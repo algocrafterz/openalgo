@@ -26,6 +26,9 @@ def _engine(**overrides) -> RiskEngine:
         "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
         "max_capital_utilization": 0.0,  # disabled by default; enable per test
         "default_product": "MIS",
+        "max_positions_per_symbol": 1,
+        "max_positions_per_sector": 2,
+        "sectors": {"BANKING": ["HDFCBANK", "SBIN"], "IT": ["TCS", "INFY"]},
     }
     defaults.update(overrides)
     return RiskEngine(**defaults)
@@ -338,14 +341,14 @@ class TestExposureChecks:
 class TestRecordTrade:
     def test_increments_counters(self):
         engine = _engine()
-        engine.record_trade()
+        engine.record_trade(symbol="RELIANCE")
         assert engine.trades_today == 1
         assert engine.open_positions == 1
 
     def test_accumulates_trades(self):
         engine = _engine()
-        engine.record_trade()
-        engine.record_trade()
+        engine.record_trade(symbol="RELIANCE")
+        engine.record_trade(symbol="TCS")
         assert engine.trades_today == 2
         assert engine.open_positions == 2
 
@@ -354,7 +357,7 @@ class TestRecordClose:
     def test_loss_updates_counters(self):
         engine = _engine()
         engine.open_positions = 1
-        engine.record_close(pnl=-500)
+        engine.record_close(pnl=-500, symbol="RELIANCE")
         assert engine.open_positions == 0
         assert engine.daily_realised_loss == 500
         assert engine.weekly_realised_loss == 500
@@ -363,22 +366,22 @@ class TestRecordClose:
     def test_profit_does_not_add_loss(self):
         engine = _engine()
         engine.open_positions = 1
-        engine.record_close(pnl=1000)
+        engine.record_close(pnl=1000, symbol="RELIANCE")
         assert engine.open_positions == 0
         assert engine.daily_realised_loss == 0
 
     def test_open_positions_never_negative(self):
         engine = _engine()
         engine.open_positions = 0
-        engine.record_close(pnl=100)
+        engine.record_close(pnl=100, symbol="RELIANCE")
         assert engine.open_positions == 0
 
 
 class TestDailyReset:
     def test_counters_reset_on_new_day(self):
         engine = _engine()
-        engine.record_trade()
-        engine.record_close(pnl=-500)
+        engine.record_trade(symbol="RELIANCE")
+        engine.record_close(pnl=-500, symbol="RELIANCE")
         assert engine.daily_realised_loss == 500
 
         engine._current_day = -1
@@ -691,6 +694,125 @@ class TestCapitalUtilization:
         assert engine.committed_margin == 0.0
 
 
+class TestSectorCorrelation:
+    def test_can_trade_sector_initially_true(self):
+        engine = _engine(max_positions_per_sector=2)
+        assert engine.can_trade_sector("HDFCBANK") is True
+
+    def test_blocks_third_banking_stock(self):
+        engine = _engine(max_positions_per_sector=2)
+        engine.record_trade(symbol="HDFCBANK")
+        engine.record_trade(symbol="SBIN")
+        assert engine.can_trade_sector("SBIN") is False
+
+    def test_allows_different_sector(self):
+        engine = _engine(max_positions_per_sector=2)
+        engine.record_trade(symbol="HDFCBANK")
+        engine.record_trade(symbol="SBIN")
+        # IT sector should still be open
+        assert engine.can_trade_sector("TCS") is True
+
+    def test_unmapped_symbol_allowed(self):
+        engine = _engine(max_positions_per_sector=1)
+        engine.record_trade(symbol="HDFCBANK")
+        # UNKNOWN is not in any sector -> allowed
+        assert engine.can_trade_sector("UNKNOWN") is True
+
+    def test_disabled_when_zero(self):
+        engine = _engine(max_positions_per_sector=0)
+        engine.record_trade(symbol="HDFCBANK")
+        engine.record_trade(symbol="SBIN")
+        # limit disabled -> always True
+        assert engine.can_trade_sector("HDFCBANK") is True
+
+    def test_close_reopens_sector_slot(self):
+        engine = _engine(max_positions_per_sector=1)
+        engine.record_trade(symbol="HDFCBANK")
+        assert engine.can_trade_sector("SBIN") is False
+        engine.open_positions = 1
+        engine.record_close(pnl=100.0, symbol="HDFCBANK")
+        assert engine.can_trade_sector("SBIN") is True
+
+    def test_reset_clears_sector_counts(self):
+        engine = _engine(max_positions_per_sector=1)
+        engine.record_trade(symbol="HDFCBANK")
+        assert engine.can_trade_sector("SBIN") is False
+        engine._current_day = -1
+        engine.check_exposure()
+        assert engine.can_trade_sector("SBIN") is True
+
+
+class TestCorrelationRisk:
+    def test_can_trade_symbol_initially_true(self):
+        engine = _engine(max_positions_per_symbol=1)
+        assert engine.can_trade_symbol("RELIANCE") is True
+
+    def test_blocks_duplicate_symbol(self):
+        engine = _engine(max_positions_per_symbol=1)
+        engine.record_trade(symbol="RELIANCE")
+        assert engine.can_trade_symbol("RELIANCE") is False
+
+    def test_allows_different_symbol(self):
+        engine = _engine(max_positions_per_symbol=1)
+        engine.record_trade(symbol="RELIANCE")
+        assert engine.can_trade_symbol("TCS") is True
+
+    def test_close_reopens_slot(self):
+        engine = _engine(max_positions_per_symbol=1)
+        engine.record_trade(symbol="RELIANCE")
+        engine.open_positions = 1
+        assert engine.can_trade_symbol("RELIANCE") is False
+        engine.record_close(pnl=100.0, symbol="RELIANCE")
+        assert engine.can_trade_symbol("RELIANCE") is True
+
+    def test_disabled_when_zero(self):
+        engine = _engine(max_positions_per_symbol=0)
+        engine.record_trade(symbol="RELIANCE")
+        engine.record_trade(symbol="RELIANCE")
+        assert engine.can_trade_symbol("RELIANCE") is True
+
+    def test_multiple_allowed_when_configured(self):
+        engine = _engine(max_positions_per_symbol=2)
+        engine.record_trade(symbol="RELIANCE")
+        assert engine.can_trade_symbol("RELIANCE") is True
+        engine.record_trade(symbol="RELIANCE")
+        assert engine.can_trade_symbol("RELIANCE") is False
+
+    def test_reset_clears_symbol_counts(self):
+        engine = _engine(max_positions_per_symbol=1)
+        engine.record_trade(symbol="RELIANCE")
+        assert engine.can_trade_symbol("RELIANCE") is False
+        engine._current_day = -1
+        engine.check_exposure()
+        assert engine.can_trade_symbol("RELIANCE") is True
+
+
+class TestCapacityStatus:
+    def test_initial_status(self):
+        engine = _engine()
+        engine._last_known_capital = 100_000.0
+        status = engine.capacity_status()
+        assert status == "0/3 positions, heat=0.0%/6.0%, margin=0.0%/0.0%"
+
+    def test_after_trade(self):
+        engine = _engine(max_capital_utilization=0.80)
+        engine._last_known_capital = 100_000.0
+        engine.open_positions = 2
+        engine.portfolio_heat = 3_000.0
+        engine.committed_margin = 52_300.0
+        status = engine.capacity_status()
+        assert status == "2/3 positions, heat=3.0%/6.0%, margin=52.3%/80.0%"
+
+    def test_zero_capital_no_division_error(self):
+        engine = _engine()
+        engine._last_known_capital = 0.0
+        # Must not raise ZeroDivisionError
+        status = engine.capacity_status()
+        assert "0/3 positions" in status
+        assert "heat=0.0%" in status
+        assert "margin=0.0%" in status
+
+
 class TestRestartSafeCounters:
     def test_counters_restored_from_store_on_init(self, tmp_path):
         db_path = str(tmp_path / "risk.db")
@@ -715,7 +837,7 @@ class TestRestartSafeCounters:
         store = RiskStore(db_path)
         engine = _engine(store=store, trade_mode="live")
         engine._last_known_capital = 100_000
-        engine.record_trade()
+        engine.record_trade(symbol="RELIANCE")
 
         from datetime import date, timezone
         from datetime import datetime
@@ -729,7 +851,7 @@ class TestRestartSafeCounters:
         store = RiskStore(db_path)
         engine = _engine(store=store, trade_mode="live")
         engine.open_positions = 1
-        engine.record_close(pnl=-400.0)
+        engine.record_close(pnl=-400.0, symbol="RELIANCE")
 
         from datetime import date, timezone
         from datetime import datetime
@@ -746,10 +868,10 @@ class TestRestartSafeCounters:
         engine_live = _engine(store=store_live, trade_mode="live")
         engine_sandbox = _engine(store=store_sandbox, trade_mode="sandbox")
 
-        engine_live.record_trade()
-        engine_live.record_trade()
+        engine_live.record_trade(symbol="RELIANCE")
+        engine_live.record_trade(symbol="TCS")
 
-        engine_sandbox.record_trade()
+        engine_sandbox.record_trade(symbol="RELIANCE")
 
         from datetime import date, timezone
         from datetime import datetime
@@ -764,8 +886,8 @@ class TestRestartSafeCounters:
         db_path = str(tmp_path / "risk.db")
         store = RiskStore(db_path)
         engine = _engine(store=store, trade_mode="live")
-        engine.record_trade()
-        engine.record_close(pnl=-200.0)
+        engine.record_trade(symbol="RELIANCE")
+        engine.record_close(pnl=-200.0, symbol="RELIANCE")
 
         # Simulate new day
         engine._current_day = -1
@@ -782,6 +904,6 @@ class TestRestartSafeCounters:
     def test_engine_with_no_store_does_not_persist(self, tmp_path):
         # Just ensure no exception is raised when store=None
         engine = _engine()
-        engine.record_trade()
-        engine.record_close(pnl=-100.0)
+        engine.record_trade(symbol="RELIANCE")
+        engine.record_close(pnl=-100.0, symbol="RELIANCE")
         assert engine.trades_today == 1

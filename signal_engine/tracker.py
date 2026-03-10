@@ -71,7 +71,7 @@ class PositionTracker:
                 pnl_delta = current_realised - self._last_realised_pnl
                 self._last_realised_pnl = current_realised
 
-                self._risk_engine.record_close(pnl_delta)
+                self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
                 self._risk_engine.remove_margin(
                     qty=pos.quantity,
                     entry_price=pos.entry_price,

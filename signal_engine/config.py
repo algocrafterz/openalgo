@@ -9,7 +9,7 @@ Missing keys or sections cause a ConfigError at startup.
 
 import os
 from dataclasses import dataclass
-from typing import Dict, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import yaml
 from dotenv import dotenv_values
@@ -108,6 +108,11 @@ class Settings:
     duplicate_window_seconds: int
     stale_signal_seconds: int
     min_sl_pct: float
+
+    # Correlation risk (from yaml)
+    max_positions_per_symbol: int
+    max_positions_per_sector: int
+    sectors: Dict[str, List[str]]
 
     # Capital override (from yaml) — 0 means fetch from OpenAlgo API
     sandbox_capital: float
@@ -218,6 +223,12 @@ def _build_settings() -> Settings:
         duplicate_window_seconds=int(_require_key(risk, "risk", "duplicate_window_seconds")),
         stale_signal_seconds=int(_require_key(risk, "risk", "stale_signal_seconds")),
         min_sl_pct=float(_require_key(risk, "risk", "min_sl_pct")),
+        max_positions_per_symbol=int(_require_key(risk, "risk", "max_positions_per_symbol")),
+        max_positions_per_sector=int(_require_key(risk, "risk", "max_positions_per_sector")),
+        sectors={
+            sector: list(symbols)
+            for sector, symbols in yml.get("sectors", {}).items()
+        },
 
         # Capital override from yaml
         sandbox_capital=float(_require_key(sizing, "sizing", "sandbox_capital")),

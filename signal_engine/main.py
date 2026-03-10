@@ -43,6 +43,9 @@ risk_engine = RiskEngine(
     margin_multiplier=settings.margin_multiplier,
     max_capital_utilization=settings.max_capital_utilization,
     default_product=settings.product,
+    max_positions_per_symbol=settings.max_positions_per_symbol,
+    max_positions_per_sector=settings.max_positions_per_sector,
+    sectors=settings.sectors,
 )
 
 # Global position tracker
@@ -75,6 +78,16 @@ async def handle_message(text: str) -> None:
     # 3. Check exposure limits
     if not risk_engine.check_exposure():
         logger.warning(f"Risk limit reached, skipping {signal.symbol}")
+        return
+
+    # 3a. Symbol concentration check
+    if not risk_engine.can_trade_symbol(signal.symbol):
+        logger.warning(f"Symbol concentration limit reached for {signal.symbol}")
+        return
+
+    # 3b. Sector concentration check
+    if not risk_engine.can_trade_sector(signal.symbol):
+        logger.warning(f"Sector concentration limit reached for {signal.symbol}")
         return
 
     # 4. Fetch capital from OpenAlgo funds API
@@ -119,9 +132,10 @@ async def handle_message(text: str) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         # 8. Record trade in risk engine and commit margin
-        risk_engine.record_trade()
+        risk_engine.record_trade(symbol=signal.symbol)
         product = signal.product if signal.product else settings.product
         risk_engine.add_margin(quantity, signal.entry, product)
+        logger.info(f"Capacity: {risk_engine.capacity_status()}")
 
         # 9. Place bracket SL + TP legs (if enabled)
         sl_order_id = ""
