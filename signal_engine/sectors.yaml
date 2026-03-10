@@ -1,0 +1,322 @@
+# ── Sector-to-Symbol Mapping ─────────────────────────────
+# Based on NSE sectoral index constituents (NIFTY Bank, IT, Auto, etc.)
+# Source: NSE India sectoral indices (last updated: 2025)
+#
+# Usage:
+#   - Symbols here are subject to correlation risk limits (max_positions_per_sector)
+#   - Unmapped symbols are allowed without sector limits
+#   - Update semi-annually to reflect NSE index rebalancing
+#   - To disable sector limits entirely, set max_positions_per_sector: 0 in config.yaml
+
+# ── NIFTY BANK (12 constituents) ─────────────────────────
+BANKING:
+  - HDFCBANK
+  - ICICIBANK
+  - SBIN
+  - AXISBANK
+  - KOTAKBANK
+  - INDUSINDBK
+  - FEDERALBNK
+  - AUBANK
+  - IDFCFIRSTB
+  - BANDHANBNK
+  - RBLBANK
+  - BANKBARODA
+  - PNB
+  - CANBK
+  - UNIONBANK
+  - INDIANB
+  - BANKINDIA
+  - CENTRALBK
+  - IOB
+  - MAHABANK
+  - UCOBANK
+  - J&KBANK
+
+# ── NIFTY IT (10 constituents) ───────────────────────────
+IT:
+  - TCS
+  - INFY
+  - HCLTECH
+  - WIPRO
+  - TECHM
+  - LTIM
+  - MPHASIS
+  - COFORGE
+  - PERSISTENT
+  - OFSS
+
+# ── NIFTY AUTO (15 constituents) ─────────────────────────
+AUTO:
+  - MARUTI
+  - TATAMOTORS
+  - M&M
+  - BAJAJ-AUTO
+  - EICHERMOT
+  - HEROMOTOCO
+  - TVSMOTOR
+  - ASHOKLEY
+  - BOSCHLTD
+  - BALKRISIND
+  - MOTHERSON
+  - MRF
+  - BHARATFORG
+  - EXIDEIND
+  - TIINDIA
+
+# ── NIFTY METAL (15 constituents) ────────────────────────
+METAL:
+  - TATASTEEL
+  - JSWSTEEL
+  - HINDALCO
+  - VEDL
+  - JINDALSTEL
+  - NMDC
+  - COALINDIA
+  - SAIL
+  - HINDZINC
+  - APLAPOLLO
+  - RATNAMANI
+  - WELCORP
+  - NATIONALUM
+  - MOIL
+  - JSWINFRA
+
+# ── NIFTY PHARMA (20 constituents) ───────────────────────
+PHARMA:
+  - SUNPHARMA
+  - DRREDDY
+  - CIPLA
+  - DIVISLAB
+  - AUROPHARMA
+  - TORNTPHARM
+  - LUPIN
+  - ALKEM
+  - BIOCON
+  - ZYDUSLIFE
+  - GLENMARK
+  - GRANULES
+  - IPCALAB
+  - LAURUSLABS
+  - ABBOTINDIA
+  - PFIZER
+  - SANOFI
+  - GLAXO
+  - NATCOPHARMA
+  - AJANTPHARM
+
+# ── NIFTY HEALTHCARE (extends PHARMA with hospitals/diagnostics) ──
+HEALTHCARE:
+  - APOLLOHOSP
+  - MAXHEALTH
+  - FORTIS
+  - METROPOLIS
+  - LALPATHLAB
+  - THYROCARE
+  - VIJAYADIAG
+  - KRSNAA
+  - MEDANTA
+  - RAINBOW
+  - POLYMED
+  - KIMS
+  - SURYODAY
+
+# ── NIFTY FMCG (15 constituents) ─────────────────────────
+FMCG:
+  - HINDUNILVR
+  - ITC
+  - NESTLEIND
+  - BRITANNIA
+  - DABUR
+  - MARICO
+  - GODREJCP
+  - COLPAL
+  - EMAMILTD
+  - TATACONSUM
+  - VBL
+  - UBL
+  - RADICO
+  - MCDOWELL-N
+  - JYOTHYLAB
+
+# ── NIFTY OIL & GAS (15 constituents) ────────────────────
+OIL:
+  - RELIANCE
+  - ONGC
+  - BPCL
+  - IOC
+  - GAIL
+  - HINDPETRO
+  - PETRONET
+  - IGL
+  - MGL
+  - GSPL
+  - OIL
+  - CPCL
+  - MRPL
+  - CASTROLIND
+  - AEGISLOG
+
+# ── NIFTY FINANCIAL SERVICES (20 constituents) ───────────
+FINANCE:
+  - BAJFINANCE
+  - BAJAJFINSV
+  - SBILIFE
+  - HDFCLIFE
+  - ICICIGI
+  - CHOLAFIN
+  - MUTHOOTFIN
+  - SHRIRAMFIN
+  - ICICIPRULI
+  - SBICARD
+  - M&MFIN
+  - RECLTD
+  - PFC
+  - JIOFIN
+  - LIC
+  - POONAWALLA
+  - MANAPPURAM
+  - LICHSGFIN
+  - CANFINHOME
+  - AAVAS
+
+# ── NIFTY REALTY (10 constituents) ───────────────────────
+REALTY:
+  - DLF
+  - GODREJPROP
+  - OBEROIRLTY
+  - PRESTIGE
+  - PHOENIXLTD
+  - SOBHA
+  - BRIGADE
+  - MAHLIFE
+  - SIGNATURE
+  - KOLTEPATIL
+
+# ── NIFTY MEDIA (15 constituents) ────────────────────────
+MEDIA:
+  - ZEEL
+  - SUNTV
+  - PVRINOX
+  - NETWORK18
+  - TV18BCAST
+  - DISHTV
+  - SAREGAMA
+  - NAZARA
+  - TIPS
+  - NDTV
+  - HATHWAY
+  - TIPSINDLTD
+  - INOXWIND
+
+# ── NIFTY CONSUMER DURABLES (15 constituents) ────────────
+CONSUMER_DURABLES:
+  - HAVELLS
+  - VOLTAS
+  - CROMPTON
+  - BLUESTAR
+  - AMBER
+  - WHIRLPOOL
+  - VGUARD
+  - ORIENTELEC
+  - SYMPHONY
+  - DIXON
+  - RAJESHEXPO
+  - KAJARIACER
+  - CERA
+  - POLYCAB
+  - BAJAJELEC
+
+# ── NIFTY PSE / PSU (Public Sector Enterprises) ──────────
+PSU:
+  - ONGC
+  - NTPC
+  - POWERGRID
+  - BHEL
+  - HAL
+  - BEL
+  - IRCTC
+  - RVNL
+  - IRFC
+  - RECLTD
+  - PFC
+  - NMDC
+  - COALINDIA
+  - CONCOR
+  - OIL
+  - HINDCOPPER
+  - MOIL
+  - NATIONALUM
+  - SAIL
+  - BEML
+
+# ── NIFTY INFRA (Infrastructure) ─────────────────────────
+INFRA:
+  - LT
+  - ADANIPORTS
+  - ADANIENT
+  - POWERGRID
+  - NTPC
+  - SIEMENS
+  - ABB
+  - RITES
+  - IRCON
+  - NCC
+  - KNR
+  - PNC
+  - AHLUCONT
+  - GMRINFRA
+  - IRB
+  - GRINFRA
+  - HCC
+  - PNCINFRA
+  - CAPACITE
+  - GPIL
+
+# ── NIFTY CHEMICALS ───────────────────────────────────────
+CHEMICALS:
+  - PIDILITIND
+  - SRF
+  - DEEPAKNTR
+  - AAVAS
+  - ATUL
+  - NAVINFLUOR
+  - FINPIPE
+  - CLEAN
+  - TATACHEM
+  - GNFC
+  - ALKYLAMINE
+  - FINEORG
+  - SOLARA
+  - VINATIORGA
+  - FLUOROCHEM
+
+# ── NIFTY CAPITAL GOODS ───────────────────────────────────
+CAPITAL_GOODS:
+  - LT
+  - SIEMENS
+  - ABB
+  - BHEL
+  - HAL
+  - BEL
+  - CUMMINSIND
+  - THERMAX
+  - BEML
+  - GRINDWELL
+  - ELGIEQUIP
+  - KAYNES
+  - AVALON
+  - DYNAMATECH
+  - ASTRAL
+
+# ── NIFTY TELECOM ─────────────────────────────────────────
+TELECOM:
+  - BHARTIARTL
+  - IDEA
+  - TATACOMM
+  - STLTECH
+  - HFCL
+  - RAILTEL
+  - ITI
+  - TEJAS
+  - GTLINFRA

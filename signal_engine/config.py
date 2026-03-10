@@ -16,6 +16,7 @@ from dotenv import dotenv_values
 
 _DIR = os.path.dirname(__file__)
 _YAML_PATH = os.path.join(_DIR, "config.yaml")
+_SECTORS_PATH = os.path.join(_DIR, "sectors.yaml")
 _ENV_PATH = os.path.join(_DIR, ".env")
 
 VALID_SIZING_MODES = ("fixed_fractional", "pct_of_capital")
@@ -36,6 +37,17 @@ def _load_yaml() -> dict:
     if not data or not isinstance(data, dict):
         raise ConfigError("config.yaml is empty or invalid")
     return data
+
+
+def _load_sectors() -> Dict[str, List[str]]:
+    """Load sector-to-symbol mapping from sectors.yaml (optional file)."""
+    if not os.path.exists(_SECTORS_PATH):
+        return {}
+    with open(_SECTORS_PATH) as f:
+        data = yaml.safe_load(f)
+    if not data or not isinstance(data, dict):
+        return {}
+    return {sector: list(symbols) for sector, symbols in data.items()}
 
 
 def _load_env() -> dict:
@@ -225,10 +237,7 @@ def _build_settings() -> Settings:
         min_sl_pct=float(_require_key(risk, "risk", "min_sl_pct")),
         max_positions_per_symbol=int(_require_key(risk, "risk", "max_positions_per_symbol")),
         max_positions_per_sector=int(_require_key(risk, "risk", "max_positions_per_sector")),
-        sectors={
-            sector: list(symbols)
-            for sector, symbols in yml.get("sectors", {}).items()
-        },
+        sectors=_load_sectors(),
 
         # Capital override from yaml
         sandbox_capital=float(_require_key(sizing, "sizing", "sandbox_capital")),

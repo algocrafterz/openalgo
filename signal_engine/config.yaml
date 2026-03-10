@@ -41,20 +41,7 @@ risk:
   stale_signal_seconds: 60     # Ignore signals older than this
   min_sl_pct: 0.003            # Reject SL tighter than 0.3% of entry (0 = disabled)
   max_positions_per_symbol: 1  # Max concurrent positions in same symbol (0 = no limit)
-  max_positions_per_sector: 2  # Max concurrent positions in same sector (0 = no limit)
-
-# ── Sector Mapping (optional) ─────────────────────────────
-# Maps sector names to lists of symbols. Used for sector concentration limits.
-# If not configured, sector limits are not applied.
-sectors:
-  BANKING: [HDFCBANK, ICICIBANK, SBIN, KOTAKBANK, AXISBANK, BANKBARODA, PNB, INDUSINDBK]
-  IT: [TCS, INFY, WIPRO, HCLTECH, TECHM, LTIM, MPHASIS, COFORGE]
-  AUTO: [TATAMOTORS, M&M, MARUTI, BAJAJ-AUTO, EICHERMOT, HEROMOTOCO, ASHOKLEY]
-  METAL: [TATASTEEL, HINDALCO, JSWSTEEL, JINDALSTEL, VEDL, NMDC, COALINDIA]
-  PHARMA: [SUNPHARMA, DRREDDY, CIPLA, DIVISLAB, APOLLOHOSP, BIOCON]
-  OIL: [RELIANCE, ONGC, BPCL, IOC, GAIL, HINDPETRO]
-  FMCG: [HINDUNILVR, ITC, NESTLEIND, BRITANNIA, DABUR, MARICO, GODREJCP, COLPAL]
-  FINANCE: [BAJFINANCE, BAJAJFINSV, SBILIFE, HDFCLIFE, ICICIGI, CHOLAFIN]
+  max_positions_per_sector: 5  # Max concurrent positions in same sector (0 = no limit)
 
 # ── Position Tracking ────────────────────────────────────
 tracking:
