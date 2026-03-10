@@ -86,3 +86,9 @@ yarn-error.log*
 
 # Windows NUL file
 nul
+
+# Signal Engine runtime data
+signal_engine/.env
+signal_engine/data/
+signal_engine/logs/
+signal_engine/*.session

@@ -1,0 +1,120 @@
+"""Async wrapper for OpenAlgo REST API calls.
+
+All endpoints respect OpenAlgo's analyze mode automatically:
+- Live mode: returns real broker data
+- Analyze mode: returns sandbox data (1Cr virtual capital)
+"""
+
+from typing import Tuple
+
+import httpx
+from loguru import logger
+
+from signal_engine.config import settings
+
+
+async def fetch_trading_mode() -> Tuple[str, bool]:
+    """Check if OpenAlgo is in live or analyze mode.
+
+    Returns (mode_str, is_analyze) e.g. ("analyze", True) or ("live", False).
+    Returns ("unknown", False) on failure.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/analyzer"
+    payload = {"apikey": settings.openalgo_api_key}
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("status") != "success":
+                return ("unknown", False)
+            mode_data = data.get("data", {})
+            is_analyze = bool(mode_data.get("analyze_mode", False))
+            mode_str = mode_data.get("mode", "unknown")
+            return (mode_str, is_analyze)
+    except Exception as e:
+        logger.error(f"Failed to fetch trading mode: {e}")
+        return ("unknown", False)
+
+
+async def fetch_available_capital() -> float:
+    """Fetch available capital for position sizing.
+
+    Priority:
+    1. If sandbox_capital is set in config and mode is analyze -> use override
+    2. Otherwise fetch from OpenAlgo /api/v1/funds (live or sandbox)
+    Returns 0.0 on failure.
+    """
+    # Check for sandbox capital override
+    if settings.sandbox_capital > 0:
+        _, is_analyze = await fetch_trading_mode()
+        if is_analyze:
+            logger.info(f"Using sandbox capital override: {settings.sandbox_capital:,.2f} INR")
+            return settings.sandbox_capital
+
+    url = f"{settings.openalgo_base_url}/api/v1/funds"
+    payload = {"apikey": settings.openalgo_api_key}
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("status") != "success":
+                logger.warning(f"Funds API returned non-success: {data}")
+                return 0.0
+            available = float(data.get("data", {}).get("availablecash", 0))
+            logger.debug(f"Available capital: {available:,.2f} INR")
+            return available
+    except Exception as e:
+        logger.error(f"Failed to fetch funds: {e}")
+        return 0.0
+
+
+async def fetch_open_position(symbol: str, strategy: str, exchange: str, product: str) -> int:
+    """Fetch open position quantity for a specific symbol+strategy.
+
+    Returns quantity (0 means position closed). Returns -1 on API error.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/openposition"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "strategy": strategy,
+        "symbol": symbol,
+        "exchange": exchange,
+        "product": product,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("status") != "success":
+                return -1
+            return int(data.get("quantity", 0))
+    except Exception as e:
+        logger.error(f"Failed to fetch position for {symbol}: {e}")
+        return -1
+
+
+async def fetch_realised_pnl() -> float:
+    """Fetch day's realised P&L from funds endpoint.
+
+    Returns m2mrealized value or 0.0 on failure.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/funds"
+    payload = {"apikey": settings.openalgo_api_key}
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("status") != "success":
+                return 0.0
+            return float(data.get("data", {}).get("m2mrealized", 0))
+    except Exception as e:
+        logger.error(f"Failed to fetch realised PnL: {e}")
+        return 0.0

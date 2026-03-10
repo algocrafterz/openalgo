@@ -1,0 +1,56 @@
+# ── Signal Engine Configuration ──────────────────────────
+# User-configurable settings. Secrets go in .env instead.
+
+# ── Telegram ─────────────────────────────────────────────
+# List of channels to listen to. Each entry needs a name (label) and id.
+# id can be a numeric chat ID or @username.
+telegram:
+  channels:
+    - name: "smidestn" #test channel
+      id: -1002773559154
+    - name: "orb_channel"
+      id: -1003518225740
+
+# ── Position Sizing ──────────────────────────────────────
+# Modes: fixed_fractional | pct_of_capital
+sizing:
+  mode: fixed_fractional
+  risk_per_trade: 0.01         # 1% risk per trade (fixed_fractional)
+  pct_of_capital: 0.05         # 5% of capital per trade (pct_of_capital)
+  max_position_size: 0          # Disabled — SL distance controls position size
+  min_entry_price: 0             # Min stock price to trade (0 = no filter)
+  max_entry_price: 0             # Max stock price to trade (0 = no filter)
+  slippage_factor: 0.0        # Widen risk per share by this % (0.05 = 5% buffer)
+  sandbox_capital: 10000      # Override capital in analyze mode (0 = use OpenAlgo default)
+
+# ── Risk Management ──────────────────────────────────────
+risk:
+  daily_loss_limit: 0.03       # 3% of capital
+  weekly_loss_limit: 0.06      # 6% of capital
+  monthly_loss_limit: 0.10     # 10% of capital
+  max_portfolio_heat: 0.06     # 6% of capital max open risk across all positions
+  max_open_positions: 3
+  max_trades_per_day: 5
+  min_rr: 1.0                  # Minimum reward:risk ratio (1.0 = 1:1)
+  duplicate_window_seconds: 60 # Ignore duplicate signals within this window
+  stale_signal_seconds: 60     # Ignore signals older than this
+  min_sl_pct: 0.003            # Reject SL tighter than 0.3% of entry (0 = disabled)
+
+# ── Position Tracking ────────────────────────────────────
+tracking:
+  poll_interval: 30            # Seconds between position checks
+
+# ── Broker / Exchange ────────────────────────────────────
+broker:
+  exchange: NSE
+  product: MIS                 # MIS or CNC
+  order_type: MARKET           # MARKET or LIMIT
+
+# ── Listener ─────────────────────────────────────────────
+listener:
+  max_retries: 5               # Max reconnection attempts
+  base_backoff: 2              # Base backoff in seconds (exponential)
+
+# ── API ──────────────────────────────────────────────────
+api:
+  timeout: 5.0                 # HTTP request timeout in seconds
