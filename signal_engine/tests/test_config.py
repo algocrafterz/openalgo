@@ -13,6 +13,7 @@ class TestConfigFileMissing:
     def test_raises_when_config_yaml_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(tmp_path / "nope.yaml"))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
         with pytest.raises(ConfigError, match="config.yaml not found"):
             _build_settings()
 
@@ -25,6 +26,7 @@ class TestRequiredYamlSections:
         yaml_path.write_text(yaml.dump(content))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
     def test_missing_sizing_section(self, tmp_path, monkeypatch):
         self._write_yaml(tmp_path, monkeypatch, {
@@ -123,6 +125,7 @@ class TestRequiredYamlKeys:
         yaml_path.write_text(yaml.dump(content))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
     def test_missing_sizing_mode(self, tmp_path, monkeypatch):
         cfg = self._full_config()
@@ -197,6 +200,7 @@ class TestInvalidSizingMode:
         yaml_path.write_text(yaml.dump(content))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
     def test_invalid_sizing_mode_rejected(self, tmp_path, monkeypatch):
         cfg = self._full_config()
@@ -289,6 +293,7 @@ class TestValidConfigLoadsSuccessfully:
         yaml_path.write_text(yaml.dump(cfg))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
         s = _build_settings()
         assert s.sizing_mode == "fixed_fractional"
@@ -316,6 +321,7 @@ class TestValidConfigLoadsSuccessfully:
         yaml_path.write_text(yaml.dump(cfg))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
         with pytest.raises(ConfigError, match="bracket"):
             _build_settings()
@@ -326,6 +332,7 @@ class TestValidConfigLoadsSuccessfully:
         yaml_path.write_text(yaml.dump(cfg))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
         s = _build_settings()
         assert s.margin_multiplier == {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0}
@@ -336,6 +343,7 @@ class TestValidConfigLoadsSuccessfully:
         yaml_path.write_text(yaml.dump(cfg))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
         s = _build_settings()
         assert s.max_capital_utilization == pytest.approx(0.80)
@@ -347,6 +355,7 @@ class TestValidConfigLoadsSuccessfully:
         yaml_path.write_text(yaml.dump(cfg))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
         with pytest.raises(ConfigError, match="margin_multiplier"):
             _build_settings()
@@ -358,6 +367,90 @@ class TestValidConfigLoadsSuccessfully:
         yaml_path.write_text(yaml.dump(cfg))
         monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
 
         with pytest.raises(ConfigError, match="max_capital_utilization"):
             _build_settings()
+
+
+class TestSectorsYamlLoading:
+    """Sectors are loaded from a separate sectors.yaml file."""
+
+    def _full_config(self) -> dict:
+        return {
+            "telegram": {"channels": []},
+            "sizing": {
+                "mode": "fixed_fractional",
+                "risk_per_trade": 0.01,
+                "pct_of_capital": 0.05,
+                "max_position_size": 0,
+                "min_entry_price": 0,
+                "max_entry_price": 0,
+                "slippage_factor": 0.0,
+                "sandbox_capital": 0,
+                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
+                "max_capital_utilization": 0.80,
+            },
+            "risk": {
+                "daily_loss_limit": 0.03,
+                "weekly_loss_limit": 0.06,
+                "monthly_loss_limit": 0.10,
+                "max_portfolio_heat": 0.06,
+                "max_open_positions": 3,
+                "max_trades_per_day": 5,
+                "min_rr": 1.0,
+                "duplicate_window_seconds": 60,
+                "stale_signal_seconds": 60,
+                "min_sl_pct": 0.003,
+                "max_positions_per_symbol": 1,
+                "max_positions_per_sector": 2,
+            },
+            "tracking": {"poll_interval": 30},
+            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
+            "listener": {"max_retries": 5, "base_backoff": 2},
+            "api": {"timeout": 5.0},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "cancel_retry_count": 2},
+        }
+
+    def test_sectors_loaded_from_separate_file(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+
+        sectors = {"BANKING": ["HDFCBANK", "SBIN"], "IT": ["TCS", "INFY"]}
+        sectors_path = tmp_path / "sectors.yaml"
+        sectors_path.write_text(yaml.dump(sectors))
+
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(sectors_path))
+
+        s = _build_settings()
+        assert s.sectors == {"BANKING": ["HDFCBANK", "SBIN"], "IT": ["TCS", "INFY"]}
+
+    def test_missing_sectors_file_returns_empty(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "no_sectors.yaml"))
+
+        s = _build_settings()
+        assert s.sectors == {}
+
+    def test_empty_sectors_file_returns_empty(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+
+        sectors_path = tmp_path / "sectors.yaml"
+        sectors_path.write_text("")
+
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(sectors_path))
+
+        s = _build_settings()
+        assert s.sectors == {}
