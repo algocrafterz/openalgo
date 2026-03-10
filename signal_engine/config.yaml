@@ -22,6 +22,11 @@ sizing:
   max_entry_price: 0             # Max stock price to trade (0 = no filter)
   slippage_factor: 0.0        # Widen risk per share by this % (0.05 = 5% buffer)
   sandbox_capital: 10000      # Override capital in analyze mode (0 = use OpenAlgo default)
+  margin_multiplier:
+    MIS: 0.20                 # 5x leverage (intraday)
+    NRML: 0.25                # 4x leverage (F&O)
+    CNC: 1.0                  # No leverage (delivery)
+  max_capital_utilization: 0.80  # Never commit more than 80% of capital
 
 # ── Risk Management ──────────────────────────────────────
 risk:

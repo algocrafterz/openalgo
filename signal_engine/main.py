@@ -40,6 +40,9 @@ risk_engine = RiskEngine(
     slippage_factor=settings.slippage_factor,
     store=_risk_store,
     trade_mode="live",
+    margin_multiplier=settings.margin_multiplier,
+    max_capital_utilization=settings.max_capital_utilization,
+    default_product=settings.product,
 )
 
 # Global position tracker
@@ -90,10 +93,17 @@ async def handle_message(text: str) -> None:
         return
 
     risk_per_share = abs(signal.entry - signal.sl)
+    risk_amount = capital * settings.risk_per_trade
+    reward_per_share = abs(signal.tp - signal.entry)
+    rr = reward_per_share / risk_per_share if risk_per_share > 0 else 0
+    pos_value = quantity * signal.entry
+    risk_total = quantity * risk_per_share
     logger.info(
-        f"Sizing [{signal.symbol}]: {capital:,.0f} * {settings.risk_per_trade:.1%} / "
-        f"{risk_per_share:.2f} = {quantity} shares @ {signal.entry} = "
-        f"{quantity * signal.entry:,.0f} value"
+        f"Sizing [{signal.symbol}]: capital={capital:,.0f} risk={settings.risk_per_trade:.1%}={risk_amount:,.0f} "
+        f"entry={signal.entry} sl={signal.sl} tp={signal.tp} "
+        f"risk/sh={risk_per_share:.2f} reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
+        f"qty=floor({risk_amount:,.0f}/{risk_per_share:.2f})={quantity} "
+        f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/capital:.2%})"
     )
 
     # 6. Build order
@@ -108,8 +118,10 @@ async def handle_message(text: str) -> None:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
 
     if trade_result.status == OrderStatus.SUCCESS:
-        # 8. Record trade in risk engine
+        # 8. Record trade in risk engine and commit margin
         risk_engine.record_trade()
+        product = signal.product if signal.product else settings.product
+        risk_engine.add_margin(quantity, signal.entry, product)
 
         # 9. Place bracket SL + TP legs (if enabled)
         sl_order_id = ""

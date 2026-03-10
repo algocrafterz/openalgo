@@ -40,6 +40,9 @@ class RiskEngine:
         slippage_factor: float = 0.0,
         store=None,
         trade_mode: str = "live",
+        margin_multiplier: dict = None,
+        max_capital_utilization: float = 0.0,
+        default_product: str = "MIS",
     ):
         self.risk_per_trade = risk_per_trade
         self.sizing_mode = sizing_mode
@@ -56,6 +59,9 @@ class RiskEngine:
         self.slippage_factor = slippage_factor
         self._store = store
         self._trade_mode = trade_mode
+        self.margin_multiplier: dict = margin_multiplier if margin_multiplier is not None else {}
+        self.max_capital_utilization = max_capital_utilization
+        self._default_product = default_product
 
         # Counters
         self.open_positions: int = 0
@@ -71,6 +77,9 @@ class RiskEngine:
 
         # Feature 2: Unrealised drawdown
         self.unrealised_loss: float = 0.0
+
+        # Feature 3: Committed margin tracking
+        self.committed_margin: float = 0.0
 
         # Restore counters from store if provided
         if self._store is not None:
@@ -107,6 +116,7 @@ class RiskEngine:
             self.open_positions = 0
             self.portfolio_heat = 0.0
             self.unrealised_loss = 0.0
+            self.committed_margin = 0.0
             self._persist()
 
     def add_heat(self, qty: int, risk_per_share: float) -> None:
@@ -116,6 +126,16 @@ class RiskEngine:
     def remove_heat(self, qty: int, risk_per_share: float) -> None:
         """Reduce portfolio heat when closing a position. Never goes below zero."""
         self.portfolio_heat = max(0.0, self.portfolio_heat - qty * risk_per_share)
+
+    def add_margin(self, qty: int, entry_price: float, product: str) -> None:
+        """Accumulate committed margin when opening a position."""
+        margin_rate = self.margin_multiplier.get(product, 1.0)
+        self.committed_margin += qty * entry_price * margin_rate
+
+    def remove_margin(self, qty: int, entry_price: float, product: str) -> None:
+        """Release committed margin when closing a position. Never goes below zero."""
+        margin_rate = self.margin_multiplier.get(product, 1.0)
+        self.committed_margin = max(0.0, self.committed_margin - qty * entry_price * margin_rate)
 
     def update_unrealised(self, loss: float) -> None:
         """Update mark-to-market unrealised loss (replace, not accumulate)."""
@@ -156,6 +176,38 @@ class RiskEngine:
                 f"Unknown sizing mode: '{self.sizing_mode}'. "
                 f"Must be 'fixed_fractional' or 'pct_of_capital'."
             )
+
+        # Determine product for margin calculations
+        product = signal.product if signal.product else self._default_product
+        margin_rate = self.margin_multiplier.get(product, 1.0)
+
+        # Margin affordability cap (AFTER risk sizing, BEFORE max_position_size cap)
+        if signal.entry > 0:
+            max_affordable_qty = math.floor(capital / (signal.entry * margin_rate))
+            if qty > max_affordable_qty:
+                logger.warning(
+                    f"Qty reduced from {qty} to {max_affordable_qty} for {signal.symbol} "
+                    f"due to margin affordability ({product} rate={margin_rate})"
+                )
+                qty = max_affordable_qty
+
+        # Remaining margin budget cap
+        if self.max_capital_utilization > 0 and capital > 0:
+            max_margin_budget = (capital * self.max_capital_utilization) - self.committed_margin
+            if max_margin_budget <= 0:
+                logger.warning(
+                    f"No margin budget remaining for {signal.symbol}, "
+                    f"committed={self.committed_margin:,.0f}, limit={capital * self.max_capital_utilization:,.0f}"
+                )
+                return 0
+            if signal.entry > 0 and margin_rate > 0:
+                max_qty_by_margin = math.floor(max_margin_budget / (signal.entry * margin_rate))
+                if qty > max_qty_by_margin:
+                    logger.warning(
+                        f"Qty reduced from {qty} to {max_qty_by_margin} for {signal.symbol} "
+                        f"due to remaining margin budget"
+                    )
+                    qty = max_qty_by_margin
 
         # Cap by max position size
         capped = False
@@ -242,6 +294,11 @@ class RiskEngine:
             if self.portfolio_heat / capital >= self.max_portfolio_heat:
                 logger.warning("Portfolio heat limit breached")
                 return False
+
+            if self.max_capital_utilization > 0:
+                if self.committed_margin / capital >= self.max_capital_utilization:
+                    logger.warning("Max capital utilization reached")
+                    return False
 
         if self.open_positions >= self.max_open_positions:
             logger.warning("Max open positions reached")

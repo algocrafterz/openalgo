@@ -72,6 +72,11 @@ class PositionTracker:
                 self._last_realised_pnl = current_realised
 
                 self._risk_engine.record_close(pnl_delta)
+                self._risk_engine.remove_margin(
+                    qty=pos.quantity,
+                    entry_price=pos.entry_price,
+                    product=pos.product,
+                )
                 logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
 
                 # OCO cancellation: cancel whichever bracket leg is still pending

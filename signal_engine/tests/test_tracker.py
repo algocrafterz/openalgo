@@ -21,6 +21,9 @@ def _make_engine(**overrides) -> RiskEngine:
         "min_entry_price": 0,
         "max_entry_price": 0,
         "max_portfolio_heat": 0.06,
+        "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
+        "max_capital_utilization": 0.80,
+        "default_product": "MIS",
     }
     defaults.update(overrides)
     return RiskEngine(**defaults)
@@ -259,3 +262,33 @@ class TestOCOCancellation:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 0
+
+
+class TestMarginRelease:
+    """When a position closes, remove_margin must be called on the risk engine."""
+
+    @pytest.mark.asyncio
+    async def test_position_closed_removes_margin(self):
+        """Closing a position calls remove_margin on the risk engine."""
+        from unittest.mock import MagicMock
+        engine = _make_engine()
+        engine.open_positions = 1
+        # Spy on remove_margin
+        engine.remove_margin = MagicMock(wraps=engine.remove_margin)
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+
+        pos = _make_position(symbol="RELIANCE", product="MIS", entry_price=2500.0, quantity=10)
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1000.0),
+        ):
+            await tracker.check_positions()
+
+        engine.remove_margin.assert_called_once_with(
+            qty=10,
+            entry_price=2500.0,
+            product="MIS",
+        )
