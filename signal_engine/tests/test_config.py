@@ -1,7 +1,6 @@
 """Tests for config loader — fail-fast on missing or invalid values."""
 
 import os
-import textwrap
 
 import pytest
 import yaml

@@ -2,7 +2,7 @@
 
 > **Document Purpose:** Implementation reference and status tracker.
 > **Reading convention:** `[IMPL]` = direct implementation directive. `[CONTEXT]` = background only. `[CONSTRAINT]` = hard rules.
-> **Status:** MVP + all planned improvements implemented and tested. See Section 19 for status.
+> **Status:** MVP + Phase 2 improvements + Phase 3 config tuning. See Section 19 for status.
 
 ---
 
@@ -167,8 +167,8 @@ sizing:
   max_position_size: 0           # 0 = disabled (SL distance controls size)
   min_entry_price: 0             # Min stock price to trade (0 = no filter)
   max_entry_price: 0             # Max stock price to trade (0 = no filter)
-  slippage_factor: 0.0           # Widen risk_per_share by this % before sizing
-  sandbox_capital: 10000         # Override capital in analyze mode (0 = use OpenAlgo)
+  slippage_factor: 0.05          # Widen risk_per_share by 5% to account for MARKET order slippage
+  sandbox_capital: 100000        # Override capital in analyze mode (0 = use OpenAlgo)
   margin_multiplier:
     MIS: 0.20                    # 5x intraday leverage (20% margin required)
     NRML: 0.25                   # 4x F&O leverage
@@ -176,18 +176,18 @@ sizing:
   max_capital_utilization: 0.80  # Never commit more than 80% of capital
 
 risk:
-  daily_loss_limit: 0.03
-  weekly_loss_limit: 0.06
+  daily_loss_limit: 0.04         # 4% of capital (allows 4 losers at 1% before lockout)
+  weekly_loss_limit: 0.08        # 8% of capital (allows 2 bad days per week)
   monthly_loss_limit: 0.10
-  max_portfolio_heat: 0.06       # Max sum of open risk across all positions
-  max_open_positions: 3
-  max_trades_per_day: 5
+  max_portfolio_heat: 0.05       # 5% of capital max open risk (aligned: 5 positions x 1%)
+  max_open_positions: 5
+  max_trades_per_day: 8
   min_rr: 1.0                    # Minimum reward:risk ratio
   duplicate_window_seconds: 60
   stale_signal_seconds: 60
-  min_sl_pct: 0.003              # Reject SL tighter than 0.3% of entry (0 = disabled)
+  min_sl_pct: 0.005              # Reject SL tighter than 0.5% of entry (0 = disabled)
   max_positions_per_symbol: 1    # Max concurrent positions in same symbol
-  max_positions_per_sector: 5    # Max concurrent positions in same sector (0 = disabled)
+  max_positions_per_sector: 3    # Max concurrent positions in same sector (forces diversification)
 
 tracking:
   poll_interval: 30
@@ -243,8 +243,6 @@ class Direction(str, Enum):        LONG, SHORT
 class Action(str, Enum):           BUY, SELL
 class ValidationStatus(str, Enum): VALID, INVALID, IGNORED
 class OrderStatus(str, Enum):      SUCCESS, TIMEOUT, REJECTED, ERROR
-class PriceType(str, Enum):        MARKET, LIMIT, SL, SL_M
-class BracketLeg(str, Enum):       SL, TP
 ```
 
 ### `Signal`
@@ -324,8 +322,8 @@ Time: 09:35
 | Target present | `tp > 0` | `INVALID` |
 | SL direction | LONG: `sl < entry`; SHORT: `sl > entry` | `INVALID` |
 | Target direction | LONG: `tp > entry`; SHORT: `tp < entry` | `INVALID` |
-| R:R ratio | `(tp - entry) / (entry - sl) >= min_rr` | `IGNORED` |
-| Min SL % | `abs(entry - sl) / entry >= min_sl_pct` (if `min_sl_pct > 0`) | `INVALID` |
+| R:R ratio | `(tp - entry) / (entry - sl) >= min_rr` (1.0 = 1:1) | `IGNORED` |
+| Min SL % | `abs(entry - sl) / entry >= min_sl_pct` (0.5% default, guards against noisy tight SLs) | `IGNORED` |
 | Duplicate | Same symbol + direction + entry within `duplicate_window_seconds` | `IGNORED` |
 
 ---
@@ -604,16 +602,17 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
+| `test_risk.py` | 93 | Sizing, slippage, margin cap, price filter, heat, unrealised drawdown, persistent counters, capacity, symbol/sector concentration |
+| `test_executor.py` | 30 | Entry order, SL order, TP order, bracket legs, OCO |
+| `test_normalizer.py` | 27 | Unicode normalization, whitespace cleanup, edge cases |
+| `test_api_client.py` | 25 | All API functions, positionbook, cancel order, order status |
 | `test_parser.py` | 24 | Signal parsing, edge cases, optional fields |
-| `test_validator.py` | 22 | Entry/SL/TP, R:R, duplicate, min_sl_pct |
-| `test_risk.py` | 91 | Sizing, slippage, margin cap, price filter, heat, unrealised drawdown, persistent counters, capacity, symbol/sector concentration |
-| `test_risk_store.py` | 7 | SQLite save/load, mode isolation, weekly/monthly aggregation |
-| `test_executor.py` | 18 | Entry order, SL order, TP order, bracket legs, OCO |
-| `test_api_client.py` | 22 | All API functions, positionbook, cancel order, order status |
+| `test_validator.py` | 21 | Entry/SL/TP, R:R, duplicate, min_sl_pct |
 | `test_tracker.py` | 21 | Register, batch positionbook, OCO cancellation, margin release |
-| `test_db.py` | 5 | Table creation, save, column values, error handling |
-| `test_main.py` | 12 | Full pipeline, concentration risk, bracket order flow |
 | `test_config.py` | 20 | Fail-fast validation, all required keys, sectors.yaml loading |
+| `test_main.py` | 13 | Full pipeline, concentration risk, bracket order flow |
+| `test_risk_store.py` | 7 | SQLite save/load, mode isolation, weekly/monthly aggregation |
+| `test_db.py` | 5 | Table creation, save, column values, error handling |
 | `test_telegram_integration.py` | 4 | Live Telegram connection (requires session) |
 
 Run tests:
@@ -666,6 +665,18 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Capacity status log:** after each trade showing heat/margin/position utilization
 - [x] **Graceful exit:** SIGINT/SIGTERM handlers, clean asyncio shutdown
 - [x] **Polling optimization:** single `fetch_positionbook()` call replaces N individual `fetch_open_position()` calls per cycle
+
+### Phase 3: Config Tuning & Cleanup -- ALL COMPLETED
+
+- [x] **Risk parameter tuning for intraday:** Aligned all limits for 5-position intraday setup
+- [x] **Slippage buffer enabled:** `slippage_factor: 0.05` (5% of SL distance) for MARKET order fill protection
+- [x] **Loss limits rebalanced:** Daily 4%, weekly 8% — scaled for 5 concurrent positions at 1% risk each
+- [x] **Portfolio heat aligned:** `max_portfolio_heat: 0.05` matches 5 positions x 1% risk
+- [x] **Position capacity increased:** `max_open_positions: 5`, `max_trades_per_day: 8` for better capital utilization
+- [x] **Sector diversification enforced:** `max_positions_per_sector: 3` (forces spread across sectors)
+- [x] **Min SL guard tightened:** `min_sl_pct: 0.005` (0.5%) rejects noise-level stop losses
+- [x] **Sandbox capital realistic:** `sandbox_capital: 100000` for meaningful paper trading
+- [x] **Dead code cleanup:** Removed unused `PriceType`/`BracketLeg` enums, stale imports, unused variable
 
 ### Not Implemented (Future Considerations)
 

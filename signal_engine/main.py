@@ -197,7 +197,7 @@ def main() -> None:
         try:
             listener_task = asyncio.create_task(start_listener(handle_message))
             # Wait for either the listener to finish or a shutdown signal
-            done, pending = await asyncio.wait(
+            _, pending = await asyncio.wait(
                 [listener_task, asyncio.create_task(shutdown_event.wait())],
                 return_when=asyncio.FIRST_COMPLETED,
             )

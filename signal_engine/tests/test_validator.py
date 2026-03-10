@@ -98,8 +98,8 @@ class TestMinSlPct:
         assert "SL distance" in result.reason
 
     def test_sl_at_threshold_allowed(self):
-        # entry=1000, sl=997, sl_pct = 3/1000 = 0.3% = threshold
-        result = validate(_make_signal(entry=1000, sl=997, tp=1006))
+        # entry=1000, sl=995, sl_pct = 5/1000 = 0.5% = threshold
+        result = validate(_make_signal(entry=1000, sl=995, tp=1010))
         assert result.status == ValidationStatus.VALID
 
     def test_sl_above_threshold_allowed(self):
