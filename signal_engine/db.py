@@ -39,7 +39,8 @@ INSERT INTO trades (
 
 def _get_connection() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(_DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(_CREATE_TABLE)
     conn.commit()
     return conn
