@@ -1,0 +1,150 @@
+"""Entry point and pipeline orchestration for the signal engine."""
+
+import asyncio
+
+from loguru import logger
+
+from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
+from signal_engine.config import settings
+from signal_engine.db import save
+from signal_engine.executor import build_order, send_order
+from signal_engine.listener import start_listener
+from signal_engine.logger_setup import setup_logger
+from signal_engine.models import OrderStatus, ValidationStatus
+from signal_engine.normalizer import normalize
+from signal_engine.parser import parse
+from signal_engine.risk import RiskEngine
+from signal_engine.risk_store import RiskStore
+from signal_engine.tracker import PositionTracker, TrackedPosition
+from signal_engine.validator import validate
+
+# Persistent risk counter store (keyed by mode + date, survives restarts)
+_risk_store = RiskStore("db/risk.db")
+
+# Global risk engine instance (counters restored from store on startup)
+risk_engine = RiskEngine(
+    risk_per_trade=settings.risk_per_trade,
+    sizing_mode=settings.sizing_mode,
+    pct_of_capital=settings.pct_of_capital,
+    max_position_size=settings.max_position_size,
+    daily_loss_limit=settings.daily_loss_limit,
+    weekly_loss_limit=settings.weekly_loss_limit,
+    monthly_loss_limit=settings.monthly_loss_limit,
+    max_portfolio_heat=settings.max_portfolio_heat,
+    max_open_positions=settings.max_open_positions,
+    max_trades_per_day=settings.max_trades_per_day,
+    min_entry_price=settings.min_entry_price,
+    max_entry_price=settings.max_entry_price,
+    slippage_factor=settings.slippage_factor,
+    store=_risk_store,
+    trade_mode="live",
+)
+
+# Global position tracker
+tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
+
+
+async def handle_message(text: str) -> None:
+    """Full sequential pipeline for a single signal message.
+
+    Pipeline: parse -> validate -> fetch_capital -> check_exposure -> size -> build_order -> send -> track -> save
+    """
+    # 1. Normalize and parse
+    normalized = normalize(text)
+    signal = parse(normalized)
+    if signal is None:
+        logger.debug("Unparseable message, skipping")
+        return
+
+    logger.info(f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol}")
+
+    # 2. Validate
+    result = validate(signal)
+    if result.status != ValidationStatus.VALID:
+        logger.info(f"Signal {result.status.value}: {result.reason}")
+        return
+
+    # 3. Check exposure limits
+    if not risk_engine.check_exposure():
+        logger.warning(f"Risk limit reached, skipping {signal.symbol}")
+        return
+
+    # 4. Fetch capital from OpenAlgo funds API
+    #    Returns live broker capital or sandbox capital depending on mode
+    capital = await fetch_available_capital()
+    if capital <= 0:
+        logger.error("Cannot fetch capital from OpenAlgo, skipping trade")
+        return
+
+    logger.info(f"Available capital: {capital:,.2f} INR")
+
+    # 5. Calculate position size with live capital
+    quantity = risk_engine.calculate_quantity(signal, capital=capital)
+    if quantity <= 0:
+        logger.info(f"Skipping {signal.symbol}: position sizing returned 0")
+        return
+
+    logger.info(f"Position size: {quantity} shares ({settings.sizing_mode})")
+
+    # 6. Build order
+    order = build_order(signal, quantity)
+
+    # 7. Send to OpenAlgo (routes to live broker or sandbox automatically)
+    trade_result = await send_order(order)
+
+    if trade_result.status == OrderStatus.SUCCESS:
+        logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
+    else:
+        logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
+
+    if trade_result.status == OrderStatus.SUCCESS:
+        # 8. Record trade in risk engine
+        risk_engine.record_trade()
+
+        # 9. Register in position tracker for P&L monitoring
+        tracker.register(TrackedPosition(
+            symbol=signal.symbol,
+            strategy=signal.strategy,
+            exchange=settings.exchange,
+            product=settings.product,
+            entry_price=signal.entry,
+            quantity=quantity,
+            sl=signal.sl,
+            tp=signal.tp,
+        ))
+
+    # 10. Persist to DB
+    save(signal, order, trade_result)
+
+
+def main() -> None:
+    """Entry point — start the signal engine with position tracker."""
+    setup_logger()
+    logger.info("Signal Engine starting")
+    logger.info(f"Sizing mode: {settings.sizing_mode}")
+    logger.info(f"Min R:R: {settings.min_rr}")
+    logger.info(f"Position poll interval: {settings.poll_interval}s")
+    for ch in settings.telegram_channels:
+        logger.info(f"Telegram channel: {ch.name} ({ch.id})")
+
+    async def run():
+        # Detect and log trading mode
+        mode_str, is_analyze = await fetch_trading_mode()
+        if is_analyze:
+            logger.info("Trading mode: ANALYZE (sandbox capital)")
+        else:
+            logger.info("Trading mode: LIVE (broker capital)")
+
+        # Start position tracker in background
+        tracker_task = asyncio.create_task(tracker.start())
+        try:
+            await start_listener(handle_message)
+        finally:
+            tracker.stop()
+            tracker_task.cancel()
+
+    asyncio.run(run())
+
+
+if __name__ == "__main__":
+    main()
