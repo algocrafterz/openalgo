@@ -75,7 +75,8 @@ class TestTrackerCheckPositions:
         tracker = PositionTracker(engine)
         tracker.register(_make_position())
 
-        with patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=50):
+        book = [{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 50, "pnl": 0}]
+        with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book):
             await tracker.check_positions()
             assert tracker.tracked_count == 1
             assert engine.open_positions == 1
@@ -89,7 +90,7 @@ class TestTrackerCheckPositions:
         tracker.register(_make_position())
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
         ):
             await tracker.check_positions()
@@ -106,7 +107,7 @@ class TestTrackerCheckPositions:
         tracker.register(_make_position())
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
         ):
             await tracker.check_positions()
@@ -115,13 +116,13 @@ class TestTrackerCheckPositions:
             assert engine.daily_realised_loss == 500.0  # lost 500
 
     @pytest.mark.asyncio
-    async def test_api_error_skips_position(self):
+    async def test_api_error_skips_cycle(self):
         engine = _make_engine()
         engine.open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position())
 
-        with patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=-1):
+        with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=None):
             await tracker.check_positions()
             assert tracker.tracked_count == 1  # not removed
             assert engine.open_positions == 1  # unchanged
@@ -175,7 +176,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-500.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
         ):
@@ -195,7 +196,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
         ):
@@ -215,7 +216,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=False),
         ):
@@ -235,7 +236,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
         ):
@@ -254,7 +255,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, side_effect=Exception("network down")),
         ):
@@ -282,7 +283,7 @@ class TestMarginRelease:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1000.0),
         ):
             await tracker.check_positions()
@@ -292,3 +293,123 @@ class TestMarginRelease:
             entry_price=2500.0,
             product="MIS",
         )
+
+
+class TestBatchPositionCheck:
+    """Polling optimization: one positionbook call replaces N individual openposition calls."""
+
+    @pytest.mark.asyncio
+    async def test_batch_check_detects_closed_position(self):
+        """Positionbook returns qty=0 for a tracked symbol -> position closed."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+
+        # Positionbook returns empty list (RELIANCE not present = closed)
+        positionbook = []
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=positionbook),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-200.0),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+        assert engine.open_positions == 0
+
+    @pytest.mark.asyncio
+    async def test_batch_check_position_still_open(self):
+        """Positionbook returns qty>0 for tracked symbol -> still open."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+
+        positionbook = [
+            {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 50, "pnl": 100.0},
+        ]
+        with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=positionbook):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 1
+        assert engine.open_positions == 1
+
+    @pytest.mark.asyncio
+    async def test_batch_check_multiple_positions_mixed(self):
+        """Mix of open and closed positions in a single positionbook call."""
+        engine = _make_engine()
+        engine.open_positions = 2
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        tracker.register(_make_position(symbol="TCS", strategy="ORB"))
+
+        # TCS still open (qty=10), RELIANCE not in positionbook (closed)
+        positionbook = [
+            {"symbol": "TCS", "exchange": "NSE", "product": "MIS", "quantity": 10, "pnl": 50.0},
+        ]
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=positionbook),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-100.0),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 1  # only TCS remains
+        assert engine.open_positions == 1
+
+    @pytest.mark.asyncio
+    async def test_batch_check_api_error_skips_cycle(self):
+        """If positionbook returns None (API error), skip entire cycle."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position())
+
+        with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=None):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 1  # nothing removed
+        assert engine.open_positions == 1
+
+    @pytest.mark.asyncio
+    async def test_batch_check_zero_qty_in_book_means_closed(self):
+        """Positionbook may return the symbol with qty=0 (explicitly closed)."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+
+        positionbook = [
+            {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0, "pnl": -150.0},
+        ]
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=positionbook),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-150.0),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+
+    @pytest.mark.asyncio
+    async def test_single_api_call_for_all_positions(self):
+        """Verify only 1 positionbook call is made regardless of position count."""
+        engine = _make_engine()
+        engine.open_positions = 3
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        tracker.register(_make_position(symbol="TCS", strategy="ORB"))
+        tracker.register(_make_position(symbol="INFY", strategy="ORB"))
+
+        positionbook = [
+            {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 50, "pnl": 0},
+            {"symbol": "TCS", "exchange": "NSE", "product": "MIS", "quantity": 10, "pnl": 0},
+            {"symbol": "INFY", "exchange": "NSE", "product": "MIS", "quantity": 20, "pnl": 0},
+        ]
+        mock_pb = AsyncMock(return_value=positionbook)
+        with patch("signal_engine.tracker.fetch_positionbook", mock_pb):
+            await tracker.check_positions()
+
+        # Exactly 1 API call, not 3
+        mock_pb.assert_called_once()

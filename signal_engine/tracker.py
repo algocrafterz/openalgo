@@ -6,7 +6,7 @@ from typing import Dict
 
 from loguru import logger
 
-from signal_engine.api_client import cancel_order, fetch_open_position, fetch_realised_pnl
+from signal_engine.api_client import cancel_order, fetch_positionbook, fetch_realised_pnl
 from signal_engine.risk import RiskEngine
 
 
@@ -50,39 +50,45 @@ class PositionTracker:
         logger.info(f"Tracking position: {key} qty={position.quantity}")
 
     async def check_positions(self) -> None:
-        """Poll all tracked positions once and process closures."""
+        """Poll all tracked positions with a single positionbook call."""
+        # Single API call for all positions
+        book = await fetch_positionbook()
+        if book is None:
+            # API error, skip entire cycle
+            return
+
+        # Build lookup: symbol -> quantity from positionbook
+        book_qty = {}
+        for entry in book:
+            sym = entry.get("symbol", "")
+            qty = int(entry.get("quantity", 0))
+            book_qty[sym] = qty
+
         closed_keys = []
 
         for key, pos in self._positions.items():
-            qty = await fetch_open_position(
-                symbol=pos.symbol,
-                strategy=pos.strategy,
-                exchange=pos.exchange,
-                product=pos.product,
-            )
+            qty = book_qty.get(pos.symbol, 0)
 
-            if qty == -1:
-                # API error, skip this cycle
+            if qty != 0:
                 continue
 
-            if qty == 0:
-                # Position closed — estimate P&L from realised PnL delta
-                current_realised = await fetch_realised_pnl()
-                pnl_delta = current_realised - self._last_realised_pnl
-                self._last_realised_pnl = current_realised
+            # Position closed — estimate P&L from realised PnL delta
+            current_realised = await fetch_realised_pnl()
+            pnl_delta = current_realised - self._last_realised_pnl
+            self._last_realised_pnl = current_realised
 
-                self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
-                self._risk_engine.remove_margin(
-                    qty=pos.quantity,
-                    entry_price=pos.entry_price,
-                    product=pos.product,
-                )
-                logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
+            self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
+            self._risk_engine.remove_margin(
+                qty=pos.quantity,
+                entry_price=pos.entry_price,
+                product=pos.product,
+            )
+            logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
 
-                # OCO cancellation: cancel whichever bracket leg is still pending
-                await self._cancel_remaining_bracket_leg(pos, pnl_delta)
+            # OCO cancellation: cancel whichever bracket leg is still pending
+            await self._cancel_remaining_bracket_leg(pos, pnl_delta)
 
-                closed_keys.append(key)
+            closed_keys.append(key)
 
         for key in closed_keys:
             del self._positions[key]
