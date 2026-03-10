@@ -6,7 +6,7 @@ from typing import Dict
 
 from loguru import logger
 
-from signal_engine.api_client import fetch_open_position, fetch_realised_pnl
+from signal_engine.api_client import cancel_order, fetch_open_position, fetch_realised_pnl
 from signal_engine.risk import RiskEngine
 
 
@@ -20,6 +20,9 @@ class TrackedPosition:
     quantity: int
     sl: float
     tp: float
+    entry_order_id: str = ""
+    sl_order_id: str = ""
+    tp_order_id: str = ""
 
 
 class PositionTracker:
@@ -70,10 +73,50 @@ class PositionTracker:
 
                 self._risk_engine.record_close(pnl_delta)
                 logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
+
+                # OCO cancellation: cancel whichever bracket leg is still pending
+                await self._cancel_remaining_bracket_leg(pos, pnl_delta)
+
                 closed_keys.append(key)
 
         for key in closed_keys:
             del self._positions[key]
+
+    async def _cancel_remaining_bracket_leg(self, pos: "TrackedPosition", pnl_delta: float) -> None:
+        """Cancel whichever bracket leg is still pending after position closes.
+
+        If pnl_delta < 0, SL was likely triggered -> cancel TP.
+        If pnl_delta >= 0, TP was likely triggered -> cancel SL.
+        If bracket IDs are not set, nothing to cancel.
+        """
+        if not pos.sl_order_id or not pos.tp_order_id:
+            return
+
+        # Determine which leg to cancel based on P&L direction
+        if pnl_delta < 0:
+            # Loss: SL was triggered, cancel the pending TP
+            leg_to_cancel = pos.tp_order_id
+            trigger_leg = "SL"
+            cancel_leg = "TP"
+        else:
+            # Profit (or breakeven): TP was triggered, cancel the pending SL
+            leg_to_cancel = pos.sl_order_id
+            trigger_leg = "TP"
+            cancel_leg = "SL"
+
+        logger.info(
+            f"Position {pos.symbol}:{pos.strategy} closed by {trigger_leg} trigger, "
+            f"cancelling remaining {cancel_leg} order {leg_to_cancel}"
+        )
+
+        try:
+            success = await cancel_order(leg_to_cancel, pos.strategy)
+            if success:
+                logger.info(f"Cancelled {cancel_leg} order {leg_to_cancel} for {pos.symbol}")
+            else:
+                logger.warning(f"Failed to cancel {cancel_leg} order {leg_to_cancel} for {pos.symbol}")
+        except Exception as e:
+            logger.error(f"Exception cancelling {cancel_leg} order {leg_to_cancel} for {pos.symbol}: {e}")
 
     async def start(self) -> None:
         """Start the polling loop. Runs until stop() is called."""

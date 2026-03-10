@@ -54,3 +54,10 @@ listener:
 # ── API ──────────────────────────────────────────────────
 api:
   timeout: 5.0                 # HTTP request timeout in seconds
+
+# ── Bracket Orders ────────────────────────────────────────
+bracket:
+  enabled: true
+  sl_order_type: SL-M         # SL or SL-M
+  max_sl_retries: 3            # Retry count for SL placement
+  cancel_retry_count: 2        # Retry count for cancelling remaining leg

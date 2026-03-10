@@ -52,7 +52,8 @@ async def start_listener(
             logger.debug(f"Skipping stale message from [{source}] ({age:.0f}s old)")
             return
 
-        logger.info(f"[{source}] Signal received: {msg.text[:80]}...")
+        clean_text = " | ".join(line.strip() for line in msg.text.strip().splitlines() if line.strip())
+        logger.info(f"[{source}] Signal received: {clean_text}")
         await on_message(msg.text)
 
     retries = 0

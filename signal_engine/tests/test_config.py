@@ -111,6 +111,7 @@ class TestRequiredYamlKeys:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "cancel_retry_count": 2},
         }
 
     def _write_yaml(self, tmp_path, monkeypatch, content: dict):
@@ -180,6 +181,7 @@ class TestInvalidSizingMode:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "cancel_retry_count": 2},
         }
 
     def _write_yaml(self, tmp_path, monkeypatch, content: dict):
@@ -261,6 +263,12 @@ class TestValidConfigLoadsSuccessfully:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "bracket": {
+                "enabled": True,
+                "sl_order_type": "SL-M",
+                "max_sl_retries": 3,
+                "cancel_retry_count": 2,
+            },
         }
 
     def test_all_values_loaded_from_yaml(self, tmp_path, monkeypatch):
@@ -284,3 +292,18 @@ class TestValidConfigLoadsSuccessfully:
         assert s.product == "MIS"
         assert s.poll_interval == 30
         assert s.sandbox_capital == 10000
+        assert s.bracket_enabled is True
+        assert s.bracket_sl_order_type == "SL-M"
+        assert s.bracket_max_sl_retries == 3
+        assert s.bracket_cancel_retry_count == 2
+
+    def test_missing_bracket_section_raises(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        del cfg["bracket"]
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+
+        with pytest.raises(ConfigError, match="bracket"):
+            _build_settings()

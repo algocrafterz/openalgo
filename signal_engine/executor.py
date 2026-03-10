@@ -1,5 +1,7 @@
 """Order construction and OpenAlgo API integration."""
 
+from typing import Optional, Tuple
+
 import httpx
 from loguru import logger
 
@@ -45,6 +47,8 @@ async def send_order(order: Order) -> TradeResult:
         "quantity": order.quantity,
         "price": order.price,
     }
+    if order.trigger_price > 0:
+        payload["trigger_price"] = order.trigger_price
 
     try:
         async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
@@ -83,3 +87,91 @@ async def send_order(order: Order) -> TradeResult:
     except Exception as e:
         logger.error(f"Error sending order for {order.symbol}: {e}")
         return TradeResult(status=OrderStatus.ERROR, message=str(e))
+
+
+def build_sl_order(signal: Signal, quantity: int) -> Order:
+    """Build a stop-loss leg order for a bracket.
+
+    For LONG entry: SELL SL-M with trigger_price=signal.sl
+    For SHORT entry: BUY SL-M with trigger_price=signal.sl
+    """
+    action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
+    sl_order_type = settings.bracket_sl_order_type
+
+    return Order(
+        symbol=signal.symbol,
+        exchange=signal.exchange or settings.exchange,
+        action=action,
+        quantity=quantity,
+        price=0.0,
+        order_type=sl_order_type,
+        product=signal.product or settings.product,
+        strategy_tag=signal.strategy,
+        trigger_price=signal.sl,
+    )
+
+
+def build_tp_order(signal: Signal, quantity: int) -> Order:
+    """Build a take-profit leg order for a bracket.
+
+    For LONG entry: SELL LIMIT at price=signal.tp
+    For SHORT entry: BUY LIMIT at price=signal.tp
+    """
+    action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
+
+    return Order(
+        symbol=signal.symbol,
+        exchange=signal.exchange or settings.exchange,
+        action=action,
+        quantity=quantity,
+        price=signal.tp,
+        order_type="LIMIT",
+        product=signal.product or settings.product,
+        strategy_tag=signal.strategy,
+        trigger_price=0.0,
+    )
+
+
+async def send_bracket_legs(
+    signal: Signal,
+    quantity: int,
+    entry_order_id: str,
+) -> Tuple[TradeResult, Optional[TradeResult]]:
+    """Place SL and TP legs for a bracket order.
+
+    SL is placed first (safety-critical) with up to bracket_max_sl_retries attempts.
+    TP is only placed after SL succeeds.
+
+    Returns (sl_result, tp_result). If SL fails, returns (sl_result, None).
+    """
+    sl_order = build_sl_order(signal, quantity)
+    sl_result: TradeResult = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
+
+    for attempt in range(1, settings.bracket_max_sl_retries + 1):
+        sl_result = await send_order(sl_order)
+        if sl_result.status == OrderStatus.SUCCESS:
+            logger.info(
+                f"SL leg placed for {signal.symbol}: id={sl_result.order_id} (attempt {attempt})"
+            )
+            break
+        logger.warning(
+            f"SL leg attempt {attempt}/{settings.bracket_max_sl_retries} failed for "
+            f"{signal.symbol}: {sl_result.message}"
+        )
+
+    if sl_result.status != OrderStatus.SUCCESS:
+        logger.error(
+            f"SL leg failed after {settings.bracket_max_sl_retries} attempts for "
+            f"{signal.symbol} - skipping TP to avoid naked position"
+        )
+        return sl_result, None
+
+    tp_order = build_tp_order(signal, quantity)
+    tp_result = await send_order(tp_order)
+
+    if tp_result.status == OrderStatus.SUCCESS:
+        logger.info(f"TP leg placed for {signal.symbol}: id={tp_result.order_id}")
+    else:
+        logger.warning(f"TP leg failed for {signal.symbol}: {tp_result.message}")
+
+    return sl_result, tp_result

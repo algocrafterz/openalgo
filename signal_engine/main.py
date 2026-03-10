@@ -1,13 +1,15 @@
 """Entry point and pipeline orchestration for the signal engine."""
 
 import asyncio
+import signal
+import sys
 
 from loguru import logger
 
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
 from signal_engine.db import save
-from signal_engine.executor import build_order, send_order
+from signal_engine.executor import build_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import OrderStatus, ValidationStatus
@@ -56,7 +58,10 @@ async def handle_message(text: str) -> None:
         logger.debug("Unparseable message, skipping")
         return
 
-    logger.info(f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol}")
+    logger.info(
+        f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol} "
+        f"entry={signal.entry} sl={signal.sl} tp={signal.tp}"
+    )
 
     # 2. Validate
     result = validate(signal)
@@ -84,7 +89,12 @@ async def handle_message(text: str) -> None:
         logger.info(f"Skipping {signal.symbol}: position sizing returned 0")
         return
 
-    logger.info(f"Position size: {quantity} shares ({settings.sizing_mode})")
+    risk_per_share = abs(signal.entry - signal.sl)
+    logger.info(
+        f"Sizing [{signal.symbol}]: {capital:,.0f} * {settings.risk_per_trade:.1%} / "
+        f"{risk_per_share:.2f} = {quantity} shares @ {signal.entry} = "
+        f"{quantity * signal.entry:,.0f} value"
+    )
 
     # 6. Build order
     order = build_order(signal, quantity)
@@ -101,7 +111,15 @@ async def handle_message(text: str) -> None:
         # 8. Record trade in risk engine
         risk_engine.record_trade()
 
-        # 9. Register in position tracker for P&L monitoring
+        # 9. Place bracket SL + TP legs (if enabled)
+        sl_order_id = ""
+        tp_order_id = ""
+        if settings.bracket_enabled:
+            sl_result, tp_result = await send_bracket_legs(signal, quantity, trade_result.order_id)
+            sl_order_id = sl_result.order_id if sl_result else ""
+            tp_order_id = tp_result.order_id if tp_result else ""
+
+        # 10. Register in position tracker for P&L monitoring
         tracker.register(TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -111,6 +129,9 @@ async def handle_message(text: str) -> None:
             quantity=quantity,
             sl=signal.sl,
             tp=signal.tp,
+            entry_order_id=trade_result.order_id,
+            sl_order_id=sl_order_id,
+            tp_order_id=tp_order_id,
         ))
 
     # 10. Persist to DB
@@ -128,6 +149,16 @@ def main() -> None:
         logger.info(f"Telegram channel: {ch.name} ({ch.id})")
 
     async def run():
+        loop = asyncio.get_running_loop()
+        shutdown_event = asyncio.Event()
+
+        def _signal_handler():
+            logger.info("Shutdown signal received, stopping gracefully...")
+            shutdown_event.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _signal_handler)
+
         # Detect and log trading mode
         mode_str, is_analyze = await fetch_trading_mode()
         if is_analyze:
@@ -138,12 +169,24 @@ def main() -> None:
         # Start position tracker in background
         tracker_task = asyncio.create_task(tracker.start())
         try:
-            await start_listener(handle_message)
+            listener_task = asyncio.create_task(start_listener(handle_message))
+            # Wait for either the listener to finish or a shutdown signal
+            done, pending = await asyncio.wait(
+                [listener_task, asyncio.create_task(shutdown_event.wait())],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
         finally:
             tracker.stop()
             tracker_task.cancel()
+            logger.info("Signal Engine stopped")
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        logger.info("Signal Engine interrupted")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

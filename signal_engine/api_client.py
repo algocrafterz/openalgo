@@ -99,6 +99,60 @@ async def fetch_open_position(symbol: str, strategy: str, exchange: str, product
         return -1
 
 
+async def cancel_order(order_id: str, strategy: str) -> bool:
+    """Cancel a pending order by order ID.
+
+    Returns True on success, False on any failure.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/cancelorder"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "strategy": strategy,
+        "orderid": order_id,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code >= 400:
+                logger.warning(f"Cancel order {order_id} returned HTTP {response.status_code}")
+                return False
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            if data.get("status") != "success":
+                logger.warning(f"Cancel order {order_id} returned non-success: {data.get('message', 'unknown')}")
+                return False
+            return True
+    except Exception as e:
+        logger.error(f"Failed to cancel order {order_id}: {e}")
+        return False
+
+
+async def fetch_order_status(order_id: str, strategy: str) -> str:
+    """Fetch current status of an order.
+
+    Returns the orderstatus string (e.g. "complete", "pending") or "" on error.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/orderstatus"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "strategy": strategy,
+        "orderid": order_id,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("status") != "success":
+                logger.warning(f"Order status {order_id} returned non-success: {data}")
+                return ""
+            return str(data.get("data", {}).get("orderstatus", ""))
+    except Exception as e:
+        logger.error(f"Failed to fetch order status for {order_id}: {e}")
+        return ""
+
+
 async def fetch_realised_pnl() -> float:
     """Fetch day's realised P&L from funds endpoint.
 

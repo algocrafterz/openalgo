@@ -131,3 +131,131 @@ class TestTrackerStop:
         tracker._running = True
         tracker.stop()
         assert tracker._running is False
+
+
+class TestOCOCancellation:
+    def _make_bracket_position(self, **overrides) -> TrackedPosition:
+        defaults = {
+            "symbol": "RELIANCE",
+            "strategy": "ORB",
+            "exchange": "NSE",
+            "product": "MIS",
+            "entry_price": 2500.0,
+            "quantity": 50,
+            "sl": 2485.0,
+            "tp": 2540.0,
+            "entry_order_id": "ENTRY001",
+            "sl_order_id": "SL001",
+            "tp_order_id": "TP001",
+        }
+        defaults.update(overrides)
+        return TrackedPosition(**defaults)
+
+    @pytest.mark.asyncio
+    async def test_position_with_bracket_ids_stored(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = self._make_bracket_position()
+        tracker.register(pos)
+        key = "RELIANCE:ORB"
+        assert tracker._positions[key].sl_order_id == "SL001"
+        assert tracker._positions[key].tp_order_id == "TP001"
+
+    @pytest.mark.asyncio
+    async def test_sl_triggered_cancels_tp(self):
+        """When position closes with loss (SL triggered), cancel the pending TP."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = self._make_bracket_position()
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-500.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+        ):
+            await tracker.check_positions()
+
+        # TP should be cancelled because SL was triggered (loss realized)
+        mock_cancel.assert_called_once_with("TP001", "ORB")
+
+    @pytest.mark.asyncio
+    async def test_tp_triggered_cancels_sl(self):
+        """When position closes with profit (TP hit), cancel the pending SL."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = self._make_bracket_position()
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+        ):
+            await tracker.check_positions()
+
+        # SL should be cancelled because TP was triggered (profit realized)
+        mock_cancel.assert_called_once_with("SL001", "ORB")
+
+    @pytest.mark.asyncio
+    async def test_cancel_fails_gracefully(self):
+        """Cancel failure must not raise; position still removed."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = self._make_bracket_position()
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=False),
+        ):
+            # Must not raise
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+
+    @pytest.mark.asyncio
+    async def test_no_bracket_ids_no_cancel(self):
+        """Position without bracket IDs should not attempt cancellation."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = _make_position()  # no bracket IDs
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
+        ):
+            await tracker.check_positions()
+
+        mock_cancel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_exception_does_not_propagate(self):
+        """Exception in cancel_order must be caught gracefully."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = self._make_bracket_position()
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, side_effect=Exception("network down")),
+        ):
+            # Must not raise
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
