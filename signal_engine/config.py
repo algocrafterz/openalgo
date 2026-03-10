@@ -125,6 +125,12 @@ class Settings:
     # API (from yaml)
     api_timeout: float
 
+    # Bracket orders (from yaml)
+    bracket_enabled: bool
+    bracket_sl_order_type: str
+    bracket_max_sl_retries: int
+    bracket_cancel_retry_count: int
+
 
 def _build_settings() -> Settings:
     yml = _load_yaml()
@@ -138,6 +144,7 @@ def _build_settings() -> Settings:
     broker = _require_section(yml, "broker")
     listener = _require_section(yml, "listener")
     api = _require_section(yml, "api")
+    bracket = _require_section(yml, "bracket")
 
     # Validate sizing mode
     mode = _require_key(sizing, "sizing", "mode")
@@ -206,6 +213,12 @@ def _build_settings() -> Settings:
 
         # API from yaml
         api_timeout=float(_require_key(api, "api", "timeout")),
+
+        # Bracket orders from yaml
+        bracket_enabled=bool(_require_key(bracket, "bracket", "enabled")),
+        bracket_sl_order_type=str(_require_key(bracket, "bracket", "sl_order_type")),
+        bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
+        bracket_cancel_retry_count=int(_require_key(bracket, "bracket", "cancel_retry_count")),
     )
 
 

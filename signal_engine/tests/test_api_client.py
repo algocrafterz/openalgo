@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 from signal_engine.api_client import (
+    cancel_order,
     fetch_available_capital,
     fetch_open_position,
+    fetch_order_status,
     fetch_realised_pnl,
     fetch_trading_mode,
 )
@@ -142,3 +144,71 @@ class TestFetchTradingMode:
             mode_str, is_analyze = await fetch_trading_mode()
             assert mode_str == "unknown"
             assert is_analyze is False
+
+
+class TestCancelOrder:
+    @pytest.mark.asyncio
+    async def test_success_returns_true(self):
+        data = {"status": "success", "orderid": "ORD123"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await cancel_order("ORD123", "ORB")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_error_status_returns_false(self):
+        data = {"status": "error", "message": "Order not found"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await cancel_order("ORD999", "ORB")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_http_error_returns_false(self):
+        data = {"status": "error", "message": "bad request"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data, status_code=400)):
+            result = await cancel_order("ORD123", "ORB")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_false(self):
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await cancel_order("ORD123", "ORB")
+            assert result is False
+
+
+class TestFetchOrderStatus:
+    @pytest.mark.asyncio
+    async def test_success_returns_status_string(self):
+        data = {"status": "success", "data": {"orderstatus": "complete"}}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_order_status("ORD123", "ORB")
+            assert result == "complete"
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_empty_string(self):
+        data = {"status": "error", "message": "Order not found"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_order_status("ORD999", "ORB")
+            assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_empty_string(self):
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=Exception("fail"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await fetch_order_status("ORD123", "ORB")
+            assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_missing_orderstatus_field_returns_empty(self):
+        data = {"status": "success", "data": {}}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_order_status("ORD123", "ORB")
+            assert result == ""

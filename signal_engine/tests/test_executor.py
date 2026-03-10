@@ -1,11 +1,11 @@
 """Tests for order executor — RED phase first."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 
-from signal_engine.executor import build_order, send_order
+from signal_engine.executor import build_order, build_sl_order, build_tp_order, send_bracket_legs, send_order
 from signal_engine.models import Action, Direction, OrderStatus, Signal
 from signal_engine.tests.conftest import make_signal as _make_signal
 
@@ -110,3 +110,157 @@ class TestSendOrder:
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await send_order(order)
             assert result.status == OrderStatus.ERROR
+
+
+class TestBuildSlOrder:
+    def test_long_entry_produces_sell_slm(self):
+        signal = _make_signal(direction=Direction.LONG, entry=2500.0, sl=2485.0)
+        order = build_sl_order(signal, quantity=10)
+        assert order.action == Action.SELL
+
+    def test_short_entry_produces_buy_slm(self):
+        signal = _make_signal(direction=Direction.SHORT, entry=2500.0, sl=2515.0)
+        order = build_sl_order(signal, quantity=10)
+        assert order.action == Action.BUY
+
+    def test_sl_order_type_is_slm(self):
+        signal = _make_signal(direction=Direction.LONG, sl=2485.0)
+        order = build_sl_order(signal, quantity=10)
+        assert order.order_type == "SL-M"
+
+    def test_trigger_price_set_to_sl(self):
+        signal = _make_signal(direction=Direction.LONG, sl=2485.0)
+        order = build_sl_order(signal, quantity=10)
+        assert order.trigger_price == 2485.0
+
+    def test_quantity_matches(self):
+        signal = _make_signal(direction=Direction.LONG)
+        order = build_sl_order(signal, quantity=42)
+        assert order.quantity == 42
+
+    def test_price_is_zero_for_slm(self):
+        signal = _make_signal(direction=Direction.LONG, sl=2485.0)
+        order = build_sl_order(signal, quantity=10)
+        assert order.price == 0.0
+
+    def test_symbol_and_strategy_captured(self):
+        signal = _make_signal(symbol="TCS", strategy="ORB")
+        order = build_sl_order(signal, quantity=5)
+        assert order.symbol == "TCS"
+        assert order.strategy_tag == "ORB"
+
+
+class TestBuildTpOrder:
+    def test_long_entry_produces_sell_limit(self):
+        signal = _make_signal(direction=Direction.LONG, tp=2540.0)
+        order = build_tp_order(signal, quantity=10)
+        assert order.action == Action.SELL
+
+    def test_short_entry_produces_buy_limit(self):
+        signal = _make_signal(direction=Direction.SHORT, entry=2500.0, sl=2515.0, tp=2460.0)
+        order = build_tp_order(signal, quantity=10)
+        assert order.action == Action.BUY
+
+    def test_tp_order_type_is_limit(self):
+        signal = _make_signal(tp=2540.0)
+        order = build_tp_order(signal, quantity=10)
+        assert order.order_type == "LIMIT"
+
+    def test_price_set_to_tp(self):
+        signal = _make_signal(tp=2540.0)
+        order = build_tp_order(signal, quantity=10)
+        assert order.price == 2540.0
+
+    def test_quantity_matches(self):
+        signal = _make_signal()
+        order = build_tp_order(signal, quantity=77)
+        assert order.quantity == 77
+
+    def test_trigger_price_is_zero(self):
+        signal = _make_signal(tp=2540.0)
+        order = build_tp_order(signal, quantity=10)
+        assert order.trigger_price == 0.0
+
+    def test_symbol_and_strategy_captured(self):
+        signal = _make_signal(symbol="INFY", strategy="VWAP")
+        order = build_tp_order(signal, quantity=5)
+        assert order.symbol == "INFY"
+        assert order.strategy_tag == "VWAP"
+
+
+class TestSendBracketLegs:
+    def _success_result(self, order_id="SL001"):
+        return MagicMock(status=OrderStatus.SUCCESS, order_id=order_id)
+
+    def _failure_result(self):
+        return MagicMock(status=OrderStatus.REJECTED, order_id="")
+
+    @pytest.mark.asyncio
+    async def test_both_legs_placed_on_success(self):
+        signal = _make_signal()
+        sl_result = self._success_result("SL001")
+        tp_result = self._success_result("TP001")
+
+        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
+            mock_send.side_effect = [sl_result, tp_result]
+            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+
+        assert result_sl.order_id == "SL001"
+        assert result_tp.order_id == "TP001"
+        assert mock_send.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_tp_not_placed_when_sl_fails(self):
+        signal = _make_signal()
+        failure = self._failure_result()
+
+        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
+            mock_send.return_value = failure
+            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+
+        assert result_sl.status == OrderStatus.REJECTED
+        assert result_tp is None
+        # Only the SL order attempts (retries), TP should never be called
+        # All calls should be to build_sl_order (no TP attempt)
+
+    @pytest.mark.asyncio
+    async def test_sl_fails_all_retries_returns_failure(self):
+        signal = _make_signal()
+        failure = self._failure_result()
+
+        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
+            mock_send.return_value = failure
+            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+
+        # Should have retried bracket_max_retries times (3 by default from config)
+        assert result_sl.status == OrderStatus.REJECTED
+        assert result_tp is None
+
+    @pytest.mark.asyncio
+    async def test_sl_succeeds_but_tp_fails(self):
+        signal = _make_signal()
+        sl_result = self._success_result("SL001")
+        tp_failure = self._failure_result()
+
+        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
+            mock_send.side_effect = [sl_result, tp_failure]
+            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+
+        assert result_sl.status == OrderStatus.SUCCESS
+        assert result_tp.status == OrderStatus.REJECTED
+
+    @pytest.mark.asyncio
+    async def test_sl_placed_before_tp(self):
+        """SL must be placed first (safety-critical)."""
+        signal = _make_signal(direction=Direction.LONG, sl=2485.0, tp=2540.0)
+        orders_placed = []
+
+        async def record_order(order):
+            orders_placed.append(order.order_type)
+            return self._success_result(f"ID{len(orders_placed)}")
+
+        with patch("signal_engine.executor.send_order", side_effect=record_order):
+            await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+
+        assert orders_placed[0] == "SL-M"
+        assert orders_placed[1] == "LIMIT"
