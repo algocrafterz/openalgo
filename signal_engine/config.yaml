@@ -20,8 +20,8 @@ sizing:
   max_position_size: 0          # Disabled — SL distance controls position size
   min_entry_price: 0             # Min stock price to trade (0 = no filter)
   max_entry_price: 0             # Max stock price to trade (0 = no filter)
-  slippage_factor: 0.0        # Widen risk per share by this % (0.05 = 5% buffer)
-  sandbox_capital: 10000      # Override capital in analyze mode (0 = use OpenAlgo default)
+  slippage_factor: 0.05        # Widen risk per share by 5% to account for MARKET order slippage
+  sandbox_capital: 100000     # Override capital in analyze mode (0 = use OpenAlgo default)
   margin_multiplier:
     MIS: 0.20                 # 5x leverage (intraday)
     NRML: 0.25                # 4x leverage (F&O)
@@ -30,18 +30,18 @@ sizing:
 
 # ── Risk Management ──────────────────────────────────────
 risk:
-  daily_loss_limit: 0.03       # 3% of capital
-  weekly_loss_limit: 0.06      # 6% of capital
+  daily_loss_limit: 0.04       # 4% of capital (allows 4 losers at 1% before lockout)
+  weekly_loss_limit: 0.08      # 8% of capital (allows 2 bad days per week)
   monthly_loss_limit: 0.10     # 10% of capital
-  max_portfolio_heat: 0.06     # 6% of capital max open risk across all positions
-  max_open_positions: 3
-  max_trades_per_day: 5
+  max_portfolio_heat: 0.05     # 5% of capital max open risk (aligned: 5 positions x 1%)
+  max_open_positions: 5
+  max_trades_per_day: 8
   min_rr: 1.0                  # Minimum reward:risk ratio (1.0 = 1:1)
   duplicate_window_seconds: 60 # Ignore duplicate signals within this window
   stale_signal_seconds: 60     # Ignore signals older than this
-  min_sl_pct: 0.003            # Reject SL tighter than 0.3% of entry (0 = disabled)
+  min_sl_pct: 0.005            # Reject SL tighter than 0.5% of entry (0 = disabled)
   max_positions_per_symbol: 1  # Max concurrent positions in same symbol (0 = no limit)
-  max_positions_per_sector: 5  # Max concurrent positions in same sector (0 = no limit)
+  max_positions_per_sector: 3  # Max concurrent positions in same sector (forces diversification)
 
 # ── Position Tracking ────────────────────────────────────
 tracking:

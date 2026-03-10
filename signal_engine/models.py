@@ -30,19 +30,6 @@ class OrderStatus(str, Enum):
     ERROR = "ERROR"
 
 
-class PriceType(str, Enum):
-    MARKET = "MARKET"
-    LIMIT = "LIMIT"
-    SL = "SL"
-    SL_M = "SL-M"
-
-
-class BracketLeg(str, Enum):
-    ENTRY = "ENTRY"
-    SL = "SL"
-    TP = "TP"
-
-
 class Signal(BaseModel):
     strategy: str
     direction: Direction

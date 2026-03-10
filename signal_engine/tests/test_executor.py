@@ -1,7 +1,7 @@
 """Tests for order executor — RED phase first."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
