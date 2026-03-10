@@ -1,8 +1,9 @@
 """Risk engine — position sizing and exposure limit enforcement."""
 
 import math
+from collections import defaultdict
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -43,6 +44,9 @@ class RiskEngine:
         margin_multiplier: dict = None,
         max_capital_utilization: float = 0.0,
         default_product: str = "MIS",
+        max_positions_per_symbol: int = 0,
+        max_positions_per_sector: int = 0,
+        sectors: Dict[str, List[str]] = None,
     ):
         self.risk_per_trade = risk_per_trade
         self.sizing_mode = sizing_mode
@@ -62,6 +66,15 @@ class RiskEngine:
         self.margin_multiplier: dict = margin_multiplier if margin_multiplier is not None else {}
         self.max_capital_utilization = max_capital_utilization
         self._default_product = default_product
+        self.max_positions_per_symbol = max_positions_per_symbol
+        self.max_positions_per_sector = max_positions_per_sector
+
+        # Build reverse lookup: symbol -> sector
+        raw_sectors: Dict[str, List[str]] = sectors if sectors is not None else {}
+        self._symbol_to_sector: Dict[str, str] = {}
+        for sector_name, symbols in raw_sectors.items():
+            for sym in symbols:
+                self._symbol_to_sector[sym] = sector_name
 
         # Counters
         self.open_positions: int = 0
@@ -80,6 +93,10 @@ class RiskEngine:
 
         # Feature 3: Committed margin tracking
         self.committed_margin: float = 0.0
+
+        # Correlation risk: per-symbol and per-sector position counts
+        self._positions_by_symbol: Dict[str, int] = defaultdict(int)
+        self._positions_by_sector: Dict[str, int] = defaultdict(int)
 
         # Restore counters from store if provided
         if self._store is not None:
@@ -117,6 +134,8 @@ class RiskEngine:
             self.portfolio_heat = 0.0
             self.unrealised_loss = 0.0
             self.committed_margin = 0.0
+            self._positions_by_symbol.clear()
+            self._positions_by_sector.clear()
             self._persist()
 
     def add_heat(self, qty: int, risk_per_share: float) -> None:
@@ -310,15 +329,53 @@ class RiskEngine:
 
         return True
 
-    def record_trade(self) -> None:
+    def capacity_status(self) -> str:
+        """Return a formatted capacity summary string."""
+        capital = self._last_known_capital
+        heat_pct = (self.portfolio_heat / capital * 100) if capital > 0 else 0
+        heat_limit = self.max_portfolio_heat * 100
+        margin_pct = (self.committed_margin / capital * 100) if capital > 0 else 0
+        margin_limit = self.max_capital_utilization * 100
+        return (
+            f"{self.open_positions}/{self.max_open_positions} positions, "
+            f"heat={heat_pct:.1f}%/{heat_limit:.1f}%, "
+            f"margin={margin_pct:.1f}%/{margin_limit:.1f}%"
+        )
+
+    def can_trade_symbol(self, symbol: str) -> bool:
+        """Return True if opening another position in this symbol is allowed."""
+        if self.max_positions_per_symbol == 0:
+            return True
+        return self._positions_by_symbol.get(symbol, 0) < self.max_positions_per_symbol
+
+    def can_trade_sector(self, symbol: str) -> bool:
+        """Return True if opening another position in this symbol's sector is allowed."""
+        if self.max_positions_per_sector == 0:
+            return True
+        sector = self._symbol_to_sector.get(symbol)
+        if sector is None:
+            return True
+        return self._positions_by_sector.get(sector, 0) < self.max_positions_per_sector
+
+    def record_trade(self, symbol: str = "") -> None:
         """Record a new trade entry, incrementing counters."""
         self.trades_today += 1
         self.open_positions += 1
+        if symbol:
+            self._positions_by_symbol[symbol] += 1
+            sector = self._symbol_to_sector.get(symbol)
+            if sector:
+                self._positions_by_sector[sector] += 1
         self._persist()
 
-    def record_close(self, pnl: float) -> None:
+    def record_close(self, pnl: float, symbol: str = "") -> None:
         """Record a position close. Negative pnl = loss."""
         self.open_positions = max(0, self.open_positions - 1)
+        if symbol:
+            self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
+            sector = self._symbol_to_sector.get(symbol)
+            if sector:
+                self._positions_by_sector[sector] = max(0, self._positions_by_sector.get(sector, 0) - 1)
         if pnl < 0:
             realized_loss = abs(pnl)
             self.daily_realised_loss += realized_loss

@@ -158,6 +158,40 @@ class TestPipelineFlow:
             mock_send.assert_not_called()
 
 
+class TestConcentrationRisk:
+    @pytest.mark.asyncio
+    async def test_symbol_concentration_blocked(self):
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+
+        with (
+            patch("signal_engine.main.parse", return_value=_mock_signal()),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.send_order") as mock_send,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.can_trade_symbol.return_value = False
+            mock_risk.can_trade_sector.return_value = True
+            await handle_message(_valid_message())
+            mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sector_concentration_blocked(self):
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+
+        with (
+            patch("signal_engine.main.parse", return_value=_mock_signal()),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.send_order") as mock_send,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.can_trade_symbol.return_value = True
+            mock_risk.can_trade_sector.return_value = False
+            await handle_message(_valid_message())
+            mock_send.assert_not_called()
+
+
 class TestBracketOrderFlow:
     @pytest.mark.asyncio
     async def test_bracket_enabled_places_sl_and_tp_after_entry(self):
