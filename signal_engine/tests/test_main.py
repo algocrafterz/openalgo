@@ -109,6 +109,7 @@ class TestPipelineFlow:
             # Verify capital passed to calculate_quantity
             mock_risk.calculate_quantity.assert_called_once_with(mock_signal, capital=200_000.0)
             mock_risk.record_trade.assert_called_once()
+            mock_risk.add_margin.assert_called_once()
             mock_tracker.register.assert_called_once()
             mock_save.assert_called_once_with(mock_signal, mock_order, mock_trade_result)
 

@@ -94,6 +94,8 @@ class TestRequiredYamlKeys:
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
+                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
+                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -164,6 +166,8 @@ class TestInvalidSizingMode:
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
+                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
+                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -246,6 +250,8 @@ class TestValidConfigLoadsSuccessfully:
                 "max_entry_price": 1500,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 10000,
+                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
+                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -306,4 +312,46 @@ class TestValidConfigLoadsSuccessfully:
         monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
 
         with pytest.raises(ConfigError, match="bracket"):
+            _build_settings()
+
+    def test_margin_multiplier_loaded(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+
+        s = _build_settings()
+        assert s.margin_multiplier == {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0}
+
+    def test_max_capital_utilization_loaded(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+
+        s = _build_settings()
+        assert s.max_capital_utilization == pytest.approx(0.80)
+
+    def test_missing_margin_multiplier_raises(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        del cfg["sizing"]["margin_multiplier"]
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+
+        with pytest.raises(ConfigError, match="margin_multiplier"):
+            _build_settings()
+
+    def test_missing_max_capital_utilization_raises(self, tmp_path, monkeypatch):
+        cfg = self._full_config()
+        del cfg["sizing"]["max_capital_utilization"]
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(cfg))
+        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
+        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
+
+        with pytest.raises(ConfigError, match="max_capital_utilization"):
             _build_settings()

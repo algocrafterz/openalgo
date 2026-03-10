@@ -9,7 +9,7 @@ Missing keys or sections cause a ConfigError at startup.
 
 import os
 from dataclasses import dataclass
-from typing import Tuple, Union
+from typing import Dict, Tuple, Union
 
 import yaml
 from dotenv import dotenv_values
@@ -94,6 +94,8 @@ class Settings:
     min_entry_price: float
     max_entry_price: float
     slippage_factor: float
+    margin_multiplier: Dict[str, float]
+    max_capital_utilization: float
 
     # Risk management (from yaml)
     daily_loss_limit: float
@@ -164,6 +166,25 @@ def _build_settings() -> Settings:
             ch_id = str(raw_id)
         channels.append(TelegramChannel(name=ch.get("name", ""), id=ch_id))
 
+    # Load and validate margin_multiplier
+    raw_multiplier = _require_key(sizing, "sizing", "margin_multiplier")
+    if not isinstance(raw_multiplier, dict):
+        raise ConfigError(
+            "sizing.margin_multiplier must be a mapping of product -> margin fraction"
+        )
+    margin_multiplier: Dict[str, float] = {}
+    for product_key, rate in raw_multiplier.items():
+        rate_f = float(rate)
+        if rate_f <= 0 or rate_f > 1.0:
+            raise ConfigError(
+                f"sizing.margin_multiplier[{product_key!r}] must be > 0 and <= 1.0, got {rate_f}"
+            )
+        margin_multiplier[product_key] = rate_f
+
+    max_capital_utilization = float(
+        _require_key(sizing, "sizing", "max_capital_utilization")
+    )
+
     return Settings(
         # Secrets from .env
         telegram_api_id=int(env.get("TELEGRAM_API_ID", 0)),
@@ -183,6 +204,8 @@ def _build_settings() -> Settings:
         min_entry_price=float(_require_key(sizing, "sizing", "min_entry_price")),
         max_entry_price=float(_require_key(sizing, "sizing", "max_entry_price")),
         slippage_factor=float(_require_key(sizing, "sizing", "slippage_factor")),
+        margin_multiplier=margin_multiplier,
+        max_capital_utilization=max_capital_utilization,
 
         # Risk management from yaml — all required
         daily_loss_limit=float(_require_key(risk, "risk", "daily_loss_limit")),
