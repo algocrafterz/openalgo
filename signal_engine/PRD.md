@@ -421,12 +421,13 @@ if max_position_size > 0:
 |----------|----------|---------|
 | `fetch_trading_mode()` | `/api/v1/analyzer` | `(mode_str, is_analyze: bool)` |
 | `fetch_available_capital()` | `/api/v1/funds` | `float` (availablecash) |
-| `fetch_open_position(symbol, strategy, exchange, product)` | `/api/v1/openposition` | `int` (qty; 0=closed, -1=error) |
+| `fetch_positionbook()` | `/api/v1/positionbook` | `list[dict]` or `None` on error |
+| `fetch_open_position(...)` | `/api/v1/openposition` | `int` (legacy, kept for compatibility) |
 | `fetch_realised_pnl()` | `/api/v1/funds` | `float` (m2mrealized) |
 | `cancel_order(order_id, strategy)` | `/api/v1/cancelorder` | `bool` |
 | `fetch_order_status(order_id, strategy)` | `/api/v1/orderstatus` | `str` (status string) |
 
-All functions return safe defaults on failure (0.0, -1, False). Never raise exceptions.
+All functions return safe defaults on failure (0.0, None, False). Never raise exceptions.
 
 ### 10.2 Order Execution (`executor.py`)
 
@@ -458,15 +459,15 @@ entry_order_id, sl_order_id, tp_order_id
 
 ### `PositionTracker`
 - `register(position)` -- add to tracking dict (key: `symbol:strategy`)
-- `check_positions()` -- for each tracked position:
-  - `fetch_open_position()` returns current quantity
-  - If qty=0 (closed):
+- `check_positions()` -- **single `fetch_positionbook()` call** per cycle (not N individual calls):
+  - Builds symbol -> qty lookup from positionbook response
+  - For each tracked position, check qty in lookup (absent or 0 = closed):
     - Detect which bracket leg triggered (SL vs TP) and cancel the other via `cancel_order()`
     - Compute P&L delta from `fetch_realised_pnl()`
     - Call `risk_engine.record_close(pnl_delta, symbol)`, `remove_heat()`, `remove_margin()`
     - Remove from tracking
-  - If qty=-1 (API error): skip, retry next cycle
-  - If qty>0 (still open): skip
+  - If positionbook returns `None` (API error): skip entire cycle
+  - If qty > 0: still open, skip
 - `start()` / `stop()` -- asyncio background task lifecycle
 
 ---
@@ -599,7 +600,7 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 
 ## 18. Testing
 
-[IMPL] Comprehensive test suite — **280 tests** (276 unit + 4 integration):
+[IMPL] Comprehensive test suite — **290 tests** (286 unit + 4 integration):
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
@@ -608,8 +609,8 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 | `test_risk.py` | 91 | Sizing, slippage, margin cap, price filter, heat, unrealised drawdown, persistent counters, capacity, symbol/sector concentration |
 | `test_risk_store.py` | 7 | SQLite save/load, mode isolation, weekly/monthly aggregation |
 | `test_executor.py` | 18 | Entry order, SL order, TP order, bracket legs, OCO |
-| `test_api_client.py` | 18 | All API functions, cancel order, order status |
-| `test_tracker.py` | 14 | Register, close detection, OCO cancellation, margin release |
+| `test_api_client.py` | 22 | All API functions, positionbook, cancel order, order status |
+| `test_tracker.py` | 21 | Register, batch positionbook, OCO cancellation, margin release |
 | `test_db.py` | 5 | Table creation, save, column values, error handling |
 | `test_main.py` | 12 | Full pipeline, concentration risk, bracket order flow |
 | `test_config.py` | 20 | Fail-fast validation, all required keys, sectors.yaml loading |
@@ -664,11 +665,11 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Detailed sizing log:** one-line calculation trace (capital, risk%, qty formula, R:R, value, total risk)
 - [x] **Capacity status log:** after each trade showing heat/margin/position utilization
 - [x] **Graceful exit:** SIGINT/SIGTERM handlers, clean asyncio shutdown
+- [x] **Polling optimization:** single `fetch_positionbook()` call replaces N individual `fetch_open_position()` calls per cycle
 
 ### Not Implemented (Future Considerations)
 
-- [ ] **Polling optimization:** batch `positionbook` call instead of N individual `openposition` calls — reduces API overhead when tracking many positions
-- [ ] **Multi-strategy performance tracking:** per-strategy P&L, win rate, avg R:R, drawdown — useful for evaluating which signals perform best
+- [ ] **Multi-strategy performance tracking:** per-strategy P&L, win rate, avg R:R, drawdown (broker + OpenAlgo already provide trade analytics)
 - [ ] **Web UI / dashboard:** real-time view of open positions, P&L, risk utilization
 - [ ] **ATR-based stop/sizing:** dynamic SL based on volatility instead of fixed price
 - [ ] **Alert system:** Telegram bot sending trade notifications back to trader

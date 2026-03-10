@@ -153,6 +153,29 @@ async def fetch_order_status(order_id: str, strategy: str) -> str:
         return ""
 
 
+async def fetch_positionbook():
+    """Fetch all open positions in a single API call.
+
+    Returns list of position dicts on success, None on failure.
+    Each dict has: symbol, exchange, product, quantity, pnl, average_price, ltp.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/positionbook"
+    payload = {"apikey": settings.openalgo_api_key}
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("status") != "success":
+                logger.warning(f"Positionbook API returned non-success: {data}")
+                return None
+            return data.get("data", [])
+    except Exception as e:
+        logger.error(f"Failed to fetch positionbook: {e}")
+        return None
+
+
 async def fetch_realised_pnl() -> float:
     """Fetch day's realised P&L from funds endpoint.
 

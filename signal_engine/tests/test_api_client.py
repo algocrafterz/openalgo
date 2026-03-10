@@ -10,6 +10,7 @@ from signal_engine.api_client import (
     fetch_available_capital,
     fetch_open_position,
     fetch_order_status,
+    fetch_positionbook,
     fetch_realised_pnl,
     fetch_trading_mode,
 )
@@ -212,3 +213,41 @@ class TestFetchOrderStatus:
         with patch("httpx.AsyncClient", return_value=_mock_client(data)):
             result = await fetch_order_status("ORD123", "ORB")
             assert result == ""
+
+
+class TestFetchPositionbook:
+    @pytest.mark.asyncio
+    async def test_success_returns_list(self):
+        positions = [
+            {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 50, "pnl": 100.0},
+            {"symbol": "TCS", "exchange": "NSE", "product": "MIS", "quantity": 10, "pnl": -20.0},
+        ]
+        data = {"status": "success", "data": positions}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_positionbook()
+            assert result == positions
+
+    @pytest.mark.asyncio
+    async def test_empty_positions(self):
+        data = {"status": "success", "data": []}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_positionbook()
+            assert result == []
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_none(self):
+        data = {"status": "error", "message": "Invalid API key"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_positionbook()
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_none(self):
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await fetch_positionbook()
+            assert result is None
