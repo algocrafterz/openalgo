@@ -192,7 +192,7 @@ def place_order_with_auth(
         executor.submit(async_log_order, "placeorder", original_data, error_response)
         return False, error_response, 500
 
-    if res.status == 200:
+    if res.status == 200 and order_id is not None:
         # Emit SocketIO event asynchronously (non-blocking)
         # Skip event emission for batch orders (they emit a summary event at the end)
         if emit_event:
