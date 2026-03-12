@@ -252,22 +252,6 @@ class RiskEngine:
 
         final_qty = qty
 
-        # Log position sizing breakdown
-        risk_per_share = abs(signal.entry - signal.sl)
-        reward_per_share = abs(signal.tp - signal.entry)
-        rr_ratio = reward_per_share / risk_per_share if risk_per_share > 0 else 0
-        position_value = final_qty * signal.entry
-
-        logger.info(
-            f"Position sizing [{signal.symbol}]: "
-            f"mode={self.sizing_mode}, capital={capital:,.0f}, "
-            f"entry={signal.entry}, sl={signal.sl}, tp={signal.tp}, "
-            f"risk/share={risk_per_share:.2f}, reward/share={reward_per_share:.2f}, "
-            f"R:R=1:{rr_ratio:.1f}, "
-            f"qty={final_qty}, value={position_value:,.0f}"
-            f"{' (capped by max_position_size)' if capped else ''}"
-        )
-
         return final_qty
 
     def _fixed_fractional(self, signal: Signal, capital: float) -> int:

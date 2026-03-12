@@ -1,5 +1,6 @@
 """Order construction and OpenAlgo API integration."""
 
+import math
 from typing import Optional, Tuple
 
 import httpx
@@ -7,6 +8,23 @@ from loguru import logger
 
 from signal_engine.config import settings
 from signal_engine.models import Action, Direction, Order, OrderStatus, Signal, TradeResult
+
+
+# NSE equity tick size is 0.05
+_TICK_SIZE = 0.05
+
+
+def round_to_tick(price: float, direction: str = "nearest") -> float:
+    """Round price to valid NSE tick size (0.05).
+
+    direction: 'nearest', 'down', or 'up'
+    """
+    if direction == "down":
+        return round(math.floor(price / _TICK_SIZE) * _TICK_SIZE, 2)
+    elif direction == "up":
+        return round(math.ceil(price / _TICK_SIZE) * _TICK_SIZE, 2)
+    else:
+        return round(round(price / _TICK_SIZE) * _TICK_SIZE, 2)
 
 
 def build_order(
@@ -76,8 +94,19 @@ async def send_order(order: Order) -> TradeResult:
                     message=reason,
                 )
 
+            # Broker may return status=success but with null orderid
+            # when the order was actually rejected at broker level
+            raw_order_id = data.get("orderid")
+            if raw_order_id is None:
+                reason = data.get("message", "Order returned success but no order ID")
+                logger.warning(f"Order rejected for {order.symbol}: {reason}")
+                return TradeResult(
+                    status=OrderStatus.REJECTED,
+                    message=reason,
+                )
+
             return TradeResult(
-                order_id=str(data.get("orderid", "")),
+                order_id=str(raw_order_id),
                 status=OrderStatus.SUCCESS,
                 message=str(data.get("status", "")),
             )
@@ -98,6 +127,11 @@ def build_sl_order(signal: Signal, quantity: int) -> Order:
     action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
     sl_order_type = settings.bracket_sl_order_type
 
+    # Round trigger price to valid tick — conservative direction
+    # LONG SL: round down (triggers earlier), SHORT SL: round up (triggers earlier)
+    sl_direction = "down" if signal.direction == Direction.LONG else "up"
+    trigger_price = round_to_tick(signal.sl, sl_direction)
+
     return Order(
         symbol=signal.symbol,
         exchange=signal.exchange or settings.exchange,
@@ -107,7 +141,7 @@ def build_sl_order(signal: Signal, quantity: int) -> Order:
         order_type=sl_order_type,
         product=signal.product or settings.product,
         strategy_tag=signal.strategy,
-        trigger_price=signal.sl,
+        trigger_price=trigger_price,
     )
 
 
@@ -119,12 +153,17 @@ def build_tp_order(signal: Signal, quantity: int) -> Order:
     """
     action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
 
+    # Round TP price to valid tick — conservative direction
+    # LONG TP: round down (fills sooner), SHORT TP: round up (fills sooner)
+    tp_direction = "down" if signal.direction == Direction.LONG else "up"
+    tp_price = round_to_tick(signal.tp, tp_direction)
+
     return Order(
         symbol=signal.symbol,
         exchange=signal.exchange or settings.exchange,
         action=action,
         quantity=quantity,
-        price=signal.tp,
+        price=tp_price,
         order_type="LIMIT",
         product=signal.product or settings.product,
         strategy_tag=signal.strategy,

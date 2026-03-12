@@ -18,8 +18,8 @@ sizing:
   risk_per_trade: 0.01         # 1% risk per trade (fixed_fractional)
   pct_of_capital: 0.05         # 5% of capital per trade (pct_of_capital)
   max_position_size: 0          # Disabled — SL distance controls position size
-  min_entry_price: 0             # Min stock price to trade (0 = no filter)
-  max_entry_price: 0             # Max stock price to trade (0 = no filter)
+  min_entry_price: 100             # Min stock price to trade (0 = no filter)
+  max_entry_price: 800             # Max stock price to trade (0 = no filter)
   slippage_factor: 0.05        # Widen risk per share by 5% to account for MARKET order slippage
   sandbox_capital: 100000     # Override capital in analyze mode (0 = use OpenAlgo default)
   margin_multiplier:
