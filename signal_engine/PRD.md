@@ -436,12 +436,17 @@ All functions return safe defaults on failure (0.0, None, False). Never raise ex
 
 **Bracket Orders (`build_sl_order`, `build_tp_order`, `send_bracket_legs`):**
 ```
-SL order:  action=opposite of entry, order_type=SL-M, trigger_price=sl
-TP order:  action=opposite of entry, order_type=LIMIT, price=tp
+SL order:  action=opposite of entry, order_type=SL-M, trigger_price=sl (rounded to tick)
+TP order:  action=opposite of entry, order_type=LIMIT, price=tp (rounded to tick)
 ```
 Both sent after successful entry. Retries up to `max_sl_retries` on failure.
+Prices are rounded to valid NSE tick size (0.05) to prevent broker rejection of LIMIT orders.
+
+**Null order ID handling:** `send_order()` checks for null `orderid` in API response — brokers can return HTTP 200 with `status=false` and `orderid=null` when an order is rejected at broker level.
 
 **OCO (One-Cancels-Other):** When either SL or TP triggers (position closed), `tracker.py` cancels the other leg via `cancel_order()`.
+
+**Design Decision (2026-03-12):** Signal engine is a dumb executor — it does not compute or override TP/SL levels. All trade logic (TP level selection, R:R calculation) stays in the PineScript strategy. Analysis of 196 trades showed TP1 (1R) at +69R significantly outperforms TP1.5 at -60R. Trailing SL to breakeven adds no value with TP1 strategy since the LIMIT order closes the trade completely. See `pinescripts/intraday/orb/SIGNAL-PERFORMANCE-2026-Q1.md` for full simulation.
 
 ---
 
@@ -677,6 +682,17 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Min SL guard tightened:** `min_sl_pct: 0.005` (0.5%) rejects noise-level stop losses
 - [x] **Sandbox capital realistic:** `sandbox_capital: 100000` for meaningful paper trading
 - [x] **Dead code cleanup:** Removed unused `PriceType`/`BracketLeg` enums, stale imports, unused variable
+
+### Phase 4: Live Trading Fixes (2026-03-12)
+
+- [x] **Null orderid fix:** `place_order_service.py` checks `order_id is not None` before returning success
+- [x] **Tick price rounding:** SL/TP prices rounded to NSE 0.05 tick size (prevents broker LIMIT order rejection)
+- [x] **Null orderid detection in signal engine:** `send_order()` returns REJECTED when API returns success with null orderid
+- [x] **Startup risk summary:** Logs restored risk state (positions, trades, losses, limits) on engine restart
+- [x] **Duplicate log removal:** Removed redundant position sizing log from `risk.py` (kept detailed one in `main.py`)
+- [x] **Price filter configured:** `min_entry_price: 100`, `max_entry_price: 800` for tradeable universe
+- [x] **PineScript co-located:** Strategy source added to `signal_engine/pinescripts/intraday/orb/`
+- [x] **TP strategy analysis:** Simulated 5 strategies across 196 trades — TP1 (1R) confirmed optimal (+69R vs -60R for TP1.5)
 
 ### Not Implemented (Future Considerations)
 
