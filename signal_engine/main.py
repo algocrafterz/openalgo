@@ -192,6 +192,11 @@ def main() -> None:
         else:
             logger.info("Trading mode: LIVE (broker capital)")
 
+        # Log risk state summary (restored counters + config)
+        startup_capital = await fetch_available_capital()
+        if startup_capital > 0:
+            risk_engine.log_startup_summary(startup_capital)
+
         # Start position tracker in background
         tracker_task = asyncio.create_task(tracker.start())
         try:

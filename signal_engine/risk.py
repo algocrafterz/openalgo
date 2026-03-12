@@ -110,6 +110,37 @@ class RiskEngine:
         self.daily_realised_loss = row["daily_loss"]
         self.open_positions = row["open_positions"]
 
+        # Load weekly/monthly losses
+        self.weekly_realised_loss = self._store.weekly_loss(self._trade_mode, today)
+        self.monthly_realised_loss = self._store.monthly_loss(self._trade_mode, today)
+
+    def log_startup_summary(self, capital: float) -> None:
+        """Log risk state summary on startup for visibility after restarts."""
+        self._last_known_capital = capital
+        daily_limit = self.daily_loss_limit * capital
+        weekly_limit = self.weekly_loss_limit * capital
+        monthly_limit = self.monthly_loss_limit * capital
+
+        logger.info("--- Risk State (restored from DB) ---")
+        logger.info(
+            f"Positions: {self.open_positions}/{self.max_open_positions} | "
+            f"Trades today: {self.trades_today}/{self.max_trades_per_day}"
+        )
+        logger.info(
+            f"Daily loss: {self.daily_realised_loss:,.2f} / {daily_limit:,.2f} "
+            f"({abs(self.daily_realised_loss / daily_limit * 100) if daily_limit else 0:.0f}%)"
+        )
+        logger.info(
+            f"Weekly loss: {self.weekly_realised_loss:,.2f} / {weekly_limit:,.2f} | "
+            f"Monthly loss: {self.monthly_realised_loss:,.2f} / {monthly_limit:,.2f}"
+        )
+        logger.info(
+            f"Price filter: {self.min_entry_price}-{self.max_entry_price} | "
+            f"Risk/trade: {self.risk_per_trade:.1%} | "
+            f"Max heat: {self.max_portfolio_heat:.1%}"
+        )
+        logger.info("-------------------------------------")
+
     def _persist(self) -> None:
         """Save current counters to the persistent store."""
         if self._store is None:
