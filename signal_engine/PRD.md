@@ -629,6 +629,7 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 | `test_risk_store.py` | 7 | SQLite save/load, mode isolation, weekly/monthly aggregation |
 | `test_db.py` | 5 | Table creation, save, column values, error handling |
 | `test_telegram_integration.py` | 4 | Live Telegram connection (requires session) |
+| `test_auto_login.py` (root) | 30 | Auto-login, TOTP, broker name, auth verification, startup summary |
 
 Run tests:
 ```bash
@@ -709,6 +710,8 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Scripts moved to `signal_engine/scripts/`**: All startup automation self-contained, no changes to core OpenAlgo
 - [x] **Configurable broker name**: `BROKER_NAME` env var (default: `mstock`), strips/lowercases
 - [x] **Auth token verification**: After auto-login, calls broker funds API to confirm token is live before starting signal engine
+- [x] **Startup summary**: Logs detailed system state (available cash, utilized margin, realized/unrealized P&L, collateral, trading config, risk params, channels)
+- [x] **Telegram startup notification**: Sends startup summary to all configured Telegram channels so user is notified without checking logs
 - [x] **PID file management**: `signal_engine/openalgo.pid` for reliable process tracking (replaces fragile `pgrep -f`)
 - [x] **Service controller**: `openalgoctl.sh` with start/stop/restart/status, health URL polling
 - [x] **Log rotation**: `start.sh` rotates startup.log at 5MB

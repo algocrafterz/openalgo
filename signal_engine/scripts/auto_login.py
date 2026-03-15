@@ -1,15 +1,18 @@
-"""Automated broker login with TOTP generation.
+"""Automated broker login with TOTP generation and startup notification.
 
 Reads BROKER_PASSWORD and BROKER_TOTP_SECRET from environment,
-generates a TOTP code, authenticates with the broker, and stores
-the auth token in the database — bypassing the web UI.
+generates a TOTP code, authenticates with the broker, stores
+the auth token in the database, verifies it works, and sends
+a Telegram notification with startup summary.
 
 Usage:
     uv run python -m signal_engine.scripts.auto_login
 """
 
+import asyncio
 import os
 import sys
+from datetime import datetime
 
 import pyotp
 
@@ -189,7 +192,7 @@ def auto_login(
     return True, f"Auto-login successful for {username}"
 
 
-def verify_broker_auth(auth_token, _get_margin_data=None) -> bool:
+def verify_broker_auth(auth_token, _get_margin_data=None) -> dict | None:
     """Verify broker auth token is live by calling the funds API.
 
     Makes a lightweight API call to fetch account funds/margins.
@@ -200,14 +203,14 @@ def verify_broker_auth(auth_token, _get_margin_data=None) -> bool:
         _get_margin_data: Override for testing (DI).
 
     Returns:
-        True if token is valid and broker responded with fund data.
+        Fund data dict if token is valid, None otherwise.
     """
     from utils.logging import get_logger
     logger = get_logger(__name__)
 
     if not auth_token:
         logger.error("No auth token to verify")
-        return False
+        return None
 
     try:
         if _get_margin_data is None:
@@ -218,14 +221,137 @@ def verify_broker_auth(auth_token, _get_margin_data=None) -> bool:
 
         if not margin_data:
             logger.error("Auth verification failed: broker returned empty funds data")
-            return False
+            return None
 
         available = margin_data.get("availablecash", "0")
         logger.info("Auth verified: available cash = %s", available)
-        return True
+        return margin_data
 
     except Exception:
         logger.exception("Auth verification failed with exception")
+        return None
+
+
+def build_startup_summary(
+    broker_name: str,
+    fund_data: dict,
+    sizing_mode: str,
+    risk_per_trade: float,
+    max_open_positions: int,
+    daily_loss_limit: float,
+    max_portfolio_heat: float,
+    exchange: str,
+    product: str,
+    order_type: str,
+    channels: list,
+) -> str:
+    """Build a human-readable startup summary for logs and Telegram.
+
+    Args:
+        broker_name: Active broker.
+        fund_data: Dict from verify_broker_auth with fund fields.
+        sizing_mode: Position sizing mode.
+        risk_per_trade: Risk fraction per trade.
+        max_open_positions: Max concurrent positions.
+        daily_loss_limit: Daily loss limit fraction.
+        max_portfolio_heat: Max portfolio heat fraction.
+        exchange: Trading exchange.
+        product: Order product type.
+        order_type: Order type.
+        channels: List of Telegram channel names.
+
+    Returns:
+        Formatted summary string.
+    """
+    available = fund_data.get("availablecash", "0.00")
+    utilized = fund_data.get("utiliseddebits", "0.00")
+    realized = fund_data.get("m2mrealized", "0.00")
+    unrealized = fund_data.get("m2munrealized", "0.00")
+    collateral = fund_data.get("collateral", "0.00")
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ch_list = ", ".join(channels) if channels else "none"
+
+    lines = [
+        f"OpenAlgo Signal Engine - Ready",
+        f"Time: {now}",
+        f"",
+        f"-- Account --",
+        f"Broker: {broker_name}",
+        f"Available Cash: {available}",
+        f"Utilized Margin: {utilized}",
+        f"Realized P&L: {realized}",
+        f"Unrealized P&L: {unrealized}",
+        f"Collateral: {collateral}",
+        f"",
+        f"-- Trading Config --",
+        f"Exchange: {exchange} | Product: {product} | Order: {order_type}",
+        f"Sizing: {sizing_mode}",
+        f"Risk/Trade: {risk_per_trade * 100:.1f}%",
+        f"Max Positions: {max_open_positions}",
+        f"Daily Loss Limit: {daily_loss_limit * 100:.1f}%",
+        f"Portfolio Heat Cap: {max_portfolio_heat * 100:.1f}%",
+        f"",
+        f"-- Channels --",
+        f"{ch_list}",
+    ]
+
+    return "\n".join(lines)
+
+
+async def send_startup_notification(summary: str, _client=None) -> bool:
+    """Send startup summary to all configured Telegram channels.
+
+    Args:
+        summary: The formatted summary string.
+        _client: Override TelegramClient for testing (DI).
+
+    Returns:
+        True if message sent successfully to at least one channel.
+    """
+    from utils.logging import get_logger
+    logger = get_logger(__name__)
+
+    try:
+        from signal_engine.config import settings
+
+        if not settings.telegram_channels:
+            logger.warning("No Telegram channels configured, skipping notification")
+            return False
+
+        if _client is None:
+            from telethon import TelegramClient
+
+            session_path = "signal_engine/data/telegram"
+            client = TelegramClient(
+                session_path,
+                settings.telegram_api_id,
+                settings.telegram_api_hash,
+            )
+            await client.start(phone=settings.telegram_phone)
+            should_disconnect = True
+        else:
+            client = _client
+            should_disconnect = False
+
+        sent = False
+        for ch in settings.telegram_channels:
+            try:
+                await client.send_message(ch.id, summary)
+                logger.info("Startup notification sent to channel: %s", ch.name)
+                sent = True
+            except Exception:
+                logger.exception(
+                    "Failed to send startup notification to channel: %s", ch.name
+                )
+
+        if should_disconnect:
+            await client.disconnect()
+
+        return sent
+
+    except Exception:
+        logger.exception("Failed to send startup notification")
         return False
 
 
@@ -234,21 +360,58 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    success, message = auto_login()
-    if success:
-        from utils.logging import get_logger
-        logger = get_logger(__name__)
-        logger.info(message)
+    from utils.logging import get_logger
+    logger = get_logger(__name__)
 
-        # Verify token works by calling broker API
-        from database.auth_db import get_auth_token
-        token = get_auth_token("admin")
-        if verify_broker_auth(token):
-            logger.info("Broker auth token verified - ready to trade")
-        else:
-            logger.error("Broker auth token verification FAILED")
-            sys.exit(1)
-    else:
-        from utils.logging import get_logger
-        get_logger(__name__).error("Auto-login failed: %s", message)
+    # 1. Auto-login
+    success, message = auto_login()
+    if not success:
+        logger.error("Auto-login failed: %s", message)
         sys.exit(1)
+
+    logger.info(message)
+
+    # 2. Verify token works by calling broker API
+    from database.auth_db import get_auth_token
+    token = get_auth_token("admin")
+    fund_data = verify_broker_auth(token)
+    if not fund_data:
+        logger.error("Broker auth token verification FAILED")
+        sys.exit(1)
+
+    logger.info("Broker auth token verified - ready to trade")
+
+    # 3. Build and log startup summary
+    from signal_engine.config import settings
+
+    broker_name = get_broker_name()
+    channel_names = [ch.name for ch in settings.telegram_channels]
+
+    summary = build_startup_summary(
+        broker_name=broker_name,
+        fund_data=fund_data,
+        sizing_mode=settings.sizing_mode,
+        risk_per_trade=settings.risk_per_trade,
+        max_open_positions=settings.max_open_positions,
+        daily_loss_limit=settings.daily_loss_limit,
+        max_portfolio_heat=settings.max_portfolio_heat,
+        exchange=settings.exchange,
+        product=settings.product,
+        order_type=settings.order_type,
+        channels=channel_names,
+    )
+
+    # Log each line of the summary
+    for line in summary.splitlines():
+        if line.strip():
+            logger.info(line)
+
+    # 4. Send Telegram notification
+    try:
+        sent = asyncio.run(send_startup_notification(summary))
+        if sent:
+            logger.info("Startup notification sent to Telegram")
+        else:
+            logger.warning("Startup notification not sent (no channels or send failed)")
+    except Exception:
+        logger.exception("Telegram notification failed (non-fatal)")
