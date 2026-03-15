@@ -11,7 +11,7 @@ $wsl = "C:\Windows\System32\wsl.exe"
 $distro = "Ubuntu-24.04"
 
 $workdir = "/home/anand/github/openalgo"
-$startScript = "./signal_engine/scripts/bootstrap.sh"
+$startScript = "./signal_engine/scripts/openalgoctl.sh run"
 
 $maxLogSizeMB = 5
 
