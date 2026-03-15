@@ -143,7 +143,7 @@ bootstrap() {
     # Startup: auto-login + verify + summary + Telegram notify
     log "Running startup (auto-login, verify, notify)..."
 
-    if "$UV_BIN" run python -m signal_engine.scripts.startup; then
+    if "$UV_BIN" run python -m signal_engine.scripts.openalgostartup; then
         log "Startup successful"
     else
         log "ERROR: Startup failed"
