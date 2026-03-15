@@ -109,7 +109,7 @@ signal_engine/
         auto_login.py        # Automated broker login with TOTP + auth verification
         start.sh             # Main startup script (Linux/WSL)
         openalgoctl.sh       # Service controller (start/stop/restart/status)
-        openAlgoAutoStart.ps1          # Windows Task Scheduler runtime script
+        openalgoctl.ps1                # Windows Task Scheduler runtime script
         createTaskOpenAlgoAutoStart.ps1 # Task Scheduler setup script
     data/                    # Runtime data (gitignored)
         trades.db            # SQLite audit database

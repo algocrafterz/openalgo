@@ -9,7 +9,7 @@ Unregister-ScheduledTask `
     -Confirm:$false `
     -ErrorAction SilentlyContinue
 
-$ps1Path = "$PSScriptRoot\openAlgoAutoStart.ps1"
+$ps1Path = "$PSScriptRoot\openalgoctl.ps1"
 
 if (!(Test-Path $ps1Path)) {
     Write-Host "ERROR: $ps1Path not found" -ForegroundColor Red
