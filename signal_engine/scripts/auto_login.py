@@ -5,7 +5,7 @@ generates a TOTP code, authenticates with the broker, and stores
 the auth token in the database — bypassing the web UI.
 
 Usage:
-    uv run python -m scripts.auto_login
+    uv run python -m signal_engine.scripts.auto_login
 """
 
 import os
@@ -13,7 +13,14 @@ import sys
 
 import pyotp
 
-BROKER_NAME = "mstock"
+
+def get_broker_name() -> str:
+    """Read broker name from BROKER_NAME env var, default to mstock.
+
+    Returns:
+        Lowercase, stripped broker name string.
+    """
+    return os.environ.get("BROKER_NAME", "mstock").strip().lower()
 
 
 def generate_totp(secret: str) -> str:
@@ -92,6 +99,8 @@ def auto_login(
     Returns:
         Tuple of (success: bool, message: str).
     """
+    broker_name = get_broker_name()
+
     # Lazy imports — only loaded when actually running (not at import time)
     if _authenticate_with_totp is None:
         from broker.mstock.api.auth_api import authenticate_with_totp
@@ -132,7 +141,7 @@ def auto_login(
         return False, "No admin user found in database. Run setup first."
 
     username = admin_user.username
-    logger.info("Auto-login starting for user: %s", username)
+    logger.info("Auto-login starting for user: %s (broker: %s)", username, broker_name)
 
     # 3. Generate TOTP
     totp_code = generate_totp(env["totp_secret"])
@@ -148,7 +157,7 @@ def auto_login(
 
     # 5. Store token in DB
     inserted_id = _upsert_auth(
-        username, auth_token, BROKER_NAME, feed_token=feed_token
+        username, auth_token, broker_name, feed_token=feed_token
     )
     if not inserted_id:
         return False, "Failed to store auth token in database"
@@ -156,24 +165,23 @@ def auto_login(
     logger.info("Auth token stored for user: %s", username)
 
     # 6. Init broker status and trigger master contract download
-    # (same logic as handle_auth_success in utils/auth_utils.py)
-    _init_broker_status(BROKER_NAME)
+    _init_broker_status(broker_name)
 
-    should_download, reason = _should_download_master_contract(BROKER_NAME)
+    should_download, reason = _should_download_master_contract(broker_name)
     logger.info("Smart download check: should_download=%s, reason=%s",
                 should_download, reason)
 
     if should_download:
         thread = Thread(
             target=_async_master_contract_download,
-            args=(BROKER_NAME,), daemon=True
+            args=(broker_name,), daemon=True
         )
         thread.start()
         logger.info("Master contract download started in background")
     else:
         thread = Thread(
             target=_load_existing_master_contract,
-            args=(BROKER_NAME,), daemon=True
+            args=(broker_name,), daemon=True
         )
         thread.start()
         logger.info("Loading cached master contract: %s", reason)
