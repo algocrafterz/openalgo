@@ -1,12 +1,11 @@
-"""Automated broker login with TOTP generation and startup notification.
+"""OpenAlgo scheduler — startup and shutdown automation.
 
-Reads BROKER_PASSWORD and BROKER_TOTP_SECRET from environment,
-generates a TOTP code, authenticates with the broker, stores
-the auth token in the database, verifies it works, and sends
-a Telegram notification with startup summary.
+Startup: auto-login with TOTP, verify broker auth, send Telegram summary.
+Shutdown: send Telegram shutdown notification.
 
 Usage:
-    uv run python -m signal_engine.scripts.openalgostartup
+    uv run python -m signal_engine.scripts.openalgoscheduler startup
+    uv run python -m signal_engine.scripts.openalgoscheduler shutdown [reason]
 """
 
 import asyncio
@@ -299,11 +298,33 @@ def build_startup_summary(
     return "\n".join(lines)
 
 
-async def send_startup_notification(summary: str, _client=None) -> bool:
-    """Send startup summary to all configured Telegram channels.
+def build_shutdown_summary(broker_name: str, reason: str = "scheduled") -> str:
+    """Build a human-readable shutdown summary for logs and Telegram.
 
     Args:
-        summary: The formatted summary string.
+        broker_name: Active broker.
+        reason: Why shutdown is happening (e.g. "scheduled", "manual").
+
+    Returns:
+        Formatted summary string.
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    lines = [
+        f"OpenAlgo Signal Engine - Stopped",
+        f"Time: {now}",
+        f"Broker: {broker_name}",
+        f"Reason: {reason}",
+    ]
+
+    return "\n".join(lines)
+
+
+async def send_telegram_notification(message: str, _client=None) -> bool:
+    """Send a message to all configured Telegram channels.
+
+    Args:
+        message: The formatted message string.
         _client: Override TelegramClient for testing (DI).
 
     Returns:
@@ -337,12 +358,12 @@ async def send_startup_notification(summary: str, _client=None) -> bool:
         sent = False
         for ch in settings.telegram_channels:
             try:
-                await client.send_message(ch.id, summary)
-                logger.info("Startup notification sent to channel: %s", ch.name)
+                await client.send_message(ch.id, message)
+                logger.info("Notification sent to channel: %s", ch.name)
                 sent = True
             except Exception:
                 logger.exception(
-                    "Failed to send startup notification to channel: %s", ch.name
+                    "Failed to send notification to channel: %s", ch.name
                 )
 
         if should_disconnect:
@@ -351,15 +372,12 @@ async def send_startup_notification(summary: str, _client=None) -> bool:
         return sent
 
     except Exception:
-        logger.exception("Failed to send startup notification")
+        logger.exception("Failed to send Telegram notification")
         return False
 
 
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
+def _run_startup():
+    """Full startup flow: login, verify, summarise, notify."""
     from utils.logging import get_logger
     logger = get_logger(__name__)
 
@@ -404,17 +422,55 @@ if __name__ == "__main__":
         channels=channel_names,
     )
 
-    # Log each line of the summary
     for line in summary.splitlines():
         if line.strip():
             logger.info(line)
 
     # 4. Send Telegram notification
     try:
-        sent = asyncio.run(send_startup_notification(summary))
+        sent = asyncio.run(send_telegram_notification(summary))
         if sent:
             logger.info("Startup notification sent to Telegram")
         else:
             logger.warning("Startup notification not sent (no channels or send failed)")
     except Exception:
         logger.exception("Telegram notification failed (non-fatal)")
+
+
+def _run_shutdown(reason: str = "scheduled"):
+    """Shutdown flow: build summary, notify, exit."""
+    from utils.logging import get_logger
+    logger = get_logger(__name__)
+
+    broker_name = get_broker_name()
+    summary = build_shutdown_summary(broker_name, reason=reason)
+
+    for line in summary.splitlines():
+        if line.strip():
+            logger.info(line)
+
+    try:
+        sent = asyncio.run(send_telegram_notification(summary))
+        if sent:
+            logger.info("Shutdown notification sent to Telegram")
+        else:
+            logger.warning("Shutdown notification not sent (no channels or send failed)")
+    except Exception:
+        logger.exception("Telegram notification failed (non-fatal)")
+
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    command = sys.argv[1] if len(sys.argv) > 1 else "startup"
+    reason = sys.argv[2] if len(sys.argv) > 2 else "scheduled"
+
+    if command == "startup":
+        _run_startup()
+    elif command == "shutdown":
+        _run_shutdown(reason=reason)
+    else:
+        print(f"Usage: python -m signal_engine.scripts.openalgoscheduler [startup|shutdown] [reason]")
+        sys.exit(1)

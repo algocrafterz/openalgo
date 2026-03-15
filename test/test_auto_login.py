@@ -1,4 +1,4 @@
-"""Tests for signal_engine/scripts/openalgostartup.py."""
+"""Tests for signal_engine/scripts/openalgoscheduler.py."""
 
 import asyncio
 import os
@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pyotp
 import pytest
 
-from signal_engine.scripts.openalgostartup import (
+from signal_engine.scripts.openalgoscheduler import (
     auto_login,
+    build_shutdown_summary,
     build_startup_summary,
     generate_totp,
     get_broker_name,
+    send_telegram_notification,
     validate_auto_login_env,
     verify_broker_auth,
 )
@@ -436,3 +438,78 @@ class TestBuildStartupSummary:
 
         assert "30000.00" in summary
         assert "1200.00" in summary
+
+
+class TestBuildShutdownSummary:
+    """Test shutdown summary message formatting."""
+
+    def test_includes_stopped_label(self):
+        summary = build_shutdown_summary("mstock")
+        assert "Stopped" in summary
+
+    def test_includes_broker_name(self):
+        summary = build_shutdown_summary("zerodha")
+        assert "zerodha" in summary
+
+    def test_includes_reason(self):
+        summary = build_shutdown_summary("mstock", reason="manual")
+        assert "manual" in summary
+
+    def test_default_reason_is_scheduled(self):
+        summary = build_shutdown_summary("mstock")
+        assert "scheduled" in summary
+
+    def test_includes_timestamp(self):
+        summary = build_shutdown_summary("mstock")
+        # Should contain date-like pattern
+        assert "Time:" in summary
+
+
+class TestSendTelegramNotification:
+    """Test Telegram notification sending."""
+
+    def test_sends_to_all_channels(self):
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock()
+
+        ch1 = MagicMock()
+        ch1.id = 123
+        ch1.name = "channel1"
+        ch2 = MagicMock()
+        ch2.id = 456
+        ch2.name = "channel2"
+
+        mock_settings = MagicMock()
+        mock_settings.telegram_channels = [ch1, ch2]
+
+        with patch("signal_engine.scripts.openalgoscheduler.settings", mock_settings, create=True):
+            with patch.dict("sys.modules", {"signal_engine.config": MagicMock(settings=mock_settings)}):
+                result = asyncio.run(send_telegram_notification("test message", _client=mock_client))
+
+        assert result is True
+        assert mock_client.send_message.call_count == 2
+
+    def test_returns_false_when_no_channels(self):
+        mock_settings = MagicMock()
+        mock_settings.telegram_channels = []
+
+        with patch.dict("sys.modules", {"signal_engine.config": MagicMock(settings=mock_settings)}):
+            result = asyncio.run(send_telegram_notification("test message"))
+
+        assert result is False
+
+    def test_returns_false_on_send_failure(self):
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=Exception("Network error"))
+
+        ch1 = MagicMock()
+        ch1.id = 123
+        ch1.name = "channel1"
+
+        mock_settings = MagicMock()
+        mock_settings.telegram_channels = [ch1]
+
+        with patch.dict("sys.modules", {"signal_engine.config": MagicMock(settings=mock_settings)}):
+            result = asyncio.run(send_telegram_notification("test", _client=mock_client))
+
+        assert result is False
