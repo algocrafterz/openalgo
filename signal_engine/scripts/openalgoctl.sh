@@ -27,7 +27,7 @@ fi
 # --- Paths ---
 LOG_DIR="$PROJECT_DIR/signal_engine/log"
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/startup.log"
+LOG_FILE="$LOG_DIR/openalgoctl.log"
 PID_FILE="$PROJECT_DIR/signal_engine/openalgo.pid"
 HEALTH_URL="http://127.0.0.1:5000/"
 MAX_WAIT=90
@@ -63,7 +63,15 @@ get_pids() {
 
 is_running() {
     get_pids
-    [[ -n "$APP_PID" && -n "$SIGNAL_PID" ]]
+    # Any PID alive = running (or partially running)
+    if [[ -n "$APP_PID" || -n "$SIGNAL_PID" ]]; then
+        return 0
+    fi
+    # No PIDs but server port is responding
+    if curl -fs --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
 }
 
 # --- Wait for network ---
@@ -86,41 +94,41 @@ wait_for_network() {
     log "Network is up (took ${elapsed}s)"
 }
 
-# --- Kill stale processes from PID file ---
-kill_stale() {
+# --- Kill processes from PID file ---
+kill_from_pidfile() {
     if [ -f "$PID_FILE" ]; then
         local old_app old_signal
         old_app=$(sed -n '1p' "$PID_FILE")
         old_signal=$(sed -n '2p' "$PID_FILE")
 
-        if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
-            log "Killing stale app.py (PID $old_app)..."
-            kill "$old_app" 2>/dev/null || true
-            sleep 2
+        if [ -n "$old_signal" ] && kill -0 "$old_signal" 2>/dev/null; then
+            log "Killing signal_engine (PID $old_signal)..."
+            kill "$old_signal" 2>/dev/null || true
         fi
 
+        if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
+            log "Killing app.py (PID $old_app)..."
+            kill "$old_app" 2>/dev/null || true
+        fi
+
+        sleep 2
+
+        # Force-kill if still alive
         if [ -n "$old_signal" ] && kill -0 "$old_signal" 2>/dev/null; then
-            log "Killing stale signal_engine (PID $old_signal)..."
-            kill "$old_signal" 2>/dev/null || true
-            sleep 2
+            kill -9 "$old_signal" 2>/dev/null || true
+        fi
+        if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
+            kill -9 "$old_app" 2>/dev/null || true
         fi
 
         rm -f "$PID_FILE"
     fi
 }
 
-# --- Core bootstrap: start server + login + signal engine ---
-bootstrap() {
-    wait_for_network || exit 1
-    kill_stale
-
-    # Start OpenAlgo server
-    log "Starting OpenAlgo server..."
-    "$UV_BIN" run app.py &
-    APP_PID=$!
-
+# --- Wait for health URL ---
+wait_for_health() {
     log "Waiting for server at $HEALTH_URL (max ${MAX_WAIT}s)..."
-    local elapsed=0
+    local elapsed=0 app_pid="$1"
 
     while ! curl -fs "$HEALTH_URL" >/dev/null 2>&1; do
         sleep 1
@@ -128,27 +136,45 @@ bootstrap() {
 
         if [ $elapsed -ge $MAX_WAIT ]; then
             log "ERROR: Server did not start within ${MAX_WAIT}s"
-            kill "$APP_PID" 2>/dev/null || true
-            exit 1
+            return 1
         fi
 
-        if ! kill -0 "$APP_PID" 2>/dev/null; then
+        if ! kill -0 "$app_pid" 2>/dev/null; then
             log "ERROR: app.py exited unexpectedly"
-            exit 1
+            return 1
         fi
     done
 
     log "Server is ready (took ${elapsed}s)"
+}
+
+# --- Core bootstrap: start server + login + signal engine ---
+#     Writes PID file as soon as each process starts.
+bootstrap() {
+    wait_for_network || return 1
+    kill_from_pidfile
+
+    # Start OpenAlgo server
+    log "Starting OpenAlgo server..."
+    "$UV_BIN" run app.py &
+    APP_PID=$!
+
+    # Write PID immediately so is_running() detects us
+    echo "$APP_PID" > "$PID_FILE"
+    echo "" >> "$PID_FILE"
+
+    wait_for_health "$APP_PID" || return 1
 
     # Startup: auto-login + verify + summary + Telegram notify
     log "Running startup (auto-login, verify, notify)..."
 
-    if "$UV_BIN" run python -m signal_engine.scripts.openalgostartup; then
+    if "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler startup; then
         log "Startup successful"
     else
         log "ERROR: Startup failed"
         kill "$APP_PID" 2>/dev/null || true
-        exit 1
+        rm -f "$PID_FILE"
+        return 1
     fi
 
     # Start Signal Engine
@@ -156,7 +182,7 @@ bootstrap() {
     "$UV_BIN" run python -m signal_engine.main &
     SIGNAL_PID=$!
 
-    # Write PID file
+    # Update PID file with both PIDs
     echo "$APP_PID" > "$PID_FILE"
     echo "$SIGNAL_PID" >> "$PID_FILE"
 
@@ -169,68 +195,18 @@ bootstrap() {
 # --- Commands ---
 
 cmd_start() {
-    if is_running; then
-        log "START SKIPPED: OpenAlgo already running"
-        log "  app.py PID: $APP_PID"
-        log "  signal_engine PID: $SIGNAL_PID"
-        return
-    fi
-
-    log "STARTING: Launching OpenAlgo (background)..."
-    rotate_log
-
-    # Run bootstrap in a subshell, detached
-    (
-        exec > >(tee -a "$LOG_FILE") 2>&1
-        bootstrap
-        # Keep waiting so services stay alive
-        wait -n "$APP_PID" "$SIGNAL_PID" || true
-        log "A process exited. Shutting down..."
-        kill "$SIGNAL_PID" 2>/dev/null || true
-        kill "$APP_PID" 2>/dev/null || true
-        rm -f "$PID_FILE"
-        wait || true
-        log "Done."
-    ) &
-    disown
-
-    # Poll health URL until services are up
-    log "WAITING: Polling $HEALTH_URL (max ${MAX_WAIT}s)..."
-    local elapsed=0
-
-    while ! curl -fs "$HEALTH_URL" >/dev/null 2>&1; do
-        sleep 2
-        elapsed=$((elapsed + 2))
-
-        if [ $elapsed -ge $MAX_WAIT ]; then
-            log "START FAILURE: Server not ready after ${MAX_WAIT}s"
-            tail -n 20 "$LOG_FILE" 2>/dev/null || true
-            exit 1
-        fi
-    done
-
-    # Give signal engine a moment to start and write PID file
-    sleep 5
-    get_pids
-
-    if [[ -n "$APP_PID" && -n "$SIGNAL_PID" ]]; then
-        log "START SUCCESS: OpenAlgo running"
-        log "  app.py PID: $APP_PID"
-        log "  signal_engine PID: $SIGNAL_PID"
-    elif [[ -n "$APP_PID" ]]; then
-        log "START PARTIAL: app.py running, signal_engine may still be starting"
-    else
-        log "START FAILURE: Services did not start correctly"
-        tail -n 20 "$LOG_FILE" 2>/dev/null || true
-        exit 1
-    fi
+    # 'start' is an alias for 'run' — kept for convenience when running
+    # directly from an interactive WSL terminal. From Windows/PowerShell,
+    # always use the PS1 script which handles backgrounding correctly.
+    cmd_run
 }
 
 cmd_run() {
     if is_running; then
         log "RUN SKIPPED: OpenAlgo already running"
-        log "  app.py PID: $APP_PID"
-        log "  signal_engine PID: $SIGNAL_PID"
+        get_pids
+        [ -n "$APP_PID" ] && log "  app.py PID: $APP_PID"
+        [ -n "$SIGNAL_PID" ] && log "  signal_engine PID: $SIGNAL_PID"
         return
     fi
 
@@ -244,6 +220,9 @@ cmd_run() {
     # Trap for cleanup in foreground mode
     cleanup() {
         log "Shutting down..."
+        # Send shutdown notification
+        "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "scheduled" 2>&1 || \
+            log "Shutdown notification failed (non-fatal)"
         kill "$SIGNAL_PID" 2>/dev/null || true
         kill "$APP_PID" 2>/dev/null || true
         rm -f "$PID_FILE"
@@ -252,13 +231,16 @@ cmd_run() {
     }
     trap cleanup INT TERM EXIT
 
-    bootstrap
+    bootstrap || exit 1
 
-    log "Press Ctrl+C to stop all services."
+    log "Blocking until a process exits. Ctrl+C to stop."
 
-    # Block until one process exits
-    wait -n "$APP_PID" "$SIGNAL_PID" || true
-    log "A process exited. Shutting down..."
+    # Block until a process exits
+    while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$SIGNAL_PID" 2>/dev/null; do
+        sleep 5
+    done
+
+    log "A process exited."
     cleanup
 }
 
@@ -273,21 +255,12 @@ cmd_stop() {
 
     log "STOPPING: Terminating OpenAlgo processes"
 
-    [ -n "$SIGNAL_PID" ] && kill "$SIGNAL_PID" 2>/dev/null || true
-    [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+    # Send shutdown notification while app.py is still running (Telegram needs it)
+    log "Sending shutdown notification..."
+    "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "${STOP_REASON:-scheduled}" 2>&1 || \
+        log "Shutdown notification failed (non-fatal)"
 
-    sleep 3
-
-    # Force-kill if still running
-    get_pids
-
-    if [[ -n "$APP_PID" || -n "$SIGNAL_PID" ]]; then
-        log "STOP WARNING: Some processes still running, forcing termination"
-        [ -n "$APP_PID" ] && kill -9 "$APP_PID" 2>/dev/null || true
-        [ -n "$SIGNAL_PID" ] && kill -9 "$SIGNAL_PID" 2>/dev/null || true
-    fi
-
-    rm -f "$PID_FILE"
+    kill_from_pidfile
     log "STOP SUCCESS: OpenAlgo stopped"
 }
 

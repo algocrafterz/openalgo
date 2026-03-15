@@ -106,15 +106,15 @@ signal_engine/
     PRD.md                   # This document
     scripts/
         __init__.py
-        openalgostartup.py       # Login + verify + summary + Telegram notify
+        openalgoscheduler.py     # Startup/shutdown automation + Telegram notify
         openalgoctl.sh           # Unified service controller (start/run/stop/restart/status)
         openalgoctl.ps1          # Windows wrapper: boots WSL, calls openalgoctl.sh run
-        createTaskOpenAlgoAutoStart.ps1 # One-time Task Scheduler setup
+        createTaskOpenAlgoScheduler.ps1  # One-time Task Scheduler setup (start + stop)
     data/                    # Runtime data (gitignored)
         trades.db            # SQLite audit database
         telegram.session     # Telegram auth session
     log/                     # Startup/runtime logs (gitignored)
-        startup.log
+        openalgoctl.log
         openalgoctl.log
     logs/                    # Signal engine log files (gitignored)
         signal_engine_*.log
@@ -713,7 +713,7 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Telegram startup notification**: Sends startup summary to all configured Telegram channels so user is notified without checking logs
 - [x] **PID file management**: `signal_engine/openalgo.pid` for reliable process tracking (replaces fragile `pgrep -f`)
 - [x] **Service controller**: `openalgoctl.sh` with start/stop/restart/status, health URL polling
-- [x] **Log rotation**: `openalgoctl.sh` rotates startup.log at 5MB
+- [x] **Log rotation**: `openalgoctl.sh` rotates openalgoctl.log at 5MB
 - [x] **Windows Task Scheduler**: PowerShell scripts for automated weekday startup via WSL
 - [x] **WSL UTF-16 fix**: Handles BOM in `wsl -l -q` output for reliable distro detection
 
@@ -771,7 +771,7 @@ PYTHONPATH=. uv run python -m signal_engine.main
 ./signal_engine/scripts/openalgoctl.sh start|stop|restart|status
 
 # Windows Task Scheduler (run in PowerShell as admin)
-powershell -ExecutionPolicy Bypass -File signal_engine/scripts/createTaskOpenAlgoAutoStart.ps1
+powershell -ExecutionPolicy Bypass -File signal_engine/scripts/createTaskOpenAlgoScheduler.ps1
 ```
 
 ### Test

@@ -90,5 +90,8 @@ nul
 # Signal Engine runtime data
 signal_engine/.env
 signal_engine/data/
+signal_engine/log/
 signal_engine/logs/
+signal_engine/*.pid
+signal_engine/*.lock
 signal_engine/*.session
