@@ -104,10 +104,20 @@ signal_engine/
     .env                     # Secrets (gitignored)
     .env.example             # Template for secrets (no values)
     PRD.md                   # This document
+    scripts/
+        __init__.py
+        auto_login.py        # Automated broker login with TOTP + auth verification
+        start.sh             # Main startup script (Linux/WSL)
+        openalgoctl.sh       # Service controller (start/stop/restart/status)
+        openAlgoAutoStart.ps1          # Windows Task Scheduler runtime script
+        createTaskOpenAlgoAutoStart.ps1 # Task Scheduler setup script
     data/                    # Runtime data (gitignored)
         trades.db            # SQLite audit database
         telegram.session     # Telegram auth session
-    logs/                    # Log files (gitignored)
+    log/                     # Startup/runtime logs (gitignored)
+        startup.log
+        openalgoctl.log
+    logs/                    # Signal engine log files (gitignored)
         signal_engine_*.log
     tests/
         __init__.py
@@ -694,6 +704,17 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **PineScript co-located:** Strategy source added to `signal_engine/pinescripts/intraday/orb/`
 - [x] **TP strategy analysis:** Simulated 5 strategies across 196 trades — TP1 (1R) confirmed optimal (+69R vs -60R for TP1.5)
 
+### Phase 5: Automated Startup & Auth Verification (2026-03-15)
+
+- [x] **Scripts moved to `signal_engine/scripts/`**: All startup automation self-contained, no changes to core OpenAlgo
+- [x] **Configurable broker name**: `BROKER_NAME` env var (default: `mstock`), strips/lowercases
+- [x] **Auth token verification**: After auto-login, calls broker funds API to confirm token is live before starting signal engine
+- [x] **PID file management**: `signal_engine/openalgo.pid` for reliable process tracking (replaces fragile `pgrep -f`)
+- [x] **Service controller**: `openalgoctl.sh` with start/stop/restart/status, health URL polling
+- [x] **Log rotation**: `start.sh` rotates startup.log at 5MB
+- [x] **Windows Task Scheduler**: PowerShell scripts for automated weekday startup via WSL
+- [x] **WSL UTF-16 fix**: Handles BOM in `wsl -l -q` output for reliable distro detection
+
 ### Not Implemented (Future Considerations)
 
 - [ ] **Multi-strategy performance tracking:** per-strategy P&L, win rate, avg R:R, drawdown (broker + OpenAlgo already provide trade analytics)
@@ -738,7 +759,17 @@ asyncio.run(auth())
 
 ### Run
 ```bash
+# Manual start (signal engine only)
 PYTHONPATH=. uv run python -m signal_engine.main
+
+# Automated start (OpenAlgo + auto-login + signal engine)
+./signal_engine/scripts/start.sh
+
+# Service controller
+./signal_engine/scripts/openalgoctl.sh start|stop|restart|status
+
+# Windows Task Scheduler (run in PowerShell as admin)
+powershell -ExecutionPolicy Bypass -File signal_engine/scripts/createTaskOpenAlgoAutoStart.ps1
 ```
 
 ### Test
