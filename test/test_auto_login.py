@@ -11,6 +11,7 @@ from signal_engine.scripts.auto_login import (
     generate_totp,
     get_broker_name,
     validate_auto_login_env,
+    verify_broker_auth,
 )
 
 
@@ -266,3 +267,63 @@ class TestAutoLogin:
         mocks["_upsert_auth"].assert_called_once_with(
             "admin", "jwt_token", "mstock", feed_token=None
         )
+
+
+class TestVerifyBrokerAuth:
+    """Test broker auth token verification via funds API."""
+
+    def test_returns_true_on_valid_funds_response(self):
+        mock_get_margin = MagicMock(return_value={
+            "availablecash": "150000.00",
+            "collateral": "0.00",
+        })
+
+        result = verify_broker_auth(
+            auth_token="valid_token",
+            _get_margin_data=mock_get_margin,
+        )
+
+        assert result is True
+        mock_get_margin.assert_called_once_with("valid_token")
+
+    def test_returns_false_on_empty_response(self):
+        mock_get_margin = MagicMock(return_value={})
+
+        result = verify_broker_auth(
+            auth_token="expired_token",
+            _get_margin_data=mock_get_margin,
+        )
+
+        assert result is False
+
+    def test_returns_false_on_none_token(self):
+        mock_get_margin = MagicMock(return_value={})
+
+        result = verify_broker_auth(
+            auth_token=None,
+            _get_margin_data=mock_get_margin,
+        )
+
+        assert result is False
+
+    def test_returns_false_on_exception(self):
+        mock_get_margin = MagicMock(side_effect=Exception("Network error"))
+
+        result = verify_broker_auth(
+            auth_token="some_token",
+            _get_margin_data=mock_get_margin,
+        )
+
+        assert result is False
+
+    def test_logs_available_cash_on_success(self):
+        mock_get_margin = MagicMock(return_value={
+            "availablecash": "250000.50",
+        })
+
+        result = verify_broker_auth(
+            auth_token="valid_token",
+            _get_margin_data=mock_get_margin,
+        )
+
+        assert result is True

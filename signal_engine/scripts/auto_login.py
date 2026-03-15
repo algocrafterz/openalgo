@@ -189,6 +189,46 @@ def auto_login(
     return True, f"Auto-login successful for {username}"
 
 
+def verify_broker_auth(auth_token, _get_margin_data=None) -> bool:
+    """Verify broker auth token is live by calling the funds API.
+
+    Makes a lightweight API call to fetch account funds/margins.
+    If the broker returns valid data, the token is confirmed working.
+
+    Args:
+        auth_token: The broker auth token to verify.
+        _get_margin_data: Override for testing (DI).
+
+    Returns:
+        True if token is valid and broker responded with fund data.
+    """
+    from utils.logging import get_logger
+    logger = get_logger(__name__)
+
+    if not auth_token:
+        logger.error("No auth token to verify")
+        return False
+
+    try:
+        if _get_margin_data is None:
+            from broker.mstock.api.funds import get_margin_data
+            _get_margin_data = get_margin_data
+
+        margin_data = _get_margin_data(auth_token)
+
+        if not margin_data:
+            logger.error("Auth verification failed: broker returned empty funds data")
+            return False
+
+        available = margin_data.get("availablecash", "0")
+        logger.info("Auth verified: available cash = %s", available)
+        return True
+
+    except Exception:
+        logger.exception("Auth verification failed with exception")
+        return False
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
 
@@ -197,7 +237,17 @@ if __name__ == "__main__":
     success, message = auto_login()
     if success:
         from utils.logging import get_logger
-        get_logger(__name__).info(message)
+        logger = get_logger(__name__)
+        logger.info(message)
+
+        # Verify token works by calling broker API
+        from database.auth_db import get_auth_token
+        token = get_auth_token("admin")
+        if verify_broker_auth(token):
+            logger.info("Broker auth token verified - ready to trade")
+        else:
+            logger.error("Broker auth token verification FAILED")
+            sys.exit(1)
     else:
         from utils.logging import get_logger
         get_logger(__name__).error("Auto-login failed: %s", message)
