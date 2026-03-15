@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-START_SCRIPT="$SCRIPT_DIR/start.sh"
+START_SCRIPT="$SCRIPT_DIR/bootstrap.sh"
 PID_FILE="$PROJECT_DIR/signal_engine/openalgo.pid"
 LOG_DIR="$PROJECT_DIR/signal_engine/log"
 LOGFILE="$LOG_DIR/openalgoctl.log"

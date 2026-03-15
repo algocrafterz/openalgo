@@ -1,4 +1,4 @@
-"""Tests for signal_engine/scripts/auto_login.py — automated broker login with TOTP."""
+"""Tests for signal_engine/scripts/startup.py — automated broker login with TOTP."""
 
 import asyncio
 import os
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pyotp
 import pytest
 
-from signal_engine.scripts.auto_login import (
+from signal_engine.scripts.startup import (
     auto_login,
     build_startup_summary,
     generate_totp,

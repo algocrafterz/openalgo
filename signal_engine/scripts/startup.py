@@ -6,7 +6,7 @@ the auth token in the database, verifies it works, and sends
 a Telegram notification with startup summary.
 
 Usage:
-    uv run python -m signal_engine.scripts.auto_login
+    uv run python -m signal_engine.scripts.startup
 """
 
 import asyncio
