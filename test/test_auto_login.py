@@ -468,7 +468,33 @@ class TestBuildShutdownSummary:
 class TestSendTelegramNotification:
     """Test Telegram notification sending."""
 
-    def test_sends_to_all_channels(self):
+    def test_sends_to_notify_channel_only(self):
+        """When notify_channel is set, send only to it (not signal channels)."""
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock()
+
+        notify_ch = MagicMock()
+        notify_ch.id = 789
+        notify_ch.name = "admin_notify"
+
+        ch1 = MagicMock()
+        ch1.id = 123
+        ch1.name = "channel1"
+
+        mock_settings = MagicMock()
+        mock_settings.notify_channel = notify_ch
+        mock_settings.telegram_channels = [ch1]
+
+        with patch("signal_engine.scripts.openalgoscheduler.settings", mock_settings, create=True):
+            with patch.dict("sys.modules", {"signal_engine.config": MagicMock(settings=mock_settings)}):
+                result = asyncio.run(send_telegram_notification("test message", _client=mock_client))
+
+        assert result is True
+        assert mock_client.send_message.call_count == 1
+        mock_client.send_message.assert_called_once_with(789, "test message")
+
+    def test_falls_back_to_signal_channels(self):
+        """When notify_channel is None, send to all signal channels."""
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock()
 
@@ -480,6 +506,7 @@ class TestSendTelegramNotification:
         ch2.name = "channel2"
 
         mock_settings = MagicMock()
+        mock_settings.notify_channel = None
         mock_settings.telegram_channels = [ch1, ch2]
 
         with patch("signal_engine.scripts.openalgoscheduler.settings", mock_settings, create=True):
@@ -491,6 +518,7 @@ class TestSendTelegramNotification:
 
     def test_returns_false_when_no_channels(self):
         mock_settings = MagicMock()
+        mock_settings.notify_channel = None
         mock_settings.telegram_channels = []
 
         with patch.dict("sys.modules", {"signal_engine.config": MagicMock(settings=mock_settings)}):
@@ -507,6 +535,7 @@ class TestSendTelegramNotification:
         ch1.name = "channel1"
 
         mock_settings = MagicMock()
+        mock_settings.notify_channel = None
         mock_settings.telegram_channels = [ch1]
 
         with patch.dict("sys.modules", {"signal_engine.config": MagicMock(settings=mock_settings)}):

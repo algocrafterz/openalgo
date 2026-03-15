@@ -25,7 +25,7 @@ if [ -z "$UV_BIN" ]; then
 fi
 
 # --- Paths ---
-LOG_DIR="$PROJECT_DIR/signal_engine/log"
+LOG_DIR="$PROJECT_DIR/signal_engine/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/openalgoctl.log"
 PID_FILE="$PROJECT_DIR/signal_engine/openalgo.pid"
@@ -195,9 +195,8 @@ bootstrap() {
 # --- Commands ---
 
 cmd_start() {
-    # 'start' is an alias for 'run' — kept for convenience when running
-    # directly from an interactive WSL terminal. From Windows/PowerShell,
-    # always use the PS1 script which handles backgrounding correctly.
+    # 'start' is an alias for 'run'. The PS1 wrapper uses 'run' directly;
+    # this alias exists for interactive use from a WSL terminal.
     cmd_run
 }
 
