@@ -36,7 +36,7 @@ HEALTH_URL="http://127.0.0.1:5000/"
 MAX_WAIT=60
 NET_MAX_WAIT=120
 
-log() { echo "[start.sh] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+log() { echo "[bootstrap] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
 log "=========================================="
 log "Starting OpenAlgo (PID: $$)"
@@ -126,11 +126,11 @@ done
 
 log "Server is ready (took ${elapsed}s)"
 
-# --- Auto-login ---
-log "Running auto-login..."
+# --- Startup (login + verify + notify) ---
+log "Running startup (auto-login, verify, notify)..."
 
-if "$UV_BIN" run python -m signal_engine.scripts.auto_login; then
-    log "Auto-login successful"
+if "$UV_BIN" run python -m signal_engine.scripts.startup; then
+    log "Startup successful"
 else
     log "ERROR: Auto-login failed"
     kill "$APP_PID" 2>/dev/null || true

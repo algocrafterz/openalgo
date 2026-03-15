@@ -106,8 +106,8 @@ signal_engine/
     PRD.md                   # This document
     scripts/
         __init__.py
-        auto_login.py        # Automated broker login with TOTP + auth verification
-        start.sh             # Main startup script (Linux/WSL)
+        startup.py               # Login + verify + summary + Telegram notify
+        bootstrap.sh             # Orchestrator: server + startup.py + signal engine
         openalgoctl.sh       # Service controller (start/stop/restart/status)
         openalgoctl.ps1                # Windows Task Scheduler runtime script
         createTaskOpenAlgoAutoStart.ps1 # Task Scheduler setup script
@@ -714,7 +714,7 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Telegram startup notification**: Sends startup summary to all configured Telegram channels so user is notified without checking logs
 - [x] **PID file management**: `signal_engine/openalgo.pid` for reliable process tracking (replaces fragile `pgrep -f`)
 - [x] **Service controller**: `openalgoctl.sh` with start/stop/restart/status, health URL polling
-- [x] **Log rotation**: `start.sh` rotates startup.log at 5MB
+- [x] **Log rotation**: `bootstrap.sh` rotates startup.log at 5MB
 - [x] **Windows Task Scheduler**: PowerShell scripts for automated weekday startup via WSL
 - [x] **WSL UTF-16 fix**: Handles BOM in `wsl -l -q` output for reliable distro detection
 
@@ -766,7 +766,7 @@ asyncio.run(auth())
 PYTHONPATH=. uv run python -m signal_engine.main
 
 # Automated start (OpenAlgo + auto-login + signal engine)
-./signal_engine/scripts/start.sh
+./signal_engine/scripts/bootstrap.sh
 
 # Service controller
 ./signal_engine/scripts/openalgoctl.sh start|stop|restart|status
