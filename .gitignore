@@ -8,6 +8,8 @@ openalgo.db
 .env
 .flaskenv
 *.pyc
+.coverage
+openalgo.pid
 __pycache__/
 instance/
 .DS_Store

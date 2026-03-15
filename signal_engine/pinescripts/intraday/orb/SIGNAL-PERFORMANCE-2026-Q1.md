@@ -202,6 +202,68 @@ Simulated net PnL across 196 trades under different TP strategies using actual Q
 
 Signal engine is a **dumb executor** — it does not compute or override TP/SL levels. All trade logic (TP level selection, R:R calculation) stays in the PineScript strategy. Signal engine handles: parsing, validation, sizing, order placement, and position tracking only.
 
+## Capital Simulation — TP1 Only (2026-03-13)
+
+Based on Q1 data: 196 trades over 31 trading days (~1.5 months), TP1 only (+69R gross).
+
+**Assumptions:**
+- Sizing: fixed_fractional, risk_per_trade = 1% of capital
+- Avg SL distance: 0.64% of entry price (from Q1 data)
+- Avg position value per trade: ~1.56x capital (= 1% risk / 0.64% SL distance)
+- Commission: 0.06% round trip (mStock actual costs)
+- Slippage: ~2 ticks round trip (MARKET orders) = ~0.10R per trade
+- Product: MIS (5x leverage, 20% margin)
+- Max open positions: 5 (from config)
+
+### Cost Breakdown (per trade)
+
+| Cost Component | As % of Position | As R-multiple |
+|----------------|-----------------|---------------|
+| Commission (0.06% RT) | 0.06% | 0.094R |
+| Slippage (~2 ticks RT) | ~0.065% | ~0.10R |
+| **Total per trade** | **~0.125%** | **~0.19R** |
+
+### Net Return Calculation
+
+| Component | R-multiples | At 1% risk/trade |
+|-----------|-------------|-------------------|
+| Gross P&L (132W - 63L) | +69.0R | +69.0% |
+| Commission (196 trades) | -18.4R | -18.4% |
+| Slippage (196 trades) | -19.6R | -19.6% |
+| **Net P&L** | **+31.0R** | **+31.0%** |
+
+### Capital vs Absolute Returns (TP1 Only, Net of Costs)
+
+| Capital (INR) | Risk/Trade | Net P&L (31R) | Monthly (~20R) | Max DD (6R) | Margin/Trade (20%) |
+|--------------:|-----------:|--------------:|---------------:|------------:|--------------------:|
+| 5,000 | 50 | 1,550 | ~1,000 | -300 | ~1,560 |
+| 10,000 | 100 | 3,100 | ~2,000 | -600 | ~3,125 |
+| 25,000 | 250 | 7,750 | ~5,000 | -1,500 | ~7,813 |
+| 50,000 | 500 | 15,500 | ~10,000 | -3,000 | ~15,625 |
+| 75,000 | 750 | 23,250 | ~15,000 | -4,500 | ~23,438 |
+| **100,000** | **1,000** | **31,000** | **~20,000** | **-6,000** | **~31,250** |
+| 200,000 | 2,000 | 62,000 | ~40,000 | -12,000 | ~62,500 |
+| 300,000 | 3,000 | 93,000 | ~60,000 | -18,000 | ~93,750 |
+| 500,000 | 5,000 | 155,000 | ~100,000 | -30,000 | ~156,250 |
+
+### Approx Net Rate of Return
+
+| Period | Net Return % | Notes |
+|--------|-------------|-------|
+| Q1 (31 trading days) | **~31%** | 196 trades, 67.3% WR |
+| Per month (~21 trading days) | **~20%** | ~130 trades/month |
+| Per week (~5 trading days) | **~5%** | ~32 trades/week |
+| Per trade (avg) | **+0.16R** | Net after all costs |
+
+### Key Observations
+
+1. **Net return % is constant regardless of capital** — fixed_fractional sizing scales linearly. Capital only changes absolute INR.
+2. **Practical minimum: 50,000 INR** — below this, lot sizes on 100-800 INR stocks become too small for meaningful execution.
+3. **Sweet spot: 100,000 INR** — gives 31K net over Q1, 1000 INR risk/trade, comfortable lot sizes across the stock universe.
+4. **Max drawdown estimate: 6R (6%)** — worst streak was 6 consecutive losses. Daily loss limit (4%) would lock out after 4 losses in a single day.
+5. **Margin constraint: at 5 max positions, margin needed = 5 x ~31% of capital = ~156%** — but MIS 5x leverage means actual margin = ~31% of capital per position. With max_capital_utilization at 80%, this limits effective concurrent positions.
+6. **Slippage is the dominant cost** (~0.10R/trade) — consider LIMIT orders for entry to reduce this by ~50%.
+
 ## Baseline for Future Comparison
 
 Use these metrics as baseline when evaluating improvements:
@@ -211,3 +273,50 @@ Use these metrics as baseline when evaluating improvements:
 - **Long WR baseline**: 63.3%
 - **Short WR baseline**: 72.4%
 - **Friday WR baseline**: 55.2%
+
+## Slippage & Cost Optimization Analysis (2026-03-13)
+
+### Cost Structure Breakdown
+
+| Cost Component | Per Trade (R) | Total (196 trades) | % of Gross |
+|---------------|--------------|--------------------|-----------:|
+| Commission (0.06% RT, mStock) | 0.094R | 18.4R | 26.7% |
+| Slippage (MARKET, ~2 ticks RT) | 0.10R | 19.6R | 28.4% |
+| **Total costs** | **0.19R** | **38.0R** | **55.1%** |
+| **Net retained** | **0.16R** | **31.0R** | **44.9%** |
+
+### Decision: Keep MARKET Orders for Entry
+
+**LIMIT orders are NOT suitable for ORB breakout entries.** Reasons:
+
+1. **Momentum strategy** — price moves away from entry on successful breakouts
+2. **Telegram relay latency** — 2-7 seconds from PineScript alert to exchange, price already past entry
+3. **Adverse selection** — LIMIT fills mainly on failed breakouts (worst trades), misses the best ones
+4. **Estimated LIMIT fill rate: 30-50%** — losing half the trades destroys the edge
+5. **Adding tick buffer to LIMIT** just converts random slippage to fixed — no net gain
+
+### Higher-Impact Optimizations (ranked)
+
+| Priority | Action | Est. Impact | Status |
+|----------|--------|-------------|--------|
+| 1 | **Remove D-grade symbols** (BHEL -4.1%, MANAPPURAM -3.2%) | +7.3R saved | Pending |
+| 2 | **Cache capital fetch** (30s TTL, avoid HTTP per signal) | -0.1 to -0.3s latency | Pending |
+| 3 | **Increase slippage_factor** 0.05 -> 0.10 (honest risk accounting) | Better sizing accuracy | Pending |
+| 4 | **Direct TradingView webhook** (bypass Telegram) | -2 to -4s latency, ~30-50% slippage reduction | Deferred (high effort, loses audit trail) |
+
+### Key Insight
+
+**Signal quality > slippage reduction.** Removing 2 D-grade symbols (BHEL, MANAPPURAM) recovers ~7.3R — nearly equivalent to eliminating ALL slippage. The watchlist filter is the highest-ROI improvement.
+
+### Latency Chain (signal to exchange)
+
+| Step | Latency |
+|------|---------|
+| PineScript alert fires (bar close) | — |
+| TradingView -> Telegram | ~1-3s |
+| Telegram API -> Telethon client | ~0.5-2s |
+| Signal engine pipeline (parse/validate/size) | ~0.2-0.5s |
+| HTTP POST to OpenAlgo API | ~0.1-0.3s |
+| OpenAlgo -> broker (mStock) | ~0.1-0.5s |
+| Broker -> exchange | ~0.05-0.2s |
+| **Total** | **~2-7s** |
