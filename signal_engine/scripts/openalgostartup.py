@@ -373,7 +373,10 @@ if __name__ == "__main__":
 
     # 2. Verify token works by calling broker API
     from database.auth_db import get_auth_token
-    token = get_auth_token("admin")
+    from database.user_db import find_user_by_username
+    admin_user = find_user_by_username()
+    username = admin_user.username if admin_user else "admin"
+    token = get_auth_token(username)
     fund_data = verify_broker_auth(token)
     if not fund_data:
         logger.error("Broker auth token verification FAILED")
