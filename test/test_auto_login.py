@@ -1,4 +1,4 @@
-"""Tests for scripts/auto_login.py — automated broker login with TOTP."""
+"""Tests for signal_engine/scripts/auto_login.py — automated broker login with TOTP."""
 
 import os
 from unittest.mock import MagicMock, patch
@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 import pyotp
 import pytest
 
-from scripts.auto_login import auto_login, generate_totp, validate_auto_login_env
+from signal_engine.scripts.auto_login import (
+    auto_login,
+    generate_totp,
+    get_broker_name,
+    validate_auto_login_env,
+)
 
 
 class TestGenerateTotp:
@@ -31,6 +36,27 @@ class TestGenerateTotp:
     def test_none_secret_raises(self):
         with pytest.raises(ValueError, match="TOTP secret"):
             generate_totp(None)
+
+
+class TestGetBrokerName:
+    """Test broker name resolution from environment."""
+
+    def test_reads_from_env(self):
+        with patch.dict(os.environ, {"BROKER_NAME": "zerodha"}):
+            assert get_broker_name() == "zerodha"
+
+    def test_defaults_to_mstock(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BROKER_NAME", None)
+            assert get_broker_name() == "mstock"
+
+    def test_strips_whitespace(self):
+        with patch.dict(os.environ, {"BROKER_NAME": "  dhan  "}):
+            assert get_broker_name() == "dhan"
+
+    def test_lowercases(self):
+        with patch.dict(os.environ, {"BROKER_NAME": "Zerodha"}):
+            assert get_broker_name() == "zerodha"
 
 
 class TestValidateAutoLoginEnv:
@@ -109,6 +135,24 @@ class TestAutoLogin:
         mocks["_upsert_auth"].assert_called_once_with(
             "admin", "jwt_token_xyz", "mstock", feed_token="feed_token_abc"
         )
+
+    @patch.dict(os.environ, {
+        "BROKER_PASSWORD": "pass123",
+        "BROKER_TOTP_SECRET": pyotp.random_base32(),
+        "BROKER_NAME": "zerodha",
+    })
+    def test_uses_broker_name_from_env(self):
+        mocks = self._make_mocks(
+            auth_return=("jwt_token", "feed_token", None),
+        )
+
+        success, _ = auto_login(**mocks)
+
+        assert success is True
+        mocks["_upsert_auth"].assert_called_once_with(
+            "admin", "jwt_token", "zerodha", feed_token="feed_token"
+        )
+        mocks["_init_broker_status"].assert_called_once_with("zerodha")
 
     @patch.dict(os.environ, {
         "BROKER_PASSWORD": "pass123",
