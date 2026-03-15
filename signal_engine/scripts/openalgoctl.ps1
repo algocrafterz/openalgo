@@ -1,19 +1,46 @@
 # -------------------------------------------------------
-# OpenAlgo AutoStart Runtime Script
+# OpenAlgo Service Controller (Windows)
+#
+# Usage:
+#   .\openalgoctl.ps1 start    — start in background (returns after health check)
+#   .\openalgoctl.ps1 run      — start in foreground (for Task Scheduler)
+#   .\openalgoctl.ps1 stop     — stop all services
+#   .\openalgoctl.ps1 restart  — stop then start
+#   .\openalgoctl.ps1 status   — show running state
 # -------------------------------------------------------
+
+param(
+    [Parameter(Position = 0)]
+    [ValidateSet("start", "run", "stop", "restart", "status")]
+    [string]$Command
+)
 
 $ErrorActionPreference = "Stop"
 
 # -------- Configuration --------
 
-$log = "$PSScriptRoot\openalgo-autostart.log"
+$log = "$PSScriptRoot\openalgoctl.log"
 $wsl = "C:\Windows\System32\wsl.exe"
 $distro = "Ubuntu-24.04"
 
 $workdir = "/home/anand/github/openalgo"
-$startScript = "./signal_engine/scripts/openalgoctl.sh run"
+$ctlScript = "./signal_engine/scripts/openalgoctl.sh"
 
 $maxLogSizeMB = 5
+
+# -------- Usage --------
+
+if (-not $Command) {
+
+    Write-Host "Usage: .\openalgoctl.ps1 {start|run|stop|restart|status}" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  start    Start in background, return after health check"
+    Write-Host "  run      Start in foreground, block until exit (Task Scheduler)"
+    Write-Host "  stop     Stop all services"
+    Write-Host "  restart  Stop then start"
+    Write-Host "  status   Show running state"
+    exit 1
+}
 
 # -------- Logging Function --------
 
@@ -47,34 +74,25 @@ try {
 }
 catch {}
 
-# -------- Main Execution --------
+# -------- WSL Preflight (shared by all commands) --------
 
-try {
-
-    Write-Log "========== START =========="
+function Test-WslReady {
 
     # Verify WSL exists
     if (!(Test-Path $wsl)) {
-
         Write-Log "ERROR: wsl.exe not found"
-        exit 1
+        return $false
     }
-
-    Write-Log "WSL binary verified"
 
     # Verify distro exists (handle UTF-16LE BOM from wsl -l -q)
     $distros = & $wsl -l -q 2>$null | ForEach-Object { $_.Trim([char]0).Trim() } | Where-Object { $_ -ne "" }
 
     if ($distros -notcontains $distro) {
-
         Write-Log "ERROR: WSL distro '$distro' not installed. Available: $($distros -join ', ')"
-        exit 2
+        return $false
     }
 
-    Write-Log "WSL distro verified: $distro"
-
-    # -------- WSL Readiness Retry Loop --------
-
+    # WSL readiness retry loop
     $maxRetries = 5
     $retryDelay = 5
     $attempt = 0
@@ -82,68 +100,68 @@ try {
     while ($attempt -lt $maxRetries) {
 
         try {
-
             $result = & $wsl -d $distro -- echo ready 2>$null
 
             if ($result -and $result.Trim([char]0).Trim() -eq "ready") {
-
-                Write-Log "WSL ready"
-                break
+                return $true
             }
-
         }
         catch {}
 
         $attempt++
-
         Write-Log "WSL not ready, retry $attempt/$maxRetries"
-
         Start-Sleep -Seconds $retryDelay
     }
 
-    if ($attempt -eq $maxRetries) {
+    Write-Log "ERROR: WSL did not become ready"
+    return $false
+}
 
-        Write-Log "ERROR: WSL did not become ready"
-        exit 4
-    }
+# -------- Run command in WSL --------
 
-    # -------- Verify project directory --------
+function Invoke-Ctl {
+    param([string]$cmd)
 
+    # Verify project directory
     $dirCheck = & $wsl -d $distro -- bash -lc "[ -d $workdir ] && echo OK" 2>$null
 
     if (-not $dirCheck -or $dirCheck.Trim([char]0).Trim() -ne "OK") {
-
         Write-Log "ERROR: project directory not found: $workdir"
         exit 3
     }
 
-    Write-Log "Project directory verified"
-
-    # -------- Prevent duplicate start --------
-
-    $existingProcess = & $wsl -d $distro -- bash -lc "pgrep -f 'uv run app.py'" 2>$null
-
-    if ($existingProcess) {
-
-        Write-Log "OpenAlgo already running (PID $($existingProcess.Trim([char]0).Trim()))"
-        exit 0
-    }
-
-    Write-Log "Launching OpenAlgo..."
-
-    # -------- Launch OpenAlgo --------
-
     & $wsl `
         -d $distro `
-        -- bash -lc "cd $workdir && $startScript" `
-        2>&1 | ForEach-Object { Write-Log $_ }
+        -- bash -lc "cd $workdir && $ctlScript $cmd" `
+        2>&1 | ForEach-Object {
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ }
+            Write-Log $line
+            Write-Host $line
+        }
+}
 
-    Write-Log "OpenAlgo execution finished"
+# -------- Main Execution --------
+
+try {
+
+    Write-Log "========== $($Command.ToUpper()) =========="
+
+    if (!(Test-WslReady)) {
+        Write-Host "WSL is not ready. Check log: $log" -ForegroundColor Red
+        exit 4
+    }
+
+    Write-Log "WSL ready, distro: $distro"
+
+    Invoke-Ctl $Command
+
+    Write-Log "Command '$Command' completed"
 
 }
 catch {
 
     Write-Log "FATAL ERROR: $($_.Exception.Message)"
+    Write-Host "FATAL ERROR: $($_.Exception.Message)" -ForegroundColor Red
     exit 100
 
 }

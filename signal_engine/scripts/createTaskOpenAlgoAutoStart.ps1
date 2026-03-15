@@ -18,7 +18,7 @@ if (!(Test-Path $ps1Path)) {
 
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ps1Path`""
+    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ps1Path`" run"
 
 $trigger = New-ScheduledTaskTrigger `
     -Weekly `
