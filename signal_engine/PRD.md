@@ -106,7 +106,7 @@ signal_engine/
     PRD.md                   # This document
     scripts/
         __init__.py
-        startup.py               # Login + verify + summary + Telegram notify
+        openalgostartup.py       # Login + verify + summary + Telegram notify
         openalgoctl.sh           # Unified service controller (start/run/stop/restart/status)
         openalgoctl.ps1          # Windows wrapper: boots WSL, calls openalgoctl.sh run
         createTaskOpenAlgoAutoStart.ps1 # One-time Task Scheduler setup
