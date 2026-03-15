@@ -238,6 +238,20 @@ title OpenAlgo Service
     exit 1
 }
 
+# -------- Kill service window (reads PID file, kills process, removes file) --------
+
+function Stop-ServiceWindow {
+
+    if (Test-Path $servicePidFile) {
+        $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue
+        if ($oldPid) {
+            Write-Log "Killing service window (PID $oldPid)..."
+            taskkill /T /F /PID $oldPid 2>$null | Out-Null
+        }
+        Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # -------- Main Execution --------
 
 try {
@@ -259,25 +273,12 @@ try {
 
         "stop" {
             Invoke-Ctl "stop"
-            # Kill the service window
-            if (Test-Path $servicePidFile) {
-                $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue
-                if ($oldPid) {
-                    taskkill /T /F /PID $oldPid 2>$null | Out-Null
-                }
-                Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
-            }
+            Stop-ServiceWindow
         }
 
         "restart" {
             Invoke-Ctl "stop"
-            if (Test-Path $servicePidFile) {
-                $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue
-                if ($oldPid) {
-                    taskkill /T /F /PID $oldPid 2>$null | Out-Null
-                }
-                Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
-            }
+            Stop-ServiceWindow
             Start-Sleep -Seconds 3
             Invoke-Start
         }

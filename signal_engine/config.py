@@ -97,6 +97,8 @@ class Settings:
 
     # Telegram channels (from yaml)
     telegram_channels: Tuple[TelegramChannel, ...]
+    # Optional: dedicated channel for system notifications (startup/shutdown)
+    notify_channel: TelegramChannel | None
 
     # Position sizing (from yaml)
     sizing_mode: str
@@ -183,6 +185,17 @@ def _build_settings() -> Settings:
             ch_id = str(raw_id)
         channels.append(TelegramChannel(name=ch.get("name", ""), id=ch_id))
 
+    # Parse optional notify channel
+    raw_notify = telegram.get("notify_channel")
+    notify_channel = None
+    if raw_notify and isinstance(raw_notify, dict):
+        raw_nid = raw_notify.get("id", "")
+        try:
+            n_id = int(raw_nid)
+        except (ValueError, TypeError):
+            n_id = str(raw_nid)
+        notify_channel = TelegramChannel(name=raw_notify.get("name", ""), id=n_id)
+
     # Load and validate margin_multiplier
     raw_multiplier = _require_key(sizing, "sizing", "margin_multiplier")
     if not isinstance(raw_multiplier, dict):
@@ -212,6 +225,7 @@ def _build_settings() -> Settings:
 
         # Telegram channels from yaml
         telegram_channels=tuple(channels),
+        notify_channel=notify_channel,
 
         # Position sizing from yaml — all required
         sizing_mode=mode,

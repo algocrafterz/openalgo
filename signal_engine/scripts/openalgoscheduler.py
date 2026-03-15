@@ -272,27 +272,27 @@ def build_startup_summary(
     ch_list = ", ".join(channels) if channels else "none"
 
     lines = [
-        f"OpenAlgo Signal Engine - Ready",
+        "OpenAlgo Signal Engine - Ready",
         f"Time: {now}",
-        f"",
-        f"-- Account --",
+        "",
+        "-- Account --",
         f"Broker: {broker_name}",
         f"Available Cash: {available}",
         f"Utilized Margin: {utilized}",
         f"Realized P&L: {realized}",
         f"Unrealized P&L: {unrealized}",
         f"Collateral: {collateral}",
-        f"",
-        f"-- Trading Config --",
+        "",
+        "-- Trading Config --",
         f"Exchange: {exchange} | Product: {product} | Order: {order_type}",
         f"Sizing: {sizing_mode}",
         f"Risk/Trade: {risk_per_trade * 100:.1f}%",
         f"Max Positions: {max_open_positions}",
         f"Daily Loss Limit: {daily_loss_limit * 100:.1f}%",
         f"Portfolio Heat Cap: {max_portfolio_heat * 100:.1f}%",
-        f"",
-        f"-- Channels --",
-        f"{ch_list}",
+        "",
+        "-- Channels --",
+        ch_list,
     ]
 
     return "\n".join(lines)
@@ -311,7 +311,7 @@ def build_shutdown_summary(broker_name: str, reason: str = "scheduled") -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
-        f"OpenAlgo Signal Engine - Stopped",
+        "OpenAlgo Signal Engine - Stopped",
         f"Time: {now}",
         f"Broker: {broker_name}",
         f"Reason: {reason}",
@@ -336,7 +336,12 @@ async def send_telegram_notification(message: str, _client=None) -> bool:
     try:
         from signal_engine.config import settings
 
-        if not settings.telegram_channels:
+        # Use dedicated notify_channel if configured, else fall back to signal channels
+        if settings.notify_channel:
+            notify_targets = [settings.notify_channel]
+        elif settings.telegram_channels:
+            notify_targets = list(settings.telegram_channels)
+        else:
             logger.warning("No Telegram channels configured, skipping notification")
             return False
 
@@ -356,7 +361,7 @@ async def send_telegram_notification(message: str, _client=None) -> bool:
             should_disconnect = False
 
         sent = False
-        for ch in settings.telegram_channels:
+        for ch in notify_targets:
             try:
                 await client.send_message(ch.id, message)
                 logger.info("Notification sent to channel: %s", ch.name)

@@ -2,7 +2,7 @@
 
 > **Document Purpose:** Implementation reference and status tracker.
 > **Reading convention:** `[IMPL]` = direct implementation directive. `[CONTEXT]` = background only. `[CONSTRAINT]` = hard rules.
-> **Status:** MVP + Phase 2 improvements + Phase 3 config tuning. See Section 19 for status.
+> **Status:** MVP + Phase 2-5 completed. See Section 19 for status.
 
 ---
 
@@ -113,10 +113,8 @@ signal_engine/
     data/                    # Runtime data (gitignored)
         trades.db            # SQLite audit database
         telegram.session     # Telegram auth session
-    log/                     # Startup/runtime logs (gitignored)
+    logs/                    # All logs (gitignored)
         openalgoctl.log
-        openalgoctl.log
-    logs/                    # Signal engine log files (gitignored)
         signal_engine_*.log
     tests/
         __init__.py
@@ -159,6 +157,11 @@ TELEGRAM_PHONE=
 # OpenAlgo
 OPENALGO_BASE_URL=http://127.0.0.1:5000
 OPENALGO_API_KEY=
+
+# Auto-login (openalgoscheduler.py)
+BROKER_NAME=mstock          # broker to auto-login (default: mstock)
+BROKER_PASSWORD=            # broker login password
+BROKER_TOTP_SECRET=         # base32 TOTP seed from authenticator setup
 ```
 
 ### 5.3 `config.yaml` Schema
@@ -168,6 +171,12 @@ telegram:
   channels:
     - name: "orb_channel"
       id: -1003518225740
+
+  # Optional: dedicated channel for system notifications (startup/shutdown)
+  # If omitted, notifications go to all signal channels above.
+  notify_channel:
+    name: "admin_notify"
+    id: -100XXXXXXXXXX
 
 sizing:
   mode: fixed_fractional         # fixed_fractional | pct_of_capital
@@ -239,6 +248,8 @@ IT:
 ### 5.5 `config.py`
 
 [IMPL] Uses frozen dataclass (not pydantic-settings). Exposes singleton `settings` imported by all modules. Sectors loaded from `sectors.yaml` by `_load_sectors()`. Missing `sectors.yaml` returns empty dict (no sector limits enforced). All required keys use `_require_key()` — `ConfigError` raised at startup if anything is missing.
+
+**`notify_channel`:** Optional `TelegramChannel` for system notifications (startup, shutdown, errors). Parsed from `telegram.notify_channel` in config.yaml. If omitted (`None`), notifications fall back to all signal channels. Keeps operational alerts separate from trading signal channels.
 
 ---
 
@@ -612,7 +623,7 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 
 ## 18. Testing
 
-[IMPL] Comprehensive test suite — **290 tests** (286 unit + 4 integration):
+[IMPL] Comprehensive test suite — **329 tests** (325 unit + 4 integration):
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
@@ -628,7 +639,7 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 | `test_risk_store.py` | 7 | SQLite save/load, mode isolation, weekly/monthly aggregation |
 | `test_db.py` | 5 | Table creation, save, column values, error handling |
 | `test_telegram_integration.py` | 4 | Live Telegram connection (requires session) |
-| `test_auto_login.py` (root) | 30 | Auto-login, TOTP, broker name, auth verification, startup summary |
+| `test_auto_login.py` (root) | 39 | Auto-login, TOTP, broker name, auth verification, startup/shutdown summary, Telegram notify (notify_channel + fallback) |
 
 Run tests:
 ```bash
@@ -710,12 +721,17 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **Configurable broker name**: `BROKER_NAME` env var (default: `mstock`), strips/lowercases
 - [x] **Auth token verification**: After auto-login, calls broker funds API to confirm token is live before starting signal engine
 - [x] **Startup summary**: Logs detailed system state (available cash, utilized margin, realized/unrealized P&L, collateral, trading config, risk params, channels)
-- [x] **Telegram startup notification**: Sends startup summary to all configured Telegram channels so user is notified without checking logs
+- [x] **Telegram startup notification**: Sends startup summary to `notify_channel` (or all signal channels if not configured)
+- [x] **Telegram shutdown notification**: Sends shutdown summary (broker, reason, timestamp) before services stop — sent while app.py is still running so Telegram has network access
 - [x] **PID file management**: `signal_engine/openalgo.pid` for reliable process tracking (replaces fragile `pgrep -f`)
-- [x] **Service controller**: `openalgoctl.sh` with start/stop/restart/status, health URL polling
-- [x] **Log rotation**: `openalgoctl.sh` rotates openalgoctl.log at 5MB
-- [x] **Windows Task Scheduler**: PowerShell scripts for automated weekday startup via WSL
+- [x] **Service controller**: `openalgoctl.sh` with start/run/stop/restart/status; `start` is an alias for `run` (foreground blocking)
+- [x] **Graceful shutdown trap**: `openalgoctl.sh run` catches SIGINT/SIGTERM/EXIT, sends shutdown notification, then kills processes
+- [x] **Log rotation**: `openalgoctl.sh` rotates `openalgoctl.log` at 5MB
+- [x] **Windows service window**: `openalgoctl.ps1 start` launches `openalgoctl.sh run` in a minimized cmd window; tracks that window's PID in `openalgo-service.pid` for reliable kill on stop/restart
+- [x] **Scheduled stop**: `createTaskOpenAlgoScheduler.ps1` creates both start (8:50 AM) and stop (3:30 PM) weekday tasks; stop task calls `openalgoctl.ps1 stop` which sends shutdown notification via WSL before killing the service window
+- [x] **WSL process management fix**: `openalgoctl.ps1` kills the Windows-side service window process tree (`taskkill /T /F`) not just WSL PIDs, preventing orphaned cmd windows on restart
 - [x] **WSL UTF-16 fix**: Handles BOM in `wsl -l -q` output for reliable distro detection
+- [x] **Separate notify channel**: `telegram.notify_channel` in config.yaml sends startup/shutdown notifications to a dedicated personal channel instead of all signal channels; falls back to signal channels if not configured
 
 ### Not Implemented (Future Considerations)
 
