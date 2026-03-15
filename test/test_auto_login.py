@@ -1,13 +1,15 @@
 """Tests for signal_engine/scripts/auto_login.py — automated broker login with TOTP."""
 
+import asyncio
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pyotp
 import pytest
 
 from signal_engine.scripts.auto_login import (
     auto_login,
+    build_startup_summary,
     generate_totp,
     get_broker_name,
     validate_auto_login_env,
@@ -272,21 +274,25 @@ class TestAutoLogin:
 class TestVerifyBrokerAuth:
     """Test broker auth token verification via funds API."""
 
-    def test_returns_true_on_valid_funds_response(self):
-        mock_get_margin = MagicMock(return_value={
+    def test_returns_fund_data_on_valid_response(self):
+        fund_data = {
             "availablecash": "150000.00",
             "collateral": "0.00",
-        })
+            "m2mrealized": "500.00",
+            "m2munrealized": "-200.00",
+            "utiliseddebits": "30000.00",
+        }
+        mock_get_margin = MagicMock(return_value=fund_data)
 
         result = verify_broker_auth(
             auth_token="valid_token",
             _get_margin_data=mock_get_margin,
         )
 
-        assert result is True
+        assert result == fund_data
         mock_get_margin.assert_called_once_with("valid_token")
 
-    def test_returns_false_on_empty_response(self):
+    def test_returns_none_on_empty_response(self):
         mock_get_margin = MagicMock(return_value={})
 
         result = verify_broker_auth(
@@ -294,19 +300,13 @@ class TestVerifyBrokerAuth:
             _get_margin_data=mock_get_margin,
         )
 
-        assert result is False
+        assert result is None
 
-    def test_returns_false_on_none_token(self):
-        mock_get_margin = MagicMock(return_value={})
+    def test_returns_none_on_none_token(self):
+        result = verify_broker_auth(auth_token=None)
+        assert result is None
 
-        result = verify_broker_auth(
-            auth_token=None,
-            _get_margin_data=mock_get_margin,
-        )
-
-        assert result is False
-
-    def test_returns_false_on_exception(self):
+    def test_returns_none_on_exception(self):
         mock_get_margin = MagicMock(side_effect=Exception("Network error"))
 
         result = verify_broker_auth(
@@ -314,16 +314,125 @@ class TestVerifyBrokerAuth:
             _get_margin_data=mock_get_margin,
         )
 
-        assert result is False
+        assert result is None
 
-    def test_logs_available_cash_on_success(self):
-        mock_get_margin = MagicMock(return_value={
-            "availablecash": "250000.50",
-        })
 
-        result = verify_broker_auth(
-            auth_token="valid_token",
-            _get_margin_data=mock_get_margin,
+class TestBuildStartupSummary:
+    """Test startup summary message formatting."""
+
+    def test_includes_broker_name(self):
+        summary = build_startup_summary(
+            broker_name="mstock",
+            fund_data={"availablecash": "150000.00"},
+            sizing_mode="fixed_fractional",
+            risk_per_trade=0.01,
+            max_open_positions=5,
+            daily_loss_limit=0.04,
+            max_portfolio_heat=0.05,
+            exchange="NSE",
+            product="MIS",
+            order_type="MARKET",
+            channels=["orb_channel"],
         )
 
-        assert result is True
+        assert "mstock" in summary
+
+    def test_includes_available_cash(self):
+        summary = build_startup_summary(
+            broker_name="mstock",
+            fund_data={"availablecash": "250000.50"},
+            sizing_mode="fixed_fractional",
+            risk_per_trade=0.01,
+            max_open_positions=5,
+            daily_loss_limit=0.04,
+            max_portfolio_heat=0.05,
+            exchange="NSE",
+            product="MIS",
+            order_type="MARKET",
+            channels=["orb_channel"],
+        )
+
+        assert "250000.50" in summary
+
+    def test_includes_risk_config(self):
+        summary = build_startup_summary(
+            broker_name="mstock",
+            fund_data={"availablecash": "100000.00"},
+            sizing_mode="fixed_fractional",
+            risk_per_trade=0.01,
+            max_open_positions=5,
+            daily_loss_limit=0.04,
+            max_portfolio_heat=0.05,
+            exchange="NSE",
+            product="MIS",
+            order_type="MARKET",
+            channels=["orb_channel", "scalp_channel"],
+        )
+
+        assert "1.0%" in summary
+        assert "5" in summary
+        assert "4.0%" in summary
+        assert "5.0%" in summary
+        assert "orb_channel" in summary
+        assert "scalp_channel" in summary
+
+    def test_includes_broker_config(self):
+        summary = build_startup_summary(
+            broker_name="mstock",
+            fund_data={"availablecash": "100000.00"},
+            sizing_mode="fixed_fractional",
+            risk_per_trade=0.01,
+            max_open_positions=5,
+            daily_loss_limit=0.04,
+            max_portfolio_heat=0.05,
+            exchange="NSE",
+            product="MIS",
+            order_type="MARKET",
+            channels=["orb_channel"],
+        )
+
+        assert "NSE" in summary
+        assert "MIS" in summary
+        assert "MARKET" in summary
+
+    def test_handles_missing_fund_fields(self):
+        summary = build_startup_summary(
+            broker_name="mstock",
+            fund_data={"availablecash": "100000.00"},
+            sizing_mode="fixed_fractional",
+            risk_per_trade=0.01,
+            max_open_positions=5,
+            daily_loss_limit=0.04,
+            max_portfolio_heat=0.05,
+            exchange="NSE",
+            product="MIS",
+            order_type="MARKET",
+            channels=[],
+        )
+
+        # Should not crash even with minimal fund_data
+        assert "100000.00" in summary
+
+    def test_includes_utilized_margin(self):
+        summary = build_startup_summary(
+            broker_name="mstock",
+            fund_data={
+                "availablecash": "150000.00",
+                "utiliseddebits": "30000.00",
+                "m2mrealized": "1200.00",
+                "m2munrealized": "-500.00",
+                "collateral": "10000.00",
+            },
+            sizing_mode="fixed_fractional",
+            risk_per_trade=0.01,
+            max_open_positions=5,
+            daily_loss_limit=0.04,
+            max_portfolio_heat=0.05,
+            exchange="NSE",
+            product="MIS",
+            order_type="MARKET",
+            channels=["orb_channel"],
+        )
+
+        assert "30000.00" in summary
+        assert "1200.00" in summary
