@@ -7,6 +7,16 @@
 #   .\openalgoctl.ps1 stop     — stop all services
 #   .\openalgoctl.ps1 restart  — stop then start
 #   .\openalgoctl.ps1 status   — show running state
+#
+# Prerequisites:
+#   1. Unblock this script if copied/downloaded (one-time):
+#        Unblock-File -Path .\openalgoctl.ps1
+#
+#   2. Shell scripts must have Unix line endings (LF, not CRLF).
+#      If you get "bash\r: No such file or directory", fix with:
+#        wsl -d Ubuntu-24.04 -- bash -c "sed -i 's/\r$//' /home/anand/github/openalgo/signal_engine/scripts/*.sh"
+#      Or configure git to keep LF in WSL:
+#        git config core.autocrlf input
 # -------------------------------------------------------
 
 param(
