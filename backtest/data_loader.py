@@ -80,6 +80,25 @@ def load_ohlcv(
     return df
 
 
+def load_index_data(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame | None:
+    """
+    Load index OHLCV data, returning None if unavailable.
+
+    Same as load_ohlcv_raw but returns None instead of raising
+    when data is missing. Used for optional index direction filter.
+    """
+    try:
+        return load_ohlcv_raw(symbol, exchange, interval, start_date, end_date)
+    except (ValueError, Exception):
+        return None
+
+
 def load_ohlcv_raw(
     symbol: str,
     exchange: str,

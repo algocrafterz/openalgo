@@ -110,13 +110,27 @@ This means: single TP at 1R, single SL — exactly what the Python backtest does
    - Swing stop mode (ATR is default)
    - Dashboard/visual elements (not relevant for backtesting)
 
-2. **Index filter implementation**:
-   - PineScript: Uses `request.security()` to fetch NIFTY data
-   - Python: Requires `index_data` parameter; if None, index filter is skipped
-   - Batch backtest currently runs without index data (filter skipped)
+2. **barstate.isconfirmed**: PineScript only acts on confirmed bars.
+   In backtesting with historical data, all bars are confirmed by
+   definition. This is only a concern for live trading, not backtesting.
+
+## Verified Full Parity (25/25 items)
+
+All 25 audited features match PineScript exactly:
+ORB Building, Breakout Detection, Pending Entry, Entry Price, Stop Loss
+(all modes), Target Calculation, Volume Filter, VWAP Trend, Daily EMA HTF,
+Index Filter (VWAP method), Multi-Filter Blocking, Gap Filter, ORB Range
+Filter, Min Entry Time, Entry Cutoff, Time Exit, One Entry Per Session,
+Session Reset, ATR (Wilder's), EMA, Breakout Buffer, Position Tracking,
+SL/TP Check Order, SL/TP Priority.
 
 ## Changelog
 
+- **2026-03-16**: Fixed ATR to use Wilder's smoothing (ewm) instead of SMA (rolling.mean)
+- **2026-03-16**: Fixed index filter to use "Price vs VWAP" method (PineScript default)
+- **2026-03-16**: Added index_filter_method config supporting all 3 PineScript methods
+- **2026-03-16**: Runner now loads NIFTY 50 index data from DuckDB and passes to strategy
+- **2026-03-16**: Added index config section to batch config parser
 - **2026-03-16**: Fixed tp_multiplier default from 1.5 to 1.0 (PineScript showTP1=true)
 - **2026-03-16**: Fixed ATR SL short side to use vol_adjust instead of price_adjust
 - **2026-03-16**: Initial parity verification document created

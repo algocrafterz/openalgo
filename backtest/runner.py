@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import pandas as pd
 
-from backtest.data_loader import load_ohlcv_raw
+from backtest.data_loader import load_index_data, load_ohlcv_raw
 from backtest.strategies import get_strategy
 
 
@@ -290,6 +290,21 @@ def run_batch(config: dict) -> BatchResult:
     product = config.get("product", "MIS")
     slippage_pct = config.get("slippage_pct", 0.0)
 
+    # Load index data once for all symbols (used by index direction filter)
+    index_data = None
+    index_cfg = config.get("index")
+    if index_cfg:
+        print(f"  Loading index data: {index_cfg['exchange']}:{index_cfg['symbol']}...",
+              end=" ", flush=True)
+        index_data = load_index_data(
+            symbol=index_cfg["symbol"], exchange=index_cfg["exchange"],
+            interval=interval, start_date=start_date, end_date=end_date,
+        )
+        if index_data is not None:
+            print(f"{len(index_data)} bars loaded")
+        else:
+            print("NOT AVAILABLE (index filter will be skipped)")
+
     results = []
     total = len(symbols)
 
@@ -302,6 +317,7 @@ def run_batch(config: dict) -> BatchResult:
             symbol=symbol, exchange=exchange,
             interval=interval, start_date=start_date, end_date=end_date,
             orb_config=orb_config, strategy_name=strategy_name,
+            index_data=index_data,
             costs=costs, product=product, slippage_pct=slippage_pct,
         )
 

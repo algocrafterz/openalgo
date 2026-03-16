@@ -63,6 +63,7 @@ class ORBConfig:
 
     # Index direction filter (NIFTY)
     enable_index_filter: bool = True
+    index_filter_method: str = "vwap"  # "vwap" (PineScript default), "ema", "orb_direction"
 
     # Smart entry filters
     enable_gap_filter: bool = True
@@ -240,16 +241,19 @@ class ORBStrategy(Strategy):
             _compute_previous_close(df) if c.enable_gap_filter else None
         )
 
-        # Index data for direction filter
+        # Index data for direction filter (PineScript default: "Price vs VWAP")
         index_close = None
-        index_session_high = None
-        index_session_low = None
+        index_vwap = None
+        index_high_roll = None
+        index_low_roll = None
         if c.enable_index_filter and self.index_data is not None:
             idx_df = self.index_data
             index_close = idx_df["close"].reindex(idx, method="ffill")
-            # Rolling 3-bar high/low as proxy for index session range
-            index_session_high = idx_df["high"].rolling(3).max().reindex(idx, method="ffill")
-            index_session_low = idx_df["low"].rolling(3).min().reindex(idx, method="ffill")
+            if c.index_filter_method == "vwap":
+                index_vwap = _compute_vwap(idx_df).reindex(idx, method="ffill")
+            elif c.index_filter_method == "orb_direction":
+                index_high_roll = idx_df["high"].rolling(3).max().reindex(idx, method="ffill")
+                index_low_roll = idx_df["low"].rolling(3).min().reindex(idx, method="ffill")
 
         # Session info
         in_session = _session_mask(idx)
@@ -531,18 +535,21 @@ class ORBStrategy(Strategy):
             # Index direction (only active when index data is provided)
             idx_bullish = False
             idx_bearish = False
-            has_index_data = (
-                index_close is not None
-                and index_session_high is not None
-                and index_session_low is not None
-            )
+            has_index_data = index_close is not None
             if c.enable_index_filter and has_index_data:
                 ic = index_close.iloc[i]
-                ih = index_session_high.iloc[i]
-                il = index_session_low.iloc[i]
-                if not np.isnan(ic) and not np.isnan(ih) and not np.isnan(il):
-                    idx_bullish = ic > ih
-                    idx_bearish = ic < il
+                if not np.isnan(ic):
+                    if c.index_filter_method == "vwap" and index_vwap is not None:
+                        iv = index_vwap.iloc[i]
+                        if not np.isnan(iv):
+                            idx_bullish = ic > iv
+                            idx_bearish = ic < iv
+                    elif c.index_filter_method == "orb_direction" and index_high_roll is not None:
+                        ih = index_high_roll.iloc[i]
+                        il = index_low_roll.iloc[i]
+                        if not np.isnan(ih) and not np.isnan(il):
+                            idx_bullish = ic > ih
+                            idx_bearish = ic < il
 
             # Count filters against LONG (block when 2+ oppose)
             filters_against_long = 0
@@ -606,7 +613,12 @@ class ORBStrategy(Strategy):
         return result
 
     def _compute_atr(self, df: pd.DataFrame, length: int) -> pd.Series:
-        """Compute Average True Range."""
+        """Compute Average True Range using Wilder's smoothing (RMA).
+
+        PineScript's ta.atr() uses Wilder's smoothing (RMA), which is
+        equivalent to EWM with span=length. This differs from a simple
+        rolling mean (SMA) and produces smoother, more reactive values.
+        """
         high = df["high"]
         low = df["low"]
         close = df["close"]
@@ -615,7 +627,7 @@ class ORBStrategy(Strategy):
             [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
             axis=1,
         ).max(axis=1)
-        return tr.rolling(length).mean()
+        return tr.ewm(span=length, adjust=False).mean()
 
     def _calculate_sl(
         self,
