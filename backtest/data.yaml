@@ -1,0 +1,50 @@
+# Shared data download configuration for backtesting.
+# Strategy-agnostic: defines what data to download and store in DuckDB.
+# Symbols are organized by pool (e.g., "orb", "momentum") but share a common date range.
+#
+# Usage:
+#   uv run python backtest/download_data.py                    # Download all pools
+#   uv run python backtest/download_data.py --pool orb         # Download only ORB pool
+#   uv run python backtest/download_data.py --check            # Check data availability
+#   uv run python backtest/download_data.py --dry-run          # Show what would download
+
+# ~4 year window (broker API limit): covers bear/bull regimes, walk-forward validation.
+# Individual strategy configs define their own backtest windows within this range.
+start_date: "2022-01-01"
+end_date: "2026-03-01"
+interval: 1m
+
+symbols:
+  orb:
+    exchange: NSE
+    list:
+      - NATIONALUM
+      - PNB
+      - CANBK
+      - PFC
+      - RECLTD
+      - EXIDEIND
+      - APOLLOTYRE
+      - ASHOKLEY
+      - LICHSGFIN
+      - TMPV
+      - SAIL
+      - FEDERALBNK
+      - WIPRO
+      - BANKBARODA
+      - ITC
+      - TATASTEEL
+      - BPCL
+      - BIOCON
+      - EMAMILTD
+      - JSWENERGY
+      - NMDC
+      - IRFC
+      - IDFCFIRSTB
+      - UNIONBANK
+      - BANKINDIA
+
+# Index data for index-direction filters
+indices:
+  - symbol: NIFTY 50
+    exchange: NSE
