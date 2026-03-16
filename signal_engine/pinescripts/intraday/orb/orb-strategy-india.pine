@@ -1,6 +1,6 @@
 //@version=6
 // Adapted for Indian Stock Market (NSE/BSE) - Based on Luxy BIG beautiful Dynamic ORB - v5
-strategy("orb-strategy-luxy-tg", shorttitle="orb-strategy-luxy-tg", overlay=true,
+strategy("orb-strategy-luxy-tg-v2", shorttitle="orb-strategy-luxy-tg-v2", overlay=true,
      default_qty_type=strategy.percent_of_equity, default_qty_value=10,
      initial_capital=100000, currency=currency.INR, commission_type=strategy.commission.percent,
      commission_value=0.06, slippage=2, calc_on_every_tick=false,
@@ -229,8 +229,8 @@ supertrendMult = input.float(3.0, "Mult", minval=0.1, step=0.1, group=grp_trend,
 // ========================================= TARGETS & RISK MANAGEMENT ================================
 enableTargets = input.bool(true, "Enable Targets & Stop-Loss", group=grp_targets, tooltip="Calculate and display profit targets (TP) and stop-loss (SL)\n\nWHEN ENABLED:\n• Shows TP/SL lines on chart during breakout\n• Displays values in dashboard\n• Calculates Risk/Reward ratio\n\nWHEN DISABLED:\n• Only shows ORB levels\n• No trade management\n\nRECOMMENDED: ON for active trading")
 
-showTP1 = input.bool(false, "TP1 (1R)", group=grp_targets, inline="show")
-showTP1_5 = input.bool(true, "TP1.5 (1.5R)", group=grp_targets, inline="show")
+showTP1 = input.bool(true, "TP1 (1R)", group=grp_targets, inline="show")
+showTP1_5 = input.bool(false, "TP1.5 (1.5R)", group=grp_targets, inline="show")
 showTP2 = input.bool(false, "TP2 (2R)", group=grp_targets, inline="show")
 showTP3 = input.bool(false, "TP3 (3R)", group=grp_targets, inline="show", tooltip="Select which Take Profit levels to display\n\nR = RISK UNITS (1R = distance from entry to stop-loss)\n\nTP1 (1R): Conservative target, 1:1 risk/reward (BEGINNER)\nTP1.5 (1.5R): Intermediate target\nTP2 (2R): Balanced target, 2:1 risk/reward\nTP3 (3R): Aggressive target, 3:1 risk/reward\n\nRECOMMENDED:\n• Beginners: TP1 only (1:1) - Higher win rate\n• Intermediate: TP1 + TP2 - Better profits\n• Use Adaptive R:R to auto-switch based on trend\n\nLines and labels stop updating when last enabled TP is hit")
 
