@@ -92,19 +92,82 @@ def get_missing_symbols(
     return missing
 
 
+def estimate_download_time(
+    num_symbols: int, start_date: str, end_date: str,
+) -> float:
+    """
+    Estimate download time in minutes.
+
+    Based on: 1m data = ~375 candles/day, 1000 candle limit per request
+    = ~2 trading days per chunk. With 250 trading days/year and ~2s per chunk
+    + 2s inter-symbol delay.
+
+    Args:
+        num_symbols: Number of symbols to download.
+        start_date: Start date (YYYY-MM-DD).
+        end_date: End date (YYYY-MM-DD).
+
+    Returns:
+        Estimated download time in minutes.
+    """
+    from datetime import datetime
+
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    calendar_days = (end - start).days
+
+    # ~250 trading days per 365 calendar days
+    trading_days = int(calendar_days * (250 / 365))
+
+    # ~2 trading days per chunk (1000 candle limit at 375 candles/day)
+    chunks_per_symbol = max(1, trading_days // 2)
+
+    # Time per chunk: ~0.4s API call + overhead
+    chunk_time_s = 0.5
+
+    # Inter-symbol delay: ~2s average
+    symbol_delay_s = 2.0
+
+    total_seconds = num_symbols * (
+        chunks_per_symbol * chunk_time_s + symbol_delay_s
+    )
+    return round(total_seconds / 60, 1)
+
+
 def _ensure_env_loaded():
     """Ensure .env is loaded for database and broker access."""
     from dotenv import load_dotenv
     load_dotenv()
 
 
+def _load_download_config(config_path: str, pool: str | None = None) -> dict:
+    """Load config from either data.yaml or strategy config.yaml."""
+    import yaml
+
+    # Peek at file to detect format
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+
+    # data.yaml has symbols as dict of pools; strategy config has symbols as list
+    if isinstance(raw.get("symbols"), dict):
+        from backtest.config import load_data_config
+        return load_data_config(config_path, pool=pool)
+
+    # Strategy config format
+    from backtest.config import load_batch_config
+    return load_batch_config(config_path)
+
+
 def download_batch(
     config_path: str,
     incremental: bool = False,
     dry_run: bool = False,
+    pool: str | None = None,
 ) -> dict:
     """
-    Download 1m data for all symbols in batch config using the Historify job system.
+    Download 1m data for all symbols in config using the Historify job system.
+
+    Supports both data.yaml (pool-based) and strategy config.yaml formats.
 
     This reuses the same download pipeline as the Historify web UI:
     - Per-call rate limiting (350ms, ~3 req/sec) via history_service
@@ -114,16 +177,15 @@ def download_batch(
     - DuckDB upsert (safe to re-run)
 
     Args:
-        config_path: Path to batch config YAML.
+        config_path: Path to config YAML (data.yaml or strategy config).
         incremental: Only fetch data after last available timestamp.
         dry_run: If True, only report what would be downloaded.
+        pool: Optional pool name (only for data.yaml format).
 
     Returns:
         Dict with download results: {total, downloaded, skipped, failed, job_id}.
     """
-    from backtest.config import load_batch_config
-
-    config = load_batch_config(config_path)
+    config = _load_download_config(config_path, pool=pool)
     symbols = config["symbols"]
     start_date = config["start_date"]
     end_date = config["end_date"]
@@ -145,13 +207,21 @@ def download_batch(
     }
 
     if dry_run:
+        print(f"Date range: {start_date} to {end_date}")
+        print(f"Interval: {storage_interval}")
         print(f"Total symbols: {len(symbols)}")
         print(f"Already available: {len(available)}")
         print(f"Need download: {len(missing)}")
         if missing:
+            est_min = estimate_download_time(len(missing), start_date, end_date)
+            print(f"Estimated time: {est_min:.0f} min ({est_min/60:.1f} hrs)")
             print("Missing symbols:")
             for sym in missing:
                 print(f"  {sym['exchange']}:{sym['symbol']}")
+        if incremental:
+            est_min = estimate_download_time(len(symbols), start_date, end_date)
+            print(f"Incremental refresh: all {len(symbols)} symbols")
+            print(f"Estimated time: {est_min:.0f} min ({est_min/60:.1f} hrs)")
         return result
 
     # Determine which symbols to download
@@ -252,8 +322,10 @@ def download_batch(
 
 def main():
     parser = argparse.ArgumentParser(description="Download data for batch backtesting")
-    parser.add_argument("--config", default="backtest/strategies/orb/config.yaml",
-                        help="Batch config YAML path")
+    parser.add_argument("--config", default="backtest/data.yaml",
+                        help="Data config YAML path (default: backtest/data.yaml)")
+    parser.add_argument("--pool", default=None,
+                        help="Download only a specific symbol pool (e.g., orb)")
     parser.add_argument("--incremental", action="store_true",
                         help="Re-download all symbols (update existing data)")
     parser.add_argument("--dry-run", action="store_true",
@@ -263,8 +335,7 @@ def main():
     args = parser.parse_args()
 
     if args.check:
-        from backtest.config import load_batch_config
-        config = load_batch_config(args.config)
+        config = _load_download_config(args.config, pool=args.pool)
         available, missing = check_data_availability(
             config["symbols"], config["interval"]
         )
@@ -277,7 +348,10 @@ def main():
             print("All symbols have data.")
         return
 
-    download_batch(args.config, incremental=args.incremental, dry_run=args.dry_run)
+    download_batch(
+        args.config, incremental=args.incremental,
+        dry_run=args.dry_run, pool=args.pool,
+    )
 
 
 if __name__ == "__main__":

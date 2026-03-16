@@ -138,6 +138,7 @@ def load_batch_config(config_path: str | Path) -> dict:
         "position_size_pct": float(raw.get("position_size_pct", 0.10)),
         "product": str(raw.get("product", "MIS")),
         "strategy": str(raw.get("strategy", "orb")),
+        "slippage_pct": float(raw.get("slippage_pct", 0.0005)),
     }
 
     # ORB strategy config
@@ -155,5 +156,80 @@ def load_batch_config(config_path: str | Path) -> dict:
         if f.name in costs_raw:
             costs_kwargs[f.name] = costs_raw[f.name]
     config["costs"] = IndianCosts(**costs_kwargs)
+
+    return config
+
+
+def load_data_config(config_path: str | Path, pool: str | None = None) -> dict:
+    """
+    Load shared data download configuration from YAML.
+
+    This config is strategy-agnostic and defines what data to download
+    and store in DuckDB. Symbols are organized by pool (e.g., "orb",
+    "momentum") but share a common date range.
+
+    Args:
+        config_path: Path to data config YAML (e.g., backtest/data.yaml).
+        pool: Optional pool name to filter symbols. If None, returns all.
+
+    Returns:
+        Dict with keys: symbols (deduplicated flat list), pools (dict),
+        indices, interval, start_date, end_date.
+
+    Raises:
+        ConfigError: On missing file, section, or key.
+    """
+    path = Path(config_path)
+    if not path.exists():
+        raise ConfigError(f"Config file not found: {path}")
+
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+
+    if not raw:
+        raise ConfigError(f"Config file is empty: {path}")
+
+    config = {
+        "start_date": str(_require_key(raw, "start_date")),
+        "end_date": str(_require_key(raw, "end_date")),
+        "interval": str(raw.get("interval", "1m")),
+    }
+
+    # Parse symbol pools
+    raw_pools = _require_key(raw, "symbols")
+    if not isinstance(raw_pools, dict):
+        raise ConfigError("symbols must be a dict of pools (e.g., orb: {exchange: NSE, list: [...]})")
+
+    if pool is not None and pool not in raw_pools:
+        raise ConfigError(f"Unknown pool '{pool}'. Available: {list(raw_pools.keys())}")
+
+    pools = {}
+    seen = set()
+    all_symbols = []
+
+    pools_to_load = {pool: raw_pools[pool]} if pool else raw_pools
+
+    for pool_name, pool_data in pools_to_load.items():
+        exchange = pool_data.get("exchange", "NSE")
+        symbol_list = pool_data.get("list", [])
+
+        pool_symbols = []
+        for sym in symbol_list:
+            entry = {"symbol": str(sym), "exchange": exchange}
+            pool_symbols.append(entry)
+
+            # Deduplicate by (symbol, exchange)
+            key = (entry["symbol"], entry["exchange"])
+            if key not in seen:
+                seen.add(key)
+                all_symbols.append(entry)
+
+        pools[pool_name] = pool_symbols
+
+    config["symbols"] = all_symbols
+    config["pools"] = pools
+
+    # Optional indices
+    config["indices"] = raw.get("indices", [])
 
     return config

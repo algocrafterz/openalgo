@@ -44,6 +44,8 @@ class SymbolResult:
     short_pnl: float
     exit_reasons: dict
     error: str | None
+    total_gross_pnl: float = 0.0
+    total_costs: float = 0.0
     trade_log: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
@@ -61,8 +63,9 @@ class BatchResult:
     def summary_df(self) -> pd.DataFrame:
         """Generate summary DataFrame of all symbol results."""
         columns = ["symbol", "exchange", "total_trades", "winners", "losers",
-                    "win_rate", "total_pnl", "avg_r", "profit_factor",
-                    "long_trades", "short_trades", "long_pnl", "short_pnl", "error"]
+                    "win_rate", "total_pnl", "gross_pnl", "costs", "avg_r",
+                    "profit_factor", "long_trades", "short_trades",
+                    "long_pnl", "short_pnl", "error"]
         if not self.results:
             return pd.DataFrame(columns=columns)
 
@@ -76,6 +79,8 @@ class BatchResult:
                 "losers": r.losers,
                 "win_rate": round(r.win_rate, 1),
                 "total_pnl": round(r.total_pnl, 2),
+                "gross_pnl": round(r.total_gross_pnl, 2),
+                "costs": round(r.total_costs, 2),
                 "avg_r": round(r.avg_r_multiple, 2),
                 "profit_factor": round(r.profit_factor, 2),
                 "long_trades": r.long_trades,
@@ -94,8 +99,11 @@ class BatchResult:
         return pd.concat(logs, ignore_index=True)
 
 
-def _compute_trade_log(signals: pd.DataFrame, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    """Extract trade log from detailed signals."""
+def _compute_trade_log(
+    signals: pd.DataFrame, df: pd.DataFrame, symbol: str,
+    costs=None, product: str = "MIS", slippage_pct: float = 0.0,
+) -> pd.DataFrame:
+    """Extract trade log from detailed signals with optional cost/slippage deduction."""
     entries = signals[signals["long_entry"] | signals["short_entry"]].copy()
     exits = signals[signals["exit"]].copy()
 
@@ -136,9 +144,23 @@ def _compute_trade_log(signals: pd.DataFrame, df: pd.DataFrame, symbol: str) -> 
         if exit_price is None:
             continue
 
-        pnl = (exit_price - entry_price) if direction == "LONG" else (entry_price - exit_price)
+        gross_pnl = (exit_price - entry_price) if direction == "LONG" else (entry_price - exit_price)
         risk = abs(entry_price - sl_price)
-        r_multiple = pnl / risk if risk > 0 else 0
+
+        # Compute transaction cost + slippage
+        cost = 0.0
+        if costs is not None:
+            # Use cost_per_trade for accurate per-leg costs (assume 1 share)
+            is_buy_entry = direction == "LONG"
+            cost += float(costs.cost_per_trade(entry_price, is_buy=is_buy_entry, product=product))
+            cost += float(costs.cost_per_trade(exit_price, is_buy=(not is_buy_entry), product=product))
+        # Slippage: symmetric cost on both legs
+        cost += float(entry_price + exit_price) * slippage_pct
+
+        net_pnl = float(gross_pnl) - cost
+        gross_r = float(gross_pnl) / risk if risk > 0 else 0.0
+        cost_r = cost / risk if risk > 0 else 0.0
+        net_r = gross_r - cost_r
 
         trades.append({
             "symbol": symbol,
@@ -149,9 +171,15 @@ def _compute_trade_log(signals: pd.DataFrame, df: pd.DataFrame, symbol: str) -> 
             "exit_price": round(exit_price, 2),
             "sl_price": round(sl_price, 2),
             "tp_price": round(tp_price, 2),
-            "pnl": round(pnl, 2),
-            "pnl_pct": round((pnl / entry_price) * 100, 2),
-            "r_multiple": round(r_multiple, 2),
+            "gross_pnl": round(gross_pnl, 4),
+            "net_pnl": round(net_pnl, 4),
+            "cost": round(cost, 4),
+            "gross_r_multiple": round(gross_r, 4),
+            "net_r_multiple": round(net_r, 4),
+            "cost_r": round(cost_r, 4),
+            "pnl": round(net_pnl, 4),           # alias for backward compat
+            "r_multiple": round(net_r, 4),       # alias for backward compat
+            "pnl_pct": round((gross_pnl / entry_price) * 100, 2),
             "exit_reason": exit_reason,
         })
 
@@ -167,6 +195,9 @@ def run_single_symbol(
     orb_config=None,
     strategy_name: str = "orb",
     index_data: pd.DataFrame | None = None,
+    costs=None,
+    product: str = "MIS",
+    slippage_pct: float = 0.0,
 ) -> SymbolResult:
     """
     Run backtest for a single symbol.
@@ -189,7 +220,10 @@ def run_single_symbol(
     strategy = get_strategy(strategy_name, orb_config=orb_config, index_data=index_data)
     signals = strategy.generate_signals_detailed(df)
 
-    trade_log = _compute_trade_log(signals, df, symbol)
+    trade_log = _compute_trade_log(
+        signals, df, symbol,
+        costs=costs, product=product, slippage_pct=slippage_pct,
+    )
 
     if trade_log.empty:
         return SymbolResult(
@@ -220,6 +254,9 @@ def run_single_symbol(
 
     exit_reasons = trade_log["exit_reason"].value_counts().to_dict()
 
+    total_gross_pnl = trade_log["gross_pnl"].sum()
+    total_costs = trade_log["cost"].sum()
+
     return SymbolResult(
         symbol=symbol, exchange=exchange,
         total_trades=total, winners=winners, losers=losers,
@@ -228,6 +265,7 @@ def run_single_symbol(
         long_trades=len(longs), short_trades=len(shorts),
         long_pnl=longs["pnl"].sum(), short_pnl=shorts["pnl"].sum(),
         exit_reasons=exit_reasons, error=None,
+        total_gross_pnl=total_gross_pnl, total_costs=total_costs,
         trade_log=trade_log,
     )
 
@@ -248,6 +286,9 @@ def run_batch(config: dict) -> BatchResult:
     end_date = config["end_date"]
     orb_config = config.get("orb_config")
     strategy_name = config.get("strategy", "orb")
+    costs = config.get("costs")
+    product = config.get("product", "MIS")
+    slippage_pct = config.get("slippage_pct", 0.0)
 
     results = []
     total = len(symbols)
@@ -261,6 +302,7 @@ def run_batch(config: dict) -> BatchResult:
             symbol=symbol, exchange=exchange,
             interval=interval, start_date=start_date, end_date=end_date,
             orb_config=orb_config, strategy_name=strategy_name,
+            costs=costs, product=product, slippage_pct=slippage_pct,
         )
 
         if result.error:
@@ -318,7 +360,16 @@ def print_batch_summary(batch: BatchResult) -> None:
     print(f"{'='*90}")
     print(f"  Symbols tested:   {len(active)}/{batch.total_symbols}")
     print(f"  Total trades:     {int(total_trades)}")
-    print(f"  Total P&L:        {total_pnl:,.2f}")
+    print(f"  Total P&L (net):  {total_pnl:,.2f}")
+
+    # Show gross/costs breakdown if available
+    if "gross_pnl" in active.columns:
+        total_gross = active["gross_pnl"].sum()
+        total_costs = active["costs"].sum() if "costs" in active.columns else 0
+        if total_costs > 0:
+            print(f"  Total P&L (gross): {total_gross:,.2f}")
+            print(f"  Total Costs:      {total_costs:,.2f}")
+
     print(f"  Avg Win Rate:     {avg_wr:.1f}%")
     print(f"  Avg Profit Factor: {avg_pf:.2f}")
 
@@ -359,18 +410,86 @@ def _build_output_dir(base_dir: str, strategy_name: str) -> Path:
     return run_dir
 
 
+def _run_walk_forward(config: dict, args) -> None:
+    """Run walk-forward analysis with train/test split."""
+    from backtest.walkforward import split_temporal, detect_overfitting
+    from backtest.evaluate import compute_strategy_health
+
+    strategy_name = config["strategy"]
+    start_date = config["start_date"]
+    end_date = config["end_date"]
+
+    train, test = split_temporal(start_date, end_date, args.train_pct)
+    print(f"Walk-Forward Analysis - {strategy_name.upper()}")
+    print(f"  Train: {train[0]} to {train[1]}")
+    print(f"  Test:  {test[0]} to {test[1]}")
+
+    # Run in-sample
+    is_config = {**config, "start_date": train[0], "end_date": train[1]}
+    print(f"\n--- IN-SAMPLE ({train[0]} to {train[1]}) ---")
+    is_batch = run_batch(is_config)
+    is_trades = is_batch.combined_trade_log()
+    is_health = compute_strategy_health(is_trades) if not is_trades.empty else {"expectancy_r": 0.0}
+
+    # Run out-of-sample
+    oos_config = {**config, "start_date": test[0], "end_date": test[1]}
+    print(f"\n--- OUT-OF-SAMPLE ({test[0]} to {test[1]}) ---")
+    oos_batch = run_batch(oos_config)
+    oos_trades = oos_batch.combined_trade_log()
+    oos_health = compute_strategy_health(oos_trades) if not oos_trades.empty else {"expectancy_r": 0.0}
+
+    # Compare
+    result = detect_overfitting(
+        is_expectancy=is_health["expectancy_r"],
+        oos_expectancy=oos_health["expectancy_r"],
+    )
+
+    w = 70
+    print(f"\n{'='*w}")
+    print("  WALK-FORWARD RESULTS")
+    print(f"{'='*w}")
+    print(f"  In-Sample Expectancy:     {is_health['expectancy_r']:+.3f} R ({len(is_trades)} trades)")
+    print(f"  Out-of-Sample Expectancy: {oos_health['expectancy_r']:+.3f} R ({len(oos_trades)} trades)")
+    print(f"  OOS/IS Ratio:             {result['ratio']}")
+    print(f"  {result['message']}")
+    print(f"{'='*w}")
+
+    # Save results
+    output_dir = _build_output_dir(args.output_dir, strategy_name)
+    wf_report = (
+        f"Walk-Forward Analysis\n"
+        f"Train: {train[0]} to {train[1]}\n"
+        f"Test:  {test[0]} to {test[1]}\n\n"
+        f"IS Expectancy:  {is_health['expectancy_r']:+.3f} R ({len(is_trades)} trades)\n"
+        f"OOS Expectancy: {oos_health['expectancy_r']:+.3f} R ({len(oos_trades)} trades)\n"
+        f"OOS/IS Ratio:   {result['ratio']}\n"
+        f"{result['message']}\n"
+    )
+    (output_dir / "walkforward.txt").write_text(wf_report)
+    print(f"\nResults: {output_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Batch Backtest Runner")
     parser.add_argument("--config", default="backtest/strategies/orb/config.yaml",
                         help="Batch config YAML path")
     parser.add_argument("--output-dir", default="backtest/results",
                         help="Base output directory for results")
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="Run walk-forward analysis (train/test split)")
+    parser.add_argument("--train-pct", type=float, default=0.7,
+                        help="Train fraction for walk-forward (default: 0.7)")
     args = parser.parse_args()
 
     from backtest.config import load_batch_config
 
     config = load_batch_config(args.config)
     strategy_name = config["strategy"]
+
+    if args.walk_forward:
+        _run_walk_forward(config, args)
+        return
+
     print(f"Running {strategy_name.upper()} backtest on "
           f"{len(config['symbols'])} symbols...")
 

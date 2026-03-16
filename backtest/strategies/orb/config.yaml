@@ -31,12 +31,13 @@ symbols:
   - BANKINDIA
 
 interval: 5m
-start_date: "2025-01-01"
+start_date: "2022-01-04"
 end_date: "2026-03-01"
 initial_capital: 100000
 position_size_pct: 0.10
 product: MIS
 strategy: orb
+slippage_pct: 0.0005  # 0.05% per leg (conservative for ORB momentum entries)
 
 # ORB strategy parameters (PineScript defaults)
 orb:

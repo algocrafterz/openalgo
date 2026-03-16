@@ -25,12 +25,18 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 def compute_strategy_health(trades: pd.DataFrame) -> dict:
-    """Core strategy quality metrics from trade log."""
+    """Core strategy quality metrics from trade log.
+
+    Uses r_multiple (net of costs) as the primary metric.
+    If gross_r_multiple exists, also computes gross expectancy for comparison.
+    """
+    empty_result = {k: 0.0 for k in [
+        "expectancy_r", "profit_factor", "payoff_ratio", "edge_ratio",
+        "win_rate", "avg_winner_r", "avg_loser_r", "total_trades",
+        "gross_expectancy_r", "avg_cost_r",
+    ]}
     if trades.empty:
-        return {k: 0.0 for k in [
-            "expectancy_r", "profit_factor", "payoff_ratio", "edge_ratio",
-            "win_rate", "avg_winner_r", "avg_loser_r", "total_trades",
-        ]}
+        return empty_result
 
     winners = trades[trades["r_multiple"] > 0]
     losers = trades[trades["r_multiple"] <= 0]
@@ -54,8 +60,18 @@ def compute_strategy_health(trades: pd.DataFrame) -> dict:
         if loss_rate > 0 and avg_loser_r != 0 else float("inf")
     )
 
+    # Gross expectancy (if cost columns exist)
+    gross_expectancy_r = expectancy_r  # same if no cost columns
+    avg_cost_r = 0.0
+    if "gross_r_multiple" in trades.columns:
+        gross_expectancy_r = round(trades["gross_r_multiple"].mean(), 3)
+    if "cost_r" in trades.columns:
+        avg_cost_r = round(trades["cost_r"].mean(), 3)
+
     return {
         "expectancy_r": round(expectancy_r, 3),
+        "gross_expectancy_r": gross_expectancy_r,
+        "avg_cost_r": avg_cost_r,
         "profit_factor": round(profit_factor, 2),
         "payoff_ratio": round(payoff_ratio, 2),
         "edge_ratio": round(edge_ratio, 2),
@@ -200,20 +216,37 @@ def generate_insights(health: dict, risk: dict, edge: dict) -> list[str]:
     """Generate tagged insight strings from computed metrics."""
     insights = []
 
-    # Strategy health insights
+    # Strategy health insights (net of costs)
     exp = health["expectancy_r"]
-    if exp > 0.2:
-        insights.append(f"[STRENGTH] Positive expectancy: {exp}R per trade")
+    gross_exp = health.get("gross_expectancy_r", exp)
+    avg_cost_r = health.get("avg_cost_r", 0.0)
+
+    if exp > 0.10:
+        insights.append(f"[STRENGTH] Net expectancy: {exp}R per trade (after costs)")
     elif exp > 0:
-        insights.append(f"[WARNING] Marginal expectancy: {exp}R per trade - thin edge")
+        insights.append(f"[WARNING] Marginal net expectancy: {exp}R per trade - thin edge after costs")
     else:
-        insights.append(f"[WARNING] Negative expectancy: {exp}R per trade - strategy is losing money")
+        insights.append(f"[WARNING] Negative net expectancy: {exp}R per trade - strategy loses money after costs")
+
+    # Cost erosion warning
+    if avg_cost_r > 0 and gross_exp > 0 and exp <= 0:
+        insights.append(
+            f"[WARNING] Gross-positive ({gross_exp}R) but net-negative ({exp}R) - "
+            f"costs of {avg_cost_r}R/trade erode the entire edge"
+        )
+    elif avg_cost_r > 0 and gross_exp > 0:
+        erosion_pct = round((avg_cost_r / gross_exp) * 100, 0)
+        if erosion_pct >= 50:
+            insights.append(
+                f"[WARNING] Costs consume {erosion_pct:.0f}% of gross edge "
+                f"({avg_cost_r}R cost vs {gross_exp}R gross)"
+            )
 
     pf = health["profit_factor"]
     if pf >= 1.5:
         insights.append(f"[STRENGTH] Profit factor {pf} - strong risk-adjusted returns")
     elif pf < 1.0:
-        insights.append(f"[WARNING] Profit factor {pf} - gross losses exceed gross wins")
+        insights.append(f"[WARNING] Profit factor {pf} - net losses exceed net wins")
 
     wr = health["win_rate"]
     if wr >= 55:
@@ -332,13 +365,27 @@ def format_report(
     lines.append("")
     lines.append(f"  STRATEGY HEALTH ({health['total_trades']} trades)")
     lines.append("-" * w)
-    lines.append(f"  Expectancy:      {health['expectancy_r']:+.3f} R/trade")
+    lines.append(f"  Net Expectancy:  {health['expectancy_r']:+.3f} R/trade")
     lines.append(f"  Win Rate:        {health['win_rate']}%")
     lines.append(f"  Profit Factor:   {health['profit_factor']}")
     lines.append(f"  Payoff Ratio:    {health['payoff_ratio']}")
     lines.append(f"  Edge Ratio:      {health['edge_ratio']}")
     lines.append(f"  Avg Winner:      {health['avg_winner_r']:+.3f} R")
     lines.append(f"  Avg Loser:       {health['avg_loser_r']:+.3f} R")
+
+    # Cost impact section (if costs were applied)
+    gross_exp = health.get("gross_expectancy_r", health["expectancy_r"])
+    avg_cost_r = health.get("avg_cost_r", 0.0)
+    if avg_cost_r > 0:
+        lines.append("")
+        lines.append("  COST IMPACT")
+        lines.append("-" * w)
+        lines.append(f"  Gross Expectancy:  {gross_exp:+.3f} R/trade")
+        lines.append(f"  Avg Cost/Trade:    -{avg_cost_r:.3f} R")
+        lines.append(f"  Net Expectancy:    {health['expectancy_r']:+.3f} R/trade")
+        if gross_exp > 0:
+            erosion = round((avg_cost_r / gross_exp) * 100, 1)
+            lines.append(f"  Cost Erosion:      {erosion}% of gross edge")
 
     # Risk Profile
     lines.append("")
