@@ -186,10 +186,20 @@ def download_batch(
         Dict with download results: {total, downloaded, skipped, failed, job_id}.
     """
     config = _load_download_config(config_path, pool=pool)
-    symbols = config["symbols"]
+    symbols = list(config["symbols"])  # copy to avoid mutating original
     start_date = config["start_date"]
     end_date = config["end_date"]
     interval = config["interval"]
+
+    # Include index symbols from data.yaml indices section
+    indices = config.get("indices", [])
+    if indices:
+        seen = {(s["symbol"], s["exchange"]) for s in symbols}
+        for idx in indices:
+            key = (idx["symbol"], idx["exchange"])
+            if key not in seen:
+                symbols.append({"symbol": idx["symbol"], "exchange": idx["exchange"]})
+                seen.add(key)
 
     # Determine storage interval (5m -> 1m)
     storage_interval = "1m" if interval in ("5m", "15m", "30m", "1h") else interval
@@ -336,8 +346,14 @@ def main():
 
     if args.check:
         config = _load_download_config(args.config, pool=args.pool)
+        symbols = list(config["symbols"])
+        # Include index symbols
+        for idx in config.get("indices", []):
+            key = (idx["symbol"], idx["exchange"])
+            if not any(s["symbol"] == key[0] and s["exchange"] == key[1] for s in symbols):
+                symbols.append({"symbol": idx["symbol"], "exchange": idx["exchange"]})
         available, missing = check_data_availability(
-            config["symbols"], config["interval"]
+            symbols, config["interval"]
         )
         print(f"Available: {len(available)}/{len(config['symbols'])}")
         if missing:

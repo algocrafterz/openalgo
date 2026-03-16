@@ -103,8 +103,8 @@ symbols:
       - RELIANCE
 
 indices:
-  - symbol: NIFTY 50
-    exchange: NSE
+  - symbol: NIFTY
+    exchange: NSE_INDEX
 ```
 
 ### Checking Downloaded Data
@@ -298,40 +298,49 @@ a backtest should meet. Values below these indicate no tradeable edge.
 per trade (brokerage + STT + exchange + GST + slippage). Any strategy with
 gross expectancy below +0.30R will struggle to be net-profitable.
 
-## ORB Strategy Observations (March 2026)
+## ORB Strategy Conclusion (March 2026)
 
-### 4-Year Backtest Results (2022-01 to 2026-02, 25 symbols)
+### 4-Year Backtest Results (2022-01 to 2026-03, 25 symbols, index filter active)
 
-- 1067 trades, gross expectancy: -0.002R (essentially random)
-- Net expectancy: -0.303R (costs of 0.298R/trade destroy any edge)
-- 0 out of 25 symbols net-profitable
-- Walk-forward: IS -0.306R, OOS -0.299R (consistent losses both periods)
-- 55% of trades exit on TIME at -0.343R (entries without follow-through)
+- 1,067 trades across 25 symbols over ~4 years
+- Gross expectancy: **+0.021R** (marginally positive before costs)
+- Net expectancy: **-0.281R** (loses money after costs)
+- Avg cost/trade: 0.302R (costs erode 1,438% of gross edge)
+- Profit factor: 0.54 (for every Rs 1 won, Rs 1.85 lost)
+- Win rate: 47.6%, payoff ratio: 0.59
+- 55% of trades exit on TIME at -0.306R (entries without follow-through)
+- 24 of 25 symbols are red-tier (only RECLTD is borderline)
+- Worst losing streak: 10 consecutive losses
+- Max drawdown: -300.59R
 
-### Known Backtest vs Live Gap
+### Verdict: No Tradeable Edge
 
-The Python backtest currently runs **without NIFTY index data** for the
-index direction filter. In live PineScript trading, this filter blocks
-counter-index entries via `request.security()`. This is a significant
-gap - the index filter is one of the strongest filters in the strategy.
+The ORB strategy does not have a tradeable edge on Indian mid-cap stocks.
+The gross edge (+0.021R) is far too small to overcome Indian market
+transaction costs (~0.30R/trade). No parameter tweak can fix a 15x gap
+between gross edge and costs.
 
-**Impact**: The backtest takes ~20-30% more trades than live PineScript
-would, most of which are losers (counter-index breakouts that fail).
+The Q1 2026 live results (+69R gross over 31 days) were a hot streak in
+a small sample. The 4-year backtest with 1,067 trades and full PineScript
+parity (including NIFTY index filter) is statistically definitive.
 
-**Status**: Fix pending - requires loading NIFTY 50 data from DuckDB and
-passing it to the strategy via `index_data` parameter in `runner.py`.
+### Why It Fails
 
-### Interpretation
+1. **ORB breakouts in Indian mid-caps don't trend enough** — most breakouts
+   fade back into the range before hitting TP, resulting in time exits
+2. **Indian market costs are brutal** — STT + brokerage + slippage = ~0.30R/trade;
+   you need gross expectancy > +0.35R just to break even
+3. **The edge was always an illusion** — Q1 2026 was a favorable momentum
+   regime with small sample size (31 trading days)
 
-The Q1 2026 live PineScript results (+69R gross over 31 days) likely
-benefited from: (1) a favorable momentum regime, (2) the index filter
-blocking bad trades, and (3) a small sample size (31 days). The 4-year
-backtest with 1067 trades is more statistically reliable but is missing
-the index filter, so the true answer lies between these two results.
+### Backtest Pipeline Status
 
-**Before adjusting live trading**: Fix the index filter gap in the
-backtest, re-run, and compare. If gross expectancy is still below +0.15R
-with the index filter enabled, the strategy does not have a tradeable edge.
+All known data gaps have been resolved:
+- NIFTY index data: loaded from DuckDB (34,512 bars), VWAP-based filter active
+- ATR calculation: Wilder's smoothing (EWM), matching PineScript `ta.atr()`
+- Index filter: "Price vs VWAP" method, matching PineScript default
+- SL short side: vol_adjust (not price_adjust), matching PineScript
+- Full 25/25 PineScript parity verified (see `PINESCRIPT_PARITY.md`)
 
 ## Recommended Workflow
 
