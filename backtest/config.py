@@ -157,6 +157,16 @@ def load_batch_config(config_path: str | Path) -> dict:
             costs_kwargs[f.name] = costs_raw[f.name]
     config["costs"] = IndianCosts(**costs_kwargs)
 
+    # Optional index data config (for index direction filter)
+    index_raw = raw.get("index")
+    if index_raw and isinstance(index_raw, dict):
+        config["index"] = {
+            "symbol": str(index_raw.get("symbol", "NIFTY 50")),
+            "exchange": str(index_raw.get("exchange", "NSE")),
+        }
+    else:
+        config["index"] = None
+
     return config
 
 
