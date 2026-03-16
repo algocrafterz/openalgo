@@ -96,3 +96,7 @@ signal_engine/logs/
 signal_engine/*.pid
 signal_engine/*.lock
 signal_engine/*.session
+
+# Backtest results (timestamped run outputs)
+backtest/results/*/
+!backtest/results/.gitkeep
