@@ -40,9 +40,10 @@ strategy: orb
 slippage_pct: 0.0005  # 0.05% per leg (conservative for ORB momentum entries)
 
 # Index data for direction filter (loaded from DuckDB)
+# Use NSE_INDEX exchange for index symbols (not NSE)
 index:
-  symbol: "NIFTY 50"
-  exchange: NSE
+  symbol: "NIFTY"
+  exchange: NSE_INDEX
 
 # ORB strategy parameters (PineScript defaults)
 orb:

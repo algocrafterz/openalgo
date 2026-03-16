@@ -45,6 +45,7 @@ symbols:
       - BANKINDIA
 
 # Index data for index-direction filters
+# Use NSE_INDEX exchange for index symbols (not NSE)
 indices:
-  - symbol: NIFTY 50
-    exchange: NSE
+  - symbol: NIFTY
+    exchange: NSE_INDEX
