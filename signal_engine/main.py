@@ -17,7 +17,7 @@ from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
 from signal_engine.risk import RiskEngine
 from signal_engine.risk_store import RiskStore
-from signal_engine.tracker import PositionTracker, TrackedPosition
+from signal_engine.tracker import PositionTracker, TimeExitScheduler, TrackedPosition
 from signal_engine.validator import validate
 
 # Persistent risk counter store (keyed by mode + date, survives restarts)
@@ -199,6 +199,18 @@ def main() -> None:
 
         # Start position tracker in background
         tracker_task = asyncio.create_task(tracker.start())
+
+        # Start time exit scheduler if enabled
+        time_exit_task = None
+        if settings.time_exit_enabled:
+            time_exit_scheduler = TimeExitScheduler(
+                tracker, settings.time_exit_hour, settings.time_exit_minute
+            )
+            time_exit_task = asyncio.create_task(time_exit_scheduler.start())
+            logger.info(
+                f"Time exit enabled: {settings.time_exit_hour:02d}:{settings.time_exit_minute:02d} IST"
+            )
+
         try:
             listener_task = asyncio.create_task(start_listener(handle_message))
             # Wait for either the listener to finish or a shutdown signal
@@ -211,6 +223,9 @@ def main() -> None:
         finally:
             tracker.stop()
             tracker_task.cancel()
+            if time_exit_task is not None:
+                time_exit_scheduler.stop()
+                time_exit_task.cancel()
             logger.info("Signal Engine stopped")
 
     try:

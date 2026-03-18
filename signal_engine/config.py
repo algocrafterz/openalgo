@@ -152,6 +152,11 @@ class Settings:
     bracket_max_sl_retries: int
     bracket_cancel_retry_count: int
 
+    # Time exit (from yaml) — close positions before broker auto square-off
+    time_exit_enabled: bool
+    time_exit_hour: int
+    time_exit_minute: int
+
 
 def _build_settings() -> Settings:
     yml = _load_yaml()
@@ -215,6 +220,11 @@ def _build_settings() -> Settings:
         _require_key(sizing, "sizing", "max_capital_utilization")
     )
 
+    # Time exit section (optional — defaults to disabled if missing)
+    time_exit = yml.get("time_exit", {})
+    if not isinstance(time_exit, dict):
+        time_exit = {}
+
     return Settings(
         # Secrets from .env
         telegram_api_id=int(env.get("TELEGRAM_API_ID", 0)),
@@ -276,6 +286,11 @@ def _build_settings() -> Settings:
         bracket_sl_order_type=str(_require_key(bracket, "bracket", "sl_order_type")),
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
         bracket_cancel_retry_count=int(_require_key(bracket, "bracket", "cancel_retry_count")),
+
+        # Time exit — optional section with safe defaults
+        time_exit_enabled=bool(time_exit.get("enabled", False)),
+        time_exit_hour=int(time_exit.get("hour", 15)),
+        time_exit_minute=int(time_exit.get("minute", 0)),
     )
 
 

@@ -33,14 +33,14 @@ sizing:
     MIS: 0.20                 # 5x leverage (intraday)
     NRML: 0.25                # 4x leverage (F&O)
     CNC: 1.0                  # No leverage (delivery)
-  max_capital_utilization: 0.80  # Never commit more than 80% of capital
+  max_capital_utilization: 0.0   # Disabled — small account (15K) needs full margin utilization. MIS 5x leverage handles exposure.
 
 # ── Risk Management ──────────────────────────────────────
 risk:
   daily_loss_limit: 0.04       # 4% of capital (allows 4 losers at 1% before lockout)
   weekly_loss_limit: 0.08      # 8% of capital (allows 2 bad days per week)
   monthly_loss_limit: 0.10     # 10% of capital
-  max_portfolio_heat: 0.05     # 5% of capital max open risk (aligned: 5 positions x 1%)
+  max_portfolio_heat: 0.08     # 8% of capital max open risk (allows up to 8 concurrent 1% risk trades)
   max_open_positions: 5
   max_trades_per_day: 8
   min_rr: 1.0                  # Minimum reward:risk ratio (1.0 = 1:1)
@@ -49,6 +49,14 @@ risk:
   min_sl_pct: 0.005            # Reject SL tighter than 0.5% of entry (0 = disabled)
   max_positions_per_symbol: 1  # Max concurrent positions in same symbol (0 = no limit)
   max_positions_per_sector: 3  # Max concurrent positions in same sector (forces diversification)
+
+# ── Time Exit ────────────────────────────────────────────
+# Close all open positions before broker auto square-off to avoid penalty charges.
+# Broker auto square-off is typically 15:10-15:20 IST with Rs 20-50/order charges.
+time_exit:
+  enabled: true
+  hour: 15                     # IST hour (24h format)
+  minute: 0                    # IST minute — 15:00 gives 10 min buffer before 15:10 auto square-off
 
 # ── Position Tracking ────────────────────────────────────
 tracking:
