@@ -34,11 +34,6 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from database.historify_db import get_data_catalog as _db_get_data_catalog
 
 
-def get_data_catalog() -> list[dict]:
-    """Get data catalog from Historify DuckDB."""
-    return _db_get_data_catalog()
-
-
 def check_data_availability(
     symbols: list[dict[str, str]], interval: str
 ) -> tuple[list[dict], list[dict]]:
@@ -57,7 +52,7 @@ def check_data_availability(
     # Computed intervals derive from 1m data
     check_interval = "1m" if interval in ("5m", "15m", "30m", "1h") else interval
 
-    catalog = get_data_catalog()
+    catalog = _db_get_data_catalog()
     catalog_set = {
         (entry["symbol"], entry["exchange"], entry["interval"])
         for entry in catalog
@@ -73,23 +68,6 @@ def check_data_availability(
             missing.append(sym)
 
     return available, missing
-
-
-def get_missing_symbols(
-    symbols: list[dict[str, str]], interval: str
-) -> list[dict[str, str]]:
-    """
-    Get symbols that need data download.
-
-    Args:
-        symbols: List of {symbol, exchange} dicts.
-        interval: Target interval.
-
-    Returns:
-        List of symbols missing from Historify.
-    """
-    _, missing = check_data_availability(symbols, interval)
-    return missing
 
 
 def estimate_download_time(
