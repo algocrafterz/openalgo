@@ -112,12 +112,3 @@ class IndianCosts:
         # so divide total round-trip by 2 * trade_value
         one_way_pct = total_cost / (2 * test_value)
         return one_way_pct
-
-
-# Pre-built cost models
-INTRADAY_COSTS = IndianCosts()  # Default is intraday/MIS
-DELIVERY_COSTS = IndianCosts()  # Same model, use product="CNC" when calling
-
-# Quick reference: approximate one-way fees for VectorBT
-INTRADAY_FEE_PCT = INTRADAY_COSTS.round_trip_pct("MIS")    # ~0.011%
-DELIVERY_FEE_PCT = DELIVERY_COSTS.round_trip_pct("CNC")     # ~0.056%

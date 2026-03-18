@@ -24,61 +24,6 @@ def _require_key(data: dict, key: str, section: str = "root") -> object:
     return data[key]
 
 
-def load_config(config_path: str | Path) -> dict:
-    """
-    Load backtest configuration from YAML file.
-
-    Args:
-        config_path: Path to config YAML file.
-
-    Returns:
-        Dict with keys: symbol, exchange, interval, start_date, end_date,
-        initial_capital, position_size_pct, orb_config, costs, product.
-
-    Raises:
-        ConfigError: On missing file, section, or key.
-    """
-    path = Path(config_path)
-    if not path.exists():
-        raise ConfigError(f"Config file not found: {path}")
-
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-
-    if not raw:
-        raise ConfigError(f"Config file is empty: {path}")
-
-    # Required top-level keys
-    config = {
-        "symbol": str(_require_key(raw, "symbol")),
-        "exchange": str(_require_key(raw, "exchange")),
-        "interval": str(_require_key(raw, "interval")),
-        "start_date": str(_require_key(raw, "start_date")),
-        "end_date": str(_require_key(raw, "end_date")),
-        "initial_capital": float(_require_key(raw, "initial_capital")),
-        "position_size_pct": float(raw.get("position_size_pct", 0.10)),
-        "product": str(raw.get("product", "MIS")),
-    }
-
-    # ORB strategy config
-    orb_raw = raw.get("orb", {})
-    orb_kwargs = {}
-    for f in fields(ORBConfig):
-        if f.name in orb_raw:
-            orb_kwargs[f.name] = orb_raw[f.name]
-    config["orb_config"] = ORBConfig(**orb_kwargs)
-
-    # Cost model overrides
-    costs_raw = raw.get("costs", {})
-    costs_kwargs = {}
-    for f in fields(IndianCosts):
-        if f.name in costs_raw:
-            costs_kwargs[f.name] = costs_raw[f.name]
-    config["costs"] = IndianCosts(**costs_kwargs)
-
-    return config
-
-
 def _normalize_symbols(raw_symbols: list) -> list[dict[str, str]]:
     """Normalize symbol list: strings become {symbol, exchange: NSE}."""
     result = []

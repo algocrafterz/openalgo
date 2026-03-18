@@ -5,19 +5,13 @@ Provides tools to detect overfitting by comparing in-sample vs
 out-of-sample performance across rolling time windows.
 
 Usage:
-    from backtest.walkforward import split_temporal, walk_forward_windows
+    from backtest.walkforward import split_temporal, detect_overfitting
 
     # Simple 70/30 split
     train, test = split_temporal("2025-01-01", "2026-01-01", train_pct=0.7)
-
-    # Rolling walk-forward windows
-    windows = walk_forward_windows("2024-01-01", "2026-01-01",
-                                   train_months=9, test_months=3, step_months=3)
 """
 
 from datetime import datetime, timedelta
-
-from dateutil.relativedelta import relativedelta
 
 
 def split_temporal(
@@ -52,61 +46,6 @@ def split_temporal(
         (start.strftime("%Y-%m-%d"), train_end.strftime("%Y-%m-%d")),
         (test_start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
     )
-
-
-def walk_forward_windows(
-    start_date: str,
-    end_date: str,
-    train_months: int = 9,
-    test_months: int = 3,
-    step_months: int = 3,
-) -> list[tuple[tuple[str, str], tuple[str, str]]]:
-    """
-    Generate rolling walk-forward train/test windows.
-
-    Each window: [train_start, train_end] -> [test_start, test_end]
-    Windows step forward by step_months.
-
-    Args:
-        start_date: Overall start date (YYYY-MM-DD).
-        end_date: Overall end date (YYYY-MM-DD).
-        train_months: Training period length in months.
-        test_months: Testing period length in months.
-        step_months: How far to step forward between windows.
-
-    Returns:
-        List of ((train_start, train_end), (test_start, test_end)) tuples.
-    """
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-
-    windows = []
-    cursor = start
-
-    while True:
-        train_start = cursor
-        train_end = train_start + relativedelta(months=train_months) - timedelta(days=1)
-        test_start = train_end + timedelta(days=1)
-        test_end = test_start + relativedelta(months=test_months) - timedelta(days=1)
-
-        # Stop if test period exceeds overall end
-        if test_end > end:
-            # Try to fit a final window with truncated test
-            if test_start <= end:
-                windows.append((
-                    (train_start.strftime("%Y-%m-%d"), train_end.strftime("%Y-%m-%d")),
-                    (test_start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
-                ))
-            break
-
-        windows.append((
-            (train_start.strftime("%Y-%m-%d"), train_end.strftime("%Y-%m-%d")),
-            (test_start.strftime("%Y-%m-%d"), test_end.strftime("%Y-%m-%d")),
-        ))
-
-        cursor += relativedelta(months=step_months)
-
-    return windows
 
 
 def detect_overfitting(
