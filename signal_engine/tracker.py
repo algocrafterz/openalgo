@@ -2,12 +2,22 @@
 
 import asyncio
 from dataclasses import dataclass
-from typing import Dict
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Set
 
 from loguru import logger
 
-from signal_engine.api_client import cancel_order, fetch_positionbook, fetch_realised_pnl
+from signal_engine.api_client import (
+    cancel_all_orders,
+    cancel_order,
+    close_all_positions,
+    fetch_positionbook,
+    fetch_realised_pnl,
+)
 from signal_engine.risk import RiskEngine
+
+# IST offset from UTC
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 @dataclass
@@ -129,6 +139,40 @@ class PositionTracker:
         except Exception as e:
             logger.error(f"Exception cancelling {cancel_leg} order {leg_to_cancel} for {pos.symbol}: {e}")
 
+    async def time_exit_all(self) -> None:
+        """Force-close all tracked positions and cancel all pending bracket orders.
+
+        Called by the TimeExitScheduler at the configured time (e.g., 15:00 IST).
+        Uses strategy-level close/cancel APIs for reliability.
+        """
+        if not self._positions:
+            logger.info("Time exit: no open positions to close")
+            return
+
+        # Collect unique strategies from tracked positions
+        strategies: Set[str] = {pos.strategy for pos in self._positions.values()}
+
+        for strategy in strategies:
+            # Cancel all pending orders first (SL-M + TP LIMIT legs)
+            logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
+            await cancel_all_orders(strategy)
+
+            # Close all open positions
+            logger.info(f"Time exit: closing all positions for strategy={strategy}")
+            await close_all_positions(strategy)
+
+        # Clear tracked positions and update risk engine
+        for key, pos in list(self._positions.items()):
+            self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+            self._risk_engine.remove_margin(
+                qty=pos.quantity,
+                entry_price=pos.entry_price,
+                product=pos.product,
+            )
+            logger.info(f"Time exit: cleared tracker entry {key}")
+
+        self._positions.clear()
+
     async def start(self) -> None:
         """Start the polling loop. Runs until stop() is called."""
         self._running = True
@@ -145,3 +189,60 @@ class PositionTracker:
         """Signal the polling loop to stop."""
         self._running = False
         logger.info("Position tracker stopped")
+
+
+class TimeExitScheduler:
+    """Schedules a one-shot time exit at a fixed IST time each trading day.
+
+    Checks the clock every 30 seconds. When the configured time (e.g., 15:00 IST)
+    is reached, calls tracker.time_exit_all() to close positions and cancel orders.
+    Fires once per day — resets at midnight IST.
+    """
+
+    def __init__(self, tracker: PositionTracker, hour: int, minute: int):
+        self._tracker = tracker
+        self._hour = hour
+        self._minute = minute
+        self._running = False
+        self._fired_today: bool = False
+        self._last_date = datetime.now(_IST).date()
+
+    async def start(self) -> None:
+        self._running = True
+        logger.info(f"Time exit scheduler started: {self._hour:02d}:{self._minute:02d} IST")
+
+        while self._running:
+            now = datetime.now(_IST)
+
+            # Reset fired flag on new day
+            if now.date() != self._last_date:
+                self._fired_today = False
+                self._last_date = now.date()
+
+            # Check if it's time to exit
+            if (
+                not self._fired_today
+                and now.hour == self._hour
+                and now.minute >= self._minute
+            ):
+                logger.info(
+                    f"Time exit triggered at {now.strftime('%H:%M')} IST "
+                    f"(configured: {self._hour:02d}:{self._minute:02d})"
+                )
+                await self._tracker.time_exit_all()
+                self._fired_today = True
+
+            # Also fire if past the configured time (in case scheduler started late)
+            if (
+                not self._fired_today
+                and (now.hour > self._hour or (now.hour == self._hour and now.minute > self._minute + 5))
+            ):
+                logger.info(f"Time exit: past configured time, firing catch-up exit")
+                await self._tracker.time_exit_all()
+                self._fired_today = True
+
+            await asyncio.sleep(30)
+
+    def stop(self) -> None:
+        self._running = False
+        logger.info("Time exit scheduler stopped")

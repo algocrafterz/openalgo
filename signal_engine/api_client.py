@@ -176,6 +176,60 @@ async def fetch_positionbook():
         return None
 
 
+async def close_all_positions(strategy: str) -> bool:
+    """Close all open positions for a strategy via OpenAlgo API.
+
+    Returns True on success, False on failure.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/closeposition"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "strategy": strategy,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code >= 400:
+                logger.warning(f"Close positions returned HTTP {response.status_code}")
+                return False
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            if data.get("status") == "error":
+                logger.warning(f"Close positions failed: {data.get('message', 'unknown')}")
+                return False
+            return True
+    except Exception as e:
+        logger.error(f"Failed to close all positions: {e}")
+        return False
+
+
+async def cancel_all_orders(strategy: str) -> bool:
+    """Cancel all pending orders for a strategy via OpenAlgo API.
+
+    Returns True on success, False on failure.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/cancelallorder"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "strategy": strategy,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code >= 400:
+                logger.warning(f"Cancel all orders returned HTTP {response.status_code}")
+                return False
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            if data.get("status") == "error":
+                logger.warning(f"Cancel all orders failed: {data.get('message', 'unknown')}")
+                return False
+            return True
+    except Exception as e:
+        logger.error(f"Failed to cancel all orders: {e}")
+        return False
+
+
 async def fetch_realised_pnl() -> float:
     """Fetch day's realised P&L from funds endpoint.
 
