@@ -735,6 +735,7 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 
 ### Not Implemented (Future Considerations)
 
+- [ ] **Chartink scanner integration:** stock selection via Chartink scans (see Section 21)
 - [ ] **Multi-strategy performance tracking:** per-strategy P&L, win rate, avg R:R, drawdown (broker + OpenAlgo already provide trade analytics)
 - [ ] **Web UI / dashboard:** real-time view of open positions, P&L, risk utilization
 - [ ] **ATR-based stop/sizing:** dynamic SL based on volatility instead of fixed price
@@ -801,6 +802,108 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 # With coverage
 PYTHONPATH=. uv run pytest signal_engine/tests/ --cov=signal_engine --cov-report=term-missing
 ```
+
+---
+
+## 21. Chartink Scanner Integration (Future)
+
+Stock selection via Chartink scans, feeding into the existing PineScript alert -> risk engine -> broker execution pipeline.
+
+### Architecture
+
+```
+Chartink Scan (9:16 AM)          PineScript ORB (on all 50 symbols)
+        |                                  |
+        v                                  v webhook
+  Today's candidates              Signal Engine receives alert
+  stored in memory                        |
+        |                                 |
+        +-------- Is symbol --------------+
+                  in candidates?
+                       |
+                  Yes  |  No -> ignore
+                       v
+                  RiskEngine -> Broker
+```
+
+PineScript handles strategy logic (entry/SL/TP). Chartink handles stock selection (volume, gap, liquidity). Signal engine handles risk + execution.
+
+### Chartink Screener Endpoint
+
+No official API. The screener web UI sends a POST internally:
+
+```
+POST https://chartink.com/screener/process
+Content-Type: application/x-www-form-urlencoded
+
+scan_clause=( {cash} ( latest close > 100 and ... ) )
+```
+
+Response: `{"data": [{"nsecode": "RELIANCE", "close": 1420.5, "volume": 8934521, ...}]}`
+
+A session cookie from `GET https://chartink.com/screener` is required first (CSRF protection).
+
+### Sample Scan Clauses
+
+**ORB Candidates (gap + volume spike, liquid stocks):**
+```
+( {cash} (
+  latest close > 100 and
+  latest volume > 1.5 * latest sma( latest volume, 20 ) and
+  abs( latest open - latest close 1 day ago ) / latest close 1 day ago < 0.025 and
+  market cap > 10000
+) )
+```
+
+**VWAP Pullback Candidates:**
+```
+( {cash} (
+  latest close > 100 and
+  latest close < latest vwap and
+  latest close > latest vwap * 0.998 and
+  latest volume > 1.2 * latest sma( latest volume, 20 )
+) )
+```
+
+**High Relative Volume (pre-market movers):**
+```
+( {cash} (
+  latest volume > 2 * latest sma( latest volume, 20 ) and
+  latest close > 100 and
+  latest close < 5000
+) )
+```
+
+Chartink scan language reference: https://chartink.com/wiki/index.php/Scan_Language
+
+### Integration Options
+
+**Option A: Poll at 9:16 AM (recommended).** Fetch candidates once after market open, cache for the day. Filter incoming PineScript alerts against the candidate list in `main.py`.
+
+**Option B: Chartink Telegram alerts (zero new code).** Chartink can send scan alerts to Telegram. The existing Telegram listener receives them. Requires a parser addition to handle "watchlist update" messages vs trade signals.
+
+### Config (future: config.yaml)
+
+```yaml
+chartink:
+  enabled: true
+  scan_time: "09:16"
+  orb_scan: |
+    ( {cash} (
+      latest close > 100 and
+      latest volume > 1.5 * latest sma( latest volume, 20 ) and
+      abs( latest open - latest close 1 day ago ) / latest close 1 day ago < 0.025 and
+      market cap > 10000
+    ) )
+```
+
+### Limitations
+
+- Chartink has no official API; the POST endpoint is undocumented
+- Rate limiting is unknown; keep requests to 1-2 per minute
+- Scan results depend on Chartink's data feed freshness
+- Session cookies may expire; re-fetch on 403/401 errors
+- Chartink scan language differs from PineScript; not portable
 
 ---
 
