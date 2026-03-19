@@ -3448,18 +3448,32 @@ if showDashboard and enableHTF
 
             // Determine reason using only globally-scoped var variables
             string noTradeReason = ""
+            bool hadConfirmedBreakout = sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0
             if not gapFilterPassed
                 noTradeReason := "Gap > " + str.tostring(maxGapPercent, "#.#") + "%"
             else if not orbRangeFilterPassed
                 noTradeReason := "ORB width out of range"
             else if not everHadBreakUp and not everHadBreakDown
-                noTradeReason := "No breakout detected"
-            else if everHadBreakUp or everHadBreakDown
-                noTradeReason := "Breakout filtered (vol/trend/HTF)"
+                noTradeReason := "No breakout"
+            else if hadConfirmedBreakout
+                noTradeReason := "Cutoff before entry filled"
             else
-                noTradeReason := "Entry cutoff passed"
+                noTradeReason := "Vol/trend/HTF blocked breakout"
 
-            table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left, tooltip="Why no entry was taken this session.\nHelps diagnose signal generation issues.\n\nPossible reasons:\n- Gap too large\n- ORB width out of range\n- No breakout detected\n- Breakout filtered by volume/trend/HTF\n- Entry cutoff time passed")
+            string noTradeTooltip = "Why no entry was taken this session\n\n"
+            noTradeTooltip += "ENTRY REQUIRES ALL OF:\n"
+            noTradeTooltip += "1. ORB breakout detected\n"
+            noTradeTooltip += "2. Volume above threshold\n"
+            noTradeTooltip += "3. Max 1 of 3 filters against direction:\n"
+            noTradeTooltip += "   - Trend (intraday)\n"
+            noTradeTooltip += "   - HTF Bias (daily)\n"
+            noTradeTooltip += "   - Index (NIFTY)\n"
+            noTradeTooltip += "   (2+ against = blocked)\n"
+            noTradeTooltip += "4. Entry before cutoff time\n"
+            noTradeTooltip += "5. Retest/confirmation within timeout\n"
+            noTradeTooltip += "\nBREAKOUTS: " + str.tostring(sessionBreakoutsUp) + " UP | " + str.tostring(sessionBreakoutsDown) + " DOWN"
+
+            table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left, tooltip=noTradeTooltip)
             table.cell(dashTable, 1, row, noTradeReason, text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
             row += 1
 
