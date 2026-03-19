@@ -3438,42 +3438,9 @@ if showDashboard and enableHTF
                     row += 1
 
         /// NO TRADE REASON — shows why no entry was taken this session
-        /// Only visible after entry cutoff has passed and no entry occurred
         if enableTargets and na(orbEntryBar) and not isBeforeCutoff
-            table.cell(dashTable, 0, row, "", text_color=txtColor, text_size=size.tiny)
-            table.cell(dashTable, 1, row, "", text_color=txtColor, text_size=size.tiny)
-            table.cell_set_height(dashTable, 0, row, 0.1)
-            table.cell_set_height(dashTable, 1, row, 0.1)
-            row += 1
-
-            // Determine reason using only globally-scoped var variables
-            string noTradeReason = ""
-            bool hadConfirmedBreakout = sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0
-            if not gapFilterPassed
-                noTradeReason := "Gap > " + str.tostring(maxGapPercent, "#.#") + "%"
-            else if not orbRangeFilterPassed
-                noTradeReason := "ORB width out of range"
-            else if not everHadBreakUp and not everHadBreakDown
-                noTradeReason := "No breakout"
-            else if hadConfirmedBreakout
-                noTradeReason := "Cutoff before entry filled"
-            else
-                noTradeReason := "Vol/trend/HTF blocked breakout"
-
-            string noTradeTooltip = "Why no entry was taken this session\n\n"
-            noTradeTooltip += "ENTRY REQUIRES ALL OF:\n"
-            noTradeTooltip += "1. ORB breakout detected\n"
-            noTradeTooltip += "2. Volume above threshold\n"
-            noTradeTooltip += "3. Max 1 of 3 filters against direction:\n"
-            noTradeTooltip += "   - Trend (intraday)\n"
-            noTradeTooltip += "   - HTF Bias (daily)\n"
-            noTradeTooltip += "   - Index (NIFTY)\n"
-            noTradeTooltip += "   (2+ against = blocked)\n"
-            noTradeTooltip += "4. Entry before cutoff time\n"
-            noTradeTooltip += "5. Retest/confirmation within timeout\n"
-            noTradeTooltip += "\nBREAKOUTS: " + str.tostring(sessionBreakoutsUp) + " UP | " + str.tostring(sessionBreakoutsDown) + " DOWN"
-
-            table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left, tooltip=noTradeTooltip)
+            string noTradeReason = not gapFilterPassed ? "Gap > " + str.tostring(maxGapPercent, "#.#") + "%" : not orbRangeFilterPassed ? "ORB width out of range" : (not everHadBreakUp and not everHadBreakDown) ? "No breakout" : (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) ? "Cutoff before entry filled" : "Vol/trend/HTF blocked"
+            table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
             table.cell(dashTable, 1, row, noTradeReason, text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
             row += 1
 
@@ -3745,18 +3712,6 @@ if showDashboard and enableHTF
         table.merge_cells(dashTable, 0, row, 1, row)
         row += 1
 
-    // DEBUG: Track max row usage — remove once confirmed stable
-    var int maxRowUsed = 0
-    if row > maxRowUsed
-        maxRowUsed := row
-    // Show debug label on last bar with max rows ever used
-    if barstate.islast
-        var label debugLabel = na
-        if not na(debugLabel)
-            label.delete(debugLabel)
-        string debugText = "DEBUG: Max rows=" + str.tostring(maxRowUsed) + "/36"
-        color debugColor = maxRowUsed <= 34 ? color.green : color.red
-        debugLabel := label.new(bar_index, low * 0.999, debugText, style=label.style_label_up, color=debugColor, textcolor=color.white, size=size.small)
 
 // ====================================== TRADE ALERTS ==========================================
 alertcondition(alertEntryTriggered and enableAlerts and enableTargets,
