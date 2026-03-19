@@ -3439,7 +3439,7 @@ if showDashboard and enableHTF
 
         /// NO TRADE REASON — shows why no entry was taken this session
         if enableTargets and na(orbEntryBar) and not isBeforeCutoff
-            string noTradeReason = not gapFilterPassed ? "Gap > " + str.tostring(maxGapPercent, "#.#") + "%" : not orbRangeFilterPassed ? "ORB width out of range" : (not everHadBreakUp and not everHadBreakDown) ? "No breakout" : (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) ? "Cutoff before entry filled" : "Vol/trend/HTF blocked"
+            string noTradeReason = not gapFilterPassed ? "Gap > " + str.tostring(maxGapPercent, "#.#") + "%" : not orbRangeFilterPassed ? "ORB width out of range" : (not everHadBreakUp and not everHadBreakDown) ? "No breakout" : (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) ? "Breakout too late (past cutoff)" : "Blocked by 2+ filters"
             table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
             table.cell(dashTable, 1, row, noTradeReason, text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
             row += 1
