@@ -3437,6 +3437,32 @@ if showDashboard and enableHTF
                     table.cell(dashTable, 1, row, orbStatus, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                     row += 1
 
+        /// NO TRADE REASON — shows why no entry was taken this session
+        /// Only visible after entry cutoff has passed and no entry occurred
+        if enableTargets and na(orbEntryBar) and not isBeforeCutoff
+            table.cell(dashTable, 0, row, "", text_color=txtColor, text_size=size.tiny)
+            table.cell(dashTable, 1, row, "", text_color=txtColor, text_size=size.tiny)
+            table.cell_set_height(dashTable, 0, row, 0.1)
+            table.cell_set_height(dashTable, 1, row, 0.1)
+            row += 1
+
+            // Determine reason using only globally-scoped var variables
+            string noTradeReason = ""
+            if not gapFilterPassed
+                noTradeReason := "Gap > " + str.tostring(maxGapPercent, "#.#") + "%"
+            else if not orbRangeFilterPassed
+                noTradeReason := "ORB width out of range"
+            else if not everHadBreakUp and not everHadBreakDown
+                noTradeReason := "No breakout detected"
+            else if everHadBreakUp or everHadBreakDown
+                noTradeReason := "Breakout filtered (vol/trend/HTF)"
+            else
+                noTradeReason := "Entry cutoff passed"
+
+            table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left, tooltip="Why no entry was taken this session.\nHelps diagnose signal generation issues.\n\nPossible reasons:\n- Gap too large\n- ORB width out of range\n- No breakout detected\n- Breakout filtered by volume/trend/HTF\n- Entry cutoff time passed")
+            table.cell(dashTable, 1, row, noTradeReason, text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
+            row += 1
+
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
         if enableTargets and not na(orbEntryBar)
