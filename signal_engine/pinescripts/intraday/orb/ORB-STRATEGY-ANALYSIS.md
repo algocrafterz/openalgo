@@ -54,45 +54,114 @@ Priority: ORB60 > ORB30 > ORB15 > ORB5 (largest completed ORB becomes active)
 
 ---
 
-## Entry Logic
+## Entry Conditions
 
-### Breakout Entry Flow
+### Pre-conditions (must ALL pass before breakout detection)
 
-1. **ORB Range Established** - Active ORB completes building phase
-2. **Breakout Detection** - Close crosses above ORB High (long) or below ORB Low (short)
-3. **Filter Checks:**
-   - Volume filter: `volume >= volumeMA * multiplier`
-   - Trend filter: VWAP/EMA/SuperTrend direction
-   - HTF bias: Daily timeframe confirmation
-   - "Both Against" blocking: Entry blocked only when **both** Trend AND HTF oppose the direction
-4. **Smart Entry Filters:**
-   - Gap filter: Rejects trades when gap from prev close > threshold
-   - ORB range filter: Min/max width as % of price
-   - Minimum entry time: Delay entry (e.g., after 9:45 AM to let gap settle)
-   - Entry cutoff time: No new entries after specified time
-5. **Retest Entry (optional):** Waits for pullback to ORB level OR consolidation near level before entering
-6. **Entry on next bar:** Pending entry executes on the bar after breakout detection
+| Condition | Description | Dashboard indicator |
+|-----------|-------------|-------------------|
+| **Gap filter** | Opening gap from previous close must be <= threshold | Gap: X% |
+| **ORB range filter** | ORB width as % of price must be within min/max range | ORB Width: X% |
+| **Minimum entry time** | Optional delay (e.g., after 9:45 AM) to let gap volatility settle | — |
+| **Entry cutoff** | No new entries after 10:30 AM (configurable) | — |
+| **One entry per session** | Only 1 trade per stock per day | — |
 
-### Exit Logic
+### Breakout Detection (must ALL pass simultaneously)
 
-| Exit Type | Description |
+| Condition | Description |
 |-----------|-------------|
-| **TP1** (1R) | First target = 1x risk distance — **ACTIVE execution target** |
-| **TP1.5** (1.5R) | Observation only — Telegram alert on hit |
-| **TP2** (2R) | Observation only — Telegram alert on hit |
-| **TP3** (3R) | Observation only — Telegram alert on hit |
-| **Stop Loss** | 7 modes: ATR, ORB %, Swing, Safer, % Based, Smart Adaptive, Scaled ATR |
-| **Time Exit** | Configurable time-based exit |
-| **EOD Close** | Close all positions at session end |
+| **Price cross** | Close crosses above ORB High + buffer (long) or below ORB Low - buffer (short) |
+| **Volume** | Current volume >= volume MA * multiplier (e.g., 1.2x) |
+| **Directional filters (2-of-3 rule)** | At most 1 of the 3 filters below can oppose the trade direction. If 2 or more oppose, entry is **blocked**. |
 
-### TP Execution vs Observation (as of 2026-03-19)
+### Directional Filter Logic (2-of-3 Rule)
+
+Three filters assess whether the broader market agrees with the breakout direction:
+
+| Filter | What it measures | Bullish signal | Bearish signal |
+|--------|-----------------|---------------|---------------|
+| **Trend** | Intraday direction (VWAP/EMA/SuperTrend) | Price above indicator | Price below indicator |
+| **HTF Bias** | Daily timeframe trend | Higher TF bullish | Higher TF bearish |
+| **Index** | NIFTY/BANKNIFTY direction | Index above VWAP/EMA | Index below VWAP/EMA |
+
+**How it works:** For each trade direction, count how many filters oppose it. If 2+ oppose → blocked.
+
+**Example scenarios for LONG entry:**
+
+| Trend | HTF Bias | Index | Filters against | Result |
+|-------|----------|-------|----------------|--------|
+| Bullish | Bullish | Bullish | 0 | ENTRY |
+| Bullish | Bullish | Bearish | 1 | ENTRY |
+| Bullish | Bearish | Bullish | 1 | ENTRY |
+| Bearish | Bullish | Bullish | 1 | ENTRY |
+| Bullish | Bearish | Bearish | 2 | BLOCKED |
+| Bearish | Bullish | Bearish | 2 | BLOCKED |
+| Bearish | Bearish | Bullish | 2 | BLOCKED |
+| Bearish | Bearish | Bearish | 3 | BLOCKED |
+
+*(Same logic applies in reverse for SHORT entries)*
+
+### Entry Execution Flow
+
+1. Breakout detected + all filters pass → **pending entry** created
+2. Optional: if retest entry enabled and volume is not strong, waits for pullback/consolidation
+3. Entry executes on **next bar** after breakout (avoids same-bar repainting)
+4. If cutoff time passes while entry is pending → pending entry **cancelled**
+
+### No Trade Reasons (shown in dashboard after cutoff)
+
+| Dashboard message | Meaning |
+|-------------------|---------|
+| Gap > X% | Opening gap exceeded filter threshold |
+| ORB width out of range | ORB too narrow or too wide for configured limits |
+| No breakout | Price never crossed ORB high or low |
+| Breakout too late (past cutoff) | Breakout passed all filters but next-bar entry landed after 10:30 AM |
+| Blocked by 2+ filters | Breakout detected but 2+ directional filters opposed the direction |
+
+---
+
+## Exit Conditions
+
+### Strategy Exit (actual position closure)
+
+| Exit Type | When | Execution |
+|-----------|------|-----------|
+| **TP1 (1R)** | Price reaches 1x risk distance from entry | `strategy.exit` with limit order — **full position close** |
+| **Stop Loss** | Price hits SL level | `strategy.exit` with stop order — **full position close** |
+| **Time Exit (3:00 PM)** | Position still open at configured time | `strategy.close_all` — **full position close** |
+
+Only ONE of these fires per trade — whichever is hit first.
+
+### Observation Alerts (Telegram only, no position change)
+
+| Event | When | Purpose |
+|-------|------|---------|
+| **TP1 hit** | Price reaches 1R target | Confirms execution target reached |
+| **TP1.5 hit** | Price reaches 1.5R target | Data collection for future optimization |
+| **TP2 hit** | Price reaches 2R target | Data collection for future optimization |
+| **TP3 hit** | Price reaches 3R target | Data collection for future optimization |
+| **Time Exit** | 3:00 PM if position still open | Signal engine handles actual exit independently |
+
+### All Telegram Alerts
+
+| Alert | Triggers execution? | Message function |
+|-------|-------------------|-----------------|
+| Entry | Yes — signal engine places order with TP1 | `buildEntryAlert` (TP1 hardcoded) |
+| SL Hit | Yes — signal engine closes position | `buildSLAlert` |
+| TP1 Hit | Observation only | `buildTPAlert(..., "TP1")` |
+| TP1.5 Hit | Observation only | `buildTPAlert(..., "TP1.5")` |
+| TP2 Hit | Observation only | `buildTPAlert(..., "TP2")` |
+| TP3 Hit | Observation only | `buildTPAlert(..., "TP3")` |
+| Time Exit | Observation only | `buildTimeExitAlert` |
+
+### Key Design Decisions (as of 2026-03-20)
 
 - **Execution**: `strategy.exit` always uses TP1 only (full position exit at 1R)
 - **Observation**: All TP levels (TP1.5, TP2, TP3) enabled by default for chart display
 - **Entry alert**: Hardcoded to TP1 — signal engine uses TP1 for order placement
-- **TP hit alerts**: Telegram notifications sent when TP1, TP1.5, TP2, TP3 are reached
-- **Purpose**: Collect data on how far ORB breakouts travel for future strategy optimization
-- **Entry cutoff**: 10:30 AM (optimal per Q1 2026 statistical analysis)
+- **Entry cutoff**: 10:30 AM (optimal per Q1 2026 statistical analysis — ~100% win rate before, ~33% after)
+- **Time exit**: 3:00 PM — gives trades 4.5 hours from entry, exits before broker auto square-off
+- **strategy.close_all retained**: For accurate backtest simulation in Strategy Tester
 
 ---
 
