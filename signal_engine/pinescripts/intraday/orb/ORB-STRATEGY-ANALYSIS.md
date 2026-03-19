@@ -77,25 +77,22 @@ Priority: ORB60 > ORB30 > ORB15 > ORB5 (largest completed ORB becomes active)
 
 | Exit Type | Description |
 |-----------|-------------|
-| **TP1** (1R) | First target = 1x risk distance |
-| **TP1.5** (1.5R) | Intermediate target |
-| **TP2** (2R) | Main target, used in extended TP mode |
-| **TP3** (3R) | Extended runner target |
+| **TP1** (1R) | First target = 1x risk distance — **ACTIVE execution target** |
+| **TP1.5** (1.5R) | Observation only — Telegram alert on hit |
+| **TP2** (2R) | Observation only — Telegram alert on hit |
+| **TP3** (3R) | Observation only — Telegram alert on hit |
 | **Stop Loss** | 7 modes: ATR, ORB %, Swing, Safer, % Based, Smart Adaptive, Scaled ATR |
 | **Time Exit** | Configurable time-based exit |
 | **EOD Close** | Close all positions at session end |
 
-### Extended TP Mode (Partial Exit)
+### TP Execution vs Observation (as of 2026-03-19)
 
-When both TP1 and TP2 are enabled:
-- 50% exits at TP1
-- Remaining 50% targets TP2 (with SL still active)
-
-### Adaptive R:R (ADX-based)
-
-When enabled:
-- ADX > threshold (trending): Uses TP2 target (1:2 R:R)
-- ADX < threshold (ranging): Uses TP1 target (1:1 R:R)
+- **Execution**: `strategy.exit` always uses TP1 only (full position exit at 1R)
+- **Observation**: All TP levels (TP1.5, TP2, TP3) enabled by default for chart display
+- **Entry alert**: Hardcoded to TP1 — signal engine uses TP1 for order placement
+- **TP hit alerts**: Telegram notifications sent when TP1, TP1.5, TP2, TP3 are reached
+- **Purpose**: Collect data on how far ORB breakouts travel for future strategy optimization
+- **Entry cutoff**: 10:30 AM (optimal per Q1 2026 statistical analysis)
 
 ---
 
