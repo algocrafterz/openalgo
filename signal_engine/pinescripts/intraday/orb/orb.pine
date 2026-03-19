@@ -120,8 +120,8 @@ extendedAfterHours = input.session("1600-2000", "After-Hours", group=grp_session
 entryCutoffHour = input.int(10, "Entry Cutoff Hour", minval=9, maxval=15, group=grp_session, inline="cutoff", tooltip="Stop taking new entries after this hour\n\nRECOMMENDED: 10:30 AM for Indian market\n\nWHY:\n• ORB momentum strongest 09:45-10:30\n• Entries after 10:30 show 33% win rate vs 90%+ before\n• Late entries take 3-4x longer to hit TP\n• Avoids weak momentum / choppy midday signals\n\nOPTIONS:\n• 10 (+ 30 min): Optimal based on Q1 2026 data\n• 11: Conservative\n• 12: Aggressive (not recommended)")
 entryCutoffMinute = input.int(30, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff", tooltip="Minutes past the hour for cutoff\n\nEXAMPLE: Hour=10, Minute=30 = 10:30 AM cutoff\n\nBased on statistical analysis:\n• 10:00-10:29 entries: ~100% win rate\n• 10:30+ entries: ~33% win rate")
 
-timeExitHour = input.int(14, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 14:00 (2 PM) for Indian market\n\nWHY:\n• Gives winners 2+ hours to reach TP after entry cutoff\n• Exits before end-of-day volatility\n• Avoids holding into close\n\nOPTIONS:\n• 13: Conservative (exit early)\n• 14: Balanced (recommended)\n• 15: Aggressive (hold longer)")
-timeExitMinute = input.int(30, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\nEXAMPLE: Hour=14, Minute=30 = 2:30 PM exit")
+timeExitHour = input.int(15, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 15:00 (3 PM) for Indian market\n\nWHY:\n• Gives trades 4.5 hours from 10:30 entry to hit TP\n• Exits before broker auto square-off at 15:10-15:20\n• Avoids auto square-off penalty charges (Rs 20-50/order)\n\nOPTIONS:\n• 14: Conservative (exit early, may cut winners short)\n• 15: Balanced — avoids broker charges\n• 15 (+05 min): Risky — too close to auto square-off")
+timeExitMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\nSet to 0 (15:00) to exit before broker auto square-off at 15:10")
 
 futuresTradingHours = input.string("Auto-Detect", "Futures Trading Hours", options=["Auto-Detect", "RTH Only (9:30-16:00)", "Electronic Full Day (24hr)"],  group=grp_session, tooltip="Control how ORB tracks E-mini futures (ES, NQ, RTY, YM)\n\n🔹 RTH ONLY (9:30-16:00):\n• ORB resets at 9:30 AM ET\n• Tracking ends at 4:00 PM ET\n• Total: 6.5 hours\n• Best for: Day traders focusing on regular session\n\n🔹 ELECTRONIC FULL DAY (24hr):\n• ORB resets at 9:30 AM ET daily\n• Tracking continues 24 hours until next 9:30 AM\n• Covers full Globex session (18:00-17:00)\n• Best for: Swing traders, overnight positions\n\n🔹 AUTO-DETECT (recommended):\n• Checks for volume outside RTH hours\n• If volume detected → Electronic mode\n• If no volume → RTH mode\n• Adapts automatically to your trading style\n\nNOTE: This setting only affects E-mini futures.\nStocks use 'Extended Hours' setting above.")
 
@@ -2694,9 +2694,10 @@ bool isPastTimeExit = currentHourNow > timeExitHour or (currentHourNow == timeEx
 if inSession and not inSession[1]
     timeExitTriggered := false
 
-// Time exit: Close ANY remaining position at time exit hour
+// Time exit: Close position at time exit hour + send Telegram alert.
+// strategy.close_all simulates the exit for backtest accuracy.
+// Signal engine handles actual exit independently via its own time exit logic.
 // strategy.position_size != 0 ensures we only fire if position is still open
-// (handles both full position and partial position from extended TP mode)
 if isPastTimeExit and not timeExitTriggered and strategy.position_size != 0
     bool isLongPos = strategy.position_size > 0
     float tpForAlert = showTP2 ? orbTP2Price : showTP1_5 ? orbTP1_5Price : showTP1 ? orbTP1Price : orbTP1_5Price
