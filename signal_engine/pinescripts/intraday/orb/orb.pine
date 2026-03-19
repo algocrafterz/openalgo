@@ -117,11 +117,11 @@ enableExtendedHours = input.bool(false, "Include Extended Hours", group=grp_sess
 extendedPreMarket = input.session("0400-0930", "Pre-Market", group=grp_session, inline="ext2", tooltip="Pre-market trading hours\n\nDEFAULT: 04:00-09:30 (NYSE)\n\nDefine the pre-market session window.\nOnly the START time (04:00) is used for extended hours calculation.")
 extendedAfterHours = input.session("1600-2000", "After-Hours", group=grp_session, inline="ext3", tooltip="After-hours trading session\n\nDEFAULT: 16:00-20:00 (NYSE)\n\nDefine the after-hours session window.\nOnly the END time (20:00) is used for extended hours calculation.")
 
-entryCutoffHour = input.int(10, "Entry Cutoff Hour", minval=9, maxval=15, group=grp_session, inline="cutoff", tooltip="Stop taking new entries after this hour\n\nRECOMMENDED: 10:30 AM for Indian market\n\nWHY:\n• ORB momentum strongest 09:45-10:30\n• Entries after 10:30 show 33% win rate vs 90%+ before\n• Late entries take 3-4x longer to hit TP\n• Avoids weak momentum / choppy midday signals\n\nOPTIONS:\n• 10 (+ 30 min): Optimal based on Q1 2026 data\n• 11: Conservative\n• 12: Aggressive (not recommended)")
-entryCutoffMinute = input.int(30, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff", tooltip="Minutes past the hour for cutoff\n\nEXAMPLE: Hour=10, Minute=30 = 10:30 AM cutoff\n\nBased on statistical analysis:\n• 10:00-10:29 entries: ~100% win rate\n• 10:30+ entries: ~33% win rate")
+entryCutoffHour = input.int(11, "Entry Cutoff Hour", minval=10, maxval=15, group=grp_session, inline="cutoff", tooltip="Stop taking new entries after this hour\n\nRECOMMENDED: 12:00 (12 PM) for Indian market\n\nWHY:\n• Gives 2+ hours for trades to reach TP\n• Avoids late-day chop and reversals\n• Better win rate on earlier entries\n\nOPTIONS:\n• 11: Very conservative (morning only)\n• 12: Balanced (recommended)\n• 13: Aggressive")
+entryCutoffMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff", tooltip="Minutes past the hour for cutoff\n\nEXAMPLE: Hour=12, Minute=30 = 12:30 PM cutoff")
 
-timeExitHour = input.int(15, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 15:05 for Indian market\n\nWHY:\n• Broker auto square-off is 15:10-15:20 with extra charges (Rs 20-50/order)\n• 15:05 exits 5-15 min BEFORE broker auto square-off\n• Avoids auto square-off penalty charges entirely\n• Gives trades maximum time to hit TP (4.5h from 10:30 entry)\n\nOPTIONS:\n• 14: Conservative (exit early, may cut winners short)\n• 15 (+05 min): Balanced — avoids broker charges\n• 15 (+15 min): Risky — too close to auto square-off")
-timeExitMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\nSet to 5 (15:05) to exit before broker auto square-off at 15:10\n\nThis avoids Rs 20-50 penalty charges per MIS order")
+timeExitHour = input.int(14, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 14:00 (2 PM) for Indian market\n\nWHY:\n• Gives winners 2+ hours to reach TP after entry cutoff\n• Exits before end-of-day volatility\n• Avoids holding into close\n\nOPTIONS:\n• 13: Conservative (exit early)\n• 14: Balanced (recommended)\n• 15: Aggressive (hold longer)")
+timeExitMinute = input.int(30, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\nEXAMPLE: Hour=14, Minute=30 = 2:30 PM exit")
 
 futuresTradingHours = input.string("Auto-Detect", "Futures Trading Hours", options=["Auto-Detect", "RTH Only (9:30-16:00)", "Electronic Full Day (24hr)"],  group=grp_session, tooltip="Control how ORB tracks E-mini futures (ES, NQ, RTY, YM)\n\n🔹 RTH ONLY (9:30-16:00):\n• ORB resets at 9:30 AM ET\n• Tracking ends at 4:00 PM ET\n• Total: 6.5 hours\n• Best for: Day traders focusing on regular session\n\n🔹 ELECTRONIC FULL DAY (24hr):\n• ORB resets at 9:30 AM ET daily\n• Tracking continues 24 hours until next 9:30 AM\n• Covers full Globex session (18:00-17:00)\n• Best for: Swing traders, overnight positions\n\n🔹 AUTO-DETECT (recommended):\n• Checks for volume outside RTH hours\n• If volume detected → Electronic mode\n• If no volume → RTH mode\n• Adapts automatically to your trading style\n\nNOTE: This setting only affects E-mini futures.\nStocks use 'Extended Hours' setting above.")
 
@@ -230,9 +230,9 @@ supertrendMult = input.float(3.0, "Mult", minval=0.1, step=0.1, group=grp_trend,
 enableTargets = input.bool(true, "Enable Targets & Stop-Loss", group=grp_targets, tooltip="Calculate and display profit targets (TP) and stop-loss (SL)\n\nWHEN ENABLED:\n• Shows TP/SL lines on chart during breakout\n• Displays values in dashboard\n• Calculates Risk/Reward ratio\n\nWHEN DISABLED:\n• Only shows ORB levels\n• No trade management\n\nRECOMMENDED: ON for active trading")
 
 showTP1 = input.bool(true, "TP1 (1R)", group=grp_targets, inline="show")
-showTP1_5 = input.bool(true, "TP1.5 (1.5R)", group=grp_targets, inline="show")
-showTP2 = input.bool(true, "TP2 (2R)", group=grp_targets, inline="show")
-showTP3 = input.bool(true, "TP3 (3R)", group=grp_targets, inline="show", tooltip="All TP levels enabled for OBSERVATION.\n\nEXECUTION: TP1 only (1R) — signal engine uses TP1 from entry alert.\nTP1.5/TP2/TP3 send Telegram notifications when hit but do NOT trigger exits.\nThis allows 30-day data collection to analyze optimal TP levels.\n\nR = RISK UNITS (1R = distance from entry to stop-loss)\n\nTP1 (1R): 1:1 risk/reward — ACTIVE execution target\nTP1.5 (1.5R): Observation only\nTP2 (2R): Observation only\nTP3 (3R): Observation only")
+showTP1_5 = input.bool(false, "TP1.5 (1.5R)", group=grp_targets, inline="show")
+showTP2 = input.bool(false, "TP2 (2R)", group=grp_targets, inline="show")
+showTP3 = input.bool(false, "TP3 (3R)", group=grp_targets, inline="show", tooltip="Select which Take Profit levels to display\n\nR = RISK UNITS (1R = distance from entry to stop-loss)\n\nTP1 (1R): Conservative target, 1:1 risk/reward (BEGINNER)\nTP1.5 (1.5R): Intermediate target\nTP2 (2R): Balanced target, 2:1 risk/reward\nTP3 (3R): Aggressive target, 3:1 risk/reward\n\nRECOMMENDED:\n• Beginners: TP1 only (1:1) - Higher win rate\n• Intermediate: TP1 + TP2 - Better profits\n• Use Adaptive R:R to auto-switch based on trend\n\nLines and labels stop updating when last enabled TP is hit")
 
 // Adaptive R:R - Auto-switch to TP2 when trending
 enableAdaptiveRR = input.bool(false, "Adaptive R:R", group=grp_targets, inline="adaptive", tooltip="Automatically extend to TP2 (2R) when market is trending\n\nHOW IT WORKS:\n• Uses ADX (trend strength indicator)\n• ADX > 25 = Trending → Target TP2\n• ADX < 25 = Ranging → Target TP1\n\nBENEFITS:\n• Best of both worlds\n• Higher win rate in choppy markets (1:1)\n• Capture big moves in trends (1:2)\n\nDEFAULT: OFF (Beginners use TP1 only)\nENABLE: When comfortable with the strategy")
@@ -1881,15 +1881,25 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry
             strategy.entry("Long", strategy.long)
             sessionEntryTaken := true  // Mark entry taken for this session
 
-            // Send Entry Alert — ALWAYS use TP1 for signal engine execution
-            // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
-            float tpForAlert = tp1
+            // Send Entry Alert
+            float tpForAlert = showTP2 ? tp2 : showTP1_5 ? tp1_5 : showTP1 ? tp1 : tp1_5
             alert(buildEntryAlert(true, entry, sl, tpForAlert, maxLossCalc, math.abs(tpForAlert - entry) * shares), alert.freq_once_per_bar)
 
             // Set exits with TP and SL
-            // EXECUTION: Always TP1 only (full position exit at 1R)
-            // Display/alerts for TP1.5/TP2/TP3 are handled separately in TP tracking section
-            strategy.exit("TP1_L", "Long", limit=tp1, stop=sl)
+            // Adaptive R:R: Use TP2 when market is trending (ADX > threshold)
+            bool useExtendedTP = (showTP1 and showTP2) or (enableAdaptiveRR and isTrendingMarket and showTP1)
+
+            if useExtendedTP
+                strategy.exit("TP1_L", "Long", qty_percent=50, limit=tp1, stop=sl)
+                strategy.exit("TP2_L", "Long", limit=tp2, stop=sl)
+            else if showTP2
+                strategy.exit("TP2_L", "Long", limit=tp2, stop=sl)
+            else if showTP1_5
+                strategy.exit("TP1_5_L", "Long", limit=tp1_5, stop=sl)
+            else if showTP1
+                strategy.exit("TP1_L", "Long", limit=tp1, stop=sl)
+            else
+                strategy.exit("SL_L", "Long", stop=sl)
 
             // Entry line - ALWAYS shown
             orbEntryLine := line.new(orbEntryBar, orbEntryPrice, bar_index, orbEntryPrice, xloc=xloc.bar_index, extend=extend.none, color=orbLineColor, width=1, style=line.style_solid)
@@ -1982,15 +1992,25 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             strategy.entry("Short", strategy.short)
             sessionEntryTaken := true  // Mark entry taken for this session
 
-            // Send Entry Alert — ALWAYS use TP1 for signal engine execution
-            // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
-            float tpForAlert = tp1
+            // Send Entry Alert
+            float tpForAlert = showTP2 ? tp2 : showTP1_5 ? tp1_5 : showTP1 ? tp1 : tp1_5
             alert(buildEntryAlert(false, entry, sl, tpForAlert, maxLossCalc, math.abs(entry - tpForAlert) * shares), alert.freq_once_per_bar)
 
             // Set exits with TP and SL
-            // EXECUTION: Always TP1 only (full position exit at 1R)
-            // Display/alerts for TP1.5/TP2/TP3 are handled separately in TP tracking section
-            strategy.exit("TP1_S", "Short", limit=tp1, stop=sl)
+            // Adaptive R:R: Use TP2 when market is trending (ADX > threshold)
+            bool useExtendedTP = (showTP1 and showTP2) or (enableAdaptiveRR and isTrendingMarket and showTP1)
+
+            if useExtendedTP
+                strategy.exit("TP1_S", "Short", qty_percent=50, limit=tp1, stop=sl)
+                strategy.exit("TP2_S", "Short", limit=tp2, stop=sl)
+            else if showTP2
+                strategy.exit("TP2_S", "Short", limit=tp2, stop=sl)
+            else if showTP1_5
+                strategy.exit("TP1_5_S", "Short", limit=tp1_5, stop=sl)
+            else if showTP1
+                strategy.exit("TP1_S", "Short", limit=tp1, stop=sl)
+            else
+                strategy.exit("SL_S", "Short", stop=sl)
 
             // Entry line - ALWAYS shown
             orbEntryLine := line.new(orbEntryBar, orbEntryPrice, bar_index, orbEntryPrice, xloc=xloc.bar_index, extend=extend.none, color=orbLineColor, width=1, style=line.style_solid)
@@ -2567,8 +2587,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if not orbTP3Hit and not na(orbTP3Price) and showTP3 and bar_index > orbEntryBar and high >= orbTP3Price
             orbTP3Hit := true
-            // Send TP3 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3"), alert.freq_once_per_bar)
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
@@ -2576,8 +2594,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             if not na(orbTP3Line)
                 line.set_color(orbTP3Line, color.new(color.green, 0))
 
-        // Lines freeze only when last DISPLAY TP is hit (TP3 since all are enabled)
-        // Strategy already exited at TP1 — this only affects chart visuals
         lastTPHit = false
         if showTP3 and orbTP3Hit
             lastTPHit := true
@@ -2646,8 +2662,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if not orbTP3Hit and not na(orbTP3Price) and showTP3 and bar_index > orbEntryBar and low <= orbTP3Price
             orbTP3Hit := true
-            // Send TP3 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3"), alert.freq_once_per_bar)
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
@@ -2999,8 +3013,8 @@ if showDashboard and enableHTF
     txtSize = dashSize == "Small" ? size.small : dashSize == "Normal" ? size.normal : dashSize == "Large" ? size.large : size.auto
 
     if showDashboard and na(dashTable)
-        dashTable := table.new(tablePos, 2, 40, bgcolor=bgColor, border_width=0, frame_width=1)
-        table.clear(dashTable, 0, 0, 1, 39)
+        dashTable := table.new(tablePos, 2, 28, bgcolor=bgColor, border_width=0, frame_width=1)
+        table.clear(dashTable, 0, 0, 1, 27)
         table.set_position(dashTable, tablePos)
         lastDashUpdateBar := bar_index
 
