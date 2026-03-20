@@ -131,6 +131,9 @@ class Settings:
     # Capital override (from yaml) — 0 means fetch from OpenAlgo API
     sandbox_capital: float
 
+    # Day-start capital caching (from yaml)
+    use_day_start_capital: bool  # Cache capital at first signal, use for all trades
+
     # Position tracking (from yaml)
     poll_interval: int
 
@@ -265,6 +268,9 @@ def _build_settings() -> Settings:
 
         # Capital override from yaml
         sandbox_capital=float(_require_key(sizing, "sizing", "sandbox_capital")),
+
+        # Day-start capital caching from yaml
+        use_day_start_capital=bool(sizing.get("use_day_start_capital", False)),
 
         # Tracking from yaml
         poll_interval=int(_require_key(tracking, "tracking", "poll_interval")),

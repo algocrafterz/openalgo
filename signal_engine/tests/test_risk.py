@@ -152,6 +152,63 @@ class TestPctOfCapitalSizing:
         assert qty == 0
 
 
+class TestDayStartCapital:
+    """use_day_start_capital: caches first capital fetch for equal risk per trade."""
+
+    def test_caches_first_capital(self):
+        engine = _engine(use_day_start_capital=True)
+        # First call caches 100K
+        assert engine.get_sizing_capital(100_000) == 100_000
+        # Second call with different live capital returns cached value
+        assert engine.get_sizing_capital(80_000) == 100_000
+        assert engine.get_sizing_capital(50_000) == 100_000
+
+    def test_disabled_returns_live_capital(self):
+        engine = _engine(use_day_start_capital=False)
+        assert engine.get_sizing_capital(100_000) == 100_000
+        assert engine.get_sizing_capital(80_000) == 80_000
+        assert engine.get_sizing_capital(50_000) == 50_000
+
+    def test_equal_sizing_across_trades(self):
+        # With day-start capital, all trades get same qty
+        engine = _engine(use_day_start_capital=True)
+        signal = _make_signal(entry=380, sl=377.57, tp=385)
+        # Simulate: first trade gets 100K, subsequent get less (margin blocked)
+        capitals = [100_000, 80_000, 60_000, 40_000, 20_000]
+        quantities = []
+        for cap in capitals:
+            sizing_cap = engine.get_sizing_capital(cap)
+            qty = engine.calculate_quantity(signal, capital=sizing_cap)
+            quantities.append(qty)
+        # All should be identical (using cached 100K)
+        assert all(q == quantities[0] for q in quantities)
+        # risk = 100K * 1% = 1000, risk_per_share = 2.43, qty = floor(1000/2.43) = 411
+        assert quantities[0] == 411
+
+    def test_resets_on_new_day(self):
+        engine = _engine(use_day_start_capital=True)
+        engine.get_sizing_capital(100_000)
+        assert engine._day_start_capital == 100_000
+
+        # Simulate new day
+        engine._day_start_capital = 0.0
+
+        # New day, new capital
+        engine.get_sizing_capital(120_000)
+        assert engine._day_start_capital == 120_000
+
+    def test_different_capital_levels(self):
+        # 15K capital: risk=150, risk_per_share=15, qty=10
+        e1 = _engine(use_day_start_capital=True)
+        cap1 = e1.get_sizing_capital(15_000)
+        assert e1.calculate_quantity(_make_signal(entry=2500, sl=2485), capital=cap1) == 10
+
+        # 1L capital: risk=1000, qty=66
+        e2 = _engine(use_day_start_capital=True)
+        cap2 = e2.get_sizing_capital(100_000)
+        assert e2.calculate_quantity(_make_signal(entry=2500, sl=2485), capital=cap2) == 66
+
+
 class TestMaxPositionSizeCapLegacy:
     """max_position_size still works when explicitly enabled."""
 

@@ -103,10 +103,12 @@ class TestPipelineFlow:
             patch("signal_engine.main.tracker") as mock_tracker,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             await handle_message(_valid_message())
 
-            # Verify capital passed to calculate_quantity
+            # Capital flows through get_sizing_capital before calculate_quantity
+            mock_risk.get_sizing_capital.assert_called_once_with(200_000.0)
             mock_risk.calculate_quantity.assert_called_once_with(mock_signal, capital=200_000.0)
             mock_risk.record_trade.assert_called_once()
             mock_risk.add_margin.assert_called_once()
@@ -133,6 +135,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.tracker") as mock_tracker,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 50_000.0
             mock_risk.calculate_quantity.return_value = 10
             await handle_message(_valid_message())
 
@@ -214,6 +217,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
             mock_settings.risk_per_trade = 0.01
@@ -245,6 +249,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = False
             mock_settings.risk_per_trade = 0.01
@@ -276,6 +281,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
             mock_settings.risk_per_trade = 0.01
@@ -310,6 +316,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
             mock_settings.risk_per_trade = 0.01
