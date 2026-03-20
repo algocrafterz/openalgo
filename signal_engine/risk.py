@@ -17,7 +17,10 @@ class RiskEngine:
     - fixed_fractional: Risk a fixed % of capital per trade, sized by SL distance
     - pct_of_capital: Allocate a fixed % of capital per trade position
 
-    Capital is always fetched from OpenAlgo funds API (live or sandbox).
+    Capital is fetched from OpenAlgo funds API (live or sandbox).
+    When use_day_start_capital is enabled, the first capital fetch of each
+    trading day is cached and used for all subsequent trades — ensuring equal
+    risk per trade regardless of how many positions are open.
 
     Optional RiskStore integration provides restart-safe counters: on init,
     today's counters are restored from the store; on every mutation, counters
@@ -47,8 +50,10 @@ class RiskEngine:
         max_positions_per_symbol: int = 0,
         max_positions_per_sector: int = 0,
         sectors: Dict[str, List[str]] = None,
+        use_day_start_capital: bool = False,
     ):
         self.risk_per_trade = risk_per_trade
+        self.use_day_start_capital = use_day_start_capital
         self.sizing_mode = sizing_mode
         self.pct_of_capital = pct_of_capital
         self.max_position_size = max_position_size
@@ -93,6 +98,9 @@ class RiskEngine:
 
         # Feature 3: Committed margin tracking
         self.committed_margin: float = 0.0
+
+        # Day-start capital: cached on first fetch of each trading day
+        self._day_start_capital: float = 0.0
 
         # Correlation risk: per-symbol and per-sector position counts
         self._positions_by_symbol: Dict[str, int] = defaultdict(int)
@@ -141,6 +149,27 @@ class RiskEngine:
         )
         logger.info("-------------------------------------")
 
+    def get_sizing_capital(self, live_capital: float) -> float:
+        """Return the capital to use for position sizing.
+
+        When use_day_start_capital is enabled, caches the first capital value
+        of each trading day and returns it for all subsequent calls. This
+        ensures every trade gets equal risk regardless of how many positions
+        are currently open (margin blocked doesn't shrink the sizing capital).
+
+        When disabled, returns live_capital as-is (original behavior).
+        """
+        if not self.use_day_start_capital:
+            return live_capital
+
+        if self._day_start_capital <= 0:
+            self._day_start_capital = live_capital
+            logger.info(
+                f"Day-start capital cached: {live_capital:,.2f} INR "
+                f"(risk={self.risk_per_trade:.1%}={live_capital * self.risk_per_trade:,.0f}/trade)"
+            )
+        return self._day_start_capital
+
     def _persist(self) -> None:
         """Save current counters to the persistent store."""
         if self._store is None:
@@ -165,6 +194,7 @@ class RiskEngine:
             self.portfolio_heat = 0.0
             self.unrealised_loss = 0.0
             self.committed_margin = 0.0
+            self._day_start_capital = 0.0
             self._positions_by_symbol.clear()
             self._positions_by_sector.clear()
             self._persist()

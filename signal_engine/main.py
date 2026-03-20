@@ -46,6 +46,7 @@ risk_engine = RiskEngine(
     max_positions_per_symbol=settings.max_positions_per_symbol,
     max_positions_per_sector=settings.max_positions_per_sector,
     sectors=settings.sectors,
+    use_day_start_capital=settings.use_day_start_capital,
 )
 
 # Global position tracker
@@ -97,26 +98,28 @@ async def handle_message(text: str) -> None:
         logger.error("Cannot fetch capital from OpenAlgo, skipping trade")
         return
 
-    logger.info(f"Available capital: {capital:,.2f} INR")
+    # Use day-start capital for equal risk per trade (cached on first fetch of day)
+    sizing_capital = risk_engine.get_sizing_capital(capital)
+    logger.info(f"Capital: live={capital:,.2f} sizing={sizing_capital:,.2f} INR")
 
-    # 5. Calculate position size with live capital
-    quantity = risk_engine.calculate_quantity(signal, capital=capital)
+    # 5. Calculate position size with sizing capital (day-start if enabled)
+    quantity = risk_engine.calculate_quantity(signal, capital=sizing_capital)
     if quantity <= 0:
         logger.info(f"Skipping {signal.symbol}: position sizing returned 0")
         return
 
     risk_per_share = abs(signal.entry - signal.sl)
-    risk_amount = capital * settings.risk_per_trade
+    risk_amount = sizing_capital * settings.risk_per_trade
     reward_per_share = abs(signal.tp - signal.entry)
     rr = reward_per_share / risk_per_share if risk_per_share > 0 else 0
     pos_value = quantity * signal.entry
     risk_total = quantity * risk_per_share
     logger.info(
-        f"Sizing [{signal.symbol}]: capital={capital:,.0f} risk={settings.risk_per_trade:.1%}={risk_amount:,.0f} "
+        f"Sizing [{signal.symbol}]: capital={sizing_capital:,.0f} risk={settings.risk_per_trade:.1%}={risk_amount:,.0f} "
         f"entry={signal.entry} sl={signal.sl} tp={signal.tp} "
         f"risk/sh={risk_per_share:.2f} reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
         f"qty=floor({risk_amount:,.0f}/{risk_per_share:.2f})={quantity} "
-        f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/capital:.2%})"
+        f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"
     )
 
     # 6. Build order
@@ -169,6 +172,8 @@ def main() -> None:
     setup_logger()
     logger.info("Signal Engine starting")
     logger.info(f"Sizing mode: {settings.sizing_mode}")
+    if settings.use_day_start_capital:
+        logger.info("Day-start capital: enabled (equal risk per trade)")
     logger.info(f"Min R:R: {settings.min_rr}")
     logger.info(f"Position poll interval: {settings.poll_interval}s")
     for ch in settings.telegram_channels:

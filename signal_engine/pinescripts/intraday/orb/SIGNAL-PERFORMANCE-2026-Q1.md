@@ -320,3 +320,70 @@ Use these metrics as baseline when evaluating improvements:
 | OpenAlgo -> broker (mStock) | ~0.1-0.5s |
 | Broker -> exchange | ~0.05-0.2s |
 | **Total** | **~2-7s** |
+
+## Capital Allocation & Equal Risk Design (2026-03-20)
+
+### Problem: Tapering Risk
+
+With `fixed_fractional` sizing using live available capital, each trade fetches current capital from the broker API. As positions open and margin is blocked, available capital shrinks — causing later trades to get smaller position sizes and lower risk:
+
+| Trade# | Available Capital | Risk (1%) | Relative Risk |
+|--------|------------------|-----------|:---:|
+| 1 | ₹15,000 | ₹150 | 100% |
+| 2 | ₹10,364 | ₹103 | 69% |
+| 3 | ₹5,742 | ₹57 | 38% |
+
+Trade 1 carries 3x the risk of trade 3. Day's P&L is dominated by which trades fire first — **sequence luck, not signal quality**.
+
+### Solution: Day-Start Capital Caching
+
+`use_day_start_capital: true` in config.yaml:
+
+1. First signal of the day fetches capital from broker API (e.g., ₹15,000)
+2. This value is cached as `_day_start_capital`
+3. All subsequent trades use the cached value for position sizing
+4. Resets automatically on new trading day
+
+Every trade risks exactly 1% of ₹15,000 = ₹150, regardless of order or concurrent positions.
+
+### Margin Constraint: 3 Concurrent Positions
+
+With ₹15K capital and MIS (5x / 20% margin), each ₹380 stock trade needs ~₹4,600 margin:
+- 3 trades: ~₹13,800 margin (fits in ₹15K)
+- 5 trades: ~₹23,000 margin (exceeds ₹15K, broker rejects)
+
+**Decision**: `max_open_positions: 3` — ensures margin fits. Slots recycle when positions close (TP/SL hit), so total daily trades can exceed 3 within the `max_trades_per_day: 8` safety cap.
+
+### Signal Quality Supports 3 Concurrent Slots
+
+From Mar 12-18 Telegram data (5-day sample):
+- Signals 1-2: **90% WR** (9W/1L) — strongest ORB breakouts
+- Signals 3+: **57% WR** (4W/3L) — weaker, later entries
+
+Taking fewer concurrent positions naturally filters for the best signals.
+
+### Configuration (2026-03-20)
+
+```yaml
+sizing:
+  mode: fixed_fractional
+  risk_per_trade: 0.01           # 1% risk, equal for all trades
+  use_day_start_capital: true    # Cache capital at first signal of day
+
+risk:
+  max_open_positions: 3          # 3 concurrent slots (margin fits ₹15K MIS)
+  max_trades_per_day: 8          # Safety cap (slots recycle within this)
+  max_portfolio_heat: 0.04       # 3 concurrent at 1% + buffer
+  daily_loss_limit: 0.04         # 4% daily loss lockout
+```
+
+### Scaling
+
+The design works at any capital level — only `max_open_positions` may need adjustment:
+
+| Capital | Risk/Trade (1%) | Margin/Trade (avg) | Max Concurrent | Adjust? |
+|--------:|----------------:|-------------------:|:-:|:-:|
+| ₹15K | ₹150 | ~₹4,600 | 3 | Current |
+| ₹25K | ₹250 | ~₹7,800 | 3 | Could go to 4 |
+| ₹50K | ₹500 | ~₹15,600 | 3 | Could go to 5 |
+| ₹1L | ₹1,000 | ~₹31,200 | 3 | Could go to 5 |
