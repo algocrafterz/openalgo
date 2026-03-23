@@ -178,6 +178,10 @@
 2. **Slippage corrected**: 1 -> 2 ticks
 3. **NIFTY Index Direction Filter added**: Blocks entries when 2+ of 3 filters (Trend, HTF, Index) oppose direction
 
+## Changes Applied on 2026-03-24
+
+1. **Volume MA Length**: 20 -> 50 bars. Fixes gap-day distortion where opening candles (5-10x normal volume) inflated the 20-bar MA, causing valid breakouts to silently fail the 1.2x volume check. With 50 bars, the MA includes previous session data as a stable baseline. 1.2x multiplier unchanged — threshold stays the same, measurement becomes fair.
+
 ## TP Strategy Analysis (2026-03-12)
 
 Simulated net PnL across 196 trades under different TP strategies using actual Q1 exit distribution (TP1=78, TP1.5=54, SL=63, TE=1):

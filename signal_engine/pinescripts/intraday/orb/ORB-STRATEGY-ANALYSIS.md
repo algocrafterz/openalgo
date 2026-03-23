@@ -256,10 +256,12 @@ All modes enforce a **minimum stop distance** to prevent unrealistically tight s
 - No **F&O lot size** awareness for futures/options traders
 - Short selling constraints in Indian cash market (BTST/STBT) not addressed
 
-### 7. Volume Filter Weakness for Indian Stocks
+### 7. Volume Filter — Gap-Day Distortion (Mitigated)
 - Volume at open (first 5-15 min) is typically 5-10x average in Indian markets
-- Using volume MA (SMA of 20 bars) during the ORB formation period biases toward "volume confirmed"
-- Could generate false confidence in early-session breakouts
+- **Fixed (2026-03-24):** Volume MA length increased from 20 to 50 bars
+- With 20-bar MA, gap-day opening candles inflated the average, causing valid breakouts to fail the 1.2x check (showed "No breakout" despite price clearly breaking ORB level with all other filters passing)
+- With 50-bar MA, includes previous session data as baseline, so 1.2x threshold is consistent across gap and non-gap days
+- 1.2x multiplier retained as quality threshold
 
 ### 8. No Market Breadth / Index Confirmation
 - Trades individual stocks without checking NIFTY/BANKNIFTY direction
@@ -382,7 +384,7 @@ At ORB completion, send a "watchlist" alert listing all symbols where ORB range 
 | Entry Cutoff | 14:00 | Allow 1.5 hours for targets to be reached |
 | Time Exit | 15:15 | Close before market close |
 | Stop Mode | Smart Adaptive or Scaled ATR | Indian stocks have variable volatility profiles |
-| Volume Filter | Enable, 1.2x multiplier | Moderate to avoid false volume signals at open |
+| Volume Filter | Enable, 1.2x multiplier, 50-bar MA | 50-bar MA resists gap-day opening volume distortion |
 | HTF Bias | Daily, Price vs EMA 20 | Aligns with institutional flow |
 | Trend Filter | VWAP | Most relevant intraday indicator for Indian markets |
 | Risk Per Trade | 1% of account | Conservative for volatile Indian stocks |
