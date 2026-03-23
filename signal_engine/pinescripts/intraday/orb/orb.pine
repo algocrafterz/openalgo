@@ -452,6 +452,13 @@ var bool volumeBlockedDown = false   // Crossed down but volume insufficient
 var bool trendBlockedUp = false      // Crossed up but 2+ filters opposed
 var bool trendBlockedDown = false    // Crossed down but 2+ filters opposed
 
+// Store filter values AT breakout attempt time (for accurate dashboard display)
+var float attemptVolRatio = na       // Volume ratio when breakout was attempted
+var bool attemptVolOK = false        // Was volume sufficient at attempt time?
+var bool attemptTrendOK = false      // Was trend aligned at attempt time?
+var int attemptFiltersAgainst = 0    // How many directional filters opposed?
+var string attemptDirection = ""     // "UP" or "DOWN"
+
 var int cyclesUp = 0
 var int cyclesDown = 0
 
@@ -786,9 +793,14 @@ hasVolumeConfirmation(volMA, mult, strongMult) =>
     if na(volMA) or volMA == 0
         true
     else
-        currentVol = volume
-        isStrongVolume = strongMult > 0 and currentVol >= volMA * strongMult
-        isNormalVolume = currentVol >= volMA * mult
+        // Use max volume of last 3 bars (current + 2 prior)
+        // WHY: Breakout momentum often builds 1-2 bars before price crosses the level.
+        // Checking only the exact crossover bar misses breakouts where volume arrived
+        // slightly earlier. This is the #1 cause of "Crossed ORB but low volume" on
+        // stocks with clearly strong volume in the breakout zone.
+        maxRecentVol = math.max(volume, math.max(nz(volume[1]), nz(volume[2])))
+        isStrongVolume = strongMult > 0 and maxRecentVol >= volMA * strongMult
+        isNormalVolume = maxRecentVol >= volMA * mult
         isStrongVolume or isNormalVolume
 
 // =========================================== TARGET & STOP FUNCTIONS ================================
@@ -1544,6 +1556,11 @@ if shouldReset
     volumeBlockedDown := false
     trendBlockedUp := false
     trendBlockedDown := false
+    attemptVolRatio := na
+    attemptVolOK := false
+    attemptTrendOK := false
+    attemptFiltersAgainst := 0
+    attemptDirection := ""
     hadRetestUp := false
     hadRetestDown := false
     retestUpBar := na
@@ -2150,9 +2167,15 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
     trendOK_Down = filtersAgainstShort < 2  // Block when 2+ filters oppose
 
     crossedAbove = close > activeHigh + activeBufferUp and close[1] <= activeHigh + activeBufferUp
-    // Diagnostic: track why breakout was rejected
+    // Diagnostic: track why breakout was rejected + store filter values at attempt time
     if crossedAbove and not activeORB.breakoutUp
         priceCrossedUp := true
+        float volRatioNow = volumeMA > 0 ? math.max(volume, math.max(nz(volume[1]), nz(volume[2]))) / volumeMA : 0
+        attemptVolRatio := volRatioNow
+        attemptVolOK := volumeOK
+        attemptTrendOK := trendOK_Up
+        attemptFiltersAgainst := filtersAgainstLong
+        attemptDirection := "UP"
         if not volumeOK
             volumeBlockedUp := true
         if not trendOK_Up
@@ -2205,9 +2228,15 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
 
     // === BREAKOUT DOWN (NEW) ===
     crossedBelow = close < activeLow - activeBufferDown and close[1] >= activeLow - activeBufferDown
-    // Diagnostic: track why breakout was rejected
+    // Diagnostic: track why breakout was rejected + store filter values at attempt time
     if crossedBelow and not activeORB.breakoutDown
         priceCrossedDown := true
+        float volRatioNow = volumeMA > 0 ? math.max(volume, math.max(nz(volume[1]), nz(volume[2]))) / volumeMA : 0
+        attemptVolRatio := volRatioNow
+        attemptVolOK := volumeOK
+        attemptTrendOK := trendOK_Down
+        attemptFiltersAgainst := filtersAgainstShort
+        attemptDirection := "DOWN"
         if not volumeOK
             volumeBlockedDown := true
         if not trendOK_Down
@@ -3465,12 +3494,56 @@ if showDashboard and enableHTF
                     table.cell(dashTable, 1, row, orbStatus, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                     row += 1
 
-        /// NO TRADE REASON — shows why no entry was taken this session
+        /// NO TRADE REASON — per-filter checklist with tick/cross at breakout attempt time
         if enableTargets and na(orbEntryBar) and not isBeforeCutoff
-            string noTradeReason = not gapFilterPassed ? "Gap > " + str.tostring(maxGapPercent, "#.#") + "%" : not orbRangeFilterPassed ? "ORB width out of range" : (not everHadBreakUp and not everHadBreakDown) ? ((priceCrossedUp or priceCrossedDown) ? ((volumeBlockedUp or volumeBlockedDown) and (trendBlockedUp or trendBlockedDown) ? "Crossed ORB but vol + trend blocked" : (volumeBlockedUp or volumeBlockedDown) ? "Crossed ORB but low volume" : (trendBlockedUp or trendBlockedDown) ? "Crossed ORB but 2+ filters opposed" : "No breakout") : "No breakout (price stayed in range)") : (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) ? "Breakout too late (past cutoff)" : "Blocked by 2+ filters"
-            table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
-            table.cell(dashTable, 1, row, noTradeReason, text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
+            // Section header
+            table.cell(dashTable, 0, row, "── No Trade", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, "──────", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
             row += 1
+
+            // Gap filter
+            string gapIcon = gapFilterPassed ? "✅" : "❌"
+            table.cell(dashTable, 0, row, "Gap:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, gapIcon + " " + str.tostring(gapPercent, "#.#") + "%" + (not gapFilterPassed ? " (max " + str.tostring(maxGapPercent, "#.#") + "%)" : ""), text_color=gapFilterPassed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+            row += 1
+
+            // ORB range filter
+            if enableORBRangeFilter and not na(orbRangePercent)
+                string orbRngIcon = orbRangeFilterPassed ? "✅" : "❌"
+                table.cell(dashTable, 0, row, "ORB Width:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+                table.cell(dashTable, 1, row, orbRngIcon + " " + str.tostring(orbRangePercent, "#.##") + "%" + (not orbRangeFilterPassed ? " (need " + str.tostring(minORBRangePercent, "#.#") + "-" + str.tostring(maxORBRangePercent, "#.#") + "%)" : ""), text_color=orbRangeFilterPassed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+                row += 1
+
+            // Price cross
+            bool priceCrossed = priceCrossedUp or priceCrossedDown
+            string crossIcon = priceCrossed ? "✅" : "❌"
+            string crossDir = priceCrossedUp and priceCrossedDown ? "Both" : priceCrossedUp ? "Up" : priceCrossedDown ? "Down" : "None"
+            table.cell(dashTable, 0, row, "Price Cross:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, crossIcon + " " + crossDir + (not priceCrossed ? " (stayed in range)" : ""), text_color=priceCrossed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+            row += 1
+
+            // Volume at attempt time (only if price crossed)
+            if priceCrossed and enableVolumeFilter
+                string volIcon = attemptVolOK ? "✅" : "❌"
+                string volText = not na(attemptVolRatio) ? str.tostring(attemptVolRatio, "#.#") + "x" : "N/A"
+                table.cell(dashTable, 0, row, "Volume:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+                table.cell(dashTable, 1, row, volIcon + " " + volText + (not attemptVolOK ? " (need " + str.tostring(volumeMultiplier, "#.#") + "x)" : ""), text_color=attemptVolOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+                row += 1
+
+            // Trend/directional filters at attempt time (only if price crossed)
+            if priceCrossed
+                string trendIcon = attemptTrendOK ? "✅" : "❌"
+                int totalFilters = (enableTrendFilter ? 1 : 0) + (enableHTF and blockCounterTrend ? 1 : 0) + (enableIndexFilter ? 1 : 0)
+                string trendText = str.tostring(attemptFiltersAgainst) + "/" + str.tostring(totalFilters) + " against " + attemptDirection
+                table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+                table.cell(dashTable, 1, row, trendIcon + " " + trendText + (not attemptTrendOK ? " (2+ blocks)" : ""), text_color=attemptTrendOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+                row += 1
+
+            // Cutoff time
+            if (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) and not (everHadBreakUp or everHadBreakDown)
+                table.cell(dashTable, 0, row, "Cutoff:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+                table.cell(dashTable, 1, row, "❌ Breakout after " + str.tostring(entryCutoffHour) + ":" + (entryCutoffMinute < 10 ? "0" : "") + str.tostring(entryCutoffMinute), text_color=color.red, text_size=txtSize, text_halign=text.align_right)
+                row += 1
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
