@@ -108,19 +108,39 @@ Three filters assess whether the broader market agrees with the breakout directi
 3. Entry executes on **next bar** after breakout (avoids same-bar repainting)
 4. If cutoff time passes while entry is pending → pending entry **cancelled**
 
-### No Trade Reasons (shown in dashboard after cutoff)
+### Unified Entry Filters Dashboard
 
-| Dashboard section | What it shows |
-|-------------------|---------------|
-| **── No Trade ──** | Per-filter checklist with ✅/❌ showing exact values at breakout attempt time |
-| **Gap:** | ✅/❌ + gap % (and max if failed) |
-| **ORB Width:** | ✅/❌ + range % (and allowed range if failed) |
-| **Price Cross:** | ✅/❌ + direction (Up/Down/None). ❌ means price stayed in ORB range |
-| **Volume:** | ✅/❌ + volume ratio at attempt time (and threshold if failed). Only shown if price crossed |
-| **Trend:** | ✅/❌ + X/Y filters against direction. Only shown if price crossed |
-| **Cutoff:** | ❌ shown only if breakout happened after entry cutoff time |
+Single section shown in ALL scenarios (live, no-trade, trade-taken). Replaces the previously separate Smart Filters, Volume, Trend, HTF, Index, and ORB Status sections.
 
-**Key improvement (2026-03-24):** Volume and trend values are now captured AT breakout attempt time, not current bar. Previously, dashboard showed current bar's 3.5x volume while the breakout was rejected at 10AM with 0.8x volume — creating a confusing mismatch.
+**Three display modes:**
+
+| Mode | Header | When | ✅/❌ | Reason line |
+|------|--------|------|-------|-------------|
+| **Live** (mode 0) | `── Filters` | Before cutoff, no trade | Gap/Width only | No |
+| **No Trade** (mode 1) | `── No Trade` | After cutoff, no trade | All filters | Yes |
+| **Trade Taken** (mode 2) | `── Entry Filters` | Trade was taken | All filters (all ✅) | No |
+
+**Filter rows:**
+
+| Row | What it shows |
+|-----|---------------|
+| **Gap:** | ✅/❌ + gap % |
+| **Width:** | ✅/❌ + ORB range % |
+| **Cross:** | ✅/❌ + direction (Up/Down/None) |
+| **Volume:** | ✅/❌ + ratio + quality (Strong/Good/Weak). Only shown if price crossed |
+| **Trend:** | ✅/❌ + bias (Bullish/Bearish). Only shown if price crossed (mode > 0) |
+| **HTF:** | ✅/❌ + bias (Bullish/Strong Bearish etc.). Only shown if price crossed (mode > 0) |
+| **Index:** | ✅/❌ + bias (Bullish/Bearish). Only shown if price crossed (mode > 0) |
+| **Cutoff:** | ❌ shown only if breakout after cutoff (mode 1 only) |
+| **Reason:** | Single line explaining why no trade (mode 1 only) |
+
+**"→" arrow for value drift:** When reviewing after hours, directional filters (Volume, Trend, HTF, Index) show attempt-time value + current value if changed: e.g., `✅ Bullish → Bearish`. This avoids confusion when the index was bullish at 10AM (when the cross happened) but bearish by 3PM (when you review the chart).
+
+**Key design decisions:**
+- All values captured AT breakout attempt time, not current bar
+- ✅/❌ based on alignment with attempted direction at attempt time
+- Arrow only appears when qualitative value changed (not minor ratio fluctuations)
+- Position sizing section follows immediately after filters for trade-taken mode
 
 ---
 

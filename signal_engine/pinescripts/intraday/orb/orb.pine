@@ -458,6 +458,12 @@ var bool attemptVolOK = false        // Was volume sufficient at attempt time?
 var bool attemptTrendOK = false      // Was trend aligned at attempt time?
 var int attemptFiltersAgainst = 0    // How many directional filters opposed?
 var string attemptDirection = ""     // "UP" or "DOWN"
+var bool attemptTrendAligned = false // Intraday trend aligned at attempt?
+var bool attemptHTFAligned = false   // HTF bias aligned at attempt?
+var bool attemptIdxAligned = false   // Index direction aligned at attempt?
+var string attemptTrendLabel = ""   // Trend bias text at attempt time
+var string attemptHTFLabel = ""     // HTF bias text at attempt time
+var string attemptIdxLabel = ""     // Index bias text at attempt time
 
 var int cyclesUp = 0
 var int cyclesDown = 0
@@ -1203,42 +1209,106 @@ getORBPlotValues(ORBData orbObj, float minsOpen, float minsOpenToEnd, float tfMi
             m := orbObj.mid
     [h, l, m]
 
-// ====================================== NO-TRADE DASHBOARD HELPER =================================
-// Renders per-filter checklist with tick/cross at breakout attempt time
-renderNoTradeChecklist(table dashTable, int startRow, string txtSize, color txtColor, bool gapOK, float gapPct, float maxGapPct, bool orbRangeOK, bool hasOrbRangeFilter, float orbRngPct, float minOrbRng, float maxOrbRng, bool crossedUp, bool crossedDown, bool volOK, float volRatio, float volMult, bool trendOK, int filtersAgainst, int totalFilters, string dir, bool hasVolFilter, bool brokeOutLate, int cutHour, int cutMin) =>
+// ====================================== UNIFIED FILTER STATUS =====================================
+// Single section: ✅/❌ per filter, one-line reason. Replaces separate Smart Filters/Volume/Trend/HTF/Index/ORB Status
+// mode: 0=live (before cutoff), 1=no-trade diagnostic (after cutoff), 2=trade taken
+// curVolRatio/curTrendLbl/curHTFLbl/curIdxLbl = live values for "→" arrow when changed since attempt
+renderFilterStatus(table dashTable, int startRow, string txtSize, color txtColor, bool gapEnabled, bool gapOK, float gapPct, float maxGapPct, bool widthEnabled, bool widthOK, float widthPct, float minW, float maxW, bool crossedUp, bool crossedDown, bool volEnabled, bool volOK, float volRatio, float volMult, float strongVolMult, bool trendEnabled, bool trendAligned, string trendLbl, bool htfEnabled, bool htfAligned, string htfLbl, bool idxEnabled, bool idxAligned, string idxLbl, float curVolRatio, string curTrendLbl, string curHTFLbl, string curIdxLbl, bool showCutoff, int cutHour, int cutMin, int mode) =>
     int row = startRow
-    table.cell(dashTable, 0, row, "── No Trade", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
-    table.cell(dashTable, 1, row, "──────", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
+    string hdr = mode == 1 ? "── No Trade" : mode == 2 ? "── Entry Filters" : "── Filters"
+    color hdrColor = mode == 1 ? color.new(color.orange, 0) : mode == 2 ? color.new(color.teal, 0) : color.new(color.orange, 0)
+    table.cell(dashTable, 0, row, hdr, text_color=hdrColor, text_size=txtSize, text_halign=text.align_left)
+    table.cell(dashTable, 1, row, "──────", text_color=hdrColor, text_size=txtSize, text_halign=text.align_right)
     row += 1
-    string gapIcon = gapOK ? "✅" : "❌"
-    table.cell(dashTable, 0, row, "Gap:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-    table.cell(dashTable, 1, row, gapIcon + " " + str.tostring(gapPct, "#.#") + "%" + (not gapOK ? " (max " + str.tostring(maxGapPct, "#.#") + "%)" : ""), text_color=gapOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-    row += 1
-    if hasOrbRangeFilter and not na(orbRngPct)
-        string orbRngIcon = orbRangeOK ? "✅" : "❌"
-        table.cell(dashTable, 0, row, "ORB Width:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-        table.cell(dashTable, 1, row, orbRngIcon + " " + str.tostring(orbRngPct, "#.##") + "%" + (not orbRangeOK ? " (need " + str.tostring(minOrbRng, "#.#") + "-" + str.tostring(maxOrbRng, "#.#") + "%)" : ""), text_color=orbRangeOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+    // Gap (session-level, no arrow needed)
+    if gapEnabled
+        string ic = gapOK ? "✅" : "❌"
+        string val = not na(gapPct) ? str.tostring(gapPct, "#.#") + "%" : "N/A"
+        table.cell(dashTable, 0, row, "Gap:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, ic + " " + val, text_color=gapOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
         row += 1
+    // Width (session-level, no arrow needed)
+    if widthEnabled and not na(widthPct)
+        string ic = widthOK ? "✅" : "❌"
+        table.cell(dashTable, 0, row, "Width:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, ic + " " + str.tostring(widthPct, "#.##") + "%", text_color=widthOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    // Price Cross
     bool crossed = crossedUp or crossedDown
-    string crossIcon = crossed ? "✅" : "❌"
+    string crossIc = crossed ? "✅" : "❌"
     string crossDir = crossedUp and crossedDown ? "Both" : crossedUp ? "Up" : crossedDown ? "Down" : "None"
-    table.cell(dashTable, 0, row, "Price Cross:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-    table.cell(dashTable, 1, row, crossIcon + " " + crossDir + (not crossed ? " (in range)" : ""), text_color=crossed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+    table.cell(dashTable, 0, row, "Cross:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+    table.cell(dashTable, 1, row, crossIc + " " + crossDir, text_color=crossed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
     row += 1
-    if crossed and hasVolFilter
-        string volIcon = volOK ? "✅" : "❌"
-        string volText = not na(volRatio) ? str.tostring(volRatio, "#.#") + "x" : "N/A"
+    // Volume with quality tag + arrow when quality changed
+    if crossed and volEnabled
+        string ic = volOK ? "✅" : "❌"
+        string vt = not na(volRatio) ? str.tostring(volRatio, "#.#") + "x" : "N/A"
+        string attQ = not na(volRatio) ? (volRatio >= strongVolMult ? "Strong" : volRatio >= volMult ? "Good" : "Weak") : ""
+        string curQ = not na(curVolRatio) ? (curVolRatio >= strongVolMult ? "Strong" : curVolRatio >= volMult ? "Good" : "Weak") : ""
+        string arrow = mode > 0 and attQ != curQ and curQ != "" ? " → " + str.tostring(curVolRatio, "#.#") + "x " + curQ : ""
+        string ex = not volOK and arrow == "" ? " (need " + str.tostring(volMult, "#.#") + "x)" : ""
         table.cell(dashTable, 0, row, "Volume:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-        table.cell(dashTable, 1, row, volIcon + " " + volText + (not volOK ? " (need " + str.tostring(volMult, "#.#") + "x)" : ""), text_color=volOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        table.cell(dashTable, 1, row, ic + " " + vt + " " + attQ + ex + arrow, text_color=volOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
         row += 1
-    if crossed
-        string trendIcon = trendOK ? "✅" : "❌"
-        table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-        table.cell(dashTable, 1, row, trendIcon + " " + str.tostring(filtersAgainst) + "/" + str.tostring(totalFilters) + " against " + dir + (not trendOK ? " (2+ blocks)" : ""), text_color=trendOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+    // Trend — ✅/❌ + arrow when label changed since attempt
+    if trendEnabled
+        if mode > 0
+            string ic = trendAligned ? "✅" : "❌"
+            string arrow = trendLbl != curTrendLbl ? " → " + curTrendLbl : ""
+            table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, ic + " " + trendLbl + arrow, text_color=trendAligned ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        else
+            table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, trendLbl, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
         row += 1
-    if brokeOutLate
+    // HTF Bias — ✅/❌ + arrow when label changed
+    if htfEnabled
+        if mode > 0
+            string ic = htfAligned ? "✅" : "❌"
+            string arrow = htfLbl != curHTFLbl ? " → " + curHTFLbl : ""
+            table.cell(dashTable, 0, row, "HTF:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, ic + " " + htfLbl + arrow, text_color=htfAligned ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        else
+            table.cell(dashTable, 0, row, "HTF:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, htfLbl, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    // Index Direction — ✅/❌ + arrow when label changed
+    if idxEnabled
+        if mode > 0
+            string ic = idxAligned ? "✅" : "❌"
+            string arrow = idxLbl != curIdxLbl ? " → " + curIdxLbl : ""
+            table.cell(dashTable, 0, row, "Index:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, ic + " " + idxLbl + arrow, text_color=idxAligned ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        else
+            table.cell(dashTable, 0, row, "Index:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+            table.cell(dashTable, 1, row, idxLbl, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    // Cutoff (only for no-trade diagnostic)
+    if showCutoff and mode == 1
         table.cell(dashTable, 0, row, "Cutoff:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
         table.cell(dashTable, 1, row, "❌ After " + str.tostring(cutHour) + ":" + (cutMin < 10 ? "0" : "") + str.tostring(cutMin), text_color=color.red, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    // One-line reason (only in no-trade diagnostic mode)
+    if mode == 1
+        string reason = ""
+        if gapEnabled and not gapOK
+            reason := "❌ Gap " + str.tostring(gapPct, "#.#") + "% exceeds " + str.tostring(maxGapPct, "#.#") + "%"
+        else if widthEnabled and not na(widthPct) and not widthOK
+            reason := "❌ Width outside " + str.tostring(minW, "#.#") + "-" + str.tostring(maxW, "#.#") + "% range"
+        else if not crossed
+            reason := "❌ Price stayed within ORB range"
+        else if volEnabled and not volOK
+            reason := "❌ Volume " + str.tostring(volRatio, "#.#") + "x < " + str.tostring(volMult, "#.#") + "x threshold"
+        else if (trendEnabled and not trendAligned) or (htfEnabled and not htfAligned) or (idxEnabled and not idxAligned)
+            reason := "❌ 2+ directional filters opposed"
+        else if showCutoff
+            reason := "❌ Breakout after " + str.tostring(cutHour) + ":" + (cutMin < 10 ? "0" : "") + str.tostring(cutMin) + " cutoff"
+        else
+            reason := "❌ No valid breakout signal"
+        table.cell(dashTable, 0, row, reason, text_color=color.new(color.red, 20), text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, "", text_size=txtSize)
+        table.merge_cells(dashTable, 0, row, 1, row)
         row += 1
     row
 
@@ -2233,6 +2303,12 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
         attemptTrendOK := trendOK_Up
         attemptFiltersAgainst := filtersAgainstLong
         attemptDirection := "UP"
+        attemptTrendAligned := not enableTrendFilter or trendBullish
+        attemptHTFAligned := not (enableHTF and blockCounterTrend) or not cachedHTFBearish
+        attemptIdxAligned := not enableIndexFilter or not cachedIndexBearish
+        attemptTrendLabel := trendBullish ? "Bullish" : trendBearish ? "Bearish" : "Neutral"
+        attemptHTFLabel := cachedHTFBiasText
+        attemptIdxLabel := cachedIndexBiasText
         if not volumeOK
             volumeBlockedUp := true
         if not trendOK_Up
@@ -2294,6 +2370,12 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
         attemptTrendOK := trendOK_Down
         attemptFiltersAgainst := filtersAgainstShort
         attemptDirection := "DOWN"
+        attemptTrendAligned := not enableTrendFilter or trendBearish
+        attemptHTFAligned := not (enableHTF and blockCounterTrend) or not cachedHTFBullish
+        attemptIdxAligned := not enableIndexFilter or not cachedIndexBullish
+        attemptTrendLabel := trendBearish ? "Bearish" : trendBullish ? "Bullish" : "Neutral"
+        attemptHTFLabel := cachedHTFBiasText
+        attemptIdxLabel := cachedIndexBiasText
         if not volumeOK
             volumeBlockedDown := true
         if not trendOK_Down
@@ -3322,149 +3404,38 @@ if showDashboard and enableHTF
 
 
 
-        // Smart Entry Filters Status
-        bool showSmartFilters = enableGapFilter or enableORBRangeFilter or enableRetestEntry or enableMinEntryTime
-        if showSmartFilters and not isHTF
-            // Gap Filter
-            if enableGapFilter
-                string gapStatus = gapFilterPassed ? "✅" : "❌"
-                string gapText = not na(gapPercent) ? str.format("{0}% {1}", str.tostring(gapPercent, "#.#"), gapStatus) : "N/A"
-                table.cell(dashTable, 0, row, "Gap:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Gap from previous close\n\nGaps > " + str.tostring(maxGapPercent) + "% are filtered out\nLarge gaps often fade/reverse")
-                table.cell(dashTable, 1, row, gapText, text_color=gapFilterPassed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-                row += 1
-
-            // ORB Range Filter
-            if enableORBRangeFilter and not na(orbRangePercent)
-                string orbRngStatus = orbRangeFilterPassed ? "✅" : "❌"
-                string orbRngText = str.format("{0}% {1}", str.tostring(orbRangePercent, "#.#"), orbRngStatus)
-                table.cell(dashTable, 0, row, "ORB Width:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="ORB Range as % of price\n\nAllowed range: " + str.tostring(minORBRangePercent) + "% - " + str.tostring(maxORBRangePercent) + "%\nToo narrow = choppy, too wide = exhausted")
-                table.cell(dashTable, 1, row, orbRngText, text_color=orbRangeFilterPassed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-                row += 1
-
-            // Retest Entry Status
-            if enableRetestEntry
-                string retestStatus = ""
-                string retestIcon = ""
-                if awaitingRetestLong
-                    int consCount = consolidationCountLong
-                    retestStatus := consCount > 0 ? "Long (" + str.tostring(consCount) + "/" + str.tostring(consolidationBars) + ")" : "Waiting Long"
-                    retestIcon := consCount > 0 ? "🔄" : "⏳"
-                else if awaitingRetestShort
-                    int consCount = consolidationCountShort
-                    retestStatus := consCount > 0 ? "Short (" + str.tostring(consCount) + "/" + str.tostring(consolidationBars) + ")" : "Waiting Short"
-                    retestIcon := consCount > 0 ? "🔄" : "⏳"
-                else
-                    retestStatus := "Ready"
-                    retestIcon := "✅"
-                table.cell(dashTable, 0, row, "Retest Entry:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Retest/Consolidation Entry Mode\n\nWaiting: Breakout occurred, waiting for pullback or consolidation\n(X/Y): Consolidation building - X bars held near level out of Y needed\nReady: No pending entry")
-                table.cell(dashTable, 1, row, retestIcon + " " + retestStatus, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
-                row += 1
-
-        // Volume
-        if showVol and enableVolumeFilter and not isHTF
-            volRatio = volumeMA > 0 ? volume / volumeMA : 0
-            volStatus = volRatio >= strongVolumeMultiplier ? "✅ Strong" : volRatio >= volumeMultiplier ? "✅ Good" : "⚠️ Weak"
-            table.cell(dashTable, 0, row, "Volume:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-            table.cell(dashTable, 1, row, str.format("{0}× {1}", str.tostring(volRatio, "#.#"), volStatus), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-        // Trend
-        if showTrend and not isHTF
-            trendStatus = "Neutral"
-            bool trendIsBullish = isTrendUp(trendMode, close, trendVWAP, trendEMA12, trendEMACustom, trendSTDirection)
-            bool trendIsBearish = isTrendDown(trendMode, close, trendVWAP, trendEMA12, trendEMACustom, trendSTDirection)
-
-            if trendIsBullish
-                trendStatus := "Bullish"
-            else if trendIsBearish
-                trendStatus := "Bearish"
-
-            // Note: With "both against" logic, blocking requires BOTH Trend AND HTF to be against
-            // Individual filter display just shows the bias, not blocking status
-
-            table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-            table.cell(dashTable, 1, row, trendStatus, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-        // HTF Bias
-        if enableHTF
-            htfTooltip = "Higher Timeframe (Daily) Bias\n\nWith 'Both Against' blocking logic:\n• Entry blocked only if BOTH Trend AND HTF are against\n• Example: Short blocked only if Trend=Bullish AND HTF=Bullish"
-            string htfDisplayText = cachedHTFBiasText
-            // Note: With "both against" logic, we just show the bias, not individual blocking
-            table.cell(dashTable, 0, row, "HTF Bias:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=htfTooltip)
-            table.cell(dashTable, 1, row, htfDisplayText, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-        // Index Direction
-        if enableIndexFilter and not isHTF
-            string idxTooltip = "Index Direction (" + indexSymbol + ")\n\nShows broad market direction using " + indexFilterMethod + "\n\nBlocking logic: Entry blocked when 2+ filters (Trend, HTF, Index) oppose direction\n\nBullish = Index favors longs\nBearish = Index favors shorts"
-            color idxColor = cachedIndexBullish ? color.green : cachedIndexBearish ? color.red : txtColor
-            table.cell(dashTable, 0, row, "Index:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=idxTooltip)
-            table.cell(dashTable, 1, row, cachedIndexBiasText, text_color=idxColor, text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-        // ORB Status Section - minimal spacer
-        table.cell(dashTable, 0, row, "", text_color=txtColor, text_size=size.tiny)
-        table.cell(dashTable, 1, row, "", text_color=txtColor, text_size=size.tiny)
-        table.cell_set_height(dashTable, 0, row, 0.1)
-        table.cell_set_height(dashTable, 1, row, 0.1)
-        row += 1
-
-        // ORB STATUS section - only show if enabled AND not on HTF
-        if showStatus and not isHTF
-            table.cell(dashTable, 0, row, "📈 ORB STATUS", text_color=txtColor, text_size=txtSize, text_halign=text.align_center, bgcolor=headerColor)
-            table.cell(dashTable, 1, row, "", bgcolor=headerColor)
-            table.merge_cells(dashTable, 0, row, 1, row)
-            row += 1
-
-            // Calculate end time of current bar for smart display (HTF compatibility)
-            float barEndTime = time + (currentTF_seconds * 1000)
-            float minsFromOpenToEndOfBar = not na(sessionFirstBarTime) ? (barEndTime - sessionFirstBarTime) / 60000 : -1
-
-            // Show status of each ORB
-            for i = 0 to array.size(allORBs) - 1
-                orbObj = array.get(allORBs, i)
-                if not na(orbObj) and orbObj.isEnabled
-                    orbStatus = ""
-                    orbIcon = ""
-                    orbTooltip = ""
-
-                    // Smart display: Check if current bar COVERS the completion point
-                    bool barCoversCompletion = minsFromOpen >= 0 and minsFromOpen < orbObj.minutes and minsFromOpenToEndOfBar >= orbObj.minutes
-
-                    if orbObj.isBuilding
-                        if barCoversCompletion
-                            // Display as complete even though internally still building
-                            orbStatus := "✅ Complete (This Bar)"
-                            orbIcon := ""
-                            orbTooltip := orbObj.name + " Status\n\nShowing COMPLETE because current bar covers the " + str.tostring(orbObj.minutes) + "-minute period.\n\nBar timeframe: " + timeframe.period + "\nBar covers: " + str.tostring(minsFromOpen, "#") + "-" + str.tostring(minsFromOpenToEndOfBar, "#") + " minutes from open\n\nInternal state: Still building (will finalize next bar)\nDisplay: Complete (user-friendly)"
-                        else
-                            orbStatus := "🔨 Building..."
-                            orbIcon := ""
-                            orbTooltip := orbObj.name + " Status\n\nCurrently building the " + str.tostring(orbObj.minutes) + "-minute range.\n\nTime elapsed: " + str.tostring(minsFromOpen, "#") + " minutes\nCompletion at: " + str.tostring(orbObj.minutes) + " minutes\n\nThe range is updating with each bar until completion."
-                    else if orbObj.isComplete
-                        cycleText = ""
-                        if orbObj.cyclesUp > 0 or orbObj.cyclesDown > 0
-                            cycleText := str.format(" | {0}↑/{1}↓", orbObj.cyclesUp, orbObj.cyclesDown)
-
-                        if not na(activeORB) and orbObj.name == activeORB.name
-                            orbStatus := "✅ Complete" + cycleText
-                            orbIcon := " ⭐"
-                            orbTooltip := orbObj.name + " Status\n\n✅ COMPLETE and ACTIVE\n\nThis is the current ORB being used for breakout detection.\n\nRange: " + str.tostring(orbObj.low, "#.##") + " -" + str.tostring(orbObj.high, "#.##") + "\nBreakouts: " + str.tostring(orbObj.cyclesUp) + " UP | " + str.tostring(orbObj.cyclesDown) + " DOWN"
-                        else
-                            orbStatus := "📌 Complete" + cycleText
-                            orbIcon := ""
-                            orbTooltip := orbObj.name + " Status\n\n📌 COMPLETE (not active)\n\nThis ORB completed but a larger ORB is now active.\n\nRange: " + str.tostring(orbObj.low, "#.##") + " -" + str.tostring(orbObj.high, "#.##") + "\nBreakouts: " + str.tostring(orbObj.cyclesUp) + " UP | " + str.tostring(orbObj.cyclesDown) + " DOWN"
-
-                    table.cell(dashTable, 0, row, orbObj.name + orbIcon + ":", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=orbTooltip)
-                    table.cell(dashTable, 1, row, orbStatus, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
-                    row += 1
-
-        /// NO TRADE REASON — per-filter checklist with tick/cross
-        if enableTargets and na(orbEntryBar) and not isBeforeCutoff
-            int totalFilters = (enableTrendFilter ? 1 : 0) + (enableHTF and blockCounterTrend ? 1 : 0) + (enableIndexFilter ? 1 : 0)
+        // Unified Entry Filters — shown for ALL scenarios: live, no-trade, trade-taken
+        if not isHTF
+            bool hasTrade = enableTargets and not na(orbEntryBar)
+            // mode: 0=live (before cutoff), 1=no-trade (after cutoff), 2=trade taken
+            int filterMode = hasTrade ? 2 : (not isBeforeCutoff ? 1 : 0)
+            bool hasCross = priceCrossedUp or priceCrossedDown
+            bool useAttempt = filterMode > 0 and hasCross
+            // Live trend labels (for mode 0)
+            bool trendBull = isTrendUp(trendMode, close, trendVWAP, trendEMA12, trendEMACustom, trendSTDirection)
+            bool trendBear = isTrendDown(trendMode, close, trendVWAP, trendEMA12, trendEMACustom, trendSTDirection)
+            string liveTrendLbl = trendBull ? "Bullish" : trendBear ? "Bearish" : "Neutral"
+            // Display values: attempt-time for modes 1&2 (have direction), live for mode 0
+            float dispVolRatio = useAttempt ? attemptVolRatio : (volumeMA > 0 ? volume / volumeMA : 0)
+            bool dispVolOK = useAttempt ? attemptVolOK : true
+            bool dispTrendAligned = useAttempt ? attemptTrendAligned : true
+            bool dispHTFAligned = useAttempt ? attemptHTFAligned : true
+            bool dispIdxAligned = useAttempt ? attemptIdxAligned : true
+            // Labels: actual bias text (Bullish/Bearish/Strong Bearish etc.)
+            string dispTrendLbl = useAttempt ? attemptTrendLabel : liveTrendLbl
+            string dispHTFLbl = useAttempt ? attemptHTFLabel : cachedHTFBiasText
+            string dispIdxLbl = useAttempt ? attemptIdxLabel : cachedIndexBiasText
+            // Live values for "→" arrow comparison (shows drift since attempt)
+            float liveVolRatio = volumeMA > 0 ? volume / volumeMA : 0
             bool brokeOutLate = (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) and not (everHadBreakUp or everHadBreakDown)
-            row := renderNoTradeChecklist(dashTable, row, txtSize, txtColor, gapFilterPassed, gapPercent, maxGapPercent, orbRangeFilterPassed, enableORBRangeFilter, orbRangePercent, minORBRangePercent, maxORBRangePercent, priceCrossedUp, priceCrossedDown, attemptVolOK, attemptVolRatio, volumeMultiplier, attemptTrendOK, attemptFiltersAgainst, totalFilters, attemptDirection, enableVolumeFilter, brokeOutLate, entryCutoffHour, entryCutoffMinute)
+            row := renderFilterStatus(dashTable, row, txtSize, txtColor, enableGapFilter, gapFilterPassed, gapPercent, maxGapPercent, enableORBRangeFilter, orbRangeFilterPassed, orbRangePercent, minORBRangePercent, maxORBRangePercent, priceCrossedUp, priceCrossedDown, enableVolumeFilter, dispVolOK, dispVolRatio, volumeMultiplier, strongVolumeMultiplier, enableTrendFilter, dispTrendAligned, dispTrendLbl, enableHTF and blockCounterTrend, dispHTFAligned, dispHTFLbl, enableIndexFilter, dispIdxAligned, dispIdxLbl, liveVolRatio, liveTrendLbl, cachedHTFBiasText, cachedIndexBiasText, brokeOutLate, entryCutoffHour, entryCutoffMinute, filterMode)
+            // Retest status (not shown for trade-taken)
+            if enableRetestEntry and not hasTrade
+                string retestSt = awaitingRetestLong ? (consolidationCountLong > 0 ? "Long (" + str.tostring(consolidationCountLong) + "/" + str.tostring(consolidationBars) + ")" : "Waiting Long") : awaitingRetestShort ? (consolidationCountShort > 0 ? "Short (" + str.tostring(consolidationCountShort) + "/" + str.tostring(consolidationBars) + ")" : "Waiting Short") : "Ready"
+                string retestIc = awaitingRetestLong ? (consolidationCountLong > 0 ? "🔄" : "⏳") : awaitingRetestShort ? (consolidationCountShort > 0 ? "🔄" : "⏳") : "✅"
+                table.cell(dashTable, 0, row, "Retest:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+                table.cell(dashTable, 1, row, retestIc + " " + retestSt, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+                row += 1
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
