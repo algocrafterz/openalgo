@@ -182,7 +182,7 @@
 
 1. **Volume MA Length**: 20 -> 50 bars. Fixes gap-day distortion where opening candles (5-10x normal volume) inflated the 20-bar MA, causing valid breakouts to silently fail the 1.2x volume check. With 50 bars, the MA includes previous session data as a stable baseline. 1.2x multiplier unchanged — threshold stays the same, measurement becomes fair.
 2. **Volume 3-bar window**: `hasVolumeConfirmation` now checks max volume of last 3 bars (current + 2 prior) instead of only the exact crossover bar. Fixes the #1 cause of false "low volume" rejections — breakout momentum often builds 1-2 bars before price crosses the ORB level.
-3. **Dashboard no-trade checklist**: Replaced vague "No breakout" with per-filter ✅/❌ breakdown showing Gap, ORB Width, Price Cross, Volume, Trend — each with the exact value at breakout attempt time. Volume and trend now show values captured when the cross happened, not the current bar (which was misleading).
+3. **Unified dashboard filter section**: Replaced 6 separate duplicated sections (Smart Filters, Volume, Trend, HTF, Index, ORB Status) with ONE unified `renderFilterStatus` function. Shows ✅/❌ per filter with actual bias labels (Bullish/Strong Bearish/etc.) and volume quality tags (Strong/Good/Weak). Three modes: live (before cutoff), no-trade diagnostic (after cutoff with one-line reason), and trade-taken (all filters with ✅). Directional filters show "→" arrow when value drifted since attempt time (e.g., `✅ Bullish → Bearish`), preventing confusion during after-hours review. Net ~120 fewer main body lines.
 
 ## TP Strategy Analysis (2026-03-12)
 
