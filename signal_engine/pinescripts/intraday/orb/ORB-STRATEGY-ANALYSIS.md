@@ -71,7 +71,7 @@ Priority: ORB60 > ORB30 > ORB15 > ORB5 (largest completed ORB becomes active)
 | Condition | Description |
 |-----------|-------------|
 | **Price cross** | Close crosses above ORB High + buffer (long) or below ORB Low - buffer (short) |
-| **Volume** | Current volume >= volume MA * multiplier (e.g., 1.2x) |
+| **Volume** | Max volume of last 3 bars >= volume MA(50) * multiplier (e.g., 1.2x). Uses 3-bar window to capture pre-breakout volume surges. |
 | **Directional filters (2-of-3 rule)** | At most 1 of the 3 filters below can oppose the trade direction. If 2 or more oppose, entry is **blocked**. |
 
 ### Directional Filter Logic (2-of-3 Rule)
@@ -110,16 +110,17 @@ Three filters assess whether the broader market agrees with the breakout directi
 
 ### No Trade Reasons (shown in dashboard after cutoff)
 
-| Dashboard message | Meaning |
-|-------------------|---------|
-| Gap > X% | Opening gap exceeded filter threshold |
-| ORB width out of range | ORB too narrow or too wide for configured limits |
-| No breakout (price stayed in range) | Price never crossed ORB high + buffer or ORB low - buffer |
-| Crossed ORB but low volume | Price crossed ORB level but volume was below 1.2x MA threshold |
-| Crossed ORB but 2+ filters opposed | Price crossed with volume, but trend/HTF/index filters blocked |
-| Crossed ORB but vol + trend blocked | Price crossed but both volume and directional filters failed |
-| Breakout too late (past cutoff) | Breakout passed all filters but next-bar entry landed after cutoff |
-| Blocked by 2+ filters | Breakout detected but 2+ directional filters opposed the direction |
+| Dashboard section | What it shows |
+|-------------------|---------------|
+| **── No Trade ──** | Per-filter checklist with ✅/❌ showing exact values at breakout attempt time |
+| **Gap:** | ✅/❌ + gap % (and max if failed) |
+| **ORB Width:** | ✅/❌ + range % (and allowed range if failed) |
+| **Price Cross:** | ✅/❌ + direction (Up/Down/None). ❌ means price stayed in ORB range |
+| **Volume:** | ✅/❌ + volume ratio at attempt time (and threshold if failed). Only shown if price crossed |
+| **Trend:** | ✅/❌ + X/Y filters against direction. Only shown if price crossed |
+| **Cutoff:** | ❌ shown only if breakout happened after entry cutoff time |
+
+**Key improvement (2026-03-24):** Volume and trend values are now captured AT breakout attempt time, not current bar. Previously, dashboard showed current bar's 3.5x volume while the breakout was rejected at 10AM with 0.8x volume — creating a confusing mismatch.
 
 ---
 

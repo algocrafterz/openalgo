@@ -181,6 +181,8 @@
 ## Changes Applied on 2026-03-24
 
 1. **Volume MA Length**: 20 -> 50 bars. Fixes gap-day distortion where opening candles (5-10x normal volume) inflated the 20-bar MA, causing valid breakouts to silently fail the 1.2x volume check. With 50 bars, the MA includes previous session data as a stable baseline. 1.2x multiplier unchanged — threshold stays the same, measurement becomes fair.
+2. **Volume 3-bar window**: `hasVolumeConfirmation` now checks max volume of last 3 bars (current + 2 prior) instead of only the exact crossover bar. Fixes the #1 cause of false "low volume" rejections — breakout momentum often builds 1-2 bars before price crosses the ORB level.
+3. **Dashboard no-trade checklist**: Replaced vague "No breakout" with per-filter ✅/❌ breakdown showing Gap, ORB Width, Price Cross, Volume, Trend — each with the exact value at breakout attempt time. Volume and trend now show values captured when the cross happened, not the current bar (which was misleading).
 
 ## TP Strategy Analysis (2026-03-12)
 
