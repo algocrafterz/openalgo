@@ -1185,6 +1185,63 @@ getNextEnabledORB(ORBData currentOrb) =>
                 nextOrb := orb
     nextOrb
 
+// ====================================== ORB PLOT HELPER ===========================================
+// Returns [high, low, mid] for an ORB stage's plot visibility window
+getORBPlotValues(ORBData orbObj, float minsOpen, float minsOpenToEnd, float tfMinutes, bool isFirstORB) =>
+    float h = na, float l = na, float m = na
+    if orbObj.isEnabled and orbObj.minutes >= tfMinutes
+        ORBData prevOrb = isFirstORB ? na : getPreviousEnabledORB(orbObj)
+        ORBData nextOrb = isFirstORB ? array.get(cachedNextORBs, 0) : getNextEnabledORB(orbObj)
+        bool prevOrbVisible = na(prevOrb) ? false : prevOrb.minutes >= tfMinutes
+        float startMin = isFirstORB ? -1.0 : (na(prevOrb) or not prevOrbVisible ? 0.0 : prevOrb.minutes - 1)
+        float endMin = isFirstORB ? (na(nextOrb) ? 9999.0 : orbObj.minutes - 1) : (na(nextOrb) ? 9999.0 : orbObj.minutes)
+        bool inWindow = isFirstORB ? (minsOpen > startMin and minsOpen <= endMin) : (minsOpen < endMin and minsOpenToEnd > startMin)
+        bool hasData = not na(orbObj.high) and not na(orbObj.low)
+        if inWindow and hasData
+            h := orbObj.high
+            l := orbObj.low
+            m := orbObj.mid
+    [h, l, m]
+
+// ====================================== NO-TRADE DASHBOARD HELPER =================================
+// Renders per-filter checklist with tick/cross at breakout attempt time
+renderNoTradeChecklist(table dashTable, int startRow, string txtSize, color txtColor, bool gapOK, float gapPct, float maxGapPct, bool orbRangeOK, bool hasOrbRangeFilter, float orbRngPct, float minOrbRng, float maxOrbRng, bool crossedUp, bool crossedDown, bool volOK, float volRatio, float volMult, bool trendOK, int filtersAgainst, int totalFilters, string dir, bool hasVolFilter, bool brokeOutLate, int cutHour, int cutMin) =>
+    int row = startRow
+    table.cell(dashTable, 0, row, "── No Trade", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
+    table.cell(dashTable, 1, row, "──────", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
+    row += 1
+    string gapIcon = gapOK ? "✅" : "❌"
+    table.cell(dashTable, 0, row, "Gap:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+    table.cell(dashTable, 1, row, gapIcon + " " + str.tostring(gapPct, "#.#") + "%" + (not gapOK ? " (max " + str.tostring(maxGapPct, "#.#") + "%)" : ""), text_color=gapOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+    row += 1
+    if hasOrbRangeFilter and not na(orbRngPct)
+        string orbRngIcon = orbRangeOK ? "✅" : "❌"
+        table.cell(dashTable, 0, row, "ORB Width:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, orbRngIcon + " " + str.tostring(orbRngPct, "#.##") + "%" + (not orbRangeOK ? " (need " + str.tostring(minOrbRng, "#.#") + "-" + str.tostring(maxOrbRng, "#.#") + "%)" : ""), text_color=orbRangeOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    bool crossed = crossedUp or crossedDown
+    string crossIcon = crossed ? "✅" : "❌"
+    string crossDir = crossedUp and crossedDown ? "Both" : crossedUp ? "Up" : crossedDown ? "Down" : "None"
+    table.cell(dashTable, 0, row, "Price Cross:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+    table.cell(dashTable, 1, row, crossIcon + " " + crossDir + (not crossed ? " (in range)" : ""), text_color=crossed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+    row += 1
+    if crossed and hasVolFilter
+        string volIcon = volOK ? "✅" : "❌"
+        string volText = not na(volRatio) ? str.tostring(volRatio, "#.#") + "x" : "N/A"
+        table.cell(dashTable, 0, row, "Volume:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, volIcon + " " + volText + (not volOK ? " (need " + str.tostring(volMult, "#.#") + "x)" : ""), text_color=volOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    if crossed
+        string trendIcon = trendOK ? "✅" : "❌"
+        table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, trendIcon + " " + str.tostring(filtersAgainst) + "/" + str.tostring(totalFilters) + " against " + dir + (not trendOK ? " (2+ blocks)" : ""), text_color=trendOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    if brokeOutLate
+        table.cell(dashTable, 0, row, "Cutoff:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
+        table.cell(dashTable, 1, row, "❌ After " + str.tostring(cutHour) + ":" + (cutMin < 10 ? "0" : "") + str.tostring(cutMin), text_color=color.red, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+    row
+
 // ====================================== CLEANUP FUNCTIONS ==========================================
 cleanupLine(lineObject) =>
     if not na(lineObject)
@@ -2884,107 +2941,16 @@ for orbObj in allORBs
             lastEnabledORB := orbObj
 
 if not isHTF and inSession
-
     float barEndTime = time + (currentTF_seconds * 1000)
     float minsFromOpenToEndOfBar = not na(sessionFirstBarTime) ? (barEndTime - sessionFirstBarTime) / 60000 : -1
-
-    if orb5Obj.isEnabled and orb5Obj.minutes >= currentTF_minutes
-        prevOrb = array.get(cachedPrevORBs, 0)
-        nextOrb = array.get(cachedNextORBs, 0)
-
-        bool prevOrbVisible = na(prevOrb) ? false : prevOrb.minutes >= currentTF_minutes
-        float startMin = -1.0  // Special case for first ORB
-        float endMin = na(nextOrb) ? 9999.0 : orb5Obj.minutes -1
-        bool inWindow = minsFromOpen > startMin and minsFromOpen <= endMin
-        bool hasData = not na(orb5Obj.high) and not na(orb5Obj.low)
-
-        if inWindow and hasData
-            plotORB5High := orb5Obj.high
-            plotORB5Low := orb5Obj.low
-            plotORB5Mid := orb5Obj.mid
-        else
-            plotORB5High := na
-            plotORB5Low := na
-            plotORB5Mid := na
-    else
-        plotORB5High := na
-        plotORB5Low := na
-        plotORB5Mid := na
-
-    if orb15Obj.isEnabled and orb15Obj.minutes >= currentTF_minutes
-        prevOrb = getPreviousEnabledORB(orb15Obj)
-        nextOrb = getNextEnabledORB(orb15Obj)
-
-        bool prevOrbVisible = na(prevOrb) ? false : prevOrb.minutes >= currentTF_minutes
-        float startMin = na(prevOrb) or not prevOrbVisible ? 0.0 : prevOrb.minutes - 1
-        float endMin = na(nextOrb) ? 9999.0 : orb15Obj.minutes
-        bool startsBeforeEnd = minsFromOpen < endMin
-        bool endsAfterStart = minsFromOpenToEndOfBar > startMin
-        bool inWindow = startsBeforeEnd and endsAfterStart
-        bool hasData = not na(orb15Obj.high) and not na(orb15Obj.low)
-
-        if inWindow and hasData
-            plotORB15High := orb15Obj.high
-            plotORB15Low := orb15Obj.low
-            plotORB15Mid := orb15Obj.mid
-        else
-            plotORB15High := na
-            plotORB15Low := na
-            plotORB15Mid := na
-    else
-        plotORB15High := na
-        plotORB15Low := na
-        plotORB15Mid := na
-
-    if orb30Obj.isEnabled and orb30Obj.minutes >= currentTF_minutes
-        prevOrb = getPreviousEnabledORB(orb30Obj)
-        nextOrb = getNextEnabledORB(orb30Obj)
-
-        bool prevOrbVisible = na(prevOrb) ? false : prevOrb.minutes >= currentTF_minutes
-        float startMin = na(prevOrb) or not prevOrbVisible ? 0.0 : prevOrb.minutes - 1
-        float endMin = na(nextOrb) ? 9999.0 : orb30Obj.minutes
-        bool startsBeforeEnd = minsFromOpen < endMin
-        bool endsAfterStart = minsFromOpenToEndOfBar > startMin
-        bool inWindow = startsBeforeEnd and endsAfterStart
-        bool hasData = not na(orb30Obj.high) and not na(orb30Obj.low)
-
-        if inWindow and hasData
-            plotORB30High := orb30Obj.high
-            plotORB30Low := orb30Obj.low
-            plotORB30Mid := orb30Obj.mid
-        else
-            plotORB30High := na
-            plotORB30Low := na
-            plotORB30Mid := na
-    else
-        plotORB30High := na
-        plotORB30Low := na
-        plotORB30Mid := na
-
-    if orb60Obj.isEnabled and orb60Obj.minutes >= currentTF_minutes
-        prevOrb = getPreviousEnabledORB(orb60Obj)
-        nextOrb = getNextEnabledORB(orb60Obj)
-
-        bool prevOrbVisible = na(prevOrb) ? false : prevOrb.minutes >= currentTF_minutes
-        float startMin = na(prevOrb) or not prevOrbVisible ? 0.0 : prevOrb.minutes - 1
-        float endMin = 9999.0
-        bool startsBeforeEnd = minsFromOpen < endMin
-        bool endsAfterStart = minsFromOpenToEndOfBar > startMin
-        bool inWindow = startsBeforeEnd and endsAfterStart
-        bool hasData = not na(orb60Obj.high) and not na(orb60Obj.low)
-
-        if inWindow and hasData
-            plotORB60High := orb60Obj.high
-            plotORB60Low := orb60Obj.low
-            plotORB60Mid := orb60Obj.mid
-        else
-            plotORB60High := na
-            plotORB60Low := na
-            plotORB60Mid := na
-    else
-        plotORB60High := na
-        plotORB60Low := na
-        plotORB60Mid := na
+    [h5, l5, m5] = getORBPlotValues(orb5Obj, minsFromOpen, minsFromOpenToEndOfBar, currentTF_minutes, true)
+    plotORB5High := h5, plotORB5Low := l5, plotORB5Mid := m5
+    [h15, l15, m15] = getORBPlotValues(orb15Obj, minsFromOpen, minsFromOpenToEndOfBar, currentTF_minutes, false)
+    plotORB15High := h15, plotORB15Low := l15, plotORB15Mid := m15
+    [h30, l30, m30] = getORBPlotValues(orb30Obj, minsFromOpen, minsFromOpenToEndOfBar, currentTF_minutes, false)
+    plotORB30High := h30, plotORB30Low := l30, plotORB30Mid := m30
+    [h60, l60, m60] = getORBPlotValues(orb60Obj, minsFromOpen, minsFromOpenToEndOfBar, currentTF_minutes, false)
+    plotORB60High := h60, plotORB60Low := l60, plotORB60Mid := m60
 
 // ORB5 Plots (during building only)
 p_orb5_high = plot(plotORB5High, title="ORB5 High", color=color.new(orb5LineColor, 0), linewidth=1, style=plot.style_linebr, display=display.all)
@@ -3494,56 +3460,11 @@ if showDashboard and enableHTF
                     table.cell(dashTable, 1, row, orbStatus, text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                     row += 1
 
-        /// NO TRADE REASON — per-filter checklist with tick/cross at breakout attempt time
+        /// NO TRADE REASON — per-filter checklist with tick/cross
         if enableTargets and na(orbEntryBar) and not isBeforeCutoff
-            // Section header
-            table.cell(dashTable, 0, row, "── No Trade", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
-            table.cell(dashTable, 1, row, "──────", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-            // Gap filter
-            string gapIcon = gapFilterPassed ? "✅" : "❌"
-            table.cell(dashTable, 0, row, "Gap:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-            table.cell(dashTable, 1, row, gapIcon + " " + str.tostring(gapPercent, "#.#") + "%" + (not gapFilterPassed ? " (max " + str.tostring(maxGapPercent, "#.#") + "%)" : ""), text_color=gapFilterPassed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-            // ORB range filter
-            if enableORBRangeFilter and not na(orbRangePercent)
-                string orbRngIcon = orbRangeFilterPassed ? "✅" : "❌"
-                table.cell(dashTable, 0, row, "ORB Width:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-                table.cell(dashTable, 1, row, orbRngIcon + " " + str.tostring(orbRangePercent, "#.##") + "%" + (not orbRangeFilterPassed ? " (need " + str.tostring(minORBRangePercent, "#.#") + "-" + str.tostring(maxORBRangePercent, "#.#") + "%)" : ""), text_color=orbRangeFilterPassed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-                row += 1
-
-            // Price cross
-            bool priceCrossed = priceCrossedUp or priceCrossedDown
-            string crossIcon = priceCrossed ? "✅" : "❌"
-            string crossDir = priceCrossedUp and priceCrossedDown ? "Both" : priceCrossedUp ? "Up" : priceCrossedDown ? "Down" : "None"
-            table.cell(dashTable, 0, row, "Price Cross:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-            table.cell(dashTable, 1, row, crossIcon + " " + crossDir + (not priceCrossed ? " (stayed in range)" : ""), text_color=priceCrossed ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-            row += 1
-
-            // Volume at attempt time (only if price crossed)
-            if priceCrossed and enableVolumeFilter
-                string volIcon = attemptVolOK ? "✅" : "❌"
-                string volText = not na(attemptVolRatio) ? str.tostring(attemptVolRatio, "#.#") + "x" : "N/A"
-                table.cell(dashTable, 0, row, "Volume:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-                table.cell(dashTable, 1, row, volIcon + " " + volText + (not attemptVolOK ? " (need " + str.tostring(volumeMultiplier, "#.#") + "x)" : ""), text_color=attemptVolOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-                row += 1
-
-            // Trend/directional filters at attempt time (only if price crossed)
-            if priceCrossed
-                string trendIcon = attemptTrendOK ? "✅" : "❌"
-                int totalFilters = (enableTrendFilter ? 1 : 0) + (enableHTF and blockCounterTrend ? 1 : 0) + (enableIndexFilter ? 1 : 0)
-                string trendText = str.tostring(attemptFiltersAgainst) + "/" + str.tostring(totalFilters) + " against " + attemptDirection
-                table.cell(dashTable, 0, row, "Trend:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-                table.cell(dashTable, 1, row, trendIcon + " " + trendText + (not attemptTrendOK ? " (2+ blocks)" : ""), text_color=attemptTrendOK ? txtColor : color.red, text_size=txtSize, text_halign=text.align_right)
-                row += 1
-
-            // Cutoff time
-            if (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) and not (everHadBreakUp or everHadBreakDown)
-                table.cell(dashTable, 0, row, "Cutoff:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
-                table.cell(dashTable, 1, row, "❌ Breakout after " + str.tostring(entryCutoffHour) + ":" + (entryCutoffMinute < 10 ? "0" : "") + str.tostring(entryCutoffMinute), text_color=color.red, text_size=txtSize, text_halign=text.align_right)
-                row += 1
+            int totalFilters = (enableTrendFilter ? 1 : 0) + (enableHTF and blockCounterTrend ? 1 : 0) + (enableIndexFilter ? 1 : 0)
+            bool brokeOutLate = (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) and not (everHadBreakUp or everHadBreakDown)
+            row := renderNoTradeChecklist(dashTable, row, txtSize, txtColor, gapFilterPassed, gapPercent, maxGapPercent, orbRangeFilterPassed, enableORBRangeFilter, orbRangePercent, minORBRangePercent, maxORBRangePercent, priceCrossedUp, priceCrossedDown, attemptVolOK, attemptVolRatio, volumeMultiplier, attemptTrendOK, attemptFiltersAgainst, totalFilters, attemptDirection, enableVolumeFilter, brokeOutLate, entryCutoffHour, entryCutoffMinute)
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
