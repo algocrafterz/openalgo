@@ -114,8 +114,11 @@ Three filters assess whether the broader market agrees with the breakout directi
 |-------------------|---------|
 | Gap > X% | Opening gap exceeded filter threshold |
 | ORB width out of range | ORB too narrow or too wide for configured limits |
-| No breakout | Price never crossed ORB high or low |
-| Breakout too late (past cutoff) | Breakout passed all filters but next-bar entry landed after 10:30 AM |
+| No breakout (price stayed in range) | Price never crossed ORB high + buffer or ORB low - buffer |
+| Crossed ORB but low volume | Price crossed ORB level but volume was below 1.2x MA threshold |
+| Crossed ORB but 2+ filters opposed | Price crossed with volume, but trend/HTF/index filters blocked |
+| Crossed ORB but vol + trend blocked | Price crossed but both volume and directional filters failed |
+| Breakout too late (past cutoff) | Breakout passed all filters but next-bar entry landed after cutoff |
 | Blocked by 2+ filters | Breakout detected but 2+ directional filters opposed the direction |
 
 ---
