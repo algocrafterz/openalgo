@@ -444,6 +444,14 @@ var bool everHadBreakUp = false
 var bool everHadBreakDown = false
 var float breakoutEntryPrice = na
 
+// Diagnostic: why breakout was not registered (for dashboard "No Trade" reason)
+var bool priceCrossedUp = false      // Price crossed ORB high + buffer
+var bool priceCrossedDown = false    // Price crossed ORB low - buffer
+var bool volumeBlockedUp = false     // Crossed up but volume insufficient
+var bool volumeBlockedDown = false   // Crossed down but volume insufficient
+var bool trendBlockedUp = false      // Crossed up but 2+ filters opposed
+var bool trendBlockedDown = false    // Crossed down but 2+ filters opposed
+
 var int cyclesUp = 0
 var int cyclesDown = 0
 
@@ -1530,6 +1538,12 @@ if shouldReset
     everHadBreakUp := false
     everHadBreakDown := false
     breakoutEntryPrice := na
+    priceCrossedUp := false
+    priceCrossedDown := false
+    volumeBlockedUp := false
+    volumeBlockedDown := false
+    trendBlockedUp := false
+    trendBlockedDown := false
     hadRetestUp := false
     hadRetestDown := false
     retestUpBar := na
@@ -2136,6 +2150,13 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
     trendOK_Down = filtersAgainstShort < 2  // Block when 2+ filters oppose
 
     crossedAbove = close > activeHigh + activeBufferUp and close[1] <= activeHigh + activeBufferUp
+    // Diagnostic: track why breakout was rejected
+    if crossedAbove and not activeORB.breakoutUp
+        priceCrossedUp := true
+        if not volumeOK
+            volumeBlockedUp := true
+        if not trendOK_Up
+            trendBlockedUp := true
     if crossedAbove and volumeOK and trendOK_Up and not activeORB.breakoutUp
         activeORB.breakoutUp := true
         activeORB.breakoutBar := bar_index
@@ -2184,6 +2205,13 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
 
     // === BREAKOUT DOWN (NEW) ===
     crossedBelow = close < activeLow - activeBufferDown and close[1] >= activeLow - activeBufferDown
+    // Diagnostic: track why breakout was rejected
+    if crossedBelow and not activeORB.breakoutDown
+        priceCrossedDown := true
+        if not volumeOK
+            volumeBlockedDown := true
+        if not trendOK_Down
+            trendBlockedDown := true
 
     if crossedBelow and volumeOK and trendOK_Down and not activeORB.breakoutDown
         activeORB.breakoutDown := true
@@ -3439,7 +3467,7 @@ if showDashboard and enableHTF
 
         /// NO TRADE REASON — shows why no entry was taken this session
         if enableTargets and na(orbEntryBar) and not isBeforeCutoff
-            string noTradeReason = not gapFilterPassed ? "Gap > " + str.tostring(maxGapPercent, "#.#") + "%" : not orbRangeFilterPassed ? "ORB width out of range" : (not everHadBreakUp and not everHadBreakDown) ? "No breakout" : (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) ? "Breakout too late (past cutoff)" : "Blocked by 2+ filters"
+            string noTradeReason = not gapFilterPassed ? "Gap > " + str.tostring(maxGapPercent, "#.#") + "%" : not orbRangeFilterPassed ? "ORB width out of range" : (not everHadBreakUp and not everHadBreakDown) ? ((priceCrossedUp or priceCrossedDown) ? ((volumeBlockedUp or volumeBlockedDown) and (trendBlockedUp or trendBlockedDown) ? "Crossed ORB but vol + trend blocked" : (volumeBlockedUp or volumeBlockedDown) ? "Crossed ORB but low volume" : (trendBlockedUp or trendBlockedDown) ? "Crossed ORB but 2+ filters opposed" : "No breakout") : "No breakout (price stayed in range)") : (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) ? "Breakout too late (past cutoff)" : "Blocked by 2+ filters"
             table.cell(dashTable, 0, row, "No Trade:", text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_left)
             table.cell(dashTable, 1, row, noTradeReason, text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
             row += 1
