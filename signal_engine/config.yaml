@@ -49,7 +49,7 @@ risk:
   stale_signal_seconds: 60     # Ignore signals older than this
   min_sl_pct: 0.005            # Reject SL tighter than 0.5% of entry (0 = disabled)
   max_positions_per_symbol: 1  # Max concurrent positions in same symbol (0 = no limit)
-  max_positions_per_sector: 1  # Max 1 per sector — with 2 slots, forces diversification across sectors
+  max_positions_per_sector: 0  # Disabled — stock universe spans same sectors (FINANCE: PFC, JIOFIN, RECLTD etc.)
 
 # ── Time Exit ────────────────────────────────────────────
 # Close all open positions before broker auto square-off to avoid penalty charges.
