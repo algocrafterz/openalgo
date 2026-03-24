@@ -15,6 +15,7 @@ from signal_engine.api_client import (
     fetch_realised_pnl,
 )
 from signal_engine.risk import RiskEngine
+from signal_engine import notifier
 
 # IST offset from UTC
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -48,6 +49,11 @@ class PositionTracker:
         self._poll_interval = poll_interval
         self._running = False
         self._last_realised_pnl: float = 0.0
+        # Day summary counters (reset at midnight via TimeExitScheduler)
+        self._day_trades: int = 0
+        self._day_wins: int = 0
+        self._day_losses: int = 0
+        self._day_pnl: float = 0.0
 
     @property
     def tracked_count(self) -> int:
@@ -94,6 +100,17 @@ class PositionTracker:
                 product=pos.product,
             )
             logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
+
+            # Update day counters
+            self._day_trades += 1
+            self._day_pnl += pnl_delta
+            if pnl_delta >= 0:
+                self._day_wins += 1
+            else:
+                self._day_losses += 1
+
+            # Notify position close
+            await notifier.notify_position_closed(pos.symbol, pnl_delta)
 
             # OCO cancellation: cancel whichever bracket leg is still pending
             await self._cancel_remaining_bracket_leg(pos, pnl_delta)
@@ -147,6 +164,19 @@ class PositionTracker:
         """
         if not self._positions:
             logger.info("Time exit: no open positions to close")
+            # Still send day summary even when all positions closed before time exit
+            capital = self._risk_engine._last_known_capital or 0.0
+            await notifier.notify_day_summary(
+                trades=self._day_trades,
+                wins=self._day_wins,
+                losses=self._day_losses,
+                net_pnl=self._day_pnl,
+                capital=capital,
+            )
+            self._day_trades = 0
+            self._day_wins = 0
+            self._day_losses = 0
+            self._day_pnl = 0.0
             return
 
         # Collect unique strategies from tracked positions
@@ -169,9 +199,25 @@ class PositionTracker:
                 entry_price=pos.entry_price,
                 product=pos.product,
             )
+            await notifier.notify_time_exit(pos.symbol)
             logger.info(f"Time exit: cleared tracker entry {key}")
 
         self._positions.clear()
+
+        # Send day summary after all positions are closed
+        capital = self._risk_engine._last_known_capital or 0.0
+        await notifier.notify_day_summary(
+            trades=self._day_trades,
+            wins=self._day_wins,
+            losses=self._day_losses,
+            net_pnl=self._day_pnl,
+            capital=capital,
+        )
+        # Reset day counters for next session
+        self._day_trades = 0
+        self._day_wins = 0
+        self._day_losses = 0
+        self._day_pnl = 0.0
 
     async def start(self) -> None:
         """Start the polling loop. Runs until stop() is called."""

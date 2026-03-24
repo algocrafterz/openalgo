@@ -183,7 +183,7 @@ Only ONE of these fires per trade — whichever is hit first.
 - **Execution**: `strategy.exit` always uses TP1 only (full position exit at 1R)
 - **Observation**: All TP levels (TP1.5, TP2, TP3) enabled by default for chart display
 - **Entry alert**: Hardcoded to TP1 — signal engine uses TP1 for order placement
-- **Entry cutoff**: 10:30 AM (optimal per Q1 2026 statistical analysis — ~100% win rate before, ~33% after)
+- **Entry cutoff**: 11:00 AM (relaxed from 10:30 to capture late valid breakouts; 10:30 remains the sweet spot per Q1 data but 10:30–11:00 window added)
 - **Time exit**: 3:00 PM — gives trades 4.5 hours from entry, exits before broker auto square-off
 - **strategy.close_all retained**: For accurate backtest simulation in Strategy Tester
 

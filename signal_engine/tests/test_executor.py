@@ -243,7 +243,8 @@ class TestSendBracketLegs:
         tp_failure = self._failure_result()
 
         with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
-            mock_send.side_effect = [sl_result, tp_failure]
+            # SL succeeds on 1st attempt, TP fails all 3 retry attempts
+            mock_send.side_effect = [sl_result, tp_failure, tp_failure, tp_failure]
             result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
 
         assert result_sl.status == OrderStatus.SUCCESS

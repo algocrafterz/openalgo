@@ -2790,9 +2790,8 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             alertSLTriggered := true  // Trigger SL alert
             orbLinesFrozen := true
 
-            // Send SL Hit Alert (LONG)
-            float tpForAlert = showTP2 ? orbTP2Price : showTP1_5 ? orbTP1_5Price : showTP1 ? orbTP1Price : orbTP1_5Price
-            alert(buildSLAlert(true, orbEntryPrice, orbSLPrice, tpForAlert, orbSLPrice), alert.freq_once_per_bar)
+            // Send SL Hit Alert (LONG) — always reference TP1 for R:R consistency with entry alert
+            alert(buildSLAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -2867,9 +2866,8 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             alertSLTriggered := true  // Trigger SL alert for short
             orbLinesFrozen := true
 
-            // Send SL Hit Alert (SHORT)
-            float tpForAlert = showTP2 ? orbTP2Price : showTP1_5 ? orbTP1_5Price : showTP1 ? orbTP1Price : orbTP1_5Price
-            alert(buildSLAlert(false, orbEntryPrice, orbSLPrice, tpForAlert, orbSLPrice), alert.freq_once_per_bar)
+            // Send SL Hit Alert (SHORT) — always reference TP1 for R:R consistency with entry alert
+            alert(buildSLAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -2896,10 +2894,8 @@ if inSession and not inSession[1]
 // strategy.position_size != 0 ensures we only fire if position is still open
 if isPastTimeExit and not timeExitTriggered and strategy.position_size != 0
     bool isLongPos = strategy.position_size > 0
-    float tpForAlert = showTP2 ? orbTP2Price : showTP1_5 ? orbTP1_5Price : showTP1 ? orbTP1Price : orbTP1_5Price
-
-    // Send Time Exit Alert
-    alert(buildTimeExitAlert(isLongPos, orbEntryPrice, orbSLPrice, tpForAlert, close), alert.freq_once_per_bar)
+    // Send Time Exit Alert — always reference TP1 for R:R consistency with entry alert
+    alert(buildTimeExitAlert(isLongPos, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
 
     strategy.close_all(comment="Time Exit")
     timeExitTriggered := true

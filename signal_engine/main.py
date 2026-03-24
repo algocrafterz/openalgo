@@ -13,6 +13,7 @@ from signal_engine.executor import build_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import OrderStatus, ValidationStatus
+from signal_engine import notifier
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
 from signal_engine.risk import RiskEngine
@@ -78,7 +79,9 @@ async def handle_message(text: str) -> None:
 
     # 3. Check exposure limits
     if not risk_engine.check_exposure():
-        logger.warning(f"Risk limit reached, skipping {signal.symbol}")
+        reason = risk_engine.exposure_block_reason()
+        logger.warning(f"Risk limit reached, skipping {signal.symbol}: {reason}")
+        await notifier.notify_risk_limit_hit(reason)
         return
 
     # 3a. Symbol concentration check
@@ -130,8 +133,10 @@ async def handle_message(text: str) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
+        await notifier.notify_order_placed(signal.symbol, signal.direction.value, trade_result.order_id)
     else:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
+        await notifier.notify_order_rejected(signal.symbol, trade_result.message)
 
     if trade_result.status == OrderStatus.SUCCESS:
         # 8. Record trade in risk engine and commit margin
@@ -147,6 +152,15 @@ async def handle_message(text: str) -> None:
             sl_result, tp_result = await send_bracket_legs(signal, quantity, trade_result.order_id)
             sl_order_id = sl_result.order_id if sl_result else ""
             tp_order_id = tp_result.order_id if tp_result else ""
+            # Notify SL/TP placement status
+            if sl_result and sl_result.status == OrderStatus.SUCCESS:
+                await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id)
+            else:
+                await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result")
+            if tp_result and tp_result.status == OrderStatus.SUCCESS:
+                await notifier.notify_tp_placed(signal.symbol, signal.direction.value, tp_order_id)
+            else:
+                await notifier.notify_tp_failed(signal.symbol, tp_result.message if tp_result else "no result")
 
         # 10. Register in position tracker for P&L monitoring
         tracker.register(TrackedPosition(
@@ -201,6 +215,8 @@ def main() -> None:
         startup_capital = await fetch_available_capital()
         if startup_capital > 0:
             risk_engine.log_startup_summary(startup_capital)
+            mode_label = "ANALYZE" if is_analyze else "LIVE"
+            await notifier.notify_engine_started(startup_capital, mode_label)
 
         # Start position tracker in background
         tracker_task = asyncio.create_task(tracker.start())
@@ -231,6 +247,7 @@ def main() -> None:
             if time_exit_task is not None:
                 time_exit_scheduler.stop()
                 time_exit_task.cancel()
+            await notifier.notify_engine_stopped()
             logger.info("Signal Engine stopped")
 
     try:

@@ -66,11 +66,11 @@ def validate(signal: Signal) -> ValidationResult:
             status=ValidationStatus.INVALID, reason="SHORT: TP must be below entry"
         )
 
-    # R:R ratio
+    # R:R ratio (round to 2dp to avoid floating-point edge cases like 0.54/0.54 = 0.9999)
     risk = abs(signal.entry - signal.sl)
     reward = abs(signal.tp - signal.entry)
     if risk > 0:
-        rr_ratio = reward / risk
+        rr_ratio = round(reward / risk, 2)
         if rr_ratio < settings.min_rr:
             return ValidationResult(
                 status=ValidationStatus.IGNORED,
