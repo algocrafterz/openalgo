@@ -7,6 +7,7 @@ from typing import Callable, Coroutine
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine import notifier
 
 
 async def start_listener(
@@ -60,6 +61,7 @@ async def start_listener(
     while retries < settings.listener_max_retries:
         try:
             await client.start(phone=settings.telegram_phone)
+            notifier.set_client(client)
             for ch in settings.telegram_channels:
                 logger.info(f"Watching channel: {ch.name} ({ch.id})")
             retries = 0

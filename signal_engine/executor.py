@@ -206,11 +206,24 @@ async def send_bracket_legs(
         return sl_result, None
 
     tp_order = build_tp_order(signal, quantity)
-    tp_result = await send_order(tp_order)
+    tp_result: TradeResult = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
 
-    if tp_result.status == OrderStatus.SUCCESS:
-        logger.info(f"TP leg placed for {signal.symbol}: id={tp_result.order_id}")
-    else:
-        logger.warning(f"TP leg failed for {signal.symbol}: {tp_result.message}")
+    for attempt in range(1, settings.bracket_max_tp_retries + 1):
+        tp_result = await send_order(tp_order)
+        if tp_result.status == OrderStatus.SUCCESS:
+            logger.info(
+                f"TP leg placed for {signal.symbol}: id={tp_result.order_id} (attempt {attempt})"
+            )
+            break
+        logger.warning(
+            f"TP leg attempt {attempt}/{settings.bracket_max_tp_retries} failed for "
+            f"{signal.symbol}: {tp_result.message}"
+        )
+
+    if tp_result.status != OrderStatus.SUCCESS:
+        logger.error(
+            f"TP leg failed after {settings.bracket_max_tp_retries} attempts for "
+            f"{signal.symbol} - position protected by SL only"
+        )
 
     return sl_result, tp_result

@@ -153,6 +153,7 @@ class Settings:
     bracket_enabled: bool
     bracket_sl_order_type: str
     bracket_max_sl_retries: int
+    bracket_max_tp_retries: int
     bracket_cancel_retry_count: int
 
     # Time exit (from yaml) — close positions before broker auto square-off
@@ -291,6 +292,7 @@ def _build_settings() -> Settings:
         bracket_enabled=bool(_require_key(bracket, "bracket", "enabled")),
         bracket_sl_order_type=str(_require_key(bracket, "bracket", "sl_order_type")),
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
+        bracket_max_tp_retries=int(bracket.get("max_tp_retries", 3)),
         bracket_cancel_retry_count=int(_require_key(bracket, "bracket", "cancel_retry_count")),
 
         # Time exit — optional section with safe defaults

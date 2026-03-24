@@ -374,6 +374,27 @@ class RiskEngine:
 
         return True
 
+    def exposure_block_reason(self) -> str:
+        """Return a human-readable reason why check_exposure() returned False."""
+        capital = self._last_known_capital
+        if capital > 0:
+            combined_daily = self.daily_realised_loss + self.unrealised_loss
+            if combined_daily >= capital * self.daily_loss_limit:
+                return f"Daily loss limit hit ({combined_daily:,.0f} >= {capital * self.daily_loss_limit:,.0f})"
+            if self.weekly_realised_loss >= capital * self.weekly_loss_limit:
+                return f"Weekly loss limit hit"
+            if self.monthly_realised_loss >= capital * self.monthly_loss_limit:
+                return f"Monthly loss limit hit"
+            if self.portfolio_heat / capital >= self.max_portfolio_heat:
+                return f"Portfolio heat limit ({self.portfolio_heat:,.0f}/{capital * self.max_portfolio_heat:,.0f})"
+            if self.max_capital_utilization > 0 and self.committed_margin / capital >= self.max_capital_utilization:
+                return f"Capital utilization limit ({self.committed_margin:,.0f}/{capital * self.max_capital_utilization:,.0f})"
+        if self.open_positions >= self.max_open_positions:
+            return f"Max positions ({self.open_positions}/{self.max_open_positions})"
+        if self.trades_today >= self.max_trades_per_day:
+            return f"Max trades/day ({self.trades_today}/{self.max_trades_per_day})"
+        return "Unknown"
+
     def capacity_status(self) -> str:
         """Return a formatted capacity summary string."""
         capital = self._last_known_capital
