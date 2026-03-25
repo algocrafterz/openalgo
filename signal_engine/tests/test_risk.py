@@ -13,7 +13,6 @@ def _engine(**overrides) -> RiskEngine:
         "risk_per_trade": 0.01,
         "sizing_mode": "fixed_fractional",
         "pct_of_capital": 0.05,
-        "max_position_size": 0,           # disabled — pure risk-based sizing
         "daily_loss_limit": 0.03,
         "weekly_loss_limit": 0.06,
         "monthly_loss_limit": 0.10,
@@ -23,8 +22,6 @@ def _engine(**overrides) -> RiskEngine:
         "max_entry_price": 0,
         "slippage_factor": 0.0,
         "max_portfolio_heat": 0.06,
-        "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-        "max_capital_utilization": 0.0,  # disabled by default; enable per test
         "default_product": "MIS",
         "max_positions_per_symbol": 1,
         "max_positions_per_sector": 2,
@@ -207,27 +204,6 @@ class TestDayStartCapital:
         e2 = _engine(use_day_start_capital=True)
         cap2 = e2.get_sizing_capital(100_000)
         assert e2.calculate_quantity(_make_signal(entry=2500, sl=2485), capital=cap2) == 66
-
-
-class TestMaxPositionSizeCapLegacy:
-    """max_position_size still works when explicitly enabled."""
-
-    def test_quantity_capped_by_max_position_size(self):
-        # max_position_value = 100000 * 0.20 = 20000, max_qty = 200
-        engine = _engine(risk_per_trade=0.50, max_position_size=0.20)
-        qty = engine.calculate_quantity(
-            _make_signal(entry=100, sl=90, tp=130), capital=100_000,
-        )
-        assert qty == 200
-
-    def test_cap_returns_zero_when_stock_too_expensive(self):
-        # capital=10000, max_position_size=0.20, max_value=2000
-        # entry=3000 -> max_qty=floor(2000/3000)=0 -> return 0
-        engine = _engine(max_position_size=0.20)
-        qty = engine.calculate_quantity(
-            _make_signal(entry=3000, sl=2990, tp=3030), capital=10_000,
-        )
-        assert qty == 0
 
 
 class TestPriceFilter:
@@ -555,202 +531,6 @@ class TestUnrealisedDrawdown:
         assert engine.unrealised_loss == 0.0
 
 
-class TestMarginAwareQtyCap:
-    """Margin-aware quantity cap: position value must be affordable after leverage.
-
-    These tests use max_capital_utilization=0 to isolate just the affordability cap.
-    The remaining-budget cap is tested separately in TestCapitalUtilization.
-    """
-
-    def test_cnc_caps_qty_to_affordable(self):
-        # capital=10000, entry=1188, CNC margin=1.0 (no leverage)
-        # risk-based: risk_amount=100, risk/share=5.74, qty=17
-        # affordable for CNC: floor(10000/(1188*1.0))=8
-        # margin cap should reduce 17 -> 8
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,  # disabled so only affordability cap applies
-            default_product="CNC",
-        )
-        qty = engine.calculate_quantity(
-            _make_signal(entry=1188.0, sl=1182.26, tp=1194.74), capital=10_000
-        )
-        assert qty == 8
-
-    def test_mis_does_not_cap(self):
-        # capital=10000, entry=1188, MIS margin=0.20 (5x leverage)
-        # risk-based: risk_amount=100, risk/share=5.74, qty=17
-        # affordable for MIS: floor(10000/(1188*0.20))=42
-        # 17 < 42, so no cap applied
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,  # disabled so only affordability cap applies
-            default_product="MIS",
-        )
-        qty = engine.calculate_quantity(
-            _make_signal(entry=1188.0, sl=1182.26, tp=1194.74), capital=10_000
-        )
-        assert qty == 17
-
-    def test_unknown_product_defaults_to_full_margin(self):
-        # Product "FUTURES" not in dict -> defaults to margin_rate=1.0 (full margin)
-        # capital=10000, entry=1188, margin_rate=1.0
-        # affordable: floor(10000/(1188*1.0))=8
-        # risk-based qty=17 -> capped to 8
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,  # disabled so only affordability cap applies
-            default_product="FUTURES",
-        )
-        qty = engine.calculate_quantity(
-            _make_signal(entry=1188.0, sl=1182.26, tp=1194.74), capital=10_000
-        )
-        assert qty == 8
-
-    def test_margin_cap_logs_when_reduced(self):
-        # Verify the cap actually reduces qty (check return value)
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,  # disabled so only affordability cap applies
-            default_product="CNC",
-        )
-        qty = engine.calculate_quantity(
-            _make_signal(entry=1188.0, sl=1182.26, tp=1194.74), capital=10_000
-        )
-        # qty should be 8 (capped from 17), not 17 (uncapped risk-based)
-        assert qty < 17
-        assert qty == 8
-
-    def test_zero_entry_returns_zero(self):
-        # entry=0 -> margin calc would divide by zero -> must return 0 safely
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,
-            default_product="MIS",
-        )
-        qty = engine.calculate_quantity(
-            _make_signal(entry=0, sl=0, tp=0), capital=10_000
-        )
-        assert qty == 0
-
-    def test_signal_product_overrides_default(self):
-        # signal.product = "CNC" should override default_product = "MIS"
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,  # disabled so only affordability cap applies
-            default_product="MIS",
-        )
-        qty = engine.calculate_quantity(
-            _make_signal(entry=1188.0, sl=1182.26, tp=1194.74, product="CNC"),
-            capital=10_000,
-        )
-        # With CNC: affordable=8, risk-based=17 -> capped to 8
-        assert qty == 8
-
-
-class TestCapitalUtilization:
-    """Track committed margin across open positions to prevent over-commitment."""
-
-    def test_add_margin_accumulates(self):
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine.add_margin(qty=10, entry_price=1000.0, product="MIS")
-        engine.add_margin(qty=5, entry_price=2000.0, product="CNC")
-        # MIS: 10*1000*0.20=2000, CNC: 5*2000*1.0=10000
-        assert engine.committed_margin == pytest.approx(12000.0)
-
-    def test_remove_margin_decreases(self):
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine.add_margin(qty=10, entry_price=1000.0, product="MIS")
-        engine.remove_margin(qty=10, entry_price=1000.0, product="MIS")
-        # MIS: 10*1000*0.20=2000 added, then 2000 removed
-        assert engine.committed_margin == pytest.approx(0.0)
-
-    def test_remove_margin_never_negative(self):
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine.add_margin(qty=5, entry_price=100.0, product="MIS")
-        # Remove more than was added
-        engine.remove_margin(qty=1000, entry_price=100.0, product="MIS")
-        assert engine.committed_margin == 0.0
-
-    def test_check_exposure_blocks_when_overcommitted(self):
-        # capital=100000, max_utilization=0.80 -> limit=80000
-        # committed_margin=80000 -> ratio=1.0 >= 0.80 -> block
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine._last_known_capital = 100_000
-        engine.committed_margin = 80_000.0
-        assert engine.check_exposure() is False
-
-    def test_check_exposure_allows_under_limit(self):
-        # capital=100000, max_utilization=0.80 -> limit=80000
-        # committed_margin=70000 -> ratio=0.70 < 0.80 -> allow
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine._last_known_capital = 100_000
-        engine.committed_margin = 70_000.0
-        assert engine.check_exposure() is True
-
-    def test_utilization_disabled_when_zero(self):
-        # max_capital_utilization=0 -> skip the check entirely
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.0,
-            default_product="MIS",
-        )
-        engine._last_known_capital = 100_000
-        engine.committed_margin = 999_000.0  # would fail if check ran
-        assert engine.check_exposure() is True
-
-    def test_remaining_margin_caps_qty(self):
-        # capital=100000, max_utilization=0.80, already committed=70000
-        # remaining budget = 80000-70000=10000
-        # entry=1000, MIS margin=0.20 -> max_qty_by_margin=floor(10000/(1000*0.20))=50
-        # risk-based gives, say, 100 -> capped to 50
-        engine = _engine(
-            risk_per_trade=0.50,  # high risk -> large qty without cap
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine._last_known_capital = 100_000
-        engine.committed_margin = 70_000.0
-        qty = engine.calculate_quantity(
-            _make_signal(entry=1000.0, sl=990.0, tp=1030.0), capital=100_000
-        )
-        # remaining=10000, max_qty_by_margin=floor(10000/(1000*0.20))=50
-        assert qty == 50
-
-    def test_committed_margin_resets_on_new_day(self):
-        engine = _engine(
-            margin_multiplier={"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-            max_capital_utilization=0.80,
-            default_product="MIS",
-        )
-        engine.add_margin(qty=10, entry_price=1000.0, product="MIS")
-        assert engine.committed_margin == pytest.approx(2000.0)
-        engine._current_day = -1
-        engine.check_exposure()
-        assert engine.committed_margin == 0.0
-
-
 class TestSectorCorrelation:
     def test_can_trade_sector_initially_true(self):
         engine = _engine(max_positions_per_sector=2)
@@ -849,16 +629,15 @@ class TestCapacityStatus:
         engine = _engine()
         engine._last_known_capital = 100_000.0
         status = engine.capacity_status()
-        assert status == "0/3 positions, heat=0.0%/6.0%, margin=0.0%/0.0%"
+        assert status == "0/3 positions, heat=0.0%/6.0%"
 
     def test_after_trade(self):
-        engine = _engine(max_capital_utilization=0.80)
+        engine = _engine()
         engine._last_known_capital = 100_000.0
         engine.open_positions = 2
         engine.portfolio_heat = 3_000.0
-        engine.committed_margin = 52_300.0
         status = engine.capacity_status()
-        assert status == "2/3 positions, heat=3.0%/6.0%, margin=52.3%/80.0%"
+        assert status == "2/3 positions, heat=3.0%/6.0%"
 
     def test_zero_capital_no_division_error(self):
         engine = _engine()
@@ -867,7 +646,6 @@ class TestCapacityStatus:
         status = engine.capacity_status()
         assert "0/3 positions" in status
         assert "heat=0.0%" in status
-        assert "margin=0.0%" in status
 
 
 class TestRestartSafeCounters:

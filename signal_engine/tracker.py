@@ -14,6 +14,9 @@ from signal_engine.api_client import (
     fetch_positionbook,
     fetch_realised_pnl,
 )
+from signal_engine.config import settings
+from signal_engine.executor import send_order
+from signal_engine.models import Action, Direction, Order, OrderStatus
 from signal_engine.risk import RiskEngine
 from signal_engine import notifier
 
@@ -31,9 +34,11 @@ class TrackedPosition:
     quantity: int
     sl: float
     tp: float
+    direction: Direction = Direction.LONG
     entry_order_id: str = ""
     sl_order_id: str = ""
-    tp_order_id: str = ""
+    tp_order_id: str = ""  # unused: TP handled via LTP monitoring, not broker order
+    tp_triggered: bool = False  # guard against double-exit
 
 
 class PositionTracker:
@@ -66,42 +71,56 @@ class PositionTracker:
         logger.info(f"Tracking position: {key} qty={position.quantity}")
 
     async def check_positions(self) -> None:
-        """Poll all tracked positions with a single positionbook call."""
-        # Single API call for all positions
+        """Poll all tracked positions with a single positionbook call.
+
+        Two things are checked each cycle:
+        1. TP monitoring: if LTP has crossed the TP price, cancel SL and exit at market.
+        2. Close detection: if position qty == 0, update risk counters.
+        """
         book = await fetch_positionbook()
         if book is None:
-            # API error, skip entire cycle
             return
 
-        # Build lookup: symbol -> quantity from positionbook
-        book_qty = {}
+        # Build lookup: symbol -> (quantity, ltp)
+        book_data: dict = {}
         for entry in book:
             sym = entry.get("symbol", "")
             qty = int(entry.get("quantity", 0))
-            book_qty[sym] = qty
+            ltp = float(entry.get("ltp", 0) or 0)
+            book_data[sym] = (qty, ltp)
 
         closed_keys = []
 
         for key, pos in self._positions.items():
-            qty = book_qty.get(pos.symbol, 0)
+            qty, ltp = book_data.get(pos.symbol, (0, 0.0))
+
+            # --- TP monitoring: exit at market when TP level is reached ---
+            if qty != 0 and not pos.tp_triggered and ltp > 0:
+                tp_hit = (
+                    (pos.direction == Direction.LONG and ltp >= pos.tp)
+                    or (pos.direction == Direction.SHORT and ltp <= pos.tp)
+                )
+                if tp_hit:
+                    logger.info(
+                        f"TP level reached for {pos.symbol}: ltp={ltp} tp={pos.tp} — cancelling SL and exiting at market"
+                    )
+                    pos.tp_triggered = True
+                    await notifier.notify_tp_level_hit(pos.symbol, ltp, pos.tp)
+                    await self._exit_at_tp(pos)
+                    # Position will close; detected as qty==0 in a future cycle
+                    continue
 
             if qty != 0:
                 continue
 
-            # Position closed — estimate P&L from realised PnL delta
+            # --- Position closed ---
             current_realised = await fetch_realised_pnl()
             pnl_delta = current_realised - self._last_realised_pnl
             self._last_realised_pnl = current_realised
 
             self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
-            self._risk_engine.remove_margin(
-                qty=pos.quantity,
-                entry_price=pos.entry_price,
-                product=pos.product,
-            )
             logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
 
-            # Update day counters
             self._day_trades += 1
             self._day_pnl += pnl_delta
             if pnl_delta >= 0:
@@ -109,52 +128,65 @@ class PositionTracker:
             else:
                 self._day_losses += 1
 
-            # Notify position close
             await notifier.notify_position_closed(pos.symbol, pnl_delta)
 
-            # OCO cancellation: cancel whichever bracket leg is still pending
-            await self._cancel_remaining_bracket_leg(pos, pnl_delta)
+            # If SL was triggered (position closed without TP trigger), cancel any
+            # pending SL order (it should already be gone, but guard against edge cases)
+            if not pos.tp_triggered and pos.sl_order_id:
+                # SL-M self-cancels when triggered; this is a no-op in most cases
+                pass
 
             closed_keys.append(key)
 
         for key in closed_keys:
             del self._positions[key]
 
-    async def _cancel_remaining_bracket_leg(self, pos: "TrackedPosition", pnl_delta: float) -> None:
-        """Cancel whichever bracket leg is still pending after position closes.
+    async def _exit_at_tp(self, pos: "TrackedPosition") -> None:
+        """Cancel the pending SL order and place a market exit at TP.
 
-        If pnl_delta < 0, SL was likely triggered -> cancel TP.
-        If pnl_delta >= 0, TP was likely triggered -> cancel SL.
-        If bracket IDs are not set, nothing to cancel.
+        Called when LTP crosses the TP price. The SL order must be cancelled first
+        so the market exit is recognised as position closure, not a double-short.
         """
-        if not pos.sl_order_id or not pos.tp_order_id:
-            return
-
-        # Determine which leg to cancel based on P&L direction
-        if pnl_delta < 0:
-            # Loss: SL was triggered, cancel the pending TP
-            leg_to_cancel = pos.tp_order_id
-            trigger_leg = "SL"
-            cancel_leg = "TP"
-        else:
-            # Profit (or breakeven): TP was triggered, cancel the pending SL
-            leg_to_cancel = pos.sl_order_id
-            trigger_leg = "TP"
-            cancel_leg = "SL"
-
-        logger.info(
-            f"Position {pos.symbol}:{pos.strategy} closed by {trigger_leg} trigger, "
-            f"cancelling remaining {cancel_leg} order {leg_to_cancel}"
-        )
-
-        try:
-            success = await cancel_order(leg_to_cancel, pos.strategy)
+        # Cancel SL first to free the position for a clean exit
+        if pos.sl_order_id:
+            success = await cancel_order(pos.sl_order_id, pos.strategy)
             if success:
-                logger.info(f"Cancelled {cancel_leg} order {leg_to_cancel} for {pos.symbol}")
+                logger.info(f"SL order {pos.sl_order_id} cancelled before TP market exit for {pos.symbol}")
             else:
-                logger.warning(f"Failed to cancel {cancel_leg} order {leg_to_cancel} for {pos.symbol}")
-        except Exception as e:
-            logger.error(f"Exception cancelling {cancel_leg} order {leg_to_cancel} for {pos.symbol}: {e}")
+                logger.warning(f"Failed to cancel SL {pos.sl_order_id} for {pos.symbol} — proceeding with market exit anyway")
+                await notifier.notify_sl_cancel_failed(pos.symbol, pos.sl_order_id)
+
+        # Place market exit order with retries
+        action = Action.SELL if pos.direction == Direction.LONG else Action.BUY
+        exit_order = Order(
+            symbol=pos.symbol,
+            exchange=pos.exchange,
+            action=action,
+            quantity=pos.quantity,
+            price=0.0,
+            order_type="MARKET",
+            product=pos.product,
+            strategy_tag=pos.strategy,
+        )
+        max_attempts = settings.bracket_tp_exit_retries
+        result = None
+        for attempt in range(1, max_attempts + 1):
+            result = await send_order(exit_order)
+            if result.status == OrderStatus.SUCCESS:
+                logger.info(f"TP market exit placed for {pos.symbol}: id={result.order_id} (attempt {attempt})")
+                await notifier.notify_tp_exit_placed(pos.symbol, result.order_id)
+                return
+            logger.warning(f"TP market exit attempt {attempt}/{max_attempts} failed for {pos.symbol}: {result.message}")
+            if attempt < max_attempts:
+                await asyncio.sleep(settings.bracket_retry_delay)
+
+        logger.error(f"TP market exit FAILED after {max_attempts} attempts for {pos.symbol}: {result.message}")
+        await notifier.notify_tp_exit_failed(pos.symbol, result.message)
+
+    # _cancel_remaining_bracket_leg is no longer needed:
+    # TP is handled via LTP monitoring (_exit_at_tp), not a broker order.
+    # When SL triggers, the position closes naturally (qty==0 detected in next poll).
+    # No dangling broker orders to clean up.
 
     async def time_exit_all(self) -> None:
         """Force-close all tracked positions and cancel all pending bracket orders.
@@ -194,11 +226,6 @@ class PositionTracker:
         # Clear tracked positions and update risk engine
         for key, pos in list(self._positions.items()):
             self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
-            self._risk_engine.remove_margin(
-                qty=pos.quantity,
-                entry_price=pos.entry_price,
-                product=pos.product,
-            )
             await notifier.notify_time_exit(pos.symbol)
             logger.info(f"Time exit: cleared tracker entry {key}")
 

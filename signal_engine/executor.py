@@ -1,5 +1,6 @@
 """Order construction and OpenAlgo API integration."""
 
+import asyncio
 import math
 from typing import Optional, Tuple
 
@@ -176,12 +177,18 @@ async def send_bracket_legs(
     quantity: int,
     entry_order_id: str,
 ) -> Tuple[TradeResult, Optional[TradeResult]]:
-    """Place SL and TP legs for a bracket order.
+    """Place SL leg only for a bracket order.
 
-    SL is placed first (safety-critical) with up to bracket_max_sl_retries attempts.
-    TP is only placed after SL succeeds.
+    Indian brokers treat the first SELL as an exit from the long, and any second
+    SELL (even a TP LIMIT) as a new short position requiring full margin. Placing
+    both SL and TP simultaneously therefore always results in one of them being
+    rejected with FUND LIMIT INSUFFICIENT.
 
-    Returns (sl_result, tp_result). If SL fails, returns (sl_result, None).
+    Strategy: Place only the SL order here (safety-critical). TP is handled by
+    the position tracker, which monitors LTP via positionbook and exits at market
+    when the TP price is reached.
+
+    Returns (sl_result, None) always — tp_result slot reserved for future use.
     """
     sl_order = build_sl_order(signal, quantity)
     sl_result: TradeResult = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
@@ -197,33 +204,14 @@ async def send_bracket_legs(
             f"SL leg attempt {attempt}/{settings.bracket_max_sl_retries} failed for "
             f"{signal.symbol}: {sl_result.message}"
         )
+        if attempt < settings.bracket_max_sl_retries:
+            await asyncio.sleep(settings.bracket_retry_delay)
 
     if sl_result.status != OrderStatus.SUCCESS:
         logger.error(
             f"SL leg failed after {settings.bracket_max_sl_retries} attempts for "
-            f"{signal.symbol} - skipping TP to avoid naked position"
-        )
-        return sl_result, None
-
-    tp_order = build_tp_order(signal, quantity)
-    tp_result: TradeResult = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
-
-    for attempt in range(1, settings.bracket_max_tp_retries + 1):
-        tp_result = await send_order(tp_order)
-        if tp_result.status == OrderStatus.SUCCESS:
-            logger.info(
-                f"TP leg placed for {signal.symbol}: id={tp_result.order_id} (attempt {attempt})"
-            )
-            break
-        logger.warning(
-            f"TP leg attempt {attempt}/{settings.bracket_max_tp_retries} failed for "
-            f"{signal.symbol}: {tp_result.message}"
+            f"{signal.symbol} - position has no SL protection"
         )
 
-    if tp_result.status != OrderStatus.SUCCESS:
-        logger.error(
-            f"TP leg failed after {settings.bracket_max_tp_retries} attempts for "
-            f"{signal.symbol} - position protected by SL only"
-        )
-
-    return sl_result, tp_result
+    # TP is handled by the position tracker via LTP monitoring (not a broker order)
+    return sl_result, None

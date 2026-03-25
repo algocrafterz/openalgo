@@ -1,18 +1,19 @@
 """Entry point and pipeline orchestration for the signal engine."""
 
 import asyncio
+import math
 import signal
 import sys
 
 from loguru import logger
 
-from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
+from signal_engine.api_client import fetch_available_capital, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
 from signal_engine.db import save
 from signal_engine.executor import build_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
-from signal_engine.models import OrderStatus, ValidationStatus
+from signal_engine.models import Direction, OrderStatus, ValidationStatus
 from signal_engine import notifier
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
@@ -29,7 +30,6 @@ risk_engine = RiskEngine(
     risk_per_trade=settings.risk_per_trade,
     sizing_mode=settings.sizing_mode,
     pct_of_capital=settings.pct_of_capital,
-    max_position_size=settings.max_position_size,
     daily_loss_limit=settings.daily_loss_limit,
     weekly_loss_limit=settings.weekly_loss_limit,
     monthly_loss_limit=settings.monthly_loss_limit,
@@ -41,8 +41,6 @@ risk_engine = RiskEngine(
     slippage_factor=settings.slippage_factor,
     store=_risk_store,
     trade_mode="live",
-    margin_multiplier=settings.margin_multiplier,
-    max_capital_utilization=settings.max_capital_utilization,
     default_product=settings.product,
     max_positions_per_symbol=settings.max_positions_per_symbol,
     max_positions_per_sector=settings.max_positions_per_sector,
@@ -52,6 +50,39 @@ risk_engine = RiskEngine(
 
 # Global position tracker
 tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
+
+
+async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> int:
+    """Adjust risk-based qty to fit within available broker margin.
+
+    Queries the Margin API for the actual margin required for raw_qty.
+    If it exceeds live_capital, scales qty down proportionally (MIS margin is linear with qty).
+    Raises MarginAPIError on persistent API failure — trade is skipped.
+
+    Returns adjusted qty, or 0 if it cannot fit in available capital.
+    """
+    actual_margin = await fetch_margin(
+        symbol=signal.symbol,
+        exchange=signal.exchange or settings.exchange,
+        action="BUY" if signal.direction == Direction.LONG else "SELL",
+        quantity=raw_qty,
+        product=signal.product or settings.product,
+    )
+
+    if actual_margin <= live_capital:
+        logger.debug(
+            f"Margin check passed for {signal.symbol}: "
+            f"margin={actual_margin:,.0f} <= capital={live_capital:,.0f}"
+        )
+        return raw_qty
+
+    # Scale proportionally — MIS margin is linear with qty
+    adjusted_qty = math.floor(raw_qty * live_capital / actual_margin)
+    logger.info(
+        f"Qty adjusted for {signal.symbol}: {raw_qty} -> {adjusted_qty} "
+        f"(margin={actual_margin:,.0f} > capital={live_capital:,.0f})"
+    )
+    return adjusted_qty
 
 
 async def handle_message(text: str) -> None:
@@ -111,6 +142,16 @@ async def handle_message(text: str) -> None:
         logger.info(f"Skipping {signal.symbol}: position sizing returned 0")
         return
 
+    # Adjust qty to fit actual broker margin (uses live capital, not day-start)
+    try:
+        quantity = await adjust_qty_for_margin(signal, quantity, capital)
+    except MarginAPIError as e:
+        logger.error(f"Margin API failed for {signal.symbol}, skipping trade: {e}")
+        return
+    if quantity <= 0:
+        logger.warning(f"Skipping {signal.symbol}: insufficient capital for minimum position after margin check")
+        return
+
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
     reward_per_share = abs(signal.tp - signal.entry)
@@ -139,28 +180,22 @@ async def handle_message(text: str) -> None:
         await notifier.notify_order_rejected(signal.symbol, trade_result.message)
 
     if trade_result.status == OrderStatus.SUCCESS:
-        # 8. Record trade in risk engine and commit margin
+        # 8. Record trade in risk engine
         risk_engine.record_trade(symbol=signal.symbol)
-        product = signal.product if signal.product else settings.product
-        risk_engine.add_margin(quantity, signal.entry, product)
         logger.info(f"Capacity: {risk_engine.capacity_status()}")
 
-        # 9. Place bracket SL + TP legs (if enabled)
+        # 9. Place SL bracket leg (if enabled)
+        # Note: TP is NOT placed as a broker order. Indian brokers treat any second
+        # SELL (after SL covers the long) as a new short requiring margin, causing
+        # FUND LIMIT INSUFFICIENT. TP is handled by the tracker via LTP monitoring.
         sl_order_id = ""
-        tp_order_id = ""
         if settings.bracket_enabled:
-            sl_result, tp_result = await send_bracket_legs(signal, quantity, trade_result.order_id)
+            sl_result, _ = await send_bracket_legs(signal, quantity, trade_result.order_id)
             sl_order_id = sl_result.order_id if sl_result else ""
-            tp_order_id = tp_result.order_id if tp_result else ""
-            # Notify SL/TP placement status
             if sl_result and sl_result.status == OrderStatus.SUCCESS:
                 await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id)
             else:
                 await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result")
-            if tp_result and tp_result.status == OrderStatus.SUCCESS:
-                await notifier.notify_tp_placed(signal.symbol, signal.direction.value, tp_order_id)
-            else:
-                await notifier.notify_tp_failed(signal.symbol, tp_result.message if tp_result else "no result")
 
         # 10. Register in position tracker for P&L monitoring
         tracker.register(TrackedPosition(
@@ -172,9 +207,9 @@ async def handle_message(text: str) -> None:
             quantity=quantity,
             sl=signal.sl,
             tp=signal.tp,
+            direction=signal.direction,
             entry_order_id=trade_result.order_id,
             sl_order_id=sl_order_id,
-            tp_order_id=tp_order_id,
         ))
 
     # 10. Persist to DB

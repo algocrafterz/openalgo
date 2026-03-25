@@ -196,18 +196,18 @@ class TestSendBracketLegs:
         return MagicMock(status=OrderStatus.REJECTED, order_id="")
 
     @pytest.mark.asyncio
-    async def test_both_legs_placed_on_success(self):
+    async def test_sl_placed_tp_always_none(self):
+        """send_bracket_legs places SL only. TP is handled by the tracker via LTP monitoring."""
         signal = _make_signal()
         sl_result = self._success_result("SL001")
-        tp_result = self._success_result("TP001")
 
         with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
-            mock_send.side_effect = [sl_result, tp_result]
+            mock_send.return_value = sl_result
             result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
 
         assert result_sl.order_id == "SL001"
-        assert result_tp.order_id == "TP001"
-        assert mock_send.call_count == 2
+        assert result_tp is None
+        assert mock_send.call_count == 1
 
     @pytest.mark.asyncio
     async def test_tp_not_placed_when_sl_fails(self):
@@ -237,22 +237,8 @@ class TestSendBracketLegs:
         assert result_tp is None
 
     @pytest.mark.asyncio
-    async def test_sl_succeeds_but_tp_fails(self):
-        signal = _make_signal()
-        sl_result = self._success_result("SL001")
-        tp_failure = self._failure_result()
-
-        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
-            # SL succeeds on 1st attempt, TP fails all 3 retry attempts
-            mock_send.side_effect = [sl_result, tp_failure, tp_failure, tp_failure]
-            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
-
-        assert result_sl.status == OrderStatus.SUCCESS
-        assert result_tp.status == OrderStatus.REJECTED
-
-    @pytest.mark.asyncio
-    async def test_sl_placed_before_tp(self):
-        """SL must be placed first (safety-critical)."""
+    async def test_sl_order_type_is_slm(self):
+        """SL order must be placed as SL-M (not LIMIT)."""
         signal = _make_signal(direction=Direction.LONG, sl=2485.0, tp=2540.0)
         orders_placed = []
 
@@ -263,5 +249,5 @@ class TestSendBracketLegs:
         with patch("signal_engine.executor.send_order", side_effect=record_order):
             await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
 
+        assert len(orders_placed) == 1
         assert orders_placed[0] == "SL-M"
-        assert orders_placed[1] == "LIMIT"
