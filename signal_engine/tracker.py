@@ -15,7 +15,7 @@ from signal_engine.api_client import (
     fetch_realised_pnl,
 )
 from signal_engine.config import settings
-from signal_engine.executor import send_order
+from signal_engine.executor import build_exit_order, send_order
 from signal_engine.models import Action, Direction, Order, OrderStatus
 from signal_engine.risk import RiskEngine
 from signal_engine import notifier
@@ -172,14 +172,10 @@ class PositionTracker:
                 await notifier.notify_sl_cancel_failed(pos.symbol, pos.sl_order_id)
 
         # Place market exit order with retries
-        action = Action.SELL if pos.direction == Direction.LONG else Action.BUY
-        exit_order = Order(
+        exit_order = build_exit_order(
             symbol=pos.symbol,
             exchange=pos.exchange,
-            action=action,
             quantity=pos.quantity,
-            price=0.0,
-            order_type="MARKET",
             product=pos.product,
             strategy_tag=pos.strategy,
         )
@@ -197,11 +193,6 @@ class PositionTracker:
 
         logger.error(f"TP market exit FAILED after {max_attempts} attempts for {pos.symbol}: {result.message}")
         await notifier.notify_tp_exit_failed(pos.symbol, result.message)
-
-    # _cancel_remaining_bracket_leg is no longer needed:
-    # TP is handled via LTP monitoring (_exit_at_tp), not a broker order.
-    # When SL triggers, the position closes naturally (qty==0 detected in next poll).
-    # No dangling broker orders to clean up.
 
     async def time_exit_all(self) -> None:
         """Force-close MIS positions and cancel their pending bracket orders.
