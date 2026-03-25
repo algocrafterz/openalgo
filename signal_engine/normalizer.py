@@ -13,7 +13,7 @@ Canonical format:
 The normalizer handles:
 - Emoji/unicode decoration stripping
 - Separator line removal (dashes, equals, underscores)
-- Pipe-delimited first line: "ORB LONG | SYMBOL" -> two lines
+- Pipe-delimited first line: "ORB LONG | SYMBOL" or "RSI-TP-MR EXIT | SYMBOL" -> two lines
 - Legacy "Target:" -> "TP:" key aliasing
 - Whitespace cleanup
 """
@@ -44,7 +44,7 @@ _TARGET_ALIAS_RE = re.compile(r"^Target\s*:\s*(.+)$", re.IGNORECASE)
 
 # Pipe-delimited first line: STRATEGY DIRECTION | SYMBOL
 _PIPE_FIRST_LINE_RE = re.compile(
-    r"^(\w+\s+(?:LONG|SHORT))\s*\|\s*(\w+)$",
+    r"^([\w-]+\s+(?:LONG|SHORT|EXIT))\s*\|\s*(\w+)$",
     re.IGNORECASE,
 )
 

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class Direction(str, Enum):
     LONG = "LONG"
     SHORT = "SHORT"
+    EXIT = "EXIT"
 
 
 class Action(str, Enum):

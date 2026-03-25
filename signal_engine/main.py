@@ -7,10 +7,10 @@ import sys
 
 from loguru import logger
 
-from signal_engine.api_client import fetch_available_capital, fetch_trading_mode, fetch_margin, MarginAPIError
+from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
 from signal_engine.db import save
-from signal_engine.executor import build_order, send_bracket_legs, send_order
+from signal_engine.executor import build_exit_order, build_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import Direction, OrderStatus, ValidationStatus
@@ -85,29 +85,82 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
     return adjusted_qty
 
 
-async def handle_message(text: str) -> None:
-    """Full sequential pipeline for a single signal message.
+async def _handle_exit(signal) -> None:
+    """Handle an EXIT signal — close an existing position.
 
-    Pipeline: parse -> validate -> fetch_capital -> check_exposure -> size -> build_order -> send -> track -> save
+    EXIT pipeline: look up tracker -> cancel SL -> MARKET SELL -> unregister -> save
+    Skips risk engine checks (closing, not opening).
     """
-    # 1. Normalize and parse
-    normalized = normalize(text)
-    signal = parse(normalized)
-    if signal is None:
-        logger.debug("Unparseable message, skipping")
-        return
+    await notifier.notify_exit_signal_received(signal.symbol, signal.strategy)
 
-    logger.info(
-        f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol} "
-        f"entry={signal.entry} sl={signal.sl} tp={signal.tp}"
+    # 1. Look up position in tracker
+    pos = tracker.find_position(signal.symbol, signal.strategy)
+
+    # 2. Fallback: if tracker lost state (engine restart), query broker API
+    if pos is None:
+        logger.warning(
+            f"EXIT: {signal.symbol} not in tracker for strategy={signal.strategy}, "
+            "checking broker API (engine restart fallback)"
+        )
+        exchange = signal.exchange or settings.exchange
+        product = signal.product or settings.product
+        api_qty = await fetch_open_position(signal.symbol, signal.strategy, exchange, product)
+        if api_qty <= 0:
+            logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
+            await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
+            return
+        # Build a minimal position for the exit
+        pos = TrackedPosition(
+            symbol=signal.symbol,
+            strategy=signal.strategy,
+            exchange=exchange,
+            product=product,
+            entry_price=signal.entry,
+            quantity=api_qty,
+            sl=signal.sl,
+            tp=signal.tp,
+            direction=Direction.LONG,
+            sl_order_id="",
+        )
+
+    # 3. Cancel SL order if present
+    if pos.sl_order_id:
+        success = await cancel_order(pos.sl_order_id, pos.strategy)
+        if success:
+            logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
+        else:
+            logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
+
+    # 4. Build and send MARKET SELL exit order
+    exit_order = build_exit_order(
+        symbol=pos.symbol,
+        exchange=pos.exchange,
+        quantity=pos.quantity,
+        product=pos.product,
+        strategy_tag=pos.strategy,
     )
+    trade_result = await send_order(exit_order)
 
-    # 2. Validate
-    result = validate(signal)
-    if result.status != ValidationStatus.VALID:
-        logger.info(f"Signal {result.status.value}: {result.reason}")
-        return
+    if trade_result.status == OrderStatus.SUCCESS:
+        logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id}")
+        await notifier.notify_exit_placed(pos.symbol, trade_result.order_id)
 
+        # 5. Unregister from tracker (prevents polling loop from double-closing)
+        tracker.unregister(signal.symbol, signal.strategy)
+        risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+    else:
+        logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
+        await notifier.notify_exit_failed(pos.symbol, trade_result.message)
+
+    # 6. Persist to DB audit trail
+    save(signal, exit_order, trade_result)
+
+
+async def _handle_entry(signal) -> None:
+    """Handle a LONG/SHORT entry signal — the existing ORB pipeline.
+
+    Pipeline: check_exposure -> size -> build_order -> send -> bracket -> track -> save
+    """
     # 3. Check exposure limits
     if not risk_engine.check_exposure():
         reason = risk_engine.exposure_block_reason()
@@ -197,12 +250,17 @@ async def handle_message(text: str) -> None:
             else:
                 await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result")
 
-        # 10. Register in position tracker for P&L monitoring
+        # 10. Determine TP monitoring mode
+        # Swing strategies (e.g. RSI-TP-MR): TP driven by PineScript EXIT signal, not LTP polling
+        # Intraday strategies (e.g. ORB): TP driven by tracker LTP monitoring
+        tp_monitoring = signal.product != "CNC"
+
+        # 11. Register in position tracker for P&L monitoring
         tracker.register(TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
-            exchange=settings.exchange,
-            product=settings.product,
+            exchange=signal.exchange or settings.exchange,
+            product=signal.product or settings.product,
             entry_price=signal.entry,
             quantity=quantity,
             sl=signal.sl,
@@ -210,10 +268,41 @@ async def handle_message(text: str) -> None:
             direction=signal.direction,
             entry_order_id=trade_result.order_id,
             sl_order_id=sl_order_id,
+            tp_monitoring=tp_monitoring,
         ))
 
-    # 10. Persist to DB
+    # 12. Persist to DB
     save(signal, order, trade_result)
+
+
+async def handle_message(text: str) -> None:
+    """Full sequential pipeline for a single signal message.
+
+    Dispatches to _handle_entry (LONG/SHORT) or _handle_exit (EXIT).
+    """
+    # 1. Normalize and parse
+    normalized = normalize(text)
+    signal = parse(normalized)
+    if signal is None:
+        logger.debug("Unparseable message, skipping")
+        return
+
+    logger.info(
+        f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol} "
+        f"entry={signal.entry} sl={signal.sl} tp={signal.tp}"
+    )
+
+    # 2. Validate
+    result = validate(signal)
+    if result.status != ValidationStatus.VALID:
+        logger.info(f"Signal {result.status.value}: {result.reason}")
+        return
+
+    # 3. Dispatch based on direction
+    if signal.direction == Direction.EXIT:
+        await _handle_exit(signal)
+    else:
+        await _handle_entry(signal)
 
 
 def main() -> None:

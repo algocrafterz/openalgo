@@ -38,6 +38,13 @@ def validate(signal: Signal) -> ValidationResult:
     if signal.entry <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="Entry must be positive")
 
+    # EXIT signals: minimal validation (closing, not opening)
+    # Skip SL/TP/R:R/duplicate checks — EXIT carries original entry data for audit only
+    if signal.direction == Direction.EXIT:
+        if not signal.symbol or signal.symbol.strip() == "":
+            return ValidationResult(status=ValidationStatus.INVALID, reason="EXIT: symbol required")
+        return ValidationResult(status=ValidationStatus.VALID)
+
     # SL validity
     if signal.sl <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="SL must be positive")

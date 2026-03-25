@@ -64,6 +64,141 @@ class TestTrackerRegister:
         assert tracker.tracked_count == 1
 
 
+class TestTrackerFindPosition:
+    def test_find_existing_position(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = _make_position(symbol="RELIANCE", strategy="RSI-TP-MR")
+        tracker.register(pos)
+        found = tracker.find_position("RELIANCE", "RSI-TP-MR")
+        assert found is not None
+        assert found.symbol == "RELIANCE"
+        assert found.strategy == "RSI-TP-MR"
+
+    def test_find_nonexistent_returns_none(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        assert tracker.find_position("TCS", "ORB") is None
+
+    def test_find_wrong_strategy_returns_none(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        assert tracker.find_position("RELIANCE", "RSI-TP-MR") is None
+
+
+class TestTrackerUnregister:
+    def test_unregister_removes_and_returns(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="RSI-TP-MR"))
+        assert tracker.tracked_count == 1
+        removed = tracker.unregister("RELIANCE", "RSI-TP-MR")
+        assert removed is not None
+        assert removed.symbol == "RELIANCE"
+        assert tracker.tracked_count == 0
+
+    def test_unregister_nonexistent_returns_none(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        assert tracker.unregister("TCS", "ORB") is None
+
+    def test_unregister_does_not_affect_other_positions(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        tracker.register(_make_position(symbol="TCS", strategy="ORB"))
+        tracker.unregister("RELIANCE", "ORB")
+        assert tracker.tracked_count == 1
+        assert tracker.find_position("TCS", "ORB") is not None
+
+
+class TestTpMonitoringFlag:
+    """Positions with tp_monitoring=False should skip TP LTP checks."""
+
+    @pytest.mark.asyncio
+    async def test_tp_monitoring_disabled_skips_tp_check(self):
+        """RSI-TP-MR positions: TP monitoring off, LTP crossing TP should NOT trigger exit."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        pos = _make_position(symbol="RELIANCE", strategy="RSI-TP-MR", tp=2540.0)
+        pos.tp_monitoring = False
+        tracker.register(pos)
+
+        # LTP = 2550 > TP = 2540, but tp_monitoring is off
+        book = [{"symbol": "RELIANCE", "quantity": 50, "ltp": 2550.0}]
+        with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book):
+            await tracker.check_positions()
+
+        # Position should still be tracked (NOT exited)
+        assert tracker.tracked_count == 1
+
+    @pytest.mark.asyncio
+    async def test_tp_monitoring_enabled_triggers_exit(self):
+        """ORB positions: TP monitoring on, LTP crossing TP SHOULD trigger exit."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        pos = _make_position(symbol="RELIANCE", strategy="ORB", tp=2540.0)
+        # tp_monitoring defaults to True
+        tracker.register(pos)
+
+        book = [{"symbol": "RELIANCE", "quantity": 50, "ltp": 2550.0}]
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book),
+            patch.object(tracker, "_exit_at_tp", new_callable=AsyncMock) as mock_exit,
+            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        mock_exit.assert_called_once()
+
+    def test_tp_monitoring_defaults_true(self):
+        pos = _make_position()
+        assert pos.tp_monitoring is True
+
+
+class TestTimeExitCncAwareness:
+    """time_exit_all() should only close MIS positions, not CNC swing positions."""
+
+    @pytest.mark.asyncio
+    async def test_time_exit_skips_cnc_positions(self):
+        engine = _make_engine()
+        engine.open_positions = 2
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB", product="MIS"))
+        tracker.register(_make_position(symbol="HDFCBANK", strategy="RSI-TP-MR", product="CNC"))
+
+        with (
+            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.tracker.close_all_positions", new_callable=AsyncMock),
+            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
+        ):
+            await tracker.time_exit_all()
+
+        # CNC position should survive time exit
+        assert tracker.tracked_count == 1
+        assert tracker.find_position("HDFCBANK", "RSI-TP-MR") is not None
+
+    @pytest.mark.asyncio
+    async def test_time_exit_closes_all_mis_positions(self):
+        engine = _make_engine()
+        engine.open_positions = 2
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB", product="MIS"))
+        tracker.register(_make_position(symbol="TCS", strategy="ORB", product="MIS"))
+
+        with (
+            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.tracker.close_all_positions", new_callable=AsyncMock),
+            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
+        ):
+            await tracker.time_exit_all()
+
+        assert tracker.tracked_count == 0
+
+
 class TestTrackerCheckPositions:
     @pytest.mark.asyncio
     async def test_position_still_open(self):

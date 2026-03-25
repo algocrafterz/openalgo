@@ -124,6 +124,45 @@ class TestMinSlPct:
         assert result.status == ValidationStatus.VALID
 
 
+class TestExitValidation:
+    """EXIT signals use relaxed validation — skip SL/TP/R:R/duplicate checks."""
+
+    def test_exit_signal_valid_with_minimal_fields(self):
+        result = validate(_make_signal(direction=Direction.EXIT))
+        assert result.status == ValidationStatus.VALID
+
+    def test_exit_skips_sl_direction_check(self):
+        """EXIT carries original entry SL/TP for audit — don't validate direction consistency."""
+        result = validate(_make_signal(
+            direction=Direction.EXIT, entry=2500, sl=2510, tp=2480,
+        ))
+        assert result.status == ValidationStatus.VALID
+
+    def test_exit_skips_rr_check(self):
+        """EXIT R:R is meaningless — it's closing, not opening."""
+        result = validate(_make_signal(
+            direction=Direction.EXIT, entry=2500, sl=2499, tp=2501,
+        ))
+        assert result.status == ValidationStatus.VALID
+
+    def test_exit_skips_duplicate_check(self):
+        """Two EXIT signals for same symbol should both pass (e.g. retry)."""
+        sig1 = _make_signal(direction=Direction.EXIT)
+        sig2 = _make_signal(direction=Direction.EXIT)
+        assert validate(sig1).status == ValidationStatus.VALID
+        assert validate(sig2).status == ValidationStatus.VALID
+
+    def test_exit_requires_positive_entry(self):
+        """Entry must be positive even for EXIT (audit trail accuracy)."""
+        result = validate(_make_signal(direction=Direction.EXIT, entry=0))
+        assert result.status == ValidationStatus.INVALID
+
+    def test_exit_requires_symbol(self):
+        """EXIT must have a symbol to identify which position to close."""
+        result = validate(_make_signal(direction=Direction.EXIT, symbol=""))
+        assert result.status == ValidationStatus.INVALID
+
+
 class TestValidSignals:
     def test_valid_long_signal(self):
         result = validate(_make_signal())

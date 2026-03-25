@@ -75,6 +75,15 @@ class TestParseValidSignals:
         assert signal is not None
         assert signal.product == "CNC"
 
+    def test_exit_direction_parsed(self):
+        text = "RSI-TP-MR EXIT\nSymbol: RELIANCE\nProduct: CNC\nEntry: 2500\nSL: 2480\nTP: 2540"
+        signal = parse(text)
+        assert signal is not None
+        assert signal.strategy == "RSI-TP-MR"
+        assert signal.direction.value == "EXIT"
+        assert signal.symbol == "RELIANCE"
+        assert signal.product == "CNC"
+
     def test_exchange_and_product_both_parsed(self):
         text = "ORB LONG\nSymbol: NIFTY24JAN24000CE\nExchange: NFO\nProduct: NRML\nEntry: 200\nSL: 180\nTP: 240"
         signal = parse(text)

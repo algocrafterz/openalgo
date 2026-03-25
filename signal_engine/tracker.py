@@ -39,6 +39,7 @@ class TrackedPosition:
     sl_order_id: str = ""
     tp_order_id: str = ""  # unused: TP handled via LTP monitoring, not broker order
     tp_triggered: bool = False  # guard against double-exit
+    tp_monitoring: bool = True  # False for swing strategies (exit via PineScript EXIT signal)
 
 
 class PositionTracker:
@@ -70,6 +71,19 @@ class PositionTracker:
         self._positions[key] = position
         logger.info(f"Tracking position: {key} qty={position.quantity}")
 
+    def find_position(self, symbol: str, strategy: str) -> "TrackedPosition | None":
+        """Look up a tracked position by symbol and strategy. Returns None if not found."""
+        key = f"{symbol}:{strategy}"
+        return self._positions.get(key)
+
+    def unregister(self, symbol: str, strategy: str) -> "TrackedPosition | None":
+        """Remove and return a tracked position. Returns None if not found."""
+        key = f"{symbol}:{strategy}"
+        pos = self._positions.pop(key, None)
+        if pos:
+            logger.info(f"Unregistered position: {key}")
+        return pos
+
     async def check_positions(self) -> None:
         """Poll all tracked positions with a single positionbook call.
 
@@ -95,7 +109,8 @@ class PositionTracker:
             qty, ltp = book_data.get(pos.symbol, (0, 0.0))
 
             # --- TP monitoring: exit at market when TP level is reached ---
-            if qty != 0 and not pos.tp_triggered and ltp > 0:
+            # Skip for positions with tp_monitoring=False (swing strategies use EXIT signals)
+            if qty != 0 and pos.tp_monitoring and not pos.tp_triggered and ltp > 0:
                 tp_hit = (
                     (pos.direction == Direction.LONG and ltp >= pos.tp)
                     or (pos.direction == Direction.SHORT and ltp <= pos.tp)
@@ -189,14 +204,24 @@ class PositionTracker:
     # No dangling broker orders to clean up.
 
     async def time_exit_all(self) -> None:
-        """Force-close all tracked positions and cancel all pending bracket orders.
+        """Force-close MIS positions and cancel their pending bracket orders.
 
         Called by the TimeExitScheduler at the configured time (e.g., 15:00 IST).
+        CNC positions (swing strategies) are excluded — they survive overnight.
         Uses strategy-level close/cancel APIs for reliability.
         """
-        if not self._positions:
-            logger.info("Time exit: no open positions to close")
-            # Still send day summary even when all positions closed before time exit
+        # Separate MIS (intraday) from CNC (swing) positions
+        mis_positions = {k: v for k, v in self._positions.items() if v.product == "MIS"}
+        cnc_positions = {k: v for k, v in self._positions.items() if v.product != "MIS"}
+
+        if cnc_positions:
+            logger.info(
+                f"Time exit: keeping {len(cnc_positions)} CNC position(s) open: "
+                + ", ".join(p.symbol for p in cnc_positions.values())
+            )
+
+        if not mis_positions:
+            logger.info("Time exit: no MIS positions to close")
             capital = self._risk_engine._last_known_capital or 0.0
             await notifier.notify_day_summary(
                 trades=self._day_trades,
@@ -211,8 +236,8 @@ class PositionTracker:
             self._day_pnl = 0.0
             return
 
-        # Collect unique strategies from tracked positions
-        strategies: Set[str] = {pos.strategy for pos in self._positions.values()}
+        # Collect unique strategies from MIS positions only
+        strategies: Set[str] = {pos.strategy for pos in mis_positions.values()}
 
         for strategy in strategies:
             # Cancel all pending orders first (SL-M + TP LIMIT legs)
@@ -223,15 +248,14 @@ class PositionTracker:
             logger.info(f"Time exit: closing all positions for strategy={strategy}")
             await close_all_positions(strategy)
 
-        # Clear tracked positions and update risk engine
-        for key, pos in list(self._positions.items()):
+        # Clear only MIS positions and update risk engine
+        for key, pos in mis_positions.items():
             self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
             await notifier.notify_time_exit(pos.symbol)
             logger.info(f"Time exit: cleared tracker entry {key}")
+            del self._positions[key]
 
-        self._positions.clear()
-
-        # Send day summary after all positions are closed
+        # Send day summary after MIS positions are closed
         capital = self._risk_engine._last_known_capital or 0.0
         await notifier.notify_day_summary(
             trades=self._day_trades,

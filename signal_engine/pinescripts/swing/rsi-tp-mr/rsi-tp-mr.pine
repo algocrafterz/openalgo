@@ -1,0 +1,107 @@
+//@version=6
+strategy("rsi-tp-mr-v1", overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=20,
+     process_orders_on_close=true)
+
+// ───── INPUTS ─────
+rsiThresh   = input.float(5.0, "RSI(2) Entry", minval=2, maxval=10)
+trendLen    = input.int(200, "Trend SMA")
+rsLen       = input.int(50, "RS SMA")
+atrLen      = input.int(14, "ATR Length")
+atrFilter   = input.float(0.04, "Max ATR %")
+
+tp1Perc     = input.float(1.2, "TP1 %")
+tp2Perc     = input.float(2.8, "TP2 %")
+
+maxHold     = input.int(12, "Max Hold Days")
+
+// ───── CALCULATIONS ─────
+rsi2    = ta.rsi(close, 2)
+sma200  = ta.sma(close, trendLen)
+rs      = close / ta.sma(close, rsLen)
+atr     = ta.atr(atrLen)
+
+// ───── CONDITIONS ─────
+trendUp     = close > sma200
+strongStock = rs > 1
+lowVol      = atr / close < atrFilter
+oversold    = rsi2 < rsiThresh
+
+inPos       = strategy.position_size > 0
+
+// Entry
+enterLong = trendUp and strongStock and lowVol and oversold and not inPos and barstate.isconfirmed
+
+// ───── EXECUTION ─────
+if enterLong
+    strategy.entry("LONG", strategy.long)
+
+// Track holding
+var int barsHeld = 0
+if inPos
+    barsHeld += 1
+else
+    barsHeld := 0
+
+// Entry price
+entryPrice = strategy.position_avg_price
+
+// ───── TP LEVELS ─────
+tp1 = entryPrice * (1 + tp1Perc/100)
+tp2 = entryPrice * (1 + tp2Perc/100)
+
+// ───── EXIT LOGIC ─────
+
+// Partial exit TP1
+strategy.exit("TP1", from_entry="LONG", qty_percent=50, limit=tp1)
+
+// Final exit TP2
+strategy.exit("TP2", from_entry="LONG", qty_percent=100, limit=tp2)
+
+// Safety exits (NO SL)
+trendBreak = close < sma200
+timeExit   = barsHeld >= maxHold
+
+if inPos and (trendBreak or timeExit)
+    strategy.close("LONG", comment="Safety Exit")
+
+// ───── PLOTS ─────
+plot(sma200, "200 SMA", color=color.orange)
+
+plotshape(enterLong, title="BUY", style=shape.triangleup,
+     location=location.belowbar, color=color.green)
+
+plotshape(strategy.position_size == 0 and strategy.position_size[1] > 0,
+     title="EXIT", style=shape.triangledown,
+     location=location.abovebar, color=color.red)
+
+// ───── TELEGRAM ALERTS ─────
+
+// Format JSON (compatible with webhook bots)
+symbol  = syminfo.ticker
+price   = str.tostring(close, "#.##")
+
+buyMsg  = '{"type":"BUY","symbol":"' + symbol + '","price":"' + price + '"}'
+tp1Msg  = '{"type":"TP1","symbol":"' + symbol + '"}'
+tp2Msg  = '{"type":"TP2","symbol":"' + symbol + '"}'
+exitMsg = '{"type":"EXIT","symbol":"' + symbol + '"}'
+
+// Entry alert
+if enterLong
+    alert(buyMsg, alert.freq_once_per_bar_close)
+
+// TP1 alert
+tp1Hit = inPos and high >= tp1
+if tp1Hit
+    alert(tp1Msg, alert.freq_once_per_bar)
+
+// TP2 alert
+tp2Hit = inPos and high >= tp2
+if tp2Hit
+    alert(tp2Msg, alert.freq_once_per_bar)
+
+// Safety exit alert
+if inPos and (trendBreak or timeExit)
+    alert(exitMsg, alert.freq_once_per_bar_close)
