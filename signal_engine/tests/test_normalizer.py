@@ -207,3 +207,78 @@ class TestNormalizeThenParse:
         signal = parse(normalize(text))
         assert signal is not None
         assert signal.symbol == "SBIN"
+
+
+class TestSwingExitFormat:
+    """Tests for RSI-TP-MR alert format (RSI(2) strategy entry/exit signals)."""
+
+    def test_exit_pipe_format_normalizes(self):
+        text = "RSI-TP-MR EXIT | RELIANCE\n------------------------\nEntry: 1500\nSL: 1420\nTP: 1545\nProduct: CNC"
+        result = normalize(text)
+        lines = result.splitlines()
+        assert lines[0] == "RSI-TP-MR EXIT"
+        assert "Symbol: RELIANCE" in result
+
+    def test_exit_pipe_format_parses(self):
+        text = "RSI-TP-MR EXIT | RELIANCE\n------------------------\nEntry: 1500\nSL: 1420\nTP: 1545\nProduct: CNC"
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.strategy == "RSI-TP-MR"
+        assert signal.direction.value == "EXIT"
+        assert signal.symbol == "RELIANCE"
+        assert signal.product == "CNC"
+
+    def test_rsi_tp_mr_long_entry_format(self):
+        """Entry alert from RSI(2) PineScript v2."""
+        text = (
+            "RSI-TP-MR LONG | HDFCBANK\n"
+            "------------------------\n"
+            "Entry: 1542.30\n"
+            "SL: 1420.00\n"
+            "TP: 1575.50\n"
+            "Product: CNC\n"
+            "------------------------\n"
+            "Risk: 122.30 | Reward: 33.20\n"
+            "R:R 1:0.3\n"
+            "RSI(2): 3.8\n"
+            "Exit: close > 5 SMA (CNC delivery)\n"
+            "------------------------\n"
+            "15:25 IST\n"
+            "https://www.tradingview.com/chart/?symbol=NSE:HDFCBANK&interval=D"
+        )
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.strategy == "RSI-TP-MR"
+        assert signal.direction.value == "LONG"
+        assert signal.symbol == "HDFCBANK"
+        assert signal.entry == 1542.30
+        assert signal.sl == 1420.00
+        assert signal.tp == 1575.50
+        assert signal.product == "CNC"
+
+    def test_rsi_tp_mr_exit_with_extras(self):
+        """Exit alert from RSI(2) PineScript v2 — extra lines ignored by parser."""
+        text = (
+            "RSI-TP-MR EXIT | HDFCBANK\n"
+            "------------------------\n"
+            "Entry: 1542.30\n"
+            "SL: 1420.00\n"
+            "TP: 1575.50\n"
+            "Product: CNC\n"
+            "------------------------\n"
+            "Exit: 1578.50\n"
+            "Reason: Close > 5 SMA\n"
+            "P&L: +36.20 (+2.3%)\n"
+            "Bars held: 4\n"
+            "------------------------\n"
+            "15:25 IST"
+        )
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.strategy == "RSI-TP-MR"
+        assert signal.direction.value == "EXIT"
+        assert signal.symbol == "HDFCBANK"
+        assert signal.entry == 1542.30
+        assert signal.sl == 1420.00
+        assert signal.tp == 1575.50
+        assert signal.product == "CNC"

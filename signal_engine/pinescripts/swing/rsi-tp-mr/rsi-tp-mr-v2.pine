@@ -1,0 +1,546 @@
+//@version=6
+strategy("RSI-TP-MR", shorttitle="RSI-TP-MR", overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=20,
+     initial_capital=500000,
+     currency=currency.INR,
+     commission_type=strategy.commission.percent,
+     commission_value=0.12,
+     slippage=1,
+     process_orders_on_close=true,
+     calc_on_every_tick=false)
+
+// ============================================ INPUT GROUPS ============================================
+string grp_entry    = "Entry Conditions"
+string grp_exit     = "Exit Conditions"
+string grp_risk     = "Risk Management"
+string grp_backtest = "Backtest Settings"
+string grp_visuals  = "Visuals"
+string grp_telegram = "Telegram Alerts"
+
+// ============================================ ENTRY INPUTS ============================================
+float rsiThresh = input.float(5.0, "RSI(2) Threshold", minval=2, maxval=15, step=1.0,
+     group=grp_entry,
+     tooltip="Core entry signal. RSI(2) must drop below this level.\n\n" +
+     "< 2: Ultra-selective, 3-8 trades/yr/stock\n" +
+     "< 5: Canonical Connors (recommended)\n" +
+     "< 10: More trades, lower avg profit\n\n" +
+     "Start with 5. Never go above 15.")
+
+int trendLen = input.int(200, "Trend SMA Length", minval=50, maxval=200, step=50,
+     group=grp_entry,
+     tooltip="Uptrend filter. Price must be above this SMA.\n\n" +
+     "200: Canonical (recommended)\n" +
+     "100: More signals, weaker trend filter\n" +
+     "50: Very permissive, higher risk")
+
+bool useRSFilter = input.bool(true, "Require Close > RS SMA", inline="rs",
+     group=grp_entry,
+     tooltip="Additional relative strength filter.\n" +
+     "When ON: stock must be above its shorter-term SMA (strong stock).\n" +
+     "When OFF: only 200 SMA trend filter applies.\n\n" +
+     "Recommended: ON for quality signals")
+
+int rsLen = input.int(50, "RS SMA", minval=20, maxval=100, inline="rs",
+     group=grp_entry,
+     tooltip="Relative strength SMA period.\n" +
+     "Close / SMA(this) must be > 1.\n\n50: Balanced (recommended)")
+
+float minVolume = input.float(500000, "Min Volume (shares)", minval=100000, maxval=5000000, step=100000,
+     group=grp_entry,
+     tooltip="Liquidity filter. Skip illiquid stocks.\n\n" +
+     "500K: Standard for NSE large-caps\n" +
+     "200K: For mid-caps\n" +
+     "1M+: Ultra-liquid only")
+
+float minPrice = input.float(100, "Min Price", minval=10, maxval=1000, step=50,
+     group=grp_entry,
+     tooltip="Penny stock filter. Avoids erratic low-price names.\n\n" +
+     "100: Standard (recommended)\n" +
+     "50: Includes smaller names\n" +
+     "200+: Blue-chip only")
+
+// ============================================ EXIT INPUTS =============================================
+int exitSmaLen = input.int(5, "Exit SMA Length", minval=3, maxval=10,
+     group=grp_exit,
+     tooltip="Primary exit: Close > this SMA on confirmed daily bar.\n\n" +
+     "5: Canonical Connors exit (recommended)\n" +
+     "3: Faster exit, captures less of the bounce\n" +
+     "7-10: Longer hold, more drawdown exposure")
+
+int maxHoldDays = input.int(7, "Max Hold Days", minval=3, maxval=15,
+     group=grp_exit,
+     tooltip="Force exit after this many TRADING bars (not calendar days).\n\n" +
+     "Connors research: close > 5 SMA fires in 3-5 bars typically.\n" +
+     "If mean reversion hasn't completed by this limit, the setup failed.\n\n" +
+     "7: Aligned with expected 2-7 day hold (recommended)\n" +
+     "5: Aggressive — cuts losers faster, may miss slow bounces\n" +
+     "10: Patient — gives more room, ties up capital longer\n" +
+     "12+: Very patient — only if backtesting shows improvement")
+
+bool useEmergencySL = input.bool(true, "Enable Emergency SL %", inline="esl",
+     group=grp_exit,
+     tooltip="Fixed % stop-loss as safety net.\n\n" +
+     "Primary SL is always 200 SMA break.\n" +
+     "Emergency SL caps worst-case loss when 200 SMA is far.\n\n" +
+     "Connors' research: SL hurts backtest, but for production\n" +
+     "automated trading you need a broker-side safety net.\n\n" +
+     "ON: max(200 SMA, entry * (1 - SL%)) as stop\n" +
+     "OFF: 200 SMA only (pure Connors)")
+
+float emergencySLPct = input.float(8.0, "SL %", minval=3.0, maxval=15.0, step=0.5, inline="esl",
+     group=grp_exit,
+     tooltip="Maximum loss per trade as % of entry.\n\n" +
+     "8%: Balanced — room for mean reversion (recommended)\n" +
+     "5-6%: Tighter, more stop-outs, safer\n" +
+     "10-15%: Very wide, near-pure Connors")
+
+// ============================================ RISK INPUTS =============================================
+float accountCapital = input.float(500000, "Account Capital (INR)", minval=10000, step=50000,
+     group=grp_risk,
+     tooltip="Total trading capital for position sizing display.\n" +
+     "Used only for dashboard calculations.\n" +
+     "Strategy uses % of equity for backtesting.")
+
+float riskPctPerTrade = input.float(1.0, "Risk % Per Trade", minval=0.5, maxval=3.0, step=0.5,
+     group=grp_risk,
+     tooltip="Percentage of capital risked per trade.\n\n" +
+     "1%: Conservative (recommended for swing)\n" +
+     "2%: Aggressive\n" +
+     "0.5%: Very conservative")
+
+float allocPct = input.float(20.0, "Max Allocation %", minval=10, maxval=33, step=5,
+     group=grp_risk,
+     tooltip="Maximum % of equity per position.\n" +
+     "Acts as position size cap.\n\n" +
+     "20%: Standard (5 concurrent positions max)\n" +
+     "15%: Conservative (6-7 positions)\n" +
+     "25-33%: Concentrated (3-4 positions)")
+
+// ============================================ BACKTEST INPUTS =========================================
+bool useDateFilter = input.bool(false, "Filter by Date Range", inline="date",
+     group=grp_backtest,
+     tooltip="Restrict backtest to specific date range.\n" +
+     "Useful for out-of-sample testing.")
+
+int startDate = input.time(timestamp("2020-01-01"), "Start", inline="date",
+     group=grp_backtest)
+
+int endDate = input.time(timestamp("2030-12-31"), "End",
+     group=grp_backtest)
+
+// ============================================ VISUAL INPUTS ==========================================
+bool showDashboard = input.bool(true, "Show Dashboard", inline="dash",
+     group=grp_visuals)
+
+string dashPos = input.string("Bottom Left", "Position",
+     options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
+     inline="dash", group=grp_visuals)
+
+bool showExitSMA = input.bool(true, "Show Exit SMA", group=grp_visuals,
+     tooltip="Plot the 5 SMA exit line on chart")
+
+bool showSLLine = input.bool(true, "Show SL Line", group=grp_visuals,
+     tooltip="Show stop-loss level during active position")
+
+bool showSignalLabels = input.bool(true, "Show Entry/Exit Labels", group=grp_visuals)
+
+// ============================================ TELEGRAM INPUTS =========================================
+string telegramChatId = input.string("", "Telegram Chat ID",
+     group=grp_telegram,
+     tooltip="Your Telegram channel/group chat ID.\n\n" +
+     "HOW TO GET:\n" +
+     "1. Add @userinfobot to your channel\n" +
+     "2. Forward any message to the bot\n" +
+     "3. Copy the chat ID (starts with -)")
+
+bool sendTestAlert = input.bool(false, "Send Test Alert",
+     group=grp_telegram,
+     tooltip="Enable to send a test alert message.\n\n" +
+     "STEPS:\n" +
+     "1. Enable this option\n" +
+     "2. Create alert: 'Any alert() function call'\n" +
+     "3. Webhook: https://api.telegram.org/bot<TOKEN>/sendMessage\n" +
+     "4. Alert triggers on last bar\n" +
+     "5. Disable after testing")
+
+// ============================================ INPUT VALIDATION ========================================
+if rsiThresh < 2 or rsiThresh > 15
+    runtime.error("RSI threshold must be between 2-15. Current: " + str.tostring(rsiThresh))
+if trendLen < 50 or trendLen > 200
+    runtime.error("Trend SMA must be between 50-200. Current: " + str.tostring(trendLen))
+if exitSmaLen < 3 or exitSmaLen > 10
+    runtime.error("Exit SMA must be between 3-10. Current: " + str.tostring(exitSmaLen))
+if maxHoldDays < 3 or maxHoldDays > 15
+    runtime.error("Max hold days must be between 3-15. Current: " + str.tostring(maxHoldDays))
+if useEmergencySL and (emergencySLPct < 3 or emergencySLPct > 15)
+    runtime.error("Emergency SL % must be between 3-15. Current: " + str.tostring(emergencySLPct))
+if riskPctPerTrade < 0.5 or riskPctPerTrade > 3
+    runtime.error("Risk % must be between 0.5-3. Current: " + str.tostring(riskPctPerTrade))
+
+// ============================================ CALCULATIONS ===========================================
+float rsi2       = ta.rsi(close, 2)
+float sma200     = ta.sma(close, trendLen)
+float smaExit    = ta.sma(close, exitSmaLen)
+float rsRatio    = ta.sma(close, rsLen)
+float atr14      = ta.atr(14)
+
+// ============================================ DATE FILTER ============================================
+bool inDateRange = not useDateFilter or (time >= startDate and time <= endDate)
+
+// ============================================ ENTRY CONDITIONS ========================================
+bool trendUp     = not na(sma200) and close > sma200
+bool strongStock = not useRSFilter or (not na(rsRatio) and close > rsRatio)
+bool oversold    = not na(rsi2) and rsi2 < rsiThresh
+bool hasVolume   = volume >= minVolume
+bool aboveMinPx  = close >= minPrice
+bool inPos       = strategy.position_size > 0
+
+bool enterLong = trendUp and strongStock and oversold and hasVolume and aboveMinPx
+     and not inPos and inDateRange and barstate.isconfirmed
+
+// ============================================ POSITION TRACKING ======================================
+var int barsHeld = 0
+if inPos
+    barsHeld += 1
+else
+    barsHeld := 0
+
+// Approximate calendar days from trading bars (weekdays only on daily chart)
+int approxCalendarDays = math.round(barsHeld * 7.0 / 5.0)
+
+// ============================================ PRICE LEVELS ===========================================
+float entryPrice = strategy.position_avg_price
+
+// SL: tighter of 200 SMA and emergency %
+float slSma200       = sma200
+float slEmergency    = useEmergencySL ? entryPrice * (1 - emergencySLPct / 100) : 0.0
+float slLevel        = useEmergencySL ? math.max(slSma200, slEmergency) : slSma200
+
+// TP reference: current 5 SMA value (informational — primary exit is close > 5 SMA)
+float tpReference = smaExit
+
+// Risk per share and position sizing (for dashboard)
+float riskPerShare   = inPos ? math.abs(entryPrice - slLevel) : 0.0
+float riskAmount     = accountCapital * (riskPctPerTrade / 100)
+int   calcQty        = riskPerShare > 0 ? math.floor(riskAmount / riskPerShare) : 0
+float calcPosValue   = calcQty > 0 ? calcQty * entryPrice : 0.0
+float calcPosPct     = accountCapital > 0 ? (calcPosValue / accountCapital) * 100 : 0.0
+// Cap at max allocation
+int   cappedQty      = calcPosPct > allocPct and entryPrice > 0
+     ? math.floor(accountCapital * allocPct / 100 / entryPrice)
+     : calcQty
+
+// ============================================ ENTRY EXECUTION ========================================
+if enterLong
+    strategy.entry("LONG", strategy.long)
+
+// ============================================ EXIT CONDITIONS =========================================
+// Primary: close crosses above exit SMA (canonical Connors exit)
+bool primaryExit = not na(smaExit) and close > smaExit and barstate.isconfirmed
+
+// Safety: trend break (close drops below 200 SMA)
+bool trendBreak = not na(sma200) and close < sma200 and barstate.isconfirmed
+
+// Safety: max holding period exceeded
+bool timeExit = barsHeld >= maxHoldDays and barstate.isconfirmed
+
+// ============================================ EXIT EXECUTION =========================================
+// Place SL order with broker (safety net if TradingView/Telegram goes down)
+if inPos
+    strategy.exit("SL", from_entry="LONG", stop=slLevel)
+
+// Primary exit: close > exit SMA
+if inPos and primaryExit
+    strategy.close("LONG", comment="Exit: Close > " + str.tostring(exitSmaLen) + " SMA")
+
+// Safety exits
+if inPos and trendBreak
+    strategy.close("LONG", comment="Safety: Trend Break")
+
+if inPos and timeExit
+    strategy.close("LONG", comment="Safety: Max Hold " + str.tostring(maxHoldDays) + "d")
+
+// ============================================ EXIT DETECTION (for alerts) =============================
+// Detect position just closed this bar
+bool justExited = strategy.position_size == 0 and strategy.position_size[1] > 0
+
+// Determine exit reason
+string exitReason = ""
+if justExited
+    if primaryExit
+        exitReason := "Close > " + str.tostring(exitSmaLen) + " SMA"
+    else if trendBreak
+        exitReason := "Trend Break (< 200 SMA)"
+    else if timeExit
+        exitReason := "Max Hold " + str.tostring(maxHoldDays) + " days"
+    else
+        exitReason := "SL Hit"
+
+// ============================================ PLOTS ==================================================
+plot(sma200, "200 SMA (Trend)", color=color.orange, linewidth=2)
+plot(showExitSMA ? smaExit : na, "Exit SMA", color=color.new(color.aqua, 30), linewidth=1)
+
+// SL line during active position
+plot(inPos and showSLLine ? slLevel : na, "Stop Loss",
+     color=color.red, linewidth=1, style=plot.style_linebr)
+
+// Entry/Exit markers
+if showSignalLabels and enterLong
+    label.new(bar_index, low,
+         text="BUY\n" + str.tostring(close, format.mintick),
+         style=label.style_label_up,
+         color=color.new(color.green, 20),
+         textcolor=color.white,
+         size=size.small)
+
+if showSignalLabels and justExited
+    label.new(bar_index, high,
+         text="EXIT\n" + exitReason,
+         style=label.style_label_down,
+         color=color.new(color.red, 20),
+         textcolor=color.white,
+         size=size.small)
+
+// ============================================ STATS TABLE ============================================
+var table statsTable = table.new(position.top_right, 2, 8,
+     bgcolor=color.new(color.black, 80),
+     border_width=1,
+     border_color=color.new(color.gray, 60))
+
+if barstate.islast
+    // Calculate stats from strategy
+    int totalTrades   = strategy.closedtrades
+    int winCount      = 0
+    float grossProfit = 0.0
+    float grossLoss   = 0.0
+
+    if totalTrades > 0
+        for i = 0 to totalTrades - 1
+            float pnl = strategy.closedtrades.profit(i)
+            if pnl > 0
+                winCount      += 1
+                grossProfit   += pnl
+            else
+                grossLoss     += math.abs(pnl)
+
+    float winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0.0
+    float pf     = grossLoss > 0 ? grossProfit / grossLoss : 0.0
+    float avgPnl = totalTrades > 0 ? strategy.netprofit / totalTrades : 0.0
+    float maxDD  = strategy.max_drawdown
+
+    // Header
+    table.cell(statsTable, 0, 0, "RSI(2) Swing", text_color=color.aqua, text_size=size.small, text_halign=text.align_left)
+    table.cell(statsTable, 1, 0, "Stats", text_color=color.aqua, text_size=size.small)
+    // Trades
+    table.cell(statsTable, 0, 1, "Trades", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 1, str.tostring(totalTrades), text_color=color.white, text_size=size.tiny)
+    // Win Rate
+    table.cell(statsTable, 0, 2, "Win Rate", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 2, str.tostring(winRate, "#.#") + "%",
+         text_color=winRate >= 60 ? color.lime : winRate >= 50 ? color.yellow : color.red,
+         text_size=size.tiny)
+    // Profit Factor
+    table.cell(statsTable, 0, 3, "Profit Factor", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 3, str.tostring(pf, "#.##"),
+         text_color=pf >= 1.5 ? color.lime : pf >= 1.0 ? color.yellow : color.red,
+         text_size=size.tiny)
+    // Avg Trade
+    table.cell(statsTable, 0, 4, "Avg Trade", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 4, str.tostring(avgPnl, "#.##"),
+         text_color=avgPnl > 0 ? color.lime : color.red,
+         text_size=size.tiny)
+    // Max DD
+    table.cell(statsTable, 0, 5, "Max DD", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 5, str.tostring(maxDD, "#.##"),
+         text_color=color.red, text_size=size.tiny)
+    // Net Profit
+    table.cell(statsTable, 0, 6, "Net Profit", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 6, str.tostring(strategy.netprofit, "#.##"),
+         text_color=strategy.netprofit > 0 ? color.lime : color.red,
+         text_size=size.tiny)
+    // RSI(2) current
+    table.cell(statsTable, 0, 7, "RSI(2)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(statsTable, 1, 7, str.tostring(rsi2, "#.#"),
+         text_color=rsi2 < rsiThresh ? color.lime : rsi2 < 10 ? color.yellow : color.white,
+         text_size=size.tiny)
+
+// ============================================ POSITION DASHBOARD =====================================
+tablePos = dashPos == "Top Left" ? position.top_left :
+     dashPos == "Top Right" ? position.top_right :
+     dashPos == "Bottom Right" ? position.bottom_right :
+     position.bottom_left
+
+var table dashTable = table.new(tablePos, 2, 10,
+     bgcolor=color.new(color.black, 80),
+     border_width=1,
+     border_color=color.new(color.gray, 60))
+
+if barstate.islast and showDashboard and inPos
+    float pnlPct = entryPrice > 0 ? ((close - entryPrice) / entryPrice) * 100 : 0.0
+    float pnlAmt = close - entryPrice
+
+    table.cell(dashTable, 0, 0, "RSI-TP-MR LONG", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dashTable, 1, 0, syminfo.ticker, text_color=color.white, text_size=size.small)
+
+    table.cell(dashTable, 0, 1, "Entry", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 1, str.tostring(entryPrice, format.mintick), text_color=color.white, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 2, "SL (Safety)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 2, str.tostring(slLevel, format.mintick), text_color=color.red, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 3, "Exit SMA(" + str.tostring(exitSmaLen) + ")", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 3, str.tostring(smaExit, format.mintick), text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 4, "Days Held", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 4, str.tostring(barsHeld) + " bars (~" + str.tostring(approxCalendarDays) + "d)",
+         text_color=barsHeld >= maxHoldDays - 2 ? color.orange : color.white,
+         text_size=size.tiny)
+
+    table.cell(dashTable, 0, 5, "P&L", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    string pnlSign = pnlAmt >= 0 ? "+" : ""
+    table.cell(dashTable, 1, 5, pnlSign + str.tostring(pnlAmt, "#.##") + " (" + pnlSign + str.tostring(pnlPct, "#.#") + "%)",
+         text_color=pnlAmt >= 0 ? color.lime : color.red,
+         text_size=size.tiny)
+
+    table.cell(dashTable, 0, 6, "Qty (risk-sized)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 6, str.tostring(cappedQty) + " shares", text_color=color.white, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 7, "Risk/Share", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 7, str.tostring(riskPerShare, "#.##"), text_color=color.orange, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 8, "RSI(2)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 8, str.tostring(rsi2, "#.#"),
+         text_color=rsi2 < 5 ? color.lime : rsi2 < 10 ? color.yellow : color.white,
+         text_size=size.tiny)
+
+    table.cell(dashTable, 0, 9, "ATR(14) %", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    float atrPct = atr14 / close * 100
+    table.cell(dashTable, 1, 9, str.tostring(atrPct, "#.##") + "%",
+         text_color=atrPct > 3 ? color.red : atrPct > 2 ? color.orange : color.white,
+         text_size=size.tiny)
+
+// Clear dashboard when not in position
+if barstate.islast and showDashboard and not inPos
+    for row = 0 to 9
+        table.cell(dashTable, 0, row, "", text_size=size.tiny)
+        table.cell(dashTable, 1, row, "", text_size=size.tiny)
+
+// ============================================ ALERT FUNCTIONS ========================================
+
+// Build chart URL
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker + "&interval=D"
+
+// Get IST time
+getTimeIST() =>
+    str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERT FORMAT — matches ORB pipeline exactly:
+//
+//   TradingView alert(JSON) ──webhook──> Telegram Bot API /sendMessage
+//                                        ──posts to channel──>
+//   Signal engine Telethon listener reads msg.text
+//                                        ──>
+//   normalizer.normalize():
+//     1. Strips emojis
+//     2. Removes separator lines (----)
+//     3. Splits pipe: "RSI-TP-MR LONG | SYMBOL" -> "RSI-TP-MR LONG" + "Symbol: SYMBOL"
+//     4. Aliases "Target:" -> "TP:"
+//                                        ──>
+//   parser.parse():
+//     Line 0: strategy + direction
+//     Lines 1+: key-value pairs (Symbol, Entry, SL, TP, Product, Exchange)
+//
+// CRITICAL: First line MUST be "STRATEGY DIRECTION | SYMBOL"
+//           Then key-value lines. Extra lines (Risk, R:R, etc) are ignored by parser.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Build Entry Alert — ORB-identical format
+// Normalizer converts: "RSI-TP-MR LONG | RELIANCE" -> "RSI-TP-MR LONG\nSymbol: RELIANCE"
+// Parser reads: strategy=RSI-TP-MR, direction=LONG, then KV pairs
+buildEntryAlert(float entry, float sl, float tp) =>
+    float riskVal    = math.abs(entry - sl)
+    float rewardVal  = math.abs(tp - entry)
+    float rrRatio    = riskVal > 0 ? rewardVal / riskVal : 0
+
+    // Line 1: STRATEGY DIRECTION | SYMBOL (normalizer splits pipe -> adds Symbol line)
+    string msg = "RSI-TP-MR LONG | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    // KV pairs — parser extracts these
+    msg += "Entry: " + str.tostring(entry, "#.##") + "\\n"
+    msg += "SL: " + str.tostring(sl, "#.##") + "\\n"
+    msg += "TP: " + str.tostring(tp, "#.##") + "\\n"
+    msg += "Product: CNC\\n"
+    msg += "------------------------\\n"
+    // Human-readable extras — parser ignores non-KV lines
+    msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
+    msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    msg += "RSI(2): " + str.tostring(rsi2, "#.#") + "\\n"
+    msg += "Exit: close > " + str.tostring(exitSmaLen) + " SMA (CNC delivery)\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+
+    '{"chat_id": "' + telegramChatId + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// Build Exit Alert — same pipe format, direction = EXIT
+// Normalizer converts: "RSI-TP-MR EXIT | RELIANCE" -> "RSI-TP-MR EXIT\nSymbol: RELIANCE"
+// NOTE: requires normalizer + parser to support EXIT direction (signal engine change)
+buildExitAlert(float entry, float sl, float tp, string reason) =>
+    float pnlAmt = close - entry
+    float pnlPct = entry > 0 ? (pnlAmt / entry) * 100 : 0
+    string pnlSign = pnlAmt >= 0 ? "+" : ""
+
+    // Line 1: STRATEGY EXIT | SYMBOL
+    string msg = "RSI-TP-MR EXIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    // KV pairs
+    msg += "Entry: " + str.tostring(entry, "#.##") + "\\n"
+    msg += "SL: " + str.tostring(sl, "#.##") + "\\n"
+    msg += "TP: " + str.tostring(tp, "#.##") + "\\n"
+    msg += "Product: CNC\\n"
+    msg += "------------------------\\n"
+    // Human-readable extras
+    msg += "Exit: " + str.tostring(close, "#.##") + "\\n"
+    msg += "Reason: " + reason + "\\n"
+    msg += "P&L: " + pnlSign + str.tostring(pnlAmt, "#.##") + " (" + pnlSign + str.tostring(pnlPct, "#.#") + "%)\\n"
+    msg += "Bars held: " + str.tostring(barsHeld) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+
+    '{"chat_id": "' + telegramChatId + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// Build Test Alert
+buildTestAlert() =>
+    string msg = "TEST ALERT - RSI(2) Swing Strategy\\n\\n"
+    msg += "Webhook connection successful!\\n\\n"
+    msg += "Symbol: " + syminfo.ticker + "\\n"
+    msg += "Exchange: " + syminfo.prefix + "\\n"
+    msg += "Price: " + str.tostring(close, "#.##") + "\\n"
+    msg += "RSI(2): " + str.tostring(rsi2, "#.#") + "\\n"
+    msg += "200 SMA: " + str.tostring(sma200, "#.##") + "\\n"
+    msg += "Time: " + getTimeIST() + "\\n\\n"
+    msg += "Alert Types:\\n"
+    msg += "- Entry (RSI-TP-MR LONG | SYMBOL)\\n"
+    msg += "- Exit (RSI-TP-MR EXIT | SYMBOL)\\n\\n"
+    msg += "View Chart: " + getChartUrl()
+
+    '{"chat_id": "' + telegramChatId + '", "text": "' + msg + '"}'
+
+// ============================================ FIRE ALERTS ============================================
+// Entry alert
+if enterLong
+    alert(buildEntryAlert(close, slLevel, smaExit), alert.freq_once_per_bar_close)
+
+// Exit alerts — use saved entry price from previous bar since position closes this bar
+if justExited
+    float prevEntry = strategy.closedtrades.entry_price(strategy.closedtrades - 1)
+    alert(buildExitAlert(prevEntry, slLevel, smaExit, exitReason), alert.freq_once_per_bar_close)
+
+// Test alert
+if sendTestAlert and barstate.islast
+    alert(buildTestAlert(), alert.freq_all)

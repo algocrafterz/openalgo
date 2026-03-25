@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from signal_engine.executor import build_order, build_sl_order, build_tp_order, send_bracket_legs, send_order
+from signal_engine.executor import build_order, build_exit_order, build_sl_order, build_tp_order, send_bracket_legs, send_order
 from signal_engine.models import Action, Direction, OrderStatus, Signal
 from signal_engine.tests.conftest import make_signal as _make_signal
 
@@ -110,6 +110,39 @@ class TestSendOrder:
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await send_order(order)
             assert result.status == OrderStatus.ERROR
+
+
+class TestBuildExitOrder:
+    """Tests for build_exit_order — MARKET SELL to close an existing LONG position."""
+
+    def test_action_is_sell(self):
+        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR")
+        assert order.action == Action.SELL
+
+    def test_order_type_is_market(self):
+        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR")
+        assert order.order_type == "MARKET"
+
+    def test_price_is_zero(self):
+        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR")
+        assert order.price == 0.0
+
+    def test_quantity_matches(self):
+        order = build_exit_order("RELIANCE", "NSE", 42, "CNC", "RSI-TP-MR")
+        assert order.quantity == 42
+
+    def test_product_passthrough(self):
+        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR")
+        assert order.product == "CNC"
+
+    def test_strategy_tag_captured(self):
+        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR")
+        assert order.strategy_tag == "RSI-TP-MR"
+
+    def test_symbol_and_exchange(self):
+        order = build_exit_order("HDFCBANK", "NSE", 10, "MIS", "ORB")
+        assert order.symbol == "HDFCBANK"
+        assert order.exchange == "NSE"
 
 
 class TestBuildSlOrder:

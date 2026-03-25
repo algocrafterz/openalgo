@@ -119,6 +119,26 @@ async def send_order(order: Order) -> TradeResult:
         return TradeResult(status=OrderStatus.ERROR, message=str(e))
 
 
+def build_exit_order(
+    symbol: str,
+    exchange: str,
+    quantity: int,
+    product: str,
+    strategy_tag: str,
+) -> Order:
+    """Build a MARKET SELL order for closing an existing LONG position."""
+    return Order(
+        symbol=symbol,
+        exchange=exchange,
+        action=Action.SELL,
+        quantity=quantity,
+        price=0.0,
+        order_type="MARKET",
+        product=product,
+        strategy_tag=strategy_tag,
+    )
+
+
 def build_sl_order(signal: Signal, quantity: int) -> Order:
     """Build a stop-loss leg order for a bracket.
 

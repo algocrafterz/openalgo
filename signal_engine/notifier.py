@@ -103,6 +103,24 @@ async def notify_sl_cancel_failed(symbol: str, sl_order_id: str) -> None:
     )
 
 
+# ── EXIT signal handling (swing strategy closes) ──────────────────────────────
+
+async def notify_exit_signal_received(symbol: str, strategy: str) -> None:
+    await notify(f"EXIT signal received | {symbol} | strategy={strategy} | {_now_ist()}")
+
+
+async def notify_exit_placed(symbol: str, order_id: str) -> None:
+    await notify(f"EXIT order placed | {symbol} | MARKET SELL id={order_id} | {_now_ist()}")
+
+
+async def notify_exit_no_position(symbol: str, strategy: str) -> None:
+    await notify(f"EXIT ignored | {symbol} | No open position for strategy={strategy} | {_now_ist()}")
+
+
+async def notify_exit_failed(symbol: str, reason: str) -> None:
+    await notify(f"EXIT FAILED | {symbol} | {reason} | {_now_ist()}")
+
+
 # ── Position lifecycle ─────────────────────────────────────────────────────────
 
 async def notify_position_closed(symbol: str, pnl: float) -> None:
