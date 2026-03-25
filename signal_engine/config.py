@@ -104,12 +104,9 @@ class Settings:
     sizing_mode: str
     risk_per_trade: float
     pct_of_capital: float
-    max_position_size: float
     min_entry_price: float
     max_entry_price: float
     slippage_factor: float
-    margin_multiplier: Dict[str, float]
-    max_capital_utilization: float
 
     # Risk management (from yaml)
     daily_loss_limit: float
@@ -148,13 +145,14 @@ class Settings:
 
     # API (from yaml)
     api_timeout: float
+    margin_api_retries: int
 
     # Bracket orders (from yaml)
     bracket_enabled: bool
     bracket_sl_order_type: str
     bracket_max_sl_retries: int
-    bracket_max_tp_retries: int
-    bracket_cancel_retry_count: int
+    bracket_retry_delay: float
+    bracket_tp_exit_retries: int
 
     # Time exit (from yaml) — close positions before broker auto square-off
     time_exit_enabled: bool
@@ -205,25 +203,6 @@ def _build_settings() -> Settings:
             n_id = str(raw_nid)
         notify_channel = TelegramChannel(name=raw_notify.get("name", ""), id=n_id)
 
-    # Load and validate margin_multiplier
-    raw_multiplier = _require_key(sizing, "sizing", "margin_multiplier")
-    if not isinstance(raw_multiplier, dict):
-        raise ConfigError(
-            "sizing.margin_multiplier must be a mapping of product -> margin fraction"
-        )
-    margin_multiplier: Dict[str, float] = {}
-    for product_key, rate in raw_multiplier.items():
-        rate_f = float(rate)
-        if rate_f <= 0 or rate_f > 1.0:
-            raise ConfigError(
-                f"sizing.margin_multiplier[{product_key!r}] must be > 0 and <= 1.0, got {rate_f}"
-            )
-        margin_multiplier[product_key] = rate_f
-
-    max_capital_utilization = float(
-        _require_key(sizing, "sizing", "max_capital_utilization")
-    )
-
     # Time exit section (optional — defaults to disabled if missing)
     time_exit = yml.get("time_exit", {})
     if not isinstance(time_exit, dict):
@@ -245,12 +224,9 @@ def _build_settings() -> Settings:
         sizing_mode=mode,
         risk_per_trade=float(_require_key(sizing, "sizing", "risk_per_trade")),
         pct_of_capital=float(_require_key(sizing, "sizing", "pct_of_capital")),
-        max_position_size=float(_require_key(sizing, "sizing", "max_position_size")),
         min_entry_price=float(_require_key(sizing, "sizing", "min_entry_price")),
         max_entry_price=float(_require_key(sizing, "sizing", "max_entry_price")),
         slippage_factor=float(_require_key(sizing, "sizing", "slippage_factor")),
-        margin_multiplier=margin_multiplier,
-        max_capital_utilization=max_capital_utilization,
 
         # Risk management from yaml — all required
         daily_loss_limit=float(_require_key(risk, "risk", "daily_loss_limit")),
@@ -287,13 +263,14 @@ def _build_settings() -> Settings:
 
         # API from yaml
         api_timeout=float(_require_key(api, "api", "timeout")),
+        margin_api_retries=int(api.get("margin_retries", 3)),
 
         # Bracket orders from yaml
         bracket_enabled=bool(_require_key(bracket, "bracket", "enabled")),
         bracket_sl_order_type=str(_require_key(bracket, "bracket", "sl_order_type")),
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
-        bracket_max_tp_retries=int(bracket.get("max_tp_retries", 3)),
-        bracket_cancel_retry_count=int(_require_key(bracket, "bracket", "cancel_retry_count")),
+        bracket_retry_delay=float(bracket.get("retry_delay", 0.5)),
+        bracket_tp_exit_retries=int(bracket.get("tp_exit_retries", 3)),
 
         # Time exit — optional section with safe defaults
         time_exit_enabled=bool(time_exit.get("enabled", False)),

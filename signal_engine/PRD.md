@@ -34,13 +34,17 @@ SignalValidator      [validator.py] -- entry/SL/target/direction/R:R/duplicate/m
 RiskEngine           [risk.py]
    |-- can_trade_symbol()   -> symbol concentration check
    |-- can_trade_sector()   -> sector correlation check
-   |-- check_exposure()     -> daily/weekly/monthly loss + portfolio heat + capital utilization + open positions + daily trades
+   |-- check_exposure()     -> daily/weekly/monthly loss + portfolio heat + open positions + daily trades
    |-- fetch_available_capital() -> live capital from OpenAlgo funds API
-   |-- calculate_quantity() -> risk-based sizing + margin cap + budget cap
+   |-- calculate_quantity() -> risk-based sizing (1% fixed fractional)
+        |
+MarginAPI            [api_client.py]
+   |-- fetch_margin()       -> actual broker margin required for the position (via /api/v1/margin)
+   |-- adjust_qty_for_margin() -> scales qty down proportionally if margin > live capital
         |
 ExecutionLayer       [executor.py]
-   |-- send_order()         -> ENTRY order (MARKET or LIMIT)
-   |-- send_bracket_legs()  -> SL-M order + TP LIMIT order (OCO pair)
+   |-- send_order()         -> ENTRY order (MARKET)
+   |-- send_bracket_legs()  -> SL-M order ONLY (no TP broker order — see Indian broker OCO constraint)
         |
 OpenAlgo HTTP API    [local instance, auto-routes live/sandbox]
         |
@@ -48,10 +52,14 @@ Broker (live or sandbox)
 
 [Background]:
 PositionTracker      [tracker.py]
-   |-- polls /api/v1/openposition every poll_interval seconds
-   |-- detects SL/TP closure, cancels remaining leg (OCO)
-   |-- computes P&L delta, updates risk engine loss counters
-   |-- releases committed margin on close
+   |-- polls /api/v1/positionbook every poll_interval seconds (10s)
+   |-- LTP monitoring: detects when ltp crosses TP level -> cancel SL -> MARKET exit
+   |-- detects position close (qty=0), computes P&L delta, updates risk engine
+   |-- sends Telegram notifications at each lifecycle event
+
+TimeExitScheduler    [tracker.py]
+   |-- fires once/day at configured IST time (15:00) to close all positions
+   |-- cancel_all_orders + close_all_positions per strategy
 
 RiskStore            [risk_store.py]
    |-- SQLite persistence for risk counters keyed by (mode, date)
@@ -182,33 +190,28 @@ sizing:
   mode: fixed_fractional         # fixed_fractional | pct_of_capital
   risk_per_trade: 0.01           # 1% risk per trade (fixed_fractional)
   pct_of_capital: 0.05           # 5% of capital per trade (pct_of_capital)
-  max_position_size: 0           # 0 = disabled (SL distance controls size)
-  min_entry_price: 0             # Min stock price to trade (0 = no filter)
-  max_entry_price: 0             # Max stock price to trade (0 = no filter)
-  slippage_factor: 0.05          # Widen risk_per_share by 5% to account for MARKET order slippage
+  min_entry_price: 100           # Min stock price to trade (0 = no filter)
+  max_entry_price: 800           # Max stock price to trade (0 = no filter)
+  slippage_factor: 0.10          # Widen risk_per_share by 10% — entry (MARKET) + TP exit (MARKET) both slip
   sandbox_capital: 100000        # Override capital in analyze mode (0 = use OpenAlgo)
-  margin_multiplier:
-    MIS: 0.20                    # 5x intraday leverage (20% margin required)
-    NRML: 0.25                   # 4x F&O leverage
-    CNC: 1.0                     # No leverage for delivery
-  max_capital_utilization: 0.80  # Never commit more than 80% of capital
+  use_day_start_capital: true    # Cache capital at first signal of day, use for all trades (equal risk per trade)
 
 risk:
   daily_loss_limit: 0.04         # 4% of capital (allows 4 losers at 1% before lockout)
   weekly_loss_limit: 0.08        # 8% of capital (allows 2 bad days per week)
   monthly_loss_limit: 0.10
-  max_portfolio_heat: 0.05       # 5% of capital max open risk (aligned: 5 positions x 1%)
-  max_open_positions: 5
+  max_portfolio_heat: 0.03       # 3% of capital max open risk (2 concurrent at 1% + buffer)
+  max_open_positions: 2          # 2 concurrent slots (fits ~15K MIS margin budget)
   max_trades_per_day: 8
   min_rr: 1.0                    # Minimum reward:risk ratio
   duplicate_window_seconds: 60
   stale_signal_seconds: 60
   min_sl_pct: 0.005              # Reject SL tighter than 0.5% of entry (0 = disabled)
   max_positions_per_symbol: 1    # Max concurrent positions in same symbol
-  max_positions_per_sector: 3    # Max concurrent positions in same sector (forces diversification)
+  max_positions_per_sector: 0    # Disabled — stock universe spans same sectors
 
 tracking:
-  poll_interval: 30
+  poll_interval: 10              # 10s balances TP responsiveness vs API load
 
 broker:
   exchange: NSE
@@ -221,12 +224,14 @@ listener:
 
 api:
   timeout: 5.0
+  margin_retries: 3              # Retry count for Margin API before skipping trade
 
 bracket:
   enabled: true
   sl_order_type: SL-M            # SL or SL-M for stop-loss leg
-  max_sl_retries: 3
-  cancel_retry_count: 2
+  max_sl_retries: 5              # 5 retries with 0.5s delay = 2.5s window
+  retry_delay: 0.5               # Seconds between retries
+  tp_exit_retries: 3             # Retry count for tracker TP market exit
 ```
 
 ### 5.4 `sectors.yaml` Schema
@@ -356,34 +361,33 @@ Time: 09:35
 
 **Fixed Fractional** (default):
 ```
-risk_amount    = capital * risk_per_trade
-risk_per_share = abs(entry - sl) * (1 + slippage_factor)
-risk_qty       = floor(risk_amount / risk_per_share)
+sizing_capital = day_start_capital  (cached on first signal of day via get_sizing_capital())
+risk_amount    = sizing_capital * risk_per_trade          # e.g. 1% of ₹15,662 = ₹156
+risk_per_share = abs(entry - sl) * (1 + slippage_factor)  # widened by 10% for MARKET slippage
+raw_qty        = floor(risk_amount / risk_per_share)
 ```
 
 **Percent of Capital**:
 ```
-allocation = capital * pct_of_capital
-risk_qty   = floor(allocation / entry)
+allocation = sizing_capital * pct_of_capital
+raw_qty    = floor(allocation / entry)
 ```
 
-**Common caps applied after risk sizing:**
+**Margin adjustment (after risk sizing, uses live capital):**
 ```
-# 1. Margin affordability cap (prevents exceeding available capital)
-margin_rate  = margin_multiplier[product]    # e.g. 0.20 for MIS
-max_qty      = floor((capital * max_capital_utilization - committed_margin) / (entry * margin_rate))
-quantity     = min(risk_qty, max_qty)
-
-# 2. Max position size cap (if enabled, i.e. > 0)
-if max_position_size > 0:
-    cap_qty  = floor(capital * max_position_size / entry)
-    quantity = min(quantity, cap_qty)
+actual_margin = fetch_margin(symbol, qty=raw_qty)   # Margin API: exact broker margin required
+if actual_margin <= live_capital:
+    quantity = raw_qty                               # fits — use full qty
+else:
+    quantity = floor(raw_qty * live_capital / actual_margin)  # scale down proportionally
+    # MIS margin is linear with qty, so one API call suffices
 
 # If quantity <= 0: return 0 (skip trade, never force qty=1)
 ```
 
 [CONSTRAINT] Capital **always** fetched live from OpenAlgo funds API. Never hardcoded.
-[CONSTRAINT] If `calculate_quantity()` returns 0, trade is **skipped** entirely — never override with 1.
+[CONSTRAINT] If quantity after margin adjustment is 0, trade is **skipped** entirely.
+[CONSTRAINT] `day_start_capital` used for risk sizing (equal risk per trade). `live_capital` (availablecash from broker) used for margin check (actual available cash).
 
 ### 9.2 Exposure Checks (`check_exposure()`)
 
@@ -396,25 +400,18 @@ if max_position_size > 0:
    - Weekly loss: `weekly_realised_loss < capital * weekly_loss_limit`
    - Monthly loss: `monthly_realised_loss < capital * monthly_loss_limit`
    - Portfolio heat: `current_heat < capital * max_portfolio_heat`
-   - Capital utilization: `committed_margin < capital * max_capital_utilization`
    - Open positions: `open_positions < max_open_positions`
    - Daily trades: `trades_today < max_trades_per_day`
 
 ### 9.3 Loss & Risk Tracking
 
 **Portfolio Heat:**
-- `add_heat(qty, entry, sl)` on new entry: adds `qty * abs(entry - sl)` to `_heat`
-- `remove_heat(qty, entry, sl)` on close: subtracts from `_heat`
-- Blocks new trades when `_heat >= capital * max_portfolio_heat`
+- `add_heat(qty, risk_per_share)` / `remove_heat()` methods exist in `risk.py`
+- Currently not called from `main.py` — heat stays at 0; `max_open_positions` provides equivalent protection
 
 **Unrealised Drawdown:**
 - `update_unrealised(unrealised_pnl)` called each tracker cycle
 - Negative unrealised PnL combined with realised loss for daily limit check
-
-**Committed Margin:**
-- `add_margin(qty, entry, product)` on new entry: adds `qty * entry * margin_rate`
-- `remove_margin(qty, entry, product)` on close
-- Blocks new trades when utilization >= `max_capital_utilization`
 
 **Persistent Counters (`risk_store.py`):**
 - `RiskStore` uses SQLite keyed by `(mode, trade_date)`
@@ -440,12 +437,19 @@ if max_position_size > 0:
 | `fetch_trading_mode()` | `/api/v1/analyzer` | `(mode_str, is_analyze: bool)` |
 | `fetch_available_capital()` | `/api/v1/funds` | `float` (availablecash) |
 | `fetch_positionbook()` | `/api/v1/positionbook` | `list[dict]` or `None` on error |
-| `fetch_open_position(...)` | `/api/v1/openposition` | `int` (legacy, kept for compatibility) |
 | `fetch_realised_pnl()` | `/api/v1/funds` | `float` (m2mrealized) |
+| `fetch_margin(symbol, exchange, action, qty, product)` | `/api/v1/margin` | `float` (total_margin_required) — raises `MarginAPIError` on failure |
 | `cancel_order(order_id, strategy)` | `/api/v1/cancelorder` | `bool` |
-| `fetch_order_status(order_id, strategy)` | `/api/v1/orderstatus` | `str` (status string) |
+| `cancel_all_orders(strategy)` | `/api/v1/cancelallorder` | `bool` |
+| `close_all_positions(strategy)` | `/api/v1/closeposition` | `bool` |
 
-All functions return safe defaults on failure (0.0, None, False). Never raise exceptions.
+**`fetch_margin()` error handling:**
+- Retries on network/timeout errors (`margin_retries` from config, default 3)
+- Raises `MarginAPIError` immediately on application errors (HTTP 4xx, status != success) — no retry
+- Raises `MarginAPIError` after all retries exhausted on network errors
+- Caller (`main.py`) catches `MarginAPIError` and skips the trade
+
+All other functions return safe defaults on failure (0.0, None, False). Never raise exceptions.
 
 ### 10.2 Order Execution (`executor.py`)
 
@@ -454,19 +458,22 @@ All functions return safe defaults on failure (0.0, None, False). Never raise ex
 - price=0 for MARKET, price=entry for LIMIT
 - Includes `trigger_price` in payload when > 0
 
-**Bracket Orders (`build_sl_order`, `build_tp_order`, `send_bracket_legs`):**
+**Bracket Orders (`build_sl_order`, `send_bracket_legs`):**
 ```
 SL order:  action=opposite of entry, order_type=SL-M, trigger_price=sl (rounded to tick)
-TP order:  action=opposite of entry, order_type=LIMIT, price=tp (rounded to tick)
 ```
-Both sent after successful entry. Retries up to `max_sl_retries` on failure.
-Prices are rounded to valid NSE tick size (0.05) to prevent broker rejection of LIMIT orders.
+Only SL is placed as a broker order. Retries up to `max_sl_retries` (5) with `retry_delay` (0.5s) between attempts.
+Prices are rounded to valid NSE tick size (0.05) to prevent broker rejection.
+
+**Why no TP broker order (Indian broker OCO constraint):**
+Indian brokers (mStock/Zerodha etc.) treat the first SELL on an existing LONG as an exit (covers the position). Any second SELL — even a TP LIMIT — is treated as a new SHORT requiring full MIS margin, causing FUND LIMIT INSUFFICIENT. There is no BO/CO product type in OpenAlgo. Solution: SL-M at broker level + tracker LTP monitoring for TP (application-level OCO).
+
+**TP execution (tracker-based):**
+`tracker.py` polls `positionbook` every 10s, reads LTP, and when `ltp >= tp` (LONG) or `ltp <= tp` (SHORT): cancels SL order first, then places a MARKET exit with retries (`tp_exit_retries`).
 
 **Null order ID handling:** `send_order()` checks for null `orderid` in API response — brokers can return HTTP 200 with `status=false` and `orderid=null` when an order is rejected at broker level.
 
-**OCO (One-Cancels-Other):** When either SL or TP triggers (position closed), `tracker.py` cancels the other leg via `cancel_order()`.
-
-**Design Decision (2026-03-12):** Signal engine is a dumb executor — it does not compute or override TP/SL levels. All trade logic (TP level selection, R:R calculation) stays in the PineScript strategy. Analysis of 196 trades showed TP1 (1R) at +69R significantly outperforms TP1.5 at -60R. Trailing SL to breakeven adds no value with TP1 strategy since the LIMIT order closes the trade completely. See `pinescripts/intraday/orb/SIGNAL-PERFORMANCE-2026-Q1.md` for full simulation.
+**Design Decision (2026-03-12):** Signal engine is a dumb executor — it does not compute or override TP/SL levels. All trade logic (TP level selection, R:R calculation) stays in the PineScript strategy. Analysis of 196 trades showed TP1 (1R) at +69R significantly outperforms TP1.5 at -60R. See `pinescripts/intraday/orb/SIGNAL-PERFORMANCE-2026-Q1.md` for full simulation.
 
 ---
 
@@ -477,21 +484,30 @@ Prices are rounded to valid NSE tick size (0.05) to prevent broker rejection of 
 ### `TrackedPosition`
 ```python
 symbol, strategy, exchange, product, entry_price, quantity, sl, tp,
-entry_order_id, sl_order_id, tp_order_id
+direction: Direction,     # LONG/SHORT for TP exit direction
+entry_order_id, sl_order_id,
+tp_triggered: bool        # guard against double-exit
 ```
 
 ### `PositionTracker`
 - `register(position)` -- add to tracking dict (key: `symbol:strategy`)
-- `check_positions()` -- **single `fetch_positionbook()` call** per cycle (not N individual calls):
-  - Builds symbol -> qty lookup from positionbook response
-  - For each tracked position, check qty in lookup (absent or 0 = closed):
-    - Detect which bracket leg triggered (SL vs TP) and cancel the other via `cancel_order()`
-    - Compute P&L delta from `fetch_realised_pnl()`
-    - Call `risk_engine.record_close(pnl_delta, symbol)`, `remove_heat()`, `remove_margin()`
-    - Remove from tracking
+- `check_positions()` -- **single `fetch_positionbook()` call** per cycle:
+  - Builds symbol -> (qty, ltp) lookup from positionbook response
+  - Per tracked position, two checks each cycle:
+    1. **TP monitoring** (while qty > 0): if `ltp >= pos.tp` (LONG) or `ltp <= pos.tp` (SHORT) and not already triggered → call `_exit_at_tp()`
+    2. **Close detection** (qty == 0): compute P&L delta from `fetch_realised_pnl()`, call `risk_engine.record_close()`, remove from tracking
   - If positionbook returns `None` (API error): skip entire cycle
-  - If qty > 0: still open, skip
+- `_exit_at_tp(pos)`:
+  - Cancel SL order first via `cancel_order()` (if fails, logs warning but continues)
+  - Place MARKET exit order with retries (`tp_exit_retries` from config)
+  - On success: `notify_tp_exit_placed`; on total failure: `notify_tp_exit_failed` (URGENT — position unprotected)
+- `time_exit_all()` -- force-close all positions at EOD: `cancel_all_orders()` then `close_all_positions()` per strategy, send day summary
 - `start()` / `stop()` -- asyncio background task lifecycle
+
+### `TimeExitScheduler`
+- Checks clock every 30s, fires `time_exit_all()` once/day at configured IST time
+- Also fires as catch-up if past configured time by >5min (engine started late)
+- Resets `_fired_today` flag at midnight IST
 
 ---
 
@@ -520,28 +536,33 @@ entry_order_id, sl_order_id, tp_order_id
     -> None: log DEBUG "Unparseable message", skip
 3.  validate(signal) -> ValidationResult
     -> INVALID/IGNORED: log INFO with reason, skip
-4.  risk_engine.can_trade_symbol(symbol)
-    -> False: log WARNING "Symbol concentration limit", skip
-5.  risk_engine.can_trade_sector(symbol)
-    -> False: log WARNING "Sector concentration limit", skip
-6.  risk_engine.check_exposure()
+4.  risk_engine.check_exposure()
     -> False: log WARNING "Risk limit reached", skip
-7.  fetch_available_capital() -> float
+5.  risk_engine.can_trade_symbol(symbol)
+    -> False: log WARNING "Symbol concentration limit", skip
+6.  risk_engine.can_trade_sector(symbol)
+    -> False: log WARNING "Sector concentration limit", skip
+7.  fetch_available_capital() -> live_capital (float)
     -> 0: log ERROR "Cannot fetch capital", skip
-8.  risk_engine.calculate_quantity(signal, capital) -> int
+8.  sizing_capital = risk_engine.get_sizing_capital(live_capital)
+    (returns cached day-start capital if use_day_start_capital=true)
+9.  risk_engine.calculate_quantity(signal, sizing_capital) -> raw_qty
     -> 0: log INFO "Position sizing returned 0", skip
-9.  Log sizing detail (one line):
-    "Sizing [SYMBOL]: capital=X risk=Y%=Z entry=E sl=S tp=T risk/sh=R reward/sh=W R:R=1:N qty=floor(Z/R)=Q value=V total_risk=TR(P%)"
-10. build_order(signal, quantity) -> Order
-11. send_order(order) -> TradeResult
+10. fetch_margin(symbol, qty=raw_qty) -> actual_margin   [MarginAPI]
+    -> MarginAPIError: log ERROR, skip trade
+    -> if actual_margin > live_capital: scale qty = floor(raw_qty * live_capital / actual_margin)
+    -> if scaled qty <= 0: skip trade
+11. Log sizing detail (one line):
+    "Sizing [SYMBOL]: capital=X risk=Y%=Z entry=E sl=S tp=T risk/sh=R reward/sh=W R:R=1:N qty=Q value=V total_risk=TR(P%)"
+12. build_order(signal, quantity) -> Order
+13. send_order(order) -> TradeResult
     -> SUCCESS:
        a. risk_engine.record_trade(symbol)
-       b. risk_engine.add_margin(quantity, entry, product)
-       c. risk_engine.add_heat(quantity, entry, sl)
-       d. Log capacity_status()
-       e. If bracket.enabled: send_bracket_legs() -> (sl_result, tp_result)
-       f. tracker.register(TrackedPosition with all order IDs)
-12. db.save(signal, order, result)   [always, for audit trail]
+       b. Log capacity_status()
+       c. If bracket.enabled: send_bracket_legs() -> (sl_result, None)
+          [TP is never a broker order — handled by tracker LTP monitoring]
+       d. tracker.register(TrackedPosition with direction + sl_order_id)
+14. db.save(signal, order, result)   [always, for audit trail]
 ```
 
 ### Startup Flow
@@ -604,8 +625,11 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 | Position size = 0 | Log INFO, skip (never force qty=1) |
 | OpenAlgo timeout | Log ERROR, do not retry |
 | OpenAlgo rejection | Log WARNING with response body |
-| SL/TP placement fails | Log WARNING, retry up to max_sl_retries |
-| OCO cancel fails | Log WARNING, graceful continue |
+| Margin API error (transient) | Retry up to `margin_retries` times |
+| Margin API error (app error) | Log ERROR, skip trade immediately (no retry) |
+| SL placement fails | Log WARNING, retry up to `max_sl_retries` (5) with 0.5s delay |
+| TP exit (tracker) fails | Log ERROR, `notify_tp_exit_failed` URGENT — position unprotected |
+| SL cancel (before TP exit) fails | Log WARNING, proceed with market exit anyway |
 | Position poll error | Log WARNING, skip cycle, retry next poll |
 | Unexpected exception | Log CRITICAL with traceback |
 
@@ -623,23 +647,23 @@ Auto-creates table on first use. Saves every trade attempt (success and failure)
 
 ## 18. Testing
 
-[IMPL] Comprehensive test suite — **329 tests** (325 unit + 4 integration):
+[IMPL] Comprehensive test suite — **273 tests** (unit + integration):
 
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| `test_risk.py` | 93 | Sizing, slippage, margin cap, price filter, heat, unrealised drawdown, persistent counters, capacity, symbol/sector concentration |
-| `test_executor.py` | 30 | Entry order, SL order, TP order, bracket legs, OCO |
-| `test_normalizer.py` | 27 | Unicode normalization, whitespace cleanup, edge cases |
-| `test_api_client.py` | 25 | All API functions, positionbook, cancel order, order status |
-| `test_parser.py` | 24 | Signal parsing, edge cases, optional fields |
-| `test_validator.py` | 21 | Entry/SL/TP, R:R, duplicate, min_sl_pct |
-| `test_tracker.py` | 21 | Register, batch positionbook, OCO cancellation, margin release |
-| `test_config.py` | 20 | Fail-fast validation, all required keys, sectors.yaml loading |
-| `test_main.py` | 13 | Full pipeline, concentration risk, bracket order flow |
-| `test_risk_store.py` | 7 | SQLite save/load, mode isolation, weekly/monthly aggregation |
-| `test_db.py` | 5 | Table creation, save, column values, error handling |
-| `test_telegram_integration.py` | 4 | Live Telegram connection (requires session) |
-| `test_auto_login.py` (root) | 39 | Auto-login, TOTP, broker name, auth verification, startup/shutdown summary, Telegram notify (notify_channel + fallback) |
+| Test File | Coverage |
+|-----------|----------|
+| `test_risk.py` | Sizing, slippage, price filter, heat, unrealised drawdown, persistent counters, capacity, symbol/sector concentration |
+| `test_executor.py` | Entry order, SL order, TP order builder, bracket legs (SL-only), send_order |
+| `test_normalizer.py` | Unicode normalization, whitespace cleanup, edge cases |
+| `test_api_client.py` | All API functions, positionbook, cancel order, fetch_margin, MarginAPIError |
+| `test_parser.py` | Signal parsing, edge cases, optional fields |
+| `test_validator.py` | Entry/SL/TP, R:R, duplicate, min_sl_pct |
+| `test_tracker.py` | Register, batch positionbook, LTP TP monitoring, _exit_at_tp, time_exit_all |
+| `test_config.py` | Fail-fast validation, all required keys, sectors.yaml loading |
+| `test_main.py` | Full pipeline, margin adjustment, concentration risk, bracket order flow |
+| `test_risk_store.py` | SQLite save/load, mode isolation, weekly/monthly aggregation |
+| `test_db.py` | Table creation, save, column values, error handling |
+| `test_telegram_integration.py` | Live Telegram connection (requires session) |
+| `test_auto_login.py` (root) | Auto-login, TOTP, broker name, auth verification, startup/shutdown summary |
 
 Run tests:
 ```bash
@@ -732,6 +756,20 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **WSL process management fix**: `openalgoctl.ps1` kills the Windows-side service window process tree (`taskkill /T /F`) not just WSL PIDs, preventing orphaned cmd windows on restart
 - [x] **WSL UTF-16 fix**: Handles BOM in `wsl -l -q` output for reliable distro detection
 - [x] **Separate notify channel**: `telegram.notify_channel` in config.yaml sends startup/shutdown notifications to a dedicated personal channel instead of all signal channels; falls back to signal channels if not configured
+
+### Phase 6: Margin API + Application-Level OCO (2026-03-25)
+
+- [x] **Indian broker OCO root cause fixed**: TP LIMIT order as 2nd SELL caused FUND LIMIT INSUFFICIENT (broker treats 2nd SELL as new short requiring full MIS margin). Removed TP broker order entirely.
+- [x] **Application-level OCO**: SL-M at broker level + tracker LTP monitoring for TP. `_exit_at_tp()`: cancel SL → MARKET exit with retries.
+- [x] **Margin API integration**: Replaced hardcoded `margin_multiplier` (wrong for mid-cap stocks, e.g. EMAMILTD actual 51% vs assumed 30%) with `fetch_margin()` calling `/api/v1/margin`. Exact margin per stock, no guesswork.
+- [x] **Proportional qty scaling**: `adjusted_qty = floor(raw_qty * live_capital / actual_margin)`. Positions that were previously completely rejected can now take a smaller qty that fits 2nd slot.
+- [x] **Removed dead config**: `margin_multiplier`, `max_capital_utilization`, `max_position_size`, `max_tp_retries`, `cancel_retry_count` all removed from config and risk engine.
+- [x] **Retry improvements**: `max_sl_retries: 5` (was 3) with `retry_delay: 0.5s`; `tp_exit_retries: 3` for tracker market exit; `margin_retries: 3` for Margin API.
+- [x] **slippage_factor 0.05 -> 0.10**: Both entry and TP exit are now MARKET orders (double slippage on round trip).
+- [x] **poll_interval 30s -> 10s**: Faster TP detection for volatile ORB stocks.
+- [x] **max_open_positions 5 -> 2**: Right-sized for ₹15K MIS margin budget (2 × ~₹7-11K margin).
+- [x] **Telegram notifications for TP lifecycle**: `notify_tp_level_hit`, `notify_tp_exit_placed`, `notify_tp_exit_failed` (URGENT), `notify_sl_cancel_failed`.
+- [x] **Day summary in tracker**: win/loss/PnL counters tracked in `PositionTracker`, sent via `notify_day_summary` at EOD or time exit.
 
 ### Not Implemented (Future Considerations)
 

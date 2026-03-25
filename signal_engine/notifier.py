@@ -75,6 +75,34 @@ async def notify_tp_failed(symbol: str, reason: str) -> None:
     await notify(f"❌ TP FAILED | {symbol} | {reason}")
 
 
+# ── Tracker-based TP monitoring (replaces broker TP LIMIT order) ───────────────
+
+async def notify_tp_level_hit(symbol: str, ltp: float, tp: float) -> None:
+    """Sent when LTP crosses the TP price — before the exit order is placed."""
+    await notify(
+        f"🎯 TP DETECTED | {symbol} | LTP={ltp:.2f} >= TP={tp:.2f} | Cancelling SL + exiting at market | {_now_ist()}"
+    )
+
+
+async def notify_tp_exit_placed(symbol: str, order_id: str) -> None:
+    """Sent when the market exit order placed after TP detection is accepted."""
+    await notify(f"✅ TP EXIT placed | {symbol} | Market exit id={order_id} | {_now_ist()}")
+
+
+async def notify_tp_exit_failed(symbol: str, reason: str) -> None:
+    """URGENT: Market exit failed after TP detection. Position is now unprotected (SL cancelled)."""
+    await notify(
+        f"🚨 TP EXIT FAILED | {symbol} | SL already cancelled — MANUAL EXIT REQUIRED | {reason} | {_now_ist()}"
+    )
+
+
+async def notify_sl_cancel_failed(symbol: str, sl_order_id: str) -> None:
+    """Sent when SL cancellation fails before TP market exit. Non-critical — exit proceeds anyway."""
+    await notify(
+        f"⚠️ SL CANCEL FAILED | {symbol} | id={sl_order_id} | Proceeding with TP market exit | {_now_ist()}"
+    )
+
+
 # ── Position lifecycle ─────────────────────────────────────────────────────────
 
 async def notify_position_closed(symbol: str, pnl: float) -> None:

@@ -24,16 +24,11 @@ sizing:
   mode: fixed_fractional
   risk_per_trade: 0.01         # 1% risk per trade (fixed_fractional)
   pct_of_capital: 0.05         # 5% of capital per trade (pct_of_capital)
-  max_position_size: 0          # Disabled — SL distance controls position size
   min_entry_price: 100             # Min stock price to trade (0 = no filter)
   max_entry_price: 800             # Max stock price to trade (0 = no filter)
-  slippage_factor: 0.05        # Widen risk per share by 5% to account for MARKET order slippage
+  slippage_factor: 0.10        # Widen risk per share by 10% — entry (MARKET) + TP exit (MARKET) both slip
+                               # 0.05 was for LIMIT TP (0 exit slippage); now both legs are MARKET orders
   sandbox_capital: 100000     # Override capital in analyze mode (0 = use OpenAlgo default)
-  margin_multiplier:
-    MIS: 0.30                 # ~3.3x leverage (actual broker MIS margin from mStock RMS data 2026-03-24)
-    NRML: 0.25                # 4x leverage (F&O)
-    CNC: 1.0                  # No leverage (delivery)
-  max_capital_utilization: 0.85  # Prevent sending orders that broker will reject due to insufficient margin
   use_day_start_capital: true  # Cache capital at first signal of day, use for all trades (equal risk per trade)
 
 # ── Risk Management ──────────────────────────────────────
@@ -42,7 +37,7 @@ risk:
   weekly_loss_limit: 0.08      # 8% of capital (allows 2 bad days per week)
   monthly_loss_limit: 0.10     # 10% of capital
   max_portfolio_heat: 0.03     # 3% of capital max open risk (2 concurrent at 1% + buffer)
-  max_open_positions: 2        # 2 concurrent slots — actual broker MIS margin is ~30%, each trade uses ~40% of capital
+  max_open_positions: 2        # 2 concurrent slots
   max_trades_per_day: 8        # Safety cap on total trades (slots can recycle within this)
   min_rr: 1.0                  # Minimum reward:risk ratio (1.0 = 1:1)
   duplicate_window_seconds: 60 # Ignore duplicate signals within this window
@@ -61,7 +56,8 @@ time_exit:
 
 # ── Position Tracking ────────────────────────────────────
 tracking:
-  poll_interval: 30            # Seconds between position checks
+  poll_interval: 10            # Seconds between position checks (10s balances TP responsiveness vs API load)
+                               # TP is now monitored via LTP in positionbook — 30s was too slow for volatile stocks
 
 # ── Broker / Exchange ────────────────────────────────────
 broker:
@@ -77,11 +73,12 @@ listener:
 # ── API ──────────────────────────────────────────────────
 api:
   timeout: 5.0                 # HTTP request timeout in seconds
+  margin_retries: 3            # Retry count for Margin API before skipping trade
 
 # ── Bracket Orders ────────────────────────────────────────
 bracket:
   enabled: true
   sl_order_type: SL-M         # SL or SL-M
-  max_sl_retries: 3            # Retry count for SL placement
-  max_tp_retries: 3            # Retry count for TP placement (prevents lost winners from margin timing)
-  cancel_retry_count: 2        # Retry count for cancelling remaining leg
+  max_sl_retries: 5            # Retry count for SL placement (safety-critical — 5 with 0.5s delay = 2.5s window)
+  retry_delay: 0.5             # Seconds to wait between retries (prevents hammering broker RMS)
+  tp_exit_retries: 3           # Retry count for tracker TP market exit (was 0 — unprotected before)

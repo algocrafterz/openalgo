@@ -48,7 +48,7 @@ class TestRequiredYamlSections:
         self._write_yaml(tmp_path, monkeypatch, {
             "telegram": {"channels": []},
             "sizing": {"mode": "fixed_fractional", "risk_per_trade": 0.01,
-                       "pct_of_capital": 0.05, "max_position_size": 0,
+                       "pct_of_capital": 0.05,
                        "min_entry_price": 0, "max_entry_price": 0,
                        "slippage_factor": 0.0, "sandbox_capital": 0},
             "tracking": {"poll_interval": 30},
@@ -63,7 +63,7 @@ class TestRequiredYamlSections:
         self._write_yaml(tmp_path, monkeypatch, {
             "telegram": {"channels": []},
             "sizing": {"mode": "fixed_fractional", "risk_per_trade": 0.01,
-                       "pct_of_capital": 0.05, "max_position_size": 0,
+                       "pct_of_capital": 0.05,
                        "min_entry_price": 0, "max_entry_price": 0,
                        "slippage_factor": 0.0, "sandbox_capital": 0},
             "risk": {"daily_loss_limit": 0.03, "weekly_loss_limit": 0.06,
@@ -90,13 +90,10 @@ class TestRequiredYamlKeys:
                 "mode": "fixed_fractional",
                 "risk_per_trade": 0.01,
                 "pct_of_capital": 0.05,
-                "max_position_size": 0,
                 "min_entry_price": 0,
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
-                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -116,7 +113,7 @@ class TestRequiredYamlKeys:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "cancel_retry_count": 2},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
         }
 
     def _write_yaml(self, tmp_path, monkeypatch, content: dict):
@@ -165,13 +162,10 @@ class TestInvalidSizingMode:
                 "mode": "fixed_fractional",
                 "risk_per_trade": 0.01,
                 "pct_of_capital": 0.05,
-                "max_position_size": 0,
                 "min_entry_price": 0,
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
-                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -191,7 +185,7 @@ class TestInvalidSizingMode:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "cancel_retry_count": 2},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
         }
 
     def _write_yaml(self, tmp_path, monkeypatch, content: dict):
@@ -228,7 +222,6 @@ class TestRiskEngineRejectsUnknownMode:
             risk_per_trade=0.01,
             sizing_mode="invalid_mode",
             pct_of_capital=0.05,
-            max_position_size=0,
             daily_loss_limit=0.03,
             weekly_loss_limit=0.06,
             monthly_loss_limit=0.10,
@@ -252,13 +245,10 @@ class TestValidConfigLoadsSuccessfully:
                 "mode": "fixed_fractional",
                 "risk_per_trade": 0.01,
                 "pct_of_capital": 0.05,
-                "max_position_size": 0,
                 "min_entry_price": 50,
                 "max_entry_price": 1500,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 10000,
-                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -282,7 +272,6 @@ class TestValidConfigLoadsSuccessfully:
                 "enabled": True,
                 "sl_order_type": "SL-M",
                 "max_sl_retries": 3,
-                "cancel_retry_count": 2,
             },
         }
 
@@ -298,7 +287,6 @@ class TestValidConfigLoadsSuccessfully:
         assert s.sizing_mode == "fixed_fractional"
         assert s.risk_per_trade == 0.01
         assert s.pct_of_capital == 0.05
-        assert s.max_position_size == 0
         assert s.min_entry_price == 50
         assert s.max_entry_price == 1500
         assert s.daily_loss_limit == 0.03
@@ -311,7 +299,6 @@ class TestValidConfigLoadsSuccessfully:
         assert s.bracket_enabled is True
         assert s.bracket_sl_order_type == "SL-M"
         assert s.bracket_max_sl_retries == 3
-        assert s.bracket_cancel_retry_count == 2
 
     def test_missing_bracket_section_raises(self, tmp_path, monkeypatch):
         cfg = self._full_config()
@@ -325,53 +312,6 @@ class TestValidConfigLoadsSuccessfully:
         with pytest.raises(ConfigError, match="bracket"):
             _build_settings()
 
-    def test_margin_multiplier_loaded(self, tmp_path, monkeypatch):
-        cfg = self._full_config()
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(yaml.dump(cfg))
-        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
-        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
-        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
-
-        s = _build_settings()
-        assert s.margin_multiplier == {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0}
-
-    def test_max_capital_utilization_loaded(self, tmp_path, monkeypatch):
-        cfg = self._full_config()
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(yaml.dump(cfg))
-        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
-        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
-        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
-
-        s = _build_settings()
-        assert s.max_capital_utilization == pytest.approx(0.80)
-
-    def test_missing_margin_multiplier_raises(self, tmp_path, monkeypatch):
-        cfg = self._full_config()
-        del cfg["sizing"]["margin_multiplier"]
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(yaml.dump(cfg))
-        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
-        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
-        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
-
-        with pytest.raises(ConfigError, match="margin_multiplier"):
-            _build_settings()
-
-    def test_missing_max_capital_utilization_raises(self, tmp_path, monkeypatch):
-        cfg = self._full_config()
-        del cfg["sizing"]["max_capital_utilization"]
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(yaml.dump(cfg))
-        monkeypatch.setattr("signal_engine.config._YAML_PATH", str(yaml_path))
-        monkeypatch.setattr("signal_engine.config._ENV_PATH", str(tmp_path / ".env"))
-        monkeypatch.setattr("signal_engine.config._SECTORS_PATH", str(tmp_path / "sectors.yaml"))
-
-        with pytest.raises(ConfigError, match="max_capital_utilization"):
-            _build_settings()
-
-
 class TestSectorsYamlLoading:
     """Sectors are loaded from a separate sectors.yaml file."""
 
@@ -382,13 +322,10 @@ class TestSectorsYamlLoading:
                 "mode": "fixed_fractional",
                 "risk_per_trade": 0.01,
                 "pct_of_capital": 0.05,
-                "max_position_size": 0,
                 "min_entry_price": 0,
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
-                "margin_multiplier": {"MIS": 0.20, "NRML": 0.25, "CNC": 1.0},
-                "max_capital_utilization": 0.80,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -408,7 +345,7 @@ class TestSectorsYamlLoading:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "cancel_retry_count": 2},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
         }
 
     def test_sectors_loaded_from_separate_file(self, tmp_path, monkeypatch):

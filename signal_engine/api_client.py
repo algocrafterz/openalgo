@@ -5,12 +5,17 @@ All endpoints respect OpenAlgo's analyze mode automatically:
 - Analyze mode: returns sandbox data (1Cr virtual capital)
 """
 
+import asyncio
 from typing import Tuple
 
 import httpx
 from loguru import logger
 
 from signal_engine.config import settings
+
+
+class MarginAPIError(Exception):
+    """Raised when the Margin API fails after all retries."""
 
 
 async def fetch_trading_mode() -> Tuple[str, bool]:
@@ -249,3 +254,60 @@ async def fetch_realised_pnl() -> float:
     except Exception as e:
         logger.error(f"Failed to fetch realised PnL: {e}")
         return 0.0
+
+
+async def fetch_margin(
+    symbol: str,
+    exchange: str,
+    action: str,
+    quantity: int,
+    product: str,
+    pricetype: str = "MARKET",
+    price: float = 0.0,
+) -> float:
+    """Fetch actual broker margin for a proposed order via OpenAlgo Margin API.
+
+    Returns total_margin_required in INR.
+    Retries on network/timeout failures. Raises MarginAPIError on all failures — no fallback.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/margin"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "positions": [{
+            "exchange": exchange,
+            "symbol": symbol,
+            "action": action,
+            "quantity": str(quantity),
+            "product": product,
+            "pricetype": pricetype,
+            "price": str(price),
+            "trigger_price": "0",
+        }],
+    }
+
+    for attempt in range(1, settings.margin_api_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+                response = await client.post(url, json=payload)
+
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+
+            if response.status_code >= 400:
+                reason = data.get("message", response.text)
+                raise MarginAPIError(f"HTTP {response.status_code}: {reason}")
+
+            if data.get("status") != "success":
+                raise MarginAPIError(f"Margin API: {data.get('message', 'unknown error')}")
+
+            margin = float(data["data"]["total_margin_required"])
+            logger.debug(f"Margin for {symbol} qty={quantity}: {margin:,.2f}")
+            return margin
+
+        except MarginAPIError:
+            raise  # Application-level errors: no retry (bad symbol, wrong exchange, etc.)
+        except Exception as e:
+            logger.warning(f"Margin API attempt {attempt}/{settings.margin_api_retries} for {symbol}: {e}")
+            if attempt < settings.margin_api_retries:
+                await asyncio.sleep(settings.bracket_retry_delay)
+
+    raise MarginAPIError(f"Margin API failed after {settings.margin_api_retries} attempts for {symbol}")
