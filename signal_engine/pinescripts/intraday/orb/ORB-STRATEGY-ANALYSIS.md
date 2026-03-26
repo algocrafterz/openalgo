@@ -539,3 +539,94 @@ The ORB strategy is a **well-engineered, feature-rich** implementation with stro
 - Monthly stock review using Grade system
 
 The strategy is best suited for **liquid large-cap stocks and index futures** on 5-minute charts with 15-30 minute ORB periods.
+
+---
+
+## Chartink Scanners
+
+Two scanners support the ORB pipeline: a **setup scanner** (run night before / pre-market) to build the TradingView watchlist, and a **live breakout scanner** (run during market hours) for discovery.
+
+### Scanner 1: Setup Scanner (Night Before / Pre-Market)
+
+**When to run:** 3:30-4:00 PM after market close, or 9:00-9:10 AM pre-market.
+**Purpose:** Find liquid, trending, volatile Nifty 100 stocks to add to TradingView watchlist and set ORB alerts on. Targets 5-15 stocks per day.
+
+```
+( {nifty100} (
+  latest close > latest sma( close, 200 )
+  and latest close > latest sma( close, 50 )
+  and latest volume > 1500000
+  and latest close > 150
+  and latest close < 800
+  and latest market cap > 10000
+  and latest average true range ( 14 ) > 5
+) )
+or
+( {nifty100} (
+  latest close < latest sma( close, 200 )
+  and latest close < latest sma( close, 50 )
+  and latest volume > 1500000
+  and latest close > 150
+  and latest close < 800
+  and latest market cap > 10000
+  and latest average true range ( 14 ) > 5
+) )
+```
+
+| Filter | Bullish group | Bearish group | Why |
+|---|---|---|---|
+| SMA(200) | Close > SMA(200) | Close < SMA(200) | Long-term trend aligned |
+| SMA(50) | Close > SMA(50) | Close < SMA(50) | Short-term trend also aligned — do NOT use > for bearish |
+| Volume | > 1,500,000 shares | same | Genuine liquidity |
+| Price band | 150 - 800 | same | Matches `min_entry_price` / `max_entry_price` in config.yaml |
+| Market Cap | > 10,000 Cr | same | Large-cap only, institutional grade |
+| ATR(14) | > 5 INR | same | Meaningful daily range for ORB moves |
+| Universe | `{nifty100}` | same | Quality filter — avoids illiquid / manipulated stocks |
+
+**After scan:** Manually remove blacklisted symbols (BHEL, MANAPPURAM, GAIL, JIOFIN, TATAPOWER) from results before adding to TradingView.
+
+**SMA(50) direction is critical:** Bearish group must use `less than` SMA(50) — not `greater than`. A stock below 200 SMA but above 50 SMA is in a transitioning/recovering phase and may bounce instead of breaking down.
+
+### Scanner 2: Live Breakout / Breakdown Scanner (During Market Hours)
+
+**When to run:** Every 15 minutes from 9:45 AM to 11:30 AM (after entry cutoff, stop scanning).
+**Purpose:** Discovery — see which stocks are actively breaking ORH or ORL right now. Cross-check against TradingView alerts; if Chartink shows a breakout TradingView missed, that stock is not in your watchlist yet.
+
+```
+( {nifty100} (
+  [0] 15 minute close crossed above [=1] 15 minute high
+  and [0] 15 minute volume > [=1] 15 minute volume
+  and [0] 15 minute close > 150
+  and [0] 15 minute close < 800
+  and [0] 15 minute close > latest sma( close, 200 )
+) )
+or
+( {nifty100} (
+  [0] 15 minute close crossed below [=1] 15 minute low
+  and [0] 15 minute volume > [=1] 15 minute volume
+  and [0] 15 minute close > 150
+  and [0] 15 minute close < 800
+  and [0] 15 minute close < latest sma( close, 200 )
+) )
+```
+
+| Filter | Bullish (ORH break) | Bearish (ORL break) | Why |
+|---|---|---|---|
+| Breakout | `crossed above [=1] 15m high` | `crossed below [=1] 15m low` | `[=1]` = first 15-min candle (9:15-9:30 AM ORB). `crossed` fires on exact breakout candle only |
+| Volume | Breakout candle > ORB candle | same | Confirms genuine breakout, not a fake |
+| Price band | 150 - 800 | same | Matches config |
+| Trend | Close > SMA(200) | Close < SMA(200) | Trade with the larger trend |
+
+**Important:** `crossed above` / `crossed below` fires only on the **exact candle** of breakout. Each scan run shows only stocks that broke out during the most recent completed 15-min candle — not earlier ones. This is intentional.
+
+**Free tier caveat:** Chartink free accounts have 15-min delayed data. This scanner is for **discovery and audit** only — your primary execution signals come from TradingView real-time alerts. By the time Chartink shows a breakout, the signal engine has already placed the order.
+
+### Workflow Summary
+
+| Time | Scanner | Action |
+|---|---|---|
+| 3:30-4:00 PM | Setup Scanner | Export results → remove blacklisted → add to TradingView → create ORB alerts |
+| 9:00-9:10 AM | Setup Scanner | Quick re-run — catches overnight movers not on yesterday's list |
+| 9:45 AM | Live Breakout Scanner | First run after 2nd 15-min candle closes |
+| 10:00, 10:15, 10:30 AM | Live Breakout Scanner | Repeat each candle — spot missed symbols for future watchlist |
+| After entry cutoff | — | Stop scanning, no new entries valid |
