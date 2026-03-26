@@ -136,6 +136,18 @@ float allocPct = input.float(20.0, "Max Allocation %", minval=10, maxval=33, ste
      "15%: Conservative (6-7 positions)\n" +
      "25-33%: Concentrated (3-4 positions)")
 
+float minRR = input.float(0.5, "Min R:R Ratio", minval=0.2, maxval=2.0, step=0.1,
+     group=grp_risk,
+     tooltip="Minimum reward:risk ratio to take entry.\n\n" +
+     "Reward = distance from entry to 5 SMA (TP)\n" +
+     "Risk = distance from entry to SL level\n\n" +
+     "Filters out shallow pullbacks where TP is too close\n" +
+     "relative to SL distance (negative expectancy setups).\n\n" +
+     "0.5: Recommended — filters worst 20-30% of setups\n" +
+     "0.3: Permissive — only skip truly toxic R:R\n" +
+     "0.8: Selective — fewer trades, better quality\n" +
+     "1.0: Aggressive filter — may skip 60%+ of signals")
+
 // ============================================ BACKTEST INPUTS =========================================
 bool useDateFilter = input.bool(false, "Filter by Date Range", inline="date",
      group=grp_backtest,
@@ -165,7 +177,7 @@ bool showSLLine = input.bool(true, "Show SL Line", group=grp_visuals,
 bool showSignalLabels = input.bool(true, "Show Entry/Exit Labels", group=grp_visuals)
 
 // ============================================ TELEGRAM INPUTS =========================================
-string telegramChatId = input.string("", "Telegram Chat ID",
+string telegramChatId = input.string("-1003867620157", "Telegram Chat ID",
      group=grp_telegram,
      tooltip="Your Telegram channel/group chat ID.\n\n" +
      "HOW TO GET:\n" +
@@ -196,6 +208,8 @@ if useEmergencySL and (emergencySLPct < 3 or emergencySLPct > 15)
     runtime.error("Emergency SL % must be between 3-15. Current: " + str.tostring(emergencySLPct))
 if riskPctPerTrade < 0.5 or riskPctPerTrade > 3
     runtime.error("Risk % must be between 0.5-3. Current: " + str.tostring(riskPctPerTrade))
+if minRR < 0.2 or minRR > 2.0
+    runtime.error("Min R:R must be between 0.2-2.0. Current: " + str.tostring(minRR))
 if entryEndMin <= entryStartMin
     runtime.error("Entry window end must be after start. Start=" + str.tostring(entryStartMin) + " End=" + str.tostring(entryEndMin))
 
@@ -217,6 +231,14 @@ bool hasVolume   = volume >= minVolume
 bool aboveMinPx  = close >= minPrice
 bool inPos       = strategy.position_size > 0
 
+// Pre-entry R:R filter: skip setups where TP is too close relative to SL
+// Uses close as prospective entry price (before position is opened)
+float preEntrySL      = useEmergencySL ? math.max(sma200, close * (1 - emergencySLPct / 100)) : sma200
+float preEntryRisk    = not na(preEntrySL) ? math.abs(close - preEntrySL) : 0.0
+float preEntryReward  = not na(smaExit) ? math.abs(smaExit - close) : 0.0
+float preEntryRR      = preEntryRisk > 0 ? preEntryReward / preEntryRisk : 0.0
+bool rrOk             = preEntryRR >= minRR
+
 // Pre-close entry window: evaluate on live intrabar data during 15:entryStartMin - 15:entryEndMin IST
 // This allows CNC order to reach broker before 15:30 market close.
 // On historical bars (backtesting), barstate.isconfirmed is used as fallback.
@@ -230,7 +252,7 @@ if ta.change(time) != 0
 bool entryTimingOk = barstate.isconfirmed or (inEntryWindow and not entryFiredThisBar)
 
 bool enterLong = trendUp and strongStock and oversold and hasVolume and aboveMinPx
-     and not inPos and inDateRange and entryTimingOk
+     and rrOk and not inPos and inDateRange and entryTimingOk
 
 // ============================================ POSITION TRACKING ======================================
 var int barsHeld = 0
@@ -324,7 +346,7 @@ plot(inPos and showSLLine ? slLevel : na, "Stop Loss",
 // Entry/Exit markers
 if showSignalLabels and enterLong
     label.new(bar_index, low,
-         text="BUY\n" + str.tostring(close, format.mintick),
+         text="BUY " + str.tostring(close, format.mintick) + "\nR:R 1:" + str.tostring(preEntryRR, "#.#"),
          style=label.style_label_up,
          color=color.new(color.green, 20),
          textcolor=color.white,
@@ -456,9 +478,35 @@ if barstate.islast and showDashboard and inPos
          text_color=atrPct > 3 ? color.red : atrPct > 2 ? color.orange : color.white,
          text_size=size.tiny)
 
-// Clear dashboard when not in position
+// Show pre-entry scan info when not in position
 if barstate.islast and showDashboard and not inPos
-    for row = 0 to 9
+    table.cell(dashTable, 0, 0, "RSI-TP-MR SCAN", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dashTable, 1, 0, syminfo.ticker, text_color=color.white, text_size=size.small)
+
+    table.cell(dashTable, 0, 1, "RSI(2)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 1, str.tostring(rsi2, "#.#"),
+         text_color=rsi2 < rsiThresh ? color.lime : rsi2 < 10 ? color.yellow : color.white,
+         text_size=size.tiny)
+
+    table.cell(dashTable, 0, 2, "Pre-entry R:R", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 2, "1:" + str.tostring(preEntryRR, "#.##"),
+         text_color=preEntryRR >= minRR ? color.lime : color.red,
+         text_size=size.tiny)
+
+    table.cell(dashTable, 0, 3, "TP (5 SMA)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 3, not na(smaExit) ? str.tostring(smaExit, format.mintick) : "N/A",
+         text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 4, "SL (pre-entry)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 4, not na(preEntrySL) ? str.tostring(preEntrySL, format.mintick) : "N/A",
+         text_color=color.red, text_size=size.tiny)
+
+    table.cell(dashTable, 0, 5, "Min R:R", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 5, "1:" + str.tostring(minRR, "#.#"),
+         text_color=color.orange, text_size=size.tiny)
+
+    // Clear unused rows
+    for row = 6 to 9
         table.cell(dashTable, 0, row, "", text_size=size.tiny)
         table.cell(dashTable, 1, row, "", text_size=size.tiny)
 
@@ -574,8 +622,9 @@ buildTestAlert() =>
 
 // ============================================ FIRE ALERTS ============================================
 // Entry alert — fires during pre-close window on live data, or on bar close for backtesting
+// Uses preEntrySL (computed from close, not entryPrice) since position isn't open yet
 if enterLong
-    alert(buildEntryAlert(close, slLevel, smaExit), alert.freq_once_per_bar)
+    alert(buildEntryAlert(close, preEntrySL, smaExit), alert.freq_once_per_bar)
 
 // Safety exit alerts ONLY — trend break, max hold, SL hit.
 // Primary exit (Close > 5 SMA) is handled by signal engine tracker via LTP monitoring.

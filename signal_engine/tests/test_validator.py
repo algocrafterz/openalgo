@@ -56,13 +56,13 @@ class TestTPValidation:
 
 class TestRRRatio:
     def test_below_min_rr_ignored(self):
-        # R:R = (2505 - 2500) / (2500 - 2490) = 0.5 < 1.0 (min_rr default)
-        result = validate(_make_signal(entry=2500, sl=2490, tp=2505))
+        # R:R = (2504 - 2500) / (2500 - 2480) = 0.2 < 0.5 (min_rr)
+        result = validate(_make_signal(entry=2500, sl=2480, tp=2504))
         assert result.status == ValidationStatus.IGNORED
 
     def test_at_min_rr_valid(self):
-        # R:R = (2515 - 2500) / (2500 - 2485) = 1.0 (equals min_rr)
-        result = validate(_make_signal(entry=2500, sl=2485, tp=2515))
+        # R:R = (2510 - 2500) / (2500 - 2480) = 0.5 (equals min_rr)
+        result = validate(_make_signal(entry=2500, sl=2480, tp=2510))
         assert result.status == ValidationStatus.VALID
 
     def test_above_min_rr_valid(self):
