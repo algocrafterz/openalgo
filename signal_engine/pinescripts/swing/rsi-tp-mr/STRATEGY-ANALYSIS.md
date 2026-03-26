@@ -20,7 +20,8 @@
 | Exit | Close > 5 SMA (tracker LTP monitoring, continuous intraday) |
 | Safety exit | Close < 200 SMA (trend broken) |
 | Time exit | 7 trading days max hold |
-| Stop-loss | max(200 SMA, entry * 0.92) — structural + emergency cap |
+| Stop-loss | max(200 SMA, entry * 0.95) — structural + 5% emergency cap |
+| Min R:R | 0.8 — filters shallow pullbacks with negative expectancy after CNC costs |
 | Product type | CNC (Cash & Carry) — NOT MIS |
 | Expected win rate | 60-75% |
 | Expected profit factor | 1.5-3.5 |
@@ -59,10 +60,11 @@ Combined: ORB for daily income, RSI(2) for opportunistic swing gains. Naturally 
 - PineScript EXIT alerts only for safety exits (trend break, max hold)
 - Uses fixed TP from entry time (5 SMA barely moves over 2-7 day hold)
 
-**SL: 200 SMA structural + configurable emergency cap (default -8%)**
+**SL: 200 SMA structural + configurable emergency cap (default -5%)**
 - Primary SL = 200 SMA level (Connors' safety exit, barely impacts backtest)
-- Emergency SL = entry * (1 - 8%) — caps worst case when 200 SMA is far
+- Emergency SL = entry * (1 - 5%) — caps worst case when 200 SMA is far
 - Actual SL = max(sma200, emergency) — whichever is tighter/closer to entry
+- 5% chosen over 8%: absorbs typical overnight gaps (1-2%) while limiting max damage for swing trades with 2-4% expected gain
 - Required for: (1) broker-side safety net, (2) signal engine position sizing denominator
 - User can disable emergency SL for pure Connors (SL = 200 SMA only)
 
@@ -164,6 +166,16 @@ Original prototype with partial TP exits and minimal alerts. Kept for reference.
 - Track: actual fills vs backtest, slippage on CNC close orders
 - Validate signal frequency matches backtest expectations
 
+### Phase 5: System robustness improvements (backlog)
+- [ ] **Separate CNC capital pool from MIS** — prevent swing trades locking up intraday capital
+- [ ] **Earnings/event calendar check** — skip entries when stock has earnings within 3 days (RSI(2) < 5 on earnings day is fundamental repricing, not mean reversion)
+- [ ] **ATR volatility filter** — skip if ATR(14)% > 3% (too volatile for clean mean reversion)
+- [ ] **Sector correlation limit** — enable `max_positions_per_sector: 2` when scaling to 3+ concurrent positions
+- [ ] **Monthly performance grading** — automate A/B/C/D grading from trade logs, update blacklist
+- [ ] **Chartink scanner refinement** — add Close > SMA(50) RS filter, price cap 800, match PineScript filters
+- [ ] **Position persistence** — survive engine restarts without losing tracked positions (currently falls back to broker API)
+- [ ] **Adaptive R:R by regime** — raise min R:R in low-volatility regimes (where TP is compressed)
+
 ## Risk Profile
 
 | Risk | Severity | Mitigation |
@@ -177,7 +189,7 @@ Original prototype with partial TP exits and minimal alerts. Kept for reference.
 ## Position Sizing
 
 - Risk-based sizing using SL distance: `qty = floor(capital * risk_pct / abs(entry - sl))`
-- SL = max(200 SMA, entry * 0.92) provides sizing denominator
+- SL = max(200 SMA, entry * 0.95) provides sizing denominator
 - Same formula as ORB (signal engine's fixed_fractional mode)
 - Max 3-5 concurrent positions
 - Separate CNC capital pool from MIS
@@ -219,7 +231,7 @@ Original prototype with partial TP exits and minimal alerts. Kept for reference.
 
 ### Capital Math
 - Risk budget: 10,000 x 1% = 100 INR per trade
-- Stock at 250, SL at 230 (8%): qty = floor(100/20) = 5 shares, value = 1,250
+- Stock at 250, SL at 237.5 (5%): qty = floor(100/12.5) = 8 shares, value = 2,000
 - Stock at 200, SL at 190 (5%): qty = floor(100/10) = 10 shares, value = 2,000
 - Max 1 concurrent position at 10K (position = 12-20% of capital)
 
@@ -250,4 +262,4 @@ max_entry_price: 400         # Skip stocks that need >10K per position
 
 ---
 
-*Created: 2026-03-26 | Last updated: 2026-03-26 (pre-close entry, tracker TP monitoring, strategy notifications)*
+*Created: 2026-03-26 | Last updated: 2026-03-27 (min R:R 0.8, SL 5%, rejection reason dashboard)*

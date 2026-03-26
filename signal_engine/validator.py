@@ -38,6 +38,25 @@ def validate(signal: Signal) -> ValidationResult:
     if signal.entry <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="Entry must be positive")
 
+    # Symbol blacklist — check before EXIT early return so EXIT signals can still close positions
+    # EXIT signals skip this check (we must close existing positions even if symbol is now blacklisted)
+    if signal.direction != Direction.EXIT:
+        symbol_upper = signal.symbol.upper()
+        # Check global blacklist
+        global_bl = settings.blacklist.get("_GLOBAL", frozenset())
+        if symbol_upper in global_bl:
+            return ValidationResult(
+                status=ValidationStatus.IGNORED,
+                reason=f"{signal.symbol} is blacklisted (global)",
+            )
+        # Check strategy-specific blacklist
+        strategy_bl = settings.blacklist.get(signal.strategy.upper(), frozenset())
+        if symbol_upper in strategy_bl:
+            return ValidationResult(
+                status=ValidationStatus.IGNORED,
+                reason=f"{signal.symbol} is blacklisted for {signal.strategy}",
+            )
+
     # EXIT signals: minimal validation (closing, not opening)
     # Skip SL/TP/R:R/duplicate checks — EXIT carries original entry data for audit only
     if signal.direction == Direction.EXIT:
