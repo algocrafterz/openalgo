@@ -9,7 +9,7 @@ strategy("RSI-TP-MR", shorttitle="RSI-TP-MR", overlay=true,
      commission_value=0.12,
      slippage=1,
      process_orders_on_close=true,
-     calc_on_every_tick=false)
+     calc_on_every_tick=true)
 
 // ============================================ INPUT GROUPS ============================================
 string grp_entry    = "Entry Conditions"
@@ -61,10 +61,28 @@ float minPrice = input.float(100, "Min Price", minval=10, maxval=1000, step=50,
      "50: Includes smaller names\n" +
      "200+: Blue-chip only")
 
+int entryStartMin = input.int(15, "Entry Window Start (minute past 15:00)", minval=0, maxval=25, step=5,
+     group=grp_entry,
+     tooltip="Pre-close entry window start (minutes past 15:00 IST).\n\n" +
+     "Entry conditions evaluated on LIVE intrabar data during this window.\n" +
+     "CNC order must reach broker before 15:30.\n\n" +
+     "15: 3:15 PM (recommended — 15 min buffer)\n" +
+     "10: 3:10 PM (more buffer, less accurate close proxy)\n" +
+     "20: 3:20 PM (tighter, more accurate)")
+
+int entryEndMin = input.int(25, "Entry Window End (minute past 15:00)", minval=15, maxval=29, step=5,
+     group=grp_entry,
+     tooltip="Pre-close entry window end.\n\n" +
+     "25: 3:25 PM (recommended — 5 min before close)\n" +
+     "29: 3:29 PM (cutting it close — risky)")
+
 // ============================================ EXIT INPUTS =============================================
 int exitSmaLen = input.int(5, "Exit SMA Length", minval=3, maxval=10,
      group=grp_exit,
-     tooltip="Primary exit: Close > this SMA on confirmed daily bar.\n\n" +
+     tooltip="Primary exit target: Close > this SMA.\n\n" +
+     "Signal engine tracker monitors LTP vs this SMA value\n" +
+     "(sent as TP in the entry alert) for continuous exit detection.\n" +
+     "PineScript EXIT alerts only fire for safety exits.\n\n" +
      "5: Canonical Connors exit (recommended)\n" +
      "3: Faster exit, captures less of the bounce\n" +
      "7-10: Longer hold, more drawdown exposure")
@@ -178,6 +196,8 @@ if useEmergencySL and (emergencySLPct < 3 or emergencySLPct > 15)
     runtime.error("Emergency SL % must be between 3-15. Current: " + str.tostring(emergencySLPct))
 if riskPctPerTrade < 0.5 or riskPctPerTrade > 3
     runtime.error("Risk % must be between 0.5-3. Current: " + str.tostring(riskPctPerTrade))
+if entryEndMin <= entryStartMin
+    runtime.error("Entry window end must be after start. Start=" + str.tostring(entryStartMin) + " End=" + str.tostring(entryEndMin))
 
 // ============================================ CALCULATIONS ===========================================
 float rsi2       = ta.rsi(close, 2)
@@ -197,8 +217,20 @@ bool hasVolume   = volume >= minVolume
 bool aboveMinPx  = close >= minPrice
 bool inPos       = strategy.position_size > 0
 
+// Pre-close entry window: evaluate on live intrabar data during 15:entryStartMin - 15:entryEndMin IST
+// This allows CNC order to reach broker before 15:30 market close.
+// On historical bars (backtesting), barstate.isconfirmed is used as fallback.
+int barHour   = hour(time, "Asia/Kolkata")
+int barMinute = minute(time, "Asia/Kolkata")
+bool inEntryWindow = barHour == 15 and barMinute >= entryStartMin and barMinute <= entryEndMin
+// Guard: fire only once per bar (prevent re-entry on every tick within the window)
+var bool entryFiredThisBar = false
+if ta.change(time) != 0
+    entryFiredThisBar := false
+bool entryTimingOk = barstate.isconfirmed or (inEntryWindow and not entryFiredThisBar)
+
 bool enterLong = trendUp and strongStock and oversold and hasVolume and aboveMinPx
-     and not inPos and inDateRange and barstate.isconfirmed
+     and not inPos and inDateRange and entryTimingOk
 
 // ============================================ POSITION TRACKING ======================================
 var int barsHeld = 0
@@ -235,15 +267,18 @@ int   cappedQty      = calcPosPct > allocPct and entryPrice > 0
 // ============================================ ENTRY EXECUTION ========================================
 if enterLong
     strategy.entry("LONG", strategy.long)
+    entryFiredThisBar := true
 
 // ============================================ EXIT CONDITIONS =========================================
-// Primary: close crosses above exit SMA (canonical Connors exit)
+// Primary exit (Close > 5 SMA): handled by signal engine tracker via LTP monitoring.
+// The TP level (5 SMA at entry time) is sent in the LONG alert. Tracker exits when LTP crosses it.
+// PineScript still closes the position for backtesting accuracy.
 bool primaryExit = not na(smaExit) and close > smaExit and barstate.isconfirmed
 
-// Safety: trend break (close drops below 200 SMA)
+// Safety: trend break (close drops below 200 SMA) — fires EXIT alert to signal engine
 bool trendBreak = not na(sma200) and close < sma200 and barstate.isconfirmed
 
-// Safety: max holding period exceeded
+// Safety: max holding period exceeded — fires EXIT alert to signal engine
 bool timeExit = barsHeld >= maxHoldDays and barstate.isconfirmed
 
 // ============================================ EXIT EXECUTION =========================================
@@ -456,6 +491,12 @@ getTimeIST() =>
 //
 // CRITICAL: First line MUST be "STRATEGY DIRECTION | SYMBOL"
 //           Then key-value lines. Extra lines (Risk, R:R, etc) are ignored by parser.
+//
+// EXIT ARCHITECTURE:
+//   - Primary exit (Close > 5 SMA): handled by signal engine tracker LTP monitoring.
+//     TP = 5 SMA value is sent in the LONG entry alert. Tracker exits continuously.
+//   - Safety exits (trend break, max hold): fire EXIT alert to signal engine.
+//     These are rare events that need PineScript's confirmed daily bar logic.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Build Entry Alert — ORB-identical format
@@ -532,12 +573,15 @@ buildTestAlert() =>
     '{"chat_id": "' + telegramChatId + '", "text": "' + msg + '"}'
 
 // ============================================ FIRE ALERTS ============================================
-// Entry alert
+// Entry alert — fires during pre-close window on live data, or on bar close for backtesting
 if enterLong
-    alert(buildEntryAlert(close, slLevel, smaExit), alert.freq_once_per_bar_close)
+    alert(buildEntryAlert(close, slLevel, smaExit), alert.freq_once_per_bar)
 
-// Exit alerts — use saved entry price from previous bar since position closes this bar
-if justExited
+// Safety exit alerts ONLY — trend break, max hold, SL hit.
+// Primary exit (Close > 5 SMA) is handled by signal engine tracker via LTP monitoring.
+// The tracker exits when LTP crosses the TP level sent in the LONG alert.
+bool safetyExitFired = justExited and (trendBreak or timeExit)
+if safetyExitFired
     float prevEntry = strategy.closedtrades.entry_price(strategy.closedtrades - 1)
     alert(buildExitAlert(prevEntry, slLevel, smaExit, exitReason), alert.freq_once_per_bar_close)
 

@@ -332,3 +332,111 @@ class TestBracketOrderFlow:
         call_args = mock_tracker.register.call_args[0][0]
         assert call_args.entry_order_id == "E001"
         assert call_args.sl_order_id == "SL001"
+
+
+class TestTpMonitoringAllPositions:
+    """TP monitoring should be enabled for all positions (MIS and CNC)."""
+
+    def _mock_cnc_signal(self):
+        sig = MagicMock()
+        sig.strategy = "RSI-TP-MR"
+        sig.direction = Direction.LONG
+        sig.symbol = "RELIANCE"
+        sig.entry = 2500.0
+        sig.sl = 2300.0
+        sig.tp = 2600.0
+        sig.product = "CNC"
+        sig.exchange = "NSE"
+        return sig
+
+    def _mock_mis_signal(self):
+        sig = MagicMock()
+        sig.strategy = "ORB"
+        sig.direction = Direction.LONG
+        sig.symbol = "RELIANCE"
+        sig.entry = 2500.0
+        sig.sl = 2485.0
+        sig.tp = 2540.0
+        sig.product = "MIS"
+        sig.exchange = "NSE"
+        return sig
+
+    @pytest.mark.asyncio
+    async def test_cnc_position_gets_tp_monitoring_enabled(self):
+        """RSI-TP-MR CNC positions should have tp_monitoring=True (tracker monitors TP via LTP)."""
+        mock_signal = self._mock_cnc_signal()
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        mock_order = MagicMock()
+        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
+        sl_result = TradeResult(order_id="SL001", status=OrderStatus.SUCCESS, message="ok")
+        tp_result = TradeResult(order_id="", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=500_000.0),
+            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=20),
+            patch("signal_engine.main.build_order", return_value=mock_order),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, tp_result)),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.can_trade_symbol.return_value = True
+            mock_risk.can_trade_sector.return_value = True
+            mock_risk.get_sizing_capital.return_value = 500_000.0
+            mock_risk.calculate_quantity.return_value = 20
+            mock_settings.bracket_enabled = True
+            mock_settings.risk_per_trade = 0.01
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+
+            await handle_message("RSI-TP-MR LONG\nSymbol: RELIANCE\nEntry: 2500\nSL: 2300\nTP: 2600\nProduct: CNC")
+
+        tracked_pos = mock_tracker.register.call_args[0][0]
+        assert tracked_pos.tp_monitoring is True
+        assert tracked_pos.product == "CNC"
+
+    @pytest.mark.asyncio
+    async def test_mis_position_gets_tp_monitoring_enabled(self):
+        """ORB MIS positions should also have tp_monitoring=True (unchanged behaviour)."""
+        mock_signal = self._mock_mis_signal()
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        mock_order = MagicMock()
+        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
+        sl_result = TradeResult(order_id="SL001", status=OrderStatus.SUCCESS, message="ok")
+        tp_result = TradeResult(order_id="", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
+            patch("signal_engine.main.build_order", return_value=mock_order),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, tp_result)),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.can_trade_symbol.return_value = True
+            mock_risk.can_trade_sector.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
+            mock_risk.calculate_quantity.return_value = 50
+            mock_settings.bracket_enabled = True
+            mock_settings.risk_per_trade = 0.01
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+
+            await handle_message("ORB LONG\nSymbol: RELIANCE\nEntry: 2500\nSL: 2485\nTP: 2540")
+
+        tracked_pos = mock_tracker.register.call_args[0][0]
+        assert tracked_pos.tp_monitoring is True
+        assert tracked_pos.product == "MIS"

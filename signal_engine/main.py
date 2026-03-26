@@ -143,14 +143,14 @@ async def _handle_exit(signal) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id}")
-        await notifier.notify_exit_placed(pos.symbol, trade_result.order_id)
+        await notifier.notify_exit_placed(pos.symbol, trade_result.order_id, strategy=pos.strategy)
 
         # 5. Unregister from tracker (prevents polling loop from double-closing)
         tracker.unregister(signal.symbol, signal.strategy)
         risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
     else:
         logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
-        await notifier.notify_exit_failed(pos.symbol, trade_result.message)
+        await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
 
     # 6. Persist to DB audit trail
     save(signal, exit_order, trade_result)
@@ -227,10 +227,10 @@ async def _handle_entry(signal) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
-        await notifier.notify_order_placed(signal.symbol, signal.direction.value, trade_result.order_id)
+        await notifier.notify_order_placed(signal.symbol, signal.direction.value, trade_result.order_id, strategy=signal.strategy)
     else:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
-        await notifier.notify_order_rejected(signal.symbol, trade_result.message)
+        await notifier.notify_order_rejected(signal.symbol, trade_result.message, strategy=signal.strategy)
 
     if trade_result.status == OrderStatus.SUCCESS:
         # 8. Record trade in risk engine
@@ -246,14 +246,16 @@ async def _handle_entry(signal) -> None:
             sl_result, _ = await send_bracket_legs(signal, quantity, trade_result.order_id)
             sl_order_id = sl_result.order_id if sl_result else ""
             if sl_result and sl_result.status == OrderStatus.SUCCESS:
-                await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id)
+                await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id, strategy=signal.strategy)
             else:
-                await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result")
+                await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
 
         # 10. Determine TP monitoring mode
-        # Swing strategies (e.g. RSI-TP-MR): TP driven by PineScript EXIT signal, not LTP polling
-        # Intraday strategies (e.g. ORB): TP driven by tracker LTP monitoring
-        tp_monitoring = signal.product != "CNC"
+        # All positions with a TP level use tracker LTP monitoring for exit.
+        # RSI-TP-MR: TP = 5 SMA (from PineScript alert), tracker exits when LTP crosses it.
+        # ORB: TP = target price, same tracker LTP monitoring.
+        # PineScript EXIT alerts serve as fallback for safety exits (trend break, max hold).
+        tp_monitoring = True
 
         # 11. Register in position tracker for P&L monitoring
         tracker.register(TrackedPosition(

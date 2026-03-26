@@ -114,15 +114,15 @@ class TestTrackerUnregister:
 
 
 class TestTpMonitoringFlag:
-    """Positions with tp_monitoring=False should skip TP LTP checks."""
+    """TP monitoring controls whether tracker checks LTP vs TP level."""
 
     @pytest.mark.asyncio
     async def test_tp_monitoring_disabled_skips_tp_check(self):
-        """RSI-TP-MR positions: TP monitoring off, LTP crossing TP should NOT trigger exit."""
+        """Positions with tp_monitoring=False: LTP crossing TP should NOT trigger exit."""
         engine = _make_engine()
         engine.open_positions = 1
         tracker = PositionTracker(engine)
-        pos = _make_position(symbol="RELIANCE", strategy="RSI-TP-MR", tp=2540.0)
+        pos = _make_position(symbol="RELIANCE", strategy="TEST", tp=2540.0)
         pos.tp_monitoring = False
         tracker.register(pos)
 

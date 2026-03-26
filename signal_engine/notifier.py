@@ -51,20 +51,24 @@ def _now_ist() -> str:
 
 # ── Order placement ────────────────────────────────────────────────────────────
 
-async def notify_order_placed(symbol: str, direction: str, order_id: str) -> None:
-    await notify(f"✅ ENTRY | {symbol} {_dir(direction)} | id={order_id} | {_now_ist()}")
+async def notify_order_placed(symbol: str, direction: str, order_id: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"✅ ENTRY | {symbol} {_dir(direction)}{tag} | id={order_id} | {_now_ist()}")
 
 
-async def notify_order_rejected(symbol: str, reason: str) -> None:
-    await notify(f"❌ ENTRY FAILED | {symbol} | {reason}")
+async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"❌ ENTRY FAILED | {symbol}{tag} | {reason}")
 
 
-async def notify_sl_placed(symbol: str, direction: str, order_id: str) -> None:
-    await notify(f"✅ SL placed | {symbol} {_dir(direction)} | id={order_id}")
+async def notify_sl_placed(symbol: str, direction: str, order_id: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"✅ SL placed | {symbol} {_dir(direction)}{tag} | id={order_id}")
 
 
-async def notify_sl_failed(symbol: str, reason: str) -> None:
-    await notify(f"❌ SL FAILED | {symbol} | {reason}")
+async def notify_sl_failed(symbol: str, reason: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"❌ SL FAILED | {symbol}{tag} | {reason}")
 
 
 async def notify_tp_placed(symbol: str, direction: str, order_id: str) -> None:
@@ -77,29 +81,33 @@ async def notify_tp_failed(symbol: str, reason: str) -> None:
 
 # ── Tracker-based TP monitoring (replaces broker TP LIMIT order) ───────────────
 
-async def notify_tp_level_hit(symbol: str, ltp: float, tp: float) -> None:
+async def notify_tp_level_hit(symbol: str, ltp: float, tp: float, strategy: str = "") -> None:
     """Sent when LTP crosses the TP price — before the exit order is placed."""
+    tag = f" [{strategy}]" if strategy else ""
     await notify(
-        f"🎯 TP DETECTED | {symbol} | LTP={ltp:.2f} >= TP={tp:.2f} | Cancelling SL + exiting at market | {_now_ist()}"
+        f"🎯 TP DETECTED | {symbol}{tag} | LTP={ltp:.2f} >= TP={tp:.2f} | Cancelling SL + exiting at market | {_now_ist()}"
     )
 
 
-async def notify_tp_exit_placed(symbol: str, order_id: str) -> None:
+async def notify_tp_exit_placed(symbol: str, order_id: str, strategy: str = "") -> None:
     """Sent when the market exit order placed after TP detection is accepted."""
-    await notify(f"✅ TP EXIT placed | {symbol} | Market exit id={order_id} | {_now_ist()}")
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"✅ TP EXIT placed | {symbol}{tag} | Market exit id={order_id} | {_now_ist()}")
 
 
-async def notify_tp_exit_failed(symbol: str, reason: str) -> None:
+async def notify_tp_exit_failed(symbol: str, reason: str, strategy: str = "") -> None:
     """URGENT: Market exit failed after TP detection. Position is now unprotected (SL cancelled)."""
+    tag = f" [{strategy}]" if strategy else ""
     await notify(
-        f"🚨 TP EXIT FAILED | {symbol} | SL already cancelled — MANUAL EXIT REQUIRED | {reason} | {_now_ist()}"
+        f"🚨 TP EXIT FAILED | {symbol}{tag} | SL already cancelled — MANUAL EXIT REQUIRED | {reason} | {_now_ist()}"
     )
 
 
-async def notify_sl_cancel_failed(symbol: str, sl_order_id: str) -> None:
+async def notify_sl_cancel_failed(symbol: str, sl_order_id: str, strategy: str = "") -> None:
     """Sent when SL cancellation fails before TP market exit. Non-critical — exit proceeds anyway."""
+    tag = f" [{strategy}]" if strategy else ""
     await notify(
-        f"⚠️ SL CANCEL FAILED | {symbol} | id={sl_order_id} | Proceeding with TP market exit | {_now_ist()}"
+        f"⚠️ SL CANCEL FAILED | {symbol}{tag} | id={sl_order_id} | Proceeding with TP market exit | {_now_ist()}"
     )
 
 
@@ -109,28 +117,32 @@ async def notify_exit_signal_received(symbol: str, strategy: str) -> None:
     await notify(f"EXIT signal received | {symbol} | strategy={strategy} | {_now_ist()}")
 
 
-async def notify_exit_placed(symbol: str, order_id: str) -> None:
-    await notify(f"EXIT order placed | {symbol} | MARKET SELL id={order_id} | {_now_ist()}")
+async def notify_exit_placed(symbol: str, order_id: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"EXIT order placed | {symbol}{tag} | MARKET SELL id={order_id} | {_now_ist()}")
 
 
 async def notify_exit_no_position(symbol: str, strategy: str) -> None:
     await notify(f"EXIT ignored | {symbol} | No open position for strategy={strategy} | {_now_ist()}")
 
 
-async def notify_exit_failed(symbol: str, reason: str) -> None:
-    await notify(f"EXIT FAILED | {symbol} | {reason} | {_now_ist()}")
+async def notify_exit_failed(symbol: str, reason: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"EXIT FAILED | {symbol}{tag} | {reason} | {_now_ist()}")
 
 
 # ── Position lifecycle ─────────────────────────────────────────────────────────
 
-async def notify_position_closed(symbol: str, pnl: float) -> None:
+async def notify_position_closed(symbol: str, pnl: float, strategy: str = "") -> None:
     icon = "✅ TP HIT" if pnl >= 0 else "❌ SL HIT"
+    tag = f" [{strategy}]" if strategy else ""
     pnl_str = f"+₹{pnl:,.0f}" if pnl >= 0 else f"-₹{abs(pnl):,.0f}"
-    await notify(f"{icon} | {symbol} | P&L: {pnl_str} | {_now_ist()}")
+    await notify(f"{icon} | {symbol}{tag} | P&L: {pnl_str} | {_now_ist()}")
 
 
-async def notify_time_exit(symbol: str) -> None:
-    await notify(f"⏰ TIME EXIT | {symbol} | {_now_ist()}")
+async def notify_time_exit(symbol: str, strategy: str = "") -> None:
+    tag = f" [{strategy}]" if strategy else ""
+    await notify(f"⏰ TIME EXIT | {symbol}{tag} | {_now_ist()}")
 
 
 # ── Risk events ────────────────────────────────────────────────────────────────
