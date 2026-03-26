@@ -154,6 +154,11 @@ class Settings:
     bracket_retry_delay: float
     bracket_tp_exit_retries: int
 
+    # Symbol blacklist (from yaml) — per-strategy + _global
+    # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR") or "_global"
+    # Values: frozenset of uppercase symbol names
+    blacklist: Dict[str, frozenset]
+
     # Time exit (from yaml) — close positions before broker auto square-off
     time_exit_enabled: bool
     time_exit_hour: int
@@ -202,6 +207,17 @@ def _build_settings() -> Settings:
         except (ValueError, TypeError):
             n_id = str(raw_nid)
         notify_channel = TelegramChannel(name=raw_notify.get("name", ""), id=n_id)
+
+    # Blacklist section (optional — empty if missing)
+    raw_blacklist = yml.get("blacklist", {})
+    if not isinstance(raw_blacklist, dict):
+        raw_blacklist = {}
+    blacklist: Dict[str, frozenset] = {}
+    for strategy_key, symbols in raw_blacklist.items():
+        if isinstance(symbols, list):
+            blacklist[strategy_key.upper()] = frozenset(
+                s.upper().strip() for s in symbols if isinstance(s, str)
+            )
 
     # Time exit section (optional — defaults to disabled if missing)
     time_exit = yml.get("time_exit", {})
@@ -271,6 +287,9 @@ def _build_settings() -> Settings:
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
         bracket_retry_delay=float(bracket.get("retry_delay", 0.5)),
         bracket_tp_exit_retries=int(bracket.get("tp_exit_retries", 3)),
+
+        # Symbol blacklist — per-strategy + _global
+        blacklist=blacklist,
 
         # Time exit — optional section with safe defaults
         time_exit_enabled=bool(time_exit.get("enabled", False)),

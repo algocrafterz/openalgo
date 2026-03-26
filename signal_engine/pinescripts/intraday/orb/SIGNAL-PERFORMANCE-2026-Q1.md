@@ -305,9 +305,9 @@ Use these metrics as baseline when evaluating improvements:
 
 | Priority | Action | Est. Impact | Status |
 |----------|--------|-------------|--------|
-| 1 | **Remove D-grade symbols** (BHEL -4.1%, MANAPPURAM -3.2%) | +7.3R saved | Pending |
+| 1 | **Remove D-grade symbols** (BHEL -4.1%, MANAPPURAM -3.2%) | +7.3R saved | DONE (blacklist in config.yaml) |
 | 2 | **Cache capital fetch** (30s TTL, avoid HTTP per signal) | -0.1 to -0.3s latency | Pending |
-| 3 | **Increase slippage_factor** 0.05 -> 0.10 (honest risk accounting) | Better sizing accuracy | Pending |
+| 3 | **Increase slippage_factor** 0.05 -> 0.10 (honest risk accounting) | Better sizing accuracy | DONE (config.yaml updated) |
 | 4 | **Direct TradingView webhook** (bypass Telegram) | -2 to -4s latency, ~30-50% slippage reduction | Deferred (high effort, loses audit trail) |
 
 ### Key Insight

@@ -46,6 +46,20 @@ risk:
   max_positions_per_symbol: 1  # Max concurrent positions in same symbol (0 = no limit)
   max_positions_per_sector: 0  # Disabled — stock universe spans same sectors (FINANCE: PFC, JIOFIN, RECLTD etc.)
 
+# ── Symbol Blacklist ─────────────────────────────────────
+# Per-strategy blacklist of symbols to reject. Review monthly using performance data.
+# _global: applies to ALL strategies (penny stocks, delisting candidates, etc.)
+# Strategy-specific: keyed by strategy tag (ORB, RSI-TP-MR, etc.)
+blacklist:
+  _global:
+    - YESBANK            # Erratic price action, manipulation risk
+  ORB:
+    - BHEL               # 0% WR, -4.1% PnL (Q1 2026) — PSU, wide spreads
+    - MANAPPURAM         # 16.7% WR, -3.2% PnL — NBFC, gaps on RBI news
+    - GAIL               # 33.3% WR, -0.5% PnL — policy-driven moves
+    - JIOFIN             # 33.3% WR, -0.4% PnL — new listing, erratic
+    - TATAPOWER          # 33.3% WR, -0.1% PnL — PSU power, slow momentum
+
 # ── Time Exit ────────────────────────────────────────────
 # Close all open positions before broker auto square-off to avoid penalty charges.
 # Broker auto square-off is typically 15:10-15:20 IST with Rs 20-50/order charges.

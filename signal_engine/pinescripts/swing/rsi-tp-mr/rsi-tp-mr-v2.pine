@@ -107,11 +107,14 @@ bool useEmergencySL = input.bool(true, "Enable Emergency SL %", inline="esl",
      "ON: max(200 SMA, entry * (1 - SL%)) as stop\n" +
      "OFF: 200 SMA only (pure Connors)")
 
-float emergencySLPct = input.float(8.0, "SL %", minval=3.0, maxval=15.0, step=0.5, inline="esl",
+float emergencySLPct = input.float(5.0, "SL %", minval=3.0, maxval=15.0, step=0.5, inline="esl",
      group=grp_exit,
      tooltip="Maximum loss per trade as % of entry.\n\n" +
-     "8%: Balanced — room for mean reversion (recommended)\n" +
-     "5-6%: Tighter, more stop-outs, safer\n" +
+     "5%: Recommended — caps loss at 5%, improves R:R for\n" +
+     "swing trades with 2-4% expected gain. Absorbs typical\n" +
+     "overnight gaps (1-2%) while limiting max damage.\n" +
+     "3-4%: Tight — more stop-outs on volatile names\n" +
+     "6-8%: Wide — better backtest PF but high max loss\n" +
      "10-15%: Very wide, near-pure Connors")
 
 // ============================================ RISK INPUTS =============================================
@@ -136,17 +139,19 @@ float allocPct = input.float(20.0, "Max Allocation %", minval=10, maxval=33, ste
      "15%: Conservative (6-7 positions)\n" +
      "25-33%: Concentrated (3-4 positions)")
 
-float minRR = input.float(0.5, "Min R:R Ratio", minval=0.2, maxval=2.0, step=0.1,
+float minRR = input.float(0.8, "Min R:R Ratio", minval=0.2, maxval=2.0, step=0.1,
      group=grp_risk,
      tooltip="Minimum reward:risk ratio to take entry.\n\n" +
      "Reward = distance from entry to 5 SMA (TP)\n" +
      "Risk = distance from entry to SL level\n\n" +
      "Filters out shallow pullbacks where TP is too close\n" +
      "relative to SL distance (negative expectancy setups).\n\n" +
-     "0.5: Recommended — filters worst 20-30% of setups\n" +
-     "0.3: Permissive — only skip truly toxic R:R\n" +
-     "0.8: Selective — fewer trades, better quality\n" +
-     "1.0: Aggressive filter — may skip 60%+ of signals")
+     "After CNC costs (0.224% round-trip), R:R below 0.8\n" +
+     "produces marginal/negative expectancy at 65-70% WR.\n\n" +
+     "0.5: Permissive — marginal after costs\n" +
+     "0.8: Recommended — positive expectancy after costs\n" +
+     "1.0: Selective — fewer trades, best quality\n" +
+     "1.5+: Very selective — may skip 60%+ of signals")
 
 // ============================================ BACKTEST INPUTS =========================================
 bool useDateFilter = input.bool(false, "Filter by Date Range", inline="date",
@@ -478,37 +483,79 @@ if barstate.islast and showDashboard and inPos
          text_color=atrPct > 3 ? color.red : atrPct > 2 ? color.orange : color.white,
          text_size=size.tiny)
 
-// Show pre-entry scan info when not in position
+// Show filter status + rejection reason when not in position (like ORB diagnostic mode)
 if barstate.islast and showDashboard and not inPos
     table.cell(dashTable, 0, 0, "RSI-TP-MR SCAN", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
     table.cell(dashTable, 1, 0, syminfo.ticker, text_color=color.white, text_size=size.small)
 
-    table.cell(dashTable, 0, 1, "RSI(2)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(dashTable, 1, 1, str.tostring(rsi2, "#.#"),
-         text_color=rsi2 < rsiThresh ? color.lime : rsi2 < 10 ? color.yellow : color.white,
+    // Filter status — each filter with pass/fail icon
+    string icTrend = trendUp ? "OK" : "NO"
+    table.cell(dashTable, 0, 1, "Trend (> " + str.tostring(trendLen) + " SMA)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 1, icTrend,
+         text_color=trendUp ? color.lime : color.red, text_size=size.tiny)
+
+    string icRS = strongStock ? "OK" : "NO"
+    table.cell(dashTable, 0, 2, "RS (" + (useRSFilter ? "> " + str.tostring(rsLen) + " SMA" : "off") + ")", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 2, useRSFilter ? icRS : "OFF",
+         text_color=strongStock ? color.lime : (useRSFilter ? color.red : color.gray), text_size=size.tiny)
+
+    string icRSI = oversold ? "OK" : "NO"
+    table.cell(dashTable, 0, 3, "RSI(2) < " + str.tostring(rsiThresh, "#"), text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 3, str.tostring(rsi2, "#.#") + " " + icRSI,
+         text_color=oversold ? color.lime : color.red, text_size=size.tiny)
+
+    string icVol = hasVolume ? "OK" : "NO"
+    float volK = volume / 1000
+    table.cell(dashTable, 0, 4, "Volume (> " + str.tostring(minVolume / 1000, "#") + "K)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 4, str.tostring(volK, "#") + "K " + icVol,
+         text_color=hasVolume ? color.lime : color.red, text_size=size.tiny)
+
+    string icPx = aboveMinPx ? "OK" : "NO"
+    table.cell(dashTable, 0, 5, "Price (> " + str.tostring(minPrice, "#") + ")", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 5, str.tostring(close, format.mintick) + " " + icPx,
+         text_color=aboveMinPx ? color.lime : color.red, text_size=size.tiny)
+
+    string icRR = rrOk ? "OK" : "NO"
+    table.cell(dashTable, 0, 6, "R:R (>= 1:" + str.tostring(minRR, "#.#") + ")", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 6, "1:" + str.tostring(preEntryRR, "#.##") + " " + icRR,
+         text_color=rrOk ? color.lime : color.red, text_size=size.tiny)
+
+    // SL & TP reference values
+    table.cell(dashTable, 0, 7, "SL / TP", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    string slTpStr = (not na(preEntrySL) ? str.tostring(preEntrySL, format.mintick) : "N/A") +
+         " / " + (not na(smaExit) ? str.tostring(smaExit, format.mintick) : "N/A")
+    table.cell(dashTable, 1, 7, slTpStr, text_color=color.white, text_size=size.tiny)
+
+    // ATR for context
+    float atrPctScan = atr14 / close * 100
+    table.cell(dashTable, 0, 8, "ATR(14) %", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 8, str.tostring(atrPctScan, "#.##") + "%",
+         text_color=atrPctScan > 3 ? color.red : atrPctScan > 2 ? color.orange : color.white,
          text_size=size.tiny)
 
-    table.cell(dashTable, 0, 2, "Pre-entry R:R", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(dashTable, 1, 2, "1:" + str.tostring(preEntryRR, "#.##"),
-         text_color=preEntryRR >= minRR ? color.lime : color.red,
-         text_size=size.tiny)
-
-    table.cell(dashTable, 0, 3, "TP (5 SMA)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(dashTable, 1, 3, not na(smaExit) ? str.tostring(smaExit, format.mintick) : "N/A",
-         text_color=color.aqua, text_size=size.tiny)
-
-    table.cell(dashTable, 0, 4, "SL (pre-entry)", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(dashTable, 1, 4, not na(preEntrySL) ? str.tostring(preEntrySL, format.mintick) : "N/A",
-         text_color=color.red, text_size=size.tiny)
-
-    table.cell(dashTable, 0, 5, "Min R:R", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(dashTable, 1, 5, "1:" + str.tostring(minRR, "#.#"),
-         text_color=color.orange, text_size=size.tiny)
-
-    // Clear unused rows
-    for row = 6 to 9
-        table.cell(dashTable, 0, row, "", text_size=size.tiny)
-        table.cell(dashTable, 1, row, "", text_size=size.tiny)
+    // Rejection reason summary — priority order (most common/important first)
+    string reason = ""
+    if not trendUp
+        reason := "Price below " + str.tostring(trendLen) + " SMA (no uptrend)"
+    else if not oversold
+        reason := "RSI(2) = " + str.tostring(rsi2, "#.#") + " (need < " + str.tostring(rsiThresh, "#") + ")"
+    else if not hasVolume
+        reason := "Volume " + str.tostring(volK, "#") + "K < " + str.tostring(minVolume / 1000, "#") + "K min"
+    else if not aboveMinPx
+        reason := "Price " + str.tostring(close, format.mintick) + " < " + str.tostring(minPrice, "#") + " min"
+    else if not strongStock
+        reason := "Close < " + str.tostring(rsLen) + " SMA (weak stock)"
+    else if not rrOk
+        reason := "R:R 1:" + str.tostring(preEntryRR, "#.##") + " < min 1:" + str.tostring(minRR, "#.#")
+    else if inPos
+        reason := "Already in position"
+    else
+        reason := "All filters pass — waiting for entry window"
+    table.cell(dashTable, 0, 9, reason,
+         text_color=reason == "All filters pass — waiting for entry window" ? color.lime : color.new(color.red, 20),
+         text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dashTable, 1, 9, "", text_size=size.tiny)
+    table.merge_cells(dashTable, 0, 9, 1, 9)
 
 // ============================================ ALERT FUNCTIONS ========================================
 
