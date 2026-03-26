@@ -120,7 +120,7 @@ class PositionTracker:
                         f"TP level reached for {pos.symbol}: ltp={ltp} tp={pos.tp} — cancelling SL and exiting at market"
                     )
                     pos.tp_triggered = True
-                    await notifier.notify_tp_level_hit(pos.symbol, ltp, pos.tp)
+                    await notifier.notify_tp_level_hit(pos.symbol, ltp, pos.tp, strategy=pos.strategy)
                     await self._exit_at_tp(pos)
                     # Position will close; detected as qty==0 in a future cycle
                     continue
@@ -143,7 +143,7 @@ class PositionTracker:
             else:
                 self._day_losses += 1
 
-            await notifier.notify_position_closed(pos.symbol, pnl_delta)
+            await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
 
             # If SL was triggered (position closed without TP trigger), cancel any
             # pending SL order (it should already be gone, but guard against edge cases)
@@ -169,7 +169,7 @@ class PositionTracker:
                 logger.info(f"SL order {pos.sl_order_id} cancelled before TP market exit for {pos.symbol}")
             else:
                 logger.warning(f"Failed to cancel SL {pos.sl_order_id} for {pos.symbol} — proceeding with market exit anyway")
-                await notifier.notify_sl_cancel_failed(pos.symbol, pos.sl_order_id)
+                await notifier.notify_sl_cancel_failed(pos.symbol, pos.sl_order_id, strategy=pos.strategy)
 
         # Place market exit order with retries
         exit_order = build_exit_order(
@@ -185,14 +185,14 @@ class PositionTracker:
             result = await send_order(exit_order)
             if result.status == OrderStatus.SUCCESS:
                 logger.info(f"TP market exit placed for {pos.symbol}: id={result.order_id} (attempt {attempt})")
-                await notifier.notify_tp_exit_placed(pos.symbol, result.order_id)
+                await notifier.notify_tp_exit_placed(pos.symbol, result.order_id, strategy=pos.strategy)
                 return
             logger.warning(f"TP market exit attempt {attempt}/{max_attempts} failed for {pos.symbol}: {result.message}")
             if attempt < max_attempts:
                 await asyncio.sleep(settings.bracket_retry_delay)
 
         logger.error(f"TP market exit FAILED after {max_attempts} attempts for {pos.symbol}: {result.message}")
-        await notifier.notify_tp_exit_failed(pos.symbol, result.message)
+        await notifier.notify_tp_exit_failed(pos.symbol, result.message, strategy=pos.strategy)
 
     async def time_exit_all(self) -> None:
         """Force-close MIS positions and cancel their pending bracket orders.
@@ -242,7 +242,7 @@ class PositionTracker:
         # Clear only MIS positions and update risk engine
         for key, pos in mis_positions.items():
             self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
-            await notifier.notify_time_exit(pos.symbol)
+            await notifier.notify_time_exit(pos.symbol, strategy=pos.strategy)
             logger.info(f"Time exit: cleared tracker entry {key}")
             del self._positions[key]
 
