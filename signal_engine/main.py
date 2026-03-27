@@ -163,8 +163,10 @@ async def _handle_exit(signal) -> None:
         f"full_exit={is_full_exit}"
     )
 
-    # 4. Cancel SL order only on full exit (partial exit keeps SL for remaining qty)
-    if is_full_exit and pos.sl_order_id:
+    # 4. ALWAYS cancel SL before placing exit order.
+    # Indian brokers treat any SELL while SL SELL is active as a new SHORT position
+    # (FUND LIMIT INSUFFICIENT). SL must be cancelled first, even for partial exits.
+    if pos.sl_order_id:
         success = await cancel_order(pos.sl_order_id, pos.strategy)
         if success:
             logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
@@ -198,6 +200,7 @@ async def _handle_exit(signal) -> None:
             # Partial exit: reduce tracked qty, keep position registered
             remaining = pos.quantity - exit_qty
             pos.quantity = remaining
+            pos.sl_order_id = ""  # SL was cancelled; no re-placement (simple mode)
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
             await notifier.notify_partial_exit(
                 pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta, strategy=pos.strategy,
