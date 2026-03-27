@@ -149,10 +149,16 @@ class Settings:
 
     # Bracket orders (from yaml)
     bracket_enabled: bool
+    bracket_cnc_sl_enabled: bool  # CNC SL-M cancelled at EOD by NSE; false = skip bracket for CNC
     bracket_sl_order_type: str
     bracket_max_sl_retries: int
     bracket_retry_delay: float
     bracket_tp_exit_retries: int
+
+    # Strategy profiles (from yaml) — per-strategy TP levels and product defaults
+    # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR")
+    # Values: dict with "tp_levels" (e.g. {"TP1": 0.5, "TP2": 1.0}) and "product" (e.g. "CNC")
+    strategy_profiles: Dict[str, dict]
 
     # Symbol blacklist (from yaml) — per-strategy + _global
     # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR") or "_global"
@@ -207,6 +213,23 @@ def _build_settings() -> Settings:
         except (ValueError, TypeError):
             n_id = str(raw_nid)
         notify_channel = TelegramChannel(name=raw_notify.get("name", ""), id=n_id)
+
+    # Strategy profiles section (optional — empty if missing)
+    raw_profiles = yml.get("strategy_profiles", {})
+    if not isinstance(raw_profiles, dict):
+        raw_profiles = {}
+    strategy_profiles: Dict[str, dict] = {}
+    for strategy_key, profile in raw_profiles.items():
+        if isinstance(profile, dict):
+            tp_levels = profile.get("tp_levels", {})
+            if isinstance(tp_levels, dict):
+                tp_levels = {k.upper(): float(v) for k, v in tp_levels.items()}
+            else:
+                tp_levels = {}
+            strategy_profiles[strategy_key.upper()] = {
+                "tp_levels": tp_levels,
+                "product": str(profile.get("product", "")),
+            }
 
     # Blacklist section (optional — empty if missing)
     raw_blacklist = yml.get("blacklist", {})
@@ -283,10 +306,14 @@ def _build_settings() -> Settings:
 
         # Bracket orders from yaml
         bracket_enabled=bool(_require_key(bracket, "bracket", "enabled")),
+        bracket_cnc_sl_enabled=bool(bracket.get("cnc_sl_enabled", False)),
         bracket_sl_order_type=str(_require_key(bracket, "bracket", "sl_order_type")),
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
         bracket_retry_delay=float(bracket.get("retry_delay", 0.5)),
         bracket_tp_exit_retries=int(bracket.get("tp_exit_retries", 3)),
+
+        # Strategy profiles — per-strategy TP levels and product
+        strategy_profiles=strategy_profiles,
 
         # Symbol blacklist — per-strategy + _global
         blacklist=blacklist,

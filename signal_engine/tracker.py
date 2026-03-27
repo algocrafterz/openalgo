@@ -14,9 +14,7 @@ from signal_engine.api_client import (
     fetch_positionbook,
     fetch_realised_pnl,
 )
-from signal_engine.config import settings
-from signal_engine.executor import build_exit_order, send_order
-from signal_engine.models import Action, Direction, Order, OrderStatus
+from signal_engine.models import Direction
 from signal_engine.risk import RiskEngine
 from signal_engine import notifier
 
@@ -37,9 +35,7 @@ class TrackedPosition:
     direction: Direction = Direction.LONG
     entry_order_id: str = ""
     sl_order_id: str = ""
-    tp_order_id: str = ""  # unused: TP handled via LTP monitoring, not broker order
-    tp_triggered: bool = False  # guard against double-exit
-    tp_monitoring: bool = True  # False for swing strategies (exit via PineScript EXIT signal)
+    tp_order_id: str = ""  # unused: TP exit driven by TradingView TP HIT signal, not broker order
 
 
 class PositionTracker:
@@ -84,12 +80,36 @@ class PositionTracker:
             logger.info(f"Unregistered position: {key}")
         return pos
 
+    def record_exit(self, pnl: float, new_realised_pnl: float | None = None) -> None:
+        """Record a completed exit in day summary counters.
+
+        Called by _handle_exit() for exits driven by TradingView signals (TP HIT, EXIT).
+        These exits bypass check_positions() so day counters would not be updated otherwise.
+
+        Args:
+            pnl: Realised PnL for this trade (positive = win, negative = loss).
+            new_realised_pnl: Updated cumulative realised PnL from broker API.
+                If provided, updates the snapshot so check_positions() delta stays accurate.
+        """
+        self._day_trades += 1
+        self._day_pnl += pnl
+        if pnl >= 0:
+            self._day_wins += 1
+        else:
+            self._day_losses += 1
+        if new_realised_pnl is not None:
+            self._last_realised_pnl = new_realised_pnl
+        logger.info(
+            f"Exit recorded: pnl={pnl:,.2f} "
+            f"day_trades={self._day_trades} wins={self._day_wins} losses={self._day_losses} "
+            f"day_pnl={self._day_pnl:,.2f}"
+        )
+
     async def check_positions(self) -> None:
         """Poll all tracked positions with a single positionbook call.
 
-        Two things are checked each cycle:
-        1. TP monitoring: if LTP has crossed the TP price, cancel SL and exit at market.
-        2. Close detection: if position qty == 0, update risk counters.
+        Checks: if position qty == 0 (closed by broker SL-M or TP HIT signal), update risk counters.
+        TP exit is driven by TradingView TP HIT signal -> signal engine _handle_exit pipeline.
         """
         book = await fetch_positionbook()
         if book is None:
@@ -107,23 +127,6 @@ class PositionTracker:
 
         for key, pos in self._positions.items():
             qty, ltp = book_data.get(pos.symbol, (0, 0.0))
-
-            # --- TP monitoring: exit at market when TP level is reached ---
-            # Skip for positions with tp_monitoring=False (swing strategies use EXIT signals)
-            if qty != 0 and pos.tp_monitoring and not pos.tp_triggered and ltp > 0:
-                tp_hit = (
-                    (pos.direction == Direction.LONG and ltp >= pos.tp)
-                    or (pos.direction == Direction.SHORT and ltp <= pos.tp)
-                )
-                if tp_hit:
-                    logger.info(
-                        f"TP level reached for {pos.symbol}: ltp={ltp} tp={pos.tp} — cancelling SL and exiting at market"
-                    )
-                    pos.tp_triggered = True
-                    await notifier.notify_tp_level_hit(pos.symbol, ltp, pos.tp, strategy=pos.strategy)
-                    await self._exit_at_tp(pos)
-                    # Position will close; detected as qty==0 in a future cycle
-                    continue
 
             if qty != 0:
                 continue
@@ -145,54 +148,10 @@ class PositionTracker:
 
             await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
 
-            # If SL was triggered (position closed without TP trigger), cancel any
-            # pending SL order (it should already be gone, but guard against edge cases)
-            if not pos.tp_triggered and pos.sl_order_id:
-                # SL-M self-cancels when triggered; this is a no-op in most cases
-                pass
-
             closed_keys.append(key)
 
         for key in closed_keys:
             del self._positions[key]
-
-    async def _exit_at_tp(self, pos: "TrackedPosition") -> None:
-        """Cancel the pending SL order and place a market exit at TP.
-
-        Called when LTP crosses the TP price. The SL order must be cancelled first
-        so the market exit is recognised as position closure, not a double-short.
-        """
-        # Cancel SL first to free the position for a clean exit
-        if pos.sl_order_id:
-            success = await cancel_order(pos.sl_order_id, pos.strategy)
-            if success:
-                logger.info(f"SL order {pos.sl_order_id} cancelled before TP market exit for {pos.symbol}")
-            else:
-                logger.warning(f"Failed to cancel SL {pos.sl_order_id} for {pos.symbol} — proceeding with market exit anyway")
-                await notifier.notify_sl_cancel_failed(pos.symbol, pos.sl_order_id, strategy=pos.strategy)
-
-        # Place market exit order with retries
-        exit_order = build_exit_order(
-            symbol=pos.symbol,
-            exchange=pos.exchange,
-            quantity=pos.quantity,
-            product=pos.product,
-            strategy_tag=pos.strategy,
-        )
-        max_attempts = settings.bracket_tp_exit_retries
-        result = None
-        for attempt in range(1, max_attempts + 1):
-            result = await send_order(exit_order)
-            if result.status == OrderStatus.SUCCESS:
-                logger.info(f"TP market exit placed for {pos.symbol}: id={result.order_id} (attempt {attempt})")
-                await notifier.notify_tp_exit_placed(pos.symbol, result.order_id, strategy=pos.strategy)
-                return
-            logger.warning(f"TP market exit attempt {attempt}/{max_attempts} failed for {pos.symbol}: {result.message}")
-            if attempt < max_attempts:
-                await asyncio.sleep(settings.bracket_retry_delay)
-
-        logger.error(f"TP market exit FAILED after {max_attempts} attempts for {pos.symbol}: {result.message}")
-        await notifier.notify_tp_exit_failed(pos.symbol, result.message, strategy=pos.strategy)
 
     async def time_exit_all(self) -> None:
         """Force-close MIS positions and cancel their pending bracket orders.

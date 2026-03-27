@@ -741,7 +741,7 @@ buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
     float rewardVal = math.abs(tpPrice - entryPrice)
     float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
 
-    string msg = "✅ " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
+    string msg = "✅ ORB " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"

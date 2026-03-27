@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from signal_engine.risk import RiskEngine
+from signal_engine.strategies import ORB, RSI_TP_MR
 from signal_engine.tracker import PositionTracker, TrackedPosition
 
 
@@ -29,7 +30,7 @@ def _make_engine(**overrides) -> RiskEngine:
 def _make_position(**overrides) -> TrackedPosition:
     defaults = {
         "symbol": "RELIANCE",
-        "strategy": "ORB",
+        "strategy": ORB,
         "exchange": "NSE",
         "product": "MIS",
         "entry_price": 2500.0,
@@ -59,8 +60,8 @@ class TestTrackerRegister:
     def test_same_key_overwrites(self):
         engine = _make_engine()
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB", quantity=100))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, quantity=100))
         assert tracker.tracked_count == 1
 
 
@@ -68,12 +69,12 @@ class TestTrackerFindPosition:
     def test_find_existing_position(self):
         engine = _make_engine()
         tracker = PositionTracker(engine)
-        pos = _make_position(symbol="RELIANCE", strategy="RSI-TP-MR")
+        pos = _make_position(symbol="RELIANCE", strategy=RSI_TP_MR)
         tracker.register(pos)
-        found = tracker.find_position("RELIANCE", "RSI-TP-MR")
+        found = tracker.find_position("RELIANCE", RSI_TP_MR)
         assert found is not None
         assert found.symbol == "RELIANCE"
-        assert found.strategy == "RSI-TP-MR"
+        assert found.strategy == RSI_TP_MR
 
     def test_find_nonexistent_returns_none(self):
         engine = _make_engine()
@@ -83,17 +84,17 @@ class TestTrackerFindPosition:
     def test_find_wrong_strategy_returns_none(self):
         engine = _make_engine()
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
-        assert tracker.find_position("RELIANCE", "RSI-TP-MR") is None
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
+        assert tracker.find_position("RELIANCE", RSI_TP_MR) is None
 
 
 class TestTrackerUnregister:
     def test_unregister_removes_and_returns(self):
         engine = _make_engine()
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="RSI-TP-MR"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=RSI_TP_MR))
         assert tracker.tracked_count == 1
-        removed = tracker.unregister("RELIANCE", "RSI-TP-MR")
+        removed = tracker.unregister("RELIANCE", RSI_TP_MR)
         assert removed is not None
         assert removed.symbol == "RELIANCE"
         assert tracker.tracked_count == 0
@@ -106,57 +107,43 @@ class TestTrackerUnregister:
     def test_unregister_does_not_affect_other_positions(self):
         engine = _make_engine()
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
-        tracker.register(_make_position(symbol="TCS", strategy="ORB"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
+        tracker.register(_make_position(symbol="TCS", strategy=ORB))
         tracker.unregister("RELIANCE", "ORB")
         assert tracker.tracked_count == 1
         assert tracker.find_position("TCS", "ORB") is not None
 
 
-class TestTpMonitoringFlag:
-    """TP monitoring controls whether tracker checks LTP vs TP level."""
+class TestTPMonitoringRemoved:
+    """TP monitoring via LTP polling is removed — exits driven by TP HIT signal instead."""
+
+    def test_tracked_position_has_no_tp_monitoring_field(self):
+        pos = _make_position()
+        assert not hasattr(pos, "tp_monitoring")
+
+    def test_tracked_position_has_no_tp_triggered_field(self):
+        pos = _make_position()
+        assert not hasattr(pos, "tp_triggered")
+
+    def test_tracker_has_no_exit_at_tp_method(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        assert not hasattr(tracker, "_exit_at_tp")
 
     @pytest.mark.asyncio
-    async def test_tp_monitoring_disabled_skips_tp_check(self):
-        """Positions with tp_monitoring=False: LTP crossing TP should NOT trigger exit."""
+    async def test_check_positions_does_not_exit_when_ltp_crosses_tp(self):
+        """Tracker must NOT exit a position when LTP > TP — that's TP HIT signal's job."""
         engine = _make_engine()
         engine.open_positions = 1
         tracker = PositionTracker(engine)
-        pos = _make_position(symbol="RELIANCE", strategy="TEST", tp=2540.0)
-        pos.tp_monitoring = False
+        pos = _make_position(symbol="RELIANCE", strategy=ORB, tp=2540.0)
         tracker.register(pos)
 
-        # LTP = 2550 > TP = 2540, but tp_monitoring is off
-        book = [{"symbol": "RELIANCE", "quantity": 50, "ltp": 2550.0}]
+        book = [{"symbol": "RELIANCE", "quantity": 50, "ltp": 2600.0}]
         with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book):
             await tracker.check_positions()
 
-        # Position should still be tracked (NOT exited)
         assert tracker.tracked_count == 1
-
-    @pytest.mark.asyncio
-    async def test_tp_monitoring_enabled_triggers_exit(self):
-        """ORB positions: TP monitoring on, LTP crossing TP SHOULD trigger exit."""
-        engine = _make_engine()
-        engine.open_positions = 1
-        tracker = PositionTracker(engine)
-        pos = _make_position(symbol="RELIANCE", strategy="ORB", tp=2540.0)
-        # tp_monitoring defaults to True
-        tracker.register(pos)
-
-        book = [{"symbol": "RELIANCE", "quantity": 50, "ltp": 2550.0}]
-        with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book),
-            patch.object(tracker, "_exit_at_tp", new_callable=AsyncMock) as mock_exit,
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-        ):
-            await tracker.check_positions()
-
-        mock_exit.assert_called_once()
-
-    def test_tp_monitoring_defaults_true(self):
-        pos = _make_position()
-        assert pos.tp_monitoring is True
 
 
 class TestTimeExitCncAwareness:
@@ -167,8 +154,8 @@ class TestTimeExitCncAwareness:
         engine = _make_engine()
         engine.open_positions = 2
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB", product="MIS"))
-        tracker.register(_make_position(symbol="HDFCBANK", strategy="RSI-TP-MR", product="CNC"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
+        tracker.register(_make_position(symbol="HDFCBANK", strategy=RSI_TP_MR, product="CNC"))
 
         with (
             patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
@@ -179,15 +166,15 @@ class TestTimeExitCncAwareness:
 
         # CNC position should survive time exit
         assert tracker.tracked_count == 1
-        assert tracker.find_position("HDFCBANK", "RSI-TP-MR") is not None
+        assert tracker.find_position("HDFCBANK", RSI_TP_MR) is not None
 
     @pytest.mark.asyncio
     async def test_time_exit_closes_all_mis_positions(self):
         engine = _make_engine()
         engine.open_positions = 2
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB", product="MIS"))
-        tracker.register(_make_position(symbol="TCS", strategy="ORB", product="MIS"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
+        tracker.register(_make_position(symbol="TCS", strategy=ORB, product="MIS"))
 
         with (
             patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
@@ -267,6 +254,61 @@ class TestTrackerStop:
         tracker._running = True
         tracker.stop()
         assert tracker._running is False
+
+
+class TestRecordExit:
+    """record_exit() increments day counters for exits driven by TradingView signals."""
+
+    def test_record_exit_profit_increments_wins(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.record_exit(pnl=500.0)
+        assert tracker._day_trades == 1
+        assert tracker._day_wins == 1
+        assert tracker._day_losses == 0
+        assert tracker._day_pnl == 500.0
+
+    def test_record_exit_loss_increments_losses(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.record_exit(pnl=-200.0)
+        assert tracker._day_trades == 1
+        assert tracker._day_wins == 0
+        assert tracker._day_losses == 1
+        assert tracker._day_pnl == -200.0
+
+    def test_record_exit_zero_pnl_counts_as_win(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.record_exit(pnl=0.0)
+        assert tracker._day_trades == 1
+        assert tracker._day_wins == 1
+
+    def test_record_exit_accumulates_across_trades(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.record_exit(pnl=500.0)
+        tracker.record_exit(pnl=-200.0)
+        tracker.record_exit(pnl=300.0)
+        assert tracker._day_trades == 3
+        assert tracker._day_wins == 2
+        assert tracker._day_losses == 1
+        assert tracker._day_pnl == 600.0
+
+    def test_record_exit_updates_realised_pnl_snapshot(self):
+        """record_exit takes a new realised_pnl snapshot to keep delta tracking accurate."""
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 1000.0
+        tracker.record_exit(pnl=500.0, new_realised_pnl=1500.0)
+        assert tracker._last_realised_pnl == 1500.0
+
+    def test_record_exit_without_snapshot_preserves_last(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 1000.0
+        tracker.record_exit(pnl=500.0)
+        assert tracker._last_realised_pnl == 1000.0
 
 
 class TestOCOCancellation:
@@ -405,7 +447,7 @@ class TestBatchPositionCheck:
         engine.open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
 
         # Positionbook returns empty list (RELIANCE not present = closed)
         positionbook = []
@@ -424,7 +466,7 @@ class TestBatchPositionCheck:
         engine = _make_engine()
         engine.open_positions = 1
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
 
         positionbook = [
             {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 50, "pnl": 100.0},
@@ -442,8 +484,8 @@ class TestBatchPositionCheck:
         engine.open_positions = 2
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
-        tracker.register(_make_position(symbol="TCS", strategy="ORB"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
+        tracker.register(_make_position(symbol="TCS", strategy=ORB))
 
         # TCS still open (qty=10), RELIANCE not in positionbook (closed)
         positionbook = [
@@ -479,7 +521,7 @@ class TestBatchPositionCheck:
         engine.open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
 
         positionbook = [
             {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0, "pnl": -150.0},
@@ -498,9 +540,9 @@ class TestBatchPositionCheck:
         engine = _make_engine()
         engine.open_positions = 3
         tracker = PositionTracker(engine)
-        tracker.register(_make_position(symbol="RELIANCE", strategy="ORB"))
-        tracker.register(_make_position(symbol="TCS", strategy="ORB"))
-        tracker.register(_make_position(symbol="INFY", strategy="ORB"))
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
+        tracker.register(_make_position(symbol="TCS", strategy=ORB))
+        tracker.register(_make_position(symbol="INFY", strategy=ORB))
 
         positionbook = [
             {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 50, "pnl": 0},

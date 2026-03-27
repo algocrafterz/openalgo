@@ -122,6 +122,19 @@ async def notify_exit_placed(symbol: str, order_id: str, strategy: str = "") -> 
     await notify(f"EXIT order placed | {symbol}{tag} | MARKET SELL id={order_id} | {_now_ist()}")
 
 
+async def notify_partial_exit(
+    symbol: str, exit_qty: int, remaining_qty: int, tp_level: str,
+    pnl: float, strategy: str = "",
+) -> None:
+    """Partial TP exit — position remains open with reduced quantity."""
+    tag = f" [{strategy}]" if strategy else ""
+    pnl_str = f"+₹{pnl:,.0f}" if pnl >= 0 else f"-₹{abs(pnl):,.0f}"
+    await notify(
+        f"🎯 PARTIAL EXIT | {symbol}{tag} | {tp_level} | "
+        f"Exited {exit_qty} qty, remaining {remaining_qty} | P&L: {pnl_str} | {_now_ist()}"
+    )
+
+
 async def notify_exit_no_position(symbol: str, strategy: str) -> None:
     await notify(f"EXIT ignored | {symbol} | No open position for strategy={strategy} | {_now_ist()}")
 

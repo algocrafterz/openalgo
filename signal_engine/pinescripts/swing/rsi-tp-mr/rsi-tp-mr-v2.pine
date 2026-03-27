@@ -622,9 +622,28 @@ buildEntryAlert(float entry, float sl, float tp) =>
 
     '{"chat_id": "' + telegramChatId + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
 
-// Build Exit Alert — same pipe format, direction = EXIT
+// Build TP Hit Alert — fires when Close > Exit SMA (primary / normal exit)
+// Normalizer detects "RSI-TP-MR TP1 HIT | SYMBOL" -> canonical RSI-TP-MR EXIT format.
+// Signal engine cancels SL order and places MARKET SELL (same _handle_exit pipeline as ORB).
+buildTPHitAlert(float exitPrice, float entryPrice) =>
+    float pnlAmt = exitPrice - entryPrice
+    float pnlPct = entryPrice > 0 ? (pnlAmt / entryPrice) * 100 : 0
+    string pnlSign = pnlAmt >= 0 ? "+" : ""
+
+    string msg = "RSI-TP-MR TP1 HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Exit: close > " + str.tostring(exitSmaLen) + " SMA\\n"
+    msg += "Exit Price: " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "P&L: " + pnlSign + str.tostring(pnlAmt, "#.##") + " (" + pnlSign + str.tostring(pnlPct, "#.#") + "%)\\n"
+    msg += "Bars held: " + str.tostring(barsHeld) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+
+    '{"chat_id": "' + telegramChatId + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// Build Exit Alert — safety exits only (trend break, max hold)
 // Normalizer converts: "RSI-TP-MR EXIT | RELIANCE" -> "RSI-TP-MR EXIT\nSymbol: RELIANCE"
-// NOTE: requires normalizer + parser to support EXIT direction (signal engine change)
 buildExitAlert(float entry, float sl, float tp, string reason) =>
     float pnlAmt = close - entry
     float pnlPct = entry > 0 ? (pnlAmt / entry) * 100 : 0
@@ -673,9 +692,13 @@ buildTestAlert() =>
 if enterLong
     alert(buildEntryAlert(close, preEntrySL, smaExit), alert.freq_once_per_bar)
 
-// Safety exit alerts ONLY — trend break, max hold, SL hit.
-// Primary exit (Close > 5 SMA) is handled by signal engine tracker via LTP monitoring.
-// The tracker exits when LTP crosses the TP level sent in the LONG alert.
+// Primary exit (Close > Exit SMA): fire TP HIT alert -> signal engine _handle_exit pipeline
+// Normalizer converts "RSI-TP-MR TP1 HIT | SYMBOL" -> RSI-TP-MR EXIT signal.
+if justExited and primaryExit
+    float prevEntry = strategy.closedtrades.entry_price(strategy.closedtrades - 1)
+    alert(buildTPHitAlert(close, prevEntry), alert.freq_once_per_bar_close)
+
+// Safety exit alerts — trend break or max hold days exceeded
 bool safetyExitFired = justExited and (trendBreak or timeExit)
 if safetyExitFired
     float prevEntry = strategy.closedtrades.entry_price(strategy.closedtrades - 1)

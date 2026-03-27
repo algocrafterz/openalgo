@@ -41,6 +41,7 @@ class Signal(BaseModel):
     exchange: Optional[str] = None
     product: Optional[str] = None
     time: Optional[str] = None
+    tp_level: Optional[str] = None  # e.g. "TP1", "TP2" — set by TP HIT normalizer
     raw_message: str = ""
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

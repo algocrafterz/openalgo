@@ -72,6 +72,11 @@ def parse(text: str) -> Optional[Signal]:
     if product:
         product = product.upper()
 
+    # TP level from TP HIT normalizer (e.g. "TP1", "TP2")
+    tp_level = fields.get("tplevel")
+    if tp_level:
+        tp_level = tp_level.upper()
+
     try:
         return Signal(
             strategy=strategy,
@@ -83,6 +88,7 @@ def parse(text: str) -> Optional[Signal]:
             exchange=exchange,
             product=product,
             time=fields.get("time"),
+            tp_level=tp_level,
             raw_message=text,
         )
     except Exception as e:

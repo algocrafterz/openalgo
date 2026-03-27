@@ -13,13 +13,16 @@ Canonical format:
 The normalizer handles:
 - Emoji/unicode decoration stripping
 - Separator line removal (dashes, equals, underscores)
-- Pipe-delimited first line: "ORB LONG | SYMBOL" or "RSI-TP-MR EXIT | SYMBOL" -> two lines
+- TP HIT alerts: "[STRATEGY] TP1 HIT | SYMBOL" -> canonical "STRATEGY EXIT" format (0.0 placeholders)
+- Pipe-delimited first line: "STRATEGY LONG | SYMBOL" or "STRATEGY EXIT | SYMBOL" -> two lines
 - Legacy "Target:" -> "TP:" key aliasing
 - Whitespace cleanup
 """
 
 import re
 from typing import Optional
+
+from signal_engine.strategies import ORB as _DEFAULT_STRATEGY
 
 # Emoji and decorative unicode ranges
 _EMOJI_RE = re.compile(
@@ -48,6 +51,17 @@ _PIPE_FIRST_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# TP HIT alert: optional strategy prefix + TP level + HIT + symbol
+# Formats: "TP1 HIT | SYMBOL", "ORB TP1 HIT | SYMBOL", "RSI-TP-MR TP1 HIT | SYMBOL"
+# Group 1: strategy prefix (optional, [\w-]+ to support hyphens)
+# Group 2: TP level (e.g. "TP1", "TP1.5", "TP2")
+# Group 3: symbol
+# Bare format (no prefix) defaults to _DEFAULT_STRATEGY for backward compatibility.
+_TP_HIT_RE = re.compile(
+    r"^(?:([\w-]+)\s+)?(TP\d+(?:\.\d+)?)\s+HIT\s*\|\s*(\w+)$",
+    re.IGNORECASE,
+)
+
 
 def normalize(text: Optional[str]) -> str:
     """Preprocess a raw signal message into canonical parser format.
@@ -72,6 +86,20 @@ def normalize(text: Optional[str]) -> str:
 
     if not lines:
         return ""
+
+    # Handle TP HIT alert: "[STRATEGY] TP1 HIT | SYMBOL" -> canonical EXIT format
+    # Group 1: optional strategy prefix; Group 2: symbol
+    # Bare format (no prefix) defaults to _DEFAULT_STRATEGY for backward compatibility.
+    # Entry/SL/TP synthesized as 0.0 (validator skips them for EXIT direction).
+    tp_hit_match = _TP_HIT_RE.match(lines[0])
+    if tp_hit_match:
+        strategy = (tp_hit_match.group(1) or _DEFAULT_STRATEGY).upper()
+        tp_level = tp_hit_match.group(2).upper()
+        symbol = tp_hit_match.group(3).upper()
+        return (
+            f"{strategy} EXIT\nSymbol: {symbol}\n"
+            f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: {tp_level}"
+        )
 
     # Handle pipe-delimited first line: "ORB LONG | NATIONALUM"
     pipe_match = _PIPE_FIRST_LINE_RE.match(lines[0])
