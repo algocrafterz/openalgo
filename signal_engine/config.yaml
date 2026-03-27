@@ -113,5 +113,4 @@ strategy_profiles:
   RSI-TP-MR:
     product: CNC
     tp_levels:
-      TP1: 0.5                  # Exit 50% at close > 5 SMA (primary mean reversion target)
-      TP2: 1.0                  # Exit remaining at TP2 or safety EXIT (trend break / max hold)
+      TP1: 1.0                  # Exit 100% at TP1 (single TP for RSI mean reversion)

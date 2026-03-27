@@ -565,8 +565,8 @@ class TestTPHitExitFlow:
         mock_notifier.notify_exit_placed.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_partial_exit_does_not_cancel_sl(self):
-        """Partial TP1 exit should keep SL active for remaining position."""
+    async def test_partial_exit_cancels_sl_before_exit(self):
+        """Partial TP1 exit must cancel SL before placing exit order (Indian broker constraint)."""
         mock_signal = MagicMock()
         mock_signal.strategy = "RSI-TP-MR"
         mock_signal.direction = Direction.EXIT
@@ -608,8 +608,10 @@ class TestTPHitExitFlow:
 
             await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
-        # SL should NOT be cancelled for partial exit — remaining position needs protection
-        mock_cancel.assert_not_called()
+        # SL MUST be cancelled before exit order — broker treats SELL while SL active as new SHORT
+        mock_cancel.assert_called_once_with("SL001", "RSI-TP-MR")
+        # After partial exit, sl_order_id is cleared (no re-placement in simple mode)
+        assert mock_pos.sl_order_id == ""
 
     @pytest.mark.asyncio
     async def test_failed_exit_fires_failure_notification(self):

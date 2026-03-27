@@ -466,7 +466,7 @@ Only SL is placed as a broker order. Retries up to `max_sl_retries` (5) with `re
 Prices are rounded to valid NSE tick size (0.05) to prevent broker rejection.
 
 **Why no TP broker order (Indian broker OCO constraint):**
-Indian brokers (mStock/Zerodha etc.) treat the first SELL on an existing LONG as an exit (covers the position). Any second SELL — even a TP LIMIT — is treated as a new SHORT requiring full MIS margin, causing FUND LIMIT INSUFFICIENT. There is no BO/CO product type in OpenAlgo. Solution: SL-M at broker level + tracker LTP monitoring for TP (application-level OCO).
+Indian brokers (mStock/Zerodha etc.) treat any SELL while an existing SL SELL is active as a new SHORT requiring full MIS margin, causing FUND LIMIT INSUFFICIENT. There is no BO/CO product type in OpenAlgo. Solution: SL-M at broker level for safety, TP exit driven by TradingView signals. **SL must ALWAYS be cancelled before placing ANY exit order** (partial or full), for both MIS and CNC products.
 
 **TP execution (tracker-based):**
 `tracker.py` polls `positionbook` every 10s, reads LTP, and when `ltp >= tp` (LONG) or `ltp <= tp` (SHORT): cancels SL order first, then places a MARKET exit with retries (`tp_exit_retries`).
@@ -563,6 +563,31 @@ tp_triggered: bool        # guard against double-exit
           [TP is never a broker order — handled by tracker LTP monitoring]
        d. tracker.register(TrackedPosition with direction + sl_order_id)
 14. db.save(signal, order, result)   [always, for audit trail]
+```
+
+### Exit Pipeline (`_handle_exit`)
+
+Triggered by TradingView EXIT/TP HIT signals (Direction.EXIT):
+
+```
+1.  Look up position in tracker by (symbol, strategy)
+    -> Not found: fallback to broker API (engine restart recovery)
+    -> Still not found: log WARNING, notify, skip
+2.  _resolve_exit_qty(signal, pos) -> (exit_qty, is_full_exit)
+    - Uses strategy_profiles.tp_levels config (e.g. TP1: 1.0 = 100%)
+    - No tp_level or no profile -> full exit
+3.  ALWAYS cancel SL order before exit (Indian broker constraint)
+    [Broker treats any SELL while SL SELL is active as new SHORT -> FUND LIMIT INSUFFICIENT]
+    -> cancel_order(sl_order_id) regardless of partial/full exit
+4.  build_exit_order() -> MARKET SELL for exit_qty
+5.  send_order(exit_order) -> TradeResult
+    -> SUCCESS:
+       a. Compute PnL from realised_pnl delta
+       b. Full exit: unregister position, record_close in risk engine
+       c. Partial exit: reduce tracked qty, clear sl_order_id (no SL re-placement)
+       d. tracker.record_exit() for day summary counters
+    -> FAILURE: notify_exit_failed
+6.  db.save(signal, exit_order, result)
 ```
 
 ### Startup Flow
@@ -770,6 +795,12 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 - [x] **max_open_positions 5 -> 2**: Right-sized for ₹15K MIS margin budget (2 × ~₹7-11K margin).
 - [x] **Telegram notifications for TP lifecycle**: `notify_tp_level_hit`, `notify_tp_exit_placed`, `notify_tp_exit_failed` (URGENT), `notify_sl_cancel_failed`.
 - [x] **Day summary in tracker**: win/loss/PnL counters tracked in `PositionTracker`, sent via `notify_day_summary` at EOD or time exit.
+
+### Phase 7: SL Cancel Before All Exits + RSI Single TP (2026-03-27)
+
+- [x] **SL cancel before ALL exit orders**: Previously SL was only cancelled on full exits. Partial exits left SL active, causing broker to treat the exit SELL as a new SHORT (FUND LIMIT INSUFFICIENT). Now SL is always cancelled before any exit order (partial or full), for both MIS and CNC.
+- [x] **RSI-TP-MR: TP1 = 100%**: Changed from 50% partial exit at TP1 to full 100% exit. Single TP for RSI mean reversion strategy.
+- [x] **Simplified partial exit flow**: After partial exit, `sl_order_id` is cleared (no SL re-placement). Remaining position relies on next TP signal or safety EXIT from TradingView.
 
 ### Not Implemented (Future Considerations)
 
