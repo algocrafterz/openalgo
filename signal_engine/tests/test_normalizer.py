@@ -209,6 +209,113 @@ class TestNormalizeThenParse:
         assert signal.symbol == "SBIN"
 
 
+class TestTPHitMessages:
+    """TP HIT alerts from TradingView PineScript — normalize to strategy-specific EXIT signals."""
+
+    # --- Backward compat: bare TP HIT without strategy prefix (old format) ---
+    def test_bare_tp1_hit_defaults_to_orb(self):
+        """Bare 'TP1 HIT | SYMBOL' (no strategy prefix) defaults to ORB for backward compat."""
+        text = "✅ TP1 HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 302.76"
+        result = normalize(text)
+        assert "ORB EXIT" in result
+        assert "Symbol: TMPV" in result
+
+    def test_bare_tp1_5_hit_defaults_to_orb(self):
+        text = "✅ TP1.5 HIT | ASHOKLEY\n------------------------\n🔴 SHORT | Entry: 164.61\nExit: 163.46"
+        result = normalize(text)
+        assert "ORB EXIT" in result
+        assert "Symbol: ASHOKLEY" in result
+
+    def test_tp_hit_without_emoji_defaults_to_orb(self):
+        text = "TP1 HIT | SBIN\nEntry: 600.0"
+        result = normalize(text)
+        assert "ORB EXIT" in result
+        assert "Symbol: SBIN" in result
+
+    # --- Strategy-prefixed TP HIT (new format, post PineScript update) ---
+    def test_orb_tp1_hit_normalized_as_orb_exit(self):
+        """'✅ ORB TP1 HIT | SYMBOL' -> 'ORB EXIT' with TpLevel: TP1."""
+        text = "✅ ORB TP1 HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 302.76"
+        result = normalize(text)
+        assert result == "ORB EXIT\nSymbol: TMPV\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1"
+
+    def test_rsi_tp_mr_tp1_hit_normalized_as_rsi_exit(self):
+        """'RSI-TP-MR TP1 HIT | SYMBOL' -> 'RSI-TP-MR EXIT' with TpLevel: TP1."""
+        text = "RSI-TP-MR TP1 HIT | HDFCBANK\n------------------------\nExit: close > 5 SMA\nP&L: +33.20"
+        result = normalize(text)
+        assert result == "RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1"
+
+    def test_orb_tp1_5_hit_normalized(self):
+        text = "✅ ORB TP1.5 HIT | NATIONALUM"
+        result = normalize(text)
+        assert result == "ORB EXIT\nSymbol: NATIONALUM\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1.5"
+
+    # --- Mandatory fields synthesized as 0.0 ---
+    def test_tp_hit_contains_mandatory_exit_fields(self):
+        """Parser requires Entry/SL/TP even for EXIT — normalizer synthesizes them as 0.0."""
+        text = "✅ ORB TP1 HIT | TMPV\nEntry: 305.10"
+        result = normalize(text)
+        assert "Entry: 0.0" in result
+        assert "SL: 0.0" in result
+        assert "TP: 0.0" in result
+
+    # --- Full pipeline tests ---
+    def test_orb_tp_hit_parses_as_orb_exit_signal(self):
+        """Full pipeline: ORB TP1 HIT -> normalize -> parse -> ORB EXIT signal."""
+        text = "✅ ORB TP1 HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 302.76"
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.direction.value == "EXIT"
+        assert signal.strategy == "ORB"
+        assert signal.symbol == "TMPV"
+
+    def test_rsi_tp_hit_parses_as_rsi_exit_signal(self):
+        """Full pipeline: RSI-TP-MR TP1 HIT -> normalize -> parse -> RSI-TP-MR EXIT signal."""
+        text = "RSI-TP-MR TP1 HIT | HDFCBANK\n------------------------\nExit: close > 5 SMA\nP&L: +33.20"
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.direction.value == "EXIT"
+        assert signal.strategy == "RSI-TP-MR"
+        assert signal.symbol == "HDFCBANK"
+
+    # --- tp_level extraction ---
+    def test_tp1_hit_carries_tp_level_in_output(self):
+        """Normalized output must include TpLevel: TP1 so parser can pass it to Signal."""
+        text = "ORB TP1 HIT | RELIANCE"
+        result = normalize(text)
+        assert "TpLevel: TP1" in result
+
+    def test_tp2_hit_carries_tp_level(self):
+        text = "RSI-TP-MR TP2 HIT | HDFCBANK"
+        result = normalize(text)
+        assert "TpLevel: TP2" in result
+
+    def test_tp1_5_hit_carries_tp_level(self):
+        text = "ORB TP1.5 HIT | TMPV"
+        result = normalize(text)
+        assert "TpLevel: TP1.5" in result
+
+    def test_tp_level_parsed_into_signal(self):
+        """Full pipeline: TP level flows through to Signal.tp_level."""
+        text = "ORB TP2 HIT | RELIANCE"
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.tp_level == "TP2"
+
+    def test_non_tp_hit_signal_has_no_tp_level(self):
+        """Regular entry/exit signals have no tp_level."""
+        text = "ORB LONG\nSymbol: SBIN\nEntry: 600\nSL: 590\nTP: 620"
+        signal = parse(normalize(text))
+        assert signal is not None
+        assert signal.tp_level is None
+
+    def test_sl_hit_is_not_normalized(self):
+        """SL HIT handled by broker SL-M — must NOT parse as EXIT to avoid double-exit."""
+        text = "❌ SL HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 307.44"
+        signal = parse(normalize(text))
+        assert signal is None
+
+
 class TestSwingExitFormat:
     """Tests for RSI-TP-MR alert format (RSI(2) strategy entry/exit signals)."""
 

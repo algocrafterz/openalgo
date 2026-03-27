@@ -70,8 +70,7 @@ time_exit:
 
 # ── Position Tracking ────────────────────────────────────
 tracking:
-  poll_interval: 10            # Seconds between position checks (10s balances TP responsiveness vs API load)
-                               # TP is now monitored via LTP in positionbook — 30s was too slow for volatile stocks
+  poll_interval: 10            # Seconds between position checks (detects broker SL-M fills via qty=0)
 
 # ── Broker / Exchange ────────────────────────────────────
 broker:
@@ -92,7 +91,27 @@ api:
 # ── Bracket Orders ────────────────────────────────────────
 bracket:
   enabled: true
+  cnc_sl_enabled: false        # CNC SL-M orders are cancelled at EOD by NSE — no overnight protection.
+                               # GTT not supported by OpenAlgo. CNC exits via TradingView signals only.
   sl_order_type: SL-M         # SL or SL-M
   max_sl_retries: 5            # Retry count for SL placement (safety-critical — 5 with 0.5s delay = 2.5s window)
   retry_delay: 0.5             # Seconds to wait between retries (prevents hammering broker RMS)
   tp_exit_retries: 3           # Retry count for tracker TP market exit (was 0 — unprotected before)
+
+# ── Strategy Profiles ───────────────────────────────────────
+# Per-strategy configuration for multi-TP partial exits and product type.
+# tp_levels: mapping of TP level -> fraction of position to exit (cumulative).
+#   TP1: 0.5 means exit 50% of position at TP1.
+#   TP2: 1.0 means exit remaining 100% at TP2.
+# product: default product type for this strategy (MIS, CNC).
+# If a strategy is not listed here, TP HIT exits 100% of position (single TP).
+strategy_profiles:
+  ORB:
+    product: MIS
+    tp_levels:
+      TP1: 1.0                  # ORB: single TP, exit 100% at TP1 HIT
+  RSI-TP-MR:
+    product: CNC
+    tp_levels:
+      TP1: 0.5                  # Exit 50% at close > 5 SMA (primary mean reversion target)
+      TP2: 1.0                  # Exit remaining at TP2 or safety EXIT (trend break / max hold)

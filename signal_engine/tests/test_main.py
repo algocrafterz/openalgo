@@ -162,6 +162,500 @@ class TestPipelineFlow:
             mock_send.assert_not_called()
 
 
+class TestExitPipelineDaySummary:
+    """_handle_exit must update tracker day counters with real PnL from realised PnL delta."""
+
+    @pytest.mark.asyncio
+    async def test_exit_records_pnl_in_tracker(self):
+        """Successful EXIT should call tracker.record_exit(pnl_delta, new_realised_pnl)."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "ORB"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+        ):
+            # Set up tracked position
+            mock_pos = MagicMock()
+            mock_pos.symbol = "RELIANCE"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 50
+            mock_pos.sl_order_id = "SL001"
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 1000.0
+
+            await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
+
+            mock_tracker.record_exit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_exit_passes_real_pnl_to_risk_engine(self):
+        """risk_engine.record_close should receive actual PnL, not 0.0."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "ORB"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "RELIANCE"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 50
+            mock_pos.sl_order_id = ""
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 1000.0
+
+            await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
+
+            # record_close should receive real PnL (1500 - 1000 = 500), not hardcoded 0.0
+            pnl_arg = mock_risk.record_close.call_args[1].get("pnl", mock_risk.record_close.call_args[0][0] if mock_risk.record_close.call_args[0] else None)
+            assert pnl_arg != 0.0
+
+
+class TestPartialExitFlow:
+    """Multi-TP partial exit: TP1 exits a fraction of qty, keeps position registered."""
+
+    @pytest.mark.asyncio
+    async def test_tp1_exits_partial_qty(self):
+        """TP1 with exit_pct=0.5 should exit 50% of position and keep it tracked."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "RSI-TP-MR"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "HDFCBANK"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()) as mock_build_exit,
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "HDFCBANK"
+            mock_pos.strategy = "RSI-TP-MR"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "CNC"
+            mock_pos.quantity = 100
+            mock_pos.sl_order_id = ""
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 1000.0
+
+            # Configure strategy profile: TP1 = 50% exit
+            mock_settings.strategy_profiles = {
+                "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
+            }
+
+            await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+            # Should exit 50 qty (50% of 100), not full 100
+            exit_qty = mock_build_exit.call_args.kwargs.get("quantity", mock_build_exit.call_args.args[2] if len(mock_build_exit.call_args.args) > 2 else None)
+            assert exit_qty == 50
+
+            # Position should NOT be fully unregistered (partial exit)
+            mock_tracker.unregister.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tp2_exits_remaining_full_qty(self):
+        """TP2 with exit_pct=1.0 should exit remaining qty and unregister position."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "RSI-TP-MR"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "HDFCBANK"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP2"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT002", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()) as mock_build_exit,
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "HDFCBANK"
+            mock_pos.strategy = "RSI-TP-MR"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "CNC"
+            mock_pos.quantity = 50  # remaining after TP1 took 50
+            mock_pos.sl_order_id = ""
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 1500.0
+
+            mock_settings.strategy_profiles = {
+                "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
+            }
+
+            await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP2")
+
+            # Full remaining qty exit
+            exit_qty = mock_build_exit.call_args.kwargs.get("quantity", mock_build_exit.call_args.args[2] if len(mock_build_exit.call_args.args) > 2 else None)
+            assert exit_qty == 50
+
+            # Should be fully unregistered
+            mock_tracker.unregister.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_tp_level_exits_full_position(self):
+        """EXIT without tp_level (safety EXIT, not TP HIT) should exit full qty."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "RSI-TP-MR"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "HDFCBANK"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = None
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT003", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()) as mock_build_exit,
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "HDFCBANK"
+            mock_pos.strategy = "RSI-TP-MR"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "CNC"
+            mock_pos.quantity = 100
+            mock_pos.sl_order_id = ""
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 1500.0
+
+            mock_settings.strategy_profiles = {
+                "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
+            }
+
+            await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
+
+            # Full qty exit — no tp_level means close everything
+            exit_qty = mock_build_exit.call_args.kwargs.get("quantity", mock_build_exit.call_args.args[2] if len(mock_build_exit.call_args.args) > 2 else None)
+            assert exit_qty == 100
+            mock_tracker.unregister.assert_called_once()
+
+
+class TestTPHitExitFlow:
+    """End-to-end TP HIT signal flow: cancel SL -> MARKET SELL -> notifications."""
+
+    @pytest.mark.asyncio
+    async def test_tp_hit_cancels_sl_before_exit(self):
+        """SL must be cancelled BEFORE the exit order is sent."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "ORB"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        call_order = []
+
+        async def mock_cancel(order_id, strategy):
+            call_order.append("cancel_sl")
+            return True
+
+        async def mock_send(order):
+            call_order.append("send_exit")
+            return exit_result
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", side_effect=mock_send),
+            patch("signal_engine.main.cancel_order", side_effect=mock_cancel),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "RELIANCE"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 50
+            mock_pos.sl_order_id = "SL001"
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 0.0
+            mock_settings.strategy_profiles = {
+                "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
+            }
+
+            await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+        assert call_order == ["cancel_sl", "send_exit"]
+
+    @pytest.mark.asyncio
+    async def test_tp_hit_full_exit_fires_all_notifications(self):
+        """Full TP exit should fire: exit_signal_received, exit_placed."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "ORB"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "RELIANCE"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 50
+            mock_pos.sl_order_id = "SL001"
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 0.0
+            mock_settings.strategy_profiles = {
+                "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
+            }
+
+            await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+        mock_notifier.notify_exit_signal_received.assert_called_once_with("RELIANCE", "ORB")
+        mock_notifier.notify_exit_placed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_tp_hit_partial_exit_fires_partial_notification(self):
+        """Partial TP exit should fire notify_partial_exit, NOT notify_exit_placed."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "RSI-TP-MR"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "HDFCBANK"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "HDFCBANK"
+            mock_pos.strategy = "RSI-TP-MR"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "CNC"
+            mock_pos.quantity = 100
+            mock_pos.sl_order_id = ""
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 0.0
+            mock_settings.strategy_profiles = {
+                "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
+            }
+
+            await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+        # Partial exit notification, not full exit
+        mock_notifier.notify_partial_exit.assert_called_once()
+        mock_notifier.notify_exit_placed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_exit_does_not_cancel_sl(self):
+        """Partial TP1 exit should keep SL active for remaining position."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "RSI-TP-MR"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "HDFCBANK"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock) as mock_cancel,
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "HDFCBANK"
+            mock_pos.strategy = "RSI-TP-MR"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "CNC"
+            mock_pos.quantity = 100
+            mock_pos.sl_order_id = "SL001"
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 0.0
+            mock_settings.strategy_profiles = {
+                "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
+            }
+
+            await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+        # SL should NOT be cancelled for partial exit — remaining position needs protection
+        mock_cancel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_exit_fires_failure_notification(self):
+        """Failed exit order should fire notify_exit_failed."""
+        mock_signal = MagicMock()
+        mock_signal.strategy = "ORB"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        failed_result = TradeResult(order_id="", status=OrderStatus.REJECTED, message="margin error")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_pos = MagicMock()
+            mock_pos.symbol = "RELIANCE"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 50
+            mock_pos.sl_order_id = "SL001"
+            mock_tracker.find_position.return_value = mock_pos
+            mock_settings.strategy_profiles = {
+                "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
+            }
+
+            await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+        mock_notifier.notify_exit_failed.assert_called_once()
+
+
 class TestConcentrationRisk:
     @pytest.mark.asyncio
     async def test_symbol_concentration_blocked(self):
@@ -194,6 +688,85 @@ class TestConcentrationRisk:
             mock_risk.can_trade_sector.return_value = False
             await handle_message(_valid_message())
             mock_send.assert_not_called()
+
+
+class TestCncBracketSkip:
+    """CNC orders should skip SL-M bracket placement — SL-M is cancelled at EOD by exchange."""
+
+    @pytest.mark.asyncio
+    async def test_cnc_entry_skips_bracket(self):
+        """CNC product should not place SL-M bracket even when bracket_enabled=True."""
+        mock_signal = _mock_signal()
+        mock_signal.product = "CNC"
+        mock_signal.exchange = "NSE"
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        mock_order = MagicMock()
+        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
+            patch("signal_engine.main.build_order", return_value=mock_order),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock) as mock_bracket,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
+            mock_risk.calculate_quantity.return_value = 50
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_cnc_sl_enabled = False
+            mock_settings.risk_per_trade = 0.01
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "CNC"
+
+            await handle_message(_valid_message())
+
+        mock_bracket.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mis_entry_still_places_bracket(self):
+        """MIS product should still place SL-M bracket when bracket_enabled=True."""
+        mock_signal = _mock_signal()
+        mock_signal.product = ""
+        mock_signal.exchange = ""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        mock_order = MagicMock()
+        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
+        sl_result = TradeResult(order_id="SL001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
+            patch("signal_engine.main.build_order", return_value=mock_order),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, None)) as mock_bracket,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 200_000.0
+            mock_risk.calculate_quantity.return_value = 50
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_cnc_sl_enabled = False
+            mock_settings.risk_per_trade = 0.01
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+
+            await handle_message(_valid_message())
+
+        mock_bracket.assert_called_once()
 
 
 class TestBracketOrderFlow:
@@ -334,109 +907,3 @@ class TestBracketOrderFlow:
         assert call_args.sl_order_id == "SL001"
 
 
-class TestTpMonitoringAllPositions:
-    """TP monitoring should be enabled for all positions (MIS and CNC)."""
-
-    def _mock_cnc_signal(self):
-        sig = MagicMock()
-        sig.strategy = "RSI-TP-MR"
-        sig.direction = Direction.LONG
-        sig.symbol = "RELIANCE"
-        sig.entry = 2500.0
-        sig.sl = 2300.0
-        sig.tp = 2600.0
-        sig.product = "CNC"
-        sig.exchange = "NSE"
-        return sig
-
-    def _mock_mis_signal(self):
-        sig = MagicMock()
-        sig.strategy = "ORB"
-        sig.direction = Direction.LONG
-        sig.symbol = "RELIANCE"
-        sig.entry = 2500.0
-        sig.sl = 2485.0
-        sig.tp = 2540.0
-        sig.product = "MIS"
-        sig.exchange = "NSE"
-        return sig
-
-    @pytest.mark.asyncio
-    async def test_cnc_position_gets_tp_monitoring_enabled(self):
-        """RSI-TP-MR CNC positions should have tp_monitoring=True (tracker monitors TP via LTP)."""
-        mock_signal = self._mock_cnc_signal()
-        valid_result = ValidationResult(status=ValidationStatus.VALID)
-        mock_order = MagicMock()
-        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
-        sl_result = TradeResult(order_id="SL001", status=OrderStatus.SUCCESS, message="ok")
-        tp_result = TradeResult(order_id="", status=OrderStatus.SUCCESS, message="ok")
-
-        with (
-            patch("signal_engine.main.parse", return_value=mock_signal),
-            patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.risk_engine") as mock_risk,
-            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=500_000.0),
-            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=20),
-            patch("signal_engine.main.build_order", return_value=mock_order),
-            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
-            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, tp_result)),
-            patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker") as mock_tracker,
-            patch("signal_engine.main.settings") as mock_settings,
-        ):
-            mock_risk.check_exposure.return_value = True
-            mock_risk.can_trade_symbol.return_value = True
-            mock_risk.can_trade_sector.return_value = True
-            mock_risk.get_sizing_capital.return_value = 500_000.0
-            mock_risk.calculate_quantity.return_value = 20
-            mock_settings.bracket_enabled = True
-            mock_settings.risk_per_trade = 0.01
-            mock_settings.sizing_mode = "fixed_fractional"
-            mock_settings.exchange = "NSE"
-            mock_settings.product = "MIS"
-
-            await handle_message("RSI-TP-MR LONG\nSymbol: RELIANCE\nEntry: 2500\nSL: 2300\nTP: 2600\nProduct: CNC")
-
-        tracked_pos = mock_tracker.register.call_args[0][0]
-        assert tracked_pos.tp_monitoring is True
-        assert tracked_pos.product == "CNC"
-
-    @pytest.mark.asyncio
-    async def test_mis_position_gets_tp_monitoring_enabled(self):
-        """ORB MIS positions should also have tp_monitoring=True (unchanged behaviour)."""
-        mock_signal = self._mock_mis_signal()
-        valid_result = ValidationResult(status=ValidationStatus.VALID)
-        mock_order = MagicMock()
-        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
-        sl_result = TradeResult(order_id="SL001", status=OrderStatus.SUCCESS, message="ok")
-        tp_result = TradeResult(order_id="", status=OrderStatus.SUCCESS, message="ok")
-
-        with (
-            patch("signal_engine.main.parse", return_value=mock_signal),
-            patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.risk_engine") as mock_risk,
-            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
-            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
-            patch("signal_engine.main.build_order", return_value=mock_order),
-            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
-            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, tp_result)),
-            patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker") as mock_tracker,
-            patch("signal_engine.main.settings") as mock_settings,
-        ):
-            mock_risk.check_exposure.return_value = True
-            mock_risk.can_trade_symbol.return_value = True
-            mock_risk.can_trade_sector.return_value = True
-            mock_risk.get_sizing_capital.return_value = 200_000.0
-            mock_risk.calculate_quantity.return_value = 50
-            mock_settings.bracket_enabled = True
-            mock_settings.risk_per_trade = 0.01
-            mock_settings.sizing_mode = "fixed_fractional"
-            mock_settings.exchange = "NSE"
-            mock_settings.product = "MIS"
-
-            await handle_message("ORB LONG\nSymbol: RELIANCE\nEntry: 2500\nSL: 2485\nTP: 2540")
-
-        tracked_pos = mock_tracker.register.call_args[0][0]
-        assert tracked_pos.tp_monitoring is True
-        assert tracked_pos.product == "MIS"

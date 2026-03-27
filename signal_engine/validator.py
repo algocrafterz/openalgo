@@ -26,18 +26,18 @@ def validate(signal: Signal) -> ValidationResult:
     """Validate a signal against trading rules.
 
     Checks (in order):
-    1. Entry > 0
-    2. SL > 0
-    3. Target > 0
-    4. SL direction consistency
-    5. Target direction consistency
-    6. Minimum R:R ratio
-    7. Duplicate detection
+    1. Symbol blacklist (non-EXIT only)
+    2. EXIT early return — symbol required, all other checks skipped
+       (TP HIT signals synthesize Entry: 0.0, SL/TP/R:R irrelevant for closes)
+    3. Entry > 0 (non-EXIT only)
+    4. SL > 0
+    5. Target > 0
+    6. SL direction consistency
+    7. Target direction consistency
+    8. Minimum R:R ratio
+    9. Minimum SL distance %
+    10. Duplicate detection
     """
-    # Entry validity
-    if signal.entry <= 0:
-        return ValidationResult(status=ValidationStatus.INVALID, reason="Entry must be positive")
-
     # Symbol blacklist — check before EXIT early return so EXIT signals can still close positions
     # EXIT signals skip this check (we must close existing positions even if symbol is now blacklisted)
     if signal.direction != Direction.EXIT:
@@ -58,11 +58,15 @@ def validate(signal: Signal) -> ValidationResult:
             )
 
     # EXIT signals: minimal validation (closing, not opening)
-    # Skip SL/TP/R:R/duplicate checks — EXIT carries original entry data for audit only
+    # Skip entry>0, SL/TP/R:R/duplicate checks — TP HIT signals synthesize Entry: 0.0
     if signal.direction == Direction.EXIT:
         if not signal.symbol or signal.symbol.strip() == "":
             return ValidationResult(status=ValidationStatus.INVALID, reason="EXIT: symbol required")
         return ValidationResult(status=ValidationStatus.VALID)
+
+    # Entry validity (non-EXIT only — EXIT may carry synthesized 0.0 from TP HIT normalizer)
+    if signal.entry <= 0:
+        return ValidationResult(status=ValidationStatus.INVALID, reason="Entry must be positive")
 
     # SL validity
     if signal.sl <= 0:

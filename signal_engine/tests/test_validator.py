@@ -3,6 +3,7 @@
 import pytest
 
 from signal_engine.models import Direction, Signal, ValidationStatus
+from signal_engine.strategies import ORB, RSI_TP_MR
 from signal_engine.validator import validate, _recent_signals
 from signal_engine.tests.conftest import make_signal as _make_signal
 
@@ -152,10 +153,10 @@ class TestExitValidation:
         assert validate(sig1).status == ValidationStatus.VALID
         assert validate(sig2).status == ValidationStatus.VALID
 
-    def test_exit_requires_positive_entry(self):
-        """Entry must be positive even for EXIT (audit trail accuracy)."""
+    def test_exit_with_synthesized_zero_entry_valid(self):
+        """TP HIT signals synthesize Entry: 0.0 — EXIT must accept it."""
         result = validate(_make_signal(direction=Direction.EXIT, entry=0))
-        assert result.status == ValidationStatus.INVALID
+        assert result.status == ValidationStatus.VALID
 
     def test_exit_requires_symbol(self):
         """EXIT must have a symbol to identify which position to close."""
@@ -168,46 +169,46 @@ class TestBlacklist:
 
     def test_blacklisted_symbol_ignored(self):
         """BHEL is blacklisted for ORB — should be IGNORED."""
-        result = validate(_make_signal(strategy="ORB", symbol="BHEL"))
+        result = validate(_make_signal(strategy=ORB, symbol="BHEL"))
         assert result.status == ValidationStatus.IGNORED
         assert "blacklisted" in result.reason.lower()
 
     def test_blacklisted_symbol_different_strategy_allowed(self):
         """BHEL blacklisted for ORB but not RSI-TP-MR — should pass."""
-        result = validate(_make_signal(strategy="RSI-TP-MR", symbol="BHEL"))
+        result = validate(_make_signal(strategy=RSI_TP_MR, symbol="BHEL"))
         assert result.status == ValidationStatus.VALID
 
     def test_non_blacklisted_symbol_allowed(self):
         """RELIANCE is not blacklisted — should pass."""
-        result = validate(_make_signal(strategy="ORB", symbol="RELIANCE"))
+        result = validate(_make_signal(strategy=ORB, symbol="RELIANCE"))
         assert result.status == ValidationStatus.VALID
 
     def test_global_blacklist_blocks_all_strategies(self):
         """Symbol in _global blacklist is blocked regardless of strategy."""
-        result = validate(_make_signal(strategy="ORB", symbol="YESBANK"))
+        result = validate(_make_signal(strategy=ORB, symbol="YESBANK"))
         assert result.status == ValidationStatus.IGNORED
         assert "blacklisted" in result.reason.lower()
 
     def test_global_blacklist_blocks_swing_too(self):
         """Global blacklist applies to RSI-TP-MR as well."""
-        result = validate(_make_signal(strategy="RSI-TP-MR", symbol="YESBANK"))
+        result = validate(_make_signal(strategy=RSI_TP_MR, symbol="YESBANK"))
         assert result.status == ValidationStatus.IGNORED
 
     def test_blacklist_case_insensitive(self):
         """Blacklist should match regardless of case."""
-        result = validate(_make_signal(strategy="ORB", symbol="bhel"))
+        result = validate(_make_signal(strategy=ORB, symbol="bhel"))
         assert result.status == ValidationStatus.IGNORED
 
     def test_exit_skips_blacklist(self):
         """EXIT signals should not be blocked by blacklist (closing existing position)."""
         result = validate(_make_signal(
-            strategy="ORB", symbol="BHEL", direction=Direction.EXIT,
+            strategy=ORB, symbol="BHEL", direction=Direction.EXIT,
         ))
         assert result.status == ValidationStatus.VALID
 
     def test_blacklisted_reason_includes_strategy(self):
         """Rejection reason should mention the strategy for clarity."""
-        result = validate(_make_signal(strategy="ORB", symbol="BHEL"))
+        result = validate(_make_signal(strategy=ORB, symbol="BHEL"))
         assert "ORB" in result.reason or "blacklisted" in result.reason.lower()
 
 

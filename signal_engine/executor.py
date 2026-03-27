@@ -204,9 +204,8 @@ async def send_bracket_legs(
     both SL and TP simultaneously therefore always results in one of them being
     rejected with FUND LIMIT INSUFFICIENT.
 
-    Strategy: Place only the SL order here (safety-critical). TP is handled by
-    the position tracker, which monitors LTP via positionbook and exits at market
-    when the TP price is reached.
+    Strategy: Place only the SL-M order here (safety-critical). TP exit is driven
+    by TradingView TP HIT signal -> _handle_exit pipeline.
 
     Returns (sl_result, None) always — tp_result slot reserved for future use.
     """
@@ -233,5 +232,5 @@ async def send_bracket_legs(
             f"{signal.symbol} - position has no SL protection"
         )
 
-    # TP is handled by the position tracker via LTP monitoring (not a broker order)
+    # TP exit via TradingView TP HIT signal -> _handle_exit (not a broker order)
     return sl_result, None

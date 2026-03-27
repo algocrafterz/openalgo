@@ -7,7 +7,7 @@ import sys
 
 from loguru import logger
 
-from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_trading_mode, fetch_margin, MarginAPIError
+from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
 from signal_engine.db import save
 from signal_engine.executor import build_exit_order, build_order, send_bracket_legs, send_order
@@ -85,11 +85,44 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
     return adjusted_qty
 
 
-async def _handle_exit(signal) -> None:
-    """Handle an EXIT signal — close an existing position.
+def _resolve_exit_qty(signal, pos: TrackedPosition) -> tuple[int, bool]:
+    """Determine exit quantity and whether this is a full exit.
 
-    EXIT pipeline: look up tracker -> cancel SL -> MARKET SELL -> unregister -> save
-    Skips risk engine checks (closing, not opening).
+    Uses strategy_profiles tp_levels config for partial exits.
+    Returns (exit_qty, is_full_exit).
+    """
+    tp_level = getattr(signal, "tp_level", None)
+    profile = settings.strategy_profiles.get(signal.strategy.upper(), {})
+    tp_levels = profile.get("tp_levels", {})
+
+    # No tp_level (safety EXIT) or no profile -> full exit
+    if not tp_level or not tp_levels:
+        return pos.quantity, True
+
+    exit_pct = tp_levels.get(tp_level.upper(), 1.0)
+
+    if exit_pct >= 1.0:
+        return pos.quantity, True
+
+    exit_qty = math.floor(pos.quantity * exit_pct)
+    if exit_qty <= 0:
+        exit_qty = 1  # Always exit at least 1 share
+    if exit_qty >= pos.quantity:
+        return pos.quantity, True
+
+    return exit_qty, False
+
+
+async def _handle_exit(signal) -> None:
+    """Handle an EXIT signal — close (or partially close) an existing position.
+
+    Supports multi-TP partial exits via strategy_profiles config:
+    - TP1 with exit_pct=0.5 -> exit 50% qty, keep position tracked with reduced qty
+    - TP2 with exit_pct=1.0 -> exit remaining qty, unregister position
+    - No tp_level (safety EXIT) -> exit full qty, unregister position
+
+    EXIT pipeline: look up tracker -> resolve qty -> cancel SL (if full exit) ->
+    MARKET SELL -> update tracker -> record PnL -> save
     """
     await notifier.notify_exit_signal_received(signal.symbol, signal.strategy)
 
@@ -109,7 +142,6 @@ async def _handle_exit(signal) -> None:
             logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
             await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
             return
-        # Build a minimal position for the exit
         pos = TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -123,36 +155,61 @@ async def _handle_exit(signal) -> None:
             sl_order_id="",
         )
 
-    # 3. Cancel SL order if present
-    if pos.sl_order_id:
+    # 3. Resolve exit quantity (partial or full based on tp_level config)
+    exit_qty, is_full_exit = _resolve_exit_qty(signal, pos)
+    tp_level = getattr(signal, "tp_level", None)
+    logger.info(
+        f"EXIT: {pos.symbol} tp_level={tp_level} exit_qty={exit_qty}/{pos.quantity} "
+        f"full_exit={is_full_exit}"
+    )
+
+    # 4. Cancel SL order only on full exit (partial exit keeps SL for remaining qty)
+    if is_full_exit and pos.sl_order_id:
         success = await cancel_order(pos.sl_order_id, pos.strategy)
         if success:
             logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
         else:
             logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
 
-    # 4. Build and send MARKET SELL exit order
+    # 5. Build and send MARKET SELL exit order
     exit_order = build_exit_order(
         symbol=pos.symbol,
         exchange=pos.exchange,
-        quantity=pos.quantity,
+        quantity=exit_qty,
         product=pos.product,
         strategy_tag=pos.strategy,
     )
     trade_result = await send_order(exit_order)
 
     if trade_result.status == OrderStatus.SUCCESS:
-        logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id}")
-        await notifier.notify_exit_placed(pos.symbol, trade_result.order_id, strategy=pos.strategy)
+        logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
 
-        # 5. Unregister from tracker (prevents polling loop from double-closing)
-        tracker.unregister(signal.symbol, signal.strategy)
-        risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+        # 6. Compute PnL from realised PnL delta (same method as check_positions)
+        current_realised = await fetch_realised_pnl()
+        pnl_delta = current_realised - tracker._last_realised_pnl
+        logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
+
+        if is_full_exit:
+            # Full exit: unregister position, free risk slot
+            await notifier.notify_exit_placed(pos.symbol, trade_result.order_id, strategy=pos.strategy)
+            tracker.unregister(signal.symbol, signal.strategy)
+            risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+        else:
+            # Partial exit: reduce tracked qty, keep position registered
+            remaining = pos.quantity - exit_qty
+            pos.quantity = remaining
+            logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
+            await notifier.notify_partial_exit(
+                pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta, strategy=pos.strategy,
+            )
+
+        # 7. Update day summary counters + realised PnL snapshot
+        tracker.record_exit(pnl=pnl_delta, new_realised_pnl=current_realised)
     else:
         logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
         await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
 
-    # 6. Persist to DB audit trail
+    # 8. Persist to DB audit trail
     save(signal, exit_order, trade_result)
 
 
@@ -237,12 +294,21 @@ async def _handle_entry(signal) -> None:
         risk_engine.record_trade(symbol=signal.symbol)
         logger.info(f"Capacity: {risk_engine.capacity_status()}")
 
-        # 9. Place SL bracket leg (if enabled)
-        # Note: TP is NOT placed as a broker order. Indian brokers treat any second
-        # SELL (after SL covers the long) as a new short requiring margin, causing
-        # FUND LIMIT INSUFFICIENT. TP is handled by the tracker via LTP monitoring.
+        # 9. Place SL bracket leg (MIS only)
+        # TP is NOT placed as a broker order — Indian brokers treat a second SELL as a new
+        # short, causing FUND LIMIT INSUFFICIENT. TP exit is driven by TradingView TP HIT
+        # signal -> _handle_exit pipeline. SL-M placed here as broker-side safety net.
+        # CNC: SL-M cancelled at EOD by NSE, no GTT in OpenAlgo — skip bracket entirely.
+        # CNC exits rely on TradingView EXIT alerts (close < 200 SMA, max hold days).
         sl_order_id = ""
-        if settings.bracket_enabled:
+        product = signal.product or settings.product
+        skip_cnc_bracket = product == "CNC" and not settings.bracket_cnc_sl_enabled
+        if skip_cnc_bracket:
+            logger.info(
+                f"Skipping SL bracket for {signal.symbol}: CNC product, "
+                "SL-M cancelled at EOD by NSE (bracket.cnc_sl_enabled=false)"
+            )
+        if settings.bracket_enabled and not skip_cnc_bracket:
             sl_result, _ = await send_bracket_legs(signal, quantity, trade_result.order_id)
             sl_order_id = sl_result.order_id if sl_result else ""
             if sl_result and sl_result.status == OrderStatus.SUCCESS:
@@ -250,14 +316,7 @@ async def _handle_entry(signal) -> None:
             else:
                 await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
 
-        # 10. Determine TP monitoring mode
-        # All positions with a TP level use tracker LTP monitoring for exit.
-        # RSI-TP-MR: TP = 5 SMA (from PineScript alert), tracker exits when LTP crosses it.
-        # ORB: TP = target price, same tracker LTP monitoring.
-        # PineScript EXIT alerts serve as fallback for safety exits (trend break, max hold).
-        tp_monitoring = True
-
-        # 11. Register in position tracker for P&L monitoring
+        # 10. Register in position tracker for P&L monitoring and SL close-detection
         tracker.register(TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -270,7 +329,6 @@ async def _handle_entry(signal) -> None:
             direction=signal.direction,
             entry_order_id=trade_result.order_id,
             sl_order_id=sl_order_id,
-            tp_monitoring=tp_monitoring,
         ))
 
     # 12. Persist to DB

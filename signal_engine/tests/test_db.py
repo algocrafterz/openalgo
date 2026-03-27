@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from signal_engine.db import save, _get_connection
+from signal_engine.strategies import ORB
 from signal_engine.models import (
     Action,
     Direction,
@@ -26,7 +27,7 @@ def _make_order(**overrides) -> Order:
         "price": 0,
         "order_type": "MARKET",
         "product": "MIS",
-        "strategy_tag": "ORB",
+        "strategy_tag": ORB,
     }
     defaults.update(overrides)
     return Order(**defaults)
