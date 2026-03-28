@@ -549,27 +549,29 @@ Two scanners support the ORB pipeline: a **setup scanner** (run night before / p
 ### Scanner 1: Setup Scanner (Night Before / Pre-Market)
 
 **When to run:** 3:30-4:00 PM after market close, or 9:00-9:10 AM pre-market.
-**Purpose:** Find liquid, trending, volatile Nifty 100 stocks to add to TradingView watchlist and set ORB alerts on. Targets 5-15 stocks per day.
+**Purpose:** Find liquid, trending, volatile Nifty 200 stocks to add to TradingView watchlist and set ORB alerts on. Targets 10-20 stocks per day.
 
 ```
-( {nifty100} (
+( {nifty200} (
   latest close > latest sma( close, 200 )
   and latest close > latest sma( close, 50 )
   and latest volume > 1500000
   and latest close > 150
   and latest close < 800
   and latest market cap > 10000
-  and latest average true range ( 14 ) > 5
+  and latest average true range ( 14 ) / latest close * 100 > 1
+  and latest average true range ( 14 ) / latest close * 100 < 4
 ) )
 or
-( {nifty100} (
+( {nifty200} (
   latest close < latest sma( close, 200 )
   and latest close < latest sma( close, 50 )
   and latest volume > 1500000
   and latest close > 150
   and latest close < 800
   and latest market cap > 10000
-  and latest average true range ( 14 ) > 5
+  and latest average true range ( 14 ) / latest close * 100 > 1
+  and latest average true range ( 14 ) / latest close * 100 < 4
 ) )
 ```
 
@@ -577,11 +579,11 @@ or
 |---|---|---|---|
 | SMA(200) | Close > SMA(200) | Close < SMA(200) | Long-term trend aligned |
 | SMA(50) | Close > SMA(50) | Close < SMA(50) | Short-term trend also aligned — do NOT use > for bearish |
-| Volume | > 1,500,000 shares | same | Genuine liquidity |
+| Volume | > 1,500,000 shares | same | Genuine daily liquidity for clean fills |
 | Price band | 150 - 800 | same | Matches `min_entry_price` / `max_entry_price` in config.yaml |
-| Market Cap | > 10,000 Cr | same | Large-cap only, institutional grade |
-| ATR(14) | > 5 INR | same | Meaningful daily range for ORB moves |
-| Universe | `{nifty100}` | same | Quality filter — avoids illiquid / manipulated stocks |
+| Market Cap | > 10,000 Cr | same | Institutional grade — avoids illiquid / manipulated stocks |
+| ATR(14) % | 1% - 4% of price | same | Meaningful range regardless of price level. Maps to PineScript ORB range filter (0.4-3.5%). Absolute ATR > 5 was misleading: same number means 3% for ₹150 stock vs 0.6% for ₹800 stock |
+| Universe | `{nifty200}` | same | Wider pool than Nifty 100 — includes mid-caps in 150-800 sweet spot. Q1 top performers (NATIONALUM, APOLLOTYRE, ASHOKLEY, EXIDEIND) are Nifty 200 stocks. Volume + market cap filters already ensure quality |
 
 **After scan:** Manually remove blacklisted symbols (BHEL, MANAPPURAM, GAIL, JIOFIN, TATAPOWER) from results before adding to TradingView.
 
@@ -593,20 +595,22 @@ or
 **Purpose:** Discovery — see which stocks are actively breaking ORH or ORL right now. Cross-check against TradingView alerts; if Chartink shows a breakout TradingView missed, that stock is not in your watchlist yet.
 
 ```
-( {nifty100} (
+( {nifty200} (
   [0] 15 minute close crossed above [=1] 15 minute high
   and [0] 15 minute volume > [=1] 15 minute volume
   and [0] 15 minute close > 150
   and [0] 15 minute close < 800
   and [0] 15 minute close > latest sma( close, 200 )
+  and [0] 15 minute close > latest sma( close, 50 )
 ) )
 or
-( {nifty100} (
+( {nifty200} (
   [0] 15 minute close crossed below [=1] 15 minute low
   and [0] 15 minute volume > [=1] 15 minute volume
   and [0] 15 minute close > 150
   and [0] 15 minute close < 800
   and [0] 15 minute close < latest sma( close, 200 )
+  and [0] 15 minute close < latest sma( close, 50 )
 ) )
 ```
 
@@ -615,7 +619,8 @@ or
 | Breakout | `crossed above [=1] 15m high` | `crossed below [=1] 15m low` | `[=1]` = first 15-min candle (9:15-9:30 AM ORB). `crossed` fires on exact breakout candle only |
 | Volume | Breakout candle > ORB candle | same | Confirms genuine breakout, not a fake |
 | Price band | 150 - 800 | same | Matches config |
-| Trend | Close > SMA(200) | Close < SMA(200) | Trade with the larger trend |
+| Trend | Close > SMA(200) + SMA(50) | Close < SMA(200) + SMA(50) | Both SMAs required — consistent with setup scanner. SMA(200) alone misses transitional stocks between 50 and 200 SMA |
+| Universe | `{nifty200}` | same | Matches setup scanner universe |
 
 **Important:** `crossed above` / `crossed below` fires only on the **exact candle** of breakout. Each scan run shows only stocks that broke out during the most recent completed 15-min candle — not earlier ones. This is intentional.
 
