@@ -1,0 +1,873 @@
+//@version=6
+// HOD Strategy — High-of-Day Breakout + First Pullback (Long & Short)
+// Detects HOD breakout with volume + VWAP confirmation, waits for controlled pullback,
+// enters on pullback high/low break. Mirrors LOD (Low-of-Day) for short setups.
+// Designed for Indian NSE 5-min charts with Telegram alerts.
+strategy("HOD Strategy", shorttitle="HOD-FPB", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     initial_capital=100000, currency=currency.INR, commission_type=strategy.commission.percent,
+     commission_value=0.06, slippage=2, calc_on_every_tick=false,
+     process_orders_on_close=false, pyramiding=0,
+     max_labels_count=500, max_lines_count=500, max_boxes_count=300)
+
+// =========================================== GROUPS ================================================
+
+grp_session  = "Session Settings"
+grp_breakout = "HOD/LOD Breakout Detection"
+grp_pullback = "Pullback Validation"
+grp_risk     = "Risk & Position Sizing"
+grp_targets  = "Targets & Exits"
+grp_visual   = "Chart Visuals"
+grp_dash     = "Dashboard"
+grp_telegram = "Telegram Alerts"
+
+// =========================================== INPUTS ================================================
+
+// --- Session ---
+sessionStart     = input.session("0915-1530", "Trading Session", group=grp_session, tooltip="NSE regular hours. ORB range builds in first 15-30 min.")
+entryCutoffHour  = input.int(14, "Entry Cutoff Hour", minval=9, maxval=15, group=grp_session, inline="cutoff", tooltip="No new entries after this time. HOD breakouts can occur later than ORB, so default 14:00.")
+entryCutoffMinute = input.int(0, "Min", minval=0, maxval=59, group=grp_session, inline="cutoff")
+timeExitHour     = input.int(15, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force close all positions. 15:00 gives buffer before broker auto square-off at 15:10-15:20.")
+timeExitMinute   = input.int(0, "Min", minval=0, maxval=59, group=grp_session, inline="timeexit")
+skipFirstNBars   = input.int(3, "Skip First N Bars", minval=0, maxval=12, group=grp_session, tooltip="Ignore HOD/LOD in first N bars (opening volatility). 3 bars = first 15 min on 5-min chart.")
+
+// --- Direction ---
+tradeDirection   = input.string("Both", "Trade Direction", options=["Long Only", "Short Only", "Both"], group=grp_breakout, tooltip="Long Only = HOD breakouts only\nShort Only = LOD breakdowns only\nBoth = trade both directions")
+
+// --- Breakout Detection ---
+volumeLength     = input.int(20, "Volume MA Length", minval=5, maxval=100, group=grp_breakout, tooltip="Period for volume SMA used in RVOL calculation.")
+volumeMultiplier = input.float(1.5, "Min RVOL for Breakout", minval=1.0, maxval=5.0, step=0.1, group=grp_breakout, tooltip="Breakout bar must have volume >= this x average volume.\n1.5 = moderate filter (recommended)\n2.0 = strict")
+vwapSlopeBars    = input.int(5, "VWAP Slope Lookback", minval=2, maxval=20, group=grp_breakout, tooltip="Number of bars to measure VWAP slope direction.")
+requireVWAPSlope = input.bool(true, "Require VWAP Slope Alignment", group=grp_breakout, tooltip="Long: VWAP must be rising. Short: VWAP must be falling.")
+
+// --- Pullback ---
+pullbackMinBars  = input.int(2, "Min Pullback Bars", minval=1, maxval=6, group=grp_pullback, tooltip="Minimum consecutive bars with lower highs (long) or higher lows (short).")
+pullbackMaxBars  = input.int(5, "Max Pullback Bars", minval=2, maxval=10, group=grp_pullback, tooltip="Maximum bars allowed in pullback before setup expires.")
+pullbackMinPct   = input.float(0.3, "Min Retracement %", minval=0.1, maxval=2.0, step=0.1, group=grp_pullback, tooltip="Pullback must retrace at least this % from HOD/LOD.")
+pullbackMaxPct   = input.float(1.5, "Max Retracement %", minval=0.3, maxval=3.0, step=0.1, group=grp_pullback, tooltip="Pullback must NOT retrace more than this % (too deep = broken momentum).\nWidened to 1.5% for Indian stocks (was 0.8% in original spec).")
+pullbackMaxVolMult = input.float(2.0, "Max Pullback Bar Vol x", minval=1.0, maxval=5.0, step=0.1, group=grp_pullback, tooltip="No single pullback bar should have volume > this x avg.\nHigh volume in pullback = distribution, not a healthy pullback.")
+
+// --- Risk & Sizing ---
+capitalAmount    = input.float(100000, "Capital (INR)", minval=10000, group=grp_risk)
+riskPerTradePct  = input.float(1.0, "Risk Per Trade %", minval=0.25, maxval=3.0, step=0.25, group=grp_risk, tooltip="% of capital risked per trade.")
+stopBuffer       = input.float(0.05, "SL Buffer %", minval=0.01, maxval=0.5, step=0.01, group=grp_risk, tooltip="Buffer below pullback low (long) or above pullback high (short).")
+minSLPct         = input.float(0.3, "Min SL %", minval=0.1, maxval=2.0, step=0.1, group=grp_risk, tooltip="Skip trade if SL distance < this % of entry. Too tight = whipsawed.")
+maxSLPct         = input.float(2.0, "Max SL %", minval=0.5, maxval=5.0, step=0.1, group=grp_risk, tooltip="Skip trade if SL distance > this % of entry. Too wide = oversized risk.")
+maxTradesPerDay  = input.int(1, "Max Trades Per Day", minval=1, maxval=10, group=grp_risk)
+maxDailyLossR    = input.float(-2.0, "Max Daily Loss (R)", minval=-10.0, maxval=-0.5, step=0.5, group=grp_risk, tooltip="Stop trading for the day after losing this many R.")
+
+// --- Targets ---
+tpMultiplier     = input.float(1.0, "TP1 Target (R multiple)", minval=0.5, maxval=5.0, step=0.5, group=grp_targets, tooltip="Full exit at this R multiple. 1.0 = 1:1 R:R (recommended based on ORB data).")
+showTP2          = input.bool(true, "Show TP2 (2R) Observation", group=grp_targets, tooltip="Display-only TP2 line on chart for monitoring. No execution.")
+showTP3          = input.bool(true, "Show TP3 (3R) Observation", group=grp_targets, tooltip="Display-only TP3 line on chart for monitoring. No execution.")
+
+// --- Visuals ---
+showVWAP         = input.bool(true, "Show VWAP", group=grp_visual, inline="lines")
+showEMA          = input.bool(true, "Show 20 EMA", group=grp_visual, inline="lines")
+emaLength        = input.int(20, "EMA Length", minval=5, maxval=50, group=grp_visual)
+showPullbackZone = input.bool(true, "Show Pullback Zone", group=grp_visual, tooltip="Highlight pullback area with shaded box.")
+showTPSLLines    = input.bool(true, "Show TP/SL Lines", group=grp_visual)
+showHODLODLine   = input.bool(true, "Show HOD/LOD Levels", group=grp_visual)
+labelSize        = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal", "Large"], group=grp_visual)
+
+// --- Dashboard ---
+showDashboard    = input.bool(true, "Show Dashboard", group=grp_dash)
+dashPosition     = input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=grp_dash)
+
+// --- Telegram ---
+telegram_chat_id = input.string("-1003518225740", "Telegram Chat ID", group=grp_telegram, tooltip="Your Telegram channel/group chat ID.\nAdd @userinfobot to get it.")
+sendTestAlert    = input.bool(false, "Send Test Alert", group=grp_telegram, tooltip="Enable to test webhook connectivity.\n1. Enable this\n2. Create alert: 'Any alert() function call'\n3. Webhook: https://api.telegram.org/bot<TOKEN>/sendMessage")
+testAlertType    = input.string("Entry", "Test Alert Type", options=["Entry", "Exit", "Both"], group=grp_telegram)
+
+// =========================================== FUNCTIONS ==============================================
+
+getLabelSize(string sz) =>
+    switch sz
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        "Large"  => size.large
+        => size.small
+
+getTimeIST() =>
+    str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
+
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker + "&interval=5"
+
+// --- Telegram Alert Builders (same JSON format as ORB) ---
+
+buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float riskAmt, float rewardAmt) =>
+    string direction = isLong ? "LONG" : "SHORT"
+    string emoji = isLong ? "🟢" : "🔴"
+    float riskVal = math.abs(entryPrice - slPrice)
+    float rewardVal = math.abs(tpPrice - entryPrice)
+    float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
+
+    string msg = emoji + " HOD " + direction + " | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Target: " + str.tostring(tpPrice, "#.##") + "\\n"
+    msg += "SL: " + str.tostring(slPrice, "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
+    msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildSLAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float exitPrice) =>
+    string direction = isLong ? "LONG" : "SHORT"
+    string emoji = isLong ? "🟢" : "🔴"
+    float pnlAmt = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
+    float pnlPct = (pnlAmt / entryPrice) * 100
+    float riskVal = math.abs(entryPrice - slPrice)
+    float rewardVal = math.abs(tpPrice - entryPrice)
+    float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
+
+    string msg = "❌ SL HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "Loss: " + str.tostring(pnlAmt, "#.##") + " (" + str.tostring(pnlPct, "#.#") + "%)\\n"
+    msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
+    msg += "R:R was 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float exitPrice, string tpLevel) =>
+    string direction = isLong ? "LONG" : "SHORT"
+    string emoji = isLong ? "🟢" : "🔴"
+    float pnlAmt = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
+    float pnlPct = (pnlAmt / entryPrice) * 100
+    float riskVal = math.abs(entryPrice - slPrice)
+    float rewardVal = math.abs(tpPrice - entryPrice)
+    float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
+
+    string msg = "✅ HOD " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "Profit: +" + str.tostring(pnlAmt, "#.##") + " (+" + str.tostring(pnlPct, "#.#") + "%)\\n"
+    msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
+    msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float exitPrice) =>
+    string direction = isLong ? "LONG" : "SHORT"
+    string emoji = isLong ? "🟢" : "🔴"
+    float pnlAmt = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
+    float pnlPct = (pnlAmt / entryPrice) * 100
+    float riskVal = math.abs(entryPrice - slPrice)
+    float rewardVal = math.abs(tpPrice - entryPrice)
+    float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
+    string pnlSign = pnlAmt >= 0 ? "+" : ""
+
+    string msg = "⏰ TIME EXIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "P&L: " + pnlSign + str.tostring(pnlAmt, "#.##") + " (" + pnlSign + str.tostring(pnlPct, "#.#") + "%)\\n"
+    msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
+    msg += "R:R was 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTestAlert() =>
+    string msg = "🧪 TEST ALERT - HOD Strategy\\n\\n"
+    msg += "Webhook connection successful!\\n\\n"
+    msg += "Symbol: " + syminfo.ticker + "\\n"
+    msg += "Exchange: " + syminfo.prefix + "\\n"
+    msg += "Price: " + str.tostring(close, "#.##") + "\\n"
+    msg += "Time: " + getTimeIST() + "\\n\\n"
+    msg += "Alert Types:\\n"
+    msg += "- Entry (LONG/SHORT)\\n"
+    msg += "- Stop Loss Hit\\n"
+    msg += "- Take Profit Hit\\n"
+    msg += "- Time Exit\\n\\n"
+    msg += "Chart: " + getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// =========================================== SESSION DETECTION ======================================
+
+var bool isNewSession = false
+isNewSession := ta.change(time("D")) != 0
+
+isWithinSession() =>
+    h = hour(time, "Asia/Kolkata")
+    m = minute(time, "Asia/Kolkata")
+    t = h * 100 + m
+    t >= 915 and t <= 1530
+
+isPastCutoff() =>
+    h = hour(time, "Asia/Kolkata")
+    m = minute(time, "Asia/Kolkata")
+    t = h * 100 + m
+    t >= entryCutoffHour * 100 + entryCutoffMinute
+
+isTimeExit() =>
+    h = hour(time, "Asia/Kolkata")
+    m = minute(time, "Asia/Kolkata")
+    t = h * 100 + m
+    t >= timeExitHour * 100 + timeExitMinute
+
+bool inSession = isWithinSession()
+bool pastCutoff = isPastCutoff()
+bool timeToExit = isTimeExit()
+
+// =========================================== INDICATORS ============================================
+
+float vwapVal  = ta.vwap(hlc3)
+float ema20    = ta.ema(close, emaLength)
+float volAvg   = ta.sma(volume, volumeLength)
+float rvol     = volAvg > 0 ? volume / volAvg : 0
+float vwapSlope = vwapVal - vwapVal[vwapSlopeBars]
+
+// =========================================== STATE VARIABLES =======================================
+
+// --- Session tracking ---
+var int   barsSinceSessionStart = 0
+var int   tradesToday           = 0
+var float dailyPnlR             = 0.0
+var bool  sessionEntryTaken     = false
+
+// --- LONG state (HOD breakout) ---
+var float sessionHigh           = na
+var bool  hodBreakoutConfirmed  = false
+var float hodBreakoutPrice      = na
+var int   hodBreakoutBar        = na
+var int   longPullbackBars      = 0
+var float longPullbackHigh      = na
+var float longPullbackLow       = na
+var bool  longPullbackValid     = false
+var bool  longEntryPending      = false
+
+// --- SHORT state (LOD breakdown) ---
+var float sessionLow            = na
+var bool  lodBreakoutConfirmed  = false
+var float lodBreakoutPrice      = na
+var int   lodBreakoutBar        = na
+var int   shortPullbackBars     = 0
+var float shortPullbackHigh     = na
+var float shortPullbackLow      = na
+var bool  shortPullbackValid    = false
+var bool  shortEntryPending     = false
+
+// --- Trade state ---
+var float tradeEntryPrice       = na
+var float tradeSLPrice          = na
+var float tradeTP1Price         = na
+var float tradeTP2Price         = na
+var float tradeTP3Price         = na
+var bool  tradeIsLong           = false
+var bool  inTrade               = false
+var bool  tp1Hit                = false
+var bool  tp2Hit                = false
+var bool  tp3Hit                = false
+var bool  slHit                 = false
+var int   tradeEntryBar         = na
+
+// --- Visual tracking ---
+var line  entryLine             = na
+var line  slLine                = na
+var line  tp1Line               = na
+var line  tp2Line               = na
+var line  tp3Line               = na
+var label entryLabel            = na
+var label slLabel               = na
+var label tp1Label              = na
+var label tp2Label              = na
+var label tp3Label              = na
+var box   pullbackBox           = na
+var line  hodLine               = na
+var line  lodLine               = na
+
+// --- State name for dashboard ---
+var string tradeState           = "SCANNING"
+var string lastTradeResult      = ""
+var string lastTradeDirection   = ""
+
+// --- Plot flags (must be global scope) ---
+var bool showHODBreakout        = false
+var bool showLODBreakdown       = false
+var bool showLongEntry          = false
+var bool showShortEntry         = false
+
+// =========================================== SESSION RESET =========================================
+
+// Reset plot flags each bar (they are per-bar signals)
+showHODBreakout := false
+showLODBreakdown := false
+showLongEntry   := false
+showShortEntry  := false
+
+if isNewSession
+    barsSinceSessionStart := 0
+    tradesToday           := 0
+    dailyPnlR             := 0.0
+    sessionEntryTaken     := false
+    lastTradeResult       := ""
+    lastTradeDirection    := ""
+
+    sessionHigh           := high
+    sessionLow            := low
+
+    hodBreakoutConfirmed  := false
+    hodBreakoutPrice      := na
+    hodBreakoutBar        := na
+    longPullbackBars      := 0
+    longPullbackHigh      := na
+    longPullbackLow       := na
+    longPullbackValid     := false
+    longEntryPending      := false
+
+    lodBreakoutConfirmed  := false
+    lodBreakoutPrice      := na
+    lodBreakoutBar        := na
+    shortPullbackBars     := 0
+    shortPullbackHigh     := na
+    shortPullbackLow      := na
+    shortPullbackValid    := false
+    shortEntryPending     := false
+
+    inTrade               := false
+    tp1Hit                := false
+    tp2Hit                := false
+    tp3Hit                := false
+    slHit                 := false
+    tradeState            := "SCANNING"
+
+if inSession
+    barsSinceSessionStart += 1
+
+// =========================================== HOD / LOD TRACKING ====================================
+
+if inSession and not isNewSession
+    if high > sessionHigh
+        sessionHigh := high
+    if low < sessionLow
+        sessionLow := low
+
+// Draw HOD/LOD levels
+if showHODLODLine and inSession and barsSinceSessionStart > 1
+    if not na(hodLine)
+        line.set_x2(hodLine, bar_index)
+        line.set_y1(hodLine, sessionHigh)
+        line.set_y2(hodLine, sessionHigh)
+    else
+        hodLine := line.new(bar_index - 1, sessionHigh, bar_index, sessionHigh, color=color.new(color.green, 50), style=line.style_dashed, width=1)
+
+    if not na(lodLine)
+        line.set_x2(lodLine, bar_index)
+        line.set_y1(lodLine, sessionLow)
+        line.set_y2(lodLine, sessionLow)
+    else
+        lodLine := line.new(bar_index - 1, sessionLow, bar_index, sessionLow, color=color.new(color.red, 50), style=line.style_dashed, width=1)
+
+// Reset HOD/LOD lines on new session
+if isNewSession
+    hodLine := na
+    lodLine := na
+
+// =========================================== CORE STATE MACHINE ====================================
+
+bool canTrade = inSession and not pastCutoff and tradesToday < maxTradesPerDay and not sessionEntryTaken and dailyPnlR > maxDailyLossR and barsSinceSessionStart > skipFirstNBars
+bool allowLong  = tradeDirection == "Long Only" or tradeDirection == "Both"
+bool allowShort = tradeDirection == "Short Only" or tradeDirection == "Both"
+
+// ======================== LONG: HOD BREAKOUT DETECTION ========================
+
+if canTrade and allowLong and not inTrade and not hodBreakoutConfirmed
+    // New high of day with volume + VWAP confirmation
+    if high >= sessionHigh and rvol >= volumeMultiplier and close > vwapVal and close > close[1]
+        bool slopeOK = requireVWAPSlope ? vwapSlope > 0 : true
+        if slopeOK
+            hodBreakoutConfirmed := true
+            hodBreakoutPrice     := high
+            hodBreakoutBar       := bar_index
+            longPullbackBars     := 0
+            longPullbackHigh     := na
+            longPullbackLow      := na
+            longPullbackValid    := false
+            longEntryPending     := false
+            tradeState           := "HOD BREAKOUT"
+
+            showHODBreakout := true
+
+// ======================== LONG: PULLBACK MONITORING ========================
+
+if canTrade and allowLong and hodBreakoutConfirmed and not inTrade and not longPullbackValid
+    if high < high[1]  // Lower high = pullback bar
+        longPullbackBars += 1
+        longPullbackLow  := na(longPullbackLow)  ? low  : math.min(longPullbackLow, low)
+        longPullbackHigh := na(longPullbackHigh) ? high : math.max(longPullbackHigh, high)
+        tradeState       := "PULLBACK (L)"
+
+        // Check for aggressive selling (invalidates pullback)
+        if rvol > pullbackMaxVolMult
+            // Heavy volume during pullback = distribution, reset
+            longPullbackBars := 0
+            longPullbackHigh := na
+            longPullbackLow  := na
+            tradeState       := "HOD BREAKOUT"
+
+    else if longPullbackBars >= pullbackMinBars
+        // Pullback ended (bar made higher high), validate
+        float retracePct = hodBreakoutPrice > 0 ? (hodBreakoutPrice - longPullbackLow) / hodBreakoutPrice * 100 : 0
+
+        if longPullbackBars <= pullbackMaxBars and not na(longPullbackLow) and longPullbackLow > vwapVal and retracePct >= pullbackMinPct and retracePct <= pullbackMaxPct
+            longPullbackValid := true
+            longEntryPending  := true
+            tradeState        := "ENTRY READY (L)"
+
+            // Draw pullback zone
+            if showPullbackZone and not na(hodBreakoutBar)
+                pullbackBox := box.new(hodBreakoutBar, longPullbackHigh, bar_index, longPullbackLow, bgcolor=color.new(color.green, 90), border_color=color.new(color.green, 70), border_width=1)
+        else
+            // Invalid pullback — reset and look for next HOD
+            hodBreakoutConfirmed := false
+            longPullbackBars     := 0
+            longPullbackHigh     := na
+            longPullbackLow      := na
+            tradeState           := "SCANNING"
+
+    else if longPullbackBars == 0
+        // No pullback yet — update HOD if price makes new high
+        if high > hodBreakoutPrice
+            hodBreakoutPrice := high
+            hodBreakoutBar   := bar_index
+
+    // Timeout: if pullback exceeds max bars without validating, reset
+    if longPullbackBars > pullbackMaxBars
+        hodBreakoutConfirmed := false
+        longPullbackBars     := 0
+        longPullbackHigh     := na
+        longPullbackLow      := na
+        longPullbackValid    := false
+        tradeState           := "SCANNING"
+
+// ======================== LONG: ENTRY TRIGGER ========================
+
+if canTrade and longEntryPending and not inTrade
+    if high > longPullbackHigh
+        float entry = longPullbackHigh
+        float sl    = longPullbackLow - (longPullbackLow * stopBuffer / 100)
+        float riskPerShare = entry - sl
+        float slPct = riskPerShare / entry * 100
+
+        // Validate SL range
+        if slPct >= minSLPct and slPct <= maxSLPct and riskPerShare > 0
+            float tp1 = entry + riskPerShare * tpMultiplier
+            float tp2 = entry + riskPerShare * 2.0
+            float tp3 = entry + riskPerShare * 3.0
+
+            float shares = math.floor((capitalAmount * riskPerTradePct / 100) / riskPerShare)
+            float maxLoss = riskPerShare * shares
+            float posValue = entry * shares
+
+            // Execute entry
+            strategy.entry("Long", strategy.long)
+            strategy.exit("TP1_L", "Long", limit=tp1, stop=sl)
+
+            // Update state
+            tradeEntryPrice := entry
+            tradeSLPrice    := sl
+            tradeTP1Price   := tp1
+            tradeTP2Price   := tp2
+            tradeTP3Price   := tp3
+            tradeIsLong     := true
+            inTrade         := true
+            tp1Hit          := false
+            tp2Hit          := false
+            tp3Hit          := false
+            slHit           := false
+            tradeEntryBar   := bar_index
+            tradesToday     += 1
+            sessionEntryTaken := true
+            lastTradeDirection := "LONG"
+            tradeState      := "IN TRADE (L)"
+
+            // Reset breakout state
+            hodBreakoutConfirmed := false
+            longPullbackValid    := false
+            longEntryPending     := false
+
+            // Send entry alert
+            alert(buildEntryAlert(true, entry, sl, tp1, maxLoss, math.abs(tp1 - entry) * shares), alert.freq_once_per_bar)
+
+            // Draw entry/SL/TP lines — LONG uses green theme
+            if showTPSLLines
+                entryLine := line.new(bar_index, entry, bar_index + 20, entry, color=color.green, width=2, style=line.style_solid)
+                entryLabel := label.new(bar_index, entry, "LONG ENTRY: " + str.tostring(entry, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.green, size=getLabelSize(labelSize))
+
+                slLine := line.new(bar_index, sl, bar_index + 20, sl, color=color.red, width=1, style=line.style_dashed)
+                slLabel := label.new(bar_index, sl, "SL: " + str.tostring(sl, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.red, size=getLabelSize(labelSize))
+
+                tp1Line := line.new(bar_index, tp1, bar_index + 20, tp1, color=color.lime, width=1, style=line.style_dashed)
+                tp1Label := label.new(bar_index, tp1, "TP1: " + str.tostring(tp1, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.lime, size=getLabelSize(labelSize))
+
+                if showTP2
+                    tp2Line := line.new(bar_index, tp2, bar_index + 20, tp2, color=color.new(color.lime, 40), width=1, style=line.style_dotted)
+                    tp2Label := label.new(bar_index, tp2, "TP2: " + str.tostring(tp2, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.new(color.lime, 40), size=getLabelSize(labelSize))
+
+                if showTP3
+                    tp3Line := line.new(bar_index, tp3, bar_index + 20, tp3, color=color.new(color.lime, 60), width=1, style=line.style_dotted)
+                    tp3Label := label.new(bar_index, tp3, "TP3: " + str.tostring(tp3, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.new(color.lime, 60), size=getLabelSize(labelSize))
+
+            showLongEntry := true
+        else
+            // SL outside valid range — skip this setup
+            longEntryPending     := false
+            hodBreakoutConfirmed := false
+            tradeState           := "SCANNING"
+
+// ======================== SHORT: LOD BREAKDOWN DETECTION ========================
+
+if canTrade and allowShort and not inTrade and not lodBreakoutConfirmed
+    // New low of day with volume + VWAP confirmation
+    if low <= sessionLow and rvol >= volumeMultiplier and close < vwapVal and close < close[1]
+        bool slopeOK = requireVWAPSlope ? vwapSlope < 0 : true
+        if slopeOK
+            lodBreakoutConfirmed := true
+            lodBreakoutPrice     := low
+            lodBreakoutBar       := bar_index
+            shortPullbackBars    := 0
+            shortPullbackHigh    := na
+            shortPullbackLow     := na
+            shortPullbackValid   := false
+            shortEntryPending    := false
+            tradeState           := "LOD BREAKDOWN"
+
+            showLODBreakdown := true
+
+// ======================== SHORT: PULLBACK MONITORING ========================
+
+if canTrade and allowShort and lodBreakoutConfirmed and not inTrade and not shortPullbackValid
+    if low > low[1]  // Higher low = pullback bar (bouncing from LOD)
+        shortPullbackBars += 1
+        shortPullbackHigh := na(shortPullbackHigh) ? high : math.max(shortPullbackHigh, high)
+        shortPullbackLow  := na(shortPullbackLow)  ? low  : math.min(shortPullbackLow, low)
+        tradeState        := "PULLBACK (S)"
+
+        if rvol > pullbackMaxVolMult
+            shortPullbackBars := 0
+            shortPullbackHigh := na
+            shortPullbackLow  := na
+            tradeState        := "LOD BREAKDOWN"
+
+    else if shortPullbackBars >= pullbackMinBars
+        // Pullback ended (bar made lower low), validate
+        float retracePct = lodBreakoutPrice > 0 ? (shortPullbackHigh - lodBreakoutPrice) / lodBreakoutPrice * 100 : 0
+
+        if shortPullbackBars <= pullbackMaxBars and not na(shortPullbackHigh) and shortPullbackHigh < vwapVal and retracePct >= pullbackMinPct and retracePct <= pullbackMaxPct
+            shortPullbackValid := true
+            shortEntryPending  := true
+            tradeState         := "ENTRY READY (S)"
+
+            if showPullbackZone and not na(lodBreakoutBar)
+                pullbackBox := box.new(lodBreakoutBar, shortPullbackHigh, bar_index, shortPullbackLow, bgcolor=color.new(color.red, 90), border_color=color.new(color.red, 70), border_width=1)
+        else
+            lodBreakoutConfirmed := false
+            shortPullbackBars    := 0
+            shortPullbackHigh    := na
+            shortPullbackLow     := na
+            tradeState           := "SCANNING"
+
+    else if shortPullbackBars == 0
+        if low < lodBreakoutPrice
+            lodBreakoutPrice := low
+            lodBreakoutBar   := bar_index
+
+    if shortPullbackBars > pullbackMaxBars
+        lodBreakoutConfirmed := false
+        shortPullbackBars    := 0
+        shortPullbackHigh    := na
+        shortPullbackLow     := na
+        shortPullbackValid   := false
+        tradeState           := "SCANNING"
+
+// ======================== SHORT: ENTRY TRIGGER ========================
+
+if canTrade and shortEntryPending and not inTrade
+    if low < shortPullbackLow
+        float entry = shortPullbackLow
+        float sl    = shortPullbackHigh + (shortPullbackHigh * stopBuffer / 100)
+        float riskPerShare = sl - entry
+        float slPct = riskPerShare / entry * 100
+
+        if slPct >= minSLPct and slPct <= maxSLPct and riskPerShare > 0
+            float tp1 = entry - riskPerShare * tpMultiplier
+            float tp2 = entry - riskPerShare * 2.0
+            float tp3 = entry - riskPerShare * 3.0
+
+            float shares = math.floor((capitalAmount * riskPerTradePct / 100) / riskPerShare)
+            float maxLoss = riskPerShare * shares
+            float posValue = entry * shares
+
+            strategy.entry("Short", strategy.short)
+            strategy.exit("TP1_S", "Short", limit=tp1, stop=sl)
+
+            tradeEntryPrice := entry
+            tradeSLPrice    := sl
+            tradeTP1Price   := tp1
+            tradeTP2Price   := tp2
+            tradeTP3Price   := tp3
+            tradeIsLong     := false
+            inTrade         := true
+            tp1Hit          := false
+            tp2Hit          := false
+            tp3Hit          := false
+            slHit           := false
+            tradeEntryBar   := bar_index
+            tradesToday     += 1
+            sessionEntryTaken := true
+            lastTradeDirection := "SHORT"
+            tradeState      := "IN TRADE (S)"
+
+            lodBreakoutConfirmed := false
+            shortPullbackValid   := false
+            shortEntryPending    := false
+
+            alert(buildEntryAlert(false, entry, sl, tp1, maxLoss, math.abs(entry - tp1) * shares), alert.freq_once_per_bar)
+
+            // Draw entry/SL/TP lines — SHORT uses red/orange theme
+            if showTPSLLines
+                entryLine := line.new(bar_index, entry, bar_index + 20, entry, color=color.red, width=2, style=line.style_solid)
+                entryLabel := label.new(bar_index, entry, "SHORT ENTRY: " + str.tostring(entry, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.red, size=getLabelSize(labelSize))
+
+                slLine := line.new(bar_index, sl, bar_index + 20, sl, color=color.orange, width=1, style=line.style_dashed)
+                slLabel := label.new(bar_index, sl, "SL: " + str.tostring(sl, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.orange, size=getLabelSize(labelSize))
+
+                tp1Line := line.new(bar_index, tp1, bar_index + 20, tp1, color=color.fuchsia, width=1, style=line.style_dashed)
+                tp1Label := label.new(bar_index, tp1, "TP1: " + str.tostring(tp1, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.fuchsia, size=getLabelSize(labelSize))
+
+                if showTP2
+                    tp2Line := line.new(bar_index, tp2, bar_index + 20, tp2, color=color.new(color.fuchsia, 40), width=1, style=line.style_dotted)
+                    tp2Label := label.new(bar_index, tp2, "TP2: " + str.tostring(tp2, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.new(color.fuchsia, 40), size=getLabelSize(labelSize))
+
+                if showTP3
+                    tp3Line := line.new(bar_index, tp3, bar_index + 20, tp3, color=color.new(color.fuchsia, 60), width=1, style=line.style_dotted)
+                    tp3Label := label.new(bar_index, tp3, "TP3: " + str.tostring(tp3, "#.##"), style=label.style_label_left, textcolor=color.white, color=color.new(color.fuchsia, 60), size=getLabelSize(labelSize))
+
+            showShortEntry := true
+        else
+            shortEntryPending    := false
+            lodBreakoutConfirmed := false
+            tradeState           := "SCANNING"
+
+// =========================================== EXTEND TRADE LINES ====================================
+
+// Extend entry/SL/TP lines to current bar while trade is active or until session end
+if (inTrade or sessionEntryTaken) and showTPSLLines
+    if not na(entryLine)
+        line.set_x2(entryLine, bar_index)
+    if not na(slLine)
+        line.set_x2(slLine, bar_index)
+    if not na(tp1Line)
+        line.set_x2(tp1Line, bar_index)
+    if not na(tp2Line)
+        line.set_x2(tp2Line, bar_index)
+    if not na(tp3Line)
+        line.set_x2(tp3Line, bar_index)
+
+// =========================================== TRADE MANAGEMENT ======================================
+
+if inTrade and inSession
+    // --- TP1 Hit Detection ---
+    if not tp1Hit
+        bool tp1Reached = tradeIsLong ? (high >= tradeTP1Price) : (low <= tradeTP1Price)
+        if tp1Reached
+            tp1Hit := true
+            alert(buildTPAlert(tradeIsLong, tradeEntryPrice, tradeSLPrice, tradeTP1Price, tradeTP1Price, "TP1"), alert.freq_once_per_bar)
+            if showTPSLLines and not na(tp1Label)
+                label.set_text(tp1Label, "✅ TP1: " + str.tostring(tradeTP1Price, "#.##"))
+                label.set_color(tp1Label, color.green)
+
+    // --- TP2 Hit Detection (observation only) ---
+    if tp1Hit and not tp2Hit and showTP2
+        bool tp2Reached = tradeIsLong ? (high >= tradeTP2Price) : (low <= tradeTP2Price)
+        if tp2Reached
+            tp2Hit := true
+            alert(buildTPAlert(tradeIsLong, tradeEntryPrice, tradeSLPrice, tradeTP2Price, tradeTP2Price, "TP2"), alert.freq_once_per_bar)
+            if showTPSLLines and not na(tp2Label)
+                label.set_text(tp2Label, "✅ TP2: " + str.tostring(tradeTP2Price, "#.##"))
+                label.set_color(tp2Label, color.green)
+
+    // --- TP3 Hit Detection (observation only) ---
+    if tp2Hit and not tp3Hit and showTP3
+        bool tp3Reached = tradeIsLong ? (high >= tradeTP3Price) : (low <= tradeTP3Price)
+        if tp3Reached
+            tp3Hit := true
+            alert(buildTPAlert(tradeIsLong, tradeEntryPrice, tradeSLPrice, tradeTP3Price, tradeTP3Price, "TP3"), alert.freq_once_per_bar)
+            if showTPSLLines and not na(tp3Label)
+                label.set_text(tp3Label, "✅ TP3: " + str.tostring(tradeTP3Price, "#.##"))
+                label.set_color(tp3Label, color.green)
+
+    // --- SL Hit Detection ---
+    if not tp1Hit and not slHit
+        bool slReached = tradeIsLong ? (low <= tradeSLPrice) : (high >= tradeSLPrice)
+        if slReached
+            slHit   := true
+            inTrade := false
+            float riskPerShare = math.abs(tradeEntryPrice - tradeSLPrice)
+            dailyPnlR -= 1.0  // Lost 1R
+            tradeState := "SL HIT"
+            lastTradeResult := "❌ SL HIT (-1R)"
+            alert(buildSLAlert(tradeIsLong, tradeEntryPrice, tradeSLPrice, tradeTP1Price, tradeSLPrice), alert.freq_once_per_bar)
+            if showTPSLLines and not na(slLabel)
+                label.set_text(slLabel, "❌ SL: " + str.tostring(tradeSLPrice, "#.##"))
+                label.set_color(slLabel, color.red)
+
+    // --- TP1 fills -> trade closed ---
+    if tp1Hit and strategy.position_size == 0 and not slHit
+        inTrade := false
+        dailyPnlR += tpMultiplier  // Won tpMultiplier R
+        tradeState := "TP1 HIT"
+        lastTradeResult := "✅ TP1 HIT (+" + str.tostring(tpMultiplier, "#.#") + "R)"
+
+// =========================================== TIME EXIT =============================================
+
+if timeToExit and strategy.position_size != 0
+    bool isLongPos = strategy.position_size > 0
+    alert(buildTimeExitAlert(isLongPos, tradeEntryPrice, tradeSLPrice, tradeTP1Price, close), alert.freq_once_per_bar)
+    strategy.close_all(comment="Time Exit")
+
+    // Approximate P&L in R
+    if inTrade
+        float riskPerShare = math.abs(tradeEntryPrice - tradeSLPrice)
+        float pnl = tradeIsLong ? (close - tradeEntryPrice) : (tradeEntryPrice - close)
+        float pnlR = riskPerShare > 0 ? pnl / riskPerShare : 0
+        dailyPnlR += pnlR
+        inTrade    := false
+        tradeState := "TIME EXIT"
+        string pnlSign2 = pnlR >= 0 ? "+" : ""
+        lastTradeResult := "⏰ TIME EXIT (" + pnlSign2 + str.tostring(pnlR, "#.#") + "R)"
+
+// =========================================== INDICATOR PLOTS =======================================
+
+plot(showVWAP ? vwapVal : na, title="VWAP", color=color.blue, linewidth=2)
+plot(showEMA  ? ema20   : na, title="20 EMA", color=color.orange, linewidth=1)
+
+// Shape markers (must be global scope)
+plotshape(showHODBreakout,  title="HOD Breakout",  style=shape.triangleup,   location=location.abovebar, color=color.green, size=size.tiny)
+plotshape(showLODBreakdown, title="LOD Breakdown",  style=shape.triangledown, location=location.belowbar, color=color.red,   size=size.tiny)
+plotshape(showLongEntry,    title="Long Entry",     style=shape.arrowup,      location=location.belowbar, color=color.green, size=size.small)
+plotshape(showShortEntry,   title="Short Entry",    style=shape.arrowdown,    location=location.abovebar, color=color.red,   size=size.small)
+
+// Session HOD/LOD background
+bgcolor(inSession and not inTrade and tradeState == "SCANNING" ? color.new(color.gray, 97) : na, title="Scanning BG")
+bgcolor(inTrade and tradeIsLong  ? color.new(color.green, 95) : na, title="Long Trade BG")
+bgcolor(inTrade and not tradeIsLong ? color.new(color.red, 95) : na, title="Short Trade BG")
+
+// =========================================== DASHBOARD =============================================
+
+if showDashboard and barstate.islast
+    var table dash = na
+    tablePos = switch dashPosition
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right"  => position.bottom_right
+        "Bottom Left"   => position.bottom_left
+        => position.top_right
+
+    dash := table.new(tablePos, 2, 12, bgcolor=color.new(color.black, 10), frame_color=color.gray, frame_width=1, border_color=color.gray, border_width=1)
+
+    // Row 0: Header
+    table.cell(dash, 0, 0, "HOD Strategy", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 20))
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.yellow, text_size=size.normal, bgcolor=color.new(color.blue, 20))
+
+    // Row 1: HOD
+    table.cell(dash, 0, 1, "HOD", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(sessionHigh, "#.##"), text_color=color.green, text_size=size.small)
+
+    // Row 2: LOD
+    table.cell(dash, 0, 2, "LOD", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(sessionLow, "#.##"), text_color=color.red, text_size=size.small)
+
+    // Row 3: VWAP
+    table.cell(dash, 0, 3, "VWAP", text_color=color.silver, text_size=size.small)
+    string vwapDir = vwapSlope > 0 ? " ▲" : vwapSlope < 0 ? " ▼" : " ─"
+    table.cell(dash, 1, 3, str.tostring(vwapVal, "#.##") + vwapDir, text_color=color.blue, text_size=size.small)
+
+    // Row 4: RVOL
+    table.cell(dash, 0, 4, "RVOL", text_color=color.silver, text_size=size.small)
+    color rvolColor = rvol >= volumeMultiplier ? color.green : rvol >= 1.0 ? color.yellow : color.red
+    table.cell(dash, 1, 4, str.tostring(rvol, "#.#") + "x", text_color=rvolColor, text_size=size.small)
+
+    // Row 5: State — color-coded by direction
+    table.cell(dash, 0, 5, "State", text_color=color.silver, text_size=size.small)
+    color stateColor = str.contains(tradeState, "IN TRADE (L)") ? color.green : str.contains(tradeState, "IN TRADE (S)") ? color.red : str.contains(tradeState, "ENTRY READY") ? color.yellow : str.contains(tradeState, "PULLBACK") ? color.orange : str.contains(tradeState, "TP1 HIT") ? color.green : str.contains(tradeState, "SL HIT") ? color.red : color.white
+    table.cell(dash, 1, 5, tradeState, text_color=stateColor, text_size=size.small)
+
+    // Row 6: Trade direction (when in trade or after trade)
+    table.cell(dash, 0, 6, "Side", text_color=color.silver, text_size=size.small)
+    color dirColor = lastTradeDirection == "LONG" ? color.green : lastTradeDirection == "SHORT" ? color.red : color.gray
+    string dirText = lastTradeDirection != "" ? lastTradeDirection : "---"
+    table.cell(dash, 1, 6, dirText, text_color=dirColor, text_size=size.small)
+
+    // Row 7: Daily P&L
+    table.cell(dash, 0, 7, "Daily P&L", text_color=color.silver, text_size=size.small)
+    string pnlStr = (dailyPnlR >= 0 ? "+" : "") + str.tostring(dailyPnlR, "#.#") + "R"
+    color pnlColor = dailyPnlR > 0 ? color.green : dailyPnlR < 0 ? color.red : color.white
+    table.cell(dash, 1, 7, pnlStr, text_color=pnlColor, text_size=size.small)
+
+    // Row 8: Last trade result
+    table.cell(dash, 0, 8, "Result", text_color=color.silver, text_size=size.small)
+    color resultColor = str.contains(lastTradeResult, "TP") ? color.green : str.contains(lastTradeResult, "SL") ? color.red : str.contains(lastTradeResult, "TIME") ? color.orange : color.gray
+    string resultText = lastTradeResult != "" ? lastTradeResult : "---"
+    table.cell(dash, 1, 8, resultText, text_color=resultColor, text_size=size.small)
+
+    // Row 9: Trades
+    table.cell(dash, 0, 9, "Trades", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 9, str.tostring(tradesToday) + " / " + str.tostring(maxTradesPerDay), text_color=color.white, text_size=size.small)
+
+    // Row 10: Direction setting
+    table.cell(dash, 0, 10, "Mode", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 10, tradeDirection, text_color=color.white, text_size=size.small)
+
+    // Row 11: Session status
+    string sessionStatus = not inSession ? "CLOSED" : pastCutoff ? "NO ENTRY" : sessionEntryTaken ? "DONE" : dailyPnlR <= maxDailyLossR ? "LOSS LIMIT" : "ACTIVE"
+    color sessColor = sessionStatus == "ACTIVE" ? color.green : sessionStatus == "DONE" ? color.aqua : sessionStatus == "NO ENTRY" ? color.yellow : color.red
+    table.cell(dash, 0, 11, "Session", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 11, sessionStatus, text_color=sessColor, text_size=size.small)
+
+// =========================================== ALERT CONDITIONS ======================================
+
+alertcondition(inTrade and tradeIsLong and tp1Hit, title="HOD TP1 Hit (Long)", message="HOD TP1 Hit - Long")
+alertcondition(inTrade and not tradeIsLong and tp1Hit, title="HOD TP1 Hit (Short)", message="HOD TP1 Hit - Short")
+alertcondition(slHit, title="HOD SL Hit", message="HOD SL Hit")
+
+// =========================================== TEST ALERTS ===========================================
+
+var bool testAlertSent = false
+
+if sendTestAlert and barstate.islast and not testAlertSent
+    if testAlertType == "Entry" or testAlertType == "Both"
+        testEntry = close
+        testSL = close * 0.99
+        testTP = close * 1.01
+        testRisk = close - testSL
+        testReward = testTP - close
+        alert(buildEntryAlert(true, testEntry, testSL, testTP, testRisk, testReward), alert.freq_all)
+
+    if testAlertType == "Exit" or testAlertType == "Both"
+        testEntry2 = close * 0.99
+        testExit2 = close
+        alert(buildTPAlert(true, testEntry2, testEntry2 * 0.99, close, close, "TP1"), alert.freq_all)
+
+    testAlertSent := true
+
+// Label to show test alert is armed
+if sendTestAlert and not testAlertSent
+    label.new(bar_index, high, "🧪 TEST", style=label.style_label_down, textcolor=color.yellow, color=color.new(color.purple, 30), size=size.tiny)
