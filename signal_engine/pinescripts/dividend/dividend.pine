@@ -1,0 +1,968 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// DIVIDEND STRATEGY - POSITIONAL SWING TRADING SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════════════
+//
+// WHAT THIS SCRIPT DOES:
+// ----------------------
+// Identifies BUY opportunities when a stock is trading near its recent lows (value zone)
+// and SELL opportunities when trading near recent highs (overvalued zone).
+// Sends alerts to Telegram when strong signals are detected.
+//
+// HOW IT WORKS (Simple Version):
+// ------------------------------
+// 1. Looks at where price is within its 90-day range (0% = lowest, 100% = highest)
+// 2. BUY ZONE: Price below 30% of range = stock is "cheap" relative to recent history
+// 3. SELL ZONE: Price above 70% of range = stock is "expensive" relative to recent history
+// 4. Calculates a SCORE (0-100) based on: price position, RSI, trend, volume, candle pattern
+// 5. Higher score = stronger signal (STRONG > MEDIUM > WEAK)
+//
+// SIGNAL TYPES:
+// -------------
+// - STRONG (Green): High confidence - score >= 50 for dividend stocks
+// - MEDIUM (Yellow): Moderate confidence - score >= 38
+// - WEAK (Gray): Low confidence - below medium threshold
+//
+// CHART MARKERS:
+// --------------
+// - Triangle (below candle): Confirmed BUY signal on closed bars
+// - Triangle (above candle): Confirmed SELL signal on closed bars
+// - Circle: Live bar indicator showing current conditions are favorable
+//
+// GAP BETWEEN SIGNALS:
+// --------------------
+// To avoid signal spam, there's a minimum gap (default 20 days) between signals.
+// Adjust "Min Days Between Signals" based on your trading style:
+// - Aggressive (5-10 days): More signals, good for averaging down
+// - Moderate (15-20 days): Standard swing trading
+// - Conservative (30+ days): Only major swing points
+//
+// TELEGRAM ALERTS:
+// ----------------
+// Only STRONG signals trigger Telegram alerts. This keeps notifications actionable.
+// Medium/Weak signals are visible on chart if enabled, but won't spam your phone.
+//
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+strategy("swing-dividend-growth", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=90, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1, calc_on_every_tick=true, initial_capital=100000)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTO-DETECTION SYSTEM - READ THIS WHEN ADDING NEW STOCKS
+// ═════════════════════════════════════════════════════════════════════════════
+// This script automatically detects whether a stock is DIVIDEND or GROWTH type
+// and applies the appropriate strategy parameters.
+//
+// HOW IT WORKS:
+// - Script checks current chart symbol against two lists (see STOCK CLASSIFICATION section below)
+// - Automatically applies optimal parameters based on stock type
+// - No manual toggling needed - works across entire watchlist
+//
+// PARAMETERS BY TYPE:
+// ┌─────────────┬──────────────┬──────────────┬────────────────┬────────────────┐
+// │ Stock Type  │ Lookback     │ Signal Gap   │ Strong Score   │ Medium Score   │
+// ├─────────────┼──────────────┼──────────────┼────────────────┼────────────────┤
+// │ DIVIDEND    │ 90 days      │ 20 days      │ 50             │ 38             │
+// │ GROWTH      │ 60 days      │ 15 days      │ 65             │ 50             │
+// └─────────────┴──────────────┴──────────────┴────────────────┴────────────────┘
+//
+// TO ADD NEW STOCKS:
+// 1. Scroll down to "STOCK CLASSIFICATION" section (search for dividend_symbols)
+// 2. Add the stock symbol to the appropriate list (comma-separated, no spaces)
+// 3. Symbol should be EXACTLY as shown in TradingView (e.g., "ITC" not "NSE:ITC")
+//
+// Examples:
+// - Dividend: dividend_symbols = "ITC,NTPC,POWERGRID,NEWSTOCK"
+// - Growth:   growth_symbols = "TATASTEEL,VEDL,DLF,NEWSTOCK"
+//
+// STOCK SELECTION GUIDE:
+// - DIVIDEND: PSUs, Utilities, Stable cash flow, High dividend yield, Mean-reverting
+// - GROWTH:   Cyclicals, Metals, Banks, High volatility, Momentum/trending
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ===== TABLE DECLARATIONS (MUST BE AT TOP LEVEL) =====
+var summary_table = table.new(position.bottom_right, 4, 10, bgcolor=color.new(color.black, 80), border_width=1, frame_color=color.white, frame_width=2)
+
+// ===== STOCK CLASSIFICATION (AUTO-DETECT) =====
+// Dividend stocks - PSUs, Utilities, Stable dividend payers
+dividend_symbols = "ITC,CASTROLIND,HINDPETRO,NTPC,POWERGRID,COALINDIA,HINDZINC,PETRONET,SJVN,GAIL"
+
+// Growth stocks - Cyclicals, Metals, Banks, High-growth sectors
+growth_symbols = "MOTHERSON,SAIL,TATASTEEL,NATIONALUM,BANKBARODA,ETERNAL,RECLTD,AARTIIND,BIOCON,BEL,VEDL,DABUR,AMBUJACEM,IRCTC,INDHOTEL,MARICO,DLF,HINDALCO,INDUSINDBK,JSWSTEEL"
+
+// Helper function to check exact symbol match in comma-separated list
+isSymbolInList(string symbolList, string symbol) =>
+    str.contains("," + symbolList + ",", "," + symbol + ",")
+
+// Auto-detect stock type based on current symbol
+current_symbol = syminfo.ticker
+is_dividend_stock = isSymbolInList(dividend_symbols, current_symbol)
+is_growth_stock = isSymbolInList(growth_symbols, current_symbol)
+
+// Display detected stock type (Dividend/Growth/Standard)
+detected_type = is_dividend_stock ? "Dividend" : is_growth_stock ? "Growth" : "Standard"
+
+// ===== INPUT PARAMETERS =====
+// Essential Strategy Settings
+value_zone_threshold = input.int(30, "Buy Zone (%)", minval=20, maxval=45, tooltip="Buy signals trigger below this % of range", group="Strategy Settings")
+sell_zone_threshold = input.int(70, "Sell Zone (%)", minval=60, maxval=90, tooltip="Sell signals trigger above this % of range", group="Strategy Settings")
+signal_gap_days = input.int(10, "Min Days Between Signals", minval=1, maxval=60, tooltip="Minimum gap between consecutive signals. Lower = more signals (aggressive), Higher = fewer signals (conservative)", group="Strategy Settings")
+
+// Display
+show_summary_table = input.bool(true, "Show Summary Table", group="Display")
+show_strong_signals = input.bool(true, "Show STRONG Signals", group="Display")
+show_medium_signals = input.bool(false, "Show MEDIUM Signals", tooltip="Enable to show medium strength signals", group="Display")
+show_weak_signals = input.bool(false, "Show WEAK Signals", tooltip="Enable to show weak strength signals", group="Display")
+show_zone_lines = input.bool(true, "Show Zone Boundary Lines", tooltip="Show horizontal lines at buy/sell zone boundaries", group="Display")
+show_emas = input.bool(true, "Show EMA/SMA Lines", tooltip="Show moving average lines (Fast EMA, Slow EMA, Trend SMA)", group="Display")
+
+// Telegram Alerts
+telegram_chat_id = input.string("-1003453925766", "Telegram Chat ID", tooltip="Your Telegram chat ID for alert notifications", group="Alerts")
+enable_test_alerts = input.bool(false, "Enable Test Alerts", tooltip="Enable to trigger test alerts to Telegram", group="Alerts")
+test_alert_type = input.string("BUY", "Test Alert Type", options=["BUY", "SELL", "Both"], tooltip="Which type of alert to test", group="Alerts")
+
+// ===== HARDCODED PARAMETERS =====
+// Signal Quality
+signal_sensitivity = "Balanced"
+enable_dip_buying = true
+enable_sell_signals = true  // Always enabled
+extreme_sell_threshold = 90
+min_days_between_sell_signals = signal_gap_days  // User configurable (same as buy)
+deep_value_threshold = 25
+
+// Dynamic Parameters Based on Stock Type (Auto-Detected from Symbol Lists)
+is_dividend_mode = is_dividend_stock  // Auto-detected: true for dividend stocks, false for growth stocks
+
+// Lookback & Signal Gap - Auto-adjusted (gap can be overridden by user input)
+lookback_period = is_dividend_mode ? 90 : 60
+min_days_between_signals = signal_gap_days  // User configurable
+
+// Scoring Thresholds - Auto-adjusted
+strong_signal_score = is_dividend_mode ? 50 : 65
+medium_signal_score = is_dividend_mode ? 38 : 50
+strong_sell_score = is_dividend_mode ? 55 : 70
+medium_sell_score = is_dividend_mode ? 42 : 55
+
+// Technical Indicators
+rsi_length = 14
+ema_fast = 12
+ema_slow = 26
+trend_sma = 50
+
+// Volume Analysis
+volume_period = 30
+volume_surge_multiplier = 1.5
+
+// Alert Configuration
+webhook_alerts = true
+alert_symbol_prefix = "DIV"
+alert_min_score = 45
+alert_on_weak = true
+alert_on_medium = true
+alert_on_strong = true
+alert_on_sell = true
+
+// ===== CORE CALCULATIONS =====
+// Price Position Metrics
+lowest_low = ta.lowest(low, lookback_period)
+highest_high = ta.highest(high, lookback_period)
+price_range = highest_high - lowest_low
+current_position = price_range > 0 ? (close - lowest_low) / price_range * 100 : 50
+
+// Moving Averages
+ema_fast_val = ta.ema(close, ema_fast)
+ema_slow_val = ta.ema(close, ema_slow)
+trend_sma_val = ta.sma(close, trend_sma)
+
+// RSI Analysis
+rsi_current = ta.rsi(close, rsi_length)
+
+// Volume Analysis
+volume_avg = ta.sma(volume, volume_period)
+volume_ratio = na(volume) or na(volume_avg) or volume_avg == 0 ? 1.0 : volume / volume_avg
+
+// ===== VALUE ZONE CONDITIONS =====
+in_value_zone = current_position <= value_zone_threshold
+in_deep_value = current_position <= deep_value_threshold
+
+// SELL ZONE CONDITIONS
+in_sell_zone = current_position >= sell_zone_threshold
+in_extreme_sell_zone = current_position >= extreme_sell_threshold
+
+// ===== BUY SCORING SYSTEM =====
+// Price Position Score (0-25 points) - Enhanced
+get_position_score() =>
+    score = 0
+    if in_deep_value
+        score := 25  // Maximum for deep value
+    else if in_value_zone
+        score := 18  // Increased for value zone
+    else if current_position <= 45
+        score := 8   // Increased for near-value
+    else if current_position <= 60
+        score := 3   // Some points for upper range
+    else
+        score := 0
+    score
+
+// RSI Score (0-25 points) - More generous
+get_rsi_score() =>
+    score = 0
+    if rsi_current <= 25
+        score := 25  // Extremely oversold
+    else if rsi_current <= 30
+        score := 22  // Very oversold
+    else if rsi_current <= 35
+        score := 20  // Oversold
+    else if rsi_current <= 45
+        score := 16  // Good level
+    else if rsi_current <= 55
+        score := 12  // Acceptable
+    else if rsi_current <= 65
+        score := 6   // Getting expensive
+    else
+        score := 0
+    score
+
+// Trend Score (0-25 points) - Increased weight
+get_trend_score() =>
+    score = 0
+
+    // EMA signals (more generous)
+    if ta.crossover(ema_fast_val, ema_slow_val)
+        score += 10  // Fresh bullish cross
+    else if ema_fast_val > ema_slow_val
+        score += 6   // Bullish alignment
+
+    // EMA momentum
+    if ema_fast_val > ema_fast_val[1] and ema_fast_val[1] > ema_fast_val[2]
+        score += 8   // Strong rising trend
+    else if ema_fast_val > ema_fast_val[1]
+        score += 4   // Recent upturn
+
+    // Long-term trend (more generous)
+    if close > trend_sma_val
+        score += 7   // Above trend
+    else if close > trend_sma_val * 0.97  // Within 3%
+        score += 4   // Near trend
+
+    math.min(score, 25)
+
+// Volume Score (0-15 points)
+get_volume_score() =>
+    score = 0
+    if volume_ratio >= 2.5
+        score := 15  // Massive volume
+    else if volume_ratio >= volume_surge_multiplier
+        score := 12  // Strong volume surge
+    else if volume_ratio >= 1.3
+        score := 9   // Good volume
+    else if volume_ratio >= 1.1
+        score := 6   // Above average
+    else if volume_ratio >= 0.9
+        score := 3   // Near average
+    else
+        score := 0
+    score
+
+// Price Action Score (0-10 points)
+get_price_action_score() =>
+    score = 0
+
+    // Strong candle patterns
+    total_range = high - low
+    if close > open and total_range > 0 and (close - open) / total_range > 0.6
+        score += 4  // Strong bullish candle
+    else if close > open
+        score += 2  // Bullish candle
+
+    // Support and momentum
+    if low >= low[1] and close > close[1]
+        score += 3  // Holding support with higher close
+    else if close > close[1]
+        score += 2  // Higher close
+    else if low >= low[1]
+        score += 1  // Holding support
+
+    // Reversal patterns
+    body_size = math.abs(close - open)
+    if total_range > 0 and body_size / total_range < 0.4 and close > (high + low) / 2
+        score += 3  // Hammer/doji reversal
+
+    score
+
+// Calculate buy scores
+position_score = get_position_score()
+rsi_score = get_rsi_score()
+trend_score = get_trend_score()
+volume_score = get_volume_score()
+price_action_score = get_price_action_score()
+
+// Total Signal Score (0-100)
+total_signal_score = position_score + rsi_score + trend_score + volume_score + price_action_score
+
+// ===== SELL SCORING SYSTEM =====
+// Price Position Sell Score (0-25 points)
+get_sell_position_score() =>
+    score = 0
+    if in_extreme_sell_zone
+        score := 25  // Maximum for extreme overpriced
+    else if in_sell_zone
+        score := 18  // High score for sell zone
+    else if current_position >= 65
+        score := 10  // Some points for upper range
+    else if current_position >= 55
+        score := 5   // Minimal points for moderate high
+    else
+        score := 0
+    score
+
+// RSI Sell Score (0-25 points) - Overbought conditions (generous for mean-reverting stocks)
+get_sell_rsi_score() =>
+    score = 0
+    if rsi_current >= 80
+        score := 25  // Extremely overbought
+    else if rsi_current >= 75
+        score := 22  // Very overbought
+    else if rsi_current >= 70
+        score := 20  // Overbought
+    else if rsi_current >= 65
+        score := 18  // Getting expensive
+    else if rsi_current >= 60
+        score := 16  // Moderately high (dividend stocks rarely sustain RSI 60+)
+    else if rsi_current >= 55
+        score := 12  // Elevated for PSU/utility stocks
+    else if rsi_current >= 50
+        score := 6   // Neutral-high
+    else
+        score := 0
+    score
+
+// Trend Exhaustion Score (0-25 points) - Detects overextension, NOT bearish reversal
+// Rationale: Sell into strength at range highs, don't wait for reversal confirmation
+get_sell_trend_score() =>
+    score = 0
+
+    // Distance above fast EMA (overextended above short-term mean)
+    ema_fast_pct = ema_fast_val > 0 ? (close - ema_fast_val) / ema_fast_val * 100 : 0
+    if ema_fast_pct >= 5
+        score += 10  // Significantly above fast EMA
+    else if ema_fast_pct >= 3
+        score += 7   // Moderately above fast EMA
+    else if ema_fast_pct >= 1.5
+        score += 4   // Slightly above fast EMA
+
+    // Distance above SMA50 (overextended above long-term trend)
+    if close > trend_sma_val * 1.15  // 15% above trend
+        score += 10  // Significantly overextended
+    else if close > trend_sma_val * 1.10  // 10% above trend
+        score += 7   // Moderately overextended
+    else if close > trend_sma_val * 1.05  // 5% above trend
+        score += 4   // Slightly overextended
+    else if close > trend_sma_val
+        score += 2   // Above trend
+
+    // Consecutive higher closes (exhaustion run-up)
+    consec_up = close > close[1] and close[1] > close[2] and close[2] > close[3]
+    if consec_up
+        score += 5   // 3+ consecutive higher closes = potential exhaustion
+
+    math.min(score, 25)
+
+// Volume Distribution Score (0-15 points)
+// High volume at range highs is distributive regardless of candle color
+// (smart money distributes into green candles at highs)
+get_sell_volume_score() =>
+    score = 0
+    if volume_ratio >= 2.5
+        score := 15  // Climactic volume at highs
+    else if volume_ratio >= 2.0
+        score := 12  // Very high volume
+    else if volume_ratio >= volume_surge_multiplier
+        score := 9   // Volume surge
+    else if volume_ratio >= 1.2
+        score := 6   // Above average volume
+    else if volume_ratio >= 0.9
+        score := 3   // Near average
+    else
+        score := 0
+    // Bonus: red candle with high volume is extra bearish
+    if close < open and volume_ratio >= 1.5 and score < 15
+        score := math.min(score + 3, 15)
+    score
+
+// Price Action Sell Score (0-10 points)
+// Includes exhaustion patterns on green candles (rejection wicks, indecision at highs)
+get_sell_price_action_score() =>
+    score = 0
+    total_range = high - low
+    body_size = math.abs(close - open)
+    upper_shadow = high - math.max(close, open)
+
+    // Bearish candle patterns
+    if close < open and total_range > 0 and (open - close) / total_range > 0.6
+        score += 4  // Strong bearish candle
+    else if close < open
+        score += 2  // Bearish candle
+    else if close > open and total_range > 0 and upper_shadow / total_range > 0.4
+        score += 3  // Green candle with long upper wick (rejection at highs)
+    else if total_range > 0 and body_size / total_range < 0.3
+        score += 2  // Small body = indecision at highs (doji)
+
+    // Resistance and momentum
+    if high <= high[1] and close < close[1]
+        score += 3  // Failing to make new highs with lower close
+    else if close < close[1]
+        score += 2  // Lower close
+    else if high <= high[1]
+        score += 1  // Failing to make new highs
+
+    // Shooting star / reversal at top
+    if total_range > 0 and body_size / total_range < 0.3 and upper_shadow / total_range > 0.6
+        score += 3  // Shooting star pattern
+
+    math.min(score, 10)
+
+// Calculate sell scores
+sell_position_score = get_sell_position_score()
+sell_rsi_score = get_sell_rsi_score()
+sell_trend_score = get_sell_trend_score()
+sell_volume_score = get_sell_volume_score()
+sell_price_action_score = get_sell_price_action_score()
+
+// Total Sell Signal Score (0-100)
+total_sell_score = sell_position_score + sell_rsi_score + sell_trend_score + sell_volume_score + sell_price_action_score
+
+// ===== SIGNAL TRACKING =====
+var signal_times = array.new<int>()
+var signal_types = array.new<string>()
+
+// ===== PERSISTENT SIGNAL TRACKING FOR LIVE BARS =====
+// Track if we've already fired a signal on the current bar (persists even if conditions change)
+var int last_buy_signal_bar_index = -1
+var int last_sell_signal_bar_index = -1
+var string last_buy_strength = ""
+var string last_sell_strength = ""
+var float last_buy_price = na
+var float last_sell_price = na
+var int last_buy_score = 0
+var int last_sell_score = 0
+
+// ===== BUY SIGNAL CONDITIONS =====
+base_signal_threshold = is_dividend_mode ? 35 : 45
+
+// Main buy signals
+main_buy_signal = total_signal_score >= base_signal_threshold and in_value_zone
+
+// Visual signal (ignores gap - shows whenever conditions are met)
+visual_buy_signal = main_buy_signal
+
+// Deep dip signal - Calculate crossunder outside conditional
+position_crossunder = ta.crossunder(current_position, deep_value_threshold)
+deep_dip_signal = enable_dip_buying and position_crossunder and rsi_current < 50 and volume_ratio >= 1.3 and close > open
+
+// Buy signal timing
+var last_signal_bar = 0
+bars_since_last = bar_index - last_signal_bar
+sufficient_gap = bars_since_last >= min_days_between_signals
+
+// Final buy signals
+primary_signal = main_buy_signal and sufficient_gap
+dip_signal = deep_dip_signal and sufficient_gap
+final_buy_signal = primary_signal or dip_signal
+
+// Buy signal strength
+final_score = total_signal_score
+
+var signal_strength = ""
+if final_buy_signal
+    signal_strength := final_score >= strong_signal_score ? "STRONG" : final_score >= medium_signal_score ? "MEDIUM" : "WEAK"
+    last_signal_bar := bar_index
+    // Store persistent signal info for live bar tracking
+    if last_buy_signal_bar_index != bar_index
+        last_buy_signal_bar_index := bar_index
+        last_buy_strength := signal_strength
+        last_buy_price := close
+        last_buy_score := final_score
+
+// Visual signal strength (for display, ignores gap)
+visual_buy_strength = visual_buy_signal ? (final_score >= strong_signal_score ? "STRONG" : final_score >= medium_signal_score ? "MEDIUM" : "WEAK") : ""
+
+// ===== SELL SIGNAL CONDITIONS =====
+sell_signal_threshold = is_dividend_mode ? 40 : 50
+
+// Main sell signals
+main_sell_signal = enable_sell_signals and total_sell_score >= sell_signal_threshold and in_sell_zone
+
+// Visual signal (ignores gap - shows whenever conditions are met)
+visual_sell_signal = main_sell_signal
+
+// Extreme sell signal - Calculate crossover outside conditional
+position_crossover = ta.crossover(current_position, extreme_sell_threshold)
+extreme_sell_signal = enable_sell_signals and position_crossover and rsi_current > 70 and volume_ratio >= 1.5 and close < open
+
+// Sell signal timing
+var last_sell_signal_bar = 0
+bars_since_last_sell = bar_index - last_sell_signal_bar
+sufficient_sell_gap = bars_since_last_sell >= min_days_between_sell_signals
+
+// Final sell signals
+primary_sell_signal = main_sell_signal and sufficient_sell_gap
+extreme_sell = extreme_sell_signal and sufficient_sell_gap
+final_sell_signal = primary_sell_signal or extreme_sell
+
+// Sell signal strength
+final_sell_score = total_sell_score
+
+var sell_strength = ""
+if final_sell_signal
+    sell_strength := final_sell_score >= strong_sell_score ? "STRONG" : final_sell_score >= medium_sell_score ? "MEDIUM" : "WEAK"
+    last_sell_signal_bar := bar_index
+    // Store persistent signal info for live bar tracking
+    if last_sell_signal_bar_index != bar_index
+        last_sell_signal_bar_index := bar_index
+        last_sell_strength := sell_strength
+        last_sell_price := close
+        last_sell_score := final_sell_score
+
+// Visual sell strength (for display, ignores gap)
+visual_sell_strength = visual_sell_signal ? (final_sell_score >= strong_sell_score ? "STRONG" : final_sell_score >= medium_sell_score ? "MEDIUM" : "WEAK") : ""
+
+// Add BUY signals to tracking
+if final_buy_signal
+    array.push(signal_times, time)
+    array.push(signal_types, signal_strength)
+
+// Add SELL signals to tracking
+if final_sell_signal
+    array.push(signal_times, time)
+    array.push(signal_types, "SELL_" + sell_strength)
+
+// Count functions - Fixed
+count_signals_by_type(days, signal_type) =>
+    result = 0
+    if array.size(signal_times) > 0
+        cutoff_time = time - (days * 24 * 60 * 60 * 1000)
+        for i = 0 to array.size(signal_times) - 1
+            if array.get(signal_times, i) >= cutoff_time and array.get(signal_types, i) == signal_type
+                result += 1
+    result
+
+count_sell_signals(days) =>
+    result = 0
+    if array.size(signal_times) > 0
+        cutoff_time = time - (days * 24 * 60 * 60 * 1000)
+        for i = 0 to array.size(signal_times) - 1
+            signal_type = array.get(signal_types, i)
+            if array.get(signal_times, i) >= cutoff_time and str.contains(signal_type, "SELL_")
+                result += 1
+    result
+
+// ===== STRATEGY EXECUTION (FOR TESTER) =====
+// Long-only mean reversion: BUY value, SELL overvalued. No shorting dividend stocks.
+// Only trade STRONG and MEDIUM signals (WEAK has poor win rate)
+buy_tradeable = final_buy_signal and (signal_strength == "STRONG" or signal_strength == "MEDIUM")
+sell_tradeable = final_sell_signal and (sell_strength == "STRONG" or sell_strength == "MEDIUM")
+
+if buy_tradeable and strategy.position_size == 0
+    strategy.entry("BUY", strategy.long)
+
+if sell_tradeable and strategy.position_size > 0
+    strategy.close("BUY", comment="SELL signal")
+
+// Safety exit: close if price drops 10% from entry (stop loss for backtester)
+if strategy.position_size > 0 and close < strategy.position_avg_price * 0.90
+    strategy.close("BUY", comment="SL 10%")
+
+// ===== ALERTS =====
+// BUY ALERTS - STRONG signals only
+if final_buy_signal and webhook_alerts and signal_strength == "STRONG"
+    alert_time = str.format_time(time, "HH:mm", "Asia/Kolkata")
+    alert_tf = timeframe.period
+    chart_link = "https://www.tradingview.com/chart/?symbol=" + syminfo.tickerid + "&interval=" + alert_tf + "&layout=anand-dividend"
+    buy_alert_json = '{"chat_id": "' + telegram_chat_id + '", "text": "✅ ' + detected_type + ' ENTRY 🟢\\n📈 <b>BUY SIGNAL</b> 📈\\n<b>Symbol:</b> <code>' + syminfo.ticker + '</code>\\n<b>Entry:</b> <code>' + str.tostring(close, "#.##") + '</code>\\n<b>Strength:</b> STRONG (' + str.tostring(final_score) + ')\\n<b>Mode:</b> Positional\\n<b>Time:</b> ' + alert_time + ' | <b>TF:</b> ' + alert_tf + '\\n<a href=\\"' + chart_link + '\\">📊 View Chart</a>", "parse_mode": "HTML"}'
+
+    alert(buy_alert_json, alert.freq_once_per_bar)
+
+// ===== BAR STATE DETECTION =====
+// Used for label and marker display logic
+is_closed_bar = barstate.isconfirmed or not barstate.islast
+is_live_bar = barstate.islast and not barstate.isconfirmed
+
+// ===== SIGNAL CONFIRMATION TRACKING =====
+// Track if signal was confirmed on this bar (captures first occurrence)
+var bool confirmed_buy_on_bar = false
+var bool confirmed_sell_on_bar = false
+var string confirmed_buy_strength_val = ""
+var string confirmed_sell_strength_val = ""
+var int confirmed_buy_bar = -1
+var int confirmed_sell_bar = -1
+
+// On new bar, reset confirmation tracking
+if barstate.isnew
+    confirmed_buy_on_bar := false
+    confirmed_sell_on_bar := false
+    confirmed_buy_strength_val := ""
+    confirmed_sell_strength_val := ""
+
+// Capture signal when alert conditions are met (includes gap check)
+// This ensures triangles only show where alerts would have fired
+if final_buy_signal and not confirmed_buy_on_bar
+    confirmed_buy_on_bar := true
+    confirmed_buy_strength_val := signal_strength
+    confirmed_buy_bar := bar_index
+
+if final_sell_signal and not confirmed_sell_on_bar
+    confirmed_sell_on_bar := true
+    confirmed_sell_strength_val := sell_strength
+    confirmed_sell_bar := bar_index
+
+// BUY Signal Labels - Score display
+// Closed bars: Show confirmed score
+// Live bars: Show current score (updates in real-time)
+var label buy_label = na
+var int buy_label_bar = -1
+var int confirmed_buy_score = 0
+var float confirmed_buy_price = na
+
+// Capture score at first alert signal occurrence
+if final_buy_signal and confirmed_buy_bar == bar_index and na(confirmed_buy_price)
+    confirmed_buy_score := final_score
+    confirmed_buy_price := close
+
+// Show label based on bar state (respects display filters)
+if (is_closed_bar and confirmed_buy_on_bar) or (is_live_bar and visual_buy_signal)
+    // Use confirmed values for closed bars, current values for live
+    display_score = is_closed_bar ? confirmed_buy_score : final_score
+    display_strength = is_closed_bar ? confirmed_buy_strength_val : visual_buy_strength
+    display_price = is_closed_bar ? confirmed_buy_price : close
+
+    // Check if this strength level should be shown
+    show_this_signal = (display_strength == "STRONG" and show_strong_signals) or (display_strength == "MEDIUM" and show_medium_signals) or (display_strength == "WEAK" and show_weak_signals)
+
+    if show_this_signal
+        label_offset = (high - low) * 0.6
+        label_color = display_strength == "STRONG" ? color.new(color.lime, 20) : display_strength == "MEDIUM" ? color.new(color.yellow, 20) : color.new(color.gray, 20)
+
+        // Delete previous label on same bar
+        if not na(buy_label) and buy_label_bar == bar_index
+            label.delete(buy_label)
+
+        // Score label
+        buy_label := label.new(bar_index, low - label_offset,
+                  str.tostring(display_score),
+                  style=label.style_label_up,
+                  color=label_color,
+                  textcolor=color.white,
+                  size=size.small,
+                  tooltip="BUY - " + display_strength + "\nScore: " + str.tostring(display_score) + "\nEntry: " + str.tostring(display_price, format.mintick))
+        buy_label_bar := bar_index
+
+// SELL ALERTS - STRONG signals only
+if final_sell_signal and webhook_alerts and sell_strength == "STRONG"
+    sell_time = str.format_time(time, "HH:mm", "Asia/Kolkata")
+    sell_tf = timeframe.period
+    sell_chart_link = "https://www.tradingview.com/chart/?symbol=" + syminfo.tickerid + "&interval=" + sell_tf + "&layout=anand-dividend"
+    sell_alert_json = '{"chat_id": "' + telegram_chat_id + '", "text": "❌ ' + detected_type + ' EXIT 🔴\\n📉 <b>SELL SIGNAL</b> 📉\\n<b>Symbol:</b> <code>' + syminfo.ticker + '</code>\\n<b>Target:</b> <code>' + str.tostring(close, "#.##") + '</code>\\n<b>Strength:</b> STRONG (' + str.tostring(final_sell_score) + ')\\n<b>Mode:</b> Positional\\n<b>Time:</b> ' + sell_time + ' | <b>TF:</b> ' + sell_tf + '\\n<a href=\\"' + sell_chart_link + '\\">📊 View Chart</a>", "parse_mode": "HTML"}'
+
+    alert(sell_alert_json, alert.freq_once_per_bar)
+
+// SELL Signal Labels - Score display
+// Closed bars: Show confirmed score
+// Live bars: Show current score (updates in real-time)
+var label sell_label = na
+var int sell_label_bar = -1
+var int confirmed_sell_score = 0
+var float confirmed_sell_price = na
+
+// Capture score at first alert signal occurrence
+if final_sell_signal and confirmed_sell_bar == bar_index and na(confirmed_sell_price)
+    confirmed_sell_score := final_sell_score
+    confirmed_sell_price := close
+
+// Show label based on bar state (respects display filters)
+if (is_closed_bar and confirmed_sell_on_bar) or (is_live_bar and visual_sell_signal)
+    // Use confirmed values for closed bars, current values for live
+    sell_display_score = is_closed_bar ? confirmed_sell_score : final_sell_score
+    sell_display_strength = is_closed_bar ? confirmed_sell_strength_val : visual_sell_strength
+    sell_display_price = is_closed_bar ? confirmed_sell_price : close
+
+    // Check if this strength level should be shown
+    show_this_sell_signal = (sell_display_strength == "STRONG" and show_strong_signals) or (sell_display_strength == "MEDIUM" and show_medium_signals) or (sell_display_strength == "WEAK" and show_weak_signals)
+
+    if show_this_sell_signal
+        sell_label_offset = (high - low) * 0.6
+        sell_label_color = sell_display_strength == "STRONG" ? color.new(color.red, 20) : sell_display_strength == "MEDIUM" ? color.new(color.orange, 20) : color.new(color.gray, 20)
+
+        // Delete previous label on same bar
+        if not na(sell_label) and sell_label_bar == bar_index
+            label.delete(sell_label)
+
+        // Score label
+        sell_label := label.new(bar_index, high + sell_label_offset,
+                  str.tostring(sell_display_score),
+                  style=label.style_label_down,
+                  color=sell_label_color,
+                  textcolor=color.white,
+                  size=size.small,
+                  tooltip="SELL - " + sell_display_strength + "\nScore: " + str.tostring(sell_display_score) + "\nExit: " + str.tostring(sell_display_price, format.mintick))
+        sell_label_bar := bar_index
+
+// ===== VISUALISATION =====
+// Background zones - Enhanced visibility
+bgcolor(in_deep_value ? color.new(color.green, 78) : na, title="Deep Value Zone")
+bgcolor(in_value_zone and not in_deep_value ? color.new(color.green, 88) : na, title="Value Zone")
+bgcolor(in_extreme_sell_zone ? color.new(color.red, 78) : na, title="Extreme Sell Zone")
+bgcolor(in_sell_zone and not in_extreme_sell_zone ? color.new(color.red, 88) : na, title="Sell Zone")
+
+// Zone boundary lines
+value_zone_price = lowest_low + (price_range * value_zone_threshold / 100)
+sell_zone_price = lowest_low + (price_range * sell_zone_threshold / 100)
+deep_value_price = lowest_low + (price_range * deep_value_threshold / 100)
+extreme_sell_price = lowest_low + (price_range * extreme_sell_threshold / 100)
+
+plot(show_zone_lines ? value_zone_price : na, "Buy Zone Line (30%)", color=color.new(color.aqua, 30), linewidth=2, style=plot.style_linebr)
+plot(show_zone_lines ? sell_zone_price : na, "Sell Zone Line (70%)", color=color.new(color.orange, 30), linewidth=2, style=plot.style_linebr)
+plot(show_zone_lines ? deep_value_price : na, "Deep Value Line (25%)", color=color.new(color.green, 20), linewidth=2, style=plot.style_linebr)
+plot(show_zone_lines ? extreme_sell_price : na, "Deep Sell Zone Line (90%)", color=color.new(color.red, 20), linewidth=2, style=plot.style_linebr)
+
+// ===== SIGNAL VISUALIZATION LOGIC =====
+// Closed bars: Full triangle (confirmed signal)
+// Live bar: Circle marker (conditions currently favorable)
+
+// BUY Signal markers - Triangles for CLOSED bars only
+plotshape(is_closed_bar and confirmed_buy_on_bar and confirmed_buy_strength_val == "STRONG" and show_strong_signals, title="Strong Buy Signal", location=location.belowbar, color=color.lime, style=shape.triangleup, size=size.large)
+plotshape(is_closed_bar and confirmed_buy_on_bar and confirmed_buy_strength_val == "MEDIUM" and show_medium_signals, title="Medium Buy Signal", location=location.belowbar, color=color.yellow, style=shape.triangleup, size=size.normal)
+plotshape(is_closed_bar and confirmed_buy_on_bar and confirmed_buy_strength_val == "WEAK" and show_weak_signals, title="Weak Buy Signal", location=location.belowbar, color=color.gray, style=shape.triangleup, size=size.small)
+
+// SELL Signal markers - Triangles for CLOSED bars only
+plotshape(is_closed_bar and confirmed_sell_on_bar and confirmed_sell_strength_val == "STRONG" and show_strong_signals, title="Strong Sell Signal", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.large)
+plotshape(is_closed_bar and confirmed_sell_on_bar and confirmed_sell_strength_val == "MEDIUM" and show_medium_signals, title="Medium Sell Signal", location=location.abovebar, color=color.orange, style=shape.triangledown, size=size.normal)
+plotshape(is_closed_bar and confirmed_sell_on_bar and confirmed_sell_strength_val == "WEAK" and show_weak_signals, title="Weak Sell Signal", location=location.abovebar, color=color.gray, style=shape.triangledown, size=size.small)
+
+// LIVE BAR: Show circle marker (conditions currently favorable)
+plotshape(is_live_bar and visual_buy_signal and visual_buy_strength == "STRONG" and show_strong_signals, title="Live Strong Buy", location=location.belowbar, color=color.lime, style=shape.circle, size=size.small)
+plotshape(is_live_bar and visual_buy_signal and visual_buy_strength == "MEDIUM" and show_medium_signals, title="Live Medium Buy", location=location.belowbar, color=color.yellow, style=shape.circle, size=size.tiny)
+plotshape(is_live_bar and visual_buy_signal and visual_buy_strength == "WEAK" and show_weak_signals, title="Live Weak Buy", location=location.belowbar, color=color.gray, style=shape.circle, size=size.tiny)
+
+plotshape(is_live_bar and visual_sell_signal and visual_sell_strength == "STRONG" and show_strong_signals, title="Live Strong Sell", location=location.abovebar, color=color.red, style=shape.circle, size=size.small)
+plotshape(is_live_bar and visual_sell_signal and visual_sell_strength == "MEDIUM" and show_medium_signals, title="Live Medium Sell", location=location.abovebar, color=color.orange, style=shape.circle, size=size.tiny)
+plotshape(is_live_bar and visual_sell_signal and visual_sell_strength == "WEAK" and show_weak_signals, title="Live Weak Sell", location=location.abovebar, color=color.gray, style=shape.circle, size=size.tiny)
+// Moving averages - Optional for advanced users
+plot(show_emas ? ema_fast_val : na, "Fast EMA(12)", color=color.blue, linewidth=2)
+plot(show_emas ? ema_slow_val : na, "Slow EMA(26)", color=color.orange, linewidth=2)
+plot(show_emas ? trend_sma_val : na, "Trend SMA(50)", color=color.white, linewidth=1)
+
+// ===== ACTION DASHBOARD =====
+if show_summary_table and barstate.islast
+    // Determine current action recommendation
+    action_text = ""
+    action_color = color.gray
+    action_bg = color.new(color.gray, 70)
+
+    if in_deep_value and total_signal_score >= strong_signal_score
+        action_text := "STRONG BUY"
+        action_color := color.lime
+        action_bg := color.new(color.green, 60)
+    else if in_value_zone and total_signal_score >= medium_signal_score
+        action_text := "ACCUMULATE"
+        action_color := color.lime
+        action_bg := color.new(color.green, 70)
+    else if in_value_zone
+        action_text := "WATCH BUY"
+        action_color := color.yellow
+        action_bg := color.new(color.yellow, 80)
+    else if in_extreme_sell_zone and total_sell_score >= strong_sell_score
+        action_text := "STRONG SELL"
+        action_color := color.red
+        action_bg := color.new(color.red, 60)
+    else if in_sell_zone and total_sell_score >= medium_sell_score
+        action_text := "BOOK PROFIT"
+        action_color := color.orange
+        action_bg := color.new(color.red, 70)
+    else if in_sell_zone
+        action_text := "WATCH SELL"
+        action_color := color.orange
+        action_bg := color.new(color.orange, 80)
+    else
+        action_text := "HOLD / WAIT"
+        action_color := color.white
+        action_bg := color.new(color.gray, 80)
+
+    // Zone text
+    zone_text = in_deep_value ? "DEEP VALUE" : in_value_zone ? "VALUE ZONE" : in_extreme_sell_zone ? "EXTREME HIGH" : in_sell_zone ? "SELL ZONE" : "NEUTRAL"
+    zone_color = in_value_zone ? color.lime : in_sell_zone ? color.red : color.white
+
+    // Row 0: Title bar
+    table.cell(summary_table, 0, 0, syminfo.ticker, bgcolor=color.new(color.purple, 10), text_color=color.white, text_size=size.large)
+    table.cell(summary_table, 1, 0, detected_type, bgcolor=color.new(color.purple, 10), text_color=is_dividend_stock ? color.aqua : color.orange, text_size=size.large)
+    table.cell(summary_table, 2, 0, str.tostring(close, format.mintick), bgcolor=color.new(color.purple, 10), text_color=close >= open ? color.lime : color.red, text_size=size.large)
+    table.cell(summary_table, 3, 0, str.tostring(current_position, "#.#") + "%", bgcolor=color.new(color.purple, 10), text_color=zone_color, text_size=size.large)
+
+    // Row 1: ACTION RECOMMENDATION (largest, most prominent)
+    table.cell(summary_table, 0, 1, "ACTION", bgcolor=action_bg, text_color=color.white, text_size=size.large)
+    table.cell(summary_table, 1, 1, action_text, bgcolor=action_bg, text_color=action_color, text_size=size.huge)
+    table.cell(summary_table, 2, 1, zone_text, bgcolor=action_bg, text_color=zone_color, text_size=size.large)
+    table.cell(summary_table, 3, 1, "", bgcolor=action_bg, text_color=color.white, text_size=size.large)
+
+    // Row 2: Buy Score breakdown
+    buy_str = total_signal_score >= strong_signal_score ? "STRONG" : total_signal_score >= medium_signal_score ? "MEDIUM" : total_signal_score >= base_signal_threshold ? "WEAK" : "---"
+    buy_str_color = total_signal_score >= strong_signal_score ? color.lime : total_signal_score >= medium_signal_score ? color.yellow : color.gray
+    table.cell(summary_table, 0, 2, "BUY SCORE", bgcolor=color.new(color.green, 70), text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 1, 2, str.tostring(total_signal_score) + " / 100", bgcolor=color.new(color.green, 70), text_color=buy_str_color, text_size=size.large)
+    table.cell(summary_table, 2, 2, buy_str, bgcolor=color.new(color.green, 70), text_color=buy_str_color, text_size=size.large)
+    table.cell(summary_table, 3, 2, in_value_zone ? "IN ZONE" : "---", bgcolor=color.new(color.green, 70), text_color=in_value_zone ? color.lime : color.gray, text_size=size.normal)
+
+    // Row 3: Sell Score breakdown
+    sell_str = total_sell_score >= strong_sell_score ? "STRONG" : total_sell_score >= medium_sell_score ? "MEDIUM" : total_sell_score >= sell_signal_threshold ? "WEAK" : "---"
+    sell_str_color = total_sell_score >= strong_sell_score ? color.red : total_sell_score >= medium_sell_score ? color.orange : color.gray
+    table.cell(summary_table, 0, 3, "SELL SCORE", bgcolor=color.new(color.red, 70), text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 1, 3, str.tostring(total_sell_score) + " / 100", bgcolor=color.new(color.red, 70), text_color=sell_str_color, text_size=size.large)
+    table.cell(summary_table, 2, 3, sell_str, bgcolor=color.new(color.red, 70), text_color=sell_str_color, text_size=size.large)
+    table.cell(summary_table, 3, 3, in_sell_zone ? "IN ZONE" : "---", bgcolor=color.new(color.red, 70), text_color=in_sell_zone ? color.red : color.gray, text_size=size.normal)
+
+    // Row 4: Key indicators
+    rsi_color = rsi_current <= 30 ? color.lime : rsi_current <= 45 ? color.green : rsi_current >= 70 ? color.red : rsi_current >= 55 ? color.orange : color.white
+    vol_color = volume_ratio >= 2.0 ? color.lime : volume_ratio >= 1.5 ? color.green : color.white
+    row4_bg = color.new(color.black, 15)
+    table.cell(summary_table, 0, 4, "RSI " + str.tostring(rsi_current, "#.#"), bgcolor=row4_bg, text_color=rsi_color, text_size=size.normal)
+    table.cell(summary_table, 1, 4, "VOL " + str.tostring(volume_ratio, "#.#") + "x", bgcolor=row4_bg, text_color=vol_color, text_size=size.normal)
+    ema_status = ema_fast_val > ema_slow_val ? "EMA BULL" : "EMA BEAR"
+    ema_color = ema_fast_val > ema_slow_val ? color.lime : color.red
+    table.cell(summary_table, 2, 4, ema_status, bgcolor=row4_bg, text_color=ema_color, text_size=size.normal)
+    sma_status = close > trend_sma_val ? "ABOVE SMA50" : "BELOW SMA50"
+    sma_color = close > trend_sma_val ? color.lime : color.red
+    table.cell(summary_table, 3, 4, sma_status, bgcolor=row4_bg, text_color=sma_color, text_size=size.normal)
+
+    // Row 5: Range info
+    row5_bg = color.new(color.black, 25)
+    table.cell(summary_table, 0, 5, str.tostring(lookback_period) + "D Range", bgcolor=row5_bg, text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 1, 5, str.tostring(lowest_low, format.mintick) + " - " + str.tostring(highest_high, format.mintick), bgcolor=row5_bg, text_color=color.white, text_size=size.normal)
+    pct_from_low = lowest_low > 0 ? (close - lowest_low) / lowest_low * 100 : 0
+    pct_from_high = highest_high > 0 ? (highest_high - close) / highest_high * 100 : 0
+    table.cell(summary_table, 2, 5, "From Low +" + str.tostring(pct_from_low, "#.#") + "%", bgcolor=row5_bg, text_color=pct_from_low < 10 ? color.lime : color.white, text_size=size.normal)
+    table.cell(summary_table, 3, 5, "From High -" + str.tostring(pct_from_high, "#.#") + "%", bgcolor=row5_bg, text_color=pct_from_high < 10 ? color.red : color.white, text_size=size.normal)
+
+    // Row 6: Buy zone target prices
+    row6_bg = color.new(color.green, 80)
+    table.cell(summary_table, 0, 6, "BUY BELOW", bgcolor=row6_bg, text_color=color.lime, text_size=size.normal)
+    table.cell(summary_table, 1, 6, str.tostring(value_zone_price, format.mintick), bgcolor=row6_bg, text_color=color.lime, text_size=size.large)
+    table.cell(summary_table, 2, 6, "DEEP BUY", bgcolor=row6_bg, text_color=color.green, text_size=size.normal)
+    table.cell(summary_table, 3, 6, str.tostring(deep_value_price, format.mintick), bgcolor=row6_bg, text_color=color.green, text_size=size.large)
+
+    // Row 7: Sell zone target prices
+    row7_bg = color.new(color.red, 80)
+    table.cell(summary_table, 0, 7, "SELL ABOVE", bgcolor=row7_bg, text_color=color.red, text_size=size.normal)
+    table.cell(summary_table, 1, 7, str.tostring(sell_zone_price, format.mintick), bgcolor=row7_bg, text_color=color.red, text_size=size.large)
+    table.cell(summary_table, 2, 7, "STRONG SELL", bgcolor=row7_bg, text_color=color.orange, text_size=size.normal)
+    table.cell(summary_table, 3, 7, str.tostring(extreme_sell_price, format.mintick), bgcolor=row7_bg, text_color=color.orange, text_size=size.large)
+
+    // Row 8: Signal history (simplified)
+    buy_30d = count_signals_by_type(30, "STRONG") + count_signals_by_type(30, "MEDIUM")
+    sell_30d = count_sell_signals(30)
+    buy_90d = count_signals_by_type(90, "STRONG") + count_signals_by_type(90, "MEDIUM")
+    sell_90d = count_sell_signals(90)
+    row8_bg = color.new(color.black, 15)
+    table.cell(summary_table, 0, 8, "SIGNALS 1M", bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 1, 8, "B:" + str.tostring(buy_30d) + "  S:" + str.tostring(sell_30d), bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 2, 8, "SIGNALS 3M", bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 3, 8, "B:" + str.tostring(buy_90d) + "  S:" + str.tostring(sell_90d), bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
+
+    // Row 9: Strategy thresholds reference
+    row9_bg = color.new(color.gray, 80)
+    table.cell(summary_table, 0, 9, "BUY Thresholds", bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
+    table.cell(summary_table, 1, 9, "STR>=" + str.tostring(strong_signal_score) + " MED>=" + str.tostring(medium_signal_score), bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
+    table.cell(summary_table, 2, 9, "SELL Thresholds", bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
+    table.cell(summary_table, 3, 9, "STR>=" + str.tostring(strong_sell_score) + " MED>=" + str.tostring(medium_sell_score), bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
+
+// Stock type now shown in dashboard title bar (removed separate label to reduce chart clutter)
+
+// DEBUG: Show current bar status with BUY and SELL score breakdowns
+var table debug_table = table.new(position.top_right, 2, 22, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    // === HEADER ===
+    table.cell(debug_table, 0, 0, "DEBUG", bgcolor=color.purple, text_color=color.white, text_size=size.small)
+    table.cell(debug_table, 1, 0, str.tostring(current_position, "#.#") + "%", bgcolor=color.purple, text_color=color.white, text_size=size.small)
+
+    // === COMMON ===
+    table.cell(debug_table, 0, 1, "Bar State", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 1, is_live_bar ? "LIVE" : "CLOSED", text_color=is_live_bar ? color.yellow : color.lime, text_size=size.tiny)
+    table.cell(debug_table, 0, 2, "RSI", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 2, str.tostring(rsi_current, "#.#"), text_color=rsi_current <= 30 ? color.lime : rsi_current >= 70 ? color.red : color.white, text_size=size.tiny)
+    table.cell(debug_table, 0, 3, "Vol Ratio", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 3, str.tostring(volume_ratio, "#.##") + "x", text_color=volume_ratio >= 1.5 ? color.lime : color.white, text_size=size.tiny)
+
+    // === BUY SECTION ===
+    table.cell(debug_table, 0, 4, "--- BUY ---", bgcolor=color.new(color.green, 60), text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 4, in_value_zone ? "IN ZONE" : "---", bgcolor=color.new(color.green, 60), text_color=in_value_zone ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 5, "Pos", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 5, str.tostring(position_score) + "/25", text_color=position_score >= 18 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 6, "RSI", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 6, str.tostring(rsi_score) + "/25", text_color=rsi_score >= 16 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 7, "Trend", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 7, str.tostring(trend_score) + "/25", text_color=trend_score >= 10 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 8, "Vol", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 8, str.tostring(volume_score) + "/15", text_color=volume_score >= 9 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 9, "PA", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 9, str.tostring(price_action_score) + "/10", text_color=price_action_score >= 4 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 10, "TOTAL", text_color=color.white, text_size=size.tiny)
+    buy_total_color = total_signal_score >= strong_signal_score ? color.lime : total_signal_score >= medium_signal_score ? color.yellow : total_signal_score >= base_signal_threshold ? color.orange : color.red
+    table.cell(debug_table, 1, 10, str.tostring(total_signal_score) + "/100", text_color=buy_total_color, text_size=size.tiny)
+    table.cell(debug_table, 0, 11, "Signal?", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 11, visual_buy_signal ? (visual_buy_strength != "" ? visual_buy_strength : "YES") : "NO", text_color=visual_buy_signal ? color.lime : color.gray, text_size=size.tiny)
+
+    // === SELL SECTION ===
+    table.cell(debug_table, 0, 12, "--- SELL ---", bgcolor=color.new(color.red, 60), text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 12, in_sell_zone ? "IN ZONE" : "---", bgcolor=color.new(color.red, 60), text_color=in_sell_zone ? color.red : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 13, "Pos", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 13, str.tostring(sell_position_score) + "/25", text_color=sell_position_score >= 18 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 14, "RSI", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 14, str.tostring(sell_rsi_score) + "/25", text_color=sell_rsi_score >= 16 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 15, "Trend", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 15, str.tostring(sell_trend_score) + "/25", text_color=sell_trend_score >= 10 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 16, "Vol", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 16, str.tostring(sell_volume_score) + "/15", text_color=sell_volume_score >= 9 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 17, "PA", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 17, str.tostring(sell_price_action_score) + "/10", text_color=sell_price_action_score >= 4 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 18, "TOTAL", text_color=color.white, text_size=size.tiny)
+    sell_total_color = total_sell_score >= strong_sell_score ? color.red : total_sell_score >= medium_sell_score ? color.orange : total_sell_score >= sell_signal_threshold ? color.yellow : color.gray
+    table.cell(debug_table, 1, 18, str.tostring(total_sell_score) + "/100", text_color=sell_total_color, text_size=size.tiny)
+    table.cell(debug_table, 0, 19, "Signal?", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 19, visual_sell_signal ? (visual_sell_strength != "" ? visual_sell_strength : "YES") : "NO", text_color=visual_sell_signal ? color.red : color.gray, text_size=size.tiny)
+
+    // === META ===
+    table.cell(debug_table, 0, 20, "Type", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 20, detected_type, text_color=is_dividend_stock ? color.aqua : is_growth_stock ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(debug_table, 0, 21, "Gap OK?", text_color=color.white, text_size=size.tiny)
+    table.cell(debug_table, 1, 21, "B:" + (sufficient_gap ? "Y" : "N") + " S:" + (sufficient_sell_gap ? "Y" : "N"), text_color=color.white, text_size=size.tiny)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TEST ALERTS SECTION
+// ═════════════════════════════════════════════════════════════════════════════
+// This section allows testing Telegram alerts without waiting for actual signals
+
+var bool testAlertSent = false
+
+if enable_test_alerts and barstate.islast and not testAlertSent
+    testSymbol = syminfo.ticker
+    testPrice = close
+
+    // Test BUY Alert
+    if test_alert_type == "BUY" or test_alert_type == "Both"
+        testAlertMessage = '{"chat_id": "' + telegram_chat_id + '", "text": "🧪 TEST DIVIDEND ENTRY\\n📈 <b>BUY SIGNAL</b> 📈\\n<b>Symbol:</b> <code>' + testSymbol + '</code>\\n<b>Entry:</b> <code>' + str.tostring(testPrice, "#.##") + '</code>\\n<b>Mode:</b> Positional\\n\\n⚠️ This is a TEST alert", "parse_mode": "HTML"}'
+        alert(testAlertMessage, alert.freq_once_per_bar)
+
+    // Test SELL Alert
+    if test_alert_type == "SELL" or test_alert_type == "Both"
+        testAlertMessage = '{"chat_id": "' + telegram_chat_id + '", "text": "🧪 TEST DIVIDEND EXIT\\n📉 <b>SELL SIGNAL</b> 📉\\n<b>Symbol:</b> <code>' + testSymbol + '</code>\\n<b>Target:</b> <code>' + str.tostring(testPrice, "#.##") + '</code>\\n<b>Mode:</b> Positional\\n\\n⚠️ This is a TEST alert", "parse_mode": "HTML"}'
+        alert(testAlertMessage, alert.freq_once_per_bar)
+
+    testAlertSent := true
+
+// Visual indicator when test alert fires (for debugging)
+plotshape(enable_test_alerts and testAlertSent,
+         title="Test Alert Fired",
+         location=location.top,
+         color=color.new(color.purple, 0),
+         style=shape.labeldown,
+         text="TEST ALERT SENT",
+         size=size.large)
