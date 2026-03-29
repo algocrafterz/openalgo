@@ -3,7 +3,7 @@
 // Detects HOD breakout with volume + VWAP confirmation, waits for controlled pullback,
 // enters on pullback high/low break. Mirrors LOD (Low-of-Day) for short setups.
 // Designed for Indian NSE 5-min charts with Telegram alerts.
-strategy("HOD Strategy", shorttitle="HOD-FPB", overlay=true,
+strategy("intraday-hod", shorttitle="", overlay=true,
      default_qty_type=strategy.percent_of_equity, default_qty_value=10,
      initial_capital=100000, currency=currency.INR, commission_type=strategy.commission.percent,
      commission_value=0.06, slippage=2, calc_on_every_tick=false,

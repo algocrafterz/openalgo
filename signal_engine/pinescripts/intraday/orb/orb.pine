@@ -1,6 +1,6 @@
 //@version=6
 // Adapted for Indian Stock Market (NSE/BSE) - Based on Luxy BIG beautiful Dynamic ORB - v5
-strategy("orb-strategy-luxy-tg-v2", shorttitle="orb-strategy-luxy-tg-v2", overlay=true,
+strategy("intraday-orb", shorttitle="", overlay=true,
      default_qty_type=strategy.percent_of_equity, default_qty_value=10,
      initial_capital=100000, currency=currency.INR, commission_type=strategy.commission.percent,
      commission_value=0.06, slippage=2, calc_on_every_tick=false,
