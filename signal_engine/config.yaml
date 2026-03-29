@@ -8,14 +8,14 @@ telegram:
   channels:
     - name: "smidestn" #test channel
       id: -1002773559154
-    - name: "orb_channel"
+    - name: "intraday-orb"
       id: -1003518225740
 
   # Channel for system notifications (startup, shutdown, errors).
   # Keeps operational alerts separate from trading signal channels.
   # Set to your personal/admin channel. If omitted, notifications go to all signal channels.
   notify_channel:
-    name: "anand_smi_assistant"
+    name: "anand-smi-assistant"
     id: -1003803150235
 
 # ── Position Sizing ──────────────────────────────────────
