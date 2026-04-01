@@ -110,7 +110,8 @@ detected_type = is_dividend_stock ? "Dividend" : is_growth_stock ? "Growth" : "S
 value_zone_threshold = input.int(30, "Buy Zone (%)", minval=20, maxval=45, tooltip="Buy signals trigger below this % of range", group="Strategy Settings")
 sell_zone_threshold = input.int(70, "Sell Zone (%)", minval=60, maxval=90, tooltip="Sell signals trigger above this % of range", group="Strategy Settings")
 signal_gap_days = input.int(10, "Min Days Between Signals", minval=1, maxval=60, tooltip="Minimum gap between consecutive signals. Lower = more signals (aggressive), Higher = fewer signals (conservative)", group="Strategy Settings")
-profit_target_pct = input.float(8.0, "Profit Target % (TP)", minval=3.0, maxval=30.0, step=0.5, tooltip="Close position when gain reaches this % — enables faster profit booking without waiting for sell zone. Set lower (5-7%) for quicker cycles, higher (10-15%) for larger swings.", group="Strategy Settings")
+profit_target_growth   = input.float(5.0, "Profit Target % — Growth stocks",   minval=3.0, maxval=20.0, step=0.5, tooltip="Growth stocks (metals, banks, cyclicals) have ~2-3% daily ATR. 5% hits in 1-2 weeks from value zone. Raise to 7-8% for bigger swings.", group="Strategy Settings")
+profit_target_dividend = input.float(10.0, "Profit Target % — Dividend stocks", minval=5.0, maxval=25.0, step=0.5, tooltip="Dividend PSUs (NTPC, ITC, POWERGRID) have ~0.8-1.2% daily ATR. 10% captures a meaningful swing without noise exits. Lower values don't speed up cycles for these stocks.", group="Strategy Settings")
 
 // Display
 show_summary_table = input.bool(true, "Show Summary Table", group="Display")
@@ -570,6 +571,11 @@ count_sell_signals(days) =>
 buy_tradeable = final_buy_signal and (signal_strength == "STRONG" or signal_strength == "MEDIUM")
 sell_tradeable = final_sell_signal and sell_strength == "STRONG"
 
+// Auto-select profit target by stock type
+// Growth: 5% default (ATR ~2-3%/day → hits in 1-2 weeks from value zone)
+// Dividend: 10% default (ATR ~0.8-1.2%/day → lower targets don't speed up cycles)
+effective_profit_target = is_dividend_mode ? profit_target_dividend : profit_target_growth
+
 // Position profit tracking
 in_position = strategy.position_size > 0
 avg_entry = strategy.position_avg_price
@@ -584,9 +590,9 @@ if buy_tradeable and not in_position
 if sell_tradeable and is_profitable
     strategy.close("BUY", comment="TP SELL +" + str.tostring(current_profit_pct, "#.#") + "%")
 
-// Exit 2: Profit target hit (faster booking — no need to wait for sell zone)
-if in_position and current_profit_pct >= profit_target_pct
-    strategy.close("BUY", comment="TP " + str.tostring(profit_target_pct, "#.#") + "%")
+// Exit 2: Profit target hit (auto-tuned per stock type for fastest viable cycling)
+if in_position and current_profit_pct >= effective_profit_target
+    strategy.close("BUY", comment="TP " + str.tostring(effective_profit_target, "#.#") + "%")
 
 // ===== ALERTS =====
 // BUY ALERTS - STRONG and MEDIUM signals
@@ -856,12 +862,14 @@ if show_summary_table and barstate.islast
     table.cell(action_table, 2, 5, "DEEP BUY", bgcolor=buy_tgt_bg, text_color=color.green, text_size=size.normal)
     table.cell(action_table, 3, 5, str.tostring(deep_value_price, format.mintick), bgcolor=buy_tgt_bg, text_color=color.green, text_size=size.normal)
 
-    // Row 6: Sell target prices
+    // Row 6: Sell target prices + active profit target
     sell_tgt_bg = color.new(color.red, 80)
+    tp_price = in_position ? avg_entry * (1 + effective_profit_target / 100) : sell_zone_price
+    tp_label = in_position ? "TP " + str.tostring(effective_profit_target, "#.#") + "% = " + str.tostring(tp_price, format.mintick) : "TP " + str.tostring(effective_profit_target, "#.#") + "%"
     table.cell(action_table, 0, 6, "SELL ABOVE", bgcolor=sell_tgt_bg, text_color=color.red, text_size=size.normal)
     table.cell(action_table, 1, 6, str.tostring(sell_zone_price, format.mintick), bgcolor=sell_tgt_bg, text_color=color.red, text_size=size.normal)
-    table.cell(action_table, 2, 6, "STRONG SELL", bgcolor=sell_tgt_bg, text_color=color.orange, text_size=size.normal)
-    table.cell(action_table, 3, 6, str.tostring(extreme_sell_price, format.mintick), bgcolor=sell_tgt_bg, text_color=color.orange, text_size=size.normal)
+    table.cell(action_table, 2, 6, tp_label, bgcolor=sell_tgt_bg, text_color=color.orange, text_size=size.normal)
+    table.cell(action_table, 3, 6, in_position ? "Entry: " + str.tostring(avg_entry, format.mintick) : "---", bgcolor=sell_tgt_bg, text_color=color.yellow, text_size=size.normal)
 
     // Row 7: Range context
     rng_bg = color.new(color.black, 25)
