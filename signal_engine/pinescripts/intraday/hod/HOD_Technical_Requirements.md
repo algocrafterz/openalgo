@@ -1,8 +1,8 @@
 # HOD-FPB Strategy — Technical Requirements Document
 
-**Version:** 2.0
-**Date:** 29 March 2026
-**Status:** Implemented (Monitoring Phase)
+**Version:** 2.1
+**Date:** 31 March 2026
+**Status:** SHELVED — Poor backtest results, not viable for live trading
 **Author:** Strategy Development Team
 
 ---
@@ -13,7 +13,7 @@ The HOD-FPB (High-of-Day Breakout + First Pullback) is an intraday equity strate
 
 **Implementation:** Single PineScript v6 strategy (`hod.pine`) with TradingView alerts routed to Telegram for signal monitoring. Both LONG and SHORT directions are combined in one script.
 
-**Current Phase:** 1-month Telegram signal monitoring before live trading integration with OpenAlgo signal engine.
+**Current Phase:** SHELVED — Strategy does not produce positive returns in TradingView backtests across the target stock universe.
 
 ---
 
@@ -92,7 +92,7 @@ Mirror of LONG:
 |-----------|---------|-------------|
 | Max Trades/Day | 1 | Single entry per session |
 | Daily Loss Limit | -2R | Stop trading after -2R |
-| Risk Per Trade | 1% | Of capital |
+| Risk Per Trade | 0.5% | Of capital (reduced from 1% per Monte Carlo analysis) |
 | Min SL % | 0.3% | Skip if SL too tight |
 | Max SL % | 2.0% | Skip if SL too wide |
 | Entry Cutoff | 14:00 IST | Later than ORB (11:00) since HOD breakouts are not time-bound |
@@ -250,6 +250,34 @@ If monitoring phase is positive:
 3. Configure `tp_levels: {TP1: 1.0}` (full exit at 1R)
 4. Route alerts through OpenAlgo TV webhook instead of direct Telegram
 5. Signal engine handles entry, SL-M placement, TV-driven exits (same as ORB)
+
+---
+
+## 9. Shelved — Analysis (31 March 2026)
+
+**Decision:** Strategy shelved after TradingView backtest results showed negative Total P&L across the target stock universe (Tier 1 F&O stocks, 5-min charts).
+
+### Root Causes of Poor Performance
+
+1. **Very low signal frequency** — The multi-filter pipeline (HOD breakout + RVOL + VWAP + pullback validation + regime filter + 1 trade/day limit) eliminates most setups. Typical output: 1-3 valid trades per month per stock, insufficient for compounding.
+
+2. **Entry price mismatch** — `strategy.entry()` fills at next bar's open (market order), but TP/SL levels are calculated from `pullbackHigh` (assumed entry). If price gaps past the pullback high, actual R:R is worse than calculated.
+
+3. **1R target with costs is marginal** — At 0.5% risk, 1R TP is ~0.5% of entry. Round-trip costs (0.06% commission × 2 + slippage) consume ~25-30% of each win. Effective win: ~0.7R vs -1R loss. Requires >60% win rate to break even — strategy does not deliver this.
+
+4. **HOD is fundamentally weaker than ORB** — ORB uses a fixed level (opening range) that institutional flow anchors to. HOD is a moving target — every new high resets it. The "breakout" from a constantly updating level is statistically less meaningful.
+
+5. **Monte Carlo pessimistic scenario was accurate** — The analysis report's pessimistic case (-8.4% CAGR, only 3.3% profitable runs) aligns with actual backtest results. The "base scenario" (19.5% CAGR) assumed theoretical entries without pullback filter attrition and transaction costs.
+
+### Also Shelved: VWAP Mean Reversion
+
+The intraday VWAP mean reversion strategy was also shelved. It targets range-bound days (low ADX, where breakout strategies fail), but the same cost structure and signal frequency issues apply to intraday mean reversion on Indian stocks.
+
+### Recommendation
+
+Focus development time on:
+- **ORB strategy optimization** — already validated with live Q1 2026 data (+31% at 1% risk). D-grade symbol filter alone saves ~7.3R.
+- **Swing strategies** (RSI-2, dividend growth) — longer holding periods amortize transaction costs better.
 
 ---
 
