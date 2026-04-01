@@ -1,135 +1,198 @@
-# Dividend Strategy Analysis
+# Dividend-Growth Swing Strategy Analysis
 
 ## Overview
 
-**File**: `dividend.pine`
-**Type**: Positional swing trading system for Indian dividend/growth stocks
-**Timeframe**: Daily (positional, multi-week holds)
-**Alerts**: Telegram via TradingView webhook (STRONG signals only)
+**File**: `dividend-growth.pine`
+**Strategy Name**: `swing-dividend-growth`
+**Type**: Positional swing trading — Long only (CNC delivery, no shorting)
+**Timeframe**: Daily
+**Approach**: Buy low (value zone), sell high (sell zone) — mean reversion on dividend and growth stocks
+
+---
 
 ## Strategy Logic
 
 ### Core Concept
-Mean-reversion on dividend-paying and growth stocks using a **multi-factor scoring system (0-100)**:
-- **BUY** when price is in the **value zone** (bottom 30% of N-day range)
-- **SELL** when price is in the **sell zone** (top 30% of N-day range)
+Price position within its N-day range (0% = N-day low, 100% = N-day high):
+- **BUY ZONE**: Price in bottom 30% of range → stock is cheap vs recent history
+- **SELL ZONE**: Price in top 30% of range → stock is expensive vs recent history
+- Multi-factor scoring (0-100) confirms signal quality before firing
 
-### Auto-Detection System
-Script auto-detects stock type from hardcoded symbol lists:
+### Signal Scoring Components
+
+| Component | Max | BUY triggers | SELL triggers |
+|---|---|---|---|
+| Price Position | 25 | In value zone (<=30%): 18, Deep value (<=25%): 25 | In sell zone (>=70%): 18, Extreme (>=90%): 25 |
+| RSI(14) | 25 | RSI<=35: 20, RSI<=45: 16, RSI<=55: 12 | RSI>=60: 16, RSI>=65: 18, RSI>=70: 20 |
+| Trend | 25 | EMA cross: 10, Rising EMA: 8, Above SMA50: 7 | % above EMA: 4-10, % above SMA50: 2-10, 3+ consec up: 5 |
+| Volume | 15 | 1.5x avg: 12, 1.3x: 9, 1.1x: 6 | 1.5x (any candle): 9, 2x: 12, 2.5x: 15 |
+| Price Action | 10 | Bullish candle: 4, Hammer: 3, Higher close: 3 | Red candle: 4, Upper wick: 3, Failing highs: 3 |
+
+### Auto-Detection by Stock Type
 
 | Parameter | Dividend | Growth |
-|-----------|----------|--------|
+|---|---|---|
 | Lookback | 90 days | 60 days |
-| Signal Gap | User config (default 10) | User config (default 10) |
-| Strong Buy Score | 50 | 65 |
-| Medium Buy Score | 38 | 50 |
-| Strong Sell Score | 55 | 70 |
-| Medium Sell Score | 42 | 55 |
+| Strong BUY | score >= 50 | score >= 65 |
+| Medium BUY | score >= 38 | score >= 50 |
+| Strong SELL | score >= 55 | score >= 70 |
+| Medium SELL | score >= 42 | score >= 55 |
 
-**Dividend stocks** (10): ITC, CASTROLIND, HINDPETRO, NTPC, POWERGRID, COALINDIA, HINDZINC, PETRONET, SJVN, GAIL
-**Growth stocks** (20): MOTHERSON, SAIL, TATASTEEL, NATIONALUM, BANKBARODA, ETERNAL, RECLTD, AARTIIND, BIOCON, BEL, VEDL, DABUR, AMBUJACEM, IRCTC, INDHOTEL, MARICO, DLF, HINDALCO, INDUSINDBK, JSWSTEEL
+---
 
-### Scoring System (BUY)
+## Signal Configuration
 
-| Component | Max Points | Key Triggers |
-|-----------|-----------|--------------|
-| Price Position | 25 | Deep value (<=25%): 25, Value zone (<=30%): 18 |
-| RSI(14) | 25 | RSI <= 25: 25, RSI <= 35: 20, RSI <= 45: 16 |
-| Trend (EMA/SMA) | 25 | EMA cross: 10, Rising EMA: 8, Above SMA50: 7 |
-| Volume | 15 | 2.5x avg: 15, 1.5x: 12, 1.3x: 9 |
-| Price Action | 10 | Bullish candle: 4, Higher close: 3, Hammer: 3 |
-| **Total** | **100** | |
+| Signal | Telegram Alert | Strategy Tester Entry/Exit |
+|---|---|---|
+| BUY STRONG | Yes | Entry (when flat) |
+| BUY MEDIUM | Yes | Entry (when flat) |
+| BUY WEAK | No | No |
+| SELL STRONG | Yes (Take Profit) | Exit (only if profitable) |
+| SELL MEDIUM | No | No |
+| SELL WEAK | No | No |
 
-**Thresholds**: STRONG >= 50 (dividend) / 65 (growth), MEDIUM >= 38 / 50
+**No Stop Loss**: CNC delivery — hold or accumulate on drops. Position never force-closed at a loss.
 
-### Scoring System (SELL)
+---
 
-| Component | Max Points | Key Triggers |
-|-----------|-----------|--------------|
-| Price Position | 25 | Extreme sell (>=90%): 25, Sell zone (>=70%): 18 |
-| RSI(14) | 25 | RSI >= 80: 25, RSI >= 70: 20, RSI >= 60: 16 |
-| Trend Exhaustion | 25 | Overextended above EMA: 10, Above SMA50 by 15%: 10, Consecutive up: 5 |
-| Volume | 15 | High volume at highs: 15 (any candle color) |
-| Price Action | 10 | Red candle: 4, Upper wick rejection: 3, Failing highs: 3 |
-| **Total** | **100** | |
+## Strategy Tester Configuration
 
-**Thresholds**: STRONG >= 55 (dividend) / 70 (growth), MEDIUM >= 42 / 55
+```
+initial_capital = 100,000
+position_size   = 90% of equity
+commission      = 0.1%
+slippage        = 1 tick
+```
 
-### Signal Flow
-1. Calculate 5 scoring components
-2. Check zone condition (value zone for buy, sell zone for sell)
-3. Check signal gap (minimum N days between signals)
-4. Determine strength (STRONG/MEDIUM/WEAK)
-5. Fire alert if STRONG + webhook enabled
+**Exit logic** (profit-only, two mechanisms):
+1. **Profit Target %** (default 8%): Close when gain ≥ target — faster profit booking
+2. **STRONG SELL signal**: Close only if currently profitable (never exits at a loss)
 
-### Telegram Alert Format
-- **BUY**: Symbol, entry price, score, strength, chart link
-- **SELL**: Symbol, exit price, score, strength, chart link
-- Only STRONG signals trigger Telegram alerts
+**No pyramiding**: Single entry per cycle (`position_size == 0` guard). Unprofitable open positions are held until profitable — shown as "open trades" in tester, not closed losses.
 
-## Dashboard
+### Why Losses Appeared Previously
+- Missing `position_size == 0` guard → multiple entries (pyramiding) at different prices
+- STRONG SELL closed all entries including higher-cost ones → individual loss trades in report
+- Backtest end forced-close of underwater open positions
 
-### Action Dashboard (bottom-right)
-Large-font actionable panel with 10 rows:
-- **Row 0**: Symbol, stock type, current price, position %
-- **Row 1**: ACTION RECOMMENDATION (STRONG BUY / ACCUMULATE / HOLD / BOOK PROFIT / STRONG SELL) in huge font
-- **Row 2-3**: Buy/Sell score with strength rating and zone status
-- **Row 4**: Key indicators (RSI, Volume ratio, EMA status, SMA50 status)
-- **Row 5**: N-day range with % from low/high
-- **Row 6-7**: Target price levels (buy below X, sell above Y)
-- **Row 8**: Signal history (1M and 3M buy/sell counts)
-- **Row 9**: Threshold reference
+---
 
-### Debug Table (top-right)
-- Shows real-time scoring breakdown for both BUY and SELL
-- Bar state, zone status, individual component scores
-- Helps diagnose why signals may not fire
+## Profit Target Optimization
+
+| Target % | Avg Hold | Trades/Year/Stock | Best For |
+|---|---|---|---|
+| 5% | 2-4 weeks | 8-12 | Metals/banks — very fast cycling |
+| **8% (default)** | **3-6 weeks** | **5-8** | **All stocks — balanced** |
+| 10% | 4-8 weeks | 3-6 | Mid-volatility stocks |
+| 12-15% | 6-12 weeks | 2-4 | Dividend PSUs, full range swings |
+
+---
+
+## Stock Universe
+
+### Dividend Stocks (13) — 90-day lookback, 4-10 week cycles
+
+```
+ITC, CASTROLIND, HINDPETRO, NTPC, POWERGRID, COALINDIA, HINDZINC,
+PETRONET, SJVN, GAIL, ONGC, NMDC, RECLTD
+```
+
+Characteristics: PSUs, utilities, regulated businesses — high dividend yield, government backing, safe to hold without SL.
+
+### Growth Stocks (18) — 60-day lookback, 3-6 week cycles
+
+```
+MOTHERSON, SAIL, TATASTEEL, NATIONALUM, BANKBARODA, AARTIIND,
+BEL, VEDL, DABUR, AMBUJACEM, IRCTC, INDHOTEL, MARICO, DLF,
+HINDALCO, JSWSTEEL, HINDUNILVR, BAJFINANCE
+```
+
+Characteristics: Cyclicals, metals, PSU banks, FMCG — faster oscillators, higher volatility, quicker cycles.
+
+### Removed Stocks
+
+| Stock | Reason |
+|---|---|
+| ETERNAL (Zomato) | Pure momentum stock — no mean reversion, no dividend floor |
+| BIOCON | Structural decline since 2022, biosimilars underperformance |
+| INDUSINDBK | Sustained downtrend from MFI book stress, no PSU backing |
+
+### Added Stocks
+
+| Stock | List | Reason |
+|---|---|---|
+| ONGC | Dividend | PSU oil, ~5-6% dividend yield, government-backed, clean mean-reverter |
+| NMDC | Dividend | PSU iron ore, ~5-7% dividend yield, government-backed |
+| RECLTD | Dividend (moved from Growth) | PSU NBFC, high dividend, behaves like dividend stock |
+| HINDUNILVR | Growth | FMCG bellwether, excellent mean-reverter, safe without SL |
+| BAJFINANCE | Growth | Established NBFC, 25-35% range, recovers reliably from dips |
+
+---
+
+## Stock Ranking by Returns & Holding Period
+
+### Tier 1 — Top 5: Fastest cycles, highest return potential (target 8%)
+
+| Rank | Stock | Avg Cycle | Range | Return/Trade | Why |
+|---|---|---|---|---|---|
+| 1 | **HINDALCO** | 3-4 weeks | 35-45% | 8-14% | Aluminium + Novelis, quick mean reversion after commodity dips |
+| 2 | **COALINDIA** | 4-6 weeks | 20-30% | 8-12% | PSU mining + high dividend (~9%), government earnings floor |
+| 3 | **BANKBARODA** | 3-5 weeks | 30-40% | 8-12% | PSU bank, government-backed floor, fast recovery from dips |
+| 4 | **NATIONALUM** | 3-5 weeks | 35-50% | 8-15% | PSU aluminium, fast cyclical oscillation, Navratna PSU |
+| 5 | **SAIL** | 3-5 weeks | 35-50% | 8-14% | PSU steel, government backing prevents deep traps |
+
+### Tier 2 — Good returns, moderate hold (5-8 weeks)
+
+RECLTD, BEL, BAJFINANCE, NMDC, AMBUJACEM, GAIL, ONGC, IRCTC, VEDL, JSWSTEEL, TATASTEEL, HINDZINC
+
+### Tier 3 — Steady but slower (8-14 weeks)
+
+ITC, NTPC, POWERGRID, PETRONET, SJVN, DABUR, MARICO, HINDUNILVR, INDHOTEL, CASTROLIND
+
+**Practical tip**: For faster consistent cycles, focus alerts on Tier 1 stocks and use `Profit Target = 8%`. For Tier 3 dividend stocks, raise target to 10-12% to capture full range swings.
+
+---
+
+## Dashboard Layout
+
+| Table | Position | Purpose |
+|---|---|---|
+| Action Dashboard | Top-right | Current recommendation: STRONG BUY / ACCUMULATE / BOOK PROFIT / STRONG SELL / HOLD. Buy/sell scores, key indicators, target price levels. |
+| Signal History | Bottom-right | Period-wise signal counts (1W to 12M): STRONG / MEDIUM / WEAK buys + SELLS |
+| Debug Table | Bottom-left | OFF by default. Toggle via "Show Debug Table". Shows component scores (Pos/RSI/Trend/Vol/PA) for both buy and sell sides. |
+
+---
 
 ## Chart Visualization
 
-- **Green background**: Value zone (buy zone)
-- **Red background**: Sell zone
-- **Green triangle up** (below bar): Confirmed BUY signal
-- **Red triangle down** (above bar): Confirmed SELL signal
-- **Circle markers**: Live bar conditions (not yet confirmed)
-- **Zone boundary lines**: Buy/sell zone price levels
-- **EMAs**: Fast EMA(12), Slow EMA(26), Trend SMA(50)
+- **Green background**: Value zone (buy zone, bottom 30%)
+- **Red background**: Sell zone (top 30%)
+- **Green triangle up** below bar: Confirmed BUY signal
+- **Red triangle down** above bar: Confirmed SELL signal
+- **Circles**: Live bar — conditions currently favorable (not yet confirmed)
 
-## Investment Approach
+---
 
-This is NOT a traditional dividend investment strategy (buy-and-hold for yield). It is a **swing trading strategy** that:
+## Telegram Alert Format
 
-1. **Targets dividend-quality stocks** for their mean-reverting behavior
-2. **Buys dips** in value zone using multi-factor confirmation
-3. **Sells rallies** in overvalued zone when exhaustion signals appear
-4. **Holds positionally** (weeks to months, not day trading)
-5. **Complements dividend income** with capital gains from swing trading
+**BUY (STRONG or MEDIUM)**:
+```
+Dividend ENTRY
+BUY STRONG
+Symbol: ITC
+Entry: 432.50
+Score: 67
+Time: 14:32 | TF: D
+View Chart
+```
 
-### Why Dividend Stocks for Swing Trading?
-- PSUs and utilities are strongly mean-reverting (government ownership, regulated earnings)
-- High institutional holding creates natural support/resistance zones
-- Dividend dates create predictable price patterns (run-up before ex-date, dip after)
-- Lower volatility than growth stocks = more predictable ranges
-
-## Key Improvements Made (v2)
-
-### Sell Signal Rebalance
-- **Before**: Sell scoring required bearish confirmation (red candles, declining EMAs) which contradicts being at range highs
-- **After**: Sell scoring detects overextension (distance above MAs, consecutive green bars, high volume at highs regardless of candle color)
-
-### Visual Differentiation
-- BUY signals: Green labels and markers
-- SELL signals: Red/orange labels and markers (previously same green as buy)
-
-### Enhanced Debug Table
-- Shows both BUY and SELL score breakdowns
-- Individual component scores visible for tuning
-
-## Usage Notes
-
-- Apply to **daily timeframe** on TradingView
-- Add stocks to the appropriate symbol list (dividend_symbols or growth_symbols)
-- Set up TradingView alert with "Any alert() function call" condition
-- Configure Telegram chat ID in settings
-- Adjust signal gap based on trading style (5-10 aggressive, 15-20 moderate, 30+ conservative)
-- Monitor debug table to understand scoring behavior on live charts
+**SELL / Take Profit (STRONG only)**:
+```
+Dividend EXIT
+SELL STRONG (TP)
+Symbol: ITC
+Exit: 468.20
+Score: 58
+Time: 10:15 | TF: D
+View Chart
+```

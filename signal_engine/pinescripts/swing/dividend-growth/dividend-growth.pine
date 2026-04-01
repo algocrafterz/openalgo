@@ -80,14 +80,18 @@ strategy("swing-dividend-growth", overlay=true, default_qty_type=strategy.percen
 // ═════════════════════════════════════════════════════════════════════════════
 
 // ===== TABLE DECLARATIONS (MUST BE AT TOP LEVEL) =====
-var summary_table = table.new(position.bottom_right, 4, 10, bgcolor=color.new(color.black, 80), border_width=1, frame_color=color.white, frame_width=2)
+var action_table = table.new(position.top_right, 4, 8, bgcolor=color.new(color.black, 80), border_width=1, frame_color=color.white, frame_width=2)
+var summary_table = table.new(position.bottom_right, 7, 8, bgcolor=color.new(color.black, 80), border_width=1, frame_color=color.white, frame_width=1)
 
 // ===== STOCK CLASSIFICATION (AUTO-DETECT) =====
-// Dividend stocks - PSUs, Utilities, Stable dividend payers
-dividend_symbols = "ITC,CASTROLIND,HINDPETRO,NTPC,POWERGRID,COALINDIA,HINDZINC,PETRONET,SJVN,GAIL"
+// Dividend stocks - PSUs, Utilities, high yield, government-backed, safe to hold without SL
+// 90-day lookback, slower oscillators (4-10 week cycles)
+dividend_symbols = "ITC,CASTROLIND,HINDPETRO,NTPC,POWERGRID,COALINDIA,HINDZINC,PETRONET,SJVN,GAIL,ONGC,NMDC,RECLTD"
 
-// Growth stocks - Cyclicals, Metals, Banks, High-growth sectors
-growth_symbols = "MOTHERSON,SAIL,TATASTEEL,NATIONALUM,BANKBARODA,ETERNAL,RECLTD,AARTIIND,BIOCON,BEL,VEDL,DABUR,AMBUJACEM,IRCTC,INDHOTEL,MARICO,DLF,HINDALCO,INDUSINDBK,JSWSTEEL"
+// Growth stocks - Cyclicals, Metals, Banks, Consumer — faster oscillators (3-6 week cycles)
+// 60-day lookback, higher volatility = quicker buy-low-sell-high cycles
+// REMOVED: ETERNAL (momentum, no mean reversion), BIOCON (structural decline), INDUSINDBK (sustained downtrend)
+growth_symbols = "MOTHERSON,SAIL,TATASTEEL,NATIONALUM,BANKBARODA,AARTIIND,BEL,VEDL,DABUR,AMBUJACEM,IRCTC,INDHOTEL,MARICO,DLF,HINDALCO,JSWSTEEL,HINDUNILVR,BAJFINANCE"
 
 // Helper function to check exact symbol match in comma-separated list
 isSymbolInList(string symbolList, string symbol) =>
@@ -106,9 +110,11 @@ detected_type = is_dividend_stock ? "Dividend" : is_growth_stock ? "Growth" : "S
 value_zone_threshold = input.int(30, "Buy Zone (%)", minval=20, maxval=45, tooltip="Buy signals trigger below this % of range", group="Strategy Settings")
 sell_zone_threshold = input.int(70, "Sell Zone (%)", minval=60, maxval=90, tooltip="Sell signals trigger above this % of range", group="Strategy Settings")
 signal_gap_days = input.int(10, "Min Days Between Signals", minval=1, maxval=60, tooltip="Minimum gap between consecutive signals. Lower = more signals (aggressive), Higher = fewer signals (conservative)", group="Strategy Settings")
+profit_target_pct = input.float(8.0, "Profit Target % (TP)", minval=3.0, maxval=30.0, step=0.5, tooltip="Close position when gain reaches this % — enables faster profit booking without waiting for sell zone. Set lower (5-7%) for quicker cycles, higher (10-15%) for larger swings.", group="Strategy Settings")
 
 // Display
 show_summary_table = input.bool(true, "Show Summary Table", group="Display")
+show_debug_table = input.bool(false, "Show Debug Table", tooltip="Shows detailed score breakdown for BUY and SELL", group="Display")
 show_strong_signals = input.bool(true, "Show STRONG Signals", group="Display")
 show_medium_signals = input.bool(false, "Show MEDIUM Signals", tooltip="Enable to show medium strength signals", group="Display")
 show_weak_signals = input.bool(false, "Show WEAK Signals", tooltip="Enable to show weak strength signals", group="Display")
@@ -558,28 +564,37 @@ count_sell_signals(days) =>
     result
 
 // ===== STRATEGY EXECUTION (FOR TESTER) =====
-// Long-only mean reversion: BUY value, SELL overvalued. No shorting dividend stocks.
-// Only trade STRONG and MEDIUM signals (WEAK has poor win rate)
+// Long-only, NO stop loss. Single entry per cycle (no pyramiding in tester).
+// BUY: STRONG + MEDIUM signals. Exit: STRONG sell (in profit) OR profit target hit.
+// No loss trades: exits only fire when position is profitable.
 buy_tradeable = final_buy_signal and (signal_strength == "STRONG" or signal_strength == "MEDIUM")
-sell_tradeable = final_sell_signal and (sell_strength == "STRONG" or sell_strength == "MEDIUM")
+sell_tradeable = final_sell_signal and sell_strength == "STRONG"
 
-if buy_tradeable and strategy.position_size == 0
+// Position profit tracking
+in_position = strategy.position_size > 0
+avg_entry = strategy.position_avg_price
+current_profit_pct = in_position and avg_entry > 0 ? (close - avg_entry) / avg_entry * 100 : 0.0
+is_profitable = in_position and close > avg_entry
+
+// Entry: only when flat (no pyramiding — clean single-trade cycles)
+if buy_tradeable and not in_position
     strategy.entry("BUY", strategy.long)
 
-if sell_tradeable and strategy.position_size > 0
-    strategy.close("BUY", comment="SELL signal")
+// Exit 1: STRONG sell signal AND currently in profit (never exit at a loss)
+if sell_tradeable and is_profitable
+    strategy.close("BUY", comment="TP SELL +" + str.tostring(current_profit_pct, "#.#") + "%")
 
-// Safety exit: close if price drops 10% from entry (stop loss for backtester)
-if strategy.position_size > 0 and close < strategy.position_avg_price * 0.90
-    strategy.close("BUY", comment="SL 10%")
+// Exit 2: Profit target hit (faster booking — no need to wait for sell zone)
+if in_position and current_profit_pct >= profit_target_pct
+    strategy.close("BUY", comment="TP " + str.tostring(profit_target_pct, "#.#") + "%")
 
 // ===== ALERTS =====
-// BUY ALERTS - STRONG signals only
-if final_buy_signal and webhook_alerts and signal_strength == "STRONG"
+// BUY ALERTS - STRONG and MEDIUM signals
+if final_buy_signal and webhook_alerts and (signal_strength == "STRONG" or signal_strength == "MEDIUM")
     alert_time = str.format_time(time, "HH:mm", "Asia/Kolkata")
     alert_tf = timeframe.period
     chart_link = "https://www.tradingview.com/chart/?symbol=" + syminfo.tickerid + "&interval=" + alert_tf + "&layout=anand-dividend"
-    buy_alert_json = '{"chat_id": "' + telegram_chat_id + '", "text": "✅ ' + detected_type + ' ENTRY 🟢\\n📈 <b>BUY SIGNAL</b> 📈\\n<b>Symbol:</b> <code>' + syminfo.ticker + '</code>\\n<b>Entry:</b> <code>' + str.tostring(close, "#.##") + '</code>\\n<b>Strength:</b> STRONG (' + str.tostring(final_score) + ')\\n<b>Mode:</b> Positional\\n<b>Time:</b> ' + alert_time + ' | <b>TF:</b> ' + alert_tf + '\\n<a href=\\"' + chart_link + '\\">📊 View Chart</a>", "parse_mode": "HTML"}'
+    buy_alert_json = '{"chat_id": "' + telegram_chat_id + '", "text": "' + detected_type + ' ENTRY\\n<b>BUY ' + signal_strength + '</b>\\n<b>Symbol:</b> <code>' + syminfo.ticker + '</code>\\n<b>Entry:</b> <code>' + str.tostring(close, "#.##") + '</code>\\n<b>Score:</b> ' + str.tostring(final_score) + '\\n<b>Time:</b> ' + alert_time + ' | <b>TF:</b> ' + alert_tf + '\\n<a href=\\"' + chart_link + '\\">View Chart</a>", "parse_mode": "HTML"}'
 
     alert(buy_alert_json, alert.freq_once_per_bar)
 
@@ -657,12 +672,12 @@ if (is_closed_bar and confirmed_buy_on_bar) or (is_live_bar and visual_buy_signa
                   tooltip="BUY - " + display_strength + "\nScore: " + str.tostring(display_score) + "\nEntry: " + str.tostring(display_price, format.mintick))
         buy_label_bar := bar_index
 
-// SELL ALERTS - STRONG signals only
+// SELL ALERTS - STRONG only (take profit signal)
 if final_sell_signal and webhook_alerts and sell_strength == "STRONG"
     sell_time = str.format_time(time, "HH:mm", "Asia/Kolkata")
     sell_tf = timeframe.period
     sell_chart_link = "https://www.tradingview.com/chart/?symbol=" + syminfo.tickerid + "&interval=" + sell_tf + "&layout=anand-dividend"
-    sell_alert_json = '{"chat_id": "' + telegram_chat_id + '", "text": "❌ ' + detected_type + ' EXIT 🔴\\n📉 <b>SELL SIGNAL</b> 📉\\n<b>Symbol:</b> <code>' + syminfo.ticker + '</code>\\n<b>Target:</b> <code>' + str.tostring(close, "#.##") + '</code>\\n<b>Strength:</b> STRONG (' + str.tostring(final_sell_score) + ')\\n<b>Mode:</b> Positional\\n<b>Time:</b> ' + sell_time + ' | <b>TF:</b> ' + sell_tf + '\\n<a href=\\"' + sell_chart_link + '\\">📊 View Chart</a>", "parse_mode": "HTML"}'
+    sell_alert_json = '{"chat_id": "' + telegram_chat_id + '", "text": "' + detected_type + ' EXIT\\n<b>SELL STRONG (TP)</b>\\n<b>Symbol:</b> <code>' + syminfo.ticker + '</code>\\n<b>Exit:</b> <code>' + str.tostring(close, "#.##") + '</code>\\n<b>Score:</b> ' + str.tostring(final_sell_score) + '\\n<b>Time:</b> ' + sell_time + ' | <b>TF:</b> ' + sell_tf + '\\n<a href=\\"' + sell_chart_link + '\\">View Chart</a>", "parse_mode": "HTML"}'
 
     alert(sell_alert_json, alert.freq_once_per_bar)
 
@@ -752,7 +767,8 @@ plot(show_emas ? ema_fast_val : na, "Fast EMA(12)", color=color.blue, linewidth=
 plot(show_emas ? ema_slow_val : na, "Slow EMA(26)", color=color.orange, linewidth=2)
 plot(show_emas ? trend_sma_val : na, "Trend SMA(50)", color=color.white, linewidth=1)
 
-// ===== ACTION DASHBOARD =====
+// ===== ACTION DASHBOARD (TOP-RIGHT) =====
+// Decision-support panel: tells trader what to do NOW
 if show_summary_table and barstate.islast
     // Determine current action recommendation
     action_text = ""
@@ -788,97 +804,118 @@ if show_summary_table and barstate.islast
         action_color := color.white
         action_bg := color.new(color.gray, 80)
 
-    // Zone text
     zone_text = in_deep_value ? "DEEP VALUE" : in_value_zone ? "VALUE ZONE" : in_extreme_sell_zone ? "EXTREME HIGH" : in_sell_zone ? "SELL ZONE" : "NEUTRAL"
     zone_color = in_value_zone ? color.lime : in_sell_zone ? color.red : color.white
 
-    // Row 0: Title bar
-    table.cell(summary_table, 0, 0, syminfo.ticker, bgcolor=color.new(color.purple, 10), text_color=color.white, text_size=size.large)
-    table.cell(summary_table, 1, 0, detected_type, bgcolor=color.new(color.purple, 10), text_color=is_dividend_stock ? color.aqua : color.orange, text_size=size.large)
-    table.cell(summary_table, 2, 0, str.tostring(close, format.mintick), bgcolor=color.new(color.purple, 10), text_color=close >= open ? color.lime : color.red, text_size=size.large)
-    table.cell(summary_table, 3, 0, str.tostring(current_position, "#.#") + "%", bgcolor=color.new(color.purple, 10), text_color=zone_color, text_size=size.large)
+    // Row 0: Symbol | Type | Price | Position%
+    hdr_bg = color.new(color.purple, 10)
+    table.cell(action_table, 0, 0, syminfo.ticker, bgcolor=hdr_bg, text_color=color.white, text_size=size.normal)
+    table.cell(action_table, 1, 0, detected_type, bgcolor=hdr_bg, text_color=is_dividend_stock ? color.aqua : color.orange, text_size=size.normal)
+    table.cell(action_table, 2, 0, str.tostring(close, format.mintick), bgcolor=hdr_bg, text_color=close >= open ? color.lime : color.red, text_size=size.normal)
+    table.cell(action_table, 3, 0, str.tostring(current_position, "#.#") + "%", bgcolor=hdr_bg, text_color=zone_color, text_size=size.normal)
 
-    // Row 1: ACTION RECOMMENDATION (largest, most prominent)
-    table.cell(summary_table, 0, 1, "ACTION", bgcolor=action_bg, text_color=color.white, text_size=size.large)
-    table.cell(summary_table, 1, 1, action_text, bgcolor=action_bg, text_color=action_color, text_size=size.huge)
-    table.cell(summary_table, 2, 1, zone_text, bgcolor=action_bg, text_color=zone_color, text_size=size.large)
-    table.cell(summary_table, 3, 1, "", bgcolor=action_bg, text_color=color.white, text_size=size.large)
+    // Row 1: ACTION | Recommendation | Zone
+    table.cell(action_table, 0, 1, "ACTION", bgcolor=action_bg, text_color=color.white, text_size=size.normal)
+    table.cell(action_table, 1, 1, action_text, bgcolor=action_bg, text_color=action_color, text_size=size.large)
+    table.cell(action_table, 2, 1, zone_text, bgcolor=action_bg, text_color=zone_color, text_size=size.normal)
+    table.cell(action_table, 3, 1, "", bgcolor=action_bg, text_color=color.white, text_size=size.normal)
 
-    // Row 2: Buy Score breakdown
+    // Row 2: Buy Score | Strength | Zone status
     buy_str = total_signal_score >= strong_signal_score ? "STRONG" : total_signal_score >= medium_signal_score ? "MEDIUM" : total_signal_score >= base_signal_threshold ? "WEAK" : "---"
     buy_str_color = total_signal_score >= strong_signal_score ? color.lime : total_signal_score >= medium_signal_score ? color.yellow : color.gray
-    table.cell(summary_table, 0, 2, "BUY SCORE", bgcolor=color.new(color.green, 70), text_color=color.white, text_size=size.normal)
-    table.cell(summary_table, 1, 2, str.tostring(total_signal_score) + " / 100", bgcolor=color.new(color.green, 70), text_color=buy_str_color, text_size=size.large)
-    table.cell(summary_table, 2, 2, buy_str, bgcolor=color.new(color.green, 70), text_color=buy_str_color, text_size=size.large)
-    table.cell(summary_table, 3, 2, in_value_zone ? "IN ZONE" : "---", bgcolor=color.new(color.green, 70), text_color=in_value_zone ? color.lime : color.gray, text_size=size.normal)
+    buy_bg = color.new(color.green, 70)
+    table.cell(action_table, 0, 2, "BUY", bgcolor=buy_bg, text_color=color.white, text_size=size.normal)
+    table.cell(action_table, 1, 2, str.tostring(total_signal_score) + "/100", bgcolor=buy_bg, text_color=buy_str_color, text_size=size.normal)
+    table.cell(action_table, 2, 2, buy_str, bgcolor=buy_bg, text_color=buy_str_color, text_size=size.normal)
+    table.cell(action_table, 3, 2, in_value_zone ? "IN ZONE" : "---", bgcolor=buy_bg, text_color=in_value_zone ? color.lime : color.gray, text_size=size.normal)
 
-    // Row 3: Sell Score breakdown
+    // Row 3: Sell Score | Strength | Zone status
     sell_str = total_sell_score >= strong_sell_score ? "STRONG" : total_sell_score >= medium_sell_score ? "MEDIUM" : total_sell_score >= sell_signal_threshold ? "WEAK" : "---"
     sell_str_color = total_sell_score >= strong_sell_score ? color.red : total_sell_score >= medium_sell_score ? color.orange : color.gray
-    table.cell(summary_table, 0, 3, "SELL SCORE", bgcolor=color.new(color.red, 70), text_color=color.white, text_size=size.normal)
-    table.cell(summary_table, 1, 3, str.tostring(total_sell_score) + " / 100", bgcolor=color.new(color.red, 70), text_color=sell_str_color, text_size=size.large)
-    table.cell(summary_table, 2, 3, sell_str, bgcolor=color.new(color.red, 70), text_color=sell_str_color, text_size=size.large)
-    table.cell(summary_table, 3, 3, in_sell_zone ? "IN ZONE" : "---", bgcolor=color.new(color.red, 70), text_color=in_sell_zone ? color.red : color.gray, text_size=size.normal)
+    sell_bg = color.new(color.red, 70)
+    table.cell(action_table, 0, 3, "SELL", bgcolor=sell_bg, text_color=color.white, text_size=size.normal)
+    table.cell(action_table, 1, 3, str.tostring(total_sell_score) + "/100", bgcolor=sell_bg, text_color=sell_str_color, text_size=size.normal)
+    table.cell(action_table, 2, 3, sell_str, bgcolor=sell_bg, text_color=sell_str_color, text_size=size.normal)
+    table.cell(action_table, 3, 3, in_sell_zone ? "IN ZONE" : "---", bgcolor=sell_bg, text_color=in_sell_zone ? color.red : color.gray, text_size=size.normal)
 
-    // Row 4: Key indicators
+    // Row 4: RSI | Volume | EMA | SMA50
+    ind_bg = color.new(color.black, 15)
     rsi_color = rsi_current <= 30 ? color.lime : rsi_current <= 45 ? color.green : rsi_current >= 70 ? color.red : rsi_current >= 55 ? color.orange : color.white
     vol_color = volume_ratio >= 2.0 ? color.lime : volume_ratio >= 1.5 ? color.green : color.white
-    row4_bg = color.new(color.black, 15)
-    table.cell(summary_table, 0, 4, "RSI " + str.tostring(rsi_current, "#.#"), bgcolor=row4_bg, text_color=rsi_color, text_size=size.normal)
-    table.cell(summary_table, 1, 4, "VOL " + str.tostring(volume_ratio, "#.#") + "x", bgcolor=row4_bg, text_color=vol_color, text_size=size.normal)
-    ema_status = ema_fast_val > ema_slow_val ? "EMA BULL" : "EMA BEAR"
     ema_color = ema_fast_val > ema_slow_val ? color.lime : color.red
-    table.cell(summary_table, 2, 4, ema_status, bgcolor=row4_bg, text_color=ema_color, text_size=size.normal)
-    sma_status = close > trend_sma_val ? "ABOVE SMA50" : "BELOW SMA50"
     sma_color = close > trend_sma_val ? color.lime : color.red
-    table.cell(summary_table, 3, 4, sma_status, bgcolor=row4_bg, text_color=sma_color, text_size=size.normal)
+    table.cell(action_table, 0, 4, "RSI " + str.tostring(rsi_current, "#.#"), bgcolor=ind_bg, text_color=rsi_color, text_size=size.normal)
+    table.cell(action_table, 1, 4, "VOL " + str.tostring(volume_ratio, "#.#") + "x", bgcolor=ind_bg, text_color=vol_color, text_size=size.normal)
+    table.cell(action_table, 2, 4, ema_fast_val > ema_slow_val ? "EMA BULL" : "EMA BEAR", bgcolor=ind_bg, text_color=ema_color, text_size=size.normal)
+    table.cell(action_table, 3, 4, close > trend_sma_val ? "> SMA50" : "< SMA50", bgcolor=ind_bg, text_color=sma_color, text_size=size.normal)
 
-    // Row 5: Range info
-    row5_bg = color.new(color.black, 25)
-    table.cell(summary_table, 0, 5, str.tostring(lookback_period) + "D Range", bgcolor=row5_bg, text_color=color.white, text_size=size.normal)
-    table.cell(summary_table, 1, 5, str.tostring(lowest_low, format.mintick) + " - " + str.tostring(highest_high, format.mintick), bgcolor=row5_bg, text_color=color.white, text_size=size.normal)
+    // Row 5: Buy target prices
+    buy_tgt_bg = color.new(color.green, 80)
+    table.cell(action_table, 0, 5, "BUY BELOW", bgcolor=buy_tgt_bg, text_color=color.lime, text_size=size.normal)
+    table.cell(action_table, 1, 5, str.tostring(value_zone_price, format.mintick), bgcolor=buy_tgt_bg, text_color=color.lime, text_size=size.normal)
+    table.cell(action_table, 2, 5, "DEEP BUY", bgcolor=buy_tgt_bg, text_color=color.green, text_size=size.normal)
+    table.cell(action_table, 3, 5, str.tostring(deep_value_price, format.mintick), bgcolor=buy_tgt_bg, text_color=color.green, text_size=size.normal)
+
+    // Row 6: Sell target prices
+    sell_tgt_bg = color.new(color.red, 80)
+    table.cell(action_table, 0, 6, "SELL ABOVE", bgcolor=sell_tgt_bg, text_color=color.red, text_size=size.normal)
+    table.cell(action_table, 1, 6, str.tostring(sell_zone_price, format.mintick), bgcolor=sell_tgt_bg, text_color=color.red, text_size=size.normal)
+    table.cell(action_table, 2, 6, "STRONG SELL", bgcolor=sell_tgt_bg, text_color=color.orange, text_size=size.normal)
+    table.cell(action_table, 3, 6, str.tostring(extreme_sell_price, format.mintick), bgcolor=sell_tgt_bg, text_color=color.orange, text_size=size.normal)
+
+    // Row 7: Range context
+    rng_bg = color.new(color.black, 25)
     pct_from_low = lowest_low > 0 ? (close - lowest_low) / lowest_low * 100 : 0
     pct_from_high = highest_high > 0 ? (highest_high - close) / highest_high * 100 : 0
-    table.cell(summary_table, 2, 5, "From Low +" + str.tostring(pct_from_low, "#.#") + "%", bgcolor=row5_bg, text_color=pct_from_low < 10 ? color.lime : color.white, text_size=size.normal)
-    table.cell(summary_table, 3, 5, "From High -" + str.tostring(pct_from_high, "#.#") + "%", bgcolor=row5_bg, text_color=pct_from_high < 10 ? color.red : color.white, text_size=size.normal)
+    table.cell(action_table, 0, 7, str.tostring(lookback_period) + "D", bgcolor=rng_bg, text_color=color.gray, text_size=size.normal)
+    table.cell(action_table, 1, 7, str.tostring(lowest_low, format.mintick) + "-" + str.tostring(highest_high, format.mintick), bgcolor=rng_bg, text_color=color.gray, text_size=size.normal)
+    table.cell(action_table, 2, 7, "Low +" + str.tostring(pct_from_low, "#.#") + "%", bgcolor=rng_bg, text_color=pct_from_low < 10 ? color.lime : color.white, text_size=size.normal)
+    table.cell(action_table, 3, 7, "High -" + str.tostring(pct_from_high, "#.#") + "%", bgcolor=rng_bg, text_color=pct_from_high < 10 ? color.red : color.white, text_size=size.normal)
 
-    // Row 6: Buy zone target prices
-    row6_bg = color.new(color.green, 80)
-    table.cell(summary_table, 0, 6, "BUY BELOW", bgcolor=row6_bg, text_color=color.lime, text_size=size.normal)
-    table.cell(summary_table, 1, 6, str.tostring(value_zone_price, format.mintick), bgcolor=row6_bg, text_color=color.lime, text_size=size.large)
-    table.cell(summary_table, 2, 6, "DEEP BUY", bgcolor=row6_bg, text_color=color.green, text_size=size.normal)
-    table.cell(summary_table, 3, 6, str.tostring(deep_value_price, format.mintick), bgcolor=row6_bg, text_color=color.green, text_size=size.large)
+// ===== SIGNAL HISTORY TABLE (BOTTOM-RIGHT) =====
+// Period-wise signal count - tracks signal distribution over time
+if show_summary_table and barstate.islast
+    // Headers
+    table.cell(summary_table, 0, 0, "PERIOD", bgcolor=color.new(color.purple, 20), text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 1, 0, "STRONG", bgcolor=color.new(color.lime, 30), text_color=color.black, text_size=size.normal)
+    table.cell(summary_table, 2, 0, "MEDIUM", bgcolor=color.new(color.green, 30), text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 3, 0, "WEAK", bgcolor=color.new(color.yellow, 30), text_color=color.black, text_size=size.normal)
+    table.cell(summary_table, 4, 0, "BUYS", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 5, 0, "SELLS", bgcolor=color.new(color.red, 30), text_color=color.white, text_size=size.normal)
+    table.cell(summary_table, 6, 0, "TOTAL", bgcolor=color.new(color.gray, 30), text_color=color.white, text_size=size.normal)
 
-    // Row 7: Sell zone target prices
-    row7_bg = color.new(color.red, 80)
-    table.cell(summary_table, 0, 7, "SELL ABOVE", bgcolor=row7_bg, text_color=color.red, text_size=size.normal)
-    table.cell(summary_table, 1, 7, str.tostring(sell_zone_price, format.mintick), bgcolor=row7_bg, text_color=color.red, text_size=size.large)
-    table.cell(summary_table, 2, 7, "STRONG SELL", bgcolor=row7_bg, text_color=color.orange, text_size=size.normal)
-    table.cell(summary_table, 3, 7, str.tostring(extreme_sell_price, format.mintick), bgcolor=row7_bg, text_color=color.orange, text_size=size.large)
+    // Data rows
+    periods = array.from("1W", "15D", "1M", "2M", "3M", "6M", "12M")
+    period_days = array.from(7, 15, 30, 60, 90, 180, 365)
 
-    // Row 8: Signal history (simplified)
-    buy_30d = count_signals_by_type(30, "STRONG") + count_signals_by_type(30, "MEDIUM")
-    sell_30d = count_sell_signals(30)
-    buy_90d = count_signals_by_type(90, "STRONG") + count_signals_by_type(90, "MEDIUM")
-    sell_90d = count_sell_signals(90)
-    row8_bg = color.new(color.black, 15)
-    table.cell(summary_table, 0, 8, "SIGNALS 1M", bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
-    table.cell(summary_table, 1, 8, "B:" + str.tostring(buy_30d) + "  S:" + str.tostring(sell_30d), bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
-    table.cell(summary_table, 2, 8, "SIGNALS 3M", bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
-    table.cell(summary_table, 3, 8, "B:" + str.tostring(buy_90d) + "  S:" + str.tostring(sell_90d), bgcolor=row8_bg, text_color=color.white, text_size=size.normal)
+    for i = 0 to 6
+        row = i + 1
+        days = array.get(period_days, i)
+        period_name = array.get(periods, i)
 
-    // Row 9: Strategy thresholds reference
-    row9_bg = color.new(color.gray, 80)
-    table.cell(summary_table, 0, 9, "BUY Thresholds", bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
-    table.cell(summary_table, 1, 9, "STR>=" + str.tostring(strong_signal_score) + " MED>=" + str.tostring(medium_signal_score), bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
-    table.cell(summary_table, 2, 9, "SELL Thresholds", bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
-    table.cell(summary_table, 3, 9, "STR>=" + str.tostring(strong_sell_score) + " MED>=" + str.tostring(medium_sell_score), bgcolor=row9_bg, text_color=color.gray, text_size=size.small)
+        // Count signals
+        weak_count = count_signals_by_type(days, "WEAK")
+        medium_count = count_signals_by_type(days, "MEDIUM")
+        strong_count = count_signals_by_type(days, "STRONG")
+        total_buy_count = weak_count + medium_count + strong_count
+        sell_count = count_sell_signals(days)
+        total_all_signals = total_buy_count + sell_count
+
+        // Fill row
+        row_bg = color.new(color.black, 15)
+        table.cell(summary_table, 0, row, period_name, bgcolor=row_bg, text_color=color.white, text_size=size.normal)
+        table.cell(summary_table, 1, row, str.tostring(strong_count), bgcolor=row_bg, text_color=strong_count > 0 ? color.lime : color.gray, text_size=size.normal)
+        table.cell(summary_table, 2, row, str.tostring(medium_count), bgcolor=row_bg, text_color=medium_count > 0 ? color.green : color.gray, text_size=size.normal)
+        table.cell(summary_table, 3, row, str.tostring(weak_count), bgcolor=row_bg, text_color=weak_count > 0 ? color.yellow : color.gray, text_size=size.normal)
+        table.cell(summary_table, 4, row, str.tostring(total_buy_count), bgcolor=row_bg, text_color=total_buy_count > 0 ? color.aqua : color.gray, text_size=size.normal)
+        table.cell(summary_table, 5, row, str.tostring(sell_count), bgcolor=row_bg, text_color=sell_count > 0 ? color.orange : color.gray, text_size=size.normal)
+        table.cell(summary_table, 6, row, str.tostring(total_all_signals), bgcolor=row_bg, text_color=total_all_signals > 0 ? color.white : color.gray, text_size=size.normal)
 
 // Stock type now shown in dashboard title bar (removed separate label to reduce chart clutter)
 
-// DEBUG: Show current bar status with BUY and SELL score breakdowns
-var table debug_table = table.new(position.top_right, 2, 22, bgcolor=color.new(color.black, 80), border_width=1)
-if barstate.islast
+// DEBUG: Show current bar status with BUY and SELL score breakdowns (toggle via input)
+var table debug_table = table.new(position.bottom_left, 2, 22, bgcolor=color.new(color.black, 80), border_width=1)
+if show_debug_table and barstate.islast
     // === HEADER ===
     table.cell(debug_table, 0, 0, "DEBUG", bgcolor=color.purple, text_color=color.white, text_size=size.small)
     table.cell(debug_table, 1, 0, str.tostring(current_position, "#.#") + "%", bgcolor=color.purple, text_color=color.white, text_size=size.small)
