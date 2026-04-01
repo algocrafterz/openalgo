@@ -1,13 +1,57 @@
-# RSI(2) Trend Pullback Mean Reversion — Strategy Analysis & Development Notes
+# RSI(2) Mean Reversion — Strategy Analysis & Development Notes
 
-**Strategy tag:** `RSI-TP-MR`
-**Status:** PineScript v2 complete, pending backtest validation (2026-03-26)
-**Branch:** `feature/swing-rsi-trend-pullback-mean-reversion`
-**Location:** `signal_engine/pinescripts/swing/rsi-tp-mr/`
+**Strategy tag:** `RSI-MR` (intraday) / `RSI-TP-MR` (swing, superseded)
+**Status:** Intraday v1 complete, observation phase (2026-04-02)
+**Branch:** `feature/intraday-hod-swing-dividend-growth-rsi`
+**Location:** `signal_engine/pinescripts/intraday/rsi-mr/`
 
 ---
 
-## Strategy Summary
+## Intraday Variant — RSI-MR (CURRENT)
+
+| Parameter | Value |
+|---|---|
+| Type | Mean reversion intraday |
+| Timeframe | 5-min chart, dual-timeframe (daily context via request.security) |
+| Direction | Long only |
+| Stock selection | Chartink scanner: RSI(2) < threshold (5–15), daily |
+| Entry window | 9:15–9:45 AM IST, first qualifying 5-min bar |
+| Entry conditions | Close < VWAP, gap ≥ 0.2%, green bar, Close > PDL, Close > 200 SMA (daily), volume ≥ 1.2× avg |
+| TP | VWAP at entry bar (fixed) |
+| SL | max(Previous Day Low, entry × (1 − 2%)) |
+| Time exit | 10:30 AM hard exit |
+| Product type | MIS (intraday) |
+| Alerts | Telegram Bot API JSON (direct to observation channel, not signal engine) |
+| Live trading | Disabled — observation phase |
+| Script | `rsi-mr-intraday.pine` |
+
+### Observation Setup
+- Telegram channel (separate from ORB/signal engine channel)
+- `Chat ID` input in script → set to observation channel
+- `Enable Alerts` = ON → fires Entry / TP Hit / SL Hit / Time Exit alerts
+- Channel NOT added to signal engine `config.yaml` → no live orders taken
+
+### Entry Conditions Detail
+1. Daily RSI(2) < threshold (configurable 2–15, match Chartink filter)
+2. Daily Close > 200 SMA (uptrend filter, toggleable)
+3. 5-min Close < VWAP (buying below session fair value)
+4. Gap to VWAP ≥ 0.2% (ensures meaningful room to TP)
+5. Green 5-min bar (close > open — bounce confirmed)
+6. Close > PDL (previous day low — bounce thesis intact)
+7. Volume ≥ 1.2× 20-bar average (institutional participation)
+
+### SL Rationale
+`SL = max(PDL, entry × 0.98)`
+PDL is the structural level: RSI(2) < 5–15 means the stock had a bad day; if PDL breaks, the bounce thesis is dead. 2% cap prevents oversized SL when PDL is far (high-ATR stocks).
+
+### TP Rationale
+VWAP is the session's fair value. A panic-oversold stock will attempt VWAP reclaim as buying absorbs sellers. VWAP at entry bar is fixed and sent as TP — no moving target.
+
+---
+
+## Swing Variant — RSI-TP-MR (SUPERSEDED)
+
+**File:** `rsi-tp-mr.pine` (kept for reference)
 
 | Parameter | Value |
 |---|---|
@@ -17,15 +61,10 @@
 | Core signal | RSI(2) < 5, Close > 200 SMA |
 | Entry | Pre-close window (3:15-3:25 PM IST), CNC delivery |
 | Primary exit | LTP > 5 SMA (tracker continuous monitoring) |
-| Exit | Close > 5 SMA (tracker LTP monitoring, continuous intraday) |
 | Safety exit | Close < 200 SMA (trend broken) |
 | Time exit | 7 trading days max hold |
 | Stop-loss | max(200 SMA, entry * 0.95) — structural + 5% emergency cap |
-| Min R:R | 0.8 — filters shallow pullbacks with negative expectancy after CNC costs |
-| Product type | CNC (Cash & Carry) — NOT MIS |
-| Expected win rate | 60-75% |
-| Expected profit factor | 1.5-3.5 |
-| Trades/stock/year | 10-25 |
+| Product type | CNC (Cash & Carry) |
 
 ## How It Complements ORB
 
