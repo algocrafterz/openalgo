@@ -1,0 +1,367 @@
+//@version=6
+// RSI(2) Mean Reversion — Intraday (NSE 5-min)
+// Stock selection: Chartink scanner (RSI(2) < threshold, daily).
+// Entry: 9:15–9:45 AM, price below VWAP, first qualifying 5-min bar.
+// TP: VWAP at entry. SL: max(PDL, entry × (1 - cap%)). Time exit: 10:30 AM.
+// Telegram alerts go directly to observation channel (Bot API JSON format).
+strategy("intraday-rsi-mr", shorttitle="RSI-MR", overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     initial_capital=100000,
+     currency=currency.INR,
+     commission_type=strategy.commission.percent,
+     commission_value=0.094,
+     slippage=1,
+     process_orders_on_close=false,
+     calc_on_every_tick=false)
+
+// ============================================ INPUT GROUPS ============================================
+string GRP_DAILY    = "Daily Filter (Chartink)"
+string GRP_ENTRY    = "Entry Conditions"
+string GRP_RISK     = "Risk / Exit"
+string GRP_TELEGRAM = "Telegram Alerts"
+
+// ============================================ DAILY FILTER INPUTS ============================================
+float rsiThresh = input.float(10.0, "RSI(2) Threshold", minval=2.0, maxval=15.0, step=1.0,
+     group=GRP_DAILY,
+     tooltip="Match to your Chartink scanner filter.\n\n" +
+     "< 5: Canonical Connors (most oversold, fewer signals)\n" +
+     "< 10: Standard starting point\n" +
+     "< 15: Permissive — more signals, lower avg quality\n\n" +
+     "Increase if Chartink returns too few stocks.")
+
+bool useTrendFilter = input.bool(true, "Require Close > SMA (Daily)", inline="trend", group=GRP_DAILY,
+     tooltip="Only trade stocks above this SMA. Disables bounce trades against downtrend.")
+int  trendLen       = input.int(200, "", minval=50, maxval=200, step=50, inline="trend", group=GRP_DAILY,
+     tooltip="Trend SMA length. 200: Canonical  100: More signals")
+
+// ============================================ ENTRY CONDITION INPUTS ============================================
+float minVwapGapPct = input.float(0.20, "Min Gap to VWAP (%)", minval=0.05, maxval=1.0, step=0.05,
+     group=GRP_ENTRY,
+     tooltip="Entry must be below VWAP by at least this %.\n" +
+     "Ensures meaningful room to TP.\n\n" +
+     "0.2%: Standard  0.1%: Permissive  0.5%: Strict")
+
+float minVolMult = input.float(1.2, "Volume Multiplier (× 20-bar avg)", minval=0.5, maxval=3.0, step=0.1,
+     group=GRP_ENTRY,
+     tooltip="Volume must exceed this multiple of the 20-bar moving average.\n\n" +
+     "1.2×: Standard  1.0×: Any volume  1.5×: High-volume only")
+
+// ============================================ RISK / EXIT INPUTS ============================================
+float slCapPct = input.float(2.0, "SL Cap (% from entry)", minval=0.5, maxval=5.0, step=0.5,
+     group=GRP_RISK,
+     tooltip="SL = max(Previous Day Low, entry × (1 - cap%))\n" +
+     "PDL is the primary structural SL.\n" +
+     "Cap prevents oversized SL on high-ATR stocks.\n\n" +
+     "2.0%: Standard  1.5%: Tight  2.5%: High-ATR stocks")
+
+// ============================================ TELEGRAM INPUTS ============================================
+bool   enableAlerts     = input.bool(true, "Enable Telegram Alerts",
+     group=GRP_TELEGRAM,
+     tooltip="ON: Telegram alerts fire for Entry / TP / SL / Time Exit.\n" +
+     "OFF: No alerts (chart signals only — useful during backtesting).\n\n" +
+     "TradingView alert webhook: https://api.telegram.org/bot<TOKEN>/sendMessage")
+
+string telegram_chat_id = input.string("-1003867620157", "Chat ID",
+     group=GRP_TELEGRAM,
+     tooltip="Your Telegram observation channel/group chat ID.\n" +
+     "Add @userinfobot to any channel to get its ID.\n\n" +
+     "Format: -100xxxxxxxxxx (negative number for channels)")
+
+bool   sendTestAlert    = input.bool(false, "Send Test Alert",
+     group=GRP_TELEGRAM,
+     tooltip="Enable, then create TradingView alert with 'Any alert() function call'.\n" +
+     "Webhook: https://api.telegram.org/bot<TOKEN>/sendMessage\n" +
+     "A test message will fire to your channel to verify connectivity.")
+
+string testAlertType    = input.string("Entry", "Test Alert Type",
+     options=["Entry", "TP Hit", "SL Hit", "Time Exit"],
+     group=GRP_TELEGRAM,
+     tooltip="Which alert format to preview in the test message.")
+
+// ============================================ DAILY CONTEXT (DUAL TIMEFRAME) ============================================
+// [1] offset = previous day's confirmed bar — no lookahead bias
+d_rsi2  = request.security(syminfo.tickerid, "D", ta.rsi(close, 2)[1])
+d_sma   = request.security(syminfo.tickerid, "D", ta.sma(close, trendLen))
+d_pdl   = request.security(syminfo.tickerid, "D", low[1])
+d_pdh   = request.security(syminfo.tickerid, "D", high[1])
+d_pdc   = request.security(syminfo.tickerid, "D", close[1])
+
+// ============================================ INTRADAY INDICATORS ============================================
+session_vwap = ta.vwap(hlc3)
+vol_ma       = ta.sma(volume, 20)
+
+// ============================================ TIME UTILITIES (IST) ============================================
+_hhmm() =>
+    hour(time, "Asia/Kolkata") * 60 + minute(time, "Asia/Kolkata")
+
+int cur = _hhmm()
+
+int T_ENTRY_START = 9 * 60 + 15   // 9:15 AM
+int T_ENTRY_END   = 9 * 60 + 44   // 9:44 AM — last bar start allowed for entry
+int T_TIME_EXIT   = 10 * 60 + 25  // 10:25 AM bar (closes 10:30) — hard time exit
+
+bool in_entry_window = cur >= T_ENTRY_START and cur <= T_ENTRY_END
+bool at_time_exit    = cur >= T_TIME_EXIT and cur <= T_TIME_EXIT + 4
+
+getTimeIST() =>
+    str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
+
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker + "&interval=5"
+
+// ============================================ ALERT BUILDERS ============================================
+
+buildEntryAlert(float entryPrice, float slPrice, float tpPrice, float rr, float gap) =>
+    float riskAmt   = entryPrice - slPrice
+    float rewardAmt = tpPrice - entryPrice
+    string msg = "🟢 RSI-MR LONG | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Entry: "      + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "TP (VWAP): "  + str.tostring(tpPrice,    "#.##") + "\\n"
+    msg += "SL: "         + str.tostring(slPrice,     "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "Risk: "       + str.tostring(riskAmt,   "#.##") +
+           " | Reward: "  + str.tostring(rewardAmt, "#.##") + "\\n"
+    msg += "R:R 1:"       + str.tostring(rr,  "#.1") +
+           " | Gap: "     + str.tostring(gap, "#.2") + "%\\n"
+    msg += "RSI(2): "     + str.tostring(d_rsi2, "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTPAlert(float entryPrice, float slPrice, float tpPrice, float exitPrice) =>
+    float pnlAmt  = exitPrice - entryPrice
+    float pnlPct  = pnlAmt / entryPrice * 100
+    float rr      = math.abs(tpPrice - entryPrice) / math.abs(entryPrice - slPrice)
+    string msg = "✅ TP HIT (VWAP) | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "🟢 LONG | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Exit: "             + str.tostring(exitPrice,  "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "Profit: +"          + str.tostring(pnlAmt, "#.##") +
+           " (+"                + str.tostring(pnlPct, "#.1") + "%)\\n"
+    msg += "R:R 1:"             + str.tostring(rr, "#.1") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildSLAlert(float entryPrice, float slPrice, float tpPrice, float exitPrice) =>
+    float pnlAmt  = exitPrice - entryPrice
+    float pnlPct  = pnlAmt / entryPrice * 100
+    float rr      = math.abs(tpPrice - entryPrice) / math.abs(entryPrice - slPrice)
+    string msg = "❌ SL HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "🟢 LONG | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Exit: "             + str.tostring(exitPrice,  "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "Loss: "             + str.tostring(pnlAmt, "#.##") +
+           " ("                 + str.tostring(pnlPct, "#.1") + "%)\\n"
+    msg += "R:R was 1:"         + str.tostring(rr, "#.1") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTimeExitAlert(float entryPrice, float slPrice, float tpPrice, float exitPrice) =>
+    float pnlAmt    = exitPrice - entryPrice
+    float pnlPct    = pnlAmt / entryPrice * 100
+    string pnlSign  = pnlAmt >= 0 ? "+" : ""
+    float rr        = math.abs(tpPrice - entryPrice) / math.abs(entryPrice - slPrice)
+    string msg = "⏰ TIME EXIT 10:30 | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "🟢 LONG | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Exit: "             + str.tostring(exitPrice,  "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "P&L: "              + pnlSign + str.tostring(pnlAmt, "#.##") +
+           " ("                 + pnlSign + str.tostring(pnlPct, "#.1") + "%)\\n"
+    msg += "R:R was 1:"         + str.tostring(rr, "#.1") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTestAlert() =>
+    string sampleEntry = str.tostring(close, "#.##")
+    string sampleSL    = str.tostring(close * 0.98, "#.##")
+    string sampleTP    = str.tostring(session_vwap, "#.##")
+    string msg = "🧪 TEST ALERT — RSI-MR Strategy\\n\\n"
+    msg += "Webhook connection successful!\\n\\n"
+    msg += "Symbol: "   + syminfo.ticker + "\\n"
+    msg += "Exchange: " + syminfo.prefix + "\\n"
+    msg += "Price: "    + str.tostring(close, "#.##") + "\\n"
+    msg += "RSI(2): "   + str.tostring(d_rsi2, "#.##") + "\\n"
+    msg += "VWAP: "     + str.tostring(session_vwap, "#.##") + "\\n"
+    msg += "Time: "     + getTimeIST() + "\\n\\n"
+    msg += "Preview (" + testAlertType + "):\\n"
+    if testAlertType == "Entry"
+        msg += "Entry=" + sampleEntry + " SL=" + sampleSL + " TP=" + sampleTP + "\\n"
+    else if testAlertType == "TP Hit"
+        msg += "TP (VWAP) hit at " + sampleTP + "\\n"
+    else if testAlertType == "SL Hit"
+        msg += "SL hit at " + sampleSL + "\\n"
+    else
+        msg += "Time exit at " + str.tostring(close, "#.##") + "\\n"
+    msg += "\\nChart: " + getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// ============================================ ENTRY CONDITIONS ============================================
+float vwap_gap_pct = na(session_vwap) ? na : (session_vwap - close) / close * 100
+
+bool c_rsi      = not na(d_rsi2)       and d_rsi2 < rsiThresh
+bool c_trend    = not useTrendFilter   or (close > d_sma)
+bool c_vwap_pos = close < session_vwap
+bool c_vwap_gap = not na(vwap_gap_pct) and vwap_gap_pct >= minVwapGapPct
+bool c_bullish  = close > open
+bool c_pdl      = close > d_pdl
+bool c_volume   = volume >= minVolMult * vol_ma
+
+bool all_entry = c_rsi and c_trend and c_vwap_pos and c_vwap_gap and c_bullish and c_pdl and c_volume
+
+// ============================================ STATE ============================================
+var bool  in_trade  = false
+var bool  day_fired = false
+var float entry_px  = na
+var float sl_px     = na
+var float tp_px     = na
+
+bool new_day = ta.change(dayofmonth) != 0
+if new_day
+    in_trade  := false
+    day_fired := false
+
+// ============================================ ENTRY ============================================
+bool entry_signal = in_entry_window and not day_fired and all_entry and barstate.isconfirmed
+
+if entry_signal
+    entry_px  := close
+    sl_px     := math.max(d_pdl, close * (1.0 - slCapPct / 100.0))
+    tp_px     := session_vwap
+    in_trade  := true
+    day_fired := true
+
+    float rr  = (tp_px - entry_px) / (entry_px - sl_px)
+
+    strategy.entry("Long", strategy.long)
+    strategy.exit("TP/SL", "Long", limit=tp_px, stop=sl_px)
+
+    if enableAlerts
+        alert(buildEntryAlert(entry_px, sl_px, tp_px, rr, vwap_gap_pct), alert.freq_once_per_bar_close)
+
+// ============================================ SL HIT DETECTION ============================================
+// Check SL before TP — if both hit same bar, SL takes priority (worst case)
+bool sl_hit = in_trade and low <= sl_px and barstate.isconfirmed
+
+if sl_hit
+    in_trade := false
+    strategy.close("Long", comment="SL Hit")
+
+    if enableAlerts
+        alert(buildSLAlert(entry_px, sl_px, tp_px, sl_px), alert.freq_once_per_bar_close)
+
+// ============================================ TP HIT DETECTION ============================================
+bool tp_hit = in_trade and close >= tp_px and barstate.isconfirmed
+
+if tp_hit
+    in_trade := false
+    strategy.close("Long", comment="TP Hit")
+
+    if enableAlerts
+        alert(buildTPAlert(entry_px, sl_px, tp_px, tp_px), alert.freq_once_per_bar_close)
+
+// ============================================ TIME EXIT (10:30 AM) ============================================
+bool time_exit_signal = in_trade and at_time_exit and barstate.isconfirmed
+
+if time_exit_signal
+    in_trade := false
+    strategy.close("Long", comment="Time Exit 10:30")
+
+    if enableAlerts
+        alert(buildTimeExitAlert(entry_px, sl_px, tp_px, close), alert.freq_once_per_bar_close)
+
+// ============================================ TEST ALERT ============================================
+if sendTestAlert and barstate.islastconfirmedhistory
+    alert(buildTestAlert(), alert.freq_once_per_bar_close)
+
+// ============================================ VISUALS ============================================
+bgcolor(in_entry_window ? color.new(color.yellow, 93) : na, title="Entry Window 9:15-9:45")
+
+plotshape(entry_signal,
+     title="Entry", style=shape.triangleup, location=location.belowbar,
+     color=color.new(color.lime, 0), size=size.normal)
+
+plotshape(tp_hit,
+     title="TP Hit", style=shape.circle, location=location.abovebar,
+     color=color.new(color.lime, 0), size=size.small)
+
+plotshape(sl_hit,
+     title="SL Hit", style=shape.xcross, location=location.belowbar,
+     color=color.new(color.red, 0), size=size.small)
+
+plotshape(time_exit_signal,
+     title="Time Exit", style=shape.xcross, location=location.abovebar,
+     color=color.new(color.orange, 0), size=size.small)
+
+plot(session_vwap, title="VWAP",
+     color=color.new(color.blue, 20), linewidth=2)
+
+plot(d_pdl, title="PDL",
+     color=color.new(color.red,    50), linewidth=1, style=plot.style_stepline)
+plot(d_pdh, title="PDH",
+     color=color.new(color.green,  50), linewidth=1, style=plot.style_stepline)
+plot(d_pdc, title="PDC",
+     color=color.new(color.orange, 50), linewidth=1, style=plot.style_stepline)
+
+// SL / TP levels visible only while in trade
+plot(in_trade ? sl_px : na, title="Active SL",
+     color=color.new(color.red,  0), linewidth=1, style=plot.style_linebr)
+plot(in_trade ? tp_px : na, title="Active TP (VWAP)",
+     color=color.new(color.lime, 0), linewidth=1, style=plot.style_linebr)
+
+// ============================================ INFO TABLE ============================================
+var table tbl = table.new(position.top_right, 2, 10,
+     bgcolor=color.new(color.black, 75), border_width=1, border_color=color.new(color.gray, 70))
+
+if barstate.islastconfirmedhistory or barstate.isrealtime
+    string alert_txt = enableAlerts ? "ALERTS ON" : "CHART ONLY"
+    color  alert_col = enableAlerts ? color.lime   : color.yellow
+
+    table.cell(tbl, 0, 0, "RSI-MR",    text_color=color.white, text_size=size.small, bgcolor=color.new(color.navy, 40))
+    table.cell(tbl, 1, 0, alert_txt,   text_color=alert_col,   text_size=size.small, bgcolor=color.new(color.navy, 40))
+    table.cell(tbl, 0, 1, "RSI(2)",    text_color=color.gray,  text_size=size.small)
+    table.cell(tbl, 1, 1, str.tostring(d_rsi2, "#.##"),
+         text_color=d_rsi2 < rsiThresh ? color.lime : color.red, text_size=size.small)
+    table.cell(tbl, 0, 2, "200 SMA",   text_color=color.gray,  text_size=size.small)
+    table.cell(tbl, 1, 2, str.tostring(d_sma, "#.##"),
+         text_color=close > d_sma ? color.lime : color.red, text_size=size.small)
+    table.cell(tbl, 0, 3, "VWAP",      text_color=color.gray,  text_size=size.small)
+    table.cell(tbl, 1, 3, str.tostring(session_vwap, "#.##"),  text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 4, "PDL",       text_color=color.gray,  text_size=size.small)
+    table.cell(tbl, 1, 4, str.tostring(d_pdl, "#.##"),         text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 5, "PDH",       text_color=color.gray,  text_size=size.small)
+    table.cell(tbl, 1, 5, str.tostring(d_pdh, "#.##"),         text_color=color.white, text_size=size.small)
+
+    if in_trade
+        float rr_live = (tp_px - entry_px) / (entry_px - sl_px)
+        table.cell(tbl, 0, 6, "Entry",     text_color=color.gray, text_size=size.small)
+        table.cell(tbl, 1, 6, str.tostring(entry_px, "#.##"),  text_color=color.lime,   text_size=size.small)
+        table.cell(tbl, 0, 7, "SL",        text_color=color.gray, text_size=size.small)
+        table.cell(tbl, 1, 7, str.tostring(sl_px,    "#.##"),  text_color=color.red,    text_size=size.small)
+        table.cell(tbl, 0, 8, "TP (VWAP)", text_color=color.gray, text_size=size.small)
+        table.cell(tbl, 1, 8, str.tostring(tp_px,    "#.##"),  text_color=color.lime,   text_size=size.small)
+        table.cell(tbl, 0, 9, "R:R",       text_color=color.gray, text_size=size.small)
+        table.cell(tbl, 1, 9, str.tostring(rr_live,  "#.##"),
+             text_color=rr_live >= 1.0 ? color.lime : color.orange, text_size=size.small)
+    else
+        string status = day_fired ? "Traded today" : (in_entry_window ? "Watching..." : "Waiting 9:15")
+        table.cell(tbl, 0, 6, "Status",    text_color=color.gray,  text_size=size.small)
+        table.cell(tbl, 1, 6, status,      text_color=color.white, text_size=size.small)
+        table.cell(tbl, 0, 7, "",          text_color=color.gray,  text_size=size.small)
+        table.cell(tbl, 1, 7, "",          text_color=color.white, text_size=size.small)
+        table.cell(tbl, 0, 8, "",          text_color=color.gray,  text_size=size.small)
+        table.cell(tbl, 1, 8, "",          text_color=color.white, text_size=size.small)
+        table.cell(tbl, 0, 9, "",          text_color=color.gray,  text_size=size.small)
+        table.cell(tbl, 1, 9, "",          text_color=color.white, text_size=size.small)
