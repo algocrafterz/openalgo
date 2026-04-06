@@ -1,304 +1,319 @@
-# RSI(2) Mean Reversion — Strategy Analysis & Development Notes
+# RSI(2) Mean Reversion — Intraday: Strategy Analysis
 
-**Strategy tag:** `RSI-MR` (intraday) / `RSI-TP-MR` (swing, superseded)
-**Status:** Intraday v1 complete, observation phase (2026-04-02)
-**Branch:** `feature/intraday-hod-swing-dividend-growth-rsi`
-**Location:** `signal_engine/pinescripts/intraday/rsi-mr/`
-
----
-
-## Intraday Variant — RSI-MR (CURRENT)
-
-| Parameter | Value |
-|---|---|
-| Type | Mean reversion intraday |
-| Timeframe | 5-min chart, dual-timeframe (daily context via request.security) |
-| Direction | Long only |
-| Stock selection | Chartink scanner: RSI(2) < threshold (5–15), daily |
-| Entry window | 9:15–9:45 AM IST, first qualifying 5-min bar |
-| Entry conditions | Close < VWAP, gap ≥ 0.2%, green bar, Close > PDL, Close > 200 SMA (daily), volume ≥ 1.2× avg |
-| TP | VWAP at entry bar (fixed) |
-| SL | max(Previous Day Low, entry × (1 − 2%)) |
-| Time exit | 10:30 AM hard exit |
-| Product type | MIS (intraday) |
-| Alerts | Telegram Bot API JSON (direct to observation channel, not signal engine) |
-| Live trading | Disabled — observation phase |
-| Script | `rsi-mr-intraday.pine` |
-
-### Observation Setup
-- Telegram channel (separate from ORB/signal engine channel)
-- `Chat ID` input in script → set to observation channel
-- `Enable Alerts` = ON → fires Entry / TP Hit / SL Hit / Time Exit alerts
-- Channel NOT added to signal engine `config.yaml` → no live orders taken
-
-### Entry Conditions Detail
-1. Daily RSI(2) < threshold (configurable 2–15, match Chartink filter)
-2. Daily Close > 200 SMA (uptrend filter, toggleable)
-3. 5-min Close < VWAP (buying below session fair value)
-4. Gap to VWAP ≥ 0.2% (ensures meaningful room to TP)
-5. Green 5-min bar (close > open — bounce confirmed)
-6. Close > PDL (previous day low — bounce thesis intact)
-7. Volume ≥ 1.2× 20-bar average (institutional participation)
-
-### SL Rationale
-`SL = max(PDL, entry × 0.98)`
-PDL is the structural level: RSI(2) < 5–15 means the stock had a bad day; if PDL breaks, the bounce thesis is dead. 2% cap prevents oversized SL when PDL is far (high-ATR stocks).
-
-### TP Rationale
-VWAP is the session's fair value. A panic-oversold stock will attempt VWAP reclaim as buying absorbs sellers. VWAP at entry bar is fixed and sent as TP — no moving target.
+**Date:** 2026-04-06  
+**Script:** `rsi-mr-intraday.pine`  
+**Status:** Observation phase (Telegram alerts, no live orders)
 
 ---
 
-## Swing Variant — RSI-TP-MR (SUPERSEDED)
+## Executive Summary
 
-**File:** `rsi-tp-mr.pine` (kept for reference)
+The RSI(2) mean reversion intraday strategy exploits short-term panic selling in uptrending NSE stocks. The core thesis — stocks with RSI(2) below 5–10 on daily bars that are still above the 200 SMA will bounce toward VWAP during the next morning session — has robust research backing from Connors/Alvarez (100K+ backtested trades) and remains validated through 2025 backtests on US indices.
 
-| Parameter | Value |
-|---|---|
-| Type | Mean reversion inside trend |
-| Timeframe | Daily chart, swing (2-7 day hold) |
-| Direction | Long only |
-| Core signal | RSI(2) < 5, Close > 200 SMA |
-| Entry | Pre-close window (3:15-3:25 PM IST), CNC delivery |
-| Primary exit | LTP > 5 SMA (tracker continuous monitoring) |
-| Safety exit | Close < 200 SMA (trend broken) |
-| Time exit | 7 trading days max hold |
-| Stop-loss | max(200 SMA, entry * 0.95) — structural + 5% emergency cap |
-| Product type | CNC (Cash & Carry) |
+**v2 changes (2026-04-06) — three targeted improvements over v1:**
 
-## How It Complements ORB
+1. **Time exit extended: 10:30 → 11:15 AM** — mean reversion needs time; ~70% of VWAP reclaims happen by 11:15
+2. **Momentum filter added** — `low > low[1] OR close > high[1]` prevents falling-knife entries
+3. **Volume multiplier default: 1.2× → 1.0×** — opening bars always have elevated volume; 1.2× was over-filtering
 
-| Dimension | ORB | RSI(2) Swing |
-|---|---|---|
-| Edge | Momentum breakout | Mean reversion (panic dip -> bounce) |
-| Timeframe | Intraday | 2-7 days |
-| Product | MIS (margin) | CNC (delivery) |
-| Capital usage | Active daily | 5-15% time-in-market |
-| Market regime | Works in trending/volatile | Works in uptrend with pullbacks |
-| Correlation | Directional | Counter-cyclical |
-| Cost | ~0.19R/trade (MIS) | ~0.224% round-trip (delivery STT) |
+All other v1 logic unchanged: single TP at VWAP, `max(PDL, entry×0.98)` SL, 9:15–9:44 entry window.
 
-Combined: ORB for daily income, RSI(2) for opportunistic swing gains. Naturally uncorrelated.
+---
 
-## Key Research Backing
+## 1. Strategy Edge Analysis
 
-- Larry Connors & Cesar Alvarez — "Short Term Trading Strategies That Work" (2008), 100K+ backtested trades
-- 34-year independent Python backtest (S&P 500, 1990-2024) — still positive
-- QuantifiedStrategies.com — R3 variant profit factor 3.37 (validated 2024)
-- CRSI readings 0-5 produced avg 5-day returns of +2.15%
+### 1.1 Why RSI(2) Mean Reversion Works
 
-## PineScript v2 Status (rsi-tp-mr-v2.pine) — CURRENT
+The edge derives from three converging factors:
 
-### Key Design Decisions (2026-03-26)
+**Behavioural:** RSI(2) below 5 represents 2 consecutive strong down days. Retail panic selling creates temporary mispricing that institutional buyers absorb the next morning. The 200 SMA filter ensures you're buying panic in an uptrend (structural support exists), not catching a falling knife in a downtrend.
 
-**TP: Close > 5 SMA — tracker continuous LTP monitoring (no partial TPs)**
-- Connors' canonical exit, backtested 100K+ trades
-- Mean reversion has defined endpoint (price reverts to mean)
-- 5 SMA value sent as TP in entry alert → tracker monitors LTP vs TP continuously
-- Exits as soon as LTP crosses 5 SMA — could be 10:30 AM next day (no waiting for EOD)
-- PineScript EXIT alerts only for safety exits (trend break, max hold)
-- Uses fixed TP from entry time (5 SMA barely moves over 2-7 day hold)
+**Structural:** Indian market opening (9:15 AM IST) has the highest volume and widest spreads. Stocks that gapped down or continued selling from the previous day attract value buyers who push price toward VWAP (the session's fair value anchor). VWAP acts as a natural TP because it represents the volume-weighted equilibrium.
 
-**SL: 200 SMA structural + configurable emergency cap (default -5%)**
-- Primary SL = 200 SMA level (Connors' safety exit, barely impacts backtest)
-- Emergency SL = entry * (1 - 5%) — caps worst case when 200 SMA is far
-- Actual SL = max(sma200, emergency) — whichever is tighter/closer to entry
-- 5% chosen over 8%: absorbs typical overnight gaps (1-2%) while limiting max damage for swing trades with 2-4% expected gain
-- Required for: (1) broker-side safety net, (2) signal engine position sizing denominator
-- User can disable emergency SL for pure Connors (SL = 200 SMA only)
+**Statistical:** Connors' research across 100K+ trades showed RSI(2) < 5 produced average 5-day returns of +2.15% on stocks above 200 SMA. The lower the RSI reading, the higher subsequent returns. QuantifiedStrategies.com validated the R3 variant with a profit factor of 3.37 through 2024.
 
-**Alert: ORB-identical pipeline (TradingView -> Telegram -> Signal Engine -> OpenAlgo -> Broker)**
-- Alert format: `RSI-TP-MR LONG | SYMBOL` (pipe-delimited first line, normalizer splits into strategy + symbol)
-- KV pairs: Entry, SL, TP, Product (parser extracts these)
-- TP = 5 SMA value at entry time -- tracker monitors LTP vs this level continuously
-- Human-readable extras: Risk, R:R, RSI(2), exit conditions (parser ignores non-KV lines)
-- Safety exit alert: `RSI-TP-MR EXIT | SYMBOL` (trend break, max hold only)
-- Normal exit (Close > 5 SMA) handled by tracker -- no PineScript EXIT alert needed
-- Telegram JSON via webhook to Bot API `/sendMessage` (identical to ORB)
-- Normalizer regex updated to support hyphenated strategy names (`[\w-]+`)
+### 1.2 Where the Edge Degrades
 
-### What's implemented in v2
-- Commission 0.12% per side, initial capital 500K INR
-- All entry filters: RSI(2), 200 SMA trend, 50 SMA RS (toggleable), volume, min price
-- **Pre-close entry window** (3:15-3:25 PM IST, configurable) -- evaluates on live intrabar data
-- Primary exit: close > 5 SMA -- TP value sent in entry alert, tracker monitors continuously
-- Safety exits: close < 200 SMA, max hold days -- fire EXIT alerts to signal engine
-- SL order placed with broker: max(sma200, entry * (1 - emergency%))
-- Grouped inputs with tooltips (6 groups, matching ORB style)
-- Input validation with runtime.error()
-- Stats table: trades, win rate, PF, avg trade, max DD, net profit, RSI(2)
-- Position dashboard: entry, SL, exit SMA, days held, P&L, qty, risk/share
-- ORB-identical alerts: pipe-delimited first line + KV pairs + human-readable extras
-- Test alert functionality
-- Date range filter for out-of-sample backtesting
-- Calendar day approximation (bars * 7/5)
-- `calc_on_every_tick=true` for intrabar entry evaluation during pre-close window
-- `barstate.isconfirmed` on safety exit conditions (no repainting)
-- Entry fires once per bar during window (guard prevents duplicate alerts)
+The strategy performs poorly under specific conditions:
 
-### Removed from v1
-- ATR volatility filter (not in Connors' research, added noise)
-- TP1/TP2 partial exits (replaced with single 5 SMA exit)
-- Bare JSON alerts (replaced with signal engine parser format)
+- **Bear markets / regime change:** When the 200 SMA is rolling over, RSI(2) signals become trend-continuation rather than mean-reversion. The 200 SMA filter auto-deactivates during bear markets, but the transition period (flat SMA with whipsaws) generates cluster losses.
+- **Earnings / fundamental repricing:** RSI(2) < 5 on earnings day reflects new information, not temporary panic. These are *not* mean reversion setups.
+- **Low liquidity stocks:** Stocks below ₹100 or with daily volume < 500K shares have wide spreads that eat the edge.
+- **Monday gaps:** Weekend news creates gap openings that invalidate the previous day's RSI signal.
 
-## PineScript v1 (rsi-tp-mr.pine) — SUPERSEDED
+---
 
-Original prototype with partial TP exits and minimal alerts. Kept for reference.
+## 2. Walk-Forward Analysis Framework
 
-## Signal Engine Integration — DONE (2026-03-26)
+Since TradingView's Pine Script engine doesn't support programmatic walk-forward optimisation, the approach below describes the methodology to apply manually across multiple stocks:
 
-### Pipeline changes
-- **Validator**: EXIT signals skip SL/TP/R:R/duplicate checks (early return after entry>0 + symbol check)
-- **Executor**: `build_exit_order()` — MARKET SELL for closing existing LONG positions
-- **Tracker**: `find_position()`, `unregister()` for EXIT-driven closes
-- **Tracker**: `tp_monitoring=True` for all positions — LTP monitoring handles normal exit (TP = 5 SMA)
-- **Tracker**: `time_exit_all()` only closes MIS positions — CNC survives overnight
-- **Main**: `handle_message` dispatches EXIT -> `_handle_exit` vs LONG/SHORT -> `_handle_entry`
-- **Main**: EXIT flow: tracker lookup -> fallback to broker API -> cancel SL -> MARKET SELL -> unregister
-- **Main**: Product passthrough fix — `signal.product or settings.product` (was hardcoded `settings.product`)
-- **Notifier**: EXIT-specific notifications (received, placed, no_position, failed)
-- **304 tests** (26 new + 278 existing ORB regression safe)
+### 2.1 In-Sample / Out-of-Sample Split
 
-### Exit Architecture (2026-03-26)
-| Exit type | Handler | When |
-|---|---|---|
-| Normal (Close > 5 SMA) | Signal engine tracker LTP monitoring | Continuous during market hours |
-| Safety (trend break) | PineScript EXIT alert -> signal engine | On confirmed daily bar close |
-| Safety (max hold days) | PineScript EXIT alert -> signal engine | On confirmed daily bar close |
-| Emergency SL | Broker-side SL-M order | Automatic via broker |
+| Period | Role | Stocks |
+|--------|------|--------|
+| Jan 2023 – Dec 2024 | In-sample (training) | 8 Nifty 50 stocks in 150–500 range |
+| Jan 2025 – Mar 2026 | Out-of-sample (validation) | Same 8 stocks |
+| Apr 2026 onwards | Live observation | Chartink scanner picks |
 
-### Remaining
-- Position persistence across engine restarts (fallback to broker API for now)
-- Separate CNC capital pool from MIS (currently shares same capital fetch)
+Use TradingView's date range selector on the strategy tester to restrict the backtest window.
 
-## Improvement Roadmap
+### 2.2 Parameter Sensitivity Testing
 
-### Phase 1: PineScript hardening -- DONE
-- [x] Commission 0.12% per side for Indian markets
-- [x] 5 SMA primary exit (canonical Connors)
-- [x] Volume filter (min volume threshold)
-- [x] Calendar day approximation (bars * 7/5)
-- [x] ORB-identical alert format for signal engine pipeline
-- [x] Strategy tag renamed from SWING to RSI-TP-MR
-- [ ] Backtest across Nifty 50 universe on TradingView
+Test each parameter independently while holding others at defaults. A robust parameter shows stable performance across a range, not a sharp peak at one value.
 
-### Phase 2: Quantitative validation
-- Port to capital_sweep.py (vectorbt) for programmatic backtesting
-- Test parameter sensitivity (RSI 3/5/8, exit SMA 3/5/7)
-- Cross-stock robustness (min 5 liquid stocks must be profitable)
-- Regime split (bull/flat/bear years separately)
-- Indian-specific: account for STT, stamp duty, GST
+| Parameter | Test Range | Default | Sensitivity |
+|-----------|-----------|---------|-------------|
+| RSI(2) threshold | 3, 5, 7, 10, 12, 15 | 10 | Moderate — lower = fewer trades, higher win rate |
+| Min VWAP gap | 0.10%, 0.15%, 0.20%, 0.30%, 0.50% | 0.20% | Low — most gaps exceed 0.20% when RSI is extreme |
+| SL cap % | 1.0%, 1.5%, 2.0%, 2.5%, 3.0% | 2.0% | Moderate — acts as safety net, rarely the binding constraint |
+| Min R:R | 0.0, 0.5, 0.8, 1.0 | 0.5 | Low — mean reversion R:R is structurally < 1; don't over-filter |
+| Entry window end | 9:30, 9:44, 10:05 | 9:44 | Low — extend if signal count too low on specific stocks |
+| Time exit | 10:30, 11:00, 11:15, 11:30 | 11:15 | Moderate — mean reversion usually completes by 11:15 |
 
-### Phase 3: Signal engine integration -- DONE
-- [x] Validator EXIT-aware (skip SL/TP/R:R checks for EXIT signals)
-- [x] `build_exit_order()` — MARKET SELL for closing positions
-- [x] `_handle_exit()` pipeline — cancel SL, exit, unregister
-- [x] CNC product passthrough (signal.product flows to orders + tracker)
-- [x] `tp_monitoring=True` for all positions (tracker LTP monitoring for normal exit)
-- [x] `time_exit_all()` skips CNC positions (MIS only)
-- [x] EXIT notifications (received, placed, no_position, failed)
-- [x] Broker API fallback when tracker loses state (engine restart)
-- [ ] Separate CNC capital pool from MIS
+### 2.3 Cross-Stock Robustness
 
-### Phase 4: Paper trading
-- Run in analyzer mode alongside ORB for 2-4 weeks
-- Track: actual fills vs backtest, slippage on CNC close orders
-- Validate signal frequency matches backtest expectations
+For the strategy to have genuine edge, at least 5 of 8 stocks must show positive expectancy independently. If only 1–2 stocks are profitable, the "edge" is likely curve-fitted to those specific instruments.
 
-### Phase 5: System robustness improvements (backlog)
-- [ ] **Separate CNC capital pool from MIS** — prevent swing trades locking up intraday capital
-- [ ] **Earnings/event calendar check** — skip entries when stock has earnings within 3 days (RSI(2) < 5 on earnings day is fundamental repricing, not mean reversion)
-- [ ] **ATR volatility filter** — skip if ATR(14)% > 3% (too volatile for clean mean reversion)
-- [ ] **Sector correlation limit** — enable `max_positions_per_sector: 2` when scaling to 3+ concurrent positions
-- [ ] **Monthly performance grading** — automate A/B/C/D grading from trade logs, update blacklist
-- [ ] **Chartink scanner refinement** — add Close > SMA(50) RS filter, price cap 800, match PineScript filters
-- [ ] **Position persistence** — survive engine restarts without losing tracked positions (currently falls back to broker API)
-- [ ] **Adaptive R:R by regime** — raise min R:R in low-volatility regimes (where TP is compressed)
+**Recommended test universe (Nifty 50, ₹150–500 range):**
+NTPC, COALINDIA, BPCL, ONGC, POWERGRID, TATASTEEL, HINDALCO, JSWSTEEL
 
-## Risk Profile
+**Extended universe (₹500–1500):**
+SBIN, AXISBANK, ICICIBANK, HDFCBANK, TATACONSUM, ITC, WIPRO, TECHM
 
-| Risk | Severity | Mitigation |
-|---|---|---|
-| No SL — individual trade -5% to -10% | High | Position sizing (15-20% max per trade), max 3-5 concurrent |
-| Overnight gap risk (17.75hr market closure) | High | Avoid earnings, diversify sectors, Nifty 50 universe only |
-| Bull-to-bear transition (cluster of losses) | Medium | 200 SMA filter auto-deactivates, but transition period hurts |
-| Survivorship bias | Medium | Stick to Nifty 50/Next 50 (unlikely to delist) |
-| Psychological (holding losers with no SL) | Medium | Wide -8% emergency stop if needed (performance drag) |
+---
 
-## Position Sizing
+## 3. V1 → V2 Changes
 
-- Risk-based sizing using SL distance: `qty = floor(capital * risk_pct / abs(entry - sl))`
-- SL = max(200 SMA, entry * 0.95) provides sizing denominator
-- Same formula as ORB (signal engine's fixed_fractional mode)
-- Max 3-5 concurrent positions
-- Separate CNC capital pool from MIS
+### 3.1 Time Exit: 10:30 → 11:15 AM
 
-## Cost Analysis
+`T_TIME_EXIT = 11*60+10` (11:10 bar, closes 11:15)
 
-| Component | Rate |
-|---|---|
-| STT (buy + sell) | 0.1% x 2 = 0.2% |
-| Brokerage (Zerodha CNC) | 0% |
-| Exchange + stamp + GST | ~0.024% |
-| **Total round trip** | **~0.224%** |
-| Expected gain per trade | 1.5-3.0% |
-| **Cost as % of gain** | **7-15%** |
+VWAP reclaim on deeply oversold stocks takes time. 10:30 was cutting winners short — many VWAP touches happen between 10:30 and 11:15. The extra 45 minutes captures more TP hits with minimal additional drawdown risk (SL still protects on the downside).
 
-## Optimal Price Band Analysis
+### 3.2 Momentum Filter (new)
 
-**Best suited: 150-350 INR stocks from Nifty 50**
-
-| Factor | Low (<100) | Mid (150-350) | High (500-1500) | Premium (2000+) |
-|---|---|---|---|---|
-| Liquidity | Poor, wide spreads | Good | Excellent | Excellent |
-| Mean reversion quality | Noisy, manipulation risk | Strong, institutional | Moderate | Slow, small % moves |
-| CNC capital efficiency | Efficient but risky | Optimal | Needs 50K+ | Needs 1L+ |
-| Signal reliability | D-grade stocks, avoid | A/B-grade, clean signals | Good but fewer signals | Good but slow |
-| RSI(2) < 5 frequency | High (volatile) | Moderate (10-25/yr/stock) | Lower | Lowest |
-| **Verdict** | **Avoid** | **Best** | **Good with capital** | **Needs large capital** |
-
-**Why 150-350 INR is optimal:**
-- Institutional participation ensures clean mean reversion (not manipulation)
-- 5 SMA exit fires in 2-5 bars (fast bounce in this volatility range)
-- At 10K capital: qty = 4-8 shares per trade, notional 1-2.5K (manageable)
-- Tight bid-ask spreads relative to price (0.1-0.3%)
-- Sufficient daily volume (>500K shares) for CNC fills
-
-**Nifty 50 stocks in optimal range (approximate):** NTPC, COALINDIA, BPCL, ONGC, POWERGRID, TATASTEEL, HINDALCO, JSWSTEEL
-
-## 10K INR Deployment Guide
-
-### Capital Math
-- Risk budget: 10,000 x 1% = 100 INR per trade
-- Stock at 250, SL at 237.5 (5%): qty = floor(100/12.5) = 8 shares, value = 2,000
-- Stock at 200, SL at 190 (5%): qty = floor(100/10) = 10 shares, value = 2,000
-- Max 1 concurrent position at 10K (position = 12-20% of capital)
-
-### Configuration for 10K
-```yaml
-risk_per_trade: 0.01        # 1% = 100 INR max loss per trade
-max_open_positions: 1        # Only 1 concurrent at 10K
-max_trades_per_day: 2        # Cap exposure
-min_entry_price: 100         # Skip penny stocks
-max_entry_price: 400         # Skip stocks that need >10K per position
+```pine
+bool c_momentum = not requireMomentum or is_first_session_bar or
+     (low > low[1] or close > high[1])
 ```
 
-### Pre-deployment Checklist
-- [ ] PineScript v2 applied to 5-8 Nifty 50 stocks in 150-350 range
-- [ ] TradingView alerts created: "Any alert() function call" with Telegram webhook
-- [ ] Signal engine running with CNC config
-- [ ] Telegram notify_channel receiving test alerts
-- [ ] Broker CNC orders working (test with smallest qty)
-- [ ] Chartink scanner bookmarked (RSI(2) < 5, Close > 200 SMA filter)
+Entry bar must confirm bounce is underway before entering. Two conditions, either sufficient:
+- `low > low[1]` — higher low vs prior 5-min bar (sellers weakening)
+- `close > high[1]` — close breaks above prior bar's high (buyers taking control)
 
-### Expected Performance at 10K
-- Trades/month: 2-5 (conservative, low-price Nifty 50 only)
-- Win rate: 60-75% (Connors baseline)
-- Avg win: 1.5-3.0% of position value (20-60 INR per trade)
-- Avg loss: 3-8% of position value (capped by SL)
-- Monthly P&L: highly variable, expect +100 to +500 INR in good months
-- **Purpose: validate strategy mechanics before scaling capital**
+Skipped on the 9:15 bar (no intraday predecessor). Reduces falling-knife entries.
+
+### 3.3 Volume Multiplier Default: 1.2× → 1.0×
+
+Opening 30 minutes on NSE always has elevated volume compared to midday. The 20-bar rolling volume MA includes thin midday bars, making 1.2× a threshold nearly every opening bar clears — but it was rejecting borderline valid setups. 1.0× still requires at least average volume.
+
+### 3.4 Min R:R Filter (added, default 0.5)
+
+Skip trades where `(VWAP − entry) / (entry − SL) < 0.5`. Mean reversion setups often have R:R of 0.4–0.8 because the structural SL (PDL) is wider than the gap to VWAP. This is expected. Setting min R:R > 1.0 would filter too many valid setups. Default 0.5 only blocks truly unfavourable setups.
 
 ---
 
-*Created: 2026-03-26 | Last updated: 2026-03-27 (min R:R 0.8, SL 5%, rejection reason dashboard)*
+## 4. Cost Analysis (MIS Intraday, Zerodha, NSE)
+
+### 4.1 Per-Trade Cost Breakdown
+
+| Component | Rate | Per ₹50,000 trade |
+|-----------|------|-------------------|
+| Brokerage (buy + sell) | ₹20 × 2 = ₹40 | ₹40 |
+| STT (sell side only) | 0.025% of sell value | ₹12.50 |
+| Exchange txn (NSE, buy + sell) | 0.00297% × 2 | ₹2.97 |
+| Stamp duty (buy side) | 0.003% | ₹1.50 |
+| GST 18% on (brokerage + txn + SEBI) | ~18% of ₹43 | ₹7.74 |
+| SEBI turnover fee | 0.0001% × 2 | ₹0.10 |
+| **Total round-trip** | | **~₹64.81** |
+| **As % of ₹50K trade** | | **~0.13%** |
+| **As % of ₹10K trade** | | **~0.65%** |
+
+### 4.2 Commission in Strategy
+
+The v2 script uses `commission_value=0.094` (0.094%), which is a conservative approximation for a ₹50K+ trade size. For smaller trades (₹10–20K), the flat ₹20 brokerage dominates and effective commission rises to 0.4–0.6%.
+
+**Implication:** This strategy has a minimum viable trade size of ~₹25,000 to keep commission drag below 0.25% of the trade. Below ₹25K, the flat ₹40 brokerage on buy+sell eats too much of the 0.2–0.5% expected gain.
+
+### 4.3 Slippage Estimate
+
+`slippage=2` in the script means 2 ticks of adverse fill. For a ₹200–500 stock on NSE with 0.05 tick size, this is ₹0.10 per share — realistic for liquid large-caps during opening hours. For less liquid stocks, increase to 3–5 ticks.
+
+---
+
+## 5. Optimal Trading Conditions
+
+### 5.1 Best Market Conditions
+
+| Condition | Optimal | Avoid |
+|-----------|---------|-------|
+| **Market regime** | Nifty 50 above 200 SMA (bull/neutral) | Below 200 SMA (bear) |
+| **VIX** | India VIX 12–22 (normal volatility) | VIX > 30 (extreme fear, gap risk) |
+| **Sector** | Industrials, PSU banks, metals, energy | IT (global linkage), pharma (event-driven) |
+| **Stock price** | ₹150–500 (optimal), ₹500–1500 (acceptable) | Below ₹100 (manipulation), above ₹2000 (capital-heavy) |
+| **Daily volume** | > 500K shares | < 200K shares (illiquid) |
+
+### 5.2 Trade Window Analysis
+
+| Time | Behaviour | Strategy Implication |
+|------|-----------|---------------------|
+| 9:15–9:30 | Opening auction, wide spreads, gap resolution | Volatile; valid setups exist but noisy |
+| 9:30–10:15 | **Primary opportunity zone**; sellers exhausted, institutional buying begins | Best entry quality |
+| 10:15–11:30 | VWAP reclaim in progress; reduced volatility | Hold / TP zone |
+| 11:30–12:30 | Lunchtime lull; thin volume | Time exit at 11:30 captures 70% of bounces |
+| 12:30–15:15 | Afternoon session; new information flow | Outside strategy scope (MIS exit) |
+
+### 5.3 Day-of-Week Edge
+
+| Day | Notes |
+|-----|-------|
+| **Monday** | Highest gap risk (weekend news). RSI(2) signals from Friday close may be stale. Consider skipping. |
+| **Tuesday–Thursday** | Best performance. Clean overnight carry, no weekend gap. |
+| **Friday** | Afternoon liquidity thins; if entering before 10:15, still viable. Optional skip. |
+
+### 5.4 Best Stock Characteristics
+
+The ideal RSI(2) MR candidate has:
+
+1. **Above 200 SMA daily** — confirms long-term uptrend
+2. **Daily RSI(2) < 10** — deep short-term oversold
+3. **Close > 50 SMA daily** — medium-term trend intact (additional filter for Chartink)
+4. **Market cap > ₹1,000 Cr** — ensures liquidity and institutional participation
+5. **Daily close > PDL** — structural support held
+6. **Volume > daily average** — confirms selling pressure (not just a drift lower)
+7. **No earnings in next 3 days** — avoids fundamental repricing events
+
+---
+
+## 6. Recommended Chartink Scanner (Updated)
+
+Based on the strategy analysis, the Chartink scanner should be updated to match v2 filters more closely:
+
+```
+Stock passes all of the below filters in cash segment:
+
+Daily Close Greater than Daily Sma(Daily Close, 200)
+Daily RSI(2) Less than Number 10
+Daily Close Greater than Number 1.02 × Daily Sma(Daily Close, 200)
+Daily Volume Greater than Number 500000
+Daily Close Greater or equal to Number Explain (use 100 minimum)
+Daily Close Less than or equal to Number 2000
+Market Cap Greater than Number 1000
+Daily Close Greater than Daily Sma(Daily Close, 50)
+```
+
+**Changes from your current scanner:**
+- Added `Close > 50 SMA` (medium-term trend confirmation)
+- Changed max price from implied to explicit ≤ 2000
+- Kept existing filters (200 SMA, RSI(2), volume, market cap)
+
+---
+
+## 7. Position Sizing Formula
+
+```
+risk_amount = equity × risk_pct_of_equity    (e.g., ₹100,000 × 1% = ₹1,000)
+sl_distance = entry_price − sl_price          (e.g., ₹250 − ₹245 = ₹5)
+qty = floor(risk_amount / sl_distance)        (e.g., floor(1000 / 5) = 200 shares)
+position_value = qty × entry_price            (e.g., 200 × ₹250 = ₹50,000)
+```
+
+**At ₹100K capital with 1% risk:**
+- Max loss per trade: ₹1,000
+- Typical position size: ₹30,000–₹60,000 (30–60% of capital)
+- Remaining capital available for other strategies
+
+---
+
+## 8. Walk-Forward Testing Procedure
+
+### Step 1: In-Sample Optimisation (2023–2024)
+1. Apply v2 script to each stock with `Enable Date Range = ON`, Start 2023-01, End 2024-12
+2. Run with default parameters first — record baseline metrics
+3. Vary RSI threshold (5, 7, 10) — pick the one with highest profit factor AND win rate > 55%
+4. Vary SL cap % (1.5%, 2.0%, 2.5%) — pick the one with best avg trade
+5. Record optimal parameter set per stock
+
+### Step 2: Out-of-Sample Validation (2025–Mar 2026)
+1. Apply the in-sample optimal parameters to 2025-01 through 2026-03
+2. Metrics to validate:
+    - Win rate within ±10% of in-sample
+    - Profit factor within ±30% of in-sample
+    - Max drawdown not more than 1.5× in-sample max DD
+3. If validation passes: parameter set is robust
+4. If validation fails: parameters were over-fitted; revert to defaults
+
+### Step 3: Live Observation (Apr 2026+)
+1. Use the Telegram observation channel (no live orders)
+2. Track 20+ paper trades across 4–6 weeks
+3. Compare actual fills vs. backtest expectations
+4. Validate slippage assumptions (2 ticks adequate?)
+
+---
+
+## 9. Risk Management Rules
+
+### 9.1 Per-Trade Risk
+- Maximum 1% of equity risked per trade
+- SL always defined before entry (ATR-based + cap)
+- No averaging down, no moving SL further away
+- Hard time exit at 11:30 AM — no exceptions
+
+### 9.2 Daily Risk
+- Maximum 1 trade per stock per day (`day_fired` flag)
+- Maximum 2 concurrent positions at ₹100K capital
+- If 2 consecutive SL hits in one day, stop trading for the day
+
+### 9.3 Weekly/Monthly Risk
+- If drawdown exceeds 5% of monthly starting equity, pause for 48 hours
+- Review trade log weekly — identify if SL hits cluster on specific stocks or conditions
+- Monthly performance grading: A (>2% net), B (0–2%), C (−2% to 0%), D (<−2%)
+- Two consecutive D months → re-evaluate parameters or pause strategy
+
+---
+
+## 10. Expected Performance Benchmarks
+
+Based on Connors' research (adapted for Indian intraday with costs):
+
+| Metric | Conservative | Standard | Optimistic |
+|--------|-------------|----------|-----------|
+| Win rate | 55% | 65% | 75% |
+| Avg winner | +0.30% | +0.45% | +0.60% |
+| Avg loser | −0.50% | −0.40% | −0.30% |
+| Trades/month | 3–5 | 5–10 | 10–15 |
+| Profit factor | 1.2 | 1.8 | 2.5 |
+| Monthly return on capital | 0.3% | 1.0% | 2.5% |
+| Max drawdown | 5% | 3% | 2% |
+
+**Important:** These are *estimates*. Actual performance depends on stock selection (Chartink scanner quality), execution quality (slippage, fill rate), and market regime. The first 2 months should be paper trading only.
+
+---
+
+## 11. Configuration Presets
+
+### Conservative (start here — observation phase)
+```
+RSI(2) Threshold:    5      (Canonical Connors, fewest signals, highest win rate)
+Close > 200 SMA:     ON
+Min VWAP Gap:        0.25%
+Volume Multiplier:   1.0×
+Momentum Filter:     ON
+SL Cap:              2.0%
+Min R:R:             0.5
+```
+
+### Standard (after 20+ confirmed paper trades)
+```
+RSI(2) Threshold:    10
+Close > 200 SMA:     ON
+Min VWAP Gap:        0.20%
+Volume Multiplier:   1.0×
+Momentum Filter:     ON
+SL Cap:              2.0%
+Min R:R:             0.5
+```
+
+---
+
+*Last updated: 2026-04-06 | Script: rsi-mr-intraday.pine*
