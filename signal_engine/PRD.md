@@ -1080,4 +1080,42 @@ chartink:
 
 ---
 
+## 23. Bug Fix — Flattrade Session Expiry on Analyzer Mode Toggle (2026-04-08)
+
+### Symptom
+After switching from Analyze → Live mode in the OpenAlgo UI, all broker API calls (funds, margin, positionbook) returned `Session Expired: Invalid Session Key`. The dashboard showed no fund data and the signal engine could not size trades.
+
+### Root Cause
+Flattrade is a **single-session broker** — it allows only one active auth token per account at a time. The sequence that broke the session:
+
+1. Startup: `openalgoscheduler` ran headless TOTP login (`authenticate_with_totp`) and stored token T1.
+2. User clicked broker reconnect in the OpenAlgo UI, initiating a new Flattrade OAuth flow. Flattrade **immediately invalidated T1** when the new OAuth session started.
+3. Flattrade redirected to `/flattrade/callback?code=XXXX` with a fresh code.
+4. `brlogin.broker_callback()` saw `session["logged_in"] = True` and returned early — **discarding the code without exchanging it**.
+5. Result: T1 dead, new code discarded → no valid token → all broker API calls fail.
+
+### Fix
+**File**: `blueprints/brlogin.py`, inside the `if session.get("logged_in"):` early-return block.
+
+When the Flattrade callback arrives with a code while already logged in, exchange the code for a fresh token and store it via `upsert_auth()` (which also publishes cache invalidation). Previously this block just redirected to dashboard, silently discarding the new code.
+
+```python
+if broker == "flattrade":
+    code = request.args.get("code")
+    if code:
+        auth_fn = broker_auth_functions.get("flattrade_auth")
+        if auth_fn:
+            new_token, err = auth_fn(code)
+            if new_token:
+                upsert_auth(session["user"], new_token, broker)
+                session["AUTH_TOKEN"] = new_token
+```
+
+`upsert_auth` stores the new token and publishes cache invalidation — all downstream callers pick up the fresh token on next request. No behavioral change for other brokers or the normal (not-yet-logged-in) flow.
+
+### Recovery
+If this occurs mid-session: restart openalgoctl to trigger the headless TOTP auto-login and obtain a fresh token.
+
+---
+
 *End of PRD*

@@ -59,6 +59,25 @@ def broker_callback(broker, para=None):
     if session.get("logged_in"):
         # Store broker in session and g
         session["broker"] = broker
+
+        # Flattrade: if a new OAuth code arrived while already logged in, exchange it for a
+        # fresh token. Flattrade invalidates the existing session when a new OAuth flow is
+        # initiated (single-session broker) — discarding the code leaves no valid token.
+        if broker == "flattrade":
+            code = request.args.get("code")
+            if code:
+                broker_auth_functions = app.broker_auth_functions
+                auth_fn = broker_auth_functions.get("flattrade_auth")
+                if auth_fn:
+                    new_token, err = auth_fn(code)
+                    if new_token:
+                        from database.auth_db import upsert_auth
+                        upsert_auth(session["user"], new_token, broker)
+                        session["AUTH_TOKEN"] = new_token
+                        logger.info("Flattrade: refreshed auth token via new OAuth code (already logged in)")
+                    else:
+                        logger.warning(f"Flattrade: failed to refresh token from new OAuth code: {err}")
+
         return redirect(url_for("dashboard_bp.dashboard"))
 
     broker_auth_functions = app.broker_auth_functions
