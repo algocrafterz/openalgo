@@ -232,7 +232,14 @@ enableTargets = input.bool(true, "Enable Targets & Stop-Loss", group=grp_targets
 showTP1 = input.bool(true, "TP1 (1R)", group=grp_targets, inline="show")
 showTP1_5 = input.bool(true, "TP1.5 (1.5R)", group=grp_targets, inline="show")
 showTP2 = input.bool(true, "TP2 (2R)", group=grp_targets, inline="show")
-showTP3 = input.bool(true, "TP3 (3R)", group=grp_targets, inline="show", tooltip="All TP levels enabled for OBSERVATION only.\n\nEXECUTION: Always TP1 (1R) — entry alert and strategy.exit use TP1.\nTP1.5/TP2/TP3 show on chart to track how far price reaches.\nUseful for future strategy optimization.\n\nR = RISK UNITS (1R = distance from entry to stop-loss)\n\nTP1 (1R): 1:1 — ACTIVE execution target\nTP1.5 (1.5R): Observation only\nTP2 (2R): Observation only\nTP3 (3R): Observation only")
+showTP3 = input.bool(true, "TP3 (3R)", group=grp_targets, inline="show", tooltip="EXECUTION: Each TP level alert includes ExitQtyPct field — signal engine reads it directly.\n\nR = RISK UNITS (1R = distance from entry to stop-loss)\n\nTP1 (1R): 1:1 — partial exit (see tp1ExitQtyPct below)\nTP1.5 (1.5R): exit remaining position (tp1_5ExitQtyPct)\nTP2 (2R): exit remaining position\nTP3 (3R): exit remaining position")
+
+// Exit quantity percentages per TP level — included in TP HIT alerts as ExitQtyPct field.
+// Signal engine reads ExitQtyPct directly; no tp_levels config needed in signal engine.
+// 50 = exit 50% of current open position at this TP level.
+// 100 = exit 100% of remaining position (full close).
+tp1ExitQtyPct   = input.int(50,  "TP1 Exit %",   minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of open position to exit at TP1\n\n50 = partial exit (bank half, hold rest for TP1.5)\n100 = full exit at TP1 (original behavior)\n\nData: 72.3% of TP1 trades also reach TP1.5 — 50% partial exit captures both wins.")
+tp1_5ExitQtyPct = input.int(100, "TP1.5 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP1.5\n\n100 = exit remaining position fully\n\nTP2/TP3 also default to 100 (exit whatever remains).")
 
 // Adaptive R:R - Auto-switch to TP2 when trending
 enableAdaptiveRR = input.bool(false, "Adaptive R:R", group=grp_targets, inline="adaptive", tooltip="Automatically extend to TP2 (2R) when market is trending\n\nHOW IT WORKS:\n• Uses ADX (trend strength indicator)\n• ADX > 25 = Trending → Target TP2\n• ADX < 25 = Ranging → Target TP1\n\nBENEFITS:\n• Best of both worlds\n• Higher win rate in choppy markets (1:1)\n• Capture big moves in trends (1:2)\n\nDEFAULT: OFF (Beginners use TP1 only)\nENABLE: When comfortable with the strategy")
@@ -732,7 +739,9 @@ buildSLAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
     '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
 
 // Build TP Hit Alert Message - Telegram JSON format
-buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float exitPrice, string tpLevel) =>
+// exitQtyPct: % of current open position to exit at this TP level (0-100).
+// Signal engine reads ExitQtyPct field directly — no tp_levels config needed.
+buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float exitPrice, string tpLevel, int exitQtyPct) =>
     string direction = isLong ? "LONG" : "SHORT"
     string emoji = isLong ? "🟢" : "🔴"
     float pnlAmt = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
@@ -749,6 +758,7 @@ buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
     msg += "Profit: +" + str.tostring(pnlAmt, "#.##") + " (+" + str.tostring(pnlPct, "#.#") + "%)\\n"
     msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
     msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    msg += "ExitQtyPct: " + str.tostring(exitQtyPct) + "\\n"
     msg += "------------------------\\n"
     msg += getTimeIST() + "\\n"
     msg += getChartUrl()
@@ -2730,7 +2740,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP1Hit := true
             alertTP1Triggered := true  // Trigger TP1 alert
             // Send TP1 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbTP1Price, "TP1"), alert.freq_once_per_bar)
+            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbTP1Price, "TP1", tp1ExitQtyPct), alert.freq_once_per_bar)
             if not na(orbTP1Label)
                 string tp1Text = labelFormat == "Simple" ? "✅ TP1" : str.format("✅ TP1: {0}", str.tostring(orbTP1Price, "#.##"))
                 label.set_text(orbTP1Label, tp1Text)
@@ -2741,7 +2751,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and high >= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5"), alert.freq_once_per_bar)
+            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5", tp1_5ExitQtyPct), alert.freq_once_per_bar)
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -2753,7 +2763,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP2Hit := true
             alertTP2Triggered := true  // Trigger TP2 alert
             // Send TP2 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2"), alert.freq_once_per_bar)
+            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2", 100), alert.freq_once_per_bar)
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -2764,7 +2774,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP3Hit and not na(orbTP3Price) and showTP3 and bar_index > orbEntryBar and high >= orbTP3Price
             orbTP3Hit := true
             // Send TP3 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3"), alert.freq_once_per_bar)
+            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3", 100), alert.freq_once_per_bar)
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
@@ -2806,7 +2816,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP1Hit := true
             alertTP1Triggered := true  // Trigger TP1 alert for short
             // Send TP1 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbTP1Price, "TP1"), alert.freq_once_per_bar)
+            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbTP1Price, "TP1", tp1ExitQtyPct), alert.freq_once_per_bar)
             if not na(orbTP1Label)
                 string tp1Text = labelFormat == "Simple" ? "✅ TP1" : str.format("✅ TP1: {0}", str.tostring(orbTP1Price, "#.##"))
                 label.set_text(orbTP1Label, tp1Text)
@@ -2817,7 +2827,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and low <= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5"), alert.freq_once_per_bar)
+            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5", tp1_5ExitQtyPct), alert.freq_once_per_bar)
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -2829,7 +2839,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP2Hit := true
             alertTP2Triggered := true  // Trigger TP2 alert for short
             // Send TP2 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2"), alert.freq_once_per_bar)
+            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2", 100), alert.freq_once_per_bar)
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -2840,7 +2850,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP3Hit and not na(orbTP3Price) and showTP3 and bar_index > orbEntryBar and low <= orbTP3Price
             orbTP3Hit := true
             // Send TP3 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3"), alert.freq_once_per_bar)
+            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3", 100), alert.freq_once_per_bar)
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)

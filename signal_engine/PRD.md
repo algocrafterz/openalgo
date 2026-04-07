@@ -979,4 +979,105 @@ chartink:
 
 ---
 
+## 22. Session Observations — 2026-04-08
+
+### Multi-TP Architecture (PineScript owns exit logic)
+
+**Decision:** Signal engine is a dumb executor. PineScript owns all exit fractions via `ExitQtyPct` field in each TP HIT alert. No `tp_levels` config in signal engine for ORB.
+
+**Implementation:**
+- `orb.pine`: added `tp1ExitQtyPct` (default 50) and `tp1_5ExitQtyPct` (default 100) inputs. Each TP HIT alert appends `ExitQtyPct: <value>` to the message body.
+- `normalizer.py`: TP HIT handler extracts `ExitQtyPct` from alert body and includes in canonical output.
+- `parser.py`: parses `exitqtypct` field (0-100), converts to 0.0-1.0 fraction → `Signal.exit_qty_pct`.
+- `main.py _resolve_exit_qty()`: priority order — (1) `signal.exit_qty_pct` (PineScript), (2) `strategy_profiles.tp_levels` config (fallback for non-ORB strategies), (3) 1.0 default.
+- `config.yaml ORB strategy_profile`: `tp_levels` intentionally absent — ORB owns it via alerts.
+- `RSI-TP-MR`: still uses `tp_levels: {TP1: 1.0}` in config (single TP, full exit).
+
+**Data backing:** 72.3% of TP1 trades progress to TP1.5. Multi-TP adds +29.78% cumulative uplift vs TP1-only (+25.71% → +55.49% over 44 days).
+
+### Breakeven SL After Partial TP Exit
+
+**Decision:** After TP1 partial exit (50%), move SL to entry price (breakeven) instead of keeping original SL.
+
+**Rationale:** TP1 profit is already banked. Keeping original SL means a reversal wipes out the gain (net ≈ 0). Moving SL to entry locks TP1 profit as the floor.
+
+**Impact calculation:**
+- 28 trades hit TP1 but not TP1.5 (27.7% of 101 TP1 hits)
+- Old: net ≈ 0 (TP1 gain offset by remaining SL loss)
+- New: net = +0.5R locked per affected trade
+- Estimated +6-9% cumulative over 44-day period (~+19%/year)
+
+**Implementation:** `main.py _handle_exit()` partial exit path — `sl_price = pos.entry_price` (was `pos.sl`). Also updates `pos.sl = breakeven_sl` so tracker stays consistent.
+
+### SL Re-placement (Indian Broker OCO Constraint)
+
+**Rule:** SL-M MUST be cancelled before ANY SELL order (partial or full). Any SELL while SL-M is active = new SHORT → FUND LIMIT INSUFFICIENT.
+
+**After partial exit:** Cancel old SL → exit partial qty → place new SL-M for remaining qty at breakeven (entry price).
+
+**`place_sl_order()`**: extracted as reusable function in `executor.py`. Used for initial bracket and re-placement. 5 retries with 0.5s delay.
+
+### TP Exit Retries
+
+`bracket.tp_exit_retries: 3` — was in config but retry loop was not implemented. Now implemented in `_handle_exit` exit order path (retries on any non-SUCCESS status; SL already cancelled so we must exit).
+
+### Race Condition Fix (SL fires in TP signal window)
+
+**Scenario:** SL fires at broker. Within 10s poll window, TP1.5 signal arrives. Engine tries SELL on already-flat position → rejected.
+
+**Fix:** On exit order failure, call `fetch_open_position()`. If broker qty == 0, silently unregister (SL already handled it). Only call `notify_exit_failed` if position is still genuinely open.
+
+### Notifications Audit
+
+**Added:**
+- `notify_order_rejected` when sizing returns qty=0 (price too high for risk budget)
+- `notify_order_rejected` when Margin API fails
+- `notify_order_rejected` when qty=0 after margin adjustment
+- Full exit via signal now calls `notify_position_closed` (with PnL) instead of bare `notify_exit_placed`
+
+**Day summary deduplication:**
+- New `send_day_summary()` method on `PositionTracker` with `_day_summary_sent` flag
+- Fires immediately when last open position closes (SL hit or TP exit)
+- Also fires at 15:00 time exit (deduped — no duplicate if already sent)
+- Resets flag + counters at time exit reset
+
+### Time Exit PnL Capture
+
+`time_exit_all()` previously recorded `pnl=0.0` for time-exited positions — day summary PnL was inaccurate. Fixed: waits 2s after `close_all_positions()`, then fetches realised PnL delta and adds to `_day_pnl`.
+
+### Watchlist & Blacklist Updates (Q2 2026 review)
+
+**TradingView watchlist** `https://in.tradingview.com/watchlists/209631447/` — recommended changes:
+- Remove: WIPRO (D grade, -1.30% Q2), LICHSGFIN (₹120 price → below ₹150 min filter, no Q2 signals)
+- Add: NATIONALUM (+6.80% cum PnL, ₹380), JSWENERGY (C→A in Q2, ₹495), SBIN (A grade Q1, 100% WR)
+- Skip: PNB (₹115), NMDC (₹70), IDFCFIRSTB (₹25) — all below ₹150 min_entry_price filter
+
+**config.yaml blacklist additions (proven D-grade, sharp Q1→Q2 reversals):**
+- CANBK: A(+3.30%) → D(-0.70%)
+- FEDERALBNK: A(+2.41%) → D(-0.70%)
+- WIPRO: B(+1.70%) → D(-1.30%)
+- BANKBARODA: B(+0.60%) → D(-0.70%)
+
+**Price filter note:** Symbols below ₹150 should not be on TradingView watchlist — they generate alerts that the engine rejects silently. Keep watchlist aligned with price filter range.
+
+### Performance Baseline (as of Apr 8, 2026)
+
+| Metric | Value |
+|--------|-------|
+| Period | Jan 28 – Apr 6, 2026 (44 days) |
+| Trades | 183 |
+| Win rate | 62.8% |
+| Cumulative PnL | +55.49% |
+| Avg PnL/trade | +0.303% |
+| Multi-TP uplift | +29.78% vs TP1-only |
+| D-grade symbols cost | -14.70% |
+| TP1 → TP1.5 progression | 72.3% |
+
+**Projected improvement from this session's changes:**
+- Breakeven SL after TP1: ~+6-9% (44-day equivalent)
+- D-grade blacklist (config.yaml): +14.70% recovered
+- Combined projected: ~+77-80% (vs +55.49% actual)
+
+---
+
 *End of PRD*

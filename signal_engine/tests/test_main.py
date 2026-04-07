@@ -289,7 +289,7 @@ class TestPartialExitFlow:
             mock_pos.exchange = "NSE"
             mock_pos.product = "CNC"
             mock_pos.quantity = 100
-            mock_pos.sl = 0.0  # sl=0 skips SL re-placement (no SL price known)
+            mock_pos.entry_price = 0.0  # entry_price=0 skips breakeven SL re-placement
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._last_realised_pnl = 1000.0
@@ -298,6 +298,8 @@ class TestPartialExitFlow:
             mock_settings.strategy_profiles = {
                 "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
@@ -350,6 +352,8 @@ class TestPartialExitFlow:
             mock_settings.strategy_profiles = {
                 "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP2")
 
@@ -402,6 +406,8 @@ class TestPartialExitFlow:
             mock_settings.strategy_profiles = {
                 "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
 
@@ -465,6 +471,8 @@ class TestTPHitExitFlow:
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
@@ -511,11 +519,15 @@ class TestTPHitExitFlow:
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_tracker._positions = {}
+            mock_tracker.send_day_summary = AsyncMock()
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
         mock_notifier.notify_exit_signal_received.assert_called_once_with("RELIANCE", "ORB")
-        mock_notifier.notify_exit_placed.assert_called_once()
+        mock_notifier.notify_position_closed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_tp_hit_partial_exit_fires_partial_notification(self):
@@ -552,19 +564,21 @@ class TestTPHitExitFlow:
             mock_pos.exchange = "NSE"
             mock_pos.product = "CNC"
             mock_pos.quantity = 100
-            mock_pos.sl = 0.0  # sl=0 skips SL re-placement
+            mock_pos.entry_price = 0.0  # entry_price=0 skips breakeven SL re-placement
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
         # Partial exit notification, not full exit
         mock_notifier.notify_partial_exit.assert_called_once()
-        mock_notifier.notify_exit_placed.assert_not_called()
+        mock_notifier.notify_position_closed.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_partial_exit_cancels_sl_before_exit(self):
@@ -638,6 +652,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_open_position", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.save"),
             patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
             patch("signal_engine.main.settings") as mock_settings,
@@ -653,6 +668,8 @@ class TestTPHitExitFlow:
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
             }
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
@@ -683,6 +700,7 @@ class TestPartialExitSlReplacement:
         mock_pos.exchange = "NSE"
         mock_pos.product = "MIS"
         mock_pos.quantity = 100
+        mock_pos.entry_price = 2500.0  # breakeven SL after partial exit
         mock_pos.sl = sl_price
         mock_pos.direction = _Direction.LONG
         mock_pos.sl_order_id = sl_order_id
@@ -719,15 +737,17 @@ class TestPartialExitSlReplacement:
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
             }
             mock_settings.bracket_enabled = True
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
-        # SL re-placement must be called for remaining 50 shares at original SL price
+        # SL re-placement must be called for remaining 50 shares at breakeven (entry price)
         mock_place_sl.assert_called_once()
         call_kwargs = mock_place_sl.call_args.kwargs
         assert call_kwargs["symbol"] == "RELIANCE"
         assert call_kwargs["quantity"] == 50  # remaining after 50% partial exit
-        assert call_kwargs["sl_price"] == 2485.0
+        assert call_kwargs["sl_price"] == 2500.0  # breakeven = entry price (not original SL)
         assert call_kwargs["direction"] == _Direction.LONG
 
         # sl_order_id updated to new SL order
@@ -761,6 +781,8 @@ class TestPartialExitSlReplacement:
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
             }
             mock_settings.bracket_enabled = True
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
@@ -850,6 +872,10 @@ class TestPartialExitSlReplacement:
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
             }
             mock_settings.bracket_enabled = True
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_tracker._positions = {}
+            mock_tracker.send_day_summary = AsyncMock()
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1.5")
 

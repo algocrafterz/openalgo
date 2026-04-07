@@ -91,14 +91,22 @@ def normalize(text: Optional[str]) -> str:
     # Group 1: optional strategy prefix; Group 2: symbol
     # Bare format (no prefix) defaults to _DEFAULT_STRATEGY for backward compatibility.
     # Entry/SL/TP synthesized as 0.0 (validator skips them for EXIT direction).
+    # ExitQtyPct field (if present in alert body) is passed through — signal engine
+    # uses it directly so no tp_levels config is needed in config.yaml.
     tp_hit_match = _TP_HIT_RE.match(lines[0])
     if tp_hit_match:
         strategy = (tp_hit_match.group(1) or _DEFAULT_STRATEGY).upper()
         tp_level = tp_hit_match.group(2).upper()
         symbol = tp_hit_match.group(3).upper()
+        # Extract ExitQtyPct from remaining lines if present
+        exit_qty_pct_line = ""
+        for line in lines[1:]:
+            if re.match(r"^ExitQtyPct\s*:\s*\d+", line, re.IGNORECASE):
+                exit_qty_pct_line = f"\n{line}"
+                break
         return (
             f"{strategy} EXIT\nSymbol: {symbol}\n"
-            f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: {tp_level}"
+            f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: {tp_level}{exit_qty_pct_line}"
         )
 
     # Handle pipe-delimited first line: "ORB LONG | NATIONALUM"

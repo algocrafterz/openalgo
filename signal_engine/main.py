@@ -13,7 +13,7 @@ from signal_engine.db import save
 from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
-from signal_engine.models import Direction, OrderStatus, ValidationStatus
+from signal_engine.models import Direction, OrderStatus, TradeResult, ValidationStatus
 from signal_engine import notifier
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
@@ -88,18 +88,28 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
 def _resolve_exit_qty(signal, pos: TrackedPosition) -> tuple[int, bool]:
     """Determine exit quantity and whether this is a full exit.
 
-    Uses strategy_profiles tp_levels config for partial exits.
+    Priority order for exit fraction:
+    1. signal.exit_qty_pct — from PineScript ExitQtyPct field in alert (source of truth)
+    2. strategy_profiles tp_levels config — fallback for strategies without ExitQtyPct
+    3. 1.0 (full exit) — default
+
     Returns (exit_qty, is_full_exit).
     """
-    tp_level = getattr(signal, "tp_level", None)
-    profile = settings.strategy_profiles.get(signal.strategy.upper(), {})
-    tp_levels = profile.get("tp_levels", {})
+    # 1. PineScript-provided ExitQtyPct takes priority
+    _raw = getattr(signal, "exit_qty_pct", None)
+    exit_pct = _raw if isinstance(_raw, (int, float)) else None
 
-    # No tp_level (safety EXIT) or no profile -> full exit
-    if not tp_level or not tp_levels:
-        return pos.quantity, True
+    # 2. Fall back to tp_levels config if PineScript didn't provide ExitQtyPct
+    if exit_pct is None:
+        tp_level = getattr(signal, "tp_level", None)
+        profile = settings.strategy_profiles.get(signal.strategy.upper(), {})
+        tp_levels = profile.get("tp_levels", {})
+        if tp_level and tp_levels:
+            exit_pct = tp_levels.get(tp_level.upper(), 1.0)
 
-    exit_pct = tp_levels.get(tp_level.upper(), 1.0)
+    # 3. Default: full exit
+    if exit_pct is None:
+        exit_pct = 1.0
 
     if exit_pct >= 1.0:
         return pos.quantity, True
@@ -173,7 +183,9 @@ async def _handle_exit(signal) -> None:
         else:
             logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
 
-    # 5. Build and send MARKET SELL exit order
+    # 5. Build and send MARKET SELL exit order — retry up to tp_exit_retries on failure.
+    # MARKET orders rarely reject but network timeouts are possible. We retry on any
+    # non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
     exit_order = build_exit_order(
         symbol=pos.symbol,
         exchange=pos.exchange,
@@ -181,7 +193,17 @@ async def _handle_exit(signal) -> None:
         product=pos.product,
         strategy_tag=pos.strategy,
     )
-    trade_result = await send_order(exit_order)
+    trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
+    for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
+        trade_result = await send_order(exit_order)
+        if trade_result.status == OrderStatus.SUCCESS:
+            break
+        logger.warning(
+            f"EXIT attempt {_attempt}/{settings.bracket_tp_exit_retries} failed for "
+            f"{pos.symbol}: {trade_result.message}"
+        )
+        if _attempt < settings.bracket_tp_exit_retries:
+            await asyncio.sleep(settings.bracket_retry_delay)
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
@@ -192,8 +214,8 @@ async def _handle_exit(signal) -> None:
         logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
 
         if is_full_exit:
-            # Full exit: unregister position, free risk slot
-            await notifier.notify_exit_placed(pos.symbol, trade_result.order_id, strategy=pos.strategy)
+            # Full exit: unregister position, free risk slot, notify with PnL
+            await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
             tracker.unregister(signal.symbol, signal.strategy)
             risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
         else:
@@ -203,22 +225,29 @@ async def _handle_exit(signal) -> None:
             pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
-            # Re-place SL for remaining qty (original SL price — no trailing).
-            # Critical: SL was already cancelled before the exit order. Re-place now so the
-            # remaining position is protected. Any partial exit -> new SL for remaining qty.
-            if settings.bracket_enabled and pos.sl > 0:
+            # Re-place SL at breakeven (entry price) after partial TP exit.
+            # Rationale: TP1 profit is already banked. Moving SL to entry locks that profit —
+            # worst case on remaining shares is flat (not a loss). Original SL is no longer
+            # appropriate because it would wipe out the banked TP1 gain on a reversal.
+            # Critical: SL was already cancelled before the exit order. Re-place now.
+            breakeven_sl = pos.entry_price  # round_to_tick applied inside place_sl_order
+            if settings.bracket_enabled and breakeven_sl > 0:
                 sl_result = await place_sl_order(
                     symbol=pos.symbol,
                     exchange=pos.exchange,
                     direction=pos.direction,
                     quantity=remaining,
-                    sl_price=pos.sl,
+                    sl_price=breakeven_sl,
                     product=pos.product,
                     strategy_tag=pos.strategy,
                 )
                 if sl_result.status == OrderStatus.SUCCESS:
+                    pos.sl = breakeven_sl  # update tracked SL so time_exit and check_positions stay consistent
                     pos.sl_order_id = sl_result.order_id
-                    logger.info(f"SL re-placed for {pos.symbol} remaining {remaining} qty: id={sl_result.order_id}")
+                    logger.info(
+                        f"SL moved to breakeven {breakeven_sl} for {pos.symbol} "
+                        f"remaining {remaining} qty: id={sl_result.order_id}"
+                    )
                 else:
                     logger.error(
                         f"SL re-placement failed for {pos.symbol} remaining {remaining} qty — "
@@ -236,9 +265,28 @@ async def _handle_exit(signal) -> None:
 
         # 7. Update day summary counters + realised PnL snapshot
         tracker.record_exit(pnl=pnl_delta, new_realised_pnl=current_realised)
+
+        # 8. Send day summary if this was the last open position
+        if is_full_exit and not tracker._positions:
+            await tracker.send_day_summary()
     else:
         logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
-        await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
+        # Check if broker position is already 0 — SL may have fired in the window between
+        # our SL cancel attempt and this exit order (race condition on fast reversals).
+        # If already flat, clean up tracker silently instead of alarming the user.
+        broker_qty = await fetch_open_position(
+            pos.symbol, pos.strategy,
+            pos.exchange, pos.product,
+        )
+        if broker_qty <= 0:
+            logger.info(
+                f"EXIT failed but broker position is already 0 for {pos.symbol} "
+                "— SL likely fired. Cleaning up tracker."
+            )
+            tracker.unregister(pos.symbol, pos.strategy)
+            risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+        else:
+            await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
 
     # 8. Persist to DB audit trail
     save(signal, exit_order, trade_result)
@@ -280,7 +328,9 @@ async def _handle_entry(signal) -> None:
     # 5. Calculate position size with sizing capital (day-start if enabled)
     quantity = risk_engine.calculate_quantity(signal, capital=sizing_capital)
     if quantity <= 0:
-        logger.info(f"Skipping {signal.symbol}: position sizing returned 0")
+        msg = f"Sizing returned 0 for {signal.symbol} — entry price too high for risk budget ({signal.entry:.2f} vs capital={sizing_capital:,.0f})"
+        logger.info(msg)
+        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
         return
 
     # Adjust qty to fit actual broker margin (uses live capital, not day-start)
@@ -292,10 +342,14 @@ async def _handle_entry(signal) -> None:
         try:
             quantity = await adjust_qty_for_margin(signal, quantity, capital)
         except MarginAPIError as e:
-            logger.error(f"Margin API failed for {signal.symbol}, skipping trade: {e}")
+            msg = f"Margin API failed: {e}"
+            logger.error(f"{signal.symbol}: {msg}, skipping trade")
+            await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
             return
         if quantity <= 0:
-            logger.warning(f"Skipping {signal.symbol}: insufficient capital for minimum position after margin check")
+            msg = f"Insufficient capital after margin check — {signal.symbol} requires more margin than available (capital={capital:,.0f})"
+            logger.warning(msg)
+            await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
             return
 
     risk_per_share = abs(signal.entry - signal.sl)

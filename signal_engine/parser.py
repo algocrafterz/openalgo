@@ -72,10 +72,21 @@ def parse(text: str) -> Optional[Signal]:
     if product:
         product = product.upper()
 
-    # TP level from TP HIT normalizer (e.g. "TP1", "TP2")
+    # TP level from TP HIT normalizer (e.g. "TP1", "TP1.5")
     tp_level = fields.get("tplevel")
     if tp_level:
         tp_level = tp_level.upper()
+
+    # ExitQtyPct: percentage of position to exit (0-100) set by PineScript.
+    # Convert to 0.0-1.0 fraction. None means full exit (backward compatible).
+    exit_qty_pct: Optional[float] = None
+    raw_pct = fields.get("exitqtypct")
+    if raw_pct is not None:
+        try:
+            pct_val = float(raw_pct)
+            exit_qty_pct = max(0.0, min(1.0, pct_val / 100.0))
+        except (ValueError, TypeError):
+            pass
 
     try:
         return Signal(
@@ -89,6 +100,7 @@ def parse(text: str) -> Optional[Signal]:
             product=product,
             time=fields.get("time"),
             tp_level=tp_level,
+            exit_qty_pct=exit_qty_pct,
             raw_message=text,
         )
     except Exception as e:

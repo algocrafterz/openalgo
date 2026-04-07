@@ -41,7 +41,8 @@ class Signal(BaseModel):
     exchange: Optional[str] = None
     product: Optional[str] = None
     time: Optional[str] = None
-    tp_level: Optional[str] = None  # e.g. "TP1", "TP2" — set by TP HIT normalizer
+    tp_level: Optional[str] = None          # e.g. "TP1", "TP1.5" — set by TP HIT normalizer
+    exit_qty_pct: Optional[float] = None    # 0.0-1.0 fraction of position to exit; from PineScript ExitQtyPct field
     raw_message: str = ""
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

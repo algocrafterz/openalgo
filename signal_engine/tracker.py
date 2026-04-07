@@ -56,6 +56,7 @@ class PositionTracker:
         self._day_wins: int = 0
         self._day_losses: int = 0
         self._day_pnl: float = 0.0
+        self._day_summary_sent: bool = False  # prevent duplicate summaries
 
     @property
     def tracked_count(self) -> int:
@@ -105,6 +106,24 @@ class PositionTracker:
             f"day_pnl={self._day_pnl:,.2f}"
         )
 
+    async def send_day_summary(self) -> None:
+        """Send day summary to notify channel. No-op if already sent today or no trades.
+
+        Called when the last open position closes (SL hit or TP exit), and again at
+        time_exit if any positions remain. Deduped via _day_summary_sent flag.
+        """
+        if self._day_summary_sent:
+            return
+        capital = self._risk_engine._last_known_capital or 0.0
+        await notifier.notify_day_summary(
+            trades=self._day_trades,
+            wins=self._day_wins,
+            losses=self._day_losses,
+            net_pnl=self._day_pnl,
+            capital=capital,
+        )
+        self._day_summary_sent = True
+
     async def check_positions(self) -> None:
         """Poll all tracked positions with a single positionbook call.
 
@@ -153,6 +172,10 @@ class PositionTracker:
         for key in closed_keys:
             del self._positions[key]
 
+        # Send day summary if all positions are now closed
+        if closed_keys and not self._positions:
+            await self.send_day_summary()
+
     async def time_exit_all(self) -> None:
         """Force-close MIS positions and cancel their pending bracket orders.
 
@@ -172,18 +195,12 @@ class PositionTracker:
 
         if not mis_positions:
             logger.info("Time exit: no MIS positions to close")
-            capital = self._risk_engine._last_known_capital or 0.0
-            await notifier.notify_day_summary(
-                trades=self._day_trades,
-                wins=self._day_wins,
-                losses=self._day_losses,
-                net_pnl=self._day_pnl,
-                capital=capital,
-            )
+            await self.send_day_summary()
             self._day_trades = 0
             self._day_wins = 0
             self._day_losses = 0
             self._day_pnl = 0.0
+            self._day_summary_sent = False
             return
 
         # Collect unique strategies from MIS positions only
@@ -198,6 +215,16 @@ class PositionTracker:
             logger.info(f"Time exit: closing all positions for strategy={strategy}")
             await close_all_positions(strategy)
 
+        # Capture actual PnL of time-exited positions from broker realised PnL delta.
+        # close_all_positions is fire-and-forget so we wait briefly for fills.
+        await asyncio.sleep(2)
+        current_realised = await fetch_realised_pnl()
+        time_exit_pnl = current_realised - self._last_realised_pnl
+        self._last_realised_pnl = current_realised
+        if time_exit_pnl != 0:
+            self._day_pnl += time_exit_pnl
+            logger.info(f"Time exit PnL captured: {time_exit_pnl:,.2f}")
+
         # Clear only MIS positions and update risk engine
         for key, pos in mis_positions.items():
             self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
@@ -205,20 +232,14 @@ class PositionTracker:
             logger.info(f"Time exit: cleared tracker entry {key}")
             del self._positions[key]
 
-        # Send day summary after MIS positions are closed
-        capital = self._risk_engine._last_known_capital or 0.0
-        await notifier.notify_day_summary(
-            trades=self._day_trades,
-            wins=self._day_wins,
-            losses=self._day_losses,
-            net_pnl=self._day_pnl,
-            capital=capital,
-        )
+        # Send day summary after MIS positions are closed (deduped — may have already fired)
+        await self.send_day_summary()
         # Reset day counters for next session
         self._day_trades = 0
         self._day_wins = 0
         self._day_losses = 0
         self._day_pnl = 0.0
+        self._day_summary_sent = False
 
     async def start(self) -> None:
         """Start the polling loop. Runs until stop() is called."""

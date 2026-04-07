@@ -66,6 +66,10 @@ blacklist:
     - USHAMART           # 28.6% WR, -0.7% PnL — thin liquidity, wide spreads
     - HINDPETRO          # 33.3% WR, -0.6% PnL — OMC, policy-sensitive
     - SYNGENE            # 0% WR, -0.4% PnL — pharma, unpredictable gaps
+    - CANBK              # A->D in Q2: +3.30% Q1 -> -0.70% Q2 — sharp reversal
+    - FEDERALBNK         # A->D in Q2: +2.41% Q1 -> -0.70% Q2 — sharp reversal
+    - WIPRO              # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — consistent deterioration
+    - BANKBARODA         # B->D: +0.60% Q1 -> -0.70% Q2 — crossed into negative
 
 # ── Time Exit ────────────────────────────────────────────
 # Close all open positions before broker auto square-off to avoid penalty charges.
@@ -116,11 +120,9 @@ bracket:
 strategy_profiles:
   ORB:
     product: MIS
-    tp_levels:
-      TP1: 0.5                  # Exit 50% at TP1 HIT — bank half, run remainder for TP1.5
-      TP1.5: 1.0                # Exit remaining 100% at TP1.5 HIT
-      # TP2 and TP3 are rare (8.2% and 2.2% of trades). TP1.5 exits 100% of remaining,
-      # so later TP signals are safely ignored (no open position to exit).
+    # tp_levels intentionally absent — ORB PineScript includes ExitQtyPct in each TP HIT alert.
+    # Signal engine reads ExitQtyPct directly; strategy owns the exit logic, not this config.
+    # PineScript inputs: tp1ExitQtyPct=50 (partial), tp1_5ExitQtyPct=100 (close remaining).
   RSI-TP-MR:
     product: MIS
     tp_levels:
