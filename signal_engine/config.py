@@ -138,6 +138,7 @@ class Settings:
     exchange: str
     product: str
     order_type: str
+    allow_off_hours_testing: bool
 
     # Listener (from yaml)
     listener_max_retries: int
@@ -295,6 +296,7 @@ def _build_settings() -> Settings:
         exchange=_require_key(broker, "broker", "exchange"),
         product=_require_key(broker, "broker", "product"),
         order_type=_require_key(broker, "broker", "order_type"),
+        allow_off_hours_testing=bool(broker.get("allow_off_hours_testing", False)),
 
         # Listener from yaml
         listener_max_retries=int(_require_key(listener, "listener", "max_retries")),

@@ -42,9 +42,9 @@ def broker_callback(broker, para=None):
     logger.info(f"Session has user key: {'user' in session}")
 
     # Special handling for OAuth brokers that come from external OAuth and might lose session
-    if broker in ("compositedge", "rmoney") and "user" not in session:
-        # For Compositedge OAuth callback, we'll handle authentication differently
-        # The session will be established after successful auth token validation
+    if broker in ("compositedge", "rmoney", "flattrade") and "user" not in session:
+        # For OAuth brokers, the external redirect can lose the session cookie.
+        # Establish the session from the admin user after successful token exchange.
         logger.info(f"{broker} callback without session - will establish session after auth")
     # Special handling for mstock POST - check session but provide better error instead of redirect
     elif broker == "mstock" and request.method == "POST" and "user" not in session:
@@ -795,6 +795,18 @@ def broker_callback(broker, para=None):
             # Paytm has feed_token (public_access_token) but no user_id
             return handle_auth_success(auth_token, session["user"], broker, feed_token=feed_token)
         else:
+            # For OAuth brokers that may lose session during external redirect, recover from DB
+            if "user" not in session:
+                from database.user_db import find_user_by_username
+                admin_user = find_user_by_username()
+                if admin_user:
+                    session["user"] = admin_user.username
+                    logger.info(f"{broker} callback: Set session user to {admin_user.username}")
+                else:
+                    logger.error(f"No admin user found in database for {broker} callback")
+                    return handle_auth_failure(
+                        "No user account found. Please login first.", forward_url="broker.html"
+                    )
             # Pass just the feed token to handle_auth_success (other brokers don't have feed_token or user_id)
             return handle_auth_success(auth_token, session["user"], broker, feed_token=feed_token)
     else:

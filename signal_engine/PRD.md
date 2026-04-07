@@ -166,10 +166,12 @@ TELEGRAM_PHONE=
 OPENALGO_BASE_URL=http://127.0.0.1:5000
 OPENALGO_API_KEY=
 
-# Auto-login (openalgoscheduler.py)
-BROKER_NAME=mstock          # broker to auto-login (default: mstock)
-BROKER_PASSWORD=            # broker login password
-BROKER_TOTP_SECRET=         # base32 TOTP seed from authenticator setup
+# Broker detection — set REDIRECT_URL (already required for OAuth callback).
+# Broker name is auto-detected from the URL path (e.g. /flattrade/callback → flattrade).
+# Optional: BROKER_NAME=flattrade overrides auto-detection.
+REDIRECT_URL=http://127.0.0.1:5000/flattrade/callback
+BROKER_PASSWORD=            # broker login password (required for TOTP brokers)
+BROKER_TOTP_SECRET=         # base32 TOTP seed from authenticator app (required for TOTP brokers)
 ```
 
 ### 5.3 `config.yaml` Schema
@@ -767,7 +769,8 @@ PYTHONPATH=. uv run pytest signal_engine/tests/ -v -m "not integration"
 ### Phase 5: Automated Startup & Auth Verification (2026-03-15)
 
 - [x] **Scripts moved to `signal_engine/scripts/`**: All startup automation self-contained, no changes to core OpenAlgo
-- [x] **Configurable broker name**: `BROKER_NAME` env var (default: `mstock`), strips/lowercases
+- [x] **Broker auto-detection**: broker name read from `REDIRECT_URL` path (e.g. `/flattrade/callback` → `flattrade`); `BROKER_NAME` overrides if set; fails fast if neither is configured
+- [x] **Flattrade headless TOTP login**: `authenticate_with_totp` uses ftauth headless OAuth flow (session → ftauth → token exchange) — no PiConnect vendor registration required; works with standard developer API credentials
 - [x] **Auth token verification**: After auto-login, calls broker funds API to confirm token is live before starting signal engine
 - [x] **Startup summary**: Logs detailed system state (available cash, utilized margin, realized/unrealized P&L, collateral, trading config, risk params, channels)
 - [x] **Telegram startup notification**: Sends startup summary to `notify_channel` (or all signal channels if not configured)

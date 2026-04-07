@@ -192,6 +192,58 @@ def build_tp_order(signal: Signal, quantity: int) -> Order:
     )
 
 
+async def place_sl_order(
+    symbol: str,
+    exchange: str,
+    direction: "Direction",
+    quantity: int,
+    sl_price: float,
+    product: str,
+    strategy_tag: str,
+) -> TradeResult:
+    """Place a SL-M order with retries. Reusable for initial bracket and re-placement after partial exit.
+
+    For LONG positions: SELL SL-M with trigger at sl_price (rounded down).
+    For SHORT positions: BUY SL-M with trigger at sl_price (rounded up).
+
+    Returns TradeResult — caller must check .status == OrderStatus.SUCCESS.
+    """
+    from signal_engine.models import Direction as _Direction
+
+    action = Action.SELL if direction == _Direction.LONG else Action.BUY
+    sl_direction = "down" if direction == _Direction.LONG else "up"
+    trigger_price = round_to_tick(sl_price, sl_direction)
+
+    sl_order = Order(
+        symbol=symbol,
+        exchange=exchange,
+        action=action,
+        quantity=quantity,
+        price=0.0,
+        order_type=settings.bracket_sl_order_type,
+        product=product,
+        strategy_tag=strategy_tag,
+        trigger_price=trigger_price,
+    )
+
+    result: TradeResult = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
+    for attempt in range(1, settings.bracket_max_sl_retries + 1):
+        result = await send_order(sl_order)
+        if result.status == OrderStatus.SUCCESS:
+            logger.info(f"SL placed for {symbol}: id={result.order_id} trigger={trigger_price} (attempt {attempt})")
+            break
+        logger.warning(
+            f"SL attempt {attempt}/{settings.bracket_max_sl_retries} failed for {symbol}: {result.message}"
+        )
+        if attempt < settings.bracket_max_sl_retries:
+            await asyncio.sleep(settings.bracket_retry_delay)
+
+    if result.status != OrderStatus.SUCCESS:
+        logger.error(f"SL failed after {settings.bracket_max_sl_retries} attempts for {symbol} — no SL protection")
+
+    return result
+
+
 async def send_bracket_legs(
     signal: Signal,
     quantity: int,
@@ -209,28 +261,14 @@ async def send_bracket_legs(
 
     Returns (sl_result, None) always — tp_result slot reserved for future use.
     """
-    sl_order = build_sl_order(signal, quantity)
-    sl_result: TradeResult = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
-
-    for attempt in range(1, settings.bracket_max_sl_retries + 1):
-        sl_result = await send_order(sl_order)
-        if sl_result.status == OrderStatus.SUCCESS:
-            logger.info(
-                f"SL leg placed for {signal.symbol}: id={sl_result.order_id} (attempt {attempt})"
-            )
-            break
-        logger.warning(
-            f"SL leg attempt {attempt}/{settings.bracket_max_sl_retries} failed for "
-            f"{signal.symbol}: {sl_result.message}"
-        )
-        if attempt < settings.bracket_max_sl_retries:
-            await asyncio.sleep(settings.bracket_retry_delay)
-
-    if sl_result.status != OrderStatus.SUCCESS:
-        logger.error(
-            f"SL leg failed after {settings.bracket_max_sl_retries} attempts for "
-            f"{signal.symbol} - position has no SL protection"
-        )
-
+    sl_result = await place_sl_order(
+        symbol=signal.symbol,
+        exchange=signal.exchange or settings.exchange,
+        direction=signal.direction,
+        quantity=quantity,
+        sl_price=signal.sl,
+        product=signal.product or settings.product,
+        strategy_tag=signal.strategy,
+    )
     # TP exit via TradingView TP HIT signal -> _handle_exit (not a broker order)
     return sl_result, None

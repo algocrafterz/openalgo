@@ -10,7 +10,7 @@ from loguru import logger
 from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
 from signal_engine.db import save
-from signal_engine.executor import build_exit_order, build_order, send_bracket_legs, send_order
+from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import Direction, OrderStatus, ValidationStatus
@@ -200,8 +200,36 @@ async def _handle_exit(signal) -> None:
             # Partial exit: reduce tracked qty, keep position registered
             remaining = pos.quantity - exit_qty
             pos.quantity = remaining
-            pos.sl_order_id = ""  # SL was cancelled; no re-placement (simple mode)
+            pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
+
+            # Re-place SL for remaining qty (original SL price — no trailing).
+            # Critical: SL was already cancelled before the exit order. Re-place now so the
+            # remaining position is protected. Any partial exit -> new SL for remaining qty.
+            if settings.bracket_enabled and pos.sl > 0:
+                sl_result = await place_sl_order(
+                    symbol=pos.symbol,
+                    exchange=pos.exchange,
+                    direction=pos.direction,
+                    quantity=remaining,
+                    sl_price=pos.sl,
+                    product=pos.product,
+                    strategy_tag=pos.strategy,
+                )
+                if sl_result.status == OrderStatus.SUCCESS:
+                    pos.sl_order_id = sl_result.order_id
+                    logger.info(f"SL re-placed for {pos.symbol} remaining {remaining} qty: id={sl_result.order_id}")
+                else:
+                    logger.error(
+                        f"SL re-placement failed for {pos.symbol} remaining {remaining} qty — "
+                        "position unprotected until TP1.5/time-exit"
+                    )
+                    await notifier.notify_sl_failed(
+                        pos.symbol,
+                        f"SL re-placement failed after partial exit: {sl_result.message}",
+                        strategy=pos.strategy,
+                    )
+
             await notifier.notify_partial_exit(
                 pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta, strategy=pos.strategy,
             )
@@ -256,14 +284,19 @@ async def _handle_entry(signal) -> None:
         return
 
     # Adjust qty to fit actual broker margin (uses live capital, not day-start)
-    try:
-        quantity = await adjust_qty_for_margin(signal, quantity, capital)
-    except MarginAPIError as e:
-        logger.error(f"Margin API failed for {signal.symbol}, skipping trade: {e}")
-        return
-    if quantity <= 0:
-        logger.warning(f"Skipping {signal.symbol}: insufficient capital for minimum position after margin check")
-        return
+    # Skip in analyze mode: sandbox has fixed virtual capital, broker margin API is not available
+    _, is_analyze = await fetch_trading_mode()
+    if is_analyze:
+        logger.info(f"Analyze mode: skipping margin check for {signal.symbol}, using risk-based qty={quantity}")
+    else:
+        try:
+            quantity = await adjust_qty_for_margin(signal, quantity, capital)
+        except MarginAPIError as e:
+            logger.error(f"Margin API failed for {signal.symbol}, skipping trade: {e}")
+            return
+        if quantity <= 0:
+            logger.warning(f"Skipping {signal.symbol}: insufficient capital for minimum position after margin check")
+            return
 
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
@@ -280,7 +313,16 @@ async def _handle_entry(signal) -> None:
     )
 
     # 6. Build order
-    order = build_order(signal, quantity)
+    # In analyze mode with off-hours testing enabled, override MIS→CNC to bypass sandbox
+    # after-hours restriction (sandbox blocks new MIS orders outside 09:00–squareoff window)
+    off_hours_product_override = (
+        is_analyze
+        and settings.allow_off_hours_testing
+        and (signal.product or settings.product) == "MIS"
+    )
+    if off_hours_product_override:
+        logger.info(f"Off-hours testing: overriding product MIS→CNC for {signal.symbol}")
+    order = build_order(signal, quantity, product="CNC" if off_hours_product_override else "")
 
     # 7. Send to OpenAlgo (routes to live broker or sandbox automatically)
     trade_result = await send_order(order)

@@ -17,12 +17,30 @@ import pyotp
 
 
 def get_broker_name() -> str:
-    """Read broker name from BROKER_NAME env var, default to mstock.
+    """Resolve the active broker name.
 
-    Returns:
-        Lowercase, stripped broker name string.
+    Resolution order:
+    1. BROKER_NAME env var (explicit override)
+    2. REDIRECT_URL env var — parses broker from path: http://host/BROKER/callback
+
+    Raises:
+        EnvironmentError: if neither source yields a non-empty broker name.
     """
-    return os.environ.get("BROKER_NAME", "mstock").strip().lower()
+    name = os.environ.get("BROKER_NAME", "").strip().lower()
+    if name:
+        return name
+
+    redirect_url = os.environ.get("REDIRECT_URL", "").strip()
+    if redirect_url:
+        from urllib.parse import urlparse
+        path_parts = [p for p in urlparse(redirect_url).path.split("/") if p]
+        if path_parts:
+            return path_parts[0].lower()
+
+    raise EnvironmentError(
+        "Cannot determine broker name. Set BROKER_NAME in .env, "
+        "or ensure REDIRECT_URL follows the pattern http://host/BROKER/callback"
+    )
 
 
 def generate_totp(secret: str) -> str:
@@ -79,34 +97,76 @@ def auto_login(
     _should_download_master_contract=None,
     _async_master_contract_download=None,
     _load_existing_master_contract=None,
+    _get_existing_auth=None,
 ) -> tuple:
     """Perform automated broker login.
 
-    Replicates the full handle_auth_success flow without Flask session:
-    1. Validate env vars
-    2. Find admin user
-    3. Generate TOTP and authenticate with broker
-    4. Store auth token in DB
-    5. Init broker status and trigger master contract download
+    Supports two auth modes:
+    - Programmatic (TOTP): broker has authenticate_with_totp → generates TOTP, logs in, stores token
+    - OAuth-only: broker uses browser redirect (e.g. flattrade) → retrieves existing DB token set
+      via browser OAuth; fails clearly if no token or if broker has changed
 
     Dependency injection parameters (for testing only):
-        _authenticate_with_totp: Override broker auth function.
+        _authenticate_with_totp: Override broker auth function (implies programmatic mode).
         _upsert_auth: Override DB upsert function.
         _find_user_by_username: Override user lookup function.
         _init_broker_status: Override broker status init.
         _should_download_master_contract: Override download check.
         _async_master_contract_download: Override master contract download.
         _load_existing_master_contract: Override cached contract loader.
+        _get_existing_auth: Override existing token lookup (OAuth brokers).
 
     Returns:
-        Tuple of (success: bool, message: str).
+        Tuple of (success: bool, message: str, auth_token: str | None).
     """
     broker_name = get_broker_name()
 
-    # Lazy imports — only loaded when actually running (not at import time)
+    # Detect auth mode: programmatic (TOTP) vs OAuth-only.
+    # When _authenticate_with_totp is injected (tests), always use programmatic path.
+    # In production, check if the broker module exposes authenticate_with_totp.
+    is_oauth_only = False
     if _authenticate_with_totp is None:
-        from broker.mstock.api.auth_api import authenticate_with_totp
-        _authenticate_with_totp = authenticate_with_totp
+        import importlib
+
+        auth_module = None
+        try:
+            auth_module = importlib.import_module(f"broker.{broker_name}.api.auth_api")
+        except Exception as e:
+            logger.error("Failed to import auth module for broker '%s': %s", broker_name, e)
+
+        if auth_module is not None and hasattr(auth_module, "authenticate_with_totp"):
+            # Broker supports direct TOTP login
+            base_fn = auth_module.authenticate_with_totp
+
+            def _normalize_and_call(password, totp_code):
+                """Call base_fn and normalize return to (token, feed, err)."""
+                try:
+                    result = base_fn(password, totp_code)
+                except TypeError:
+                    try:
+                        result = base_fn(password)
+                    except Exception as e:
+                        return None, None, str(e)
+                except Exception as e:
+                    return None, None, str(e)
+
+                if result is None:
+                    return None, None, "Authentication returned no result"
+                if isinstance(result, tuple):
+                    if len(result) == 3:
+                        return result
+                    if len(result) == 2:
+                        token, err = result
+                        return token, None, err
+                    if len(result) == 1:
+                        return result[0], None, None
+                return result, None, None
+
+            _authenticate_with_totp = _normalize_and_call
+        else:
+            # OAuth-only broker (e.g. flattrade, zerodha) — no programmatic login
+            is_oauth_only = True
+
     if _upsert_auth is None:
         from database.auth_db import upsert_auth
         _upsert_auth = upsert_auth
@@ -131,40 +191,77 @@ def auto_login(
     from utils.logging import get_logger
     logger = get_logger(__name__)
 
-    # 1. Validate env
-    try:
-        env = validate_auto_login_env()
-    except EnvironmentError as e:
-        return False, str(e)
-
-    # 2. Find admin user
+    # 1. Find admin user (env vars only needed for programmatic login)
     admin_user = _find_user_by_username()
     if not admin_user:
-        return False, "No admin user found in database. Run setup first."
+        return False, "No admin user found in database. Run setup first.", None
 
     username = admin_user.username
     logger.info("Auto-login starting for user: %s (broker: %s)", username, broker_name)
 
-    # 3. Generate TOTP
-    totp_code = generate_totp(env["totp_secret"])
-    logger.info("TOTP code generated")
+    if is_oauth_only:
+        # OAuth broker: use the token already stored in DB via browser login
+        logger.info("Broker '%s' uses OAuth — retrieving existing session token", broker_name)
 
-    # 4. Authenticate with broker
-    auth_token, feed_token, error = _authenticate_with_totp(
-        env["broker_password"], totp_code
-    )
-    if error:
-        logger.error("Broker authentication failed: %s", error)
-        return False, error
+        if _get_existing_auth is None:
+            from database.auth_db import get_auth_token as _dba_get
+            from database.auth_db import get_auth_token_dbquery as _dba_query
+            def _get_existing_auth(uname):
+                return _dba_get(uname), _dba_query(uname)
 
-    # 5. Store token in DB
-    inserted_id = _upsert_auth(
-        username, auth_token, broker_name, feed_token=feed_token
-    )
-    if not inserted_id:
-        return False, "Failed to store auth token in database"
+        auth_token, auth_obj = _get_existing_auth(username)
 
-    logger.info("Auth token stored for user: %s", username)
+        if not auth_token:
+            msg = (
+                f"Broker '{broker_name}' requires OAuth login. "
+                "Please authenticate via the OpenAlgo web interface first, "
+                "then restart the signal engine."
+            )
+            logger.error(msg)
+            return False, msg, None
+
+        # Detect broker mismatch: stored token is for a different broker
+        if auth_obj is not None and auth_obj.broker != broker_name:
+            msg = (
+                f"Broker changed from '{auth_obj.broker}' to '{broker_name}'. "
+                "Please log in via the OpenAlgo web interface to authenticate "
+                "with the new broker, then restart the signal engine."
+            )
+            logger.error(msg)
+            return False, msg, None
+
+        feed_token = None  # Feed token not needed by scheduler; already in DB
+    else:
+        # 2. Validate env (password + TOTP secret only required for programmatic login)
+        try:
+            env = validate_auto_login_env()
+        except EnvironmentError as e:
+            return False, str(e), None
+
+        # 3. Generate TOTP
+        totp_code = generate_totp(env["totp_secret"])
+        logger.info("TOTP code generated")
+
+        # 4. Authenticate with broker
+        auth_token, feed_token, error = _authenticate_with_totp(
+            env["broker_password"], totp_code
+        )
+        if error:
+            logger.error("Broker authentication failed: %s", error)
+            return False, error, None
+
+        if not auth_token:
+            logger.error("Broker authentication returned empty token for user: %s", username)
+            return False, "Authentication succeeded but returned empty/null token", None
+
+        # 5. Store token in DB
+        inserted_id = _upsert_auth(
+            username, auth_token, broker_name, feed_token=feed_token
+        )
+        if not inserted_id:
+            return False, "Failed to store auth token in database", None
+
+        logger.info("Auth token stored for user: %s", username)
 
     # 6. Init broker status and trigger master contract download
     _init_broker_status(broker_name)
@@ -188,7 +285,7 @@ def auto_login(
         thread.start()
         logger.info("Loading cached master contract: %s", reason)
 
-    return True, f"Auto-login successful for {username}"
+    return True, f"Auto-login successful for {username}", auth_token
 
 
 def verify_broker_auth(auth_token, _get_margin_data=None) -> dict | None:
@@ -213,8 +310,16 @@ def verify_broker_auth(auth_token, _get_margin_data=None) -> dict | None:
 
     try:
         if _get_margin_data is None:
-            from broker.mstock.api.funds import get_margin_data
-            _get_margin_data = get_margin_data
+            import importlib
+            broker_name = get_broker_name()
+            try:
+                broker_funds = importlib.import_module(f"broker.{broker_name}.api.funds")
+                _get_margin_data = broker_funds.get_margin_data
+            except Exception as import_err:
+                logger.error(
+                    f"Failed to import funds module for broker '{broker_name}': {import_err}"
+                )
+                return None
 
         margin_data = _get_margin_data(auth_token)
 
@@ -387,20 +492,24 @@ def _run_startup():
     logger = get_logger(__name__)
 
     # 1. Auto-login
-    success, message = auto_login()
-    if not success:
-        logger.error("Auto-login failed: %s", message)
+    try:
+        login_result = auto_login()
+    except EnvironmentError as e:
+        logger.error("Configuration error: %s", e)
         sys.exit(1)
 
+    if not login_result[0]:
+        logger.error("Auto-login failed: %s", login_result[1])
+        sys.exit(1)
+
+    # Unpack: (success, message, auth_token)
+    _, message, auth_token = login_result
     logger.info(message)
 
     # 2. Verify token works by calling broker API
-    from database.auth_db import get_auth_token
-    from database.user_db import find_user_by_username
-    admin_user = find_user_by_username()
-    username = admin_user.username if admin_user else "admin"
-    token = get_auth_token(username)
-    fund_data = verify_broker_auth(token)
+    # Use the token returned directly from auto_login — avoids DB round-trip
+    # which can fail if find_user_by_username() returns None in subprocess context.
+    fund_data = verify_broker_auth(auth_token)
     if not fund_data:
         logger.error("Broker auth token verification FAILED")
         sys.exit(1)
