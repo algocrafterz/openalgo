@@ -1,0 +1,5 @@
+ORB LONG | WIPRO
+Symbol: WIPRO
+Entry: 250.00
+SL: 247.50
+TP: 255.00

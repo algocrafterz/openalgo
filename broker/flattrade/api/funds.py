@@ -55,8 +55,14 @@ def get_margin_data(auth_token):
 
     # Check if the request was successful
     if margin_data.get("stat") != "Ok":
-        # Log the error or return an empty dictionary to indicate failure
-        logger.info(f"Error fetching margin data: {margin_data.get('emsg')}")
+        emsg = margin_data.get("emsg", "")
+        # "Session Expired" / "Invalid Session Key" outside market hours is Flattrade's
+        # normal off-hours API response (maintenance window ~15:30–09:00 IST).
+        # Log at DEBUG to avoid misleading ERROR spam in logs; the token is still valid.
+        if "session" in emsg.lower() or "invalid session" in emsg.lower():
+            logger.debug(f"Flattrade funds API off-hours response: {emsg}")
+        else:
+            logger.info(f"Error fetching margin data: {emsg}")
         return {}
 
     # Fetch position data

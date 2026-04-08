@@ -708,7 +708,10 @@ def get_dashboard_data():
         margin_data = response.get("data", {})
 
         if not margin_data:
-            logger.error(f"Failed to get margin data for user {login_username}")
+            # Empty margin_data is normal during broker off-hours (e.g. Flattrade returns
+            # "Session Expired" outside 09:00–15:30 IST as a maintenance response).
+            # Log at WARNING (not ERROR) to avoid misleading alerts in logs.
+            logger.warning(f"Failed to get margin data for user {login_username} (broker may be in off-hours maintenance)")
             return jsonify({"status": "error", "message": "Failed to get margin data"}), 500
 
         return jsonify({"status": "success", "data": margin_data})
