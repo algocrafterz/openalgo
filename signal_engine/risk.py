@@ -2,8 +2,12 @@
 
 import math
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
+
+# Indian Standard Time — all daily counters use IST so the "day" resets at
+# midnight IST (18:30 UTC), not UTC midnight (05:30 IST next morning).
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 from loguru import logger
 
@@ -82,7 +86,7 @@ class RiskEngine:
         self.weekly_realised_loss: float = 0.0
         self.monthly_realised_loss: float = 0.0
         self._last_known_capital: float = 0.0
-        self._current_day: int = datetime.now(timezone.utc).timetuple().tm_yday
+        self._current_day: int = datetime.now(_IST).timetuple().tm_yday
 
         # Feature 1: Portfolio heat
         self.portfolio_heat: float = 0.0
@@ -103,11 +107,12 @@ class RiskEngine:
 
     def _restore(self) -> None:
         """Load today's counters from the persistent store."""
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(_IST).date()
         row = self._store.load(self._trade_mode, today)
         self.trades_today = row["trades_today"]
         self.daily_realised_loss = row["daily_loss"]
         self.open_positions = row["open_positions"]
+        self.portfolio_heat = row.get("portfolio_heat", 0.0)
 
         # Load weekly/monthly losses
         self.weekly_realised_loss = self._store.weekly_loss(self._trade_mode, today)
@@ -165,17 +170,18 @@ class RiskEngine:
         """Save current counters to the persistent store."""
         if self._store is None:
             return
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(_IST).date()
         self._store.save(
             self._trade_mode,
             today,
             trades_today=self.trades_today,
             daily_loss=self.daily_realised_loss,
             open_positions=self.open_positions,
+            portfolio_heat=self.portfolio_heat,
         )
 
     def _maybe_reset_daily(self) -> None:
-        today = datetime.now(timezone.utc).timetuple().tm_yday
+        today = datetime.now(_IST).timetuple().tm_yday
         if today != self._current_day:
             logger.info("New trading day detected, resetting daily counters")
             self._current_day = today
