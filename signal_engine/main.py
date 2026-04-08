@@ -18,12 +18,12 @@ from signal_engine import notifier
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
 from signal_engine.risk import RiskEngine
-from signal_engine.risk_store import RiskStore
+from signal_engine.risk_store import RiskStore, RISK_DB_PATH
 from signal_engine.tracker import PositionTracker, TimeExitScheduler, TrackedPosition
 from signal_engine.validator import validate
 
 # Persistent risk counter store (keyed by mode + date, survives restarts)
-_risk_store = RiskStore("db/risk.db")
+_risk_store = RiskStore(RISK_DB_PATH)
 
 # Global risk engine instance (counters restored from store on startup)
 risk_engine = RiskEngine(
@@ -55,19 +55,39 @@ tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
 async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> int:
     """Adjust risk-based qty to fit within available broker margin.
 
-    Queries the Margin API for the actual margin required for raw_qty.
-    If it exceeds live_capital, scales qty down proportionally (MIS margin is linear with qty).
-    Raises MarginAPIError on persistent API failure — trade is skipped.
+    For NSE/BSE equity: SpanCalc doesn't support equity. Estimates margin as
+    qty * entry * mis_margin_pct (20% for Flattrade). If estimated margin exceeds
+    live_capital (e.g. discretionary trade consumed funds), scales qty down proportionally.
 
-    For equity exchanges (NSE/BSE), the broker SpanCalc API only supports derivatives —
-    skip the margin check and trust risk-based sizing.
+    For derivatives (NFO etc.): queries SpanCalc API for exact margin. Scales down if
+    actual margin > live_capital. Raises MarginAPIError on persistent API failure.
+
+    Note: sizing uses day-start capital (equal risk weighting). This check uses live_capital
+    as a safety floor only — it prevents broker rejections, not sizing adjustments.
 
     Returns adjusted qty, or 0 if it cannot fit in available capital.
     """
     exchange = signal.exchange or settings.exchange
     if exchange in ("NSE", "BSE"):
-        logger.debug(f"Equity exchange {exchange}: skipping SpanCalc margin check for {signal.symbol}, using risk-based qty={raw_qty}")
-        return raw_qty
+        # SpanCalc only supports derivatives — estimate equity MIS margin instead.
+        # Safety check: if a discretionary trade has consumed live capital, scale qty
+        # down so we don't send an order the broker will reject (INSUFFICIENT FUNDS).
+        # Sizing still uses day-start capital (equal risk weighting); this is only a floor.
+        estimated_margin = raw_qty * signal.entry * settings.mis_margin_pct
+        if estimated_margin <= live_capital:
+            logger.debug(
+                f"NSE equity margin check passed for {signal.symbol}: "
+                f"est_margin={estimated_margin:,.0f} ({settings.mis_margin_pct:.0%} of {raw_qty}x{signal.entry:.2f}) "
+                f"<= live_capital={live_capital:,.0f}"
+            )
+            return raw_qty
+        adjusted_qty = math.floor(raw_qty * live_capital / estimated_margin)
+        logger.info(
+            f"NSE equity margin floor for {signal.symbol}: qty {raw_qty} -> {adjusted_qty} "
+            f"(est_margin={estimated_margin:,.0f} > live_capital={live_capital:,.0f}, "
+            f"likely discretionary trade consumed capital)"
+        )
+        return adjusted_qty
 
     actual_margin = await fetch_margin(
         symbol=signal.symbol,
@@ -360,6 +380,11 @@ async def _handle_entry(signal) -> None:
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
             return
 
+    # Apply test qty cap if configured (for minimal exposure live testing)
+    if settings.test_qty_cap > 0 and quantity > settings.test_qty_cap:
+        logger.info(f"Test qty cap: {quantity} -> {settings.test_qty_cap} for {signal.symbol}")
+        quantity = settings.test_qty_cap
+
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
     reward_per_share = abs(signal.tp - signal.entry)
@@ -472,9 +497,78 @@ async def handle_message(text: str) -> None:
         await _handle_entry(signal)
 
 
+async def _test_signal(text: str) -> None:
+    """Process a single test signal through the full pipeline, then exit.
+
+    Used with --test CLI flag for manual live market testing without Telegram.
+    """
+    setup_logger()
+    logger.info("Signal Engine TEST MODE — processing single signal")
+
+    if settings.test_qty_cap > 0:
+        logger.info(f"Test qty cap active: max {settings.test_qty_cap} shares per order")
+    else:
+        logger.warning("test_qty_cap is 0 (disabled) — full position sizing will be used")
+
+    # Detect trading mode for logging
+    mode_str, is_analyze = await fetch_trading_mode()
+    mode_label = "ANALYZE" if is_analyze else "LIVE"
+    logger.info(f"Trading mode: {mode_label}")
+
+    capital = await fetch_available_capital()
+    if capital > 0:
+        logger.info(f"Available capital: {capital:,.2f} INR")
+
+    logger.info(f"Input signal:\n{text}")
+    await handle_message(text)
+    logger.info("Test signal processing complete")
+
+
 def main() -> None:
     """Entry point — start the signal engine with position tracker."""
     setup_logger()
+
+    # --smoke-test: connectivity + pipeline health check, exit with 0/1
+    if "--smoke-test" in sys.argv or "--dry-run" in sys.argv:
+        from signal_engine.smoke_test import run_smoke_test, run_dry_run
+        is_dry = "--dry-run" in sys.argv
+
+        async def _run_checks():
+            report = await run_dry_run() if is_dry else await run_smoke_test()
+            report.print()
+            sys.exit(0 if report.all_passed else 1)
+
+        try:
+            asyncio.run(_run_checks())
+        except KeyboardInterrupt:
+            sys.exit(1)
+        return
+
+    # --test mode: read signal from stdin or file, process once, exit
+    if "--test" in sys.argv:
+        # Read signal text from: --test "signal text" OR --test-file path OR stdin
+        idx = sys.argv.index("--test")
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--"):
+            signal_text = sys.argv[idx + 1]
+        elif "--test-file" in sys.argv:
+            fidx = sys.argv.index("--test-file")
+            if fidx + 1 < len(sys.argv):
+                with open(sys.argv[fidx + 1]) as f:
+                    signal_text = f.read().strip()
+            else:
+                logger.error("--test-file requires a path argument")
+                sys.exit(1)
+        else:
+            logger.info("Reading signal from stdin (paste signal, then Ctrl+D):")
+            signal_text = sys.stdin.read().strip()
+
+        if not signal_text:
+            logger.error("No signal text provided")
+            sys.exit(1)
+
+        asyncio.run(_test_signal(signal_text))
+        sys.exit(0)
+
     logger.info("Signal Engine starting")
     logger.info(f"Sizing mode: {settings.sizing_mode}")
     if settings.use_day_start_capital:
@@ -495,12 +589,77 @@ def main() -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _signal_handler)
 
+        # ── Startup health checks ──────────────────────────────────────────────
+        # Run before accepting any signals. Critical failures abort startup and
+        # notify via Telegram. Warning failures are logged but allow startup.
+        from signal_engine.smoke_test import run_startup_checks, _CRITICAL_CHECKS, _WARNING_CHECKS
+        startup_report = await run_startup_checks()
+        startup_report.print()
+
+        failed_critical = [c for c in startup_report.checks if not c.passed and c.name in _CRITICAL_CHECKS]
+        failed_warnings = [c for c in startup_report.checks if not c.passed and c.name in _WARNING_CHECKS]
+
+        if failed_warnings:
+            warn_lines = "\n".join(f"  WARN {c.name}: {c.message}" for c in failed_warnings)
+            logger.warning(f"Startup warnings (non-fatal):\n{warn_lines}")
+
+        if failed_critical:
+            fail_lines = "\n".join(f"  FAIL {c.name}: {c.message}" for c in failed_critical)
+            logger.critical(f"Startup checks FAILED — aborting:\n{fail_lines}")
+            summary = "\n".join(f"FAIL: {c.name}\n  {c.message}" for c in failed_critical)
+            await notifier.notify_startup_result(all_passed=False, summary=summary)
+            shutdown_event.set()
+            return
+
+        # Notify startup result (pass summary with warnings if any)
+        warn_note = ""
+        if failed_warnings:
+            warn_note = "\nWarnings:\n" + "\n".join(f"  {c.name}" for c in failed_warnings)
+        await notifier.notify_startup_result(all_passed=True, summary=f"All critical checks passed.{warn_note}")
+        # ── End startup checks ─────────────────────────────────────────────────
+
         # Detect and log trading mode
         mode_str, is_analyze = await fetch_trading_mode()
         if is_analyze:
             logger.info("Trading mode: ANALYZE (sandbox capital)")
         else:
             logger.info("Trading mode: LIVE (broker capital)")
+
+        # ── Position reconciliation ────────────────────────────────────────────
+        # Reconcile stored open_positions against actual broker positions on startup.
+        # Prevents stale counter from blocking new trades if engine was stopped while
+        # positions were open (broker auto-squareoff, SL hit during downtime, etc.).
+        if risk_engine.open_positions > 0:
+            from signal_engine.api_client import fetch_positionbook
+            positions = await fetch_positionbook()
+            if positions is not None:
+                configured_product = settings.product  # MIS or CNC
+                product_map = {"MIS": "I", "CNC": "C", "NRML": "M"}
+                broker_product = product_map.get(configured_product, configured_product)
+                actual_open = sum(
+                    1 for p in positions
+                    if int(p.get("quantity", 0)) != 0
+                    and p.get("product", "").upper() in (configured_product, broker_product)
+                )
+                if actual_open != risk_engine.open_positions:
+                    logger.warning(
+                        f"Position mismatch: stored open_positions={risk_engine.open_positions}, "
+                        f"broker reports {actual_open} open — correcting and persisting"
+                    )
+                    # Correct heat proportionally if positions differ
+                    if actual_open == 0:
+                        risk_engine.portfolio_heat = 0.0
+                    elif risk_engine.open_positions > 0:
+                        risk_engine.portfolio_heat = (
+                            risk_engine.portfolio_heat * actual_open / risk_engine.open_positions
+                        )
+                    risk_engine.open_positions = actual_open
+                    risk_engine._persist()
+                else:
+                    logger.info(f"Position reconciliation: stored={risk_engine.open_positions} matches broker={actual_open}")
+            else:
+                logger.warning("Position reconciliation: could not fetch positionbook, skipping")
+        # ── End position reconciliation ────────────────────────────────────────
 
         # Log risk state summary (restored counters + config)
         startup_capital = await fetch_available_capital()
@@ -530,6 +689,12 @@ def main() -> None:
                 [listener_task, asyncio.create_task(shutdown_event.wait())],
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            # Send stopped notification while the Telethon client is still alive
+            # (listener_task not yet cancelled — must happen before task.cancel())
+            try:
+                await asyncio.wait_for(notifier.notify_engine_stopped(), timeout=5.0)
+            except Exception:
+                logger.debug("Could not send engine stopped notification")
             for task in pending:
                 task.cancel()
         finally:
@@ -538,7 +703,6 @@ def main() -> None:
             if time_exit_task is not None:
                 time_exit_scheduler.stop()
                 time_exit_task.cancel()
-            await notifier.notify_engine_stopped()
             logger.info("Signal Engine stopped")
 
     try:

@@ -131,6 +131,9 @@ class Settings:
     # Day-start capital caching (from yaml)
     use_day_start_capital: bool  # Cache capital at first signal, use for all trades
 
+    # Test mode qty cap (from yaml) — 0 = disabled
+    test_qty_cap: int
+
     # Position tracking (from yaml)
     poll_interval: int
 
@@ -139,6 +142,7 @@ class Settings:
     product: str
     order_type: str
     allow_off_hours_testing: bool
+    mis_margin_pct: float  # NSE/BSE equity MIS margin % for live capital floor check
 
     # Listener (from yaml)
     listener_max_retries: int
@@ -289,6 +293,9 @@ def _build_settings() -> Settings:
         # Day-start capital caching from yaml
         use_day_start_capital=bool(sizing.get("use_day_start_capital", False)),
 
+        # Test mode qty cap from yaml (0 = disabled)
+        test_qty_cap=int(sizing.get("test_qty_cap", 0)),
+
         # Tracking from yaml
         poll_interval=int(_require_key(tracking, "tracking", "poll_interval")),
 
@@ -297,6 +304,7 @@ def _build_settings() -> Settings:
         product=_require_key(broker, "broker", "product"),
         order_type=_require_key(broker, "broker", "order_type"),
         allow_off_hours_testing=bool(broker.get("allow_off_hours_testing", False)),
+        mis_margin_pct=float(_require_key(broker, "broker", "mis_margin_pct")),
 
         # Listener from yaml
         listener_max_retries=int(_require_key(listener, "listener", "max_retries")),

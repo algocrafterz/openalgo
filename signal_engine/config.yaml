@@ -30,6 +30,7 @@ sizing:
                                # 0.05 was for LIMIT TP (0 exit slippage); now both legs are MARKET orders
   sandbox_capital: 15000      # Override capital in analyze mode — set to match live capital for realistic sizing
   use_day_start_capital: true  # Cache capital at first signal of day, use for all trades (equal risk per trade)
+  test_qty_cap: 0              # Max qty per order in test mode (0 = disabled). Set to 1 for minimal exposure live testing.
 
 # ── Risk Management ──────────────────────────────────────
 risk:
@@ -89,6 +90,8 @@ broker:
   product: MIS                 # MIS or CNC
   order_type: MARKET           # MARKET or LIMIT
   allow_off_hours_testing: false  # true = place orders as CNC in analyze mode outside market hours (for pipeline testing only)
+  mis_margin_pct: 0.20         # Flattrade NSE equity MIS margin = 20% (5x leverage). Source: flattrade.in/margin-calculator-equities
+                               # Used as safety floor: if estimated margin > live capital, scale qty down proportionally.
 
 # ── Listener ─────────────────────────────────────────────
 listener:

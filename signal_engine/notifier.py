@@ -8,6 +8,7 @@ Uses the same TelegramClient as the listener (set via set_client once connected)
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,8 @@ async def notify(text: str) -> None:
         return
     try:
         await _client.send_message(settings.notify_channel.id, text)
+    except asyncio.CancelledError:
+        logger.debug("Notifier: send cancelled (event loop shutting down)")
     except Exception as e:
         logger.warning(f"Notifier: failed to send message: {e}")
 
@@ -200,3 +203,35 @@ async def notify_engine_started(capital: float, mode: str) -> None:
 
 async def notify_engine_stopped() -> None:
     await notify(f"🔴 Engine stopped | {_now_ist()}")
+
+
+async def notify_startup_result(all_passed: bool, summary: str) -> None:
+    """Send startup check result via a one-shot Telegram client.
+
+    Called before the main listener connects, so creates its own client
+    using the same session file. Used for both pass and fail notifications
+    so the user knows the engine state before market open.
+    """
+    if not settings.notify_channel:
+        return
+
+    from telethon import TelegramClient
+
+    session_path = "signal_engine/data/telegram"
+    try:
+        client = TelegramClient(
+            session_path,
+            settings.telegram_api_id,
+            settings.telegram_api_hash,
+        )
+        await client.connect()
+        if not await client.is_user_authorized():
+            logger.warning("Startup notifier: Telegram not authorized, skipping notification")
+            await client.disconnect()
+            return
+        icon = "🟢 READY" if all_passed else "🔴 STARTUP FAILED"
+        msg = f"{icon} | Signal Engine | {_now_ist()}\n{summary}"
+        await client.send_message(settings.notify_channel.id, msg)
+        await client.disconnect()
+    except Exception as e:
+        logger.warning(f"Startup notifier: could not send Telegram message: {e}")
