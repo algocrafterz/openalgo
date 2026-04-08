@@ -1118,4 +1118,88 @@ If this occurs mid-session: restart openalgoctl to trigger the headless TOTP aut
 
 ---
 
+## 24. Bug Fix — Flattrade SL-MKT Order Rejection (2026-04-08)
+
+### Symptom
+After switching from mstock to Flattrade, all SL bracket orders fail silently. Entry BUY executes, but the SL SELL order fails 5/5 retries with "Order returned success but no order ID". Position is left unprotected.
+
+Evidence from log (WIPRO and TMPV):
+```
+SL attempt 1/5 failed for WIPRO: Order returned success but no order ID
+SL attempt 2/5 failed for WIPRO: Order returned success but no order ID
+...
+SL failed after 5 attempts for WIPRO — no SL protection
+```
+
+### Root Cause (3 issues)
+
+**Issue 1 (Critical): Flattrade blocks SL-MKT order type via API.**
+Flattrade (like Shoonya) does not accept `SL-MKT` (stop-loss market) orders through its API. The Shoonya `transform_data.py` already handled this by converting `SL-M → SL-LMT` with MPP (Market Price Protection) pricing. But the Flattrade `transform_data.py` only applied MPP to `MARKET` orders, passing `SL-M` through as `SL-MKT` — which Flattrade rejects.
+
+**Issue 2: Error message swallowed by `place_order_service.py`.**
+When Flattrade returned HTTP 200 with `{"stat": "Not_Ok", "emsg": "..."}`, `place_order_api` set `orderid = None`. But `place_order_with_auth` only checked `res.status == 200` and returned `{"status": "success", "orderid": null}` — masking the actual broker error message.
+
+**Issue 3: No response logging in Flattrade `place_order_api`.**
+The actual Flattrade rejection response (`emsg`) was never logged, making diagnosis impossible.
+
+### Fix
+
+**File 1**: `broker/flattrade/mapping/transform_data.py`
+- Extended MPP to handle both `MARKET` and `SL-M` order types (matching Shoonya)
+- `MARKET` → `LMT` with MPP price (existing behavior)
+- `SL-M` → `SL-LMT` with MPP price based on trigger_price (new)
+- Trigger price (`trgprc`) passes through unchanged
+
+```python
+# Before: only MARKET
+if data["pricetype"] == "MARKET":
+
+# After: MARKET and SL-M (matching Shoonya)
+if data["pricetype"] in ("MARKET", "SL-M"):
+    # For SL-M: use trigger_price as base for MPP (not LTP)
+    # SL-M → SL-LMT, MARKET → LMT
+```
+
+**File 2**: `services/place_order_service.py`
+- When HTTP 200 but `order_id is None`, return `{"status": "error", "message": <broker emsg>}` instead of false success.
+
+**File 3**: `broker/flattrade/api/order_api.py`
+- Added response logging on both success and rejection paths.
+
+### Expected SL order after fix
+```
+trantype: S, prctyp: SL-LMT, prc: ~199.93 (trigger 200.9 - 1% MPP), trgprc: 200.9
+```
+
+### Also fixed in same session
+
+| Fix | File | Issue |
+|---|---|---|
+| Equity margin skip | `signal_engine/main.py` | SpanCalc API returns "invalid input" for NSE equity; skip margin check for NSE/BSE |
+| Capital fetch retry | `signal_engine/api_client.py` | 3 retries with 2s backoff for transient session expiry on funds API |
+| Session auto-refresh | `services/funds_service.py` + `utils/session_manager.py` | Transparent headless re-auth on empty funds response |
+
+---
+
+## 25. Architecture Decision — Keep OpenAlgo as Broker Bridge (2026-04-08)
+
+### Context
+After frequent Flattrade integration issues, evaluated bypassing OpenAlgo to connect signal engine directly to broker API.
+
+### Decision
+**Keep OpenAlgo.** The bugs were in the Flattrade plugin's transform layer, not the architecture.
+
+### Rationale
+- **Going direct requires replicating**: symbol master DB, MPP conversion, session management (OAuth + TOTP), sandbox mode, monitoring dashboard — estimated 2-3 weeks, new codebase = new bugs.
+- **Bugs are converging**: SL-MKT, null orderid, session refresh, equity margin — all fixed. The Flattrade plugin is maturing.
+- **Broker switching cost**: currently one env var change. Going direct means full rewrite per broker.
+- **Escape hatch exists**: `place_order_service.py` supports direct Python calls (`place_order(auth_token=..., broker=...)`) — can skip HTTP overhead while keeping all abstractions.
+
+### When to reconsider
+- If OpenAlgo upstream breaks backward compatibility frequently
+- If BO/CO/GTT order types become critical (not currently needed for equity MIS)
+- If locked to a single broker permanently
+
+---
+
 *End of PRD*

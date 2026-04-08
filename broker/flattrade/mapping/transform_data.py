@@ -32,10 +32,13 @@ def transform_data(data, token, auth_token=None):
     order_type = map_order_type(data["pricetype"])
     action = data["action"].upper()
 
-    # Apply Market Price Protection for MARKET orders
-    if data["pricetype"] == "MARKET":
+    # Apply Market Price Protection for MARKET and SL-M orders
+    # Flattrade (like Shoonya) blocks both MKT and SL-MKT order types for API orders.
+    # MARKET -> LIMIT with MPP price; SL-M -> SL-LMT with MPP price (keeps trigger_price).
+    if data["pricetype"] in ("MARKET", "SL-M"):
+        original_type = data["pricetype"]
         logger.info(
-            f"MPP: MARKET order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={action}"
+            f"MPP: {original_type} order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={action}"
         )
         try:
             if auth_token:
@@ -59,8 +62,12 @@ def transform_data(data, token, auth_token=None):
                     f"MPP Symbol Info: InstrumentType={instrument_type}, TickSize={tick_size}"
                 )
 
-                # Get LTP for price calculation
-                ltp = float(quote_data.get("ltp", 0))
+                # For SL-M orders, use the trigger price as the base for MPP calculation
+                # (SL triggers at trigger_price, limit price must be near that level)
+                if original_type == "SL-M":
+                    ltp = float(data.get("trigger_price", 0))
+                else:
+                    ltp = float(quote_data.get("ltp", 0))
 
                 if ltp > 0:
                     # Calculate protected price using centralized MPP slab with tick size rounding
@@ -73,16 +80,21 @@ def transform_data(data, token, auth_token=None):
                     )
                     price = str(protected_price)
 
-                    # Convert order type from MARKET to LIMIT
-                    order_type = "LMT"
+                    if original_type == "MARKET":
+                        # Convert MARKET to LIMIT
+                        order_type = "LMT"
+                    else:
+                        # Convert SL-M to SL-LMT (keep trigger price)
+                        order_type = "SL-LMT"
+
                     logger.info(
-                        f"MPP Conversion Complete: Symbol={data['symbol']}, OrderType=MARKET->LIMIT, "
-                        f"FinalPrice={protected_price}"
+                        f"MPP Conversion Complete: Symbol={data['symbol']}, "
+                        f"OrderType={original_type}->{order_type}, FinalPrice={protected_price}"
                     )
                 else:
                     logger.warning(
-                        f"MPP Warning: LTP is 0 or invalid for Symbol={data['symbol']}, "
-                        f"Exchange={data['exchange']}. Proceeding with regular market order"
+                        f"MPP Warning: LTP/trigger is 0 or invalid for Symbol={data['symbol']}, "
+                        f"Exchange={data['exchange']}. Proceeding with regular {original_type} order"
                     )
             else:
                 logger.warning(
@@ -92,7 +104,7 @@ def transform_data(data, token, auth_token=None):
         except Exception as e:
             logger.error(
                 f"MPP Error: Failed to apply MPP for Symbol={data['symbol']}, "
-                f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with regular market order."
+                f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with regular {original_type} order."
             )
 
     # Basic mapping - ensure all numeric values are strings
