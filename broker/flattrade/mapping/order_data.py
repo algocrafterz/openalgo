@@ -19,7 +19,7 @@ def map_order_data(order_data):
     # Check if 'data' is None
     if order_data is None or (isinstance(order_data, dict) and (order_data["stat"] == "Not_Ok")):
         # Handle the case where there is no data
-        logger.warning("No data available.")
+        logger.debug("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data
@@ -175,9 +175,7 @@ def map_trade_data(trade_data):
     # Check if 'data' is None
     if trade_data is None or (isinstance(trade_data, dict) and (trade_data["stat"] == "Not_Ok")):
         # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.warning("No data available.")
+        logger.debug("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data
@@ -253,7 +251,7 @@ def map_position_data(position_data):
         isinstance(position_data, dict) and (position_data["stat"] == "Not_Ok")
     ):
         # Handle the case where there is no data
-        logger.warning("No data available.")
+        logger.debug("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data

@@ -215,6 +215,25 @@ def place_order_with_auth(
         return False, error_response, 500
 
     if res.status == 200:
+        if order_id is None:
+            # Broker returned HTTP 200 but rejected the order (e.g., stat=Not_Ok)
+            message = (
+                response_data.get("emsg", response_data.get("message", "Order rejected by broker"))
+                if isinstance(response_data, dict) else "Order rejected by broker"
+            )
+            error_response = {"status": "error", "message": message}
+            bus.publish(OrderFailedEvent(
+                mode="live",
+                api_type="placeorder",
+                request_data=order_request_data,
+                response_data=error_response,
+                api_key=api_key,
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                error_message=message,
+            ))
+            return False, error_response, 200
+
         order_response_data = {"status": "success", "orderid": order_id}
 
         if emit_event:

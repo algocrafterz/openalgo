@@ -26,8 +26,9 @@ def transform_data(data, token, auth_token=None):
     if symbol and "&" in symbol:
         symbol = symbol.replace("&", "%26")
 
-    # Default values
-    price = str(data.get("price", "0"))
+    # Default values — normalize zero prices to "0" (not "0.0") for SL-M orders
+    price_raw = data.get("price", 0)
+    price = "0" if float(price_raw) == 0 else str(price_raw)
     order_type = map_order_type(data["pricetype"])
     action = data["action"].upper()
 

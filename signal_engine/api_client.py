@@ -49,7 +49,11 @@ async def fetch_available_capital() -> float:
     Priority:
     1. If sandbox_capital is set in config and mode is analyze -> use override
     2. Otherwise fetch from OpenAlgo /api/v1/funds (live or sandbox)
-    Returns 0.0 on failure.
+
+    Retries up to 3 times with 2s backoff to ride out transient session expiry errors
+    (the OpenAlgo server auto-refreshes the broker session on the first failed call).
+
+    Returns 0.0 only after all retries are exhausted.
     """
     # Check for sandbox capital override
     if settings.sandbox_capital > 0:
@@ -60,21 +64,34 @@ async def fetch_available_capital() -> float:
 
     url = f"{settings.openalgo_base_url}/api/v1/funds"
     payload = {"apikey": settings.openalgo_api_key}
+    max_retries = 3
+    retry_delay = 2.0
 
-    try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") != "success":
-                logger.warning(f"Funds API returned non-success: {data}")
-                return 0.0
-            available = float(data.get("data", {}).get("availablecash", 0))
-            logger.debug(f"Available capital: {available:,.2f} INR")
-            return available
-    except Exception as e:
-        logger.error(f"Failed to fetch funds: {e}")
-        return 0.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if data.get("status") != "success":
+                    logger.warning(f"Funds API non-success (attempt {attempt}/{max_retries}): {data}")
+                else:
+                    available = float(data.get("data", {}).get("availablecash", 0))
+                    if available > 0:
+                        logger.debug(f"Available capital: {available:,.2f} INR")
+                        return available
+                    logger.warning(
+                        f"Funds API returned 0 capital (attempt {attempt}/{max_retries}) — "
+                        "broker session may be refreshing"
+                    )
+        except Exception as e:
+            logger.warning(f"Funds API error (attempt {attempt}/{max_retries}): {e}")
+
+        if attempt < max_retries:
+            await asyncio.sleep(retry_delay)
+
+    logger.error(f"Failed to fetch capital after {max_retries} attempts")
+    return 0.0
 
 
 async def fetch_open_position(symbol: str, strategy: str, exchange: str, product: str) -> int:

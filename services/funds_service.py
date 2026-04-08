@@ -2,8 +2,9 @@ import importlib
 import traceback
 from typing import Any, Dict, Optional, Tuple, Union
 
-from database.auth_db import get_auth_token_broker
+from database.auth_db import get_auth_token_broker, get_username_by_apikey
 from utils.logging import get_logger
+from utils.session_manager import refresh_broker_session
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -29,7 +30,7 @@ def import_broker_module(broker_name: str) -> Any | None:
 
 
 def get_funds_with_auth(
-    auth_token: str, broker: str, original_data: dict[str, Any] = None
+    auth_token: str, broker: str, original_data: dict[str, Any] = None, username: str | None = None
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get account funds and margin details from the broker using provided auth token.
@@ -74,6 +75,24 @@ def get_funds_with_auth(
         # Get funds data using broker's implementation
         funds = broker_module.get_margin_data(auth_token)
 
+        # Empty dict means the broker rejected the request — most likely a session expiry.
+        # Attempt a transparent headless re-auth and retry once.
+        if not funds and username:
+            logger.info(
+                f"Funds returned empty for broker '{broker}' — session may be expired, "
+                "attempting automatic refresh"
+            )
+            success, new_token = refresh_broker_session(username, broker)
+            if success and new_token:
+                funds = broker_module.get_margin_data(new_token)
+                if funds:
+                    logger.info(f"Session refreshed successfully for '{broker}', funds retrieved")
+                else:
+                    logger.warning(
+                        f"Funds still empty after session refresh for '{broker}' — "
+                        "broker may be down or credentials changed"
+                    )
+
         return True, {"status": "success", "data": funds}, 200
     except Exception as e:
         logger.error(f"Error in broker_module.get_margin_data: {e}")
@@ -104,8 +123,9 @@ def get_funds(
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        username = get_username_by_apikey(api_key)
         original_data = {"apikey": api_key}
-        return get_funds_with_auth(AUTH_TOKEN, broker_name, original_data)
+        return get_funds_with_auth(AUTH_TOKEN, broker_name, original_data, username=username)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:

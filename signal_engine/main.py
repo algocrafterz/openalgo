@@ -59,8 +59,16 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
     If it exceeds live_capital, scales qty down proportionally (MIS margin is linear with qty).
     Raises MarginAPIError on persistent API failure — trade is skipped.
 
+    For equity exchanges (NSE/BSE), the broker SpanCalc API only supports derivatives —
+    skip the margin check and trust risk-based sizing.
+
     Returns adjusted qty, or 0 if it cannot fit in available capital.
     """
+    exchange = signal.exchange or settings.exchange
+    if exchange in ("NSE", "BSE"):
+        logger.debug(f"Equity exchange {exchange}: skipping SpanCalc margin check for {signal.symbol}, using risk-based qty={raw_qty}")
+        return raw_qty
+
     actual_margin = await fetch_margin(
         symbol=signal.symbol,
         exchange=signal.exchange or settings.exchange,

@@ -171,8 +171,10 @@ def place_order_api(data, auth):
 
     if response_data["stat"] == "Ok":
         orderid = response_data["norenordno"]
+        logger.info(f"Flattrade PlaceOrder accepted: orderid={orderid}")
     else:
         orderid = None
+        logger.warning(f"Flattrade PlaceOrder rejected: {response_data}")
     return res, response_data, orderid
 
 
