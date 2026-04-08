@@ -95,34 +95,50 @@ wait_for_network() {
 }
 
 # --- Kill processes from PID file ---
+#
+# NOTE: uv run does NOT forward SIGTERM to its child Python process.
+# Killing the uv wrapper PID leaves the actual python3 process running as an orphan.
+# We must also kill by matching the project .venv path — specific enough to never
+# match unrelated Python processes on this machine.
 kill_from_pidfile() {
+    local venv_python="$PROJECT_DIR/.venv/bin/python3"
+
     if [ -f "$PID_FILE" ]; then
         local old_app old_signal
         old_app=$(sed -n '1p' "$PID_FILE")
         old_signal=$(sed -n '2p' "$PID_FILE")
 
         if [ -n "$old_signal" ] && kill -0 "$old_signal" 2>/dev/null; then
-            log "Killing signal_engine (PID $old_signal)..."
+            log "Killing signal_engine uv wrapper (PID $old_signal)..."
             kill "$old_signal" 2>/dev/null || true
         fi
 
         if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
-            log "Killing app.py (PID $old_app)..."
+            log "Killing app.py uv wrapper (PID $old_app)..."
             kill "$old_app" 2>/dev/null || true
         fi
-
-        sleep 2
-
-        # Force-kill if still alive
-        if [ -n "$old_signal" ] && kill -0 "$old_signal" 2>/dev/null; then
-            kill -9 "$old_signal" 2>/dev/null || true
-        fi
-        if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
-            kill -9 "$old_app" 2>/dev/null || true
-        fi
-
-        rm -f "$PID_FILE"
     fi
+
+    # Kill the actual Python processes spawned by uv (uv does not forward SIGTERM).
+    # Match by .venv path — safe, project-specific, survives orphaning.
+    log "Killing Python processes (venv)..."
+    pkill -TERM -f "$venv_python -m signal_engine" 2>/dev/null || true
+    pkill -TERM -f "$venv_python app.py" 2>/dev/null || true
+
+    sleep 2
+
+    # Force-kill anything still alive
+    if [ -f "$PID_FILE" ]; then
+        local old_app old_signal
+        old_app=$(sed -n '1p' "$PID_FILE")
+        old_signal=$(sed -n '2p' "$PID_FILE")
+        [ -n "$old_signal" ] && kill -9 "$old_signal" 2>/dev/null || true
+        [ -n "$old_app" ]    && kill -9 "$old_app"    2>/dev/null || true
+    fi
+    pkill -9 -f "$venv_python -m signal_engine" 2>/dev/null || true
+    pkill -9 -f "$venv_python app.py"           2>/dev/null || true
+
+    rm -f "$PID_FILE"
 }
 
 # --- Wait for health URL ---
@@ -219,13 +235,14 @@ cmd_run() {
     # Trap for cleanup in foreground mode
     cleanup() {
         log "Shutting down..."
-        # Send shutdown notification
-        "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "scheduled" 2>&1 || \
+        # Send shutdown notification (10s timeout — Telegram may be slow)
+        timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "scheduled" 2>&1 || \
             log "Shutdown notification failed (non-fatal)"
         kill "$SIGNAL_PID" 2>/dev/null || true
         kill "$APP_PID" 2>/dev/null || true
         rm -f "$PID_FILE"
-        wait || true
+        # Note: no 'wait' here — exec > >(tee ...) creates a tee subprocess that
+        # won't exit until shell stdout closes, causing 'wait' to deadlock.
         log "Done."
     }
     trap cleanup INT TERM EXIT
@@ -246,7 +263,12 @@ cmd_run() {
 cmd_stop() {
     get_pids
 
-    if [[ -z "$APP_PID" && -z "$SIGNAL_PID" ]]; then
+    local venv_python="$PROJECT_DIR/.venv/bin/python3"
+    local python_running=false
+    pgrep -f "$venv_python app.py" >/dev/null 2>&1 && python_running=true
+    pgrep -f "$venv_python -m signal_engine" >/dev/null 2>&1 && python_running=true
+
+    if [[ -z "$APP_PID" && -z "$SIGNAL_PID" && "$python_running" == "false" ]]; then
         log "STOP SKIPPED: OpenAlgo not running"
         rm -f "$PID_FILE"
         return
@@ -254,9 +276,11 @@ cmd_stop() {
 
     log "STOPPING: Terminating OpenAlgo processes"
 
-    # Send shutdown notification while app.py is still running (Telegram needs it)
+    # Send shutdown notification while app.py is still running (Telegram needs it).
+    # 10s timeout — if Telegram is slow or the session is busy (signal_engine holds
+    # the same Telethon session), this must not block kill_from_pidfile indefinitely.
     log "Sending shutdown notification..."
-    "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "${STOP_REASON:-scheduled}" 2>&1 || \
+    timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "${STOP_REASON:-scheduled}" 2>&1 || \
         log "Shutdown notification failed (non-fatal)"
 
     kill_from_pidfile
