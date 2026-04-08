@@ -953,6 +953,7 @@ class TestCncBracketSkip:
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "CNC"
+            mock_settings.test_qty_cap = 0
 
             await handle_message(_valid_message())
 
@@ -991,6 +992,7 @@ class TestCncBracketSkip:
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
 
             await handle_message(_valid_message())
 
@@ -1027,6 +1029,7 @@ class TestBracketOrderFlow:
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
 
             await handle_message(_valid_message())
 
@@ -1059,6 +1062,7 @@ class TestBracketOrderFlow:
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
 
             await handle_message(_valid_message())
 
@@ -1091,6 +1095,7 @@ class TestBracketOrderFlow:
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
 
             await handle_message(_valid_message())
 
@@ -1127,6 +1132,7 @@ class TestBracketOrderFlow:
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
 
             await handle_message(_valid_message())
 
