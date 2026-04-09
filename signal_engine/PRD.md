@@ -32,9 +32,9 @@ main.py (_handle_entry / _handle_exit)
 
 ### Entry (LONG/SHORT)
 1. `check_exposure()` — daily/weekly/monthly loss + portfolio heat + open positions
-2. `fetch_available_capital()` → day-start cached capital
-3. `calculate_quantity()` → risk-based qty
-4. `adjust_qty_for_margin()` → scale down if margin > capital [LIVE only, skipped for NSE/BSE equity]
+2. `fetch_available_capital()` → live capital; skip if below `min_capital_for_entry` floor
+3. Day-start cached capital → `calculate_quantity()` → risk-based qty
+4. `adjust_qty_for_margin()` [LIVE only]: NSE/BSE — binary reject if full-risk qty doesn't fit live capital (never scales down); derivatives — SpanCalc margin check, scales if needed
 5. Apply `test_qty_cap` if set
 6. `build_order()` + `send_order()` → `POST /api/v1/placeorder`
 7. `send_bracket_legs()` → SL-M order only (see OCO constraint below)
@@ -44,12 +44,13 @@ main.py (_handle_entry / _handle_exit)
 
 ### Exit (TP HIT / EXIT signal)
 1. Normalizer converts `"ORB TP1 HIT | SYMBOL"` → canonical EXIT signal
-2. Resolve exit qty from `signal.exit_qty_pct` → `tp_levels` config → default 100%
-3. **Cancel SL order first** — broker treats any SELL while SL SELL is active as new SHORT
-4. `build_exit_order()` → MARKET SELL
-5. `send_order()` with `tp_exit_retries` retries
-6. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at breakeven
-7. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
+2. **Per-position asyncio.Lock acquired** — serializes concurrent TP signals for same position (TradingView fires all TP levels simultaneously at bar close; lock ensures second handler sees already-closed position)
+3. Resolve exit qty from `signal.exit_qty_pct` → `tp_levels` config → default 100%
+4. **Cancel SL order first** — broker treats any SELL while SL SELL is active as new SHORT
+5. `build_exit_order()` → MARKET SELL
+6. `send_order()` with `tp_exit_retries` retries
+7. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at breakeven (entry price)
+8. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
 
 ---
 
@@ -126,20 +127,28 @@ qty = floor(capital × pct_of_capital / entry_price)
 ### Day-start capital (`use_day_start_capital: true`)
 First capital fetch of each day is cached. All subsequent trades size off this value — equal risk per trade regardless of intraday P&L.
 
-### Margin adjustment (Live, derivatives only)
-After risk-based sizing, `fetch_margin()` gets actual broker margin for the qty.  
-If `actual_margin > live_capital`: `qty = floor(raw_qty × live_capital / actual_margin)`.  
-NSE/BSE equity: skipped (SpanCalc API is derivatives-only).
+### Minimum capital floor (`min_capital_for_entry`)
+Before sizing, live capital is checked against `sizing.min_capital_for_entry`. If below the floor, the entry is skipped cleanly — no order is sent to the broker. Prevents dwarf positions when open positions have consumed most of the margin.
 
-### Capital Scaling Reference
+### Margin check (Live only)
+After sizing, `adjust_qty_for_margin()` checks whether the full-risk qty fits in live capital:
 
-| Capital | risk_per_trade | Margin/trade (~) | Concurrent | max_entry_price |
-|---------|---------------|------------------|------------|-----------------|
-| ₹15K    | 1.0%          | ~41%             | 2          | ₹800            |
-| ₹25K    | 1.0%          | ~41%             | 2          | ₹1,000          |
-| ₹50K    | 0.8%          | ~33%             | 3          | ₹1,500          |
-| ₹75K    | 0.8%          | ~33%             | 3          | ₹2,000          |
-| ₹1L     | 0.7%          | ~29%             | 4          | ₹2,500          |
+- **NSE/BSE equity** (SpanCalc API is derivatives-only): estimates margin as `qty × entry × mis_margin_pct`. **Binary reject** — if estimated margin > live capital, returns 0 (trade skipped). Never scales qty down; a scaled trade risks less than 1% and produces dwarf profits not worth commission cost.
+- **Derivatives (NFO etc.)**: `fetch_margin()` → SpanCalc API for exact margin. If `actual_margin > live_capital`: `qty = floor(raw_qty × live_capital / actual_margin)`.
+
+### Capital vs Concurrent Slots
+
+At avg_sl=0.64% (Q1 actuals), risk=1%, MIS margin=20%:  
+`margin_per_trade ≈ capital × 1% / 0.64% × 20% = capital × 31%`
+
+This ratio is **capital-invariant** — 3 concurrent slots fit at any capital level from ₹15K to ₹1L+. Keep `max_open_positions: 3` and `max_portfolio_heat: 0.03` in sync.
+
+| Capital | Risk/trade | Avg margin/trade | Max slots | `max_open_positions` |
+|---------|------------|------------------|-----------|----------------------|
+| ₹15K    | ₹150       | ₹4,688           | 3         | 3                    |
+| ₹25K    | ₹250       | ₹7,813           | 3         | 3                    |
+| ₹50K    | ₹500       | ₹15,625          | 3         | 3                    |
+| ₹1L     | ₹1,000     | ₹31,250          | 3         | 3                    |
 
 ---
 
@@ -209,6 +218,7 @@ telegram:
 | `sandbox_capital` | Capital override in analyze mode |
 | `use_day_start_capital` | Cache first fetch of day for equal risk per trade |
 | `test_qty_cap` | Max qty per order in `--test` mode (0 = disabled) |
+| `min_capital_for_entry` | Skip new entries if live capital below this floor (INR) |
 
 ### `risk`
 | Key | Description |
@@ -258,9 +268,10 @@ tracking:
 
 broker:
   exchange: NSE
-  product: MIS        # MIS or CNC
+  product: MIS                   # MIS or CNC
   order_type: MARKET
-  allow_off_hours_testing: false   # MIS→CNC override in analyze mode (testing only)
+  allow_off_hours_testing: false  # MIS→CNC override in analyze mode (testing only)
+  mis_margin_pct: 0.20           # Must match broker's actual NSE equity MIS margin %
 
 api:
   timeout: 5.0
@@ -382,7 +393,7 @@ openalgoctl.sh run
 ## Testing
 
 ```bash
-# Full test suite (402 tests)
+# Full test suite (406 tests)
 PYTHONPATH=. uv run pytest signal_engine/tests/ -v
 
 # With coverage

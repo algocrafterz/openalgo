@@ -94,6 +94,7 @@ class TestRequiredYamlKeys:
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
+                "min_capital_for_entry": 0,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -110,7 +111,7 @@ class TestRequiredYamlKeys:
                 "max_positions_per_sector": 2,
             },
             "tracking": {"poll_interval": 30},
-            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
+            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
@@ -166,6 +167,7 @@ class TestInvalidSizingMode:
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
+                "min_capital_for_entry": 0,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -182,7 +184,7 @@ class TestInvalidSizingMode:
                 "max_positions_per_sector": 2,
             },
             "tracking": {"poll_interval": 30},
-            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
+            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
@@ -249,6 +251,7 @@ class TestValidConfigLoadsSuccessfully:
                 "max_entry_price": 1500,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 10000,
+                "min_capital_for_entry": 0,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -265,7 +268,7 @@ class TestValidConfigLoadsSuccessfully:
                 "max_positions_per_sector": 2,
             },
             "tracking": {"poll_interval": 30},
-            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
+            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
             "bracket": {
@@ -326,6 +329,7 @@ class TestSectorsYamlLoading:
                 "max_entry_price": 0,
                 "slippage_factor": 0.0,
                 "sandbox_capital": 0,
+                "min_capital_for_entry": 0,
             },
             "risk": {
                 "daily_loss_limit": 0.03,
@@ -342,7 +346,7 @@ class TestSectorsYamlLoading:
                 "max_positions_per_sector": 2,
             },
             "tracking": {"poll_interval": 30},
-            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET"},
+            "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},

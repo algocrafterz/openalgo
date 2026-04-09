@@ -161,6 +161,69 @@ class TestPipelineFlow:
             # Capital=0 means API unreachable, trade should be skipped
             mock_send.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_below_min_capital_skips_trade(self):
+        """Entry must be skipped when live capital is below min_capital_for_entry threshold."""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+
+        with (
+            patch("signal_engine.main.parse", return_value=_mock_signal()),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=800.0),
+            patch("signal_engine.main.send_order") as mock_send,
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.can_trade_symbol.return_value = True
+            mock_risk.can_trade_sector.return_value = True
+            mock_settings.min_capital_for_entry = 2000.0  # threshold is ₹2,000
+
+            await handle_message(_valid_message())
+
+            # ₹800 < ₹2,000 threshold — order must not be sent
+            mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_above_min_capital_proceeds(self):
+        """Entry proceeds normally when live capital exceeds the threshold."""
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        mock_order = MagicMock()
+        entry_result = TradeResult(order_id="E001", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=_mock_signal()),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=5000.0),
+            patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=10),
+            patch("signal_engine.main.build_order", return_value=mock_order),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result) as mock_send,
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(None, None)),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.can_trade_symbol.return_value = True
+            mock_risk.can_trade_sector.return_value = True
+            mock_risk.get_sizing_capital.return_value = 15000.0
+            mock_risk.calculate_quantity.return_value = 10
+            mock_settings.min_capital_for_entry = 2000.0  # ₹5,000 > ₹2,000 — should proceed
+            mock_settings.risk_per_trade = 0.01
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
+            mock_settings.bracket_enabled = False
+            mock_settings.bracket_cnc_sl_enabled = False
+
+            await handle_message(_valid_message())
+
+            mock_send.assert_called_once()
+
 
 class TestExitPipelineDaySummary:
     """_handle_exit must update tracker day counters with real PnL from realised PnL delta."""
@@ -954,6 +1017,7 @@ class TestCncBracketSkip:
             mock_settings.exchange = "NSE"
             mock_settings.product = "CNC"
             mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
 
@@ -993,6 +1057,7 @@ class TestCncBracketSkip:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
 
@@ -1030,6 +1095,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
 
@@ -1063,6 +1129,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
 
@@ -1096,6 +1163,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
 
@@ -1133,6 +1201,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
 
@@ -1141,3 +1210,173 @@ class TestBracketOrderFlow:
         assert call_args.sl_order_id == "SL001"
 
 
+class TestConcurrentTPSignals:
+    """When multiple TP alerts fire simultaneously (same bar), only the first should execute.
+
+    TradingView fires all TP alerts at bar close when price crosses multiple levels in one bar.
+    Telethon dispatches each as a separate asyncio task, so without locking both handlers
+    find the same open position and place duplicate orders (phantom SHORTs on the broker).
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tp_signals_only_first_exits(self):
+        """When TP1.5 (full exit) and TP1 (partial) arrive simultaneously, only TP1.5 executes.
+
+        After TP1.5 fully exits and unregisters the position, the TP1 handler must find
+        no position and skip — it must NOT place a second exit order or a phantom SL.
+        """
+        import asyncio
+        from signal_engine.main import _handle_exit, _exit_locks
+
+        # Clear any stale locks from other tests
+        _exit_locks.clear()
+
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+        call_log = []
+
+        def _make_tp_signal(tp_level: str, exit_qty_pct: float):
+            sig = MagicMock()
+            sig.strategy = "ORB"
+            sig.direction = Direction.EXIT
+            sig.symbol = "EXIDEIND"
+            sig.entry = 0.0
+            sig.sl = 0.0
+            sig.tp = 0.0
+            sig.tp_level = tp_level
+            sig.exit_qty_pct = exit_qty_pct
+            sig.exchange = ""
+            sig.product = ""
+            return sig
+
+        tp1_5_signal = _make_tp_signal("TP1.5", 1.0)  # full exit
+        tp1_signal = _make_tp_signal("TP1", 0.5)       # partial exit
+
+        with (
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_settings.strategy_profiles = {}
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_settings.bracket_enabled = False
+
+            # Simulate: position exists for first call, then unregistered (returns None for second)
+            mock_pos = MagicMock()
+            mock_pos.symbol = "EXIDEIND"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 58
+            mock_pos.sl_order_id = "SL001"
+            mock_tracker._positions = {}
+            mock_tracker._last_realised_pnl = 0.0
+
+            # First call finds position; after unregister, second call finds nothing
+            find_calls = [0]
+            def find_position_side_effect(symbol, strategy):
+                find_calls[0] += 1
+                call_log.append(f"find_position call {find_calls[0]}")
+                if find_calls[0] == 1:
+                    return mock_pos  # first caller gets position
+                return None  # second caller — already closed
+
+            mock_tracker.find_position.side_effect = find_position_side_effect
+            mock_tracker.send_day_summary = AsyncMock()
+
+            # Run both handlers concurrently (simulates Telethon dispatching both at once)
+            await asyncio.gather(
+                _handle_exit(tp1_5_signal),
+                _handle_exit(tp1_signal),
+            )
+
+        # Both handlers attempted position lookup but only first found it
+        assert mock_tracker.find_position.call_count == 2
+        # find_position returned None for the second handler — it skipped without placing orders
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tp_same_symbol_serialized(self):
+        """Two simultaneous EXIT signals for same symbol must not place duplicate SL orders."""
+        import asyncio
+        from signal_engine.main import _handle_exit, _exit_locks
+
+        _exit_locks.clear()
+
+        exit_result = TradeResult(order_id="EXIT002", status=OrderStatus.SUCCESS, message="ok")
+        send_order_call_count = [0]
+
+        async def counting_send_order(order):
+            send_order_call_count[0] += 1
+            return exit_result
+
+        def _make_exit_signal(tp_level: str, exit_qty_pct: float):
+            sig = MagicMock()
+            sig.strategy = "ORB"
+            sig.direction = Direction.EXIT
+            sig.symbol = "JSWENERGY"
+            sig.entry = 0.0
+            sig.sl = 0.0
+            sig.tp = 0.0
+            sig.tp_level = tp_level
+            sig.exit_qty_pct = exit_qty_pct
+            sig.exchange = ""
+            sig.product = ""
+            return sig
+
+        sig_tp1_5 = _make_exit_signal("TP1.5", 1.0)
+        sig_tp1 = _make_exit_signal("TP1", 0.5)
+
+        with (
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", side_effect=counting_send_order),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.main.place_sl_order", new_callable=AsyncMock) as mock_place_sl,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_settings.strategy_profiles = {}
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_settings.bracket_enabled = True
+
+            mock_pos = MagicMock()
+            mock_pos.symbol = "JSWENERGY"
+            mock_pos.strategy = "ORB"
+            mock_pos.exchange = "NSE"
+            mock_pos.product = "MIS"
+            mock_pos.quantity = 46
+            mock_pos.sl_order_id = "SL002"
+            mock_tracker._positions = {}
+            mock_tracker._last_realised_pnl = 0.0
+            mock_tracker.send_day_summary = AsyncMock()
+
+            call_n = [0]
+            def find_pos(symbol, strategy):
+                call_n[0] += 1
+                if call_n[0] == 1:
+                    return mock_pos
+                return None  # second caller sees closed position
+
+            mock_tracker.find_position.side_effect = find_pos
+
+            await asyncio.gather(
+                _handle_exit(sig_tp1_5),
+                _handle_exit(sig_tp1),
+            )
+
+        # Only 1 exit order should have been placed, not 2
+        assert send_order_call_count[0] == 1, (
+            f"Expected 1 exit order (duplicate TP suppressed), got {send_order_call_count[0]}"
+        )
+        # No phantom SL placed for a position that was already closed
+        mock_place_sl.assert_not_called()

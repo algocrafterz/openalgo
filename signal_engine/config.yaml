@@ -1,56 +1,107 @@
 # ── Signal Engine Configuration ──────────────────────────
 # User-configurable settings. Secrets go in .env instead.
+# Keys marked [tune] are safe to adjust without breaking system logic.
+# Keys without [tune] are calibrated to the execution model — change with care.
 
 # ── Telegram ─────────────────────────────────────────────
-# List of channels to listen to. Each entry needs a name (label) and id.
-# id can be a numeric chat ID or @username.
+# [tune] Add/remove channels freely. id = numeric chat ID or @username.
 telegram:
   channels:
-    - name: "smidestn" #test channel
+    - name: "smidestn"           # test channel
       id: -1002773559154
     - name: "intraday-orb"
       id: -1003518225740
 
-  # Channel for system notifications (startup, shutdown, errors).
-  # Keeps operational alerts separate from trading signal channels.
-  # Set to your personal/admin channel. If omitted, notifications go to all signal channels.
+  # [tune] Personal/admin channel for engine start/stop/error alerts.
+  # If omitted, notifications go to all signal channels.
   notify_channel:
     name: "anand-smi-assistant"
     id: -1003803150235
 
 # ── Position Sizing ──────────────────────────────────────
-# Modes: fixed_fractional | pct_of_capital
 sizing:
+  # CRITICAL: changing mode switches the entire sizing model.
+  # fixed_fractional = risk_per_trade % of capital / SL distance (recommended)
+  # pct_of_capital   = pct_of_capital % of capital regardless of SL
   mode: fixed_fractional
-  risk_per_trade: 0.01         # 1% risk per trade (fixed_fractional)
-  pct_of_capital: 0.05         # 5% of capital per trade (pct_of_capital)
-  min_entry_price: 150             # Min stock price to trade (0 = no filter)
-  max_entry_price: 800             # Max stock price to trade (0 = no filter)
-  slippage_factor: 0.10        # Widen risk per share by 10% — entry (MARKET) + TP exit (MARKET) both slip
-                               # 0.05 was for LIMIT TP (0 exit slippage); now both legs are MARKET orders
-  sandbox_capital: 15000      # Override capital in analyze mode — set to match live capital for realistic sizing
-  use_day_start_capital: true  # Cache capital at first signal of day, use for all trades (equal risk per trade)
-  test_qty_cap: 0              # Max qty per order in test mode (0 = disabled). Set to 1 for minimal exposure live testing.
+
+  # [tune] Fraction of capital to risk per trade (fixed_fractional mode).
+  # 1% is conservative — Kelly fraction for this strategy is ~34%. Keep at 1% until ₹1L+.
+  risk_per_trade: 0.01
+
+  # [tune] Fraction of capital per trade (pct_of_capital mode only — unused when mode=fixed_fractional).
+  pct_of_capital: 0.05
+
+  # [tune] Entry price filter — reject signals outside this range. 0 = no filter.
+  # Current range ₹150–₹800 targets liquid mid-caps with manageable qty sizes at ₹15K capital.
+  min_entry_price: 150
+  max_entry_price: 800
+
+  # CRITICAL: calibrated to MARKET entry + MARKET TP exit (both legs slip).
+  # 0.10 = 10% slippage buffer on risk_per_share. Do not reduce unless switching to LIMIT TP exits.
+  slippage_factor: 0.10
+
+  # [tune] Capital override in analyze (sandbox) mode. Set to match live capital for realistic sizing.
+  # Has no effect in live mode — live capital is fetched from broker API.
+  sandbox_capital: 15000
+
+  # [tune] Cache capital at first signal of the day; use same value for all trades.
+  # Ensures equal risk per trade regardless of intra-day capital fluctuations from open positions.
+  use_day_start_capital: true
+
+  # [tune] Hard cap on qty per order (0 = disabled). Set to 1 when testing pipeline live
+  # with minimal exposure before going full size.
+  test_qty_cap: 0
+
+  # [tune] Minimum live capital (INR) to place a new entry.
+  # When open positions consume most margin, live capital drops below this floor and new
+  # entries are skipped cleanly — no scaled-down dwarf orders sent to broker.
+  min_capital_for_entry: 2000
 
 # ── Risk Management ──────────────────────────────────────
 risk:
-  daily_loss_limit: 0.04       # 4% of capital (allows 4 losers at 1% before lockout)
-  weekly_loss_limit: 0.08      # 8% of capital (allows 2 bad days per week)
-  monthly_loss_limit: 0.10     # 10% of capital
-  max_portfolio_heat: 0.03     # 3% of capital max open risk (2 concurrent at 1% + buffer)
-  max_open_positions: 5        # 2 concurrent slots
-  max_trades_per_day: 8        # Safety cap on total trades (slots can recycle within this)
-  min_rr: 0.5                  # Minimum reward:risk ratio (safety net — each PineScript strategy enforces its own: ORB >= 1:1, RSI-TP-MR >= 0.5)
-  duplicate_window_seconds: 60 # Ignore duplicate signals within this window
-  stale_signal_seconds: 60     # Ignore signals older than this
-  min_sl_pct: 0.005            # Reject SL tighter than 0.5% of entry (0 = disabled)
-  max_positions_per_symbol: 1  # Max concurrent positions in same symbol (0 = no limit)
-  max_positions_per_sector: 0  # Disabled — stock universe spans same sectors (FINANCE: PFC, JIOFIN, RECLTD etc.)
+  # [tune] Daily/weekly/monthly loss limits as fraction of capital. Engine locks out new entries
+  # when cumulative loss hits the limit. Resets automatically at the start of each period.
+  daily_loss_limit: 0.04         # 4% = 4 losers at 1% risk before lockout
+  weekly_loss_limit: 0.08        # 8% = 2 bad days per week
+  monthly_loss_limit: 0.10       # 10% of capital
+
+  # CRITICAL: must equal max_open_positions × risk_per_trade. If out of sync, new entries
+  # are blocked prematurely (heat too low) or open risk is under-tracked (heat too high).
+  max_portfolio_heat: 0.03       # 3 slots × 1% = 3% max open risk
+
+  # [tune] Max concurrent open positions. At avg_sl=0.64%, risk=1%, MIS=20% margin:
+  # margin_per_trade ≈ 31% of capital → 3 slots fit at any capital level (₹15K–₹1L+).
+  # Increase to 4 only if avg_sl tightens materially (e.g. <0.45%). Also update max_portfolio_heat.
+  max_open_positions: 3
+
+  # [tune] Hard cap on total trades per day (slots can recycle within this limit).
+  max_trades_per_day: 8
+
+  # [tune] Minimum reward:risk ratio to accept a signal. Strategy-level minimums are enforced
+  # by PineScript (ORB >= 1:1, RSI-TP-MR >= 0.5). This is a safety net for parser edge cases.
+  min_rr: 0.5
+
+  # [tune] Suppress duplicate signals for the same symbol+strategy within this window.
+  duplicate_window_seconds: 60
+
+  # [tune] Reject signals with a timestamp older than this (catches stale Telegram deliveries).
+  stale_signal_seconds: 60
+
+  # [tune] Reject SL tighter than this fraction of entry price (0 = disabled).
+  # 0.5% filters noise — avoids trades where SL is within normal bid-ask spread.
+  min_sl_pct: 0.005
+
+  # [tune] Max concurrent positions in the same symbol (0 = no limit).
+  max_positions_per_symbol: 1
+
+  # [tune] Max concurrent positions in the same sector (0 = disabled).
+  # Disabled: stock universe spans the same sectors (FINANCE: PFC, JIOFIN, RECLTD etc.)
+  max_positions_per_sector: 0
 
 # ── Symbol Blacklist ─────────────────────────────────────
-# Per-strategy blacklist of symbols to reject. Review monthly using performance data.
-# _global: applies to ALL strategies (penny stocks, delisting candidates, etc.)
-# Strategy-specific: keyed by strategy tag (ORB, RSI-TP-MR, etc.)
+# [tune] Review monthly using SIGNAL-PERFORMANCE-*.md. Add D-grade symbols (WR < 35%, PnL < -0.5%).
+# _global applies to ALL strategies. Strategy-specific keys by strategy tag (ORB, RSI-TP-MR, etc.)
 blacklist:
   _global:
     - YESBANK            # Erratic price action, manipulation risk
@@ -73,60 +124,78 @@ blacklist:
     - BANKBARODA         # B->D: +0.60% Q1 -> -0.70% Q2 — crossed into negative
 
 # ── Time Exit ────────────────────────────────────────────
-# Close all open positions before broker auto square-off to avoid penalty charges.
-# Broker auto square-off is typically 15:10-15:20 IST with Rs 20-50/order charges.
+# [tune] Close all open positions before broker auto square-off (typically 15:10-15:20 IST).
+# Penalty for broker-forced square-off is Rs 20-50/order.
 time_exit:
   enabled: true
-  hour: 15                     # IST hour (24h format)
-  minute: 0                    # IST minute — 15:00 gives 10 min buffer before 15:10 auto square-off
+  hour: 15                       # IST hour (24h format)
+  minute: 0                      # 15:00 gives 10-min buffer before 15:10 broker auto square-off
 
 # ── Position Tracking ────────────────────────────────────
 tracking:
-  poll_interval: 10            # Seconds between position checks (detects broker SL-M fills via qty=0)
+  # [tune] Seconds between position checks. Detects broker SL-M fills (qty drops to 0).
+  # 10s is responsive enough for volatile ORB stocks. Lower = more API calls.
+  poll_interval: 10
 
 # ── Broker / Exchange ────────────────────────────────────
 broker:
+  # CRITICAL: must match your broker account setup. Changing exchange affects margin estimation.
   exchange: NSE
-  product: MIS                 # MIS or CNC
-  order_type: MARKET           # MARKET or LIMIT
-  allow_off_hours_testing: false  # true = place orders as CNC in analyze mode outside market hours (for pipeline testing only)
-  mis_margin_pct: 0.20         # Flattrade NSE equity MIS margin = 20% (5x leverage). Source: flattrade.in/margin-calculator-equities
-                               # Used as safety floor: if estimated margin > live capital, scale qty down proportionally.
+  product: MIS                   # MIS (intraday, 5x leverage) or CNC (delivery, 1x)
+  order_type: MARKET             # MARKET (recommended) or LIMIT — affects slippage_factor calibration
+
+  # [tune] Testing only: place CNC orders in analyze mode outside market hours.
+  # Bypasses sandbox MIS restriction without touching live capital. Keep false in production.
+  allow_off_hours_testing: false
+
+  # CRITICAL: must match your broker's actual NSE equity MIS margin percentage.
+  # Flattrade = 20% (5x leverage). Used to estimate whether full-risk qty fits in live capital.
+  # If wrong, margin floor check will either reject valid trades or allow broker rejections.
+  mis_margin_pct: 0.20
 
 # ── Listener ─────────────────────────────────────────────
 listener:
-  max_retries: 5               # Max reconnection attempts
-  base_backoff: 2              # Base backoff in seconds (exponential)
+  # [tune] Telegram reconnection settings. Increase max_retries for unreliable connections.
+  max_retries: 5                 # Max reconnection attempts before giving up
+  base_backoff: 2                # Base seconds for exponential backoff between retries
 
 # ── API ──────────────────────────────────────────────────
 api:
-  timeout: 5.0                 # HTTP request timeout in seconds
-  margin_retries: 3            # Retry count for Margin API before skipping trade
+  # [tune] HTTP timeout and retry settings for OpenAlgo API calls.
+  timeout: 5.0                   # Request timeout in seconds
+  margin_retries: 3              # Retries for Margin API on network error (not on app errors)
 
 # ── Bracket Orders ────────────────────────────────────────
 bracket:
+  # CRITICAL: disabling removes all broker-side SL protection. Keep enabled=true in production.
   enabled: true
-  cnc_sl_enabled: false        # CNC SL-M orders are cancelled at EOD by NSE — no overnight protection.
-                               # GTT not supported by OpenAlgo. CNC exits via TradingView signals only.
-  sl_order_type: SL-M         # SL or SL-M
-  max_sl_retries: 5            # Retry count for SL placement (safety-critical — 5 with 0.5s delay = 2.5s window)
-  retry_delay: 0.5             # Seconds to wait between retries (prevents hammering broker RMS)
-  tp_exit_retries: 3           # Retry count for tracker TP market exit (was 0 — unprotected before)
+
+  # CRITICAL: CNC SL-M orders are cancelled at EOD by NSE — no overnight protection.
+  # GTT not supported by OpenAlgo. CNC exits are driven by TradingView EXIT signals only.
+  cnc_sl_enabled: false
+
+  # CRITICAL: SL-M (market) is safer than SL (limit) — always fills on gap-down.
+  # Only change to SL if your broker doesn't support SL-M.
+  sl_order_type: SL-M
+
+  # [tune] SL placement retry settings. Safety-critical — 5 retries × 0.5s = 2.5s window.
+  max_sl_retries: 5
+  retry_delay: 0.5               # Seconds between SL placement retries
+
+  # [tune] Retry count for TP market exit orders. 3 retries covers brief network glitches.
+  tp_exit_retries: 3
 
 # ── Strategy Profiles ───────────────────────────────────────
-# Per-strategy configuration for multi-TP partial exits and product type.
-# tp_levels: mapping of TP level -> fraction of position to exit (cumulative).
-#   TP1: 0.5 means exit 50% of position at TP1.
-#   TP2: 1.0 means exit remaining 100% at TP2.
-# product: default product type for this strategy (MIS, CNC).
-# If a strategy is not listed here, TP HIT exits 100% of position (single TP).
+# [tune] Per-strategy TP exit fractions and product type.
+# tp_levels: TP label -> fraction of position to exit at that level (e.g. TP1: 0.5 = exit 50%).
+# product: overrides broker.product for this strategy (MIS or CNC).
+# If a strategy is absent here, every TP HIT exits 100% of position.
 strategy_profiles:
   ORB:
     product: MIS
-    # tp_levels intentionally absent — ORB PineScript includes ExitQtyPct in each TP HIT alert.
-    # Signal engine reads ExitQtyPct directly; strategy owns the exit logic, not this config.
-    # PineScript inputs: tp1ExitQtyPct=50 (partial), tp1_5ExitQtyPct=100 (close remaining).
+    # tp_levels absent — ORB PineScript sends ExitQtyPct in each TP HIT alert.
+    # Engine reads ExitQtyPct directly; strategy owns exit fractions, not this config.
   RSI-TP-MR:
     product: MIS
     tp_levels:
-      TP1: 1.0                  # Exit 100% at TP1 (single TP for RSI mean reversion)
+      TP1: 1.0                   # Exit 100% at TP1 (single TP for RSI mean reversion)

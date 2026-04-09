@@ -134,6 +134,10 @@ class Settings:
     # Test mode qty cap (from yaml) — 0 = disabled
     test_qty_cap: int
 
+    # Minimum live capital required before placing any new entry (from yaml)
+    # Prevents dwarf positions and broker rejections when capital is nearly depleted
+    min_capital_for_entry: float
+
     # Position tracking (from yaml)
     poll_interval: int
 
@@ -295,6 +299,9 @@ def _build_settings() -> Settings:
 
         # Test mode qty cap from yaml (0 = disabled)
         test_qty_cap=int(sizing.get("test_qty_cap", 0)),
+
+        # Minimum live capital for new entries
+        min_capital_for_entry=float(_require_key(sizing, "sizing", "min_capital_for_entry")),
 
         # Tracking from yaml
         poll_interval=int(_require_key(tracking, "tracking", "poll_interval")),

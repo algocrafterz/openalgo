@@ -51,13 +51,27 @@ risk_engine = RiskEngine(
 # Global position tracker
 tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
 
+# Per-position exit locks to serialize concurrent TP signal processing.
+# TradingView fires all TP alerts that hit in the same bar simultaneously at bar close.
+# Telethon dispatches each as a separate asyncio task, so without locking both handlers
+# find the same open position and place duplicate exit/SL orders.
+_exit_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_exit_lock(symbol: str, strategy: str) -> asyncio.Lock:
+    key = f"{symbol}:{strategy}"
+    if key not in _exit_locks:
+        _exit_locks[key] = asyncio.Lock()
+    return _exit_locks[key]
+
 
 async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> int:
-    """Adjust risk-based qty to fit within available broker margin.
+    """Check whether risk-based qty fits within available broker margin.
 
     For NSE/BSE equity: SpanCalc doesn't support equity. Estimates margin as
-    qty * entry * mis_margin_pct (20% for Flattrade). If estimated margin exceeds
-    live_capital (e.g. discretionary trade consumed funds), scales qty down proportionally.
+    qty * entry * mis_margin_pct (20% for Flattrade). If the full-risk qty doesn't
+    fit in live_capital, returns 0 (binary reject — never scales down). Scaled
+    positions risk less than 1% and produce dwarf profits not worth commission cost.
 
     For derivatives (NFO etc.): queries SpanCalc API for exact margin. Scales down if
     actual margin > live_capital. Raises MarginAPIError on persistent API failure.
@@ -65,14 +79,16 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
     Note: sizing uses day-start capital (equal risk weighting). This check uses live_capital
     as a safety floor only — it prevents broker rejections, not sizing adjustments.
 
-    Returns adjusted qty, or 0 if it cannot fit in available capital.
+    Returns raw_qty if margin check passes, or 0 if the trade cannot be taken at full size.
     """
     exchange = signal.exchange or settings.exchange
     if exchange in ("NSE", "BSE"):
         # SpanCalc only supports derivatives — estimate equity MIS margin instead.
-        # Safety check: if a discretionary trade has consumed live capital, scale qty
-        # down so we don't send an order the broker will reject (INSUFFICIENT FUNDS).
-        # Sizing still uses day-start capital (equal risk weighting); this is only a floor.
+        # Binary reject: if full-risk qty doesn't fit in live capital, skip the trade.
+        # We never scale qty down — a scaled trade risks less than 1% and produces
+        # dwarf positions that are not worth the commission + slippage cost.
+        # Sizing uses day-start capital (equal risk weighting); this check uses live_capital
+        # as a hard floor to prevent broker rejections.
         estimated_margin = raw_qty * signal.entry * settings.mis_margin_pct
         if estimated_margin <= live_capital:
             logger.debug(
@@ -81,13 +97,12 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
                 f"<= live_capital={live_capital:,.0f}"
             )
             return raw_qty
-        adjusted_qty = math.floor(raw_qty * live_capital / estimated_margin)
         logger.info(
-            f"NSE equity margin floor for {signal.symbol}: qty {raw_qty} -> {adjusted_qty} "
-            f"(est_margin={estimated_margin:,.0f} > live_capital={live_capital:,.0f}, "
-            f"likely discretionary trade consumed capital)"
+            f"NSE equity margin floor: skipping {signal.symbol} — "
+            f"est_margin={estimated_margin:,.0f} > live_capital={live_capital:,.0f}, "
+            f"full qty {raw_qty} not feasible (won't scale down to preserve 1% risk)"
         )
-        return adjusted_qty
+        return 0
 
     actual_margin = await fetch_margin(
         symbol=signal.symbol,
@@ -164,6 +179,17 @@ async def _handle_exit(signal) -> None:
     """
     await notifier.notify_exit_signal_received(signal.symbol, signal.strategy)
 
+    # Serialize concurrent exit signals for the same position.
+    # When multiple TP levels hit the same 5-min bar, TradingView fires all TP alerts
+    # simultaneously at bar close. Telethon dispatches each as a separate asyncio task,
+    # so without locking both handlers find the same position and place duplicate orders.
+    # The lock ensures the second handler sees the already-closed/reduced position.
+    async with _get_exit_lock(signal.symbol, signal.strategy):
+        await _handle_exit_locked(signal)
+
+
+async def _handle_exit_locked(signal) -> None:
+    """Inner exit handler — must be called with the per-position exit lock held."""
     # 1. Look up position in tracker
     pos = tracker.find_position(signal.symbol, signal.strategy)
 
@@ -347,6 +373,20 @@ async def _handle_entry(signal) -> None:
     capital = await fetch_available_capital()
     if capital <= 0:
         logger.error("Cannot fetch capital from OpenAlgo, skipping trade")
+        return
+
+    # 4a. Minimum capital floor — skip entry if live capital is too depleted.
+    # When existing positions consume most of the margin, the margin floor scales qty
+    # down to tiny sizes (8-12 shares) that get broker-rejected anyway. Blocking here
+    # prevents wasted API calls, avoids consuming the trades_per_day counter, and
+    # keeps the remaining capital free for SL exits on open positions.
+    if settings.min_capital_for_entry > 0 and capital < settings.min_capital_for_entry:
+        msg = (
+            f"Insufficient capital for new entry: live={capital:,.0f} < "
+            f"min={settings.min_capital_for_entry:,.0f} INR"
+        )
+        logger.warning(msg)
+        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
         return
 
     # Use day-start capital for equal risk per trade (cached on first fetch of day)
