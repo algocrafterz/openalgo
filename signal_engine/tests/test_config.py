@@ -31,7 +31,7 @@ class TestRequiredYamlSections:
         self._write_yaml(tmp_path, monkeypatch, {
             "telegram": {"channels": []},
             "risk": {"daily_loss_limit": 0.03, "weekly_loss_limit": 0.06,
-                     "monthly_loss_limit": 0.10, "max_portfolio_heat": 0.06,
+                     "monthly_loss_limit": 0.10,
                      "max_open_positions": 3,
                      "max_trades_per_day": 5, "min_rr": 1.0,
                      "duplicate_window_seconds": 60, "stale_signal_seconds": 60,
@@ -67,7 +67,7 @@ class TestRequiredYamlSections:
                        "min_entry_price": 0, "max_entry_price": 0,
                        "slippage_factor": 0.0, "sandbox_capital": 0},
             "risk": {"daily_loss_limit": 0.03, "weekly_loss_limit": 0.06,
-                     "monthly_loss_limit": 0.10, "max_portfolio_heat": 0.06,
+                     "monthly_loss_limit": 0.10,
                      "max_open_positions": 3,
                      "max_trades_per_day": 5, "min_rr": 1.0,
                      "duplicate_window_seconds": 60, "stale_signal_seconds": 60,
@@ -100,7 +100,7 @@ class TestRequiredYamlKeys:
                 "daily_loss_limit": 0.03,
                 "weekly_loss_limit": 0.06,
                 "monthly_loss_limit": 0.10,
-                "max_portfolio_heat": 0.06,
+
                 "max_open_positions": 3,
                 "max_trades_per_day": 5,
                 "min_rr": 1.0,
@@ -173,7 +173,7 @@ class TestInvalidSizingMode:
                 "daily_loss_limit": 0.03,
                 "weekly_loss_limit": 0.06,
                 "monthly_loss_limit": 0.10,
-                "max_portfolio_heat": 0.06,
+
                 "max_open_positions": 3,
                 "max_trades_per_day": 5,
                 "min_rr": 1.0,
@@ -231,7 +231,6 @@ class TestRiskEngineRejectsUnknownMode:
             max_trades_per_day=5,
             min_entry_price=0,
             max_entry_price=0,
-            max_portfolio_heat=0.06,
         )
         with pytest.raises(ValueError, match="Unknown sizing mode"):
             engine.calculate_quantity(make_signal(), capital=100_000)
@@ -257,7 +256,7 @@ class TestValidConfigLoadsSuccessfully:
                 "daily_loss_limit": 0.03,
                 "weekly_loss_limit": 0.06,
                 "monthly_loss_limit": 0.10,
-                "max_portfolio_heat": 0.06,
+
                 "max_open_positions": 3,
                 "max_trades_per_day": 5,
                 "min_rr": 1.0,
@@ -293,7 +292,6 @@ class TestValidConfigLoadsSuccessfully:
         assert s.min_entry_price == 50
         assert s.max_entry_price == 1500
         assert s.daily_loss_limit == 0.03
-        assert s.max_portfolio_heat == 0.06
         assert s.max_open_positions == 3
         assert s.exchange == "NSE"
         assert s.product == "MIS"
@@ -335,7 +333,7 @@ class TestSectorsYamlLoading:
                 "daily_loss_limit": 0.03,
                 "weekly_loss_limit": 0.06,
                 "monthly_loss_limit": 0.10,
-                "max_portfolio_heat": 0.06,
+
                 "max_open_positions": 3,
                 "max_trades_per_day": 5,
                 "min_rr": 1.0,

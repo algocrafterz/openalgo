@@ -21,7 +21,6 @@ def _engine(**overrides) -> RiskEngine:
         "min_entry_price": 0,
         "max_entry_price": 0,
         "slippage_factor": 0.0,
-        "max_portfolio_heat": 0.06,
         "default_product": "MIS",
         "max_positions_per_symbol": 1,
         "max_positions_per_sector": 2,
@@ -423,65 +422,6 @@ class TestDailyReset:
         assert engine.daily_realised_loss == 0
 
 
-class TestPortfolioHeat:
-    def test_initial_heat_is_zero(self):
-        engine = _engine()
-        assert engine.portfolio_heat == 0.0
-
-    def test_add_heat_accumulates(self):
-        engine = _engine()
-        engine.add_heat(qty=10, risk_per_share=50.0)
-        assert engine.portfolio_heat == 500.0
-
-    def test_add_heat_multiple_positions(self):
-        engine = _engine()
-        engine.add_heat(qty=10, risk_per_share=50.0)
-        engine.add_heat(qty=5, risk_per_share=20.0)
-        assert engine.portfolio_heat == 600.0
-
-    def test_remove_heat_decreases(self):
-        engine = _engine()
-        engine.add_heat(qty=10, risk_per_share=50.0)
-        engine.remove_heat(qty=10, risk_per_share=50.0)
-        assert engine.portfolio_heat == 0.0
-
-    def test_remove_heat_never_goes_negative(self):
-        engine = _engine()
-        engine.add_heat(qty=5, risk_per_share=10.0)
-        engine.remove_heat(qty=100, risk_per_share=100.0)
-        assert engine.portfolio_heat == 0.0
-
-    def test_check_exposure_blocks_when_heat_exceeds_limit(self):
-        # max_portfolio_heat=0.06, capital=100_000 -> limit=6000
-        # heat = 6001 -> block
-        engine = _engine(max_portfolio_heat=0.06)
-        engine._last_known_capital = 100_000
-        engine.portfolio_heat = 6001.0
-        assert engine.check_exposure() is False
-
-    def test_check_exposure_allows_at_limit_boundary(self):
-        # heat exactly at limit (5999 < 6000) -> allow
-        engine = _engine(max_portfolio_heat=0.06)
-        engine._last_known_capital = 100_000
-        engine.portfolio_heat = 5999.0
-        assert engine.check_exposure() is True
-
-    def test_check_exposure_skips_heat_when_no_capital(self):
-        # capital=0 -> heat check skipped
-        engine = _engine(max_portfolio_heat=0.06)
-        engine._last_known_capital = 0
-        engine.portfolio_heat = 99999.0
-        assert engine.check_exposure() is True
-
-    def test_heat_reset_on_new_day(self):
-        engine = _engine()
-        engine.add_heat(qty=10, risk_per_share=50.0)
-        assert engine.portfolio_heat == 500.0
-        engine._current_day = -1
-        engine.check_exposure()
-        assert engine.portfolio_heat == 0.0
-
-
 class TestUnrealisedDrawdown:
     def test_initial_unrealised_loss_is_zero(self):
         engine = _engine()
@@ -627,25 +567,14 @@ class TestCorrelationRisk:
 class TestCapacityStatus:
     def test_initial_status(self):
         engine = _engine()
-        engine._last_known_capital = 100_000.0
         status = engine.capacity_status()
-        assert status == "0/3 positions, heat=0.0%/6.0%"
+        assert status == "0/3 positions open"
 
     def test_after_trade(self):
         engine = _engine()
-        engine._last_known_capital = 100_000.0
         engine.open_positions = 2
-        engine.portfolio_heat = 3_000.0
         status = engine.capacity_status()
-        assert status == "2/3 positions, heat=3.0%/6.0%"
-
-    def test_zero_capital_no_division_error(self):
-        engine = _engine()
-        engine._last_known_capital = 0.0
-        # Must not raise ZeroDivisionError
-        status = engine.capacity_status()
-        assert "0/3 positions" in status
-        assert "heat=0.0%" in status
+        assert status == "2/3 positions open"
 
 
 class TestRestartSafeCounters:

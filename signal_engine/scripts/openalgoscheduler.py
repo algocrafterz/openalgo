@@ -343,7 +343,6 @@ def build_startup_summary(
     risk_per_trade: float,
     max_open_positions: int,
     daily_loss_limit: float,
-    max_portfolio_heat: float,
     exchange: str,
     product: str,
     order_type: str,
@@ -358,7 +357,6 @@ def build_startup_summary(
         risk_per_trade: Risk fraction per trade.
         max_open_positions: Max concurrent positions.
         daily_loss_limit: Daily loss limit fraction.
-        max_portfolio_heat: Max portfolio heat fraction.
         exchange: Trading exchange.
         product: Order product type.
         order_type: Order type.
@@ -394,7 +392,6 @@ def build_startup_summary(
         f"Risk/Trade: {risk_per_trade * 100:.1f}%",
         f"Max Positions: {max_open_positions}",
         f"Daily Loss Limit: {daily_loss_limit * 100:.1f}%",
-        f"Portfolio Heat Cap: {max_portfolio_heat * 100:.1f}%",
         "",
         "-- Channels --",
         ch_list,
@@ -529,7 +526,6 @@ def _run_startup():
         risk_per_trade=settings.risk_per_trade,
         max_open_positions=settings.max_open_positions,
         daily_loss_limit=settings.daily_loss_limit,
-        max_portfolio_heat=settings.max_portfolio_heat,
         exchange=settings.exchange,
         product=settings.product,
         order_type=settings.order_type,

@@ -43,7 +43,6 @@ class RiskEngine:
         max_trades_per_day: int,
         min_entry_price: float,
         max_entry_price: float,
-        max_portfolio_heat: float,
         slippage_factor: float = 0.0,
         store=None,
         trade_mode: str = "live",
@@ -64,7 +63,6 @@ class RiskEngine:
         self.max_trades_per_day = max_trades_per_day
         self.min_entry_price = min_entry_price
         self.max_entry_price = max_entry_price
-        self.max_portfolio_heat = max_portfolio_heat
         self.slippage_factor = slippage_factor
         self._store = store
         self._trade_mode = trade_mode
@@ -88,10 +86,7 @@ class RiskEngine:
         self._last_known_capital: float = 0.0
         self._current_day: int = datetime.now(_IST).timetuple().tm_yday
 
-        # Feature 1: Portfolio heat
-        self.portfolio_heat: float = 0.0
-
-        # Feature 2: Unrealised drawdown
+        # Unrealised drawdown
         self.unrealised_loss: float = 0.0
 
         # Day-start capital: cached on first fetch of each trading day
@@ -112,7 +107,6 @@ class RiskEngine:
         self.trades_today = row["trades_today"]
         self.daily_realised_loss = row["daily_loss"]
         self.open_positions = row["open_positions"]
-        self.portfolio_heat = row.get("portfolio_heat", 0.0)
 
         # Load weekly/monthly losses
         self.weekly_realised_loss = self._store.weekly_loss(self._trade_mode, today)
@@ -140,8 +134,7 @@ class RiskEngine:
         )
         logger.info(
             f"Price filter: {self.min_entry_price}-{self.max_entry_price} | "
-            f"Risk/trade: {self.risk_per_trade:.1%} | "
-            f"Max heat: {self.max_portfolio_heat:.1%}"
+            f"Risk/trade: {self.risk_per_trade:.1%}"
         )
         logger.info("-------------------------------------")
 
@@ -177,7 +170,6 @@ class RiskEngine:
             trades_today=self.trades_today,
             daily_loss=self.daily_realised_loss,
             open_positions=self.open_positions,
-            portfolio_heat=self.portfolio_heat,
         )
 
     def _maybe_reset_daily(self) -> None:
@@ -188,20 +180,11 @@ class RiskEngine:
             self.trades_today = 0
             self.daily_realised_loss = 0.0
             self.open_positions = 0
-            self.portfolio_heat = 0.0
             self.unrealised_loss = 0.0
             self._day_start_capital = 0.0
             self._positions_by_symbol.clear()
             self._positions_by_sector.clear()
             self._persist()
-
-    def add_heat(self, qty: int, risk_per_share: float) -> None:
-        """Accumulate open risk into portfolio heat when opening a position."""
-        self.portfolio_heat += qty * risk_per_share
-
-    def remove_heat(self, qty: int, risk_per_share: float) -> None:
-        """Reduce portfolio heat when closing a position. Never goes below zero."""
-        self.portfolio_heat = max(0.0, self.portfolio_heat - qty * risk_per_share)
 
     def update_unrealised(self, loss: float) -> None:
         """Update mark-to-market unrealised loss (replace, not accumulate)."""
@@ -294,10 +277,6 @@ class RiskEngine:
                 logger.warning("Monthly loss limit breached")
                 return False
 
-            if self.portfolio_heat / capital >= self.max_portfolio_heat:
-                logger.warning("Portfolio heat limit breached")
-                return False
-
         if self.open_positions >= self.max_open_positions:
             logger.warning("Max open positions reached")
             return False
@@ -319,8 +298,6 @@ class RiskEngine:
                 return f"Weekly loss limit hit"
             if self.monthly_realised_loss >= capital * self.monthly_loss_limit:
                 return f"Monthly loss limit hit"
-            if self.portfolio_heat / capital >= self.max_portfolio_heat:
-                return f"Portfolio heat limit ({self.portfolio_heat:,.0f}/{capital * self.max_portfolio_heat:,.0f})"
         if self.open_positions >= self.max_open_positions:
             return f"Max positions ({self.open_positions}/{self.max_open_positions})"
         if self.trades_today >= self.max_trades_per_day:
@@ -329,13 +306,7 @@ class RiskEngine:
 
     def capacity_status(self) -> str:
         """Return a formatted capacity summary string."""
-        capital = self._last_known_capital
-        heat_pct = (self.portfolio_heat / capital * 100) if capital > 0 else 0
-        heat_limit = self.max_portfolio_heat * 100
-        return (
-            f"{self.open_positions}/{self.max_open_positions} positions, "
-            f"heat={heat_pct:.1f}%/{heat_limit:.1f}%"
-        )
+        return f"{self.open_positions}/{self.max_open_positions} positions open"
 
     def can_trade_symbol(self, symbol: str) -> bool:
         """Return True if opening another position in this symbol is allowed."""

@@ -23,41 +23,38 @@ class RiskStore:
                 trades_today    INTEGER NOT NULL DEFAULT 0,
                 daily_loss      REAL NOT NULL DEFAULT 0.0,
                 open_positions  INTEGER NOT NULL DEFAULT 0,
-                portfolio_heat  REAL NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (mode, trade_date)
             )
         """)
-        # Migrate existing DBs that predate portfolio_heat column
+        # Migrate existing DBs that still have the portfolio_heat column (no-op on fresh DBs)
         try:
             self._conn.execute("ALTER TABLE risk_counters ADD COLUMN portfolio_heat REAL NOT NULL DEFAULT 0.0")
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass  # Column already exists — harmless legacy column, ignored on read
         self._conn.commit()
 
     def save(self, mode: str, trade_date: date, *,
-             trades_today: int, daily_loss: float, open_positions: int,
-             portfolio_heat: float = 0.0) -> None:
+             trades_today: int, daily_loss: float, open_positions: int) -> None:
         self._conn.execute("""
-            INSERT INTO risk_counters (mode, trade_date, trades_today, daily_loss, open_positions, portfolio_heat)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO risk_counters (mode, trade_date, trades_today, daily_loss, open_positions)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(mode, trade_date) DO UPDATE SET
                 trades_today = excluded.trades_today,
                 daily_loss = excluded.daily_loss,
-                open_positions = excluded.open_positions,
-                portfolio_heat = excluded.portfolio_heat
-        """, (mode, trade_date.isoformat(), trades_today, daily_loss, open_positions, portfolio_heat))
+                open_positions = excluded.open_positions
+        """, (mode, trade_date.isoformat(), trades_today, daily_loss, open_positions))
         self._conn.commit()
 
     def load(self, mode: str, trade_date: date) -> dict:
         cur = self._conn.execute(
-            "SELECT trades_today, daily_loss, open_positions, portfolio_heat FROM risk_counters "
+            "SELECT trades_today, daily_loss, open_positions FROM risk_counters "
             "WHERE mode = ? AND trade_date = ?",
             (mode, trade_date.isoformat()),
         )
         row = cur.fetchone()
         if row is None:
-            return {"trades_today": 0, "daily_loss": 0.0, "open_positions": 0, "portfolio_heat": 0.0}
-        return {"trades_today": row[0], "daily_loss": row[1], "open_positions": row[2], "portfolio_heat": row[3]}
+            return {"trades_today": 0, "daily_loss": 0.0, "open_positions": 0}
+        return {"trades_today": row[0], "daily_loss": row[1], "open_positions": row[2]}
 
     def weekly_loss(self, mode: str, ref_date: date) -> float:
         week_start = ref_date - timedelta(days=ref_date.weekday())

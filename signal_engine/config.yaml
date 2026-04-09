@@ -66,10 +66,6 @@ risk:
   weekly_loss_limit: 0.08        # 8% = 2 bad days per week
   monthly_loss_limit: 0.10       # 10% of capital
 
-  # CRITICAL: must equal max_open_positions × risk_per_trade. If out of sync, new entries
-  # are blocked prematurely (heat too low) or open risk is under-tracked (heat too high).
-  max_portfolio_heat: 0.03       # 3 slots × 1% = 3% max open risk
-
   # [tune] Max concurrent open positions. At avg_sl=0.64%, risk=1%, MIS=20% margin:
   # margin_per_trade ≈ 31% of capital → 3 slots fit at any capital level (₹15K–₹1L+).
   # Increase to 4 only if avg_sl tightens materially (e.g. <0.45%). Also update max_portfolio_heat.
@@ -120,7 +116,7 @@ blacklist:
     - SYNGENE            # 0% WR, -0.4% PnL — pharma, unpredictable gaps
     - CANBK              # A->D in Q2: +3.30% Q1 -> -0.70% Q2 — sharp reversal
     - FEDERALBNK         # A->D in Q2: +2.41% Q1 -> -0.70% Q2 — sharp reversal
-    #- WIPRO              # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — consistent deterioration
+    - WIPRO              # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — consistent deterioration
     - BANKBARODA         # B->D: +0.60% Q1 -> -0.70% Q2 — crossed into negative
 
 # ── Time Exit ────────────────────────────────────────────
@@ -134,8 +130,8 @@ time_exit:
 # ── Position Tracking ────────────────────────────────────
 tracking:
   # [tune] Seconds between position checks. Detects broker SL-M fills (qty drops to 0).
-  # 10s is responsive enough for volatile ORB stocks. Lower = more API calls.
-  poll_interval: 10
+  # 5s halves slot-recovery latency vs 10s — 1 API call per poll, negligible load.
+  poll_interval: 5
 
 # ── Broker / Exchange ────────────────────────────────────
 broker:

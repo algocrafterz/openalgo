@@ -33,7 +33,6 @@ risk_engine = RiskEngine(
     daily_loss_limit=settings.daily_loss_limit,
     weekly_loss_limit=settings.weekly_loss_limit,
     monthly_loss_limit=settings.monthly_loss_limit,
-    max_portfolio_heat=settings.max_portfolio_heat,
     max_open_positions=settings.max_open_positions,
     max_trades_per_day=settings.max_trades_per_day,
     min_entry_price=settings.min_entry_price,

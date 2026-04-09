@@ -112,7 +112,6 @@ class Settings:
     daily_loss_limit: float
     weekly_loss_limit: float
     monthly_loss_limit: float
-    max_portfolio_heat: float
     max_open_positions: int
     max_trades_per_day: int
     min_rr: float
@@ -280,7 +279,6 @@ def _build_settings() -> Settings:
         daily_loss_limit=float(_require_key(risk, "risk", "daily_loss_limit")),
         weekly_loss_limit=float(_require_key(risk, "risk", "weekly_loss_limit")),
         monthly_loss_limit=float(_require_key(risk, "risk", "monthly_loss_limit")),
-        max_portfolio_heat=float(_require_key(risk, "risk", "max_portfolio_heat")),
         max_open_positions=int(_require_key(risk, "risk", "max_open_positions")),
         max_trades_per_day=int(_require_key(risk, "risk", "max_trades_per_day")),
         min_rr=float(_require_key(risk, "risk", "min_rr")),
