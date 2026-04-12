@@ -196,7 +196,7 @@ Simulated net PnL across 196 trades under different TP strategies using actual Q
 | 50-50 split, no trail | +4.5R | +0.023R | — |
 | TP1.5 only, no trail | -60.0R | -0.306R | 27.6% |
 
-### Conclusions
+### Conclusions (mStock, 2026-03-12)
 
 1. **TP1 (1R) is the optimal target** — highest net PnL by a wide margin. High win rate (67.3%) with 1:1 R:R outperforms all alternatives.
 2. **TP1.5 alone without trailing SL loses money** (-60R). The 78 trades that hit TP1 but not TP1.5 would become full losses.
@@ -207,6 +207,132 @@ Simulated net PnL across 196 trades under different TP strategies using actual Q
 ### Design Decision
 
 Signal engine is a **dumb executor** — it does not compute or override TP/SL levels. All trade logic (TP level selection, R:R calculation) stays in the PineScript strategy. Signal engine handles: parsing, validation, sizing, order placement, and position tracking only.
+
+---
+
+## TP Strategy Re-Analysis — Flattrade (2026-04-12)
+
+Broker switched from mStock to **Flattrade (zero brokerage)**. All charges are percentage-based (STT, exchange, SEBI, GST, stamp duty). This changes the TP strategy conclusion significantly.
+
+### Derived R-Multiples from Actual Q1 Exit Data
+
+From live 50-50 strategy (50% position per exit):
+- Avg win per exit: +0.725% of capital → TP1 exit (50% pos) = **+0.602%**, TP1.5 exit (50% pos) = **+0.903%**
+- Avg loss per exit: -0.660% of capital (full position SL)
+- Full position TP1 exit (TP1-only model) = 2 × 0.602% = **+1.204%**
+
+### Key Flattrade Cost Insight
+
+With percentage-only fees, splitting one exit into two partial exits costs **exactly the same** total charges — STT and exchange fees are proportional to sell value, which is identical whether exited in one lot or two. Zero commission penalty for 50-50 strategies.
+
+Only extra cost for 50-50: slippage on the runner exit (one additional MARKET order on 78 winning trades = **+3.9R total** over Q1).
+
+### Gross PnL by Scenario
+
+| Scenario | Count | TP1-only | 50-50 trail to BE | 50-50 trail to TP1 |
+|---|---|---|---|---|
+| TP1.5 reached | 54 | 54 × 1.204% = +65.0% | 54 × 1.505% = +81.3% | 54 × 1.505% = +81.3% |
+| TP1 hit, fell back | 24 | 24 × 1.204% = +28.9% | 24 × 0.602% = +14.4% | 24 × 1.204% = +28.9% |
+| SL hit | 63 | 63 × (−0.660%) = −41.6% | −41.6% | −41.6% |
+| **Gross total** | | **+52.3%** | **+54.1%** | **+68.6%** |
+
+### Net After Flattrade Costs (Q1, 142 trades)
+
+| Strategy | Gross | Commission | Slippage | **Net (Q1)** |
+|---|---|---|---|---|
+| TP1-only | +52.3% | −7.8% | −14.2% | **+30.3%** |
+| 50-50 trail to BE | +54.1% | −7.8% | −18.1% | **+28.2%** |
+| **50-50 trail to TP1** | **+68.6%** | **−7.8%** | **−18.1%** | **+42.7%** |
+
+Note: commission is identical for all three strategies (percentage-based fees, same total sell value).
+
+### Absolute Returns by Capital (per Q1 ≈ 6 weeks)
+
+| Capital | TP1-only | 50-50 trail BE | **50-50 trail TP1** | Extra vs TP1-only |
+|---:|---:|---:|---:|---:|
+| ₹15,000 | ₹4,545 | ₹4,230 | **₹6,405** | +₹1,860 |
+| ₹35,000 | ₹10,605 | ₹9,870 | **₹14,945** | +₹4,340 |
+| ₹50,000 | ₹15,150 | ₹14,100 | **₹21,350** | +₹6,200 |
+| ₹1,00,000 | ₹30,300 | ₹28,200 | **₹42,700** | +₹12,400 |
+
+### TP1.5 Level Clarification
+
+From `calculateTargets()` in orb.pine:
+- `tp1_risk = entry + (risk × 1.0)` → TP1 is **1× risk distance** from entry
+- `tp1_5_risk = entry + (risk × 1.5)` → TP1.5 is **1.5× risk distance** from entry
+
+TP1.5 is **50% more** profitable than TP1 on the same qty — NOT 100% more. The gain from TP1 to TP1.5 is only 0.5R extra.
+
+### Correct Scenario Table (₹35K capital, round numbers: full TP1 win = ₹500, SL loss = ₹350)
+
+| Scenario | Strategy A (100% at TP1) | Strategy B (50-50 trail to TP1) | Difference |
+|---|---|---|---|
+| TP1.5 reached (54 trades) | +₹500 (already exited, missed run) | ₹250 (TP1 half) + ₹375 (TP1.5 half) = **+₹625** | **B wins +₹125** |
+| TP1 hit, TP1.5 not reached (24 trades) | +₹500 | ₹250 (TP1 half) + ₹250 (runner exits at TP1) = **+₹500** | Tie |
+| SL hit before TP1 (63 trades) | −₹350 | −₹350 | Tie |
+
+Strategy A has **no TP1.5 scenario** — all shares sold at TP1, runner does not exist.
+Strategy B is never worse than A; wins only when TP1.5 is reached.
+
+**Q1 extra for Strategy B at ₹35K: 54 × ₹125 = ₹6,750 gross, ~₹5,350 net** (after extra slippage on 54 runner exits).
+
+### Revised Conclusions (Flattrade, 2026-04-12)
+
+1. **50-50 trail to TP1 is the optimal strategy** — +42.7% net vs +30.3% for TP1-only. The prior TP1-only conclusion was driven by mStock's per-order brokerage; that cost advantage no longer exists.
+2. **50-50 trail to BE is now marginally WORSE than TP1-only** (+28.2% vs +30.3%) — the tiny gross advantage (+1.8%) is outweighed by extra slippage on runner exits. Do not use this variant.
+3. **50-50 trail to TP1 strictly dominates TP1-only** — identical outcome on SL and TP1-only trades, strictly better when TP1.5 is reached (54 trades in Q1). Never worse, sometimes better.
+4. **Implementation cost is justified at ₹35K+ capital** — ~₹5,350/quarter improvement warrants the signal engine change: cancel SL-M after TP1 hit, re-place SL-M at TP1 price for the runner.
+5. **Slippage is the only remaining cost differentiator** between strategies — with zero brokerage, optimizing MARKET order latency (TradingView direct webhook) becomes higher ROI than before.
+
+### Implementation Requirements (Signal Engine)
+
+For "50-50 trail to TP1":
+1. On TP1 signal: exit 50% at market
+2. Cancel existing SL-M broker order
+3. Place new SL-M at TP1 price for remaining 50% position
+4. On TP1.5 signal: exit remaining 50% at market
+5. Fallback: if new SL-M placement fails, immediately exit runner at market (no naked exposure)
+
+Status: **Implemented 2026-04-13** (see Changes Applied on 2026-04-13).
+
+## Changes Applied on 2026-04-13
+
+### Change 1 — SL-Hunt Floor for ATR / Scaled ATR modes (`orb.pine`)
+Smart Adaptive SL already floored to `orbLow - 0.3 × orbRange`, but ATR and Scaled ATR
+modes placed SL purely off ATR distance — on narrow ATR days the SL sat just inside the
+ORB range and a routine first-bar wick-back cleared it. Applied a matching floor to all
+four mode/direction branches inside `calculateStopLoss()`:
+
+```
+wickBuf = max(validATR * 0.3, orbRange * 0.15)
+LONG : sl = min(atrStop, orbLow  - wickBuf)
+SHORT: sl = max(atrStop, orbHigh + wickBuf)
+```
+
+Safety: fixed-fractional sizing (`qty = risk_budget / sl_distance`) means a wider SL
+automatically reduces share count — ₹ loss on SL hit stays capped at 1% of capital.
+Verified against EXIDEIND case (the trade that motivated this change).
+
+### Change 2 — 50-50 TP Booking with SL Moved to TP1 (`main.py`, `notifier.py`)
+On partial TP1 exit, the remaining 50% now has its SL moved to **TP1 price** (not entry).
+Runner outcomes: TP1.5 hit (full edge) OR SL at TP1 (banked TP1 on 100% qty) — never worse.
+
+Sequence in `_handle_exit_locked()`:
+1. Cancel existing SL-M broker order (already in place — required for Indian brokers)
+2. Place MARKET SELL for `exit_qty` (50% of position)
+3. Place new SL-M at `pos.tp` for remaining 50% qty; fallback to `pos.entry_price` if
+   `pos.tp` is missing; if placement fails, `notify_sl_failed` fires (operator alert)
+
+Telegram alerts (concise, `notify_partial_exit` extended with `new_sl`):
+- `🎯 TP DETECTED | RELIANCE[ORB] | LTP=2525.50 >= TP=2525.00 | Cancelling SL + exiting at market | HH:MM IST`
+- `🎯 PARTIAL EXIT | RELIANCE[ORB] | TP1 | Exited 50 qty, remaining 50 | P&L: +₹245 | SL→2525.00 | HH:MM IST`
+- On TP1.5: `✅ TP HIT | RELIANCE[ORB] | P&L: +₹XXX | HH:MM IST`
+- On failure: `❌ SL FAILED | RELIANCE[ORB] | SL re-placement failed after partial exit: <reason>`
+
+Tests: added `test_sl_replayed_for_remaining_qty_after_partial_exit` (asserts new SL at
+TP1 price 2525), `test_sl_falls_back_to_entry_when_tp_missing`, and the existing
+`test_sl_replacement_failure_logs_error_and_notifies` continues to guard the failure
+path. Full `test_main.py` suite green (36 passed).
 
 ## Capital Simulation — TP1 Only (2026-03-13)
 
@@ -240,11 +366,14 @@ Based on Q1 data: 196 trades over 31 trading days (~1.5 months), TP1 only (+69R 
 
 ### Capital vs Absolute Returns (TP1 Only, Net of Costs)
 
+> Note: TP1-only is the mStock baseline. For Flattrade with 50-50 trail to TP1, multiply net P&L by 1.41× (42.7% / 30.3%). See Flattrade re-analysis section above.
+
 | Capital (INR) | Risk/Trade | Net P&L (31R) | Monthly (~20R) | Max DD (6R) | Margin/Trade (20%) |
 |--------------:|-----------:|--------------:|---------------:|------------:|--------------------:|
 | 5,000 | 50 | 1,550 | ~1,000 | -300 | ~1,560 |
 | 10,000 | 100 | 3,100 | ~2,000 | -600 | ~3,125 |
 | 25,000 | 250 | 7,750 | ~5,000 | -1,500 | ~7,813 |
+| **35,000** | **350** | **10,850** | **~7,000** | **-2,100** | **~10,938** |
 | 50,000 | 500 | 15,500 | ~10,000 | -3,000 | ~15,625 |
 | 75,000 | 750 | 23,250 | ~15,000 | -4,500 | ~23,438 |
 | **100,000** | **1,000** | **31,000** | **~20,000** | **-6,000** | **~31,250** |
@@ -389,7 +518,8 @@ The design works at any capital level — only `max_open_positions` may need adj
 
 | Capital | Risk/Trade (1%) | Margin/Trade (avg) | Max Concurrent | Adjust? |
 |--------:|----------------:|-------------------:|:-:|:-:|
-| ₹15K | ₹150 | ~₹4,600 | 3 | Current |
+| ₹15K | ₹150 | ~₹4,600 | 3 | Previous |
 | ₹25K | ₹250 | ~₹7,800 | 3 | Could go to 4 |
+| **₹35K** | **₹350** | **~₹10,700** | **3** | **Current — fits 3 comfortably, consider 4** |
 | ₹50K | ₹500 | ~₹15,600 | 3 | Could go to 5 |
 | ₹1L | ₹1,000 | ~₹31,200 | 3 | Could go to 5 |

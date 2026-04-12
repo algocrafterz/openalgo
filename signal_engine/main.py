@@ -7,7 +7,7 @@ import sys
 
 from loguru import logger
 
-from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
+from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_order_fill_price, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
 from signal_engine.db import save
 from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
@@ -192,6 +192,19 @@ async def _handle_exit_locked(signal) -> None:
     # 1. Look up position in tracker
     pos = tracker.find_position(signal.symbol, signal.strategy)
 
+    # Guard against duplicate concurrent processing. asyncio.Lock serializes tasks, but
+    # Telethon can dispatch multiple simultaneous TP alerts as separate tasks before any
+    # acquires the lock. The flag is set/cleared synchronously (no await between check
+    # and set), so it is safe in single-threaded asyncio — it catches the rare case where
+    # the lock re-enters before the previous handler fully clears the position.
+    if pos is not None and getattr(pos, "exit_pending", False) is True:
+        logger.warning(
+            f"EXIT: {signal.symbol} exit already in progress (duplicate TP signal), skipping"
+        )
+        return
+    if pos is not None:
+        pos.exit_pending = True
+
     # 2. Fallback: if tracker lost state (engine restart), query broker API
     if pos is None:
         logger.warning(
@@ -201,20 +214,23 @@ async def _handle_exit_locked(signal) -> None:
         exchange = signal.exchange or settings.exchange
         product = signal.product or settings.product
         api_qty = await fetch_open_position(signal.symbol, signal.strategy, exchange, product)
-        if api_qty <= 0:
+        if api_qty == 0 or api_qty == -1:
             logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
             await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
             return
+        # Negative qty from broker means SHORT position; positive means LONG.
+        # Use the absolute value for quantity and set direction accordingly.
+        fallback_direction = Direction.SHORT if api_qty < 0 else Direction.LONG
         pos = TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
             exchange=exchange,
             product=product,
             entry_price=signal.entry,
-            quantity=api_qty,
+            quantity=abs(api_qty),
             sl=signal.sl,
             tp=signal.tp,
-            direction=Direction.LONG,
+            direction=fallback_direction,
             sl_order_id="",
         )
 
@@ -245,6 +261,7 @@ async def _handle_exit_locked(signal) -> None:
         quantity=exit_qty,
         product=pos.product,
         strategy_tag=pos.strategy,
+        direction=pos.direction,
     )
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
@@ -271,6 +288,7 @@ async def _handle_exit_locked(signal) -> None:
             await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
             tracker.unregister(signal.symbol, signal.strategy)
             risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+            # exit_pending does not need clearing — position is unregistered
         else:
             # Partial exit: reduce tracked qty, keep position registered
             remaining = pos.quantity - exit_qty
@@ -278,27 +296,29 @@ async def _handle_exit_locked(signal) -> None:
             pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
-            # Re-place SL at breakeven (entry price) after partial TP exit.
-            # Rationale: TP1 profit is already banked. Moving SL to entry locks that profit —
-            # worst case on remaining shares is flat (not a loss). Original SL is no longer
-            # appropriate because it would wipe out the banked TP1 gain on a reversal.
+            # Re-place SL at TP1 price after partial TP exit (50-50 TP booking strategy).
+            # Rationale: TP1 profit is already banked on the first 50%. Moving SL to TP1
+            # price guarantees the remaining 50% also books at least TP1 profit on reversal
+            # — the runner can only realise TP1.5 (better) or TP1 (same as the first half),
+            # never worse. Fall back to entry_price (old breakeven behaviour) if pos.tp is
+            # unset — defensive, shouldn't occur in normal flow.
             # Critical: SL was already cancelled before the exit order. Re-place now.
-            breakeven_sl = pos.entry_price  # round_to_tick applied inside place_sl_order
-            if settings.bracket_enabled and breakeven_sl > 0:
+            new_sl_price = pos.tp if pos.tp and pos.tp > 0 else pos.entry_price
+            if settings.bracket_enabled and new_sl_price > 0:
                 sl_result = await place_sl_order(
                     symbol=pos.symbol,
                     exchange=pos.exchange,
                     direction=pos.direction,
                     quantity=remaining,
-                    sl_price=breakeven_sl,
+                    sl_price=new_sl_price,
                     product=pos.product,
                     strategy_tag=pos.strategy,
                 )
                 if sl_result.status == OrderStatus.SUCCESS:
-                    pos.sl = breakeven_sl  # update tracked SL so time_exit and check_positions stay consistent
+                    pos.sl = new_sl_price  # update tracked SL so time_exit and check_positions stay consistent
                     pos.sl_order_id = sl_result.order_id
                     logger.info(
-                        f"SL moved to breakeven {breakeven_sl} for {pos.symbol} "
+                        f"SL moved to TP1 price {new_sl_price} for {pos.symbol} "
                         f"remaining {remaining} qty: id={sl_result.order_id}"
                     )
                 else:
@@ -313,8 +333,10 @@ async def _handle_exit_locked(signal) -> None:
                     )
 
             await notifier.notify_partial_exit(
-                pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta, strategy=pos.strategy,
+                pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta,
+                strategy=pos.strategy, new_sl=pos.sl,
             )
+            pos.exit_pending = False  # partial exit done — allow next TP signal
 
         # 7. Update day summary counters + realised PnL snapshot
         tracker.record_exit(pnl=pnl_delta, new_realised_pnl=current_realised)
@@ -331,7 +353,7 @@ async def _handle_exit_locked(signal) -> None:
             pos.symbol, pos.strategy,
             pos.exchange, pos.product,
         )
-        if broker_qty <= 0:
+        if broker_qty == 0:
             logger.info(
                 f"EXIT failed but broker position is already 0 for {pos.symbol} "
                 "— SL likely fired. Cleaning up tracker."
@@ -339,6 +361,9 @@ async def _handle_exit_locked(signal) -> None:
             tracker.unregister(pos.symbol, pos.strategy)
             risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
         else:
+            # Position still open (broker_qty > 0 for LONG, < 0 for SHORT, -1 for API error).
+            # Clear exit_pending so the next TP/EXIT signal can retry.
+            pos.exit_pending = False
             await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
 
     # 8. Persist to DB audit trail
@@ -487,7 +512,22 @@ async def _handle_entry(signal) -> None:
             else:
                 await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
 
-        # 10. Register in position tracker for P&L monitoring and SL close-detection
+        # 10. Fetch actual entry fill price (MARKET orders typically fill before bracket completes)
+        entry_fill_price = await fetch_order_fill_price(trade_result.order_id, signal.strategy)
+        if entry_fill_price:
+            slippage = entry_fill_price - signal.entry
+            logger.info(
+                f"Entry fill: {signal.symbol} avg_price={entry_fill_price:.2f} "
+                f"(signal={signal.entry:.2f}, slippage={slippage:+.2f})"
+            )
+            await notifier.notify_entry_filled(
+                signal.symbol, signal.direction.value, entry_fill_price,
+                quantity, signal.entry, strategy=signal.strategy,
+            )
+        else:
+            logger.warning(f"Entry fill price unavailable for {signal.symbol} id={trade_result.order_id}")
+
+        # 11. Register in position tracker for P&L monitoring and SL close-detection
         tracker.register(TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -500,6 +540,7 @@ async def _handle_entry(signal) -> None:
             direction=signal.direction,
             entry_order_id=trade_result.order_id,
             sl_order_id=sl_order_id,
+            fill_price=entry_fill_price or 0.0,
         ))
 
     # 12. Persist to DB

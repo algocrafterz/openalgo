@@ -352,7 +352,8 @@ class TestPartialExitFlow:
             mock_pos.exchange = "NSE"
             mock_pos.product = "CNC"
             mock_pos.quantity = 100
-            mock_pos.entry_price = 0.0  # entry_price=0 skips breakeven SL re-placement
+            mock_pos.entry_price = 0.0
+            mock_pos.tp = 0.0  # tp=0 and entry_price=0 skip SL re-placement
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._last_realised_pnl = 1000.0
@@ -627,7 +628,8 @@ class TestTPHitExitFlow:
             mock_pos.exchange = "NSE"
             mock_pos.product = "CNC"
             mock_pos.quantity = 100
-            mock_pos.entry_price = 0.0  # entry_price=0 skips breakeven SL re-placement
+            mock_pos.entry_price = 0.0
+            mock_pos.tp = 0.0  # tp=0 and entry_price=0 skip SL re-placement
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._last_realised_pnl = 0.0
@@ -678,7 +680,9 @@ class TestTPHitExitFlow:
             mock_pos.exchange = "NSE"
             mock_pos.product = "CNC"
             mock_pos.quantity = 100
-            mock_pos.sl = 0.0  # sl=0 skips SL re-placement
+            mock_pos.entry_price = 0.0
+            mock_pos.tp = 0.0  # tp=0 and entry_price=0 skip SL re-placement
+            mock_pos.sl = 0.0
             mock_pos.sl_order_id = "SL001"
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._last_realised_pnl = 0.0
@@ -763,7 +767,8 @@ class TestPartialExitSlReplacement:
         mock_pos.exchange = "NSE"
         mock_pos.product = "MIS"
         mock_pos.quantity = 100
-        mock_pos.entry_price = 2500.0  # breakeven SL after partial exit
+        mock_pos.entry_price = 2500.0
+        mock_pos.tp = 2525.0  # TP1 price — new SL after partial exit (locks TP1 profit on remaining qty)
         mock_pos.sl = sl_price
         mock_pos.direction = _Direction.LONG
         mock_pos.sl_order_id = sl_order_id
@@ -805,16 +810,53 @@ class TestPartialExitSlReplacement:
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
-        # SL re-placement must be called for remaining 50 shares at breakeven (entry price)
+        # SL re-placement must be called for remaining 50 shares at TP1 price (locks TP1 profit)
         mock_place_sl.assert_called_once()
         call_kwargs = mock_place_sl.call_args.kwargs
         assert call_kwargs["symbol"] == "RELIANCE"
         assert call_kwargs["quantity"] == 50  # remaining after 50% partial exit
-        assert call_kwargs["sl_price"] == 2500.0  # breakeven = entry price (not original SL)
+        assert call_kwargs["sl_price"] == 2525.0  # TP1 price (not entry/breakeven, not original SL)
         assert call_kwargs["direction"] == _Direction.LONG
 
         # sl_order_id updated to new SL order
         assert mock_pos.sl_order_id == "SL002"
+
+    @pytest.mark.asyncio
+    async def test_sl_falls_back_to_entry_when_tp_missing(self):
+        """Defensive: if pos.tp is 0/missing, fall back to entry_price (old breakeven behaviour)."""
+        mock_signal, mock_pos = self._make_partial_exit_context(sl_order_id="SL001", sl_price=2485.0)
+        mock_pos.tp = 0.0  # simulate missing TP on position (shouldn't happen in practice)
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+        new_sl_result = TradeResult(order_id="SL002", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
+            patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._last_realised_pnl = 0.0
+            mock_settings.strategy_profiles = {
+                "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
+            }
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+
+            await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
+
+        mock_place_sl.assert_called_once()
+        assert mock_place_sl.call_args.kwargs["sl_price"] == 2500.0  # fallback to entry_price
 
     @pytest.mark.asyncio
     async def test_sl_replacement_failure_logs_error_and_notifies(self):
@@ -1380,3 +1422,126 @@ class TestConcurrentTPSignals:
         )
         # No phantom SL placed for a position that was already closed
         mock_place_sl.assert_not_called()
+
+
+class TestExitPendingGuard:
+    """exit_pending flag prevents duplicate TP signals from double-processing a position."""
+
+    @pytest.mark.asyncio
+    async def test_exit_pending_blocks_duplicate_signal(self):
+        """When exit_pending=True, a second EXIT signal for the same position is dropped."""
+        import asyncio
+        from signal_engine.main import _handle_exit, _exit_locks
+        from signal_engine.tracker import TrackedPosition
+
+        _exit_locks.clear()
+
+        def _make_exit_signal():
+            sig = MagicMock()
+            sig.strategy = "ORB"
+            sig.direction = Direction.EXIT
+            sig.symbol = "EXIDEIND"
+            sig.entry = 0.0
+            sig.sl = 0.0
+            sig.tp = 0.0
+            sig.tp_level = "TP1"
+            sig.exit_qty_pct = 1.0
+            sig.exchange = ""
+            sig.product = ""
+            return sig
+
+        exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
+        send_count = [0]
+
+        with (
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result) as mock_send,
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_settings.strategy_profiles = {}
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_settings.bracket_enabled = False
+
+            # Create a real TrackedPosition so exit_pending works correctly
+            pos = TrackedPosition(
+                symbol="EXIDEIND", strategy="ORB", exchange="NSE", product="MIS",
+                entry_price=320.0, quantity=58, sl=317.0, tp=323.0,
+            )
+            pos.exit_pending = True  # Simulate first handler already in progress
+
+            mock_tracker.find_position.return_value = pos
+            mock_tracker._last_realised_pnl = 0.0
+
+            await _handle_exit(_make_exit_signal())
+
+        # No exit order should be placed — guard blocked it
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_short_exit_places_buy_order(self):
+        """EXIT signal for a SHORT position must place a BUY (cover), not a SELL."""
+        from signal_engine.main import _handle_exit, _exit_locks
+        from signal_engine.tracker import TrackedPosition
+        from signal_engine.executor import build_exit_order
+        from signal_engine.models import Action
+
+        _exit_locks.clear()
+
+        sig = MagicMock()
+        sig.strategy = "ORB"
+        sig.direction = Direction.EXIT
+        sig.symbol = "EXIDEIND"
+        sig.entry = 0.0
+        sig.sl = 0.0
+        sig.tp = 0.0
+        sig.tp_level = "TP1"
+        sig.exit_qty_pct = 1.0
+        sig.exchange = "NSE"
+        sig.product = "MIS"
+
+        exit_result = TradeResult(order_id="EXIT002", status=OrderStatus.SUCCESS, message="ok")
+        placed_orders = []
+
+        async def capture_order(order):
+            placed_orders.append(order)
+            return exit_result
+
+        with (
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.send_order", side_effect=capture_order),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_settings.strategy_profiles = {}
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_settings.bracket_enabled = False
+
+            pos = TrackedPosition(
+                symbol="EXIDEIND", strategy="ORB", exchange="NSE", product="MIS",
+                entry_price=309.9, quantity=58, sl=312.24, tp=307.56,
+                direction=Direction.SHORT,
+            )
+
+            mock_tracker.find_position.return_value = pos
+            mock_tracker._last_realised_pnl = 0.0
+            mock_tracker._positions = {"EXIDEIND:ORB": pos}
+            mock_tracker.send_day_summary = AsyncMock()
+
+            await _handle_exit(sig)
+
+        assert len(placed_orders) == 1, "Expected exactly one exit order"
+        assert placed_orders[0].action == Action.BUY, (
+            f"SHORT exit must BUY to cover, got {placed_orders[0].action}"
+        )

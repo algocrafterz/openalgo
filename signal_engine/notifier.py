@@ -59,6 +59,25 @@ async def notify_order_placed(symbol: str, direction: str, order_id: str, strate
     await notify(f"✅ ENTRY | {symbol} {_dir(direction)}{tag} | id={order_id} | {_now_ist()}")
 
 
+async def notify_entry_filled(
+    symbol: str,
+    direction: str,
+    fill_price: float,
+    qty: int,
+    signal_price: float,
+    strategy: str = "",
+) -> None:
+    """Sent after fetching actual broker fill price for the entry order."""
+    tag = f" [{strategy}]" if strategy else ""
+    diff = fill_price - signal_price
+    diff_str = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
+    await notify(
+        f"💰 FILLED | {symbol} {_dir(direction)}{tag} | "
+        f"fill={fill_price:.2f} (signal={signal_price:.2f}, {diff_str}) | "
+        f"qty={qty} | {_now_ist()}"
+    )
+
+
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
     tag = f" [{strategy}]" if strategy else ""
     await notify(f"❌ ENTRY FAILED | {symbol}{tag} | {reason}")
@@ -127,14 +146,19 @@ async def notify_exit_placed(symbol: str, order_id: str, strategy: str = "") -> 
 
 async def notify_partial_exit(
     symbol: str, exit_qty: int, remaining_qty: int, tp_level: str,
-    pnl: float, strategy: str = "",
+    pnl: float, strategy: str = "", new_sl: float | None = None,
 ) -> None:
-    """Partial TP exit — position remains open with reduced quantity."""
+    """Partial TP exit — position remains open with reduced quantity.
+
+    new_sl: if provided and > 0, appended as 'SL→<price>' so the operator sees
+    the runner's new floor (moved to TP1 price after a 50% partial exit).
+    """
     tag = f" [{strategy}]" if strategy else ""
     pnl_str = f"+₹{pnl:,.0f}" if pnl >= 0 else f"-₹{abs(pnl):,.0f}"
+    sl_str = f" | SL→{new_sl:.2f}" if new_sl and new_sl > 0 else ""
     await notify(
         f"🎯 PARTIAL EXIT | {symbol}{tag} | {tp_level} | "
-        f"Exited {exit_qty} qty, remaining {remaining_qty} | P&L: {pnl_str} | {_now_ist()}"
+        f"Exited {exit_qty} qty, remaining {remaining_qty} | P&L: {pnl_str}{sl_str} | {_now_ist()}"
     )
 
 
@@ -149,11 +173,14 @@ async def notify_exit_failed(symbol: str, reason: str, strategy: str = "") -> No
 
 # ── Position lifecycle ─────────────────────────────────────────────────────────
 
-async def notify_position_closed(symbol: str, pnl: float, strategy: str = "") -> None:
+async def notify_position_closed(
+    symbol: str, pnl: float, strategy: str = "", exit_price: float | None = None
+) -> None:
     icon = "✅ TP HIT" if pnl >= 0 else "❌ SL HIT"
     tag = f" [{strategy}]" if strategy else ""
     pnl_str = f"+₹{pnl:,.0f}" if pnl >= 0 else f"-₹{abs(pnl):,.0f}"
-    await notify(f"{icon} | {symbol}{tag} | P&L: {pnl_str} | {_now_ist()}")
+    price_str = f" | exit={exit_price:.2f}" if exit_price is not None else ""
+    await notify(f"{icon} | {symbol}{tag}{price_str} | P&L: {pnl_str} | {_now_ist()}")
 
 
 async def notify_time_exit(symbol: str, strategy: str = "") -> None:
