@@ -181,6 +181,12 @@ bracket:
   # [tune] Retry count for TP market exit orders. 3 retries covers brief network glitches.
   tp_exit_retries: 3
 
+  # [tune] Buffer below TP1 for runner SL after partial exit, as fraction of R (0.1 = 10% of R).
+  # Prevents immediate stop-out from normal wick-backs to the freshly-hit TP1 level.
+  # At avg SL=0.64%: ₹150 stock = 2 ticks, ₹500 stock = 6 ticks, ₹800 stock = 10 ticks.
+  # Set to 0.0 to place SL exactly at TP1.
+  tp1_runner_sl_buffer: 0.1
+
 # ── Strategy Profiles ───────────────────────────────────────
 # [tune] Per-strategy TP exit fractions and product type.
 # tp_levels: TP label -> fraction of position to exit at that level (e.g. TP1: 0.5 = exit 50%).

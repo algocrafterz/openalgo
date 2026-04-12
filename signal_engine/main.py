@@ -296,14 +296,23 @@ async def _handle_exit_locked(signal) -> None:
             pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
-            # Re-place SL at TP1 price after partial TP exit (50-50 TP booking strategy).
-            # Rationale: TP1 profit is already banked on the first 50%. Moving SL to TP1
-            # price guarantees the remaining 50% also books at least TP1 profit on reversal
-            # — the runner can only realise TP1.5 (better) or TP1 (same as the first half),
-            # never worse. Fall back to entry_price (old breakeven behaviour) if pos.tp is
-            # unset — defensive, shouldn't occur in normal flow.
+            # Re-place SL at TP1 - 0.1R after partial TP exit (50-50 TP booking strategy).
+            # Rationale: TP1 is freshly-hit resistance. Placing SL exactly at TP1 means any
+            # normal wick-back immediately stops the runner. Buffer = 0.1R gives the runner
+            # room to breathe without giving back significant profit (worst case: runner exits
+            # at TP1 - 0.1R = still +0.9R on that half, vs -1R original SL).
+            # Buffer is direction-aware: LONG = TP1 - buffer, SHORT = TP1 + buffer.
+            # Fall back to entry_price if pos.tp is unset — defensive, shouldn't occur.
             # Critical: SL was already cancelled before the exit order. Re-place now.
-            new_sl_price = pos.tp if pos.tp and pos.tp > 0 else pos.entry_price
+            if pos.tp and pos.tp > 0:
+                risk_distance = abs(pos.tp - pos.entry_price)
+                buffer = settings.tp1_runner_sl_buffer * risk_distance
+                if pos.direction == Direction.LONG:
+                    new_sl_price = pos.tp - buffer
+                else:
+                    new_sl_price = pos.tp + buffer
+            else:
+                new_sl_price = pos.entry_price
             if settings.bracket_enabled and new_sl_price > 0:
                 sl_result = await place_sl_order(
                     symbol=pos.symbol,
@@ -318,8 +327,8 @@ async def _handle_exit_locked(signal) -> None:
                     pos.sl = new_sl_price  # update tracked SL so time_exit and check_positions stay consistent
                     pos.sl_order_id = sl_result.order_id
                     logger.info(
-                        f"SL moved to TP1 price {new_sl_price} for {pos.symbol} "
-                        f"remaining {remaining} qty: id={sl_result.order_id}"
+                        f"SL moved to TP1-buffer {new_sl_price:.2f} (tp={pos.tp}, buf={settings.tp1_runner_sl_buffer}R) "
+                        f"for {pos.symbol} remaining {remaining} qty: id={sl_result.order_id}"
                     )
                 else:
                     logger.error(

@@ -162,6 +162,7 @@ class Settings:
     bracket_max_sl_retries: int
     bracket_retry_delay: float
     bracket_tp_exit_retries: int
+    tp1_runner_sl_buffer: float  # fraction of R to set below TP1 for runner SL after partial exit
 
     # Strategy profiles (from yaml) — per-strategy TP levels and product defaults
     # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR")
@@ -326,6 +327,7 @@ def _build_settings() -> Settings:
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
         bracket_retry_delay=float(bracket.get("retry_delay", 0.5)),
         bracket_tp_exit_retries=int(bracket.get("tp_exit_retries", 3)),
+        tp1_runner_sl_buffer=float(bracket.get("tp1_runner_sl_buffer", 0.1)),
 
         # Strategy profiles — per-strategy TP levels and product
         strategy_profiles=strategy_profiles,
