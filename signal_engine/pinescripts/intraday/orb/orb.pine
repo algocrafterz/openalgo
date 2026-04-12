@@ -872,6 +872,9 @@ calculateStopLoss(entry, orbHigh, orbLow, orbRange, atr, mode, isBullish) =>
                                entry < 5000 ? 0.7 :    // Reduce for high price
                                0.5                     // Further reduce for very high price
             sl := entry - (validATR * atrMultiplier * priceAdjust)
+            // ORB floor: keep SL below ORB Low so first-bar wick-backs don't trigger SL hunt
+            float wickBuf = math.max(validATR * 0.3, orbRange * 0.15)
+            sl := math.min(sl, orbLow - wickBuf)
         else if mode == "ORB %"
             sl := orbLow - (orbRange * orbFraction)
         else if mode == "Swing"
@@ -895,10 +898,16 @@ calculateStopLoss(entry, orbHigh, orbLow, orbRange, atr, mode, isBullish) =>
                               atrPercent > 1.5 ? 1.5 :    // Normal volatility
                               1.2                         // Low volatility - tighter stop
             sl := entry - (validATR * scaledMult)
+            // ORB floor: keep SL below ORB Low so first-bar wick-backs don't trigger SL hunt
+            float wickBuf = math.max(validATR * 0.3, orbRange * 0.15)
+            sl := math.min(sl, orbLow - wickBuf)
     else
         if mode == "ATR"
             float volAdjust = atrPercent > 3 ? 1.2 : atrPercent > 1.5 ? 1.0 : 0.8
             sl := entry + (validATR * atrMultiplier * volAdjust)
+            // ORB ceiling: keep SL above ORB High so first-bar wick-backs don't trigger SL hunt
+            float wickBuf = math.max(validATR * 0.3, orbRange * 0.15)
+            sl := math.max(sl, orbHigh + wickBuf)
         else if mode == "ORB %"
             sl := orbHigh + (orbRange * orbFraction)
         else if mode == "Swing"
@@ -923,6 +932,9 @@ calculateStopLoss(entry, orbHigh, orbLow, orbRange, atr, mode, isBullish) =>
                               atrPercent > 1.5 ? 1.5 :
                               1.2
             sl := entry + (validATR * scaledMult)
+            // ORB ceiling: keep SL above ORB High so first-bar wick-backs don't trigger SL hunt
+            float wickBuf = math.max(validATR * 0.3, orbRange * 0.15)
+            sl := math.max(sl, orbHigh + wickBuf)
 
     sl := isBullish ? math.min(sl, entry - minStopDistance) : math.max(sl, entry + minStopDistance)
 
