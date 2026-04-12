@@ -125,12 +125,21 @@ def build_exit_order(
     quantity: int,
     product: str,
     strategy_tag: str,
+    direction: "Direction" = None,
 ) -> Order:
-    """Build a MARKET SELL order for closing an existing LONG position."""
+    """Build a MARKET order to close an existing position.
+
+    For LONG positions: SELL to close.
+    For SHORT positions: BUY to cover.
+    """
+    from signal_engine.models import Direction as _Direction
+    if direction is None:
+        direction = _Direction.LONG
+    action = Action.SELL if direction == _Direction.LONG else Action.BUY
     return Order(
         symbol=symbol,
         exchange=exchange,
-        action=Action.SELL,
+        action=action,
         quantity=quantity,
         price=0.0,
         order_type="MARKET",
@@ -148,9 +157,10 @@ def build_sl_order(signal: Signal, quantity: int) -> Order:
     action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
     sl_order_type = settings.bracket_sl_order_type
 
-    # Round trigger price to valid tick — conservative direction
-    # LONG SL: round down (triggers earlier), SHORT SL: round up (triggers earlier)
-    sl_direction = "down" if signal.direction == Direction.LONG else "up"
+    # Round trigger price to valid tick — conservative direction (trigger earlier = less loss)
+    # LONG SL is below entry: round UP so trigger fires sooner (less price drop needed)
+    # SHORT SL is above entry: round DOWN so trigger fires sooner (less price rise needed)
+    sl_direction = "up" if signal.direction == Direction.LONG else "down"
     trigger_price = round_to_tick(signal.sl, sl_direction)
 
     return Order(
@@ -203,15 +213,18 @@ async def place_sl_order(
 ) -> TradeResult:
     """Place a SL-M order with retries. Reusable for initial bracket and re-placement after partial exit.
 
-    For LONG positions: SELL SL-M with trigger at sl_price (rounded down).
-    For SHORT positions: BUY SL-M with trigger at sl_price (rounded up).
+    For LONG positions: SELL SL-M with trigger at sl_price (rounded up — fires earlier).
+    For SHORT positions: BUY SL-M with trigger at sl_price (rounded down — fires earlier).
 
     Returns TradeResult — caller must check .status == OrderStatus.SUCCESS.
     """
     from signal_engine.models import Direction as _Direction
 
     action = Action.SELL if direction == _Direction.LONG else Action.BUY
-    sl_direction = "down" if direction == _Direction.LONG else "up"
+    # Conservative rounding: trigger SL before the stated price to minimise loss
+    # LONG SL is below entry — round UP so trigger fires before reaching stated price
+    # SHORT SL is above entry — round DOWN so trigger fires before reaching stated price
+    sl_direction = "up" if direction == _Direction.LONG else "down"
     trigger_price = round_to_tick(sl_price, sl_direction)
 
     sl_order = Order(

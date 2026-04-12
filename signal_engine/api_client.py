@@ -175,6 +175,55 @@ async def fetch_order_status(order_id: str, strategy: str) -> str:
         return ""
 
 
+async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int = 3) -> float | None:
+    """Fetch average fill price for a completed order.
+
+    Polls up to max_attempts times with 1s delay — MARKET orders fill in < 1s but
+    the broker may take a moment to update order status.
+
+    Returns avg fill price (float) when orderstatus == "complete".
+    Returns None if order is not yet filled, was rejected, or on API error.
+    """
+    url = f"{settings.openalgo_base_url}/api/v1/orderstatus"
+    payload = {
+        "apikey": settings.openalgo_api_key,
+        "strategy": strategy,
+        "orderid": order_id,
+    }
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if data.get("status") != "success":
+                    return None
+                order_data = data.get("data", {})
+                status = str(order_data.get("orderstatus", "")).lower()
+                if status == "complete":
+                    # Try common broker field names for average fill price
+                    raw = (
+                        order_data.get("avgprice")
+                        or order_data.get("average_price")
+                        or order_data.get("averageprice")
+                        or order_data.get("price")
+                    )
+                    if raw:
+                        return float(raw)
+                    return None
+                if status in ("rejected", "cancelled"):
+                    return None
+                # pending/open — wait and retry
+        except Exception as e:
+            logger.debug(f"Fill price fetch attempt {attempt}/{max_attempts} for {order_id}: {e}")
+
+        if attempt < max_attempts:
+            await asyncio.sleep(1)
+
+    return None
+
+
 async def fetch_positionbook():
     """Fetch all open positions in a single API call.
 

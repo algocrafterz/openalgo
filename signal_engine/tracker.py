@@ -36,6 +36,8 @@ class TrackedPosition:
     entry_order_id: str = ""
     sl_order_id: str = ""
     tp_order_id: str = ""  # unused: TP exit driven by TradingView TP HIT signal, not broker order
+    exit_pending: bool = False  # True while an exit handler is actively processing this position
+    fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
 
 
 class PositionTracker:
@@ -156,7 +158,20 @@ class PositionTracker:
             self._last_realised_pnl = current_realised
 
             self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
-            logger.info(f"Position closed: {key}, PnL delta: {pnl_delta:,.2f}")
+
+            # Compute implied exit fill price from PnL delta
+            # Use actual entry fill price if available, else fall back to signal entry
+            base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+            if pos.quantity > 0:
+                exit_price = base_price + (pnl_delta / pos.quantity) if pos.direction == Direction.LONG \
+                    else base_price - (pnl_delta / pos.quantity)
+            else:
+                exit_price = None
+            exit_str = f"{exit_price:.2f}" if exit_price is not None else "N/A"
+            logger.info(
+                f"Position closed: {key}, entry={base_price:.2f}, exit={exit_str}, "
+                f"PnL delta: {pnl_delta:,.2f}"
+            )
 
             self._day_trades += 1
             self._day_pnl += pnl_delta
@@ -165,7 +180,7 @@ class PositionTracker:
             else:
                 self._day_losses += 1
 
-            await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
+            await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy, exit_price=exit_price)
 
             closed_keys.append(key)
 

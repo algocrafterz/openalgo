@@ -113,9 +113,19 @@ class TestSendOrder:
 
 
 class TestBuildExitOrder:
-    """Tests for build_exit_order — MARKET SELL to close an existing LONG position."""
+    """Tests for build_exit_order — MARKET order to close LONG or SHORT positions."""
 
-    def test_action_is_sell(self):
+    def test_long_exit_action_is_sell(self):
+        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR", direction=Direction.LONG)
+        assert order.action == Action.SELL
+
+    def test_short_exit_action_is_buy(self):
+        """Closing a SHORT requires BUY (cover), not SELL (which would expand the short)."""
+        order = build_exit_order("RELIANCE", "NSE", 50, "MIS", "ORB", direction=Direction.SHORT)
+        assert order.action == Action.BUY
+
+    def test_default_direction_long(self):
+        """Default direction=LONG for backward compat — exits as SELL."""
         order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR")
         assert order.action == Action.SELL
 
@@ -165,6 +175,20 @@ class TestBuildSlOrder:
         signal = _make_signal(direction=Direction.LONG, sl=2485.0)
         order = build_sl_order(signal, quantity=10)
         assert order.trigger_price == 2485.0
+
+    def test_long_sl_rounds_up_for_early_trigger(self):
+        """LONG SL below entry must round UP so trigger fires before stated SL level."""
+        signal = _make_signal(direction=Direction.LONG, entry=319.45, sl=317.08, tp=321.82)
+        order = build_sl_order(signal, quantity=58)
+        # 317.08 rounds UP to 317.10 (next valid tick) — triggers sooner, less loss
+        assert order.trigger_price == 317.10
+
+    def test_short_sl_rounds_down_for_early_trigger(self):
+        """SHORT SL above entry must round DOWN so trigger fires before stated SL level."""
+        signal = _make_signal(direction=Direction.SHORT, entry=309.9, sl=312.24, tp=307.56)
+        order = build_sl_order(signal, quantity=58)
+        # 312.24 rounds DOWN to 312.20 (prev valid tick) — triggers sooner, less loss
+        assert order.trigger_price == 312.20
 
     def test_quantity_matches(self):
         signal = _make_signal(direction=Direction.LONG)
