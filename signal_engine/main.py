@@ -189,6 +189,15 @@ async def _handle_exit(signal) -> None:
 
 async def _handle_exit_locked(signal) -> None:
     """Inner exit handler — must be called with the per-position exit lock held."""
+    # 0. Abort if time_exit_all() is already closing all positions to avoid double-exit.
+    # time_exit cancels all orders then fires close_all_positions — a concurrent TP signal
+    # would try to cancel the same SL (already gone) and place a duplicate exit order.
+    if tracker._time_exit_active:
+        logger.info(
+            f"EXIT skipped for {signal.symbol}: time_exit_all() in progress, positions closing via time exit"
+        )
+        return
+
     # 1. Look up position in tracker
     pos = tracker.find_position(signal.symbol, signal.strategy)
 
@@ -278,9 +287,12 @@ async def _handle_exit_locked(signal) -> None:
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
 
-        # 6. Compute PnL from realised PnL delta (same method as check_positions)
-        current_realised = await fetch_realised_pnl()
-        pnl_delta = current_realised - tracker._last_realised_pnl
+        # 6. Compute PnL from realised PnL delta (same method as check_positions).
+        # Lock prevents race with check_positions polling concurrently at the same time.
+        async with tracker._pnl_lock:
+            current_realised = await fetch_realised_pnl()
+            pnl_delta = current_realised - tracker._last_realised_pnl
+            tracker._last_realised_pnl = current_realised
         logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
 
         if is_full_exit:
@@ -292,6 +304,19 @@ async def _handle_exit_locked(signal) -> None:
         else:
             # Partial exit: reduce tracked qty, keep position registered
             remaining = pos.quantity - exit_qty
+            if remaining <= 0:
+                # Defensive: arithmetic produced invalid remainder — treat as full exit
+                logger.warning(
+                    f"Partial exit produced invalid remainder {remaining} for {pos.symbol} "
+                    f"(qty={pos.quantity}, exit_qty={exit_qty}), converting to full exit"
+                )
+                tracker.unregister(signal.symbol, signal.strategy)
+                risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+                await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
+                tracker.record_exit(pnl=pnl_delta, new_realised_pnl=current_realised)
+                if not tracker._positions:
+                    await tracker.send_day_summary()
+                return
             pos.quantity = remaining
             pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")

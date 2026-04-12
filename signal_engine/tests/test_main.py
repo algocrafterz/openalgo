@@ -264,6 +264,7 @@ class TestExitPipelineDaySummary:
             mock_pos.quantity = 50
             mock_pos.sl_order_id = "SL001"
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 1000.0
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
@@ -305,6 +306,7 @@ class TestExitPipelineDaySummary:
             mock_pos.quantity = 50
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 1000.0
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
@@ -356,6 +358,7 @@ class TestPartialExitFlow:
             mock_pos.tp = 0.0  # tp=0 and entry_price=0 skip SL re-placement
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 1000.0
 
             # Configure strategy profile: TP1 = 50% exit
@@ -411,6 +414,7 @@ class TestPartialExitFlow:
             mock_pos.quantity = 50  # remaining after TP1 took 50
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 1500.0
 
             mock_settings.strategy_profiles = {
@@ -465,6 +469,7 @@ class TestPartialExitFlow:
             mock_pos.quantity = 100
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 1500.0
 
             mock_settings.strategy_profiles = {
@@ -531,6 +536,7 @@ class TestTPHitExitFlow:
             mock_pos.quantity = 50
             mock_pos.sl_order_id = "SL001"
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
@@ -579,6 +585,7 @@ class TestTPHitExitFlow:
             mock_pos.quantity = 50
             mock_pos.sl_order_id = "SL001"
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
@@ -632,6 +639,7 @@ class TestTPHitExitFlow:
             mock_pos.tp = 0.0  # tp=0 and entry_price=0 skip SL re-placement
             mock_pos.sl_order_id = ""
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
@@ -685,6 +693,7 @@ class TestTPHitExitFlow:
             mock_pos.sl = 0.0
             mock_pos.sl_order_id = "SL001"
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "RSI-TP-MR": {"tp_levels": {"TP1": 0.5, "TP2": 1.0}, "product": "CNC"},
@@ -732,6 +741,7 @@ class TestTPHitExitFlow:
             mock_pos.quantity = 50
             mock_pos.sl_order_id = "SL001"
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 1.0}, "product": "MIS"},
             }
@@ -800,6 +810,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
@@ -846,6 +857,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
@@ -883,6 +895,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
@@ -921,6 +934,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
@@ -978,6 +992,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
@@ -1038,6 +1053,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 500.0
             mock_settings.strategy_profiles = {
                 "ORB": {"tp_levels": {"TP1": 0.5, "TP1.5": 1.0}, "product": "MIS"},
@@ -1384,6 +1400,7 @@ class TestConcurrentTPSignals:
             mock_pos.quantity = 58
             mock_pos.sl_order_id = "SL001"
             mock_tracker._positions = {}
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
 
             # First call finds position; after unregister, second call finds nothing
@@ -1465,6 +1482,7 @@ class TestConcurrentTPSignals:
             mock_pos.quantity = 46
             mock_pos.sl_order_id = "SL002"
             mock_tracker._positions = {}
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_tracker.send_day_summary = AsyncMock()
 
@@ -1543,6 +1561,7 @@ class TestExitPendingGuard:
             pos.exit_pending = True  # Simulate first handler already in progress
 
             mock_tracker.find_position.return_value = pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
 
             await _handle_exit(_make_exit_signal())
@@ -1601,6 +1620,7 @@ class TestExitPendingGuard:
             )
 
             mock_tracker.find_position.return_value = pos
+            mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 0.0
             mock_tracker._positions = {"EXIDEIND:ORB": pos}
             mock_tracker.send_day_summary = AsyncMock()

@@ -53,6 +53,8 @@ class PositionTracker:
         self._poll_interval = poll_interval
         self._running = False
         self._last_realised_pnl: float = 0.0
+        self._pnl_lock: asyncio.Lock = asyncio.Lock()  # serialise _last_realised_pnl updates
+        self._time_exit_active: bool = False  # True while time_exit_all() is in progress
         # Day summary counters (reset at midnight via TimeExitScheduler)
         self._day_trades: int = 0
         self._day_wins: int = 0
@@ -64,20 +66,24 @@ class PositionTracker:
     def tracked_count(self) -> int:
         return len(self._positions)
 
+    @staticmethod
+    def _key(symbol: str, strategy: str) -> str:
+        """Normalise lookup key — upper-case both components to absorb case drift in signals."""
+        return f"{symbol.upper()}:{strategy.upper()}"
+
     def register(self, position: TrackedPosition) -> None:
         """Register a new position to track."""
-        key = f"{position.symbol}:{position.strategy}"
+        key = self._key(position.symbol, position.strategy)
         self._positions[key] = position
         logger.info(f"Tracking position: {key} qty={position.quantity}")
 
     def find_position(self, symbol: str, strategy: str) -> "TrackedPosition | None":
         """Look up a tracked position by symbol and strategy. Returns None if not found."""
-        key = f"{symbol}:{strategy}"
-        return self._positions.get(key)
+        return self._positions.get(self._key(symbol, strategy))
 
     def unregister(self, symbol: str, strategy: str) -> "TrackedPosition | None":
         """Remove and return a tracked position. Returns None if not found."""
-        key = f"{symbol}:{strategy}"
+        key = self._key(symbol, strategy)
         pos = self._positions.pop(key, None)
         if pos:
             logger.info(f"Unregistered position: {key}")
@@ -134,6 +140,7 @@ class PositionTracker:
         """
         book = await fetch_positionbook()
         if book is None:
+            logger.warning("check_positions: positionbook fetch failed — skipping this poll cycle")
             return
 
         # Build lookup: symbol -> (quantity, ltp)
@@ -153,9 +160,10 @@ class PositionTracker:
                 continue
 
             # --- Position closed ---
-            current_realised = await fetch_realised_pnl()
-            pnl_delta = current_realised - self._last_realised_pnl
-            self._last_realised_pnl = current_realised
+            async with self._pnl_lock:
+                current_realised = await fetch_realised_pnl()
+                pnl_delta = current_realised - self._last_realised_pnl
+                self._last_realised_pnl = current_realised
 
             self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
 
@@ -221,14 +229,18 @@ class PositionTracker:
         # Collect unique strategies from MIS positions only
         strategies: Set[str] = {pos.strategy for pos in mis_positions.values()}
 
-        for strategy in strategies:
-            # Cancel all pending orders first (SL-M + TP LIMIT legs)
-            logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
-            await cancel_all_orders(strategy)
+        self._time_exit_active = True
+        try:
+            for strategy in strategies:
+                # Cancel all pending orders first (SL-M + TP LIMIT legs)
+                logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
+                await cancel_all_orders(strategy)
 
-            # Close all open positions
-            logger.info(f"Time exit: closing all positions for strategy={strategy}")
-            await close_all_positions(strategy)
+                # Close all open positions
+                logger.info(f"Time exit: closing all positions for strategy={strategy}")
+                await close_all_positions(strategy)
+        finally:
+            self._time_exit_active = False
 
         # Capture actual PnL of time-exited positions from broker realised PnL delta.
         # close_all_positions is fire-and-forget so we wait briefly for fills.

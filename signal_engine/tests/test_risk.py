@@ -581,9 +581,9 @@ class TestRestartSafeCounters:
     def test_counters_restored_from_store_on_init(self, tmp_path):
         db_path = str(tmp_path / "risk.db")
         store = RiskStore(db_path)
-        from datetime import date, timezone
-        from datetime import datetime
-        today = datetime.now(timezone.utc).date()
+        from datetime import datetime, timezone, timedelta
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(_IST).date()
         store.save("live", today, trades_today=3, daily_loss=1500.0, open_positions=2)
 
         engine = _engine(store=store, trade_mode="live")
@@ -603,9 +603,9 @@ class TestRestartSafeCounters:
         engine._last_known_capital = 100_000
         engine.record_trade(symbol="RELIANCE")
 
-        from datetime import date, timezone
-        from datetime import datetime
-        today = datetime.now(timezone.utc).date()
+        from datetime import datetime, timezone, timedelta
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(_IST).date()
         row = store.load("live", today)
         assert row["trades_today"] == 1
         assert row["open_positions"] == 1
@@ -617,9 +617,9 @@ class TestRestartSafeCounters:
         engine.open_positions = 1
         engine.record_close(pnl=-400.0, symbol="RELIANCE")
 
-        from datetime import date, timezone
-        from datetime import datetime
-        today = datetime.now(timezone.utc).date()
+        from datetime import datetime, timezone, timedelta
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(_IST).date()
         row = store.load("live", today)
         assert row["daily_loss"] == 400.0
         assert row["open_positions"] == 0
@@ -637,9 +637,9 @@ class TestRestartSafeCounters:
 
         engine_sandbox.record_trade(symbol="RELIANCE")
 
-        from datetime import date, timezone
-        from datetime import datetime
-        today = datetime.now(timezone.utc).date()
+        from datetime import datetime, timezone, timedelta
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(_IST).date()
         live_row = store_live.load("live", today)
         sandbox_row = store_sandbox.load("sandbox", today)
 
