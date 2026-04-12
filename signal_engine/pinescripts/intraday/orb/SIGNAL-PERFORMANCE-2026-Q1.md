@@ -287,11 +287,11 @@ Strategy B is never worse than A; wins only when TP1.5 is reached.
 ### Implementation Requirements (Signal Engine)
 
 For "50-50 trail to TP1":
-1. On TP1 signal: exit 50% at market
-2. Cancel existing SL-M broker order
+1. Cancel existing SL-M broker order (must be first — Indian broker treats SELL while SL active as new SHORT)
+2. Exit 50% at market on TP1 signal
 3. Place new SL-M at TP1 price for remaining 50% position
 4. On TP1.5 signal: exit remaining 50% at market
-5. Fallback: if new SL-M placement fails, immediately exit runner at market (no naked exposure)
+5. Fallback: if new SL-M placement fails, `notify_sl_failed` fires — position relies on TP1.5 signal or time exit
 
 Status: **Implemented 2026-04-13** (see Changes Applied on 2026-04-13).
 
@@ -324,10 +324,19 @@ Sequence in `_handle_exit_locked()`:
    `pos.tp` is missing; if placement fails, `notify_sl_failed` fires (operator alert)
 
 Telegram alerts (concise, `notify_partial_exit` extended with `new_sl`):
-- `🎯 TP DETECTED | RELIANCE[ORB] | LTP=2525.50 >= TP=2525.00 | Cancelling SL + exiting at market | HH:MM IST`
+- `EXIT signal received | RELIANCE | strategy=ORB | HH:MM IST`
 - `🎯 PARTIAL EXIT | RELIANCE[ORB] | TP1 | Exited 50 qty, remaining 50 | P&L: +₹245 | SL→2525.00 | HH:MM IST`
-- On TP1.5: `✅ TP HIT | RELIANCE[ORB] | P&L: +₹XXX | HH:MM IST`
-- On failure: `❌ SL FAILED | RELIANCE[ORB] | SL re-placement failed after partial exit: <reason>`
+- On TP1.5 (full close): `✅ TP HIT | RELIANCE[ORB] | P&L: +₹XXX | HH:MM IST`
+- On SL re-place failure: `❌ SL FAILED | RELIANCE[ORB] | SL re-placement failed after partial exit: <reason>`
+
+### TradingView Alert Delivery Behaviour (2026-04-13)
+- Alerts fire **intrabar** (`barstate.islast`) — triggered the moment bar's high crosses TP, not on bar close
+- `alert.freq_once_per_bar` prevents double-fire within the same bar
+- When price gaps through multiple TP levels on the same bar (e.g. TP1 → TP1.5 → TP2 in one move),
+  all alerts fire in the same PineScript tick as separate Telegram messages — delivery order is not guaranteed
+- Engine handles out-of-order delivery safely: `ExitQtyPct` field (not tp_level name) drives exit sizing.
+  Any TP above TP1 carries `ExitQtyPct=100` — if TP1.5 or TP2 arrives before TP1, the full position exits
+  at the higher price (better outcome). Subsequent stale TP1 message finds no open position → silently ignored.
 
 Tests: added `test_sl_replayed_for_remaining_qty_after_partial_exit` (asserts new SL at
 TP1 price 2525), `test_sl_falls_back_to_entry_when_tp_missing`, and the existing
