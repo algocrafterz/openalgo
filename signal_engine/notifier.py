@@ -147,18 +147,26 @@ async def notify_exit_placed(symbol: str, order_id: str, strategy: str = "") -> 
 async def notify_partial_exit(
     symbol: str, exit_qty: int, remaining_qty: int, tp_level: str,
     pnl: float, strategy: str = "", new_sl: float | None = None,
+    next_tp_label: str | None = None, next_tp_price: float | None = None,
 ) -> None:
     """Partial TP exit — position remains open with reduced quantity.
 
     new_sl: if provided and > 0, appended as 'SL→<price>' so the operator sees
     the runner's new floor (moved to TP1 price after a 50% partial exit).
+    next_tp_label/next_tp_price: if provided, shows the estimated next TP level
+    price so the operator knows how far price must travel from here.
     """
     tag = f" [{strategy}]" if strategy else ""
     pnl_str = f"+₹{pnl:,.0f}" if pnl >= 0 else f"-₹{abs(pnl):,.0f}"
     sl_str = f" | SL→{new_sl:.2f}" if new_sl and new_sl > 0 else ""
+    next_tp_str = (
+        f" | Next {next_tp_label}: {next_tp_price:.2f}"
+        if next_tp_label and next_tp_price
+        else ""
+    )
     await notify(
         f"🎯 PARTIAL EXIT | {symbol}{tag} | {tp_level} | "
-        f"Exited {exit_qty} qty, remaining {remaining_qty} | P&L: {pnl_str}{sl_str} | {_now_ist()}"
+        f"Exited {exit_qty} qty, remaining {remaining_qty} | P&L: {pnl_str}{sl_str}{next_tp_str} | {_now_ist()}"
     )
 
 

@@ -165,6 +165,36 @@ def _resolve_exit_qty(signal, pos: TrackedPosition) -> tuple[int, bool]:
     return exit_qty, False
 
 
+def compute_next_tp(pos: TrackedPosition, tp_level: str | None) -> tuple[str, float] | None:
+    """Compute the next TP price after a partial exit.
+
+    Uses pos.tp (TP1 price) and pos.entry_price to derive R-multiples:
+    - TP1 hit → next is TP1.5 at entry + 1.5R
+    - TP1.5 hit → next is TP2 at entry + 2.0R
+    - TP2 or unknown → None (no further standard TP level)
+
+    Returns (next_label, next_price) or None if the next level cannot be computed.
+    """
+    if not tp_level or pos.tp <= 0 or pos.entry_price <= 0:
+        return None
+    r_distance = abs(pos.tp - pos.entry_price)
+    if r_distance <= 0:
+        return None
+    next_levels: dict[str, tuple[str, float]] = {
+        "TP1": ("TP1.5", 1.5),
+        "TP1.5": ("TP2", 2.0),
+    }
+    next_info = next_levels.get(tp_level.upper())
+    if next_info is None:
+        return None
+    next_label, multiplier = next_info
+    if pos.direction == Direction.LONG:
+        next_price = pos.entry_price + multiplier * r_distance
+    else:
+        next_price = pos.entry_price - multiplier * r_distance
+    return (next_label, next_price)
+
+
 async def _handle_exit(signal) -> None:
     """Handle an EXIT signal — close (or partially close) an existing position.
 
@@ -366,9 +396,13 @@ async def _handle_exit_locked(signal) -> None:
                         strategy=pos.strategy,
                     )
 
+            next_tp_info = compute_next_tp(pos, tp_level)
+            next_tp_label = next_tp_info[0] if next_tp_info else None
+            next_tp_price = next_tp_info[1] if next_tp_info else None
             await notifier.notify_partial_exit(
                 pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta,
                 strategy=pos.strategy, new_sl=pos.sl,
+                next_tp_label=next_tp_label, next_tp_price=next_tp_price,
             )
             pos.exit_pending = False  # partial exit done — allow next TP signal
 
@@ -485,6 +519,7 @@ async def _handle_entry(signal) -> None:
 
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
+    adjusted_rps = risk_per_share * (1 + settings.slippage_factor)
     reward_per_share = abs(signal.tp - signal.entry)
     rr = reward_per_share / risk_per_share if risk_per_share > 0 else 0
     pos_value = quantity * signal.entry
@@ -492,8 +527,9 @@ async def _handle_entry(signal) -> None:
     logger.info(
         f"Sizing [{signal.symbol}]: capital={sizing_capital:,.0f} risk={settings.risk_per_trade:.1%}={risk_amount:,.0f} "
         f"entry={signal.entry} sl={signal.sl} tp={signal.tp} "
-        f"risk/sh={risk_per_share:.2f} reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
-        f"qty=floor({risk_amount:,.0f}/{risk_per_share:.2f})={quantity} "
+        f"risk/sh={risk_per_share:.2f}(+{settings.slippage_factor:.0%}slip={adjusted_rps:.2f}) "
+        f"reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
+        f"qty=floor({risk_amount:,.0f}/{adjusted_rps:.2f})={quantity} "
         f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"
     )
 

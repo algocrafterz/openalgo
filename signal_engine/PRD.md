@@ -49,7 +49,9 @@ main.py (_handle_entry / _handle_exit)
 4. **Cancel SL order first** — broker treats any SELL while SL SELL is active as new SHORT
 5. `build_exit_order()` → MARKET SELL
 6. `send_order()` with `tp_exit_retries` retries
-7. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at breakeven (entry price)
+7. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at TP1 - 0.1R (runner SL)
+   - `compute_next_tp()` derives next TP level (TP1→TP1.5, TP1.5→TP2) for notification
+   - Telegram notification includes: booked qty, remaining qty, new SL, next TP price
 8. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
 
 ---
@@ -138,17 +140,19 @@ After sizing, `adjust_qty_for_margin()` checks whether the full-risk qty fits in
 
 ### Capital vs Concurrent Slots
 
-At avg_sl=0.64% (Q1 actuals), risk=1%, MIS margin=20%:  
-`margin_per_trade ≈ capital × 1% / 0.64% × 20% = capital × 31%`
+**Q2 2026 observed margin per trade** (NSE MIS 20% on actual position values):
+- Avg margin per trade: 6–8% of capital (wide-SL stocks like JSWENERGY: 4%, tight-SL: 9%)
+- 5 concurrent slots = 30–40% margin utilisation — well within ₹15K+ available capital
+- Original Q1 estimate of 31% margin per trade was based on avg_sl=0.64%; actual SLs vary 0.5–4%
 
-This ratio is **capital-invariant** — 3 concurrent slots fit at any capital level from ₹15K to ₹1L+. Keep `max_open_positions: 3` and `max_portfolio_heat: 0.03` in sync.
+`margin_per_trade ≈ qty × entry × 20%`  where `qty = floor(capital × 1% / (sl_distance × 1.10))`
 
-| Capital | Risk/trade | Avg margin/trade | Max slots | `max_open_positions` |
-|---------|------------|------------------|-----------|----------------------|
-| ₹15K    | ₹150       | ₹4,688           | 3         | 3                    |
-| ₹25K    | ₹250       | ₹7,813           | 3         | 3                    |
-| ₹50K    | ₹500       | ₹15,625          | 3         | 3                    |
-| ₹1L     | ₹1,000     | ₹31,250          | 3         | 3                    |
+| Capital | Risk/trade | Avg margin/trade (6-8%) | `max_open_positions` |
+|---------|------------|--------------------------|----------------------|
+| ₹15K    | ₹152       | ₹900–₹1,200              | 5                    |
+| ₹25K    | ₹250       | ₹1,500–₹2,000            | 5–6                  |
+| ₹50K    | ₹500       | ₹3,000–₹4,000            | 6–7                  |
+| ₹1L     | ₹1,000     | ₹6,000–₹8,000            | 7–8                  |
 
 ---
 

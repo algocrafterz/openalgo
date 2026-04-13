@@ -66,13 +66,14 @@ risk:
   weekly_loss_limit: 0.08        # 8% = 2 bad days per week
   monthly_loss_limit: 0.10       # 10% of capital
 
-  # [tune] Max concurrent open positions. At avg_sl=0.64%, risk=1%, MIS=20% margin:
-  # margin_per_trade ≈ 31% of capital → 3 slots fit at any capital level (₹15K–₹1L+).
-  # Increase to 4 only if avg_sl tightens materially (e.g. <0.45%). Also update max_portfolio_heat.
-  max_open_positions: 3
+  # [tune] Max concurrent open positions. Observed margin per trade (Q2 2026):
+  # avg margin ≈ 6-8% of capital (NSE MIS 20% × position value). 5 slots = 30-40% margin use,
+  # well within available capital at ₹15K+. Increase to 6-7 only at ₹25K+ or if avg_sl widens.
+  max_open_positions: 5
 
   # [tune] Hard cap on total trades per day (slots can recycle within this limit).
-  max_trades_per_day: 8
+  # 12 allows 5 concurrent + 7 recycles on active days without over-trading.
+  max_trades_per_day: 12
 
   # [tune] Minimum reward:risk ratio to accept a signal. Strategy-level minimums are enforced
   # by PineScript (ORB >= 1:1, RSI-TP-MR >= 0.5). This is a safety net for parser edge cases.
