@@ -117,9 +117,12 @@ Normalizer converts this to canonical EXIT. `TP1` matched against `strategy_prof
 
 ### fixed_fractional (default)
 ```
-qty = floor(capital × risk_per_trade / (|entry - sl| × (1 + slippage_factor)))
+effective_sl = min(|entry - sl|, entry × max_sl_pct_for_sizing)   # capped if max_sl_pct_for_sizing > 0
+qty = floor(capital × risk_per_trade / (effective_sl × (1 + slippage_factor)))
 ```
 `slippage_factor: 0.10` — both entry and TP exit are MARKET (double slippage). If `qty = 0`, trade is skipped.
+
+**SL cap for sizing (`max_sl_pct_for_sizing`):** ORB SL distances vary 0.5–5%+ based on opening range width. Without a cap, wide-range days produce tiny qty (6 shares vs 18 with cap). The cap normalises position size across all market conditions. The real SL ORDER is placed at `signal.sl` — only sizing uses the capped distance. Actual loss if SL fires = `qty × real_sl_distance` (may exceed `risk_per_trade` on very wide gaps).
 
 ### pct_of_capital
 ```
@@ -219,6 +222,7 @@ telegram:
 | `min_entry_price` | Skip stocks below this price |
 | `max_entry_price` | Skip stocks above this price |
 | `slippage_factor` | Widens SL distance before sizing |
+| `max_sl_pct_for_sizing` | SL cap for qty calc (0=off). Wide-SL stock qty computed as if SL = entry × cap. Real SL order unchanged. |
 | `sandbox_capital` | Capital override in analyze mode |
 | `use_day_start_capital` | Cache first fetch of day for equal risk per trade |
 | `test_qty_cap` | Max qty per order in `--test` mode (0 = disabled) |

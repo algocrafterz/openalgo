@@ -38,6 +38,7 @@ risk_engine = RiskEngine(
     min_entry_price=settings.min_entry_price,
     max_entry_price=settings.max_entry_price,
     slippage_factor=settings.slippage_factor,
+    max_sl_pct_for_sizing=settings.max_sl_pct_for_sizing,
     store=_risk_store,
     trade_mode="live",
     default_product=settings.product,
@@ -519,15 +520,25 @@ async def _handle_entry(signal) -> None:
 
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
-    adjusted_rps = risk_per_share * (1 + settings.slippage_factor)
+    # Effective SL used for sizing — may be capped if max_sl_pct_for_sizing is set
+    effective_sl = risk_per_share
+    if settings.max_sl_pct_for_sizing > 0 and signal.entry > 0:
+        max_sl_dist = signal.entry * settings.max_sl_pct_for_sizing
+        if risk_per_share > max_sl_dist:
+            effective_sl = max_sl_dist
+    adjusted_rps = effective_sl * (1 + settings.slippage_factor)
     reward_per_share = abs(signal.tp - signal.entry)
     rr = reward_per_share / risk_per_share if risk_per_share > 0 else 0
     pos_value = quantity * signal.entry
     risk_total = quantity * risk_per_share
+    cap_note = (
+        f" [SL capped {risk_per_share:.2f}->{effective_sl:.2f} for sizing]"
+        if effective_sl < risk_per_share else ""
+    )
     logger.info(
         f"Sizing [{signal.symbol}]: capital={sizing_capital:,.0f} risk={settings.risk_per_trade:.1%}={risk_amount:,.0f} "
         f"entry={signal.entry} sl={signal.sl} tp={signal.tp} "
-        f"risk/sh={risk_per_share:.2f}(+{settings.slippage_factor:.0%}slip={adjusted_rps:.2f}) "
+        f"risk/sh={risk_per_share:.2f}(+{settings.slippage_factor:.0%}slip={adjusted_rps:.2f}){cap_note} "
         f"reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
         f"qty=floor({risk_amount:,.0f}/{adjusted_rps:.2f})={quantity} "
         f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"

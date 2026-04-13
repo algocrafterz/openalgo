@@ -107,6 +107,7 @@ class Settings:
     min_entry_price: float
     max_entry_price: float
     slippage_factor: float
+    max_sl_pct_for_sizing: float  # SL cap for qty calculation; 0 = disabled
 
     # Risk management (from yaml)
     daily_loss_limit: float
@@ -275,6 +276,7 @@ def _build_settings() -> Settings:
         min_entry_price=float(_require_key(sizing, "sizing", "min_entry_price")),
         max_entry_price=float(_require_key(sizing, "sizing", "max_entry_price")),
         slippage_factor=float(_require_key(sizing, "sizing", "slippage_factor")),
+        max_sl_pct_for_sizing=float(sizing.get("max_sl_pct_for_sizing", 0.0)),
 
         # Risk management from yaml — all required
         daily_loss_limit=float(_require_key(risk, "risk", "daily_loss_limit")),

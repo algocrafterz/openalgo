@@ -215,6 +215,7 @@ class TestPipelineFlow:
             mock_settings.min_capital_for_entry = 2000.0  # ₹5,000 > ₹2,000 — should proceed
             mock_settings.risk_per_trade = 0.01
             mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
@@ -1140,6 +1141,7 @@ class TestCncBracketSkip:
             mock_settings.bracket_cnc_sl_enabled = False
             mock_settings.risk_per_trade = 0.01
             mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "CNC"
@@ -1181,6 +1183,7 @@ class TestCncBracketSkip:
             mock_settings.bracket_cnc_sl_enabled = False
             mock_settings.risk_per_trade = 0.01
             mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
@@ -1220,6 +1223,7 @@ class TestBracketOrderFlow:
             mock_settings.bracket_enabled = True
             mock_settings.risk_per_trade = 0.01
             mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
@@ -1327,6 +1331,7 @@ class TestBracketOrderFlow:
             mock_settings.bracket_enabled = True
             mock_settings.risk_per_trade = 0.01
             mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"

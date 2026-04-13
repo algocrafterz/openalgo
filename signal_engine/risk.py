@@ -44,6 +44,7 @@ class RiskEngine:
         min_entry_price: float,
         max_entry_price: float,
         slippage_factor: float = 0.0,
+        max_sl_pct_for_sizing: float = 0.0,
         store=None,
         trade_mode: str = "live",
         default_product: str = "MIS",
@@ -56,6 +57,7 @@ class RiskEngine:
         self.use_day_start_capital = use_day_start_capital
         self.sizing_mode = sizing_mode
         self.pct_of_capital = pct_of_capital
+        self.max_sl_pct_for_sizing = max_sl_pct_for_sizing
         self.daily_loss_limit = daily_loss_limit
         self.weekly_loss_limit = weekly_loss_limit
         self.monthly_loss_limit = monthly_loss_limit
@@ -132,9 +134,12 @@ class RiskEngine:
             f"Weekly loss: {self.weekly_realised_loss:,.2f} / {weekly_limit:,.2f} | "
             f"Monthly loss: {self.monthly_realised_loss:,.2f} / {monthly_limit:,.2f}"
         )
+        sl_cap_str = (
+            f"{self.max_sl_pct_for_sizing:.1%}" if self.max_sl_pct_for_sizing > 0 else "off"
+        )
         logger.info(
             f"Price filter: {self.min_entry_price}-{self.max_entry_price} | "
-            f"Risk/trade: {self.risk_per_trade:.1%}"
+            f"Risk/trade: {self.risk_per_trade:.1%} | SL cap for sizing: {sl_cap_str}"
         )
         logger.info("-------------------------------------")
 
@@ -238,11 +243,32 @@ class RiskEngine:
         return qty
 
     def _fixed_fractional(self, signal: Signal, capital: float) -> int:
-        """Risk a fixed % of capital, sized by distance to SL."""
+        """Risk a fixed % of capital, sized by distance to SL.
+
+        When max_sl_pct_for_sizing > 0 and the signal's SL distance is wider than
+        that cap (as a fraction of entry), the sizing uses the capped distance instead
+        of the actual SL distance. The real SL ORDER is still placed at signal.sl.
+        Effect: wide-SL stocks get proportionally more shares, improving capital
+        utilisation on wide-range ORB days.
+        """
         risk_amount = capital * self.risk_per_trade
         risk_per_share = abs(signal.entry - signal.sl)
         if risk_per_share <= 0:
             return 0
+
+        # Apply SL cap for sizing if configured and SL is wider than the cap
+        if self.max_sl_pct_for_sizing > 0 and signal.entry > 0:
+            max_sl_distance = signal.entry * self.max_sl_pct_for_sizing
+            if risk_per_share > max_sl_distance:
+                sl_pct = risk_per_share / signal.entry
+                logger.info(
+                    f"SL cap applied for {signal.symbol}: actual_sl={risk_per_share:.2f} "
+                    f"({sl_pct:.2%} of entry) capped at {max_sl_distance:.2f} "
+                    f"({self.max_sl_pct_for_sizing:.1%}) for sizing. "
+                    f"Real SL order still at {signal.sl:.2f}."
+                )
+                risk_per_share = max_sl_distance
+
         risk_per_share *= (1 + self.slippage_factor)
         return math.floor(risk_amount / risk_per_share)
 

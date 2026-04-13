@@ -671,3 +671,84 @@ class TestRestartSafeCounters:
         engine.record_trade(symbol="RELIANCE")
         engine.record_close(pnl=-100.0, symbol="RELIANCE")
         assert engine.trades_today == 1
+
+
+class TestMaxSlPctForSizing:
+    """max_sl_pct_for_sizing caps the effective SL distance used in position sizing.
+
+    The real SL ORDER still goes at signal.sl — only qty calculation is affected.
+    When actual SL > entry × max_sl_pct, qty is computed as if SL = entry × max_sl_pct.
+    """
+
+    def _engine_capped(self, cap: float = 0.015) -> RiskEngine:
+        return _engine(slippage_factor=0.0, max_sl_pct_for_sizing=cap)
+
+    def test_wide_sl_qty_is_capped(self):
+        # JSWENERGY-like: entry=490.8, sl=470.29 (SL dist=20.51, 4.18% of entry)
+        # With cap=1.5%: effective_sl = 490.8 × 0.015 = 7.362
+        # risk_amount = 15000 × 0.01 = 150
+        # qty = floor(150 / 7.362) = 20
+        engine = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015)
+        sig = _make_signal(entry=490.8, sl=470.29, tp=505.2)
+        qty = engine.calculate_quantity(sig, capital=15_000)
+        expected_sl = 490.8 * 0.015  # 7.362
+        expected = int(150 / expected_sl)
+        assert qty == expected
+
+    def test_tight_sl_unchanged(self):
+        # SL = 1.0% of entry < 1.5% cap → no capping
+        # entry=500, sl=495 → dist=5, cap_dist=7.5 → actual dist used = 5
+        engine = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015)
+        sig = _make_signal(entry=500.0, sl=495.0, tp=515.0)
+        qty_capped = engine.calculate_quantity(sig, capital=100_000)
+        engine_no_cap = _engine(risk_per_trade=0.01, slippage_factor=0.0)
+        qty_no_cap = engine_no_cap.calculate_quantity(sig, capital=100_000)
+        assert qty_capped == qty_no_cap  # no change when SL within cap
+
+    def test_cap_exactly_at_threshold_no_change(self):
+        # SL = exactly cap → no capping applied (equal, not greater)
+        # entry=500, cap=1.5%, sl_dist=7.5 → sl=492.5
+        engine = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015)
+        sl_at_cap = 500.0 - (500.0 * 0.015)  # = 492.5
+        sig = _make_signal(entry=500.0, sl=sl_at_cap, tp=515.0)
+        qty_capped = engine.calculate_quantity(sig, capital=100_000)
+        engine_no_cap = _engine(risk_per_trade=0.01, slippage_factor=0.0)
+        qty_no_cap = engine_no_cap.calculate_quantity(sig, capital=100_000)
+        assert qty_capped == qty_no_cap
+
+    def test_cap_disabled_when_zero(self):
+        # max_sl_pct_for_sizing=0 means disabled — wide SL is not capped
+        engine_cap0 = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.0)
+        engine_default = _engine(risk_per_trade=0.01, slippage_factor=0.0)
+        sig = _make_signal(entry=490.8, sl=470.29, tp=505.2)
+        assert engine_cap0.calculate_quantity(sig, capital=15_000) == \
+               engine_default.calculate_quantity(sig, capital=15_000)
+
+    def test_cap_improves_capital_utilisation(self):
+        # With cap: wide-SL stock should produce more shares than without
+        sig = _make_signal(entry=490.8, sl=470.29, tp=505.2)  # 4.18% SL
+        engine_capped = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015)
+        engine_uncapped = _engine(risk_per_trade=0.01, slippage_factor=0.0)
+        qty_capped = engine_capped.calculate_quantity(sig, capital=15_000)
+        qty_uncapped = engine_uncapped.calculate_quantity(sig, capital=15_000)
+        assert qty_capped > qty_uncapped
+
+    def test_short_direction_capping(self):
+        # SHORT: entry=500, sl=520 → dist=20 (4% of entry)
+        # With cap=1.5%: effective_dist=7.5 → qty=floor(1000/7.5)=133
+        engine = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015)
+        sig = _make_signal(entry=500.0, sl=520.0, tp=480.0, direction=Direction.SHORT)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        expected = int(1000 / (500.0 * 0.015))
+        assert qty == expected
+
+    def test_with_slippage_factor_combined(self):
+        # Slippage applied after SL cap
+        # entry=490.8, cap=1.5% → eff_sl=7.362, slip=10% → adjusted=8.098
+        # risk_amount=150, qty=floor(150/8.098)=18
+        engine = _engine(risk_per_trade=0.01, slippage_factor=0.10, max_sl_pct_for_sizing=0.015)
+        sig = _make_signal(entry=490.8, sl=470.29, tp=505.2)
+        qty = engine.calculate_quantity(sig, capital=15_000)
+        expected_rps = 490.8 * 0.015 * 1.10
+        expected = int(150 / expected_rps)
+        assert qty == expected
