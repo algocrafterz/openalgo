@@ -49,9 +49,12 @@ main.py (_handle_entry / _handle_exit)
 4. **Cancel SL order first** — broker treats any SELL while SL SELL is active as new SHORT
 5. `build_exit_order()` → MARKET SELL
 6. `send_order()` with `tp_exit_retries` retries
-7. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at TP1 - 0.1R (runner SL)
+7. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at TP1 − 0.3R (runner SL)
+   - `tp1_runner_sl_buffer: 0.3` — 30% of R below TP1. Gives price room to wick-back and test TP1 before continuing to TP1.5. Old value 0.1R was too tight (TMPV 2026-04-13: ₹0.80 gap triggered by normal TP1 test wick). 0.3R scales correctly across ₹150–₹800 filter (9–72 ticks depending on SL%).
+   - Runner SL is the **only automated protection** when TP1.5 signal is delayed or missing.
    - `compute_next_tp()` derives next TP level (TP1→TP1.5, TP1.5→TP2) for notification
    - Telegram notification includes: booked qty, remaining qty, new SL, next TP price
+   - **TP1.5 exit fires only on TradingView TP1.5 HIT alert** — engine has no autonomous LTP monitoring for TP exits. If the alert is delayed/missing, runner holds until runner SL fires or time exit at 15:00.
 8. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
 
 ---
@@ -129,14 +132,24 @@ absorbs real fill slippage on MARKET entry and TP exit orders. This is by design
 
 Validated 2026-04-13: JSWENERGY 0.81%, EMAMILTD 0.89%, EXIDEIND 0.90%, TMPV 0.88%.
 
-**Expected profit per trade:**
+**Expected profit per trade (₹15K capital, avg stock ₹350, avg SL 1.5%):**
 ```
-Full exit at R:R 1:1:   profit ≈ actual_risk ≈ ₹138  (not ₹150 — slippage buffer accounts for ~10%)
-TP1 50% exit at R:R 0.7: profit ≈ ₹138 × 0.7 × 0.5 ≈ ₹48
-TP1 50% exit at R:R 0.5: profit ≈ ₹138 × 0.5 × 0.5 ≈ ₹35
+Full exit at R:R 1:1:     profit ≈ actual_risk ≈ ₹138  (not ₹150 — slippage buffer accounts for ~9%)
+TP1 50% exit at R:R 0.7:  profit ≈ ₹138 × 0.7 × 0.5 ≈ ₹48  (partial, runner continues)
+TP1 50% exit at R:R 0.5:  profit ≈ ₹138 × 0.5 × 0.5 ≈ ₹35  (partial, runner continues)
+Blended (50-50 trail, TP1.5 hit 27.6% of trades): ≈₹61/winning trade
 ```
 ORB signals typically have R:R 0.5–0.7 at TP1. Validated: TMPV ₹45, JSWENERGY ₹45 at TP1.
 Full round-trip (TP1+runner) validated: TMPV ₹84.60, JSWENERGY ₹103.20.
+
+### Slippage Factor vs Broker MPP
+
+These serve different purposes and are NOT redundant:
+
+- **MPP (Market Price Protection)** — Flattrade hard fill cap per leg: entry MARKET → LMT at LTP+1% (₹100–500 stocks). SL-M → SL-LMT at trigger+1%. Prevents catastrophic fills in illiquid spikes. Pure safety net.
+- **`slippage_factor: 0.10`** — sizing buffer: widens denominator by 10% to account for entry filling above signal price on momentum breakout (typical: 0.3–0.8% above). Also covers TP exit slipping below TP price on MARKET order. Without this buffer, actual risk regularly runs 10–15% over 1%.
+
+MPP caps the worst-case single fill. `slippage_factor` accounts for the typical gap that widens effective risk across both legs. Keep at 0.10 — validated Q2 2026 (actual risk 0.81–0.90% = ~9% haircut from the 10% buffer).
 
 **`max_sl_pct_for_sizing` (default 0.0 = disabled):** Enabling this cap would inflate qty beyond
 what the SL distance justifies, producing actual losses of 2–3× risk_per_trade when SL fires.
@@ -169,12 +182,30 @@ After sizing, `adjust_qty_for_margin()` checks whether the full-risk qty fits in
 
 `margin_per_trade ≈ qty × entry × 20%`  where `qty = floor(capital × 1% / (sl_distance × 1.10))`
 
-| Capital | Risk/trade | Avg margin/trade (6-8%) | `max_open_positions` |
-|---------|------------|--------------------------|----------------------|
-| ₹15K    | ₹152       | ₹900–₹1,200              | 5                    |
-| ₹25K    | ₹250       | ₹1,500–₹2,000            | 5–6                  |
-| ₹50K    | ₹500       | ₹3,000–₹4,000            | 6–7                  |
-| ₹1L     | ₹1,000     | ₹6,000–₹8,000            | 7–8                  |
+**Sizing and profitability by capital level** (assumptions: avg stock ₹350, avg SL 1.5%, slippage_factor=0.10, 50-50 trail-to-TP1 strategy, ~3 trades/day, 70% win rate from Q1):
+
+| Capital | Risk/trade | Actual risk (~91%) | Qty (avg) | Margin/trade (~9%) | Slots | TP1 partial profit | Blended $/win | Est. monthly net |
+|---------|-----------|-------------------|-----------|-------------------|-------|--------------------|---------------|------------------|
+| ₹15K    | ₹150      | ₹136              | ~25       | ₹788              | 5     | ₹44                | ₹61           | ₹3,200           |
+| ₹25K    | ₹250      | ₹227              | ~43       | ₹1,330            | 5     | ₹74                | ₹102          | ₹5,400           |
+| ₹35K    | ₹350      | ₹318              | ~60       | ₹1,860            | 5     | ₹103               | ₹142          | ₹7,500           |
+| ₹50K    | ₹500      | ₹454              | ~86       | ₹2,660            | 5–6   | ₹148               | ₹204          | ₹10,800          |
+
+Return % stays constant at ~21%/month — profit scales linearly with capital. The practical benefit of larger capital is fewer rejections from `min_capital_for_entry` floor and room to raise `max_open_positions` to 6–7 at ₹35K+.
+
+### Multi-TP vs TP1-only: Strategy Decision
+
+Q1 2026 net PnL comparison (196 trades, 31 days, ₹35K capital, Flattrade percentage fees):
+
+| Strategy | Net PnL | Notes |
+|---|---|---|
+| TP1-only (100% exit) | +30.3% | Leaves 54 TP1.5 trades on the table |
+| 50-50 trail to BE | +28.2% | BE stop-outs eat into gains |
+| **50-50 trail to TP1** | **+42.7%** | **Strictly optimal** |
+
+50-50 trail-to-TP1 dominates: identical outcome on SL trades and TP1-only trades, strictly better on the 27.6% of trades that reach TP1.5 (54 trades in Q1). Percentage fees (Flattrade) make partial exits free — no per-order cost penalty.
+
+Note: earlier analysis showed "TP1-only +69R better" — that was under mStock's per-order brokerage model. Under percentage fees, 50-50 trail is always at least as good. **Current implementation is optimal.**
 
 ---
 

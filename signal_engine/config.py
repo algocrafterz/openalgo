@@ -329,7 +329,7 @@ def _build_settings() -> Settings:
         bracket_max_sl_retries=int(_require_key(bracket, "bracket", "max_sl_retries")),
         bracket_retry_delay=float(bracket.get("retry_delay", 0.5)),
         bracket_tp_exit_retries=int(bracket.get("tp_exit_retries", 3)),
-        tp1_runner_sl_buffer=float(bracket.get("tp1_runner_sl_buffer", 0.1)),
+        tp1_runner_sl_buffer=float(bracket.get("tp1_runner_sl_buffer", 0.3)),
 
         # Strategy profiles — per-strategy TP levels and product
         strategy_profiles=strategy_profiles,
