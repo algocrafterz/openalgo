@@ -41,15 +41,14 @@ sizing:
   # 0.10 = 10% slippage buffer on risk_per_share. Do not reduce unless switching to LIMIT TP exits.
   slippage_factor: 0.10
 
-  # [tune] SL distance cap for position sizing (as fraction of entry price). 0 = disabled.
-  # ORB opening-range SLs vary from 0.5% to 5%+ depending on the day's range width.
-  # Without a cap, wide-SL stocks (JSWENERGY at 4.18%) produce tiny qty (6 shares) even
-  # though capital sits idle — the 1% risk budget is consumed by distance, not position size.
-  # With cap=0.015: SL > 1.5% is treated as 1.5% for sizing → normalises qty across all ORB
-  # conditions. The real SL ORDER is still placed at the signal's original SL price.
-  # Actual loss if SL fires = qty × real_sl_distance (may exceed risk_per_trade on wide days).
-  # At cap=1.5%: worst-case ~2.5% loss/trade on widest gaps; 4% daily_loss_limit = 1-2 SL hits.
-  max_sl_pct_for_sizing: 0.015
+  # [tune] SL distance cap for position sizing (as fraction of entry price). 0 = DISABLED.
+  # WARNING: enabling this BREAKS the 1% risk-per-trade guarantee.
+  # If SL fires on a capped signal the actual loss = qty × real_sl_distance, which can be
+  # 2-3x risk_per_trade on wide-range ORB days (e.g. JSWENERGY 4.18% SL → 2.43% loss).
+  # Keep at 0 to maintain strict ~0.9% actual risk per trade (validated: Q2 2026 trades
+  # show 0.81-0.90% actual risk — slippage_factor=0.10 in the denominator is the ~10% buffer).
+  # The lower capital utilisation on wide-SL days is the CORRECT consequence of 1% risk mgmt.
+  max_sl_pct_for_sizing: 0.0
 
   # [tune] Capital override in analyze (sandbox) mode. Set to match live capital for realistic sizing.
   # Has no effect in live mode — live capital is fetched from broker API.

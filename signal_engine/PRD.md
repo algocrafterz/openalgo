@@ -117,12 +117,31 @@ Normalizer converts this to canonical EXIT. `TP1` matched against `strategy_prof
 
 ### fixed_fractional (default)
 ```
-effective_sl = min(|entry - sl|, entry × max_sl_pct_for_sizing)   # capped if max_sl_pct_for_sizing > 0
-qty = floor(capital × risk_per_trade / (effective_sl × (1 + slippage_factor)))
+qty = floor(capital × risk_per_trade / (|entry - sl| × (1 + slippage_factor)))
 ```
-`slippage_factor: 0.10` — both entry and TP exit are MARKET (double slippage). If `qty = 0`, trade is skipped.
+`slippage_factor: 0.10` — widens the denominator by 10%, producing conservatively fewer shares.
+If `qty = 0`, trade is skipped (stock too expensive for the risk budget).
 
-**SL cap for sizing (`max_sl_pct_for_sizing`):** ORB SL distances vary 0.5–5%+ based on opening range width. Without a cap, wide-range days produce tiny qty (6 shares vs 18 with cap). The cap normalises position size across all market conditions. The real SL ORDER is placed at `signal.sl` — only sizing uses the capped distance. Actual loss if SL fires = `qty × real_sl_distance` (may exceed `risk_per_trade` on very wide gaps).
+**Actual risk per trade (Q2 2026 validated):**
+The 10% slippage buffer means actual risk = `qty × sl_dist ≈ capital × risk_per_trade / 1.10`.
+At 1% risk and ₹15K capital: actual risk ≈ ₹138 (0.91%), not ₹152 (1.0%) — the ~9% haircut
+absorbs real fill slippage on MARKET entry and TP exit orders. This is by design.
+
+Validated 2026-04-13: JSWENERGY 0.81%, EMAMILTD 0.89%, EXIDEIND 0.90%, TMPV 0.88%.
+
+**Expected profit per trade:**
+```
+Full exit at R:R 1:1:   profit ≈ actual_risk ≈ ₹138  (not ₹150 — slippage buffer accounts for ~10%)
+TP1 50% exit at R:R 0.7: profit ≈ ₹138 × 0.7 × 0.5 ≈ ₹48
+TP1 50% exit at R:R 0.5: profit ≈ ₹138 × 0.5 × 0.5 ≈ ₹35
+```
+ORB signals typically have R:R 0.5–0.7 at TP1. Validated: TMPV ₹45, JSWENERGY ₹45 at TP1.
+Full round-trip (TP1+runner) validated: TMPV ₹84.60, JSWENERGY ₹103.20.
+
+**`max_sl_pct_for_sizing` (default 0.0 = disabled):** Enabling this cap would inflate qty beyond
+what the SL distance justifies, producing actual losses of 2–3× risk_per_trade when SL fires.
+Keep at 0 to maintain strict ~0.91% risk per trade. Wide-SL days will have lower capital
+utilisation — this is the mathematically correct consequence of consistent 1% risk management.
 
 ### pct_of_capital
 ```
