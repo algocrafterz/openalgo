@@ -52,7 +52,7 @@ sizing:
 
   # [tune] Capital override in analyze (sandbox) mode. Set to match live capital for realistic sizing.
   # Has no effect in live mode — live capital is fetched from broker API.
-  sandbox_capital: 15000
+  sandbox_capital: 35000
 
   # [tune] Cache capital at first signal of the day; use same value for all trades.
   # Ensures equal risk per trade regardless of intra-day capital fluctuations from open positions.
@@ -65,7 +65,9 @@ sizing:
   # [tune] Minimum live capital (INR) to place a new entry.
   # When open positions consume most margin, live capital drops below this floor and new
   # entries are skipped cleanly — no scaled-down dwarf orders sent to broker.
-  min_capital_for_entry: 2000
+  # At ₹35K: each slot uses ~₹10,937 margin; ₹5,000 floor ensures any scaled entry is
+  # at least 46% of full size (₹161 min risk) — below this the order is not worth placing.
+  min_capital_for_entry: 5000
 
 # ── Risk Management ──────────────────────────────────────
 risk:
@@ -75,9 +77,11 @@ risk:
   weekly_loss_limit: 0.08        # 8% = 2 bad days per week
   monthly_loss_limit: 0.10       # 10% of capital
 
-  # [tune] Max concurrent open positions. Observed margin per trade (Q2 2026):
-  # avg margin ≈ 6-8% of capital (NSE MIS 20% × position value). 5 slots = 30-40% margin use,
-  # well within available capital at ₹15K+. Increase to 6-7 only at ₹25K+ or if avg_sl widens.
+  # [tune] Max concurrent open positions.
+  # At ₹35K capital: each full-risk slot uses ~31% margin (₹350 risk / 0.64% avg SL = ₹54K position × 20% MIS).
+  # 3 concurrent slots = ~93% capital utilization — slots 4-5 get auto-scaled down via Margin API.
+  # Increasing beyond 5 has no effect; capital constrains to 3 meaningful positions at ₹35K.
+  # In practice, utilization is limited by signal frequency (avg 4.7 signals/day), not this cap.
   max_open_positions: 5
 
   # [tune] Hard cap on total trades per day (slots can recycle within this limit).
