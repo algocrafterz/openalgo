@@ -15,7 +15,7 @@ telegram:
   # [tune] Personal/admin channel for engine start/stop/error alerts.
   # If omitted, notifications go to all signal channels.
   notify_channel:
-    name: "anand-smi-assistant"
+    name: "signal-engine"
     id: -1003803150235
 
 # ── Position Sizing ──────────────────────────────────────

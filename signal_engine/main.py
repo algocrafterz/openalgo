@@ -19,7 +19,7 @@ from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
 from signal_engine.risk import RiskEngine
 from signal_engine.risk_store import RiskStore, RISK_DB_PATH
-from signal_engine.tracker import PositionTracker, TimeExitScheduler, TrackedPosition
+from signal_engine.tracker import PositionTracker, TimeExitScheduler, TrackedPosition, TradeRecord, _compute_r
 from signal_engine.validator import validate
 
 # Persistent risk counter store (keyed by mode + date, survives restarts)
@@ -326,9 +326,28 @@ async def _handle_exit_locked(signal) -> None:
             tracker._last_realised_pnl = current_realised
         logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
 
+        # Compute total trade P&L: partials already in pos.realized_pnl + this leg
+        total_trade_pnl = pos.realized_pnl + pnl_delta
+        base_price = pos.fill_price or pos.entry_price
+
         if is_full_exit:
-            # Full exit: unregister position, free risk slot, notify with PnL
-            await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
+            # Full exit: unregister position, free risk slot, notify with total trade P&L + R
+            r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+            all_exit_types = pos.exit_types + [tp_level or "EXIT"]
+            tracker.add_trade_record(TradeRecord(
+                symbol=pos.symbol,
+                direction=pos.direction.value,
+                entry_price=base_price,
+                exit_price=None,  # market exit — exact fill fetched separately if needed
+                original_qty=pos.original_quantity or pos.quantity,
+                total_pnl=total_trade_pnl,
+                r_multiple=r,
+                exit_types=all_exit_types,
+            ))
+            await notifier.notify_position_closed(
+                pos.symbol, total_trade_pnl, strategy=pos.strategy,
+                direction=pos.direction.value, r_multiple=r,
+            )
             tracker.unregister(signal.symbol, signal.strategy)
             risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
             # exit_pending does not need clearing — position is unregistered
@@ -341,10 +360,25 @@ async def _handle_exit_locked(signal) -> None:
                     f"Partial exit produced invalid remainder {remaining} for {pos.symbol} "
                     f"(qty={pos.quantity}, exit_qty={exit_qty}), converting to full exit"
                 )
+                r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+                all_exit_types = pos.exit_types + [tp_level or "EXIT"]
+                tracker.add_trade_record(TradeRecord(
+                    symbol=pos.symbol,
+                    direction=pos.direction.value,
+                    entry_price=base_price,
+                    exit_price=None,
+                    original_qty=pos.original_quantity or pos.quantity,
+                    total_pnl=total_trade_pnl,
+                    r_multiple=r,
+                    exit_types=all_exit_types,
+                ))
                 tracker.unregister(signal.symbol, signal.strategy)
                 risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-                await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy)
-                tracker.record_exit(pnl=pnl_delta, new_realised_pnl=current_realised)
+                await notifier.notify_position_closed(
+                    pos.symbol, total_trade_pnl, strategy=pos.strategy,
+                    direction=pos.direction.value, r_multiple=r,
+                )
+                tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
                 if not tracker._positions:
                     await tracker.send_day_summary()
                 return
@@ -353,13 +387,6 @@ async def _handle_exit_locked(signal) -> None:
             logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
             # Re-place SL at TP1 - 0.1R after partial TP exit (50-50 TP booking strategy).
-            # Rationale: TP1 is freshly-hit resistance. Placing SL exactly at TP1 means any
-            # normal wick-back immediately stops the runner. Buffer = 0.1R gives the runner
-            # room to breathe without giving back significant profit (worst case: runner exits
-            # at TP1 - 0.1R = still +0.9R on that half, vs -1R original SL).
-            # Buffer is direction-aware: LONG = TP1 - buffer, SHORT = TP1 + buffer.
-            # Fall back to entry_price if pos.tp is unset — defensive, shouldn't occur.
-            # Critical: SL was already cancelled before the exit order. Re-place now.
             if pos.tp and pos.tp > 0:
                 risk_distance = abs(pos.tp - pos.entry_price)
                 buffer = settings.tp1_runner_sl_buffer * risk_distance
@@ -397,6 +424,8 @@ async def _handle_exit_locked(signal) -> None:
                         strategy=pos.strategy,
                     )
 
+            # R for this partial leg only (shows how far into the trade we are)
+            r_partial = _compute_r(pnl_delta, exit_qty, base_price, pos.sl)
             next_tp_info = compute_next_tp(pos, tp_level)
             next_tp_label = next_tp_info[0] if next_tp_info else None
             next_tp_price = next_tp_info[1] if next_tp_info else None
@@ -404,11 +433,21 @@ async def _handle_exit_locked(signal) -> None:
                 pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta,
                 strategy=pos.strategy, new_sl=pos.sl,
                 next_tp_label=next_tp_label, next_tp_price=next_tp_price,
+                direction=pos.direction.value, r_multiple=r_partial,
             )
+            # Accumulate partial P&L and record exit label for final TradeRecord
+            pos.realized_pnl += pnl_delta
+            pos.exit_types.append(tp_level or "TP")
             pos.exit_pending = False  # partial exit done — allow next TP signal
 
         # 7. Update day summary counters + realised PnL snapshot
-        tracker.record_exit(pnl=pnl_delta, new_realised_pnl=current_realised)
+        # is_partial=True: only P&L accumulated, no trade count. is_partial=False: full trade counted.
+        tracker.record_exit(
+            pnl=pnl_delta,
+            is_partial=not is_full_exit,
+            total_pnl=total_trade_pnl if is_full_exit else None,
+            new_realised_pnl=current_realised,
+        )
 
         # 8. Send day summary if this was the last open position
         if is_full_exit and not tracker._positions:
@@ -561,7 +600,7 @@ async def _handle_entry(signal) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
-        await notifier.notify_order_placed(signal.symbol, signal.direction.value, trade_result.order_id, strategy=signal.strategy)
+        await notifier.notify_order_placed(signal.symbol, signal.direction.value, trade_result.order_id, strategy=signal.strategy, signal_price=signal.entry)
     else:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
         await notifier.notify_order_rejected(signal.symbol, trade_result.message, strategy=signal.strategy)
@@ -589,7 +628,7 @@ async def _handle_entry(signal) -> None:
             sl_result, _ = await send_bracket_legs(signal, quantity, trade_result.order_id)
             sl_order_id = sl_result.order_id if sl_result else ""
             if sl_result and sl_result.status == OrderStatus.SUCCESS:
-                await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id, strategy=signal.strategy)
+                await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id, strategy=signal.strategy, sl_price=signal.sl)
             else:
                 await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
 
@@ -603,7 +642,7 @@ async def _handle_entry(signal) -> None:
             )
             await notifier.notify_entry_filled(
                 signal.symbol, signal.direction.value, entry_fill_price,
-                quantity, signal.entry, strategy=signal.strategy,
+                quantity, signal.entry, strategy=signal.strategy, sl=signal.sl,
             )
         else:
             logger.warning(f"Entry fill price unavailable for {signal.symbol} id={trade_result.order_id}")

@@ -71,7 +71,7 @@ main.py (_handle_entry / _handle_exit)
 | `risk.py` | Position sizing (`RiskEngine`), exposure limits, portfolio heat |
 | `risk_store.py` | SQLite persistence for risk counters (restart-safe). Path: `RISK_DB_PATH` |
 | `executor.py` | Order construction + OpenAlgo API calls |
-| `tracker.py` | Position lifecycle: register, poll SL fills, time exit |
+| `tracker.py` | Position lifecycle: register, poll SL fills, time exit; `TradeRecord` dataclass, `_compute_r()` R-multiple helper |
 | `api_client.py` | All async OpenAlgo API calls |
 | `notifier.py` | Telegram notification dispatch |
 | `config.py` | Fail-fast config loader (`Settings` dataclass singleton) |
@@ -248,6 +248,52 @@ Flattrade blocks raw MARKET and SL-MKT order types via API.
 
 ---
 
+## Telegram Notifications
+
+All notifications sent via `notifier.py` to `telegram.notify_channel`.
+
+### Entry lifecycle
+
+| Message | Trigger | Key fields |
+|---------|---------|-----------|
+| `✅ ENTRY` | Order placed | symbol, direction, strategy, signal_price, order_id |
+| `💰 FILLED` | Fill price fetched | fill_price, slip=±diff, risk=₹NNN, SL=NNN.NN, qty |
+| `✅ SL placed` | SL-M placed | sl_price, order_id |
+| `❌ ENTRY FAILED` | Order rejected or risk limit hit | reason |
+
+### Exit lifecycle
+
+| Message | Trigger | Key fields |
+|---------|---------|-----------|
+| `🎯 PARTIAL EXIT` | TP leg filled (qty remaining) | tp_level, R-multiple, exited/remaining qty, P&L, new SL, next TP |
+| `✅ TP HIT` | Position closed, net P&L ≥ 0 | direction, exit_price, total P&L, R-multiple |
+| `❌ SL HIT` | Position closed, net P&L < 0 | direction, exit_price, total P&L, R-multiple |
+| `⏰ TIME EXIT` | Forced close at `time_exit.hour:minute` | direction, P&L, R-multiple |
+
+**P&L and R-multiple semantics:**
+- `PARTIAL EXIT R`: partial leg only — `pnl_delta / (exit_qty × abs(entry - sl))`
+- `TP HIT / SL HIT R`: total trade — `(sum of all partial P&L + final leg) / (original_qty × abs(entry - sl))`
+- Multi-leg trades (e.g. TP1 + runner SL) show the correct net R on the closing notification
+
+**Noise suppression:** TP detection internals (TP detected, TP exit placed, EXIT signal received) are log-only — not sent to Telegram.
+
+### EOD Day Summary
+
+```
+📊 Day Summary | HH:MM IST
+Trades: N | W: W L: L T: T | WR: XX%
+Net P&L: +₹NNN (±N.N%)
+
+▲ SYMBOL  entry→exit  +₹NNN  +1.2R  TP1+TP1.5
+▼ SYMBOL  entry→exit  -₹NNN  -1.0R  SL
+```
+
+- `W`/`L`: decided trades (TP or SL outcome). WR = W / (W+L), excludes T.
+- `T`: time-exit trades — forced close, no directional outcome, counted separately.
+- Per-trade table: direction arrow, symbol, entry→exit prices, total P&L, total R, exit type labels.
+
+---
+
 ## Configuration (`config.yaml`)
 
 All values required — `ConfigError` raised on any missing key.
@@ -322,7 +368,7 @@ time_exit:
   minute: 0
 
 tracking:
-  poll_interval: 10   # seconds between position polls
+  poll_interval: 5    # seconds between position polls
 
 broker:
   exchange: NSE

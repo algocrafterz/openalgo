@@ -1,9 +1,9 @@
 """Position tracker — polls OpenAlgo to detect closed positions and update risk counters."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 from loguru import logger
 
@@ -22,6 +22,27 @@ from signal_engine import notifier
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def _compute_r(total_pnl: float, qty: int, entry: float, sl: float) -> float | None:
+    """Compute R-multiple: total_pnl divided by initial 1R risk for the position."""
+    risk_per_share = abs(entry - sl)
+    if risk_per_share == 0 or qty == 0:
+        return None
+    return total_pnl / (qty * risk_per_share)
+
+
+@dataclass
+class TradeRecord:
+    """Completed trade summary — one record per position lifecycle, appended to _completed_trades."""
+    symbol: str
+    direction: str          # "LONG" / "SHORT"
+    entry_price: float      # fill_price if available, else signal entry
+    exit_price: float | None  # final exit price (None for time/force exits)
+    original_qty: int
+    total_pnl: float        # cumulative P&L across all exit legs (partial + final)
+    r_multiple: float | None
+    exit_types: List[str]   # e.g. ["TP1", "TP2"], ["SL"], ["TIME"], ["EXIT"]
+
+
 @dataclass
 class TrackedPosition:
     symbol: str
@@ -37,7 +58,10 @@ class TrackedPosition:
     sl_order_id: str = ""
     tp_order_id: str = ""  # unused: TP exit driven by TradingView TP HIT signal, not broker order
     exit_pending: bool = False  # True while an exit handler is actively processing this position
-    fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
+    fill_price: float = 0.0     # Actual broker fill price for the entry order (0 = unknown)
+    original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
+    realized_pnl: float = 0.0   # P&L accumulated from partial exits (for W/L classification at full close)
+    exit_types: List[str] = field(default_factory=list)  # labels appended at each exit leg
 
 
 class PositionTracker:
@@ -59,8 +83,10 @@ class PositionTracker:
         self._day_trades: int = 0
         self._day_wins: int = 0
         self._day_losses: int = 0
+        self._day_time_exits: int = 0  # positions force-closed at 15:00 (not W or L)
         self._day_pnl: float = 0.0
         self._day_summary_sent: bool = False  # prevent duplicate summaries
+        self._completed_trades: List[TradeRecord] = []  # one record per closed position
 
     @property
     def tracked_count(self) -> int:
@@ -72,7 +98,9 @@ class PositionTracker:
         return f"{symbol.upper()}:{strategy.upper()}"
 
     def register(self, position: TrackedPosition) -> None:
-        """Register a new position to track."""
+        """Register a new position to track. Sets original_quantity from quantity if not provided."""
+        if position.original_quantity == 0:
+            position.original_quantity = position.quantity
         key = self._key(position.symbol, position.strategy)
         self._positions[key] = position
         logger.info(f"Tracking position: {key} qty={position.quantity}")
@@ -89,30 +117,45 @@ class PositionTracker:
             logger.info(f"Unregistered position: {key}")
         return pos
 
-    def record_exit(self, pnl: float, new_realised_pnl: float | None = None) -> None:
-        """Record a completed exit in day summary counters.
+    def record_exit(
+        self,
+        pnl: float,
+        is_partial: bool = False,
+        total_pnl: float | None = None,
+        new_realised_pnl: float | None = None,
+    ) -> None:
+        """Record an exit event in day summary counters.
 
-        Called by _handle_exit() for exits driven by TradingView signals (TP HIT, EXIT).
-        These exits bypass check_positions() so day counters would not be updated otherwise.
+        Partial exits only accumulate P&L — they do NOT count as completed trades.
+        A trade is counted once, at the final (full) exit.
 
         Args:
-            pnl: Realised PnL for this trade (positive = win, negative = loss).
-            new_realised_pnl: Updated cumulative realised PnL from broker API.
-                If provided, updates the snapshot so check_positions() delta stays accurate.
+            pnl: Realised P&L delta for this specific exit leg.
+            is_partial: True for partial exits (TP1 with runner remaining). Does not
+                count as a completed trade — only updates _day_pnl.
+            total_pnl: Cumulative P&L for the full trade (all legs). Used for W/L
+                classification on full exit. If omitted, pnl is used instead.
+            new_realised_pnl: Updated cumulative realised P&L from broker API snapshot.
         """
-        self._day_trades += 1
         self._day_pnl += pnl
-        if pnl >= 0:
-            self._day_wins += 1
-        else:
-            self._day_losses += 1
+        if not is_partial:
+            effective_pnl = total_pnl if total_pnl is not None else pnl
+            self._day_trades += 1
+            if effective_pnl >= 0:
+                self._day_wins += 1
+            else:
+                self._day_losses += 1
         if new_realised_pnl is not None:
             self._last_realised_pnl = new_realised_pnl
         logger.info(
-            f"Exit recorded: pnl={pnl:,.2f} "
+            f"Exit recorded (partial={is_partial}): pnl={pnl:,.2f} total={total_pnl} "
             f"day_trades={self._day_trades} wins={self._day_wins} losses={self._day_losses} "
             f"day_pnl={self._day_pnl:,.2f}"
         )
+
+    def add_trade_record(self, record: TradeRecord) -> None:
+        """Append a completed trade record for EOD summary."""
+        self._completed_trades.append(record)
 
     async def send_day_summary(self) -> None:
         """Send day summary to notify channel. No-op if already sent today or no trades.
@@ -129,6 +172,8 @@ class PositionTracker:
             losses=self._day_losses,
             net_pnl=self._day_pnl,
             capital=capital,
+            time_exits=self._day_time_exits,
+            trade_records=self._completed_trades,
         )
         self._day_summary_sent = True
 
@@ -176,19 +221,38 @@ class PositionTracker:
             else:
                 exit_price = None
             exit_str = f"{exit_price:.2f}" if exit_price is not None else "N/A"
+
+            # Total trade P&L = partial exits already counted + this final close leg
+            total_pnl = pos.realized_pnl + pnl_delta
+            r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+
             logger.info(
                 f"Position closed: {key}, entry={base_price:.2f}, exit={exit_str}, "
-                f"PnL delta: {pnl_delta:,.2f}"
+                f"pnl_delta={pnl_delta:,.2f} total_pnl={total_pnl:,.2f} r={r}"
             )
+
+            self._completed_trades.append(TradeRecord(
+                symbol=pos.symbol,
+                direction=pos.direction.value,
+                entry_price=base_price,
+                exit_price=exit_price,
+                original_qty=pos.original_quantity or pos.quantity,
+                total_pnl=total_pnl,
+                r_multiple=r,
+                exit_types=pos.exit_types[:] if pos.exit_types else ["SL"],
+            ))
 
             self._day_trades += 1
             self._day_pnl += pnl_delta
-            if pnl_delta >= 0:
+            if total_pnl >= 0:
                 self._day_wins += 1
             else:
                 self._day_losses += 1
 
-            await notifier.notify_position_closed(pos.symbol, pnl_delta, strategy=pos.strategy, exit_price=exit_price)
+            await notifier.notify_position_closed(
+                pos.symbol, total_pnl, strategy=pos.strategy, exit_price=exit_price,
+                direction=pos.direction.value, r_multiple=r,
+            )
 
             closed_keys.append(key)
 
@@ -224,6 +288,7 @@ class PositionTracker:
             self._day_losses = 0
             self._day_pnl = 0.0
             self._day_summary_sent = False
+            self._completed_trades = []
             return
 
         # Collect unique strategies from MIS positions only
@@ -252,10 +317,33 @@ class PositionTracker:
             self._day_pnl += time_exit_pnl
             logger.info(f"Time exit PnL captured: {time_exit_pnl:,.2f}")
 
+        # Distribute time-exit P&L equally across MIS positions (exact for single position,
+        # approximate for multiple — per-position broker fetch would require serial close flow)
+        n = len(mis_positions)
+        per_pos_pnl = time_exit_pnl / n if n > 0 else 0.0
+
         # Clear only MIS positions and update risk engine
         for key, pos in mis_positions.items():
+            base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+            total_pnl = pos.realized_pnl + per_pos_pnl
+            r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+            self._completed_trades.append(TradeRecord(
+                symbol=pos.symbol,
+                direction=pos.direction.value,
+                entry_price=base_price,
+                exit_price=None,
+                original_qty=pos.original_quantity or pos.quantity,
+                total_pnl=total_pnl,
+                r_multiple=r,
+                exit_types=pos.exit_types[:] + ["TIME"],
+            ))
             self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
-            await notifier.notify_time_exit(pos.symbol, strategy=pos.strategy)
+            await notifier.notify_time_exit(
+                pos.symbol, strategy=pos.strategy, direction=pos.direction.value,
+                pnl=total_pnl, r_multiple=r,
+            )
+            self._day_trades += 1
+            self._day_time_exits += 1
             logger.info(f"Time exit: cleared tracker entry {key}")
             del self._positions[key]
 
@@ -265,8 +353,10 @@ class PositionTracker:
         self._day_trades = 0
         self._day_wins = 0
         self._day_losses = 0
+        self._day_time_exits = 0
         self._day_pnl = 0.0
         self._day_summary_sent = False
+        self._completed_trades = []
 
     async def start(self) -> None:
         """Start the polling loop. Runs until stop() is called."""
