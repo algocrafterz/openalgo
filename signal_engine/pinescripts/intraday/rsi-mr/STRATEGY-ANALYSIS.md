@@ -1,8 +1,25 @@
 # RSI(2) Mean Reversion — Intraday: Strategy Analysis
 
-**Date:** 2026-04-06  
+**Date:** 2026-04-15 (v3 update)  
 **Script:** `rsi-mr-intraday.pine`  
 **Status:** Observation phase (Telegram alerts, no live orders)
+
+---
+
+## v3 Changes Summary (2026-04-15)
+
+Four targeted fixes driven by the INDOTHAI/CHENNPETRO observations on 2026-04-15. All changes tighten signal quality without adding new logic complexity.
+
+| Parameter | v2 | v3 | Reason |
+|-----------|----|----|--------|
+| `minRR` default | 0.0 | **0.5** | v2 code default was off despite docs saying 0.5; INDOTHAI had R:R 0.36 and should have been skipped |
+| `minVwapGapPct` default | 0.20% | **0.50%** | 0.2% gap at 9:15–9:20 is noise (2-bar-old VWAP); 0.5% requires meaningful deviation |
+| Entry window start | 9:15 | **9:25** | First 2 bars unreliable (ATR spans prior session, VWAP barely formed) |
+| `slCapPct` default | 2.0% | **1.5%** | Tighter hard cap → forces smaller risk → improves structural R:R |
+
+**INDOTHAI 2026-04-15 post-mortem**: Entry 283.8, SL 280.1, TP 285.12. Gap to VWAP was 0.46%, SL was 1.30% → R:R 0.36. With v3, this trade is **filtered by both `minVwapGapPct` (0.46% < 0.50%) and `minRR` (0.36 < 0.50)**. The stock did recover later — mean reversion thesis was correct, execution filters were too loose.
+
+**CHENNPETRO 2026-04-15**: Gap-down open, strong bullish recovery through VWAP and beyond by 10:30. This is the archetype the strategy targets. A later entry (9:25+) with a bigger gap would have been a clean TP hit.
 
 ---
 
@@ -10,13 +27,18 @@
 
 The RSI(2) mean reversion intraday strategy exploits short-term panic selling in uptrending NSE stocks. The core thesis — stocks with RSI(2) below 5–10 on daily bars that are still above the 200 SMA will bounce toward VWAP during the next morning session — has robust research backing from Connors/Alvarez (100K+ backtested trades) and remains validated through 2025 backtests on US indices.
 
+**v3 changes (2026-04-15) — four parameter fixes for better R:R:**
+
+1. **`minRR` default fixed: 0.0 → 0.5** — code was off despite docs saying 0.5; single biggest filter improvement
+2. **`minVwapGapPct` raised: 0.20% → 0.50%** — early-session VWAP barely deviates; 0.2% was allowing noise trades
+3. **Entry window start delayed: 9:15 → 9:25** — skip first 2 bars where ATR/VWAP are unreliable
+4. **`slCapPct` tightened: 2.0% → 1.5%** — forces tighter max SL, improving structural R:R
+
 **v2 changes (2026-04-06) — three targeted improvements over v1:**
 
 1. **Time exit extended: 10:30 → 11:15 AM** — mean reversion needs time; ~70% of VWAP reclaims happen by 11:15
 2. **Momentum filter added** — `low > low[1] OR close > high[1]` prevents falling-knife entries
 3. **Volume multiplier default: 1.2× → 1.0×** — opening bars always have elevated volume; 1.2× was over-filtering
-
-All other v1 logic unchanged: single TP at VWAP, `max(PDL, entry×0.98)` SL, 9:15–9:44 entry window.
 
 ---
 
@@ -61,12 +83,13 @@ Use TradingView's date range selector on the strategy tester to restrict the bac
 
 Test each parameter independently while holding others at defaults. A robust parameter shows stable performance across a range, not a sharp peak at one value.
 
-| Parameter | Test Range | Default | Sensitivity |
+| Parameter | Test Range | v3 Default | Sensitivity |
 |-----------|-----------|---------|-------------|
 | RSI(2) threshold | 3, 5, 7, 10, 12, 15 | 10 | Moderate — lower = fewer trades, higher win rate |
-| Min VWAP gap | 0.10%, 0.15%, 0.20%, 0.30%, 0.50% | 0.20% | Low — most gaps exceed 0.20% when RSI is extreme |
-| SL cap % | 1.0%, 1.5%, 2.0%, 2.5%, 3.0% | 2.0% | Moderate — acts as safety net, rarely the binding constraint |
-| Min R:R | 0.0, 0.5, 0.8, 1.0 | 0.5 | Low — mean reversion R:R is structurally < 1; don't over-filter |
+| Min VWAP gap | 0.20%, 0.35%, 0.50%, 0.75%, 1.0% | **0.50%** | Moderate — v3 raise from 0.20%; higher = fewer signals, better avg quality |
+| SL cap % | 1.0%, 1.5%, 2.0%, 2.5%, 3.0% | **1.5%** | Moderate — tighter cap forces better R:R; rarely binding on liquid stocks |
+| Min R:R | 0.0, 0.25, 0.50, 0.75, 1.0 | **0.50** | High — single biggest quality filter; do not set below 0.5 |
+| Entry window start | 9:15, 9:20, 9:25, 9:30 | **9:25** | Moderate — earlier = more signals, lower quality; 9:25 is the sweet spot |
 | Entry window end | 9:30, 9:44, 10:05 | 9:44 | Low — extend if signal count too low on specific stocks |
 | Time exit | 10:30, 11:00, 11:15, 11:30 | 11:15 | Moderate — mean reversion usually completes by 11:15 |
 
@@ -82,7 +105,44 @@ SBIN, AXISBANK, ICICIBANK, HDFCBANK, TATACONSUM, ITC, WIPRO, TECHM
 
 ---
 
-## 3. V1 → V2 Changes
+## 3. Version Change Log
+
+### V2 → V3 Changes (2026-04-15)
+
+#### 3.0 Root Cause: INDOTHAI 2026-04-15
+
+Signal: Entry 283.8 | SL 280.1 | TP 285.12 (VWAP) | R:R 0.36 | SL hit in 5 min
+
+The trade exposed four issues in v2 defaults:
+
+1. **`minRR = 0.0`**: R:R 0.36 should have been rejected. Documentation said default should be 0.5 but code had 0.0.
+2. **`minVwapGapPct = 0.20%`**: Gap was 0.46%, barely above threshold. At 9:20 with 2 bars of VWAP data, 0.46% is noise.
+3. **Entry at 9:20**: Only 2 intraday bars existed. ATR(10) was mostly prior-session data → SL was set 1.30% below entry (3.7 pts) while VWAP reward was only 0.46% (1.32 pts).
+4. **`slCapPct = 2.0%`**: Allowed SL to be placed 1.3% away when actual reward was only 0.46%.
+
+With v3 parameters applied retroactively, INDOTHAI would have been **filtered by two independent conditions** (gap too small, R:R too low).
+
+#### 3.1 Fix: minRR default 0.0 → 0.5
+
+The single highest-impact change. Mean reversion setups have structurally lower R:R (wide ATR SL vs small VWAP gap), but 0.5 is the minimum threshold below which expectancy becomes negative after costs. Any R:R below 0.5 means the win rate needs to exceed 67% just to break even — unrealistic for opening session MR setups.
+
+#### 3.2 Fix: minVwapGapPct 0.20% → 0.50%
+
+VWAP at 9:15–9:25 is computed from 1–3 bars. On a flat open, VWAP ≈ price. A 0.20% deviation is within normal bid-ask spread noise. At 0.50%, the gap represents at least a meaningful directional move away from fair value. Additionally, the larger gap provides more reward space, which directly supports the min R:R requirement.
+
+#### 3.3 Fix: Entry window start 9:15 → 9:25
+
+The 9:15 and 9:20 bars have specific data quality problems:
+- `ATR(10)`: With only 1–2 intraday bars, ATR is averaging 8–9 prior-session bars. Prior session can be 2–5× more volatile than the opening range, so ATR-based SL is systematically overestimated.
+- `VWAP`: Only 1–2 data points. Any gap-down open will show VWAP ≈ open price, making the 0.50% gap filter weak on the first two bars.
+
+By 9:25 (3rd bar), there are 3 intraday bars. ATR is still impure but VWAP has 3 price/volume observations and starts to reflect the session's fair value.
+
+#### 3.4 Fix: slCapPct 2.0% → 1.5%
+
+The 2.0% hard cap allows SL placements up to 2% below entry. Combined with a 0.5% VWAP gap minimum, the theoretical maximum R:R with a 2.0% SL cap is `0.5 / 2.0 = 0.25` — terrible. Tightening to 1.5% raises the theoretical max to `0.5 / 1.5 = 0.33` at the minimum gap, and `0.75 / 1.5 = 0.5` for a 0.75% gap. The cap now works in harmony with `minRR` and `minVwapGapPct`.
+
+### V1 → V2 Changes
 
 ### 3.1 Time Exit: 10:30 → 11:15 AM
 
@@ -292,28 +352,42 @@ Based on Connors' research (adapted for Indian intraday with costs):
 
 ## 11. Configuration Presets
 
-### Conservative (start here — observation phase)
+### v3 Conservative (start here — observation phase)
 ```
 RSI(2) Threshold:    5      (Canonical Connors, fewest signals, highest win rate)
 Close > 200 SMA:     ON
-Min VWAP Gap:        0.25%
+Min VWAP Gap:        0.50%  (v3)
 Volume Multiplier:   1.0×
 Momentum Filter:     ON
-SL Cap:              2.0%
-Min R:R:             0.5
+Entry Window Start:  9:25   (v3 — skip first 2 bars)
+SL Cap:              1.5%   (v3)
+Min R:R:             0.50   (v3 — was 0.0 in v2 code)
 ```
 
-### Standard (after 20+ confirmed paper trades)
+### v3 Standard (after 20+ confirmed paper trades)
 ```
 RSI(2) Threshold:    10
 Close > 200 SMA:     ON
-Min VWAP Gap:        0.20%
+Min VWAP Gap:        0.50%  (v3)
 Volume Multiplier:   1.0×
 Momentum Filter:     ON
-SL Cap:              2.0%
-Min R:R:             0.5
+Entry Window Start:  9:25   (v3)
+SL Cap:              1.5%   (v3)
+Min R:R:             0.50   (v3)
+```
+
+### v3 Strict (high-quality signals only)
+```
+RSI(2) Threshold:    5
+Close > 200 SMA:     ON
+Min VWAP Gap:        0.75%
+Volume Multiplier:   1.2×
+Momentum Filter:     ON
+Entry Window Start:  9:30
+SL Cap:              1.5%
+Min R:R:             0.75
 ```
 
 ---
 
-*Last updated: 2026-04-06 | Script: rsi-mr-intraday.pine*
+*Last updated: 2026-04-15 v3 | Script: rsi-mr-intraday.pine*

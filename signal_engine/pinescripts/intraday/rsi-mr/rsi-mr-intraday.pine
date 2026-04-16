@@ -1,13 +1,25 @@
 //@version=6
-// RSI(2) Mean Reversion — Intraday v2 (NSE 5-min)
+// RSI(2) Mean Reversion — Intraday v3 (NSE 5-min)
 // ─────────────────────────────────────────────────────────────────────────────
-// Changes from v1:
+// Changes from v2:
+//   1. minRR default: 0.0 → 0.5
+//      (v2 default was 0.0 — misaligned with strategy docs; this alone filters the
+//       most common bad setups where ATR SL >> VWAP gap, e.g. INDOTHAI 2026-04-15
+//       had R:R 0.36 and should have been skipped)
+//   2. minVwapGapPct default: 0.20% → 0.50%
+//      (at 9:15–9:20, VWAP is only 1–2 bars old and barely deviates from price;
+//       a 0.2% gap is noise; 0.5% ensures a meaningful reward target exists)
+//   3. Entry window start: 9:15 → 9:25 AM
+//      (skip first 2 bars; ATR(10) at 9:15–9:20 spans mostly prior-day data
+//       making SL placement unreliable; by 9:25 we have 3 intraday bars)
+//   4. SL cap tightened: 2.0% → 1.5%
+//      (hard cap now closer to expected ATR range; prevents outsized loss on
+//       gap-heavy opens where ATR is still inflated from prior session)
+// ─────────────────────────────────────────────────────────────────────────────
+// Changes from v1 (carried forward from v2):
 //   1. Time exit extended: 10:30 → 11:15 AM
-//      (mean reversion needs time; 70%+ of VWAP reclaims happen by 11:15)
 //   2. Momentum filter added: bar low > prev bar low OR close > prev bar high
-//      (confirms bounce has started — filters falling-knife entries)
 //   3. Volume multiplier default lowered: 1.2× → 1.0×
-//      (opening 30 min always has elevated volume; 1.2× was over-filtering)
 // ─────────────────────────────────────────────────────────────────────────────
 // Stock selection: Chartink scanner (RSI(2) < threshold, daily).
 // Entry: 9:15–9:44 AM, price below VWAP, first qualifying 5-min bar.
@@ -15,7 +27,7 @@
 // Time exit: 11:15 AM. One trade per symbol per session.
 // Telegram alerts → Bot API JSON format (observation channel).
 // ─────────────────────────────────────────────────────────────────────────────
-strategy("intraday-rsi-mr", shorttitle="RSI-MR", overlay=true,
+strategy("intraday-rsi-mr-v3", shorttitle="RSI-MR", overlay=true,
      pyramiding=0,
      default_qty_type=strategy.percent_of_equity,
      default_qty_value=10,
@@ -53,11 +65,13 @@ int  trendLen       = input.int(200, "", minval=50, maxval=200, step=50, inline=
 // ═══════════════════════════════════════════════════════════════════════════
 // ENTRY CONDITIONS
 // ═══════════════════════════════════════════════════════════════════════════
-float minVwapGapPct = input.float(0.20, "Min Gap to VWAP (%)", minval=0.05, maxval=1.0, step=0.05,
+float minVwapGapPct = input.float(0.50, "Min Gap to VWAP (%)", minval=0.05, maxval=1.0, step=0.05,
      group=GRP_ENTRY,
      tooltip="Entry must be at least this % below VWAP.\n" +
      "Ensures meaningful room to TP.\n\n" +
-     "0.20%: Standard  0.10%: Permissive  0.50%: Strict")
+     "0.20%: Permissive (early-session VWAP barely deviates — too noisy)\n" +
+     "0.50%: Standard (v3 default)\n" +
+     "0.75%: Strict (fewer signals, higher average gap quality)")
 
 float minVolMult = input.float(1.0, "Volume Multiplier (× 20-bar avg)", minval=0.5, maxval=3.0, step=0.1,
      group=GRP_ENTRY,
@@ -81,19 +95,20 @@ float atrSlMult = input.float(1.0, "ATR(10) SL Multiplier", minval=0.5, maxval=3
      "1.0×: Very tight (SL hunting risk)  1.5×: Standard  2.0×: Wide (high-ATR stocks)\n\n" +
      "ATR adapts automatically: liquid large-caps get a tighter SL, volatile mid-caps get wider.")
 
-float slCapPct = input.float(2.0, "SL Cap (% from entry)", minval=0.5, maxval=5.0, step=0.5,
+float slCapPct = input.float(1.5, "SL Cap (% from entry)", minval=0.5, maxval=5.0, step=0.5,
      group=GRP_RISK,
      tooltip="Hard cap: SL cannot be more than this % below entry.\n" +
      "Acts as a safety net when ATR is large (e.g., volatile session).\n" +
      "Final SL = max(ATR-based SL, PDL), then capped at entry × (1 − cap%).\n\n" +
-     "2.0%: Standard  2.5%: High-ATR stocks  3.0%: Very wide")
+     "1.5%: Standard (v3 — tighter cap, forces better R:R)\n" +
+     "2.0%: Permissive (v2 default)  2.5%: High-ATR stocks")
 
-float minRR = input.float(0.0, "Minimum R:R to Enter", minval=0.0, maxval=3.0, step=0.25,
+float minRR = input.float(0.5, "Minimum R:R to Enter", minval=0.0, maxval=3.0, step=0.25,
      group=GRP_RISK,
      tooltip="Skip trades where planned reward/risk < this value.\n" +
      "Mean reversion setups structurally have R:R < 1 (wide ATR SL, small VWAP gap).\n" +
-     "Default 0.0 = no minimum filter. Raise to 0.5 only after confirming signal count.\n\n" +
-     "0.0: Off  0.5: Light filter  1.0: Strict")
+     "0.5 filters the worst setups (wide SL, tiny VWAP gap) while allowing valid MR entries.\n\n" +
+     "0.0: Off  0.5: Standard (v3 default)  0.75: Strict  1.0: Very strict")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TELEGRAM ALERTS
@@ -138,7 +153,7 @@ _hhmm() =>
 
 int cur = _hhmm()
 
-int T_ENTRY_START = 9 * 60 + 15   // 9:15 AM
+int T_ENTRY_START = 9 * 60 + 25   // 9:25 AM — skip first 2 bars (VWAP/ATR unreliable before 3 bars)
 int T_ENTRY_END   = 9 * 60 + 44   // 9:44 AM — last bar start allowed
 int T_TIME_EXIT   = 11 * 60 + 10  // 11:10 AM bar (closes 11:15) — v2: was 10:25
 
