@@ -2,8 +2,11 @@
 
 import asyncio
 import math
+import os
 import signal
+import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
@@ -21,6 +24,36 @@ from signal_engine.risk import RiskEngine
 from signal_engine.risk_store import RiskStore, RISK_DB_PATH
 from signal_engine.tracker import PositionTracker, TimeExitScheduler, TrackedPosition, TradeRecord, _compute_r
 from signal_engine.validator import validate
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+_OPENALGO_DB = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "db", "openalgo.db")
+)
+
+
+def _is_be_series(symbol: str, exchange: str) -> bool:
+    """Return True if the symbol is in the T2T (BE) series — MIS trading not allowed.
+
+    Queries the symtoken table for the broker-side symbol name. A brsymbol ending
+    in '-BE' (e.g. 'ZODIAC-BE') is in NSE's Trade-to-Trade segment and cannot be
+    traded MIS at any Indian broker.
+
+    Fails open on any DB error so a bad lookup never silently blocks a valid trade.
+    """
+    try:
+        conn = sqlite3.connect(_OPENALGO_DB, timeout=3)
+        row = conn.execute(
+            "SELECT brsymbol FROM symtoken WHERE symbol = ? AND exchange = ? LIMIT 1",
+            (symbol, exchange),
+        ).fetchone()
+        conn.close()
+        if row:
+            return str(row[0]).endswith("-BE")
+    except Exception as e:
+        logger.warning(f"BE series check failed for {symbol}: {e} — allowing trade")
+    return False
+
 
 # Persistent risk counter store (keyed by mode + date, survives restarts)
 _risk_store = RiskStore(RISK_DB_PATH)
@@ -329,6 +362,7 @@ async def _handle_exit_locked(signal) -> None:
         # Compute total trade P&L: partials already in pos.realized_pnl + this leg
         total_trade_pnl = pos.realized_pnl + pnl_delta
         base_price = pos.fill_price or pos.entry_price
+        hold_min = int((datetime.now(_IST) - pos.entry_time).total_seconds() / 60) if hasattr(pos, 'entry_time') else 0
 
         if is_full_exit:
             # Full exit: unregister position, free risk slot, notify with total trade P&L + R
@@ -347,6 +381,7 @@ async def _handle_exit_locked(signal) -> None:
             await notifier.notify_position_closed(
                 pos.symbol, total_trade_pnl, strategy=pos.strategy,
                 direction=pos.direction.value, r_multiple=r,
+                entry_price=base_price, hold_minutes=hold_min,
             )
             tracker.unregister(signal.symbol, signal.strategy)
             risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
@@ -377,6 +412,7 @@ async def _handle_exit_locked(signal) -> None:
                 await notifier.notify_position_closed(
                     pos.symbol, total_trade_pnl, strategy=pos.strategy,
                     direction=pos.direction.value, r_multiple=r,
+                    entry_price=base_price, hold_minutes=hold_min,
                 )
                 tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
                 if not tracker._positions:
@@ -434,6 +470,7 @@ async def _handle_exit_locked(signal) -> None:
                 strategy=pos.strategy, new_sl=pos.sl,
                 next_tp_label=next_tp_label, next_tp_price=next_tp_price,
                 direction=pos.direction.value, r_multiple=r_partial,
+                entry_price=base_price, hold_minutes=hold_min,
             )
             # Accumulate partial P&L and record exit label for final TradeRecord
             pos.realized_pnl += pnl_delta
@@ -483,6 +520,16 @@ async def _handle_entry(signal) -> None:
 
     Pipeline: check_exposure -> size -> build_order -> send -> bracket -> track -> save
     """
+    # 2. Reject T2T (BE series) symbols for MIS orders — broker will reject immediately.
+    product = signal.product or settings.product
+    if product == "MIS":
+        exchange = signal.exchange or settings.exchange
+        if _is_be_series(signal.symbol, exchange):
+            msg = f"{signal.symbol} is T2T (BE series) — MIS not allowed, add to blacklist to suppress"
+            logger.warning(msg)
+            await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+            return
+
     # 3. Check exposure limits
     if not risk_engine.check_exposure():
         reason = risk_engine.exposure_block_reason()
@@ -600,7 +647,11 @@ async def _handle_entry(signal) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
-        await notifier.notify_order_placed(signal.symbol, signal.direction.value, trade_result.order_id, strategy=signal.strategy, signal_price=signal.entry)
+        await notifier.notify_order_placed(
+            signal.symbol, signal.direction.value, trade_result.order_id,
+            strategy=signal.strategy, signal_price=signal.entry,
+            sl=signal.sl, tp=signal.tp, rr=rr,
+        )
     else:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
         await notifier.notify_order_rejected(signal.symbol, trade_result.message, strategy=signal.strategy)
@@ -642,7 +693,7 @@ async def _handle_entry(signal) -> None:
             )
             await notifier.notify_entry_filled(
                 signal.symbol, signal.direction.value, entry_fill_price,
-                quantity, signal.entry, strategy=signal.strategy, sl=signal.sl,
+                quantity, signal.entry, strategy=signal.strategy, sl=signal.sl, tp=signal.tp,
             )
         else:
             logger.warning(f"Entry fill price unavailable for {signal.symbol} id={trade_result.order_id}")

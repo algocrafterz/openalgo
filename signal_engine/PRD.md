@@ -59,27 +59,79 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Recent Changes (2026-04-17)
+
+### New Features
+
+**No-Progress Detection (SL to Break-Even)**  
+Detects stuck trades (no progress toward TP1) and moves SL to entry price (break-even). Config:
+```yaml
+no_progress:
+  enabled: true
+  check_after_minutes: 90        # Grace period after entry
+  min_progress_pct: 0.33         # Trade must move ≥33% of entry→TP1 distance
+```
+When a position hasn't progressed enough within the grace period, SL is replaced at entry price. Protects capital without waiting for 15:00 time exit. Sends Telegram notification: `⚠️ STOP → BREAK-EVEN`.
+
+**Orphaned Position Detection**  
+New `record_rejection()` in RiskEngine releases position slots for phantom/unfilled orders without counting a trade or touching loss counters. When the tracker detects an order was never filled (broker rejection, slow fill, or zero-PnL orphan), the function is called to free the slot. Sends Telegram notification: `⚠️ ORDER NOT FILLED`.
+
+**T2T (BE Series) MIS Filter**  
+Rejects MIS orders for T2T (BE series) stocks — brokers do not allow intraday MIS trading on these symbols. Logs warning and skips order, freeing the slot. Recommendation: add to `blacklist.ORB` to suppress repeated attempts.
+
+### Configuration Updates
+
+**`tracking.min_position_age_seconds` (New)**  
+Minimum age before a position can be detected as closed (default: 30s). Protects against ghost-closes when order rejection causes brief qty=0 in positionbook before broker processes fill. Covers worst-case propagation lag while catching real SL hits.
+
+### Notification Changes
+
+**Redesigned Telegram Notifications** — trader-friendly format with:
+- Entry lifecycle: `📤 ENTRY SENT`, `💰 LIVE`, `🚫 ENTRY REJECTED`
+- Exit lifecycle: `🎯 TP1 HIT` (partial), `✅ TP WIN` (full), `❌ SL HIT`, `⏰ TIME EXIT`
+- Risk events: `⚠️ STOP → BREAK-EVEN`, `⚠️ ORDER NOT FILLED`, `🛑 TRADING HALTED`
+- Daily summary: trades, win rate, net P&L, capital, per-trade table with exit types
+- All messages include IST timestamp, symbol with direction arrow (▲/▼), R-multiple, hold duration
+- P&L shows both absolute (₹) and risk-adjusted (R) values
+- Day summary includes avg R, capital trajectory, and orphan-flag warnings
+
+---
+
 ## Module Map
 
 | File | Responsibility |
 |------|---------------|
-| `main.py` | Pipeline orchestration, startup checks, entry/exit routing |
+| `main.py` | Pipeline orchestration, startup checks, entry/exit routing, T2T (BE series) filter |
 | `listener.py` | Async Telegram channel listener (Telethon) |
 | `normalizer.py` | Raw message preprocessing → canonical format |
 | `parser.py` | Canonical text → `Signal` model |
 | `validator.py` | Signal validation (SL, R:R, duplicates, blacklist) |
-| `risk.py` | Position sizing (`RiskEngine`), exposure limits, portfolio heat |
+| `risk.py` | Position sizing (`RiskEngine`), exposure limits, portfolio heat; `record_rejection()` for phantom orders |
 | `risk_store.py` | SQLite persistence for risk counters (restart-safe). Path: `RISK_DB_PATH` |
 | `executor.py` | Order construction + OpenAlgo API calls |
-| `tracker.py` | Position lifecycle: register, poll SL fills, time exit; `TradeRecord` dataclass, `_compute_r()` R-multiple helper |
+| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; min_position_age_seconds guard |
 | `api_client.py` | All async OpenAlgo API calls |
-| `notifier.py` | Telegram notification dispatch |
-| `config.py` | Fail-fast config loader (`Settings` dataclass singleton) |
+| `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary) |
+| `config.py` | Fail-fast config loader (`Settings` dataclass singleton); no_progress, tracking sections |
 | `models.py` | `Signal`, `Order`, `TradeResult`, `ValidationResult` |
 | `strategies.py` | Strategy name constants |
 | `db.py` | SQLite trade audit trail. Path: `_DB_PATH` |
 | `logger_setup.py` | Loguru daily rotation |
 | `smoke_test.py` | Pre-session health checks + dry run |
+
+### Key Functions & Methods (2026-04-17 additions)
+
+| Function | Module | Purpose |
+|----------|--------|---------|
+| `record_rejection()` | `risk.py` | Release position slot for phantom/unfilled orders without counting trade |
+| `is_t2t_symbol()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
+| `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
+| `notify_be_stop_applied()` | `notifier.py` | Telegram alert for break-even SL move (no progress) |
+| `notify_partial_exit()` | `notifier.py` | Trader-friendly partial TP exit notification with hold duration, next TP, runner SL |
+| `notify_position_closed()` | `notifier.py` | Unified position close notification (TP WIN / SL HIT / TIME EXIT) |
+| `notify_day_summary()` | `notifier.py` | EOD summary with trades, win rate, per-trade table, capital trajectory |
+| `_poll_positions()` | `tracker.py` | Detects closed positions with min_position_age_seconds guard |
+| `_check_no_progress()` | `tracker.py` | Detects stuck trades and moves SL to break-even |
 
 ### Scripts (`scripts/`)
 
@@ -250,47 +302,68 @@ Flattrade blocks raw MARKET and SL-MKT order types via API.
 
 ## Telegram Notifications
 
-All notifications sent via `notifier.py` to `telegram.notify_channel`.
+All notifications sent via `notifier.py` to `telegram.notify_channel`. Format is trader-friendly with timestamps, direction arrows (▲/▼), hold duration, and risk-adjusted metrics.
 
 ### Entry lifecycle
 
-| Message | Trigger | Key fields |
-|---------|---------|-----------|
-| `✅ ENTRY` | Order placed | symbol, direction, strategy, signal_price, order_id |
-| `💰 FILLED` | Fill price fetched | fill_price, slip=±diff, risk=₹NNN, SL=NNN.NN, qty |
-| `✅ SL placed` | SL-M placed | sl_price, order_id |
-| `❌ ENTRY FAILED` | Order rejected or risk limit hit | reason |
+| Message | Trigger | Example |
+|---------|---------|---------|
+| `📤 ENTRY SENT` | Order placed to broker | `📤 ENTRY SENT \| SBIN ▲ \| ORB \| 10:15 IST\nSignal: 800.50 \| SL: 793.00 \| TP: 815.00 \| R:R 1:1.9` |
+| `💰 LIVE` | Entry filled, SL active | `💰 LIVE \| SBIN ▲ \| ORB \| 10:16 IST\nFill: 800.75 (slip +0.25) × 25 qty \| SL: 793.00 \| TP: 815.00 \| Risk: ₹193` |
+| `🚫 ENTRY REJECTED` | Order rejected or risk limit hit | `🚫 ENTRY REJECTED \| SBIN \| ORB \| 10:15 IST\nReason: max_open_positions exceeded \| Slot free` |
 
 ### Exit lifecycle
 
-| Message | Trigger | Key fields |
-|---------|---------|-----------|
-| `🎯 PARTIAL EXIT` | TP leg filled (qty remaining) | tp_level, R-multiple, exited/remaining qty, P&L, new SL, next TP |
-| `✅ TP HIT` | Position closed, net P&L ≥ 0 | direction, exit_price, total P&L, R-multiple |
-| `❌ SL HIT` | Position closed, net P&L < 0 | direction, exit_price, total P&L, R-multiple |
-| `⏰ TIME EXIT` | Forced close at `time_exit.hour:minute` | direction, P&L, R-multiple |
+| Message | Trigger | Example |
+|---------|---------|---------|
+| `🎯 TP1 HIT` | Partial exit (qty remains) | `🎯 TP1 HIT \| SBIN ▲ \| ORB \| held 2h 15m\n800.50 → 814.95 × 12 → +₹170 (+0.8R)\nRunner: 13 qty \| SL → 800.50 \| Next TP1.5: 829.00` |
+| `✅ TP WIN` | Position closed, P&L ≥ 0 | `✅ TP WIN \| SBIN ▲ \| ORB \| held 4h 30m\n800.50 → 829.20 \| +₹722 (+1.8R)` |
+| `❌ SL HIT` | Position closed, P&L < 0 | `❌ SL HIT \| SBIN ▼ \| ORB \| held 1h 22m\n800.50 → 793.00 \| -₹187 (-1.0R)` |
+| `⏰ TIME EXIT` | Forced close at `time_exit.hour:minute` | `⏰ TIME EXIT \| SBIN ▲ \| ORB \| held 6h 45m\n800.50 → — \| +₹243 (+0.6R)` |
+| `⚠️ STOP → BREAK-EVEN` | SL moved due to no progress (no_progress) | `⚠️ STOP → BREAK-EVEN \| SBIN ▲ \| ORB\nStuck 90min: LTP 801.10 only 2% toward TP → SL now 800.50\nRisk eliminated. Next: TP hit or flat exit at 800.50` |
 
 **P&L and R-multiple semantics:**
-- `PARTIAL EXIT R`: partial leg only — `pnl_delta / (exit_qty × abs(entry - sl))`
-- `TP HIT / SL HIT R`: total trade — `(sum of all partial P&L + final leg) / (original_qty × abs(entry - sl))`
-- Multi-leg trades (e.g. TP1 + runner SL) show the correct net R on the closing notification
+- `TP1 HIT R`: partial leg only — `pnl_delta / (exit_qty × abs(entry - sl))`
+- `TP WIN / SL HIT R`: total trade — `(sum of all partial P&L + final leg) / (original_qty × abs(entry - sl))`
+- Multi-leg trades (e.g. TP1 50% + runner SL 50%) show the correct net R on the closing notification
+- Hold duration shown as `held Xh Ym` or `held Xm` for shorter holds
 
-**Noise suppression:** TP detection internals (TP detected, TP exit placed, EXIT signal received) are log-only — not sent to Telegram.
+**Noise suppression:** TP detection internals (TP detected, TP exit placed, EXIT signal received) are log-only — not sent to Telegram. SL placement confirmation is embedded in the LIVE message.
+
+### Risk and System Events
+
+| Message | Trigger |
+|---------|---------|
+| `🛑 TRADING HALTED` | Daily/weekly/monthly loss limit exceeded |
+| `⚠️ ORDER NOT FILLED` | Orphaned position detected (phantom/slow-fill order, slot released) |
+| `🟢 Engine started` | Startup complete, capital initialized |
+| `🔴 Engine stopped` | Engine shutdown |
+| `🟢 READY` / `🔴 STARTUP FAILED` | Pre-market health check result |
 
 ### EOD Day Summary
 
 ```
-📊 Day Summary | HH:MM IST
-Trades: N | W: W L: L T: T | WR: XX%
-Net P&L: +₹NNN (±N.N%)
-
-▲ SYMBOL  entry→exit  +₹NNN  +1.2R  TP1+TP1.5
-▼ SYMBOL  entry→exit  -₹NNN  -1.0R  SL
+📊 DAY SUMMARY | 17-Apr-2026
+Trades: 8 | W: 6  L: 2 | Win Rate: 75%
+Net: +₹1,240 (+3.5%) | Avg R: +0.8R
+Capital: ₹35,000 → ₹36,240
+────────────────────────────────────
+▲ SBIN         800.50→815.20   +₹370    (+1.0R)  TP1+TP1.5
+▲ INFY         1950.00→1965.50 +₹248    (+0.8R)  TP1
+▼ WIPRO        620.50→615.00   -₹137    (-1.0R)  SL
+▲ HDFC         2800.00→2814.75 +₹472    (+0.9R)  TP1+TP1.5
+▼ RELIANCE     2300.00→2295.00 -₹150    (-1.0R)  SL
+▲ BAJAJFINSV   15800→16100     +₹750    (+1.2R)  TP1
+▲ MARUTI       9950→10050      +₹301    (+1.1R)  TP1
+▼ TECHM        4150→4100       +₹127    (+0.6R)  TIME_EXIT  ⚠️
 ```
 
-- `W`/`L`: decided trades (TP or SL outcome). WR = W / (W+L), excludes T.
-- `T`: time-exit trades — forced close, no directional outcome, counted separately.
-- Per-trade table: direction arrow, symbol, entry→exit prices, total P&L, total R, exit type labels.
+**Summary components:**
+- `W`/`L`: decided trades (TP or SL outcome). WR = W / (W+L), excludes time exits
+- Capital line: opening → closing values
+- Per-trade table: direction arrow, symbol, entry→exit, total P&L, total R (risk-adjusted), exit types (TP1, TP1.5, SL, TIME_EXIT)
+- `⚠️` flag: orphaned trades (0 PnL + entry ≈ exit price) indicate unfilled orders
+- Avg R: mean risk-multiple across decided trades (numeric summary of expected value)
 
 ---
 
@@ -360,23 +433,45 @@ strategy_profiles:
       TP1: 1.0          # Exit 100% at TP1
 ```
 
-### Other sections
+### `no_progress` (new — 2026-04-17)
+```yaml
+no_progress:
+  enabled: true
+  check_after_minutes: 90        # Grace period — wait before checking for stuck trades
+  min_progress_pct: 0.33         # Must move ≥33% of entry→TP1 distance to avoid BE move
+```
+When enabled: if position hasn't progressed min_progress_pct% of the entry→TP1 distance within check_after_minutes, SL is moved to entry price (break-even). Protects capital without waiting for 15:00 time exit.
+
+**Example:** entry=194.15, TP1=196.37 (distance=2.22). At 90min, if LTP < 194.88 (194.15 + 33% × 2.22), SL moves to 194.15. Sends `⚠️ STOP → BREAK-EVEN` notification.
+
+### `time_exit`
 ```yaml
 time_exit:
   enabled: true
   hour: 15            # IST 24h (15:00 = 10min buffer before broker square-off at 15:10)
   minute: 0
+```
 
+### `tracking`
+```yaml
 tracking:
-  poll_interval: 5    # seconds between position polls
+  poll_interval: 5    # seconds between position polls (5s halves slot-recovery latency vs 10s)
+  min_position_age_seconds: 30   # minimum age before detecting a position as closed
+```
+**`min_position_age_seconds` (new — 2026-04-17):** Protects against ghost-closes. When an order is rejected/slow-to-fill, positionbook briefly shows qty=0 before broker processes fill. 30s covers worst-case propagation while catching real SL hits.
 
+### `broker`
+```yaml
 broker:
   exchange: NSE
   product: MIS                   # MIS or CNC
   order_type: MARKET
   allow_off_hours_testing: false  # MIS→CNC override in analyze mode (testing only)
   mis_margin_pct: 0.20           # Must match broker's actual NSE equity MIS margin %
+```
 
+### `api`
+```yaml
 api:
   timeout: 5.0
   margin_retries: 3

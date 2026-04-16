@@ -140,6 +140,7 @@ class Settings:
 
     # Position tracking (from yaml)
     poll_interval: int
+    tracker_min_position_age_seconds: int
 
     # Broker / Exchange (from yaml)
     exchange: str
@@ -179,6 +180,22 @@ class Settings:
     time_exit_enabled: bool
     time_exit_hour: int
     time_exit_minute: int
+
+    # No-progress detection (from yaml) — move SL to break-even on stuck trades
+    no_progress_enabled: bool
+    no_progress_check_after_minutes: int
+    no_progress_min_progress_pct: float
+
+
+def _parse_no_progress(cfg: dict) -> dict:
+    """Parse the no_progress config section into Settings keyword args."""
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return {
+        "no_progress_enabled": bool(cfg.get("enabled", False)),
+        "no_progress_check_after_minutes": int(cfg.get("check_after_minutes", 90)),
+        "no_progress_min_progress_pct": float(cfg.get("min_progress_pct", 0.33)),
+    }
 
 
 def _build_settings() -> Settings:
@@ -306,6 +323,7 @@ def _build_settings() -> Settings:
 
         # Tracking from yaml
         poll_interval=int(_require_key(tracking, "tracking", "poll_interval")),
+        tracker_min_position_age_seconds=int(tracking.get("min_position_age_seconds", 30)),
 
         # Broker from yaml — all required
         exchange=_require_key(broker, "broker", "exchange"),
@@ -341,6 +359,9 @@ def _build_settings() -> Settings:
         time_exit_enabled=bool(time_exit.get("enabled", False)),
         time_exit_hour=int(time_exit.get("hour", 15)),
         time_exit_minute=int(time_exit.get("minute", 0)),
+
+        # No-progress detection — optional section with safe defaults
+        **_parse_no_progress(yml.get("no_progress", {})),
     )
 
 

@@ -360,6 +360,22 @@ class RiskEngine:
                 self._positions_by_sector[sector] += 1
         self._persist()
 
+    def record_rejection(self, symbol: str = "") -> None:
+        """Release an open-position slot for a rejected/phantom entry.
+
+        Called when the tracker detects that an order was never filled (broker rejection,
+        cancelled, or zero-PnL orphan). Frees the slot WITHOUT counting a trade or
+        touching W/L/loss counters — the position never existed at the broker.
+        """
+        self.open_positions = max(0, self.open_positions - 1)
+        if symbol:
+            self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
+            sector = self._symbol_to_sector.get(symbol)
+            if sector:
+                self._positions_by_sector[sector] = max(0, self._positions_by_sector.get(sector, 0) - 1)
+        logger.info(f"Position slot released (rejection): {symbol or 'unknown'}")
+        self._persist()
+
     def record_close(self, pnl: float, symbol: str = "") -> None:
         """Record a position close. Negative pnl = loss."""
         self.open_positions = max(0, self.open_positions - 1)

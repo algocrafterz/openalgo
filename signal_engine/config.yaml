@@ -141,11 +141,29 @@ time_exit:
   hour: 15                       # IST hour (24h format)
   minute: 0                      # 15:00 gives 10-min buffer before 15:10 broker auto square-off
 
+# ── No-progress Detection ────────────────────────────────
+# [tune] Move SL to break-even when a trade hasn't progressed toward TP1.
+# Protects capital on "stuck" positions without waiting for the 15:00 time exit.
+# After check_after_minutes, if current ltp has NOT moved min_progress_pct of the
+# entry→TP1 distance, the SL order is replaced at the entry fill price.
+# Example: HUDCO entry=194.15 TP1=196.37 (dist=2.22). At 90min, if ltp < 194.88
+# (33% of 2.22 = 0.73 -> threshold 194.88), SL moves to entry 194.15.
+no_progress:
+  enabled: true
+  check_after_minutes: 90        # Grace period — don't check freshly entered trades
+  min_progress_pct: 0.33         # Must have moved >= 33% of entry→TP1 distance toward TP
+
 # ── Position Tracking ────────────────────────────────────
 tracking:
   # [tune] Seconds between position checks. Detects broker SL-M fills (qty drops to 0).
   # 5s halves slot-recovery latency vs 10s — 1 API call per poll, negligible load.
   poll_interval: 5
+
+  # [tune] Minimum age (seconds) before a position can be detected as closed.
+  # Protects against ghost-closes: when an order is rejected/slow-to-fill, the position
+  # briefly shows qty=0 in positionbook before the broker processes the fill.
+  # 30s covers the worst-case positionbook propagation lag while still catching real SL hits.
+  min_position_age_seconds: 30
 
 # ── Broker / Exchange ────────────────────────────────────
 broker:
