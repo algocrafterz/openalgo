@@ -232,11 +232,15 @@ cmd_run() {
 
     exec > >(tee -a "$LOG_FILE") 2>&1
 
+    _STOP_REASON="scheduled"
+    _CLEANUP_DONE=false
+
     # Trap for cleanup in foreground mode
     cleanup() {
-        log "Shutting down..."
-        # Send shutdown notification (10s timeout — Telegram may be slow)
-        timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "scheduled" 2>&1 || \
+        $_CLEANUP_DONE && return
+        _CLEANUP_DONE=true
+        log "Shutting down (reason: $_STOP_REASON)..."
+        timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "$_STOP_REASON" 2>&1 || \
             log "Shutdown notification failed (non-fatal)"
         kill "$SIGNAL_PID" 2>/dev/null || true
         kill "$APP_PID" 2>/dev/null || true
@@ -245,18 +249,58 @@ cmd_run() {
         # won't exit until shell stdout closes, causing 'wait' to deadlock.
         log "Done."
     }
-    trap cleanup INT TERM EXIT
+    trap 'cleanup' INT TERM
+    trap 'cleanup' EXIT
 
     bootstrap || exit 1
 
-    log "Blocking until a process exits. Ctrl+C to stop."
+    log "Blocking — signal engine will auto-restart on crash. Ctrl+C to stop."
 
-    # Block until a process exits
-    while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$SIGNAL_PID" 2>/dev/null; do
+    local _MAX_RESTARTS=5
+    local _RESTART_COUNT=0
+    local _RESTART_WINDOW=300   # seconds: restart budget resets if stable this long
+    local _last_start=$SECONDS
+
+    while true; do
+        # Wait while both processes are alive
+        while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$SIGNAL_PID" 2>/dev/null; do
+            sleep 5
+            # Reset restart counter if signal engine has been stable for _RESTART_WINDOW seconds
+            if (( SECONDS - _last_start >= _RESTART_WINDOW )); then
+                _RESTART_COUNT=0
+            fi
+        done
+
+        # app.py died — fatal, can't recover without it
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            log "app.py exited unexpectedly — cannot recover."
+            _STOP_REASON="app_crash"
+            break
+        fi
+
+        # Signal engine died — attempt restart
+        log "Signal engine exited unexpectedly."
+        _RESTART_COUNT=$(( _RESTART_COUNT + 1 ))
+
+        if (( _RESTART_COUNT > _MAX_RESTARTS )); then
+            log "Signal engine crashed $_RESTART_COUNT times — giving up."
+            _STOP_REASON="signal_engine_crash_loop"
+            break
+        fi
+
+        log "Restarting signal engine (attempt $_RESTART_COUNT/$_MAX_RESTARTS)..."
         sleep 5
+
+        "$UV_BIN" run python -m signal_engine.main &
+        SIGNAL_PID=$!
+        _last_start=$SECONDS
+
+        # Update PID file
+        echo "$APP_PID" > "$PID_FILE"
+        echo "$SIGNAL_PID" >> "$PID_FILE"
+        log "Signal engine restarted (PID $SIGNAL_PID)"
     done
 
-    log "A process exited."
     cleanup
 }
 

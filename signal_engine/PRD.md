@@ -140,7 +140,7 @@ Minimum age before a position can be detected as closed (default: 30s). Protects
 | `openalgoscheduler.py` | Startup: auto-login (TOTP), verify auth, start signal engine |
 | `openalgoctl.sh` | Service controller: start/run/stop/restart/status, log rotation |
 | `openalgoctl.ps1` | Windows: launches `openalgoctl.sh` in minimized cmd |
-| `createTaskOpenAlgoScheduler.ps1` | Windows Task Scheduler: 8:50 AM start, 3:30 PM stop |
+| `createTaskOpenAlgoScheduler.ps1` | Windows Task Scheduler: 3 tasks — 8:50 AM start, 3:30 PM stop, watchdog every 5 min 9 AM-3:25 PM |
 
 ---
 
@@ -566,20 +566,56 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 # Windows
 .\signal_engine\scripts\openalgoctl.ps1 start
 
-# Windows Task Scheduler (one-time setup)
+# Windows Task Scheduler (one-time setup, run as Administrator)
 .\signal_engine\scripts\createTaskOpenAlgoScheduler.ps1
-# Creates: Start 8:50 AM weekdays, Stop 3:30 PM weekdays
+# Creates 3 tasks under Anand user:
+#   openAlgoAutoStart  -- 8:50 AM weekdays, long-running (blocks all day)
+#   openAlgoAutoStop   -- 3:30 PM weekdays, graceful shutdown
+#   openAlgoWatchdog   -- every 5 min, 9:00 AM-3:25 PM weekdays, crash recovery
 ```
+
+### Windows Task Scheduler -- How the 3 Tasks Work Together
+
+| Time | Task | Action |
+|------|------|--------|
+| 8:50 AM | `openAlgoAutoStart` | Calls `openalgoctl.ps1 run` -- starts app.py + signal engine, **stays running all day** |
+| 9:00 AM-3:25 PM | `openAlgoWatchdog` | Calls `openalgoctl.ps1 start` every 5 min -- no-op if healthy, relaunches if crashed |
+| 3:30 PM | `openAlgoAutoStop` | Calls `openalgoctl.ps1 stop` -- sends Telegram notification, kills both services |
+
+The watchdog uses `start` (idempotent): polls `http://127.0.0.1:5000/`, skips if healthy, restarts the full stack if dead. Maximum recovery time after a crash: **5 minutes**.
+
+### WSL Stability -- ~/.wslconfig (Windows user home)
+
+```ini
+[wsl2]
+vmIdleTimeout=-1      # prevent Windows from auto-terminating the WSL2 VM
+memory=8GB            # explicit cap prevents OOM-kill from Windows memory pressure
+swap=2GB
+pageReporting=false   # stop Windows reclaiming WSL memory pages aggressively
+```
+
+Apply with: `wsl --shutdown` then restart WSL.
+
+### Signal Engine Self-Restart (openalgoctl.sh)
+
+If only the signal engine crashes (app.py still healthy), `openalgoctl.sh run` automatically restarts it -- up to 5 times within a 5-minute window. Restart counter resets after 5 minutes of stability. If app.py itself dies, the watchdog task handles full recovery.
+
+Shutdown reason in Telegram notification accurately reflects cause:
+- `scheduled` -- normal INT/TERM signal (AutoStop task)
+- `signal_engine_crash` -- signal engine exited, app.py still alive
+- `app_crash` -- app.py exited unexpectedly
+- `signal_engine_crash_loop` -- exceeded 5 restarts in 5 min
+- `crash` -- both processes exited simultaneously
 
 ### Startup Sequence
 ```
 openalgoctl.sh run
-  1. Start OpenAlgo (uv run app.py) — wait for HTTP readiness
+  1. Start OpenAlgo (uv run app.py) -- wait for HTTP readiness
   2. openalgoscheduler.py startup
      a. Auto-login to broker (TOTP or OAuth reuse)
      b. Verify token via broker funds API
   3. python -m signal_engine.main
-     a. Run startup health checks (7 checks, ~5s) — abort if critical fail
+     a. Run startup health checks (7 checks, ~5s) -- abort if critical fail
      b. Reconcile open_positions against actual broker positions
      c. Restore risk counters from DB
      d. Start TimeExitScheduler + PositionTracker
