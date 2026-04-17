@@ -1,6 +1,7 @@
-import { Calculator, ChevronDown, ChevronUp, Info, Loader2 } from 'lucide-react'
+import { Calculator, ChevronDown, ChevronUp, Info, Loader2, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -12,8 +13,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
 import { useAuthStore } from '@/stores/authStore'
 import { useSizing, type SizingRequest } from '@/hooks/useSizing'
+import { useORBPreset, type ORBLevels } from '@/hooks/useORBPreset'
 
 type SizingMode = 'fixed_fractional' | 'pct_of_capital'
 
@@ -83,14 +86,86 @@ function ResultRow({
   )
 }
 
+interface ORBFormState {
+  symbol: string
+  exchange: string
+  orb_minutes: string
+  tp_rr: string
+}
+
+const DEFAULT_ORB_FORM: ORBFormState = {
+  symbol: '',
+  exchange: 'NSE',
+  orb_minutes: '15',
+  tp_rr: '2.0',
+}
+
+function ORBBadge({ side }: { side: ORBLevels['side'] }) {
+  const color =
+    side === 'BUY'
+      ? 'bg-green-100 text-green-800'
+      : side === 'SELL'
+        ? 'bg-red-100 text-red-800'
+        : 'bg-yellow-100 text-yellow-800'
+  return <Badge className={`${color} text-xs font-semibold`}>{side}</Badge>
+}
+
 export default function SizingCalculator() {
   const { apiKey } = useAuthStore()
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [orbForm, setOrbForm] = useState<ORBFormState>(DEFAULT_ORB_FORM)
   const { mutate: calculate, data: result, isPending, error } = useSizing()
+  const {
+    mutate: loadORB,
+    data: orbResult,
+    isPending: orbLoading,
+    error: orbError,
+  } = useORBPreset()
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function setOrbField<K extends keyof ORBFormState>(key: K, value: string) {
+    setOrbForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function handleLoadORB() {
+    if (!apiKey || !orbForm.symbol) return
+    loadORB(
+      {
+        apikey: apiKey,
+        symbol: orbForm.symbol.toUpperCase(),
+        exchange: orbForm.exchange,
+        orb_minutes: parseInt(orbForm.orb_minutes),
+        tp_rr: parseFloat(orbForm.tp_rr),
+      },
+      {
+        onSuccess(data) {
+          if (data.status === 'success' && data.data) {
+            const { inputs, sizing } = data.data
+            setForm((prev) => ({
+              ...prev,
+              symbol: inputs.symbol,
+              exchange: inputs.exchange,
+              side: inputs.side as 'BUY' | 'SELL',
+              product: inputs.product as 'MIS' | 'NRML' | 'CNC',
+              entry_price: String(inputs.entry_price),
+              stop_loss: String(inputs.stop_loss),
+              target: String(inputs.target),
+              sizing_mode: inputs.sizing_mode as SizingMode,
+              risk_per_trade: String(inputs.risk_per_trade),
+              slippage_factor: String(inputs.slippage_factor),
+            }))
+            // If sizing already ran with 0 capital, clear it so user can fill capital
+            if (sizing.skip_reason?.includes('Capital')) {
+              setForm((prev) => ({ ...prev, capital: '' }))
+            }
+          }
+        },
+      }
+    )
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -144,6 +219,144 @@ export default function SizingCalculator() {
         </Alert>
       )}
 
+      {/* ORB Preset */}
+      <Card className="border-orange-200 bg-orange-50/40 dark:bg-orange-950/10 dark:border-orange-900">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Zap className="h-4 w-4 text-orange-500" />
+            ORB Preset
+            <Badge variant="secondary" className="text-xs">
+              Auto-fill
+            </Badge>
+          </CardTitle>
+          <CardDescription>
+            Enter a symbol — entry, SL, and TP are derived from live ORB levels. All other
+            parameters are pre-set to ORB strategy defaults.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="space-y-1.5 sm:col-span-1">
+              <Label htmlFor="orb-symbol">Symbol</Label>
+              <Input
+                id="orb-symbol"
+                placeholder="SBIN"
+                value={orbForm.symbol}
+                onChange={(e) => setOrbField('symbol', e.target.value.toUpperCase())}
+                onKeyDown={(e) => e.key === 'Enter' && handleLoadORB()}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="orb-exchange">Exchange</Label>
+              <Select value={orbForm.exchange} onValueChange={(v) => setOrbField('exchange', v)}>
+                <SelectTrigger id="orb-exchange">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {['NSE', 'BSE'].map((ex) => (
+                    <SelectItem key={ex} value={ex}>
+                      {ex}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="orb-minutes">ORB Period</Label>
+              <Select
+                value={orbForm.orb_minutes}
+                onValueChange={(v) => setOrbField('orb_minutes', v)}
+              >
+                <SelectTrigger id="orb-minutes">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {['5', '15', '30', '60'].map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m} min
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="orb-tprr">TP (R×)</Label>
+              <Input
+                id="orb-tprr"
+                type="number"
+                step="0.5"
+                min="0.5"
+                max="10"
+                value={orbForm.tp_rr}
+                onChange={(e) => setOrbField('tp_rr', e.target.value)}
+              />
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="border-orange-300 hover:bg-orange-100 dark:hover:bg-orange-950/30"
+            disabled={orbLoading || !apiKey || !orbForm.symbol}
+            onClick={handleLoadORB}
+          >
+            {orbLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                Fetching ORB levels...
+              </>
+            ) : (
+              <>
+                <Zap className="h-4 w-4 mr-2 text-orange-500" />
+                Load ORB Preset
+              </>
+            )}
+          </Button>
+
+          {orbError && (
+            <p className="text-sm text-destructive">
+              {orbError.message || 'Failed to load ORB preset'}
+            </p>
+          )}
+
+          {orbResult?.status === 'error' && (
+            <p className="text-sm text-destructive">{orbResult.message}</p>
+          )}
+
+          {orbResult?.status === 'success' && orbResult.data && (
+            <div className="flex flex-wrap gap-3 pt-1">
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">Side:</span>
+                <ORBBadge side={orbResult.data.orb.side} />
+              </div>
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">LTP:</span>
+                <span className="font-medium">₹{orbResult.data.orb.ltp}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">ORB High:</span>
+                <span className="font-medium">₹{orbResult.data.orb.orb_high}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">ORB Low:</span>
+                <span className="font-medium">₹{orbResult.data.orb.orb_low}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">Range:</span>
+                <span className="font-medium">₹{orbResult.data.orb.orb_range}</span>
+              </div>
+              {orbResult.data.orb.side === 'INSIDE' && (
+                <p className="w-full text-xs text-yellow-600 dark:text-yellow-400">
+                  Price is inside the ORB range — no breakout yet. Levels pre-filled for reference.
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator />
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Input form */}
         <Card>
@@ -166,10 +379,7 @@ export default function SizingCalculator() {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="exchange">Exchange</Label>
-                  <Select
-                    value={form.exchange}
-                    onValueChange={(v) => setField('exchange', v)}
-                  >
+                  <Select value={form.exchange} onValueChange={(v) => setField('exchange', v)}>
                     <SelectTrigger id="exchange">
                       <SelectValue />
                     </SelectTrigger>

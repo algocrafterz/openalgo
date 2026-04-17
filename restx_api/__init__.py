@@ -26,6 +26,7 @@ from .instruments import api as instruments_ns
 from .intervals import api as intervals_ns
 from .margin import api as margin_ns
 from .sizing import api as sizing_ns
+from .sizing_orb import api as sizing_orb_ns
 from .market_holidays import api as market_holidays_ns
 from .market_timings import api as market_timings_ns
 from .modify_order import api as modify_order_ns
@@ -90,6 +91,7 @@ api.add_namespace(ping_ns, path="/ping")
 api.add_namespace(telegram_ns, path="/telegram")
 api.add_namespace(margin_ns, path="/margin")
 api.add_namespace(sizing_ns, path="/sizing")
+api.add_namespace(sizing_orb_ns, path="/sizing/orb")
 api.add_namespace(instruments_ns, path="/instruments")
 api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
