@@ -191,6 +191,11 @@ def react_tools():
     return serve_react_app()
 
 
+@react_bp.route("/sizing")
+def react_sizing():
+    return serve_react_app()
+
+
 # IV Chart for options implied volatility
 @react_bp.route("/ivchart")
 def react_ivchart():
