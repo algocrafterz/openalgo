@@ -314,6 +314,69 @@ class SyntheticFutureSchema(Schema):
     expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28OCT25)
 
 
+class SizingCalculatorSchema(Schema):
+    """Schema for position sizing calculator request."""
+
+    apikey = fields.Str(
+        required=True,
+        validate=validate.Length(min=1, max=256, error="API key must be between 1 and 256 characters."),
+    )
+    symbol = fields.Str(missing=None, allow_none=True)
+    exchange = fields.Str(missing=None, allow_none=True)
+    side = fields.Str(missing="BUY", validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    product = fields.Str(missing="MIS", validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    entry_price = fields.Float(
+        required=True,
+        validate=validate.Range(min=0, min_inclusive=False, error="entry_price must be a positive number."),
+    )
+    stop_loss = fields.Float(
+        required=True,
+        validate=validate.Range(min=0, error="stop_loss must be a non-negative number."),
+    )
+    target = fields.Float(missing=0.0, allow_none=True)
+    capital = fields.Float(
+        missing=None,
+        allow_none=True,
+        validate=validate.Range(min=0, error="capital must be a non-negative number."),
+    )
+    sizing_mode = fields.Str(
+        required=True,
+        validate=validate.OneOf(
+            ["fixed_fractional", "pct_of_capital"],
+            error="sizing_mode must be 'fixed_fractional' or 'pct_of_capital'.",
+        ),
+    )
+    risk_per_trade = fields.Float(
+        missing=0.01,
+        validate=validate.Range(min=0, max=1, error="risk_per_trade must be between 0 and 1."),
+    )
+    pct_of_capital = fields.Float(
+        missing=None,
+        allow_none=True,
+        validate=validate.Range(min=0, max=1, error="pct_of_capital must be between 0 and 1."),
+    )
+    slippage_factor = fields.Float(
+        missing=0.0,
+        allow_none=True,
+        validate=validate.Range(min=0, error="slippage_factor must be non-negative."),
+    )
+    max_sl_pct_for_sizing = fields.Float(
+        missing=0.0,
+        allow_none=True,
+        validate=validate.Range(min=0, error="max_sl_pct_for_sizing must be non-negative."),
+    )
+    min_entry_price = fields.Float(
+        missing=0.0,
+        allow_none=True,
+        validate=validate.Range(min=0, error="min_entry_price must be non-negative."),
+    )
+    max_entry_price = fields.Float(
+        missing=0.0,
+        allow_none=True,
+        validate=validate.Range(min=0, error="max_entry_price must be non-negative."),
+    )
+
+
 class MarginPositionSchema(Schema):
     """Schema for a single position in margin calculation"""
 

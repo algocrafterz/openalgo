@@ -168,6 +168,17 @@ Normalizer converts this to canonical EXIT. `TP1` matched against `strategy_prof
 
 ---
 
+## Position Sizing Calculator (Webapp)
+
+A standalone calculator is available at `/sizing` in the OpenAlgo webapp.
+- **API**: `POST /api/v1/sizing` — stateless, JSON-only, works from curl/Android too
+- **Modes**: `fixed_fractional` (risk %) and `pct_of_capital` (flat allocation)
+- **Live capital**: leave `capital` blank to auto-fetch from broker funds
+- **Outputs**: qty, risk ₹, R:R ratio, position value, skip reason (if qty=0)
+- **Tests**: `test/test_sizing_service.py` (47 unit), `test/test_sizing_api.py` (24 integration)
+
+---
+
 ## Position Sizing
 
 ### fixed_fractional (default)
