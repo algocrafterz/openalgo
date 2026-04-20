@@ -345,6 +345,12 @@ export default function SizingCalculator() {
                 <span className="text-muted-foreground">Range:</span>
                 <span className="font-medium">₹{orbResult.data.orb.orb_range}</span>
               </div>
+              {orbResult.data.orb.data_date !== new Date().toISOString().slice(0, 10) && (
+                <p className="w-full text-xs text-yellow-600 dark:text-yellow-400">
+                  Market closed — showing ORB data from {orbResult.data.orb.data_date}. Levels are
+                  from the last available session.
+                </p>
+              )}
               {orbResult.data.orb.side === 'INSIDE' && (
                 <p className="w-full text-xs text-yellow-600 dark:text-yellow-400">
                   Price is inside the ORB range — no breakout yet. Levels pre-filled for reference.

@@ -103,6 +103,7 @@ class ORBPreset(Resource):
                         "ltp": orb.ltp,
                         "side": orb.side,
                         "candles_used": orb.candles_used,
+                        "data_date": orb.data_date,
                     },
                     "inputs": result.preset_inputs,
                     "sizing": {

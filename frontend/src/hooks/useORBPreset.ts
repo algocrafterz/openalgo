@@ -18,6 +18,7 @@ export interface ORBLevels {
   ltp: number
   side: 'BUY' | 'SELL' | 'INSIDE'
   candles_used: number
+  data_date: string // YYYY-MM-DD; may differ from today when market is closed
 }
 
 export interface ORBPresetInputs {
@@ -57,8 +58,15 @@ export interface ORBPresetResponse {
 }
 
 async function fetchORBPreset(req: ORBPresetRequest): Promise<ORBPresetResponse> {
-  const { data } = await axios.post<ORBPresetResponse>('/api/v1/sizing/orb', req)
-  return data
+  try {
+    const { data } = await axios.post<ORBPresetResponse>('/api/v1/sizing/orb', req)
+    return data
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.data) {
+      return err.response.data as ORBPresetResponse
+    }
+    throw err
+  }
 }
 
 export function useORBPreset() {
