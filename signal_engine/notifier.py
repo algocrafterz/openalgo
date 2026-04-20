@@ -306,6 +306,24 @@ async def notify_be_stop_applied(
     )
 
 
+async def notify_no_progress_exit(
+    symbol: str,
+    ltp: float,
+    entry: float,
+    progress: float,
+    strategy: str = "",
+    direction: str | None = None,
+    age_minutes: int = 0,
+) -> None:
+    dir_str = f" {_dir(direction)}" if direction else ""
+    pnl_sign = "+" if ltp >= entry else ""
+    await notify(
+        f"🚪 NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)}\n"
+        f"Stuck {age_minutes}min: LTP {ltp:.2f} only {progress:.0%} toward TP\n"
+        f"Time exit near — closing at market. Entry {entry:.2f} → {pnl_sign}{ltp - entry:.2f}"
+    )
+
+
 async def notify_orphaned_position(
     symbol: str,
     strategy: str,

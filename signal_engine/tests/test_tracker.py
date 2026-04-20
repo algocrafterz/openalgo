@@ -1,11 +1,15 @@
 """Tests for position tracker."""
 
 import pytest
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
 from signal_engine.risk import RiskEngine
 from signal_engine.strategies import ORB, RSI_TP_MR
 from signal_engine.tracker import PositionTracker, TrackedPosition
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+_AGED = datetime.now(_IST) - timedelta(minutes=5)  # past Guard 1 (30s min age)
 
 
 def _make_engine(**overrides) -> RiskEngine:
@@ -36,6 +40,7 @@ def _make_position(**overrides) -> TrackedPosition:
         "quantity": 50,
         "sl": 2485.0,
         "tp": 2540.0,
+        "entry_time": _AGED,  # bypass Guard 1 (min_position_age_seconds) in close-detection tests
     }
     defaults.update(overrides)
     return TrackedPosition(**defaults)
@@ -318,12 +323,14 @@ class TestOCOCancellation:
             "exchange": "NSE",
             "product": "MIS",
             "entry_price": 2500.0,
+            "fill_price": 2500.0,  # confirmed fill bypasses Guard 2 (order status check)
             "quantity": 50,
             "sl": 2485.0,
             "tp": 2540.0,
             "entry_order_id": "ENTRY001",
             "sl_order_id": "SL001",
             "tp_order_id": "TP001",
+            "entry_time": _AGED,
         }
         defaults.update(overrides)
         return TrackedPosition(**defaults)
@@ -554,3 +561,180 @@ class TestBatchPositionCheck:
 
         # Exactly 1 API call, not 3
         mock_pb.assert_called_once()
+
+
+class TestGuard2Timeout:
+    """Guard 2 — ambiguous order status — bypasses wait after guard2_timeout_minutes."""
+
+    @pytest.mark.asyncio
+    async def test_guard2_waits_when_young_and_status_unknown(self):
+        """Position younger than guard2_timeout should keep waiting on unknown order status."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        # entry_time = 5 min ago (passes Guard 1, but < 30 min guard2_timeout)
+        pos = _make_position(fill_price=0.0, entry_order_id="ORDER123")
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 1  # still waiting
+
+    @pytest.mark.asyncio
+    async def test_guard2_proceeds_when_old_and_status_unknown(self):
+        """Position older than guard2_timeout should proceed to close processing."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 1000.0
+        old_entry = datetime.now(_IST) - timedelta(minutes=35)  # > 30 min guard2_timeout
+        pos = _make_position(fill_price=0.0, entry_order_id="ORDER456", entry_time=old_entry)
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0  # assumed complete, position cleared
+
+
+class TestNoProgressProfitLock:
+    """no_progress break-even with profit_lock_ratio locks partial unrealized profit."""
+
+    @pytest.mark.asyncio
+    async def test_profit_lock_raises_sl_above_entry(self):
+        """With profit_lock_ratio=0.4 and ltp > entry, new SL should be above entry."""
+        from signal_engine.models import Direction
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = _make_position(
+            entry_price=541.80,
+            fill_price=541.80,
+            sl=528.01,
+            tp=551.10,
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=150),
+        )
+        tracker.register(pos)
+
+        book_data = {"RELIANCE": (1, 544.70)}
+
+        with (
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.tracker.place_sl_order") as mock_place,
+            patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
+        ):
+            from signal_engine.models import TradeResult, OrderStatus
+            mock_place.return_value = TradeResult(
+                status=OrderStatus.SUCCESS, order_id="NEW_SL", message=""
+            )
+            with patch("signal_engine.config.settings") as mock_settings:
+                mock_settings.no_progress_enabled = True
+                mock_settings.no_progress_check_after_minutes = 90
+                mock_settings.no_progress_min_progress_pct = 0.33
+                mock_settings.no_progress_profit_lock_ratio = 0.40
+                mock_settings.time_exit_enabled = False  # disable market-exit path
+                await tracker._check_no_progress(book_data)
+
+        mock_place.assert_called_once()
+        _, kwargs = mock_place.call_args
+        sl_placed = kwargs.get("sl_price", mock_place.call_args[0][3] if mock_place.call_args[0] else None)
+        # With lock 0.4 and ltp=544.70, entry=541.80: new SL = 541.80 + (544.70-541.80)*0.4 = 542.96
+        assert sl_placed is not None and sl_placed > 541.80
+
+    @pytest.mark.asyncio
+    async def test_strict_breakeven_when_lock_ratio_zero(self):
+        """With profit_lock_ratio=0.0, SL should move to exact entry price."""
+        from signal_engine.models import Direction
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = _make_position(
+            entry_price=541.80,
+            fill_price=541.80,
+            sl=528.01,
+            tp=551.10,
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=150),
+        )
+        tracker.register(pos)
+
+        book_data = {"RELIANCE": (1, 544.70)}
+
+        with (
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.tracker.place_sl_order") as mock_place,
+            patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
+        ):
+            from signal_engine.models import TradeResult, OrderStatus
+            mock_place.return_value = TradeResult(
+                status=OrderStatus.SUCCESS, order_id="NEW_SL", message=""
+            )
+            with patch("signal_engine.config.settings") as mock_settings:
+                mock_settings.no_progress_enabled = True
+                mock_settings.no_progress_check_after_minutes = 90
+                mock_settings.no_progress_min_progress_pct = 0.33
+                mock_settings.no_progress_profit_lock_ratio = 0.0
+                mock_settings.time_exit_enabled = False  # disable market-exit path
+                await tracker._check_no_progress(book_data)
+
+        mock_place.assert_called_once()
+        _, kwargs = mock_place.call_args
+        sl_placed = kwargs.get("sl_price", mock_place.call_args[0][3] if mock_place.call_args[0] else None)
+        assert sl_placed == 541.80
+
+    @pytest.mark.asyncio
+    async def test_market_exit_when_rate_too_slow(self):
+        """Market exit when projected time-to-TP1 at current rate exceeds time remaining to exit.
+
+        Setup: entry=541.80 TP=551.10 (9.30pt), after 150min at ltp=544.70 (31.2% progress).
+        Rate = 0.312/150 = 0.00208/min. Minutes needed = 0.688/0.00208 = 331min.
+        With time exit 60min away: 331 > 60 → market exit fires.
+        """
+        from signal_engine.models import Direction, TradeResult, OrderStatus
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = _make_position(
+            entry_price=541.80,
+            fill_price=541.80,
+            sl=528.01,
+            tp=551.10,
+            sl_order_id="OLD_SL",
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=150),
+        )
+        tracker.register(pos)
+
+        book_data = {"RELIANCE": (1, 544.70)}  # progress = (544.70-541.80)/(551.10-541.80) = 31.2%
+        now = datetime.now(_IST)
+        exit_time = now + timedelta(minutes=60)  # 331min needed > 60min remaining → market exit
+
+        with (
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.tracker.send_order", new_callable=AsyncMock,
+                  return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MKT_EXIT", message="")) as mock_send,
+            patch("signal_engine.tracker.place_sl_order") as mock_sl,
+            patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
+        ):
+            with patch("signal_engine.config.settings") as mock_settings:
+                mock_settings.no_progress_enabled = True
+                mock_settings.no_progress_check_after_minutes = 90
+                mock_settings.no_progress_min_progress_pct = 0.33
+                mock_settings.no_progress_profit_lock_ratio = 0.0
+                mock_settings.time_exit_enabled = True
+                mock_settings.time_exit_hour = exit_time.hour
+                mock_settings.time_exit_minute = exit_time.minute
+                await tracker._check_no_progress(book_data)
+
+        mock_send.assert_called_once()   # market exit placed
+        mock_sl.assert_not_called()      # no break-even SL

@@ -63,15 +63,14 @@ main.py (_handle_entry / _handle_exit)
 
 ### New Features
 
-**No-Progress Detection (SL to Break-Even)**  
-Detects stuck trades (no progress toward TP1) and moves SL to entry price (break-even). Config:
-```yaml
-no_progress:
-  enabled: true
-  check_after_minutes: 90        # Grace period after entry
-  min_progress_pct: 0.33         # Trade must move ≥33% of entry→TP1 distance
-```
-When a position hasn't progressed enough within the grace period, SL is replaced at entry price. Protects capital without waiting for 15:00 time exit. Sends Telegram notification: `⚠️ STOP → BREAK-EVEN`.
+**No-Progress Detection (Rate-Based Exit)**  
+Detects stuck trades and takes action based on a rate projection — not a fixed timer. At `check_after_minutes` (60min), if progress < `min_progress_pct` (33%):
+- Compute rate: `progress / age_minutes`
+- Project: `minutes_needed = (1 - progress) / rate`
+- If `minutes_needed > minutes_to_exit` → **market exit now** (won't reach TP1 before 15:00)
+- Otherwise → **break-even SL** (slow but still on track — let it run)
+
+60min grace aligns with ORB momentum window. Late entries (11:00 AM) are held to a higher standard — they need ≥25% progress vs ≥19% for early entries (9:45 AM), because they have less runway. Sends `⚠️ STOP → BREAK-EVEN` or `🚪 NO-PROGRESS EXIT` notification.
 
 **Orphaned Position Detection**  
 New `record_rejection()` in RiskEngine releases position slots for phantom/unfilled orders without counting a trade or touching loss counters. When the tracker detects an order was never filled (broker rejection, slow fill, or zero-PnL orphan), the function is called to free the slot. Sends Telegram notification: `⚠️ ORDER NOT FILLED`.
@@ -444,16 +443,26 @@ strategy_profiles:
       TP1: 1.0          # Exit 100% at TP1
 ```
 
-### `no_progress` (new — 2026-04-17)
+### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20)
 ```yaml
 no_progress:
   enabled: true
-  check_after_minutes: 90        # Grace period — wait before checking for stuck trades
-  min_progress_pct: 0.33         # Must move ≥33% of entry→TP1 distance to avoid BE move
+  check_after_minutes: 60        # Grace period — ORB momentum shows within 60min
+  min_progress_pct: 0.33         # Must move ≥33% of entry→TP1 distance to skip check
+  profit_lock_ratio: 0.0         # 0.0 = strict break-even SL (recommended)
 ```
-When enabled: if position hasn't progressed min_progress_pct% of the entry→TP1 distance within check_after_minutes, SL is moved to entry price (break-even). Protects capital without waiting for 15:00 time exit.
+At 60min, if progress < 33%: project `minutes_needed = (1 - progress) / rate` and compare to minutes remaining until time exit. If the trade cannot reach TP1 before 15:00 at its current pace → market exit. Otherwise → break-even SL.
 
-**Example:** entry=194.15, TP1=196.37 (distance=2.22). At 90min, if LTP < 194.88 (194.15 + 33% × 2.22), SL moves to 194.15. Sends `⚠️ STOP → BREAK-EVEN` notification.
+**Decision thresholds by entry time** (entry window 9:45–11:00 AM, time exit 15:00):
+
+| Entry | Check at | Time to exit | Break-even SL if progress ≥ | Market exit if progress < |
+|---|---|---|---|---|
+| 9:45 AM | 10:45 AM | 255 min | 19% | 19% |
+| 10:00 AM | 11:00 AM | 240 min | 20% | 20% |
+| 10:30 AM | 11:30 AM | 210 min | 22% | 22% |
+| 11:00 AM | 12:00 PM | 180 min | 25% | 25% |
+
+Progress ≥ 33% → no action (on track). Between threshold and 33% → break-even SL. Below threshold → market exit. Formula: `threshold = 60 / (60 + minutes_to_exit)`.
 
 ### `time_exit`
 ```yaml
@@ -466,10 +475,13 @@ time_exit:
 ### `tracking`
 ```yaml
 tracking:
-  poll_interval: 5    # seconds between position polls (5s halves slot-recovery latency vs 10s)
-  min_position_age_seconds: 30   # minimum age before detecting a position as closed
+  poll_interval: 5                 # seconds between position polls
+  min_position_age_seconds: 30     # minimum age before detecting a position as closed
+  guard2_timeout_minutes: 30       # max wait for ambiguous entry order status
 ```
-**`min_position_age_seconds` (new — 2026-04-17):** Protects against ghost-closes. When an order is rejected/slow-to-fill, positionbook briefly shows qty=0 before broker processes fill. 30s covers worst-case propagation while catching real SL hits.
+**`min_position_age_seconds`:** Protects against ghost-closes. When an order is rejected/slow-to-fill, positionbook briefly shows qty=0. 30s covers worst-case propagation.
+
+**`guard2_timeout_minutes` (new — 2026-04-20):** Guard 2 waits for entry fill confirmation before recording a close. If fill price is still unconfirmed after 30min (e.g. broker returns empty status for old orders), Guard 2 times out and proceeds — prevents infinite wait loop on JSWENERGY-style entries where fill confirmation never arrives.
 
 ### `broker`
 ```yaml

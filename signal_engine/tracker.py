@@ -15,7 +15,7 @@ from signal_engine.api_client import (
     fetch_positionbook,
     fetch_realised_pnl,
 )
-from signal_engine.executor import place_sl_order
+from signal_engine.executor import build_exit_order, place_sl_order, send_order
 from signal_engine.models import Direction, OrderStatus
 from signal_engine.risk import RiskEngine
 from signal_engine import notifier
@@ -247,12 +247,23 @@ class PositionTracker:
                     closed_keys.append(key)
                     continue
                 elif status_lower not in ("complete", "filled"):
-                    # Pending, unknown, or API error — wait for next poll cycle
-                    logger.debug(
-                        f"check_positions: {key} order status={order_status!r} "
-                        "positionbook not yet updated — waiting"
-                    )
-                    continue
+                    timeout = timedelta(minutes=_settings.tracker_guard2_timeout_minutes)
+                    if age >= timeout:
+                        # Broker stops returning status for old orders — assume complete.
+                        # The position has been open long enough that a ghost-close is impossible.
+                        logger.warning(
+                            f"check_positions: {key} order status={order_status!r} "
+                            f"but age={age.total_seconds()/60:.0f}min >= guard2_timeout={_settings.tracker_guard2_timeout_minutes}min "
+                            f"— assuming complete, proceeding with close"
+                        )
+                        # Fall through to normal close processing
+                    else:
+                        # Pending, unknown, or API error — wait for next poll cycle
+                        logger.debug(
+                            f"check_positions: {key} order status={order_status!r} "
+                            "positionbook not yet updated — waiting"
+                        )
+                        continue
                 # status == complete/filled: order traded, position now closed (e.g. instant SL)
                 # Fall through to normal close processing.
 
@@ -381,54 +392,105 @@ class PositionTracker:
                 continue  # Making progress — leave it
 
             # Use actual fill price as break-even; fall back to signal entry
-            be_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+            base_entry = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+            lock_ratio = _settings.no_progress_profit_lock_ratio
+            in_profit = (pos.direction == Direction.LONG and ltp > base_entry) or \
+                        (pos.direction != Direction.LONG and ltp < base_entry)
+            if lock_ratio > 0 and in_profit:
+                unrealized = abs(ltp - base_entry)
+                if pos.direction == Direction.LONG:
+                    be_price = base_entry + unrealized * lock_ratio
+                else:
+                    be_price = base_entry - unrealized * lock_ratio
+            else:
+                be_price = base_entry
 
+            # Decide: market-exit (won't reach TP before time exit) or break-even SL (has runway)
+            # Rate-based: project minutes needed to reach TP at current pace vs minutes remaining
+            use_market_exit = False
+            if _settings.time_exit_enabled:
+                time_exit_today = now.replace(
+                    hour=_settings.time_exit_hour,
+                    minute=_settings.time_exit_minute,
+                    second=0, microsecond=0,
+                )
+                minutes_to_exit = max(0, (time_exit_today - now).total_seconds() / 60)
+                age_min = age.total_seconds() / 60
+                rate_per_min = progress / age_min if age_min > 0 else 0.0
+                if rate_per_min > 0:
+                    minutes_needed = (1.0 - progress) / rate_per_min
+                    use_market_exit = minutes_needed > minutes_to_exit
+                else:
+                    use_market_exit = True  # zero rate — never reaching TP
+
+            action_label = "market-exit" if use_market_exit else \
+                           ("profit-lock" if be_price != base_entry else "break-even")
             logger.info(
                 f"No-progress [{pos.symbol}]: age={age.total_seconds()/60:.0f}min "
-                f"ltp={ltp:.2f} entry={be_price:.2f} tp={pos.tp:.2f} "
+                f"ltp={ltp:.2f} entry={base_entry:.2f} tp={pos.tp:.2f} "
                 f"progress={progress:.1%} < {_settings.no_progress_min_progress_pct:.0%} "
-                f"-> moving SL to break-even {be_price:.2f}"
+                f"-> {action_label}"
             )
 
-            # Cancel existing SL order before re-placing
+            # Cancel existing SL order first (required before any sell on Indian brokers)
             if pos.sl_order_id:
                 cancelled = await cancel_order(pos.sl_order_id, pos.strategy)
                 if not cancelled:
                     logger.warning(f"No-progress: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
                 pos.sl_order_id = ""
 
-            sl_result = await place_sl_order(
-                symbol=pos.symbol,
-                exchange=pos.exchange,
-                direction=pos.direction,
-                quantity=pos.quantity,
-                sl_price=be_price,
-                product=pos.product,
-                strategy_tag=pos.strategy,
-            )
+            pos.be_stop_applied = True  # prevent re-triggering regardless of path
 
-            if sl_result.status == OrderStatus.SUCCESS:
-                pos.sl = be_price
-                pos.sl_order_id = sl_result.order_id
-                pos.be_stop_applied = True
-                logger.info(
-                    f"Break-even SL placed for {pos.symbol}: {be_price:.2f} "
-                    f"id={sl_result.order_id}"
+            if use_market_exit:
+                exit_order = build_exit_order(
+                    symbol=pos.symbol,
+                    exchange=pos.exchange,
+                    quantity=pos.quantity,
+                    product=pos.product,
+                    strategy_tag=pos.strategy,
+                    direction=pos.direction,
                 )
-                await notifier.notify_be_stop_applied(
-                    pos.symbol, be_price, ltp, progress,
-                    strategy=pos.strategy, direction=pos.direction.value,
-                    age_minutes=int(age.total_seconds() / 60),
-                )
+                result = await send_order(exit_order)
+                if result.status == OrderStatus.SUCCESS:
+                    logger.info(f"No-progress market exit placed for {pos.symbol}: id={result.order_id}")
+                    await notifier.notify_no_progress_exit(
+                        pos.symbol, ltp, base_entry, progress,
+                        strategy=pos.strategy, direction=pos.direction.value,
+                        age_minutes=int(age.total_seconds() / 60),
+                    )
+                else:
+                    logger.error(f"No-progress market exit failed for {pos.symbol}: {result.message}")
+                    await notifier.notify_sl_failed(
+                        pos.symbol,
+                        f"No-progress market exit failed after {age.total_seconds()/60:.0f}min: {result.message}",
+                        strategy=pos.strategy,
+                    )
             else:
-                logger.error(
-                    f"No-progress: break-even SL placement failed for {pos.symbol}: {sl_result.message}"
+                sl_result = await place_sl_order(
+                    symbol=pos.symbol,
+                    exchange=pos.exchange,
+                    direction=pos.direction,
+                    quantity=pos.quantity,
+                    sl_price=be_price,
+                    product=pos.product,
+                    strategy_tag=pos.strategy,
                 )
-                await notifier.notify_sl_failed(
-                    pos.symbol,
-                    f"Break-even SL failed after {age.total_seconds()/60:.0f}min no-progress: {sl_result.message}",
-                    strategy=pos.strategy,
-                )
+                if sl_result.status == OrderStatus.SUCCESS:
+                    pos.sl = be_price
+                    pos.sl_order_id = sl_result.order_id
+                    logger.info(f"Break-even SL placed for {pos.symbol}: {be_price:.2f} id={sl_result.order_id}")
+                    await notifier.notify_be_stop_applied(
+                        pos.symbol, be_price, ltp, progress,
+                        strategy=pos.strategy, direction=pos.direction.value,
+                        age_minutes=int(age.total_seconds() / 60),
+                    )
+                else:
+                    logger.error(f"No-progress: break-even SL failed for {pos.symbol}: {sl_result.message}")
+                    await notifier.notify_sl_failed(
+                        pos.symbol,
+                        f"Break-even SL failed after {age.total_seconds()/60:.0f}min no-progress: {sl_result.message}",
+                        strategy=pos.strategy,
+                    )
 
     async def time_exit_all(self) -> None:
         """Force-close MIS positions and cancel their pending bracket orders.

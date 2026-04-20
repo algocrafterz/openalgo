@@ -141,6 +141,7 @@ class Settings:
     # Position tracking (from yaml)
     poll_interval: int
     tracker_min_position_age_seconds: int
+    tracker_guard2_timeout_minutes: int  # max minutes Guard 2 waits for ambiguous order status
 
     # Broker / Exchange (from yaml)
     exchange: str
@@ -185,6 +186,7 @@ class Settings:
     no_progress_enabled: bool
     no_progress_check_after_minutes: int
     no_progress_min_progress_pct: float
+    no_progress_profit_lock_ratio: float  # 0.0 = strict break-even; 0.4 = lock 40% of unrealized profit
 
 
 def _parse_no_progress(cfg: dict) -> dict:
@@ -195,6 +197,7 @@ def _parse_no_progress(cfg: dict) -> dict:
         "no_progress_enabled": bool(cfg.get("enabled", False)),
         "no_progress_check_after_minutes": int(cfg.get("check_after_minutes", 90)),
         "no_progress_min_progress_pct": float(cfg.get("min_progress_pct", 0.33)),
+        "no_progress_profit_lock_ratio": float(cfg.get("profit_lock_ratio", 0.0)),
     }
 
 
@@ -324,6 +327,7 @@ def _build_settings() -> Settings:
         # Tracking from yaml
         poll_interval=int(_require_key(tracking, "tracking", "poll_interval")),
         tracker_min_position_age_seconds=int(tracking.get("min_position_age_seconds", 30)),
+        tracker_guard2_timeout_minutes=int(tracking.get("guard2_timeout_minutes", 30)),
 
         # Broker from yaml — all required
         exchange=_require_key(broker, "broker", "exchange"),
