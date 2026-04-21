@@ -62,6 +62,18 @@ _TP_HIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# SL HIT alert: optional strategy prefix + "SL HIT" + symbol
+# Formats: "SL HIT | SYMBOL", "ORB SL HIT | SYMBOL"
+# TradingView sends these when the strategy's SL level is breached.
+# Mapped to an EXIT signal so the engine can reconcile tracker state and
+# cancel any lingering SL orders (broker SL may have already executed).
+# Group 1: strategy prefix (optional)
+# Group 2: symbol
+_SL_HIT_RE = re.compile(
+    r"^(?:([\w-]+)\s+)?SL\s+HIT\s*\|\s*(\w+)$",
+    re.IGNORECASE,
+)
+
 
 def normalize(text: Optional[str]) -> str:
     """Preprocess a raw signal message into canonical parser format.
@@ -107,6 +119,19 @@ def normalize(text: Optional[str]) -> str:
         return (
             f"{strategy} EXIT\nSymbol: {symbol}\n"
             f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: {tp_level}{exit_qty_pct_line}"
+        )
+
+    # Handle SL HIT alert: "[STRATEGY] SL HIT | SYMBOL" -> canonical EXIT format
+    # TradingView sends this when the strategy's SL level is breached on the chart.
+    # The broker SL-M order may have already executed; this signal lets the engine
+    # reconcile tracker state and cancel any lingering orders.
+    sl_hit_match = _SL_HIT_RE.match(lines[0])
+    if sl_hit_match:
+        strategy = (sl_hit_match.group(1) or _DEFAULT_STRATEGY).upper()
+        symbol = sl_hit_match.group(2).upper()
+        return (
+            f"{strategy} EXIT\nSymbol: {symbol}\n"
+            f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: SL"
         )
 
     # Handle pipe-delimited first line: "ORB LONG | NATIONALUM"

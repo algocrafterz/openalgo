@@ -12,7 +12,7 @@ Telegram Channels
       │ raw text
       ▼
 listener.py      — async Telethon client, stale guard, multi-channel
-normalizer.py    — strip emojis, alias keys, handle TP HIT / pipe formats
+normalizer.py    — strip emojis, alias keys, handle TP HIT / SL HIT / pipe formats
 parser.py        — text → Signal object
 validator.py     — SL/TP direction, R:R, duplicate, stale, blacklist, price filter
       │ valid Signal
@@ -42,20 +42,21 @@ main.py (_handle_entry / _handle_exit)
 9. `risk_engine.record_trade()` → persist counters
 10. Notify + persist to DB
 
-### Exit (TP HIT / EXIT signal)
-1. Normalizer converts `"ORB TP1 HIT | SYMBOL"` → canonical EXIT signal
+### Exit (TP HIT / SL HIT / EXIT signal)
+1. Normalizer converts `"ORB TP1 HIT | SYMBOL"` or `"ORB SL HIT | SYMBOL"` → canonical EXIT signal
 2. **Per-position asyncio.Lock acquired** — serializes concurrent TP signals for same position (TradingView fires all TP levels simultaneously at bar close; lock ensures second handler sees already-closed position)
-3. Resolve exit qty from `signal.exit_qty_pct` → `tp_levels` config → default 100%
-4. **Cancel SL order first** — broker treats any SELL while SL SELL is active as new SHORT
-5. `build_exit_order()` → MARKET SELL
-6. `send_order()` with `tp_exit_retries` retries
-7. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at TP1 − 0.3R (runner SL)
+3. **Phantom-exit guard** — if entry fill was never confirmed (`fill_price == 0`), query broker orderstatus before placing any exit. If status is `rejected/cancelled`, cancel orphaned SL, release slot, abort exit. Prevents naked short from TP signal on a non-existent position (EMAMILTD 2026-04-21 incident).
+4. Resolve exit qty from `signal.exit_qty_pct` → `tp_levels` config → default 100%
+5. **Cancel SL order first** — broker treats any SELL while SL SELL is active as new SHORT
+6. `build_exit_order()` → MARKET SELL
+7. `send_order()` with `tp_exit_retries` retries
+8. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at TP1 − 0.3R (runner SL)
    - `tp1_runner_sl_buffer: 0.3` — 30% of R below TP1. Gives price room to wick-back and test TP1 before continuing to TP1.5. Old value 0.1R was too tight (TMPV 2026-04-13: ₹0.80 gap triggered by normal TP1 test wick). 0.3R scales correctly across ₹150–₹800 filter (9–72 ticks depending on SL%).
    - Runner SL is the **only automated protection** when TP1.5 signal is delayed or missing.
    - `compute_next_tp()` derives next TP level (TP1→TP1.5, TP1.5→TP2) for notification
    - Telegram notification includes: booked qty, remaining qty, new SL, next TP price
    - **TP1.5 exit fires only on TradingView TP1.5 HIT alert** — engine has no autonomous LTP monitoring for TP exits. If the alert is delayed/missing, runner holds until runner SL fires or time exit at 15:00.
-8. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
+9. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
 
 ---
 
@@ -102,13 +103,13 @@ Minimum age before a position can be detected as closed (default: 30s). Protects
 |------|---------------|
 | `main.py` | Pipeline orchestration, startup checks, entry/exit routing, T2T (BE series) filter |
 | `listener.py` | Async Telegram channel listener (Telethon) |
-| `normalizer.py` | Raw message preprocessing → canonical format |
+| `normalizer.py` | Raw message preprocessing → canonical format; handles TP HIT, SL HIT, pipe-delimited, emoji stripping |
 | `parser.py` | Canonical text → `Signal` model |
 | `validator.py` | Signal validation (SL, R:R, duplicates, blacklist) |
 | `risk.py` | Position sizing (`RiskEngine`), exposure limits, portfolio heat; `record_rejection()` for phantom orders |
 | `risk_store.py` | SQLite persistence for risk counters (restart-safe). Path: `RISK_DB_PATH` |
 | `executor.py` | Order construction + OpenAlgo API calls |
-| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; min_position_age_seconds guard |
+| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; three-guard close detection (Guard 1: min age, Guard 2: orderstatus with rejection/timeout-orphan, Guard 3: zero-PnL orphan); all orphan paths cancel associated SL order |
 | `api_client.py` | All async OpenAlgo API calls |
 | `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary) |
 | `config.py` | Fail-fast config loader (`Settings` dataclass singleton); no_progress, tracking sections |
@@ -481,7 +482,7 @@ tracking:
 ```
 **`min_position_age_seconds`:** Protects against ghost-closes. When an order is rejected/slow-to-fill, positionbook briefly shows qty=0. 30s covers worst-case propagation.
 
-**`guard2_timeout_minutes` (new — 2026-04-20):** Guard 2 waits for entry fill confirmation before recording a close. If fill price is still unconfirmed after 30min (e.g. broker returns empty status for old orders), Guard 2 times out and proceeds — prevents infinite wait loop on JSWENERGY-style entries where fill confirmation never arrives.
+**`guard2_timeout_minutes` (updated — 2026-04-21):** Guard 2 waits for entry fill confirmation before recording a close. If fill price is still unconfirmed after 30min and orderstatus remains ambiguous (e.g. persistent 500 errors from broker API), Guard 2 times out and treats the position as an orphaned rejection — cancels any associated SL order and releases the slot. Previously this path "assumed complete" which left rejected-order phantom positions alive for hours (EMAMILTD 2026-04-21 incident: rejected entry tracked for 4.5h, TP1 exit placed on non-existent position creating naked short risk).
 
 ### `broker`
 ```yaml

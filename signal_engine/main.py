@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_order_fill_price, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
+from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_order_fill_price, fetch_order_status, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
 from signal_engine.db import save
 from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
@@ -307,7 +307,31 @@ async def _handle_exit_locked(signal) -> None:
             sl_order_id="",
         )
 
-    # 3. Resolve exit quantity (partial or full based on tp_level config)
+    # 3. Guard against phantom exit — if the entry order was never confirmed as filled,
+    # verify the broker status before placing an exit. A rejected entry leaves no real
+    # position; placing a SELL without one would create an unintended naked short.
+    if pos.entry_order_id and pos.fill_price == 0.0:
+        order_status = await fetch_order_status(pos.entry_order_id, pos.strategy)
+        status_lower = order_status.lower()
+        if status_lower in ("rejected", "cancelled", "cancel"):
+            logger.warning(
+                f"EXIT: {pos.symbol} entry order {pos.entry_order_id} was {status_lower} "
+                "— aborting exit (no real position). Cancelling orphaned SL and releasing slot."
+            )
+            if pos.sl_order_id:
+                await cancel_order(pos.sl_order_id, pos.strategy)
+                logger.info(f"EXIT: cancelled orphaned SL {pos.sl_order_id} for {pos.symbol}")
+            risk_engine.record_rejection(symbol=pos.symbol)
+            tracker.unregister(signal.symbol, signal.strategy)
+            await notifier.notify_orphaned_position(
+                pos.symbol, pos.strategy, pos.direction.value,
+                pos.entry_order_id, f"exit blocked: entry order {status_lower}",
+            )
+            if pos.exit_pending:
+                pos.exit_pending = False
+            return
+
+    # 4. Resolve exit quantity (partial or full based on tp_level config)
     exit_qty, is_full_exit = _resolve_exit_qty(signal, pos)
     tp_level = getattr(signal, "tp_level", None)
     logger.info(
@@ -315,7 +339,7 @@ async def _handle_exit_locked(signal) -> None:
         f"full_exit={is_full_exit}"
     )
 
-    # 4. ALWAYS cancel SL before placing exit order.
+    # 6. ALWAYS cancel SL before placing exit order.
     # Indian brokers treat any SELL while SL SELL is active as a new SHORT position
     # (FUND LIMIT INSUFFICIENT). SL must be cancelled first, even for partial exits.
     if pos.sl_order_id:
@@ -325,7 +349,7 @@ async def _handle_exit_locked(signal) -> None:
         else:
             logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
 
-    # 5. Build and send MARKET SELL exit order — retry up to tp_exit_retries on failure.
+    # 7. Build and send MARKET SELL exit order — retry up to tp_exit_retries on failure.
     # MARKET orders rarely reject but network timeouts are possible. We retry on any
     # non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
     exit_order = build_exit_order(

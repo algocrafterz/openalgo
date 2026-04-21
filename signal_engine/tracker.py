@@ -239,6 +239,9 @@ class PositionTracker:
                         f"check_positions: {key} order {pos.entry_order_id} "
                         f"was {status_lower} — releasing slot without recording trade"
                     )
+                    if pos.sl_order_id:
+                        await cancel_order(pos.sl_order_id, pos.strategy)
+                        logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
                     self._risk_engine.record_rejection(symbol=pos.symbol)
                     await notifier.notify_orphaned_position(
                         pos.symbol, pos.strategy, pos.direction.value,
@@ -249,21 +252,33 @@ class PositionTracker:
                 elif status_lower not in ("complete", "filled"):
                     timeout = timedelta(minutes=_settings.tracker_guard2_timeout_minutes)
                     if age >= timeout:
-                        # Broker stops returning status for old orders — assume complete.
-                        # The position has been open long enough that a ghost-close is impossible.
-                        logger.warning(
-                            f"check_positions: {key} order status={order_status!r} "
-                            f"but age={age.total_seconds()/60:.0f}min >= guard2_timeout={_settings.tracker_guard2_timeout_minutes}min "
-                            f"— assuming complete, proceeding with close"
+                        # Order status never resolved after timeout — the positionbook has
+                        # shown qty=0 since entry with no confirmed fill. Treat as orphaned
+                        # rejection: cancel any associated SL and release the slot.
+                        # (A genuinely filled position would have appeared in positionbook
+                        # with non-zero qty for some time before closing.)
+                        logger.error(
+                            f"check_positions: {key} order status={order_status!r} still unresolved "
+                            f"after {age.total_seconds()/60:.0f}min — treating as orphaned rejection, "
+                            "releasing slot"
                         )
-                        # Fall through to normal close processing
+                        if pos.sl_order_id:
+                            await cancel_order(pos.sl_order_id, pos.strategy)
+                            logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
+                        self._risk_engine.record_rejection(symbol=pos.symbol)
+                        await notifier.notify_orphaned_position(
+                            pos.symbol, pos.strategy, pos.direction.value,
+                            pos.entry_order_id,
+                            f"order status={order_status!r} unresolved after {age.total_seconds()/60:.0f}min",
+                        )
+                        closed_keys.append(key)
                     else:
                         # Pending, unknown, or API error — wait for next poll cycle
                         logger.debug(
                             f"check_positions: {key} order status={order_status!r} "
                             "positionbook not yet updated — waiting"
                         )
-                        continue
+                    continue
                 # status == complete/filled: order traded, position now closed (e.g. instant SL)
                 # Fall through to normal close processing.
 
@@ -281,6 +296,9 @@ class PositionTracker:
                     f"check_positions: {key} — zero PnL delta with unconfirmed fill "
                     "(orphan position, likely broker rejection). Releasing slot."
                 )
+                if pos.sl_order_id:
+                    await cancel_order(pos.sl_order_id, pos.strategy)
+                    logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
                 self._risk_engine.record_rejection(symbol=pos.symbol)
                 await notifier.notify_orphaned_position(
                     pos.symbol, pos.strategy, pos.direction.value,

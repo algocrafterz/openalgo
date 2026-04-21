@@ -309,11 +309,28 @@ class TestTPHitMessages:
         assert signal is not None
         assert signal.tp_level is None
 
-    def test_sl_hit_is_not_normalized(self):
-        """SL HIT handled by broker SL-M — must NOT parse as EXIT to avoid double-exit."""
+    def test_sl_hit_normalized_as_exit(self):
+        """SL HIT from TradingView -> EXIT signal so engine can reconcile tracker state."""
+        text = "❌ SL HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 307.44"
+        result = normalize(text)
+        assert "ORB EXIT" in result
+        assert "Symbol: TMPV" in result
+        assert "TpLevel: SL" in result
+
+    def test_sl_hit_parses_as_exit_signal(self):
+        """Full pipeline: SL HIT -> normalize -> parse -> EXIT signal."""
         text = "❌ SL HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 307.44"
         signal = parse(normalize(text))
-        assert signal is None
+        assert signal is not None
+        assert signal.direction.value == "EXIT"
+        assert signal.symbol == "TMPV"
+        assert signal.tp_level == "SL"
+
+    def test_orb_sl_hit_uses_strategy_prefix(self):
+        """Strategy-prefixed SL HIT uses the correct strategy."""
+        text = "❌ ORB SL HIT | HUDCO"
+        result = normalize(text)
+        assert result == "ORB EXIT\nSymbol: HUDCO\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: SL"
 
 
 class TestSwingExitFormat:

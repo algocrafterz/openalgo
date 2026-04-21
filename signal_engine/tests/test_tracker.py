@@ -563,6 +563,75 @@ class TestBatchPositionCheck:
         mock_pb.assert_called_once()
 
 
+class TestOrphanSlCancel:
+    """Orphaned SL orders must be cancelled when a position is released as orphan."""
+
+    @pytest.mark.asyncio
+    async def test_guard2_immediate_rejection_cancels_sl(self):
+        """Guard 2: broker returns 'rejected' -> slot released AND orphaned SL cancelled."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_REJ")
+        pos.sl_order_id = "SL_ORPHAN_REJ"
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="rejected"),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+        mock_cancel.assert_awaited_once_with("SL_ORPHAN_REJ", pos.strategy)
+
+    @pytest.mark.asyncio
+    async def test_guard3_zero_pnl_cancels_sl(self):
+        """Guard 3: zero PnL with unconfirmed fill -> orphan released AND orphaned SL cancelled."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_G3")
+        pos.sl_order_id = "SL_ORPHAN_G3"
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="complete"),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+        mock_cancel.assert_awaited_once_with("SL_ORPHAN_G3", pos.strategy)
+
+    @pytest.mark.asyncio
+    async def test_no_sl_order_id_no_cancel_on_orphan(self):
+        """Orphan release with no sl_order_id should not attempt cancel."""
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_NOSL")
+        pos.sl_order_id = ""
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="rejected"),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
+            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+        mock_cancel.assert_not_called()
+
+
 class TestGuard2Timeout:
     """Guard 2 — ambiguous order status — bypasses wait after guard2_timeout_minutes."""
 
@@ -586,24 +655,28 @@ class TestGuard2Timeout:
         assert tracker.tracked_count == 1  # still waiting
 
     @pytest.mark.asyncio
-    async def test_guard2_proceeds_when_old_and_status_unknown(self):
-        """Position older than guard2_timeout should proceed to close processing."""
+    async def test_guard2_releases_as_orphan_when_old_and_status_unknown(self):
+        """Position older than guard2_timeout with still-unknown orderstatus is treated as
+        orphaned rejection (not 'assumed complete'). Slot released, SL cancelled."""
         engine = _make_engine()
         engine.open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0
         old_entry = datetime.now(_IST) - timedelta(minutes=35)  # > 30 min guard2_timeout
         pos = _make_position(fill_price=0.0, entry_order_id="ORDER456", entry_time=old_entry)
+        pos.sl_order_id = "SL_ORPHAN"
         tracker.register(pos)
 
         with (
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
-            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
         ):
             await tracker.check_positions()
 
-        assert tracker.tracked_count == 0  # assumed complete, position cleared
+        assert tracker.tracked_count == 0  # orphan released
+        mock_cancel.assert_awaited_once_with("SL_ORPHAN", pos.strategy)  # orphaned SL cancelled
 
 
 class TestNoProgressProfitLock:
