@@ -58,7 +58,6 @@ class TrackedPosition:
     direction: Direction = Direction.LONG
     entry_order_id: str = ""
     sl_order_id: str = ""
-    tp_order_id: str = ""  # unused: TP exit driven by TradingView TP HIT signal, not broker order
     exit_pending: bool = False  # True while an exit handler is actively processing this position
     fill_price: float = 0.0     # Actual broker fill price for the entry order (0 = unknown)
     original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
@@ -91,6 +90,45 @@ class PositionTracker:
         self._day_pnl: float = 0.0
         self._day_summary_sent: bool = False  # prevent duplicate summaries
         self._completed_trades: List[TradeRecord] = []  # one record per closed position
+        # Per-(key, log-kind) throttle to suppress repeated debug lines on every 5s poll.
+        # Value = last time we emitted that log line for the position/kind pair.
+        self._last_debug_log: Dict[tuple[str, str], datetime] = {}
+
+    def day_context_line(self, max_trades: int | None = None) -> str:
+        """Compact per-day running context used in Telegram close notifications."""
+        return notifier.format_day_context(
+            day_trades=self._day_trades,
+            day_wins=self._day_wins,
+            day_losses=self._day_losses,
+            day_pnl=self._day_pnl,
+            max_trades=max_trades,
+        )
+
+    def projected_day_context(
+        self, trade_pnl: float, pnl_delta: float, max_trades: int | None = None,
+    ) -> str:
+        """Day context as if a trade with this total_pnl/pnl_delta were already counted.
+
+        Used by full-exit paths in main.py where tracker.record_exit is not called
+        (close happens via risk_engine.record_close + unregister, and day counters
+        are incremented later by check_positions on the next poll).
+        """
+        return notifier.format_day_context(
+            day_trades=self._day_trades + 1,
+            day_wins=self._day_wins + (1 if trade_pnl >= 0 else 0),
+            day_losses=self._day_losses + (0 if trade_pnl >= 0 else 1),
+            day_pnl=self._day_pnl + pnl_delta,
+            max_trades=max_trades,
+        )
+
+    def _should_log_debug(self, key: str, kind: str, interval_sec: int = 60) -> bool:
+        """Return True if enough time has elapsed since the last debug log for this key/kind."""
+        now = datetime.now(_IST)
+        last = self._last_debug_log.get((key, kind))
+        if last is None or (now - last).total_seconds() >= interval_sec:
+            self._last_debug_log[(key, kind)] = now
+            return True
+        return False
 
     @property
     def tracked_count(self) -> int:
@@ -119,6 +157,9 @@ class PositionTracker:
         pos = self._positions.pop(key, None)
         if pos:
             logger.info(f"Unregistered position: {key}")
+        # Purge stale throttle entries for this key so a later re-entry starts fresh
+        for kind in ("age", "poll_wait"):
+            self._last_debug_log.pop((key, kind), None)
         return pos
 
     def record_exit(
@@ -210,7 +251,14 @@ class PositionTracker:
 
         closed_keys = []
 
-        for key, pos in self._positions.items():
+        # Snapshot the position list so concurrent _handle_exit_locked unregisters
+        # don't mutate the dict mid-iteration (RuntimeError on dict-size-change).
+        for key, pos in list(self._positions.items()):
+            # Race guard: if a concurrent exit handler already removed/replaced this
+            # position, skip — it's already been accounted for via record_close.
+            if self._positions.get(key) is not pos:
+                continue
+
             qty, ltp = book_data.get(pos.symbol, (0, 0.0))
 
             if qty != 0:
@@ -221,10 +269,11 @@ class PositionTracker:
             # positionbook propagation lag, not a genuine SL hit in the first few seconds.
             age = datetime.now(_IST) - pos.entry_time
             if age < timedelta(seconds=_settings.tracker_min_position_age_seconds):
-                logger.debug(
-                    f"check_positions: {key} age={age.total_seconds():.0f}s < "
-                    f"min={_settings.tracker_min_position_age_seconds}s — skipping"
-                )
+                if self._should_log_debug(key, "age", interval_sec=30):
+                    logger.debug(
+                        f"check_positions: {key} age={age.total_seconds():.0f}s < "
+                        f"min={_settings.tracker_min_position_age_seconds}s — skipping"
+                    )
                 continue
 
             # Guard 2: Order status — for positions whose fill was never confirmed,
@@ -273,17 +322,26 @@ class PositionTracker:
                         )
                         closed_keys.append(key)
                     else:
-                        # Pending, unknown, or API error — wait for next poll cycle
-                        logger.debug(
-                            f"check_positions: {key} order status={order_status!r} "
-                            "positionbook not yet updated — waiting"
-                        )
+                        # Pending, unknown, or API error — wait for next poll cycle.
+                        # Throttled: poll runs every 5s but we only need periodic
+                        # visibility into stuck positions (not every cycle).
+                        if self._should_log_debug(key, "poll_wait", interval_sec=60):
+                            logger.debug(
+                                f"check_positions: {key} order status={order_status!r} "
+                                f"positionbook not yet updated — waiting "
+                                f"(age={age.total_seconds()/60:.0f}min)"
+                            )
                     continue
                 # status == complete/filled: order traded, position now closed (e.g. instant SL)
                 # Fall through to normal close processing.
 
             # --- Position closed (qty dropped to 0) ---
             async with self._pnl_lock:
+                # Re-check under the lock: a concurrent _handle_exit_locked path may have
+                # already recorded this close (SL HIT reconcile, TP exit). If so, skip
+                # to avoid double record_close / phantom zero-PnL trade record.
+                if self._positions.get(key) is not pos:
+                    continue
                 current_realised = await fetch_realised_pnl()
                 pnl_delta = current_realised - self._last_realised_pnl
                 self._last_realised_pnl = current_realised
@@ -347,10 +405,13 @@ class PositionTracker:
             else:
                 self._day_losses += 1
 
+            close_exit_types = pos.exit_types[:] if pos.exit_types else ["SL"]
             await notifier.notify_position_closed(
                 pos.symbol, total_pnl, strategy=pos.strategy, exit_price=exit_price,
                 direction=pos.direction.value, r_multiple=r,
                 entry_price=base_price, hold_minutes=hold_min,
+                exit_types=close_exit_types,
+                day_context=self.day_context_line(_settings.max_trades_per_day),
             )
 
             closed_keys.append(key)
@@ -519,6 +580,8 @@ class PositionTracker:
         CNC positions (swing strategies) are excluded — they survive overnight.
         Uses strategy-level close/cancel APIs for reliability.
         """
+        from signal_engine.config import settings as _settings
+
         # Separate MIS (intraday) from CNC (swing) positions
         mis_positions = {k: v for k, v in self._positions.items() if v.product == "MIS"}
         cnc_positions = {k: v for k, v in self._positions.items() if v.product != "MIS"}
@@ -588,13 +651,14 @@ class PositionTracker:
                 exit_types=pos.exit_types[:] + ["TIME"],
             ))
             self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+            self._day_trades += 1
+            self._day_time_exits += 1
             await notifier.notify_time_exit(
                 pos.symbol, strategy=pos.strategy, direction=pos.direction.value,
                 pnl=total_pnl, r_multiple=r,
                 entry_price=base_price, hold_minutes=hold_min,
+                day_context=self.day_context_line(_settings.max_trades_per_day),
             )
-            self._day_trades += 1
-            self._day_time_exits += 1
             logger.info(f"Time exit: cleared tracker entry {key}")
             del self._positions[key]
 

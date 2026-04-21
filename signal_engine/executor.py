@@ -176,32 +176,6 @@ def build_sl_order(signal: Signal, quantity: int) -> Order:
     )
 
 
-def build_tp_order(signal: Signal, quantity: int) -> Order:
-    """Build a take-profit leg order for a bracket.
-
-    For LONG entry: SELL LIMIT at price=signal.tp
-    For SHORT entry: BUY LIMIT at price=signal.tp
-    """
-    action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
-
-    # Round TP price to valid tick — conservative direction
-    # LONG TP: round down (fills sooner), SHORT TP: round up (fills sooner)
-    tp_direction = "down" if signal.direction == Direction.LONG else "up"
-    tp_price = round_to_tick(signal.tp, tp_direction)
-
-    return Order(
-        symbol=signal.symbol,
-        exchange=signal.exchange or settings.exchange,
-        action=action,
-        quantity=quantity,
-        price=tp_price,
-        order_type="LIMIT",
-        product=signal.product or settings.product,
-        strategy_tag=signal.strategy,
-        trigger_price=0.0,
-    )
-
-
 async def place_sl_order(
     symbol: str,
     exchange: str,

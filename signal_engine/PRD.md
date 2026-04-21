@@ -109,14 +109,14 @@ Minimum age before a position can be detected as closed (default: 30s). Protects
 | `risk.py` | Position sizing (`RiskEngine`), exposure limits, portfolio heat; `record_rejection()` for phantom orders |
 | `risk_store.py` | SQLite persistence for risk counters (restart-safe). Path: `RISK_DB_PATH` |
 | `executor.py` | Order construction + OpenAlgo API calls |
-| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; three-guard close detection (Guard 1: min age, Guard 2: orderstatus with rejection/timeout-orphan, Guard 3: zero-PnL orphan); all orphan paths cancel associated SL order |
+| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; three-guard close detection (Guard 1: min age, Guard 2: orderstatus with rejection/timeout-orphan, Guard 3: zero-PnL orphan); all orphan paths cancel associated SL order; race guard (`_positions.get(key) is not pos`) under `_pnl_lock` prevents double-close; per-(key,kind) debug throttling via `_should_log_debug()` |
 | `api_client.py` | All async OpenAlgo API calls |
-| `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary) |
+| `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary); `format_day_context()` / `format_slot_context()` helpers for running day telemetry lines |
 | `config.py` | Fail-fast config loader (`Settings` dataclass singleton); no_progress, tracking sections |
 | `models.py` | `Signal`, `Order`, `TradeResult`, `ValidationResult` |
 | `strategies.py` | Strategy name constants |
 | `db.py` | SQLite trade audit trail. Path: `_DB_PATH` |
-| `logger_setup.py` | Loguru daily rotation |
+| `logger_setup.py` | Loguru daily rotation; file sink defaults to INFO (set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` for verbose mode) |
 | `smoke_test.py` | Pre-session health checks + dry run |
 
 ### Key Functions & Methods (2026-04-17 additions)
@@ -128,7 +128,7 @@ Minimum age before a position can be detected as closed (default: 30s). Protects
 | `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
 | `notify_be_stop_applied()` | `notifier.py` | Telegram alert for break-even SL move (no progress) |
 | `notify_partial_exit()` | `notifier.py` | Trader-friendly partial TP exit notification with hold duration, next TP, runner SL |
-| `notify_position_closed()` | `notifier.py` | Unified position close notification (TP WIN / SL HIT / TIME EXIT) |
+| `notify_position_closed()` | `notifier.py` | Unified position close notification; icon driven by `exit_types` list (❌ SL / ⏰ TIME / 🚪 EXIT / ✅ TPn); appends running day context line |
 | `notify_day_summary()` | `notifier.py` | EOD summary with trades, win rate, per-trade table, capital trajectory |
 | `_poll_positions()` | `tracker.py` | Detects closed positions with min_position_age_seconds guard |
 | `_check_no_progress()` | `tracker.py` | Detects stuck trades and moves SL to break-even |
@@ -339,7 +339,7 @@ All notifications sent via `notifier.py` to `telegram.notify_channel`. Format is
 - Multi-leg trades (e.g. TP1 50% + runner SL 50%) show the correct net R on the closing notification
 - Hold duration shown as `held Xh Ym` or `held Xm` for shorter holds
 
-**Noise suppression:** TP detection internals (TP detected, TP exit placed, EXIT signal received) are log-only — not sent to Telegram. SL placement confirmation is embedded in the LIVE message.
+**Noise suppression:** TP detection internals (TP detected, TP exit placed, EXIT signal received) are log-only — not sent to Telegram. SL placement confirmation is embedded in the LIVE message. signal_engine.log file sink defaults to INFO; set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` to enable poll-level debug traces.
 
 ### Risk and System Events
 

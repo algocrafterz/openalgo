@@ -327,8 +327,6 @@ async def _handle_exit_locked(signal) -> None:
                 pos.symbol, pos.strategy, pos.direction.value,
                 pos.entry_order_id, f"exit blocked: entry order {status_lower}",
             )
-            if pos.exit_pending:
-                pos.exit_pending = False
             return
 
     # 4. SL HIT reconcile path — broker SL-M already closed this position.
@@ -352,14 +350,16 @@ async def _handle_exit_locked(signal) -> None:
             original_qty=pos.original_quantity or pos.quantity,
             total_pnl=total_trade_pnl, r_multiple=r, exit_types=["SL"],
         ))
+        tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
         await notifier.notify_position_closed(
             pos.symbol, total_trade_pnl, strategy=pos.strategy,
             exit_price=pos.sl, direction=pos.direction.value,
             r_multiple=r, entry_price=base_price, hold_minutes=hold_min,
+            exit_types=["SL"],
+            day_context=tracker.day_context_line(settings.max_trades_per_day),
         )
         tracker.unregister(signal.symbol, signal.strategy)
         risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-        tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
         if not tracker._positions:
             await tracker.send_day_summary()
         return
@@ -437,10 +437,18 @@ async def _handle_exit_locked(signal) -> None:
                 r_multiple=r,
                 exit_types=all_exit_types,
             ))
+            # check_positions will count this trade on the next poll (qty drops to 0),
+            # so project the day context here rather than mutating counters twice.
+            day_ctx = tracker.projected_day_context(
+                trade_pnl=total_trade_pnl, pnl_delta=pnl_delta,
+                max_trades=settings.max_trades_per_day,
+            )
             await notifier.notify_position_closed(
                 pos.symbol, total_trade_pnl, strategy=pos.strategy,
                 exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
                 entry_price=base_price, hold_minutes=hold_min,
+                exit_types=all_exit_types,
+                day_context=day_ctx,
             )
             tracker.unregister(signal.symbol, signal.strategy)
             risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
@@ -466,14 +474,16 @@ async def _handle_exit_locked(signal) -> None:
                     r_multiple=r,
                     exit_types=all_exit_types,
                 ))
+                tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
                 tracker.unregister(signal.symbol, signal.strategy)
                 risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
                 await notifier.notify_position_closed(
                     pos.symbol, total_trade_pnl, strategy=pos.strategy,
                     exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
                     entry_price=base_price, hold_minutes=hold_min,
+                    exit_types=all_exit_types,
+                    day_context=tracker.day_context_line(settings.max_trades_per_day),
                 )
-                tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
                 if not tracker._positions:
                     await tracker.send_day_summary()
                 return
@@ -706,10 +716,15 @@ async def _handle_entry(signal) -> None:
 
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
+        # +1 because risk_engine.record_trade runs below — this slot is now taken.
+        slot_context = notifier.format_slot_context(
+            risk_engine.open_positions + 1, risk_engine.max_open_positions
+        )
         await notifier.notify_order_placed(
-            signal.symbol, signal.direction.value, trade_result.order_id,
+            signal.symbol, signal.direction.value,
             strategy=signal.strategy, signal_price=signal.entry,
             sl=signal.sl, tp=signal.tp, rr=rr,
+            slot_context=slot_context,
         )
     else:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
@@ -738,7 +753,7 @@ async def _handle_entry(signal) -> None:
             sl_result, _ = await send_bracket_legs(signal, quantity, trade_result.order_id)
             sl_order_id = sl_result.order_id if sl_result else ""
             if sl_result and sl_result.status == OrderStatus.SUCCESS:
-                await notifier.notify_sl_placed(signal.symbol, signal.direction.value, sl_order_id, strategy=signal.strategy, sl_price=signal.sl)
+                await notifier.notify_sl_placed(signal.symbol, sl_order_id, strategy=signal.strategy, sl_price=signal.sl)
             else:
                 await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
 

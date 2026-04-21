@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from signal_engine.executor import build_order, build_exit_order, build_sl_order, build_tp_order, send_bracket_legs, send_order
+from signal_engine.executor import build_order, build_exit_order, build_sl_order, send_bracket_legs, send_order
 from signal_engine.models import Action, Direction, OrderStatus, Signal
 from signal_engine.tests.conftest import make_signal as _make_signal
 
@@ -205,44 +205,6 @@ class TestBuildSlOrder:
         order = build_sl_order(signal, quantity=5)
         assert order.symbol == "TCS"
         assert order.strategy_tag == "ORB"
-
-
-class TestBuildTpOrder:
-    def test_long_entry_produces_sell_limit(self):
-        signal = _make_signal(direction=Direction.LONG, tp=2540.0)
-        order = build_tp_order(signal, quantity=10)
-        assert order.action == Action.SELL
-
-    def test_short_entry_produces_buy_limit(self):
-        signal = _make_signal(direction=Direction.SHORT, entry=2500.0, sl=2515.0, tp=2460.0)
-        order = build_tp_order(signal, quantity=10)
-        assert order.action == Action.BUY
-
-    def test_tp_order_type_is_limit(self):
-        signal = _make_signal(tp=2540.0)
-        order = build_tp_order(signal, quantity=10)
-        assert order.order_type == "LIMIT"
-
-    def test_price_set_to_tp(self):
-        signal = _make_signal(tp=2540.0)
-        order = build_tp_order(signal, quantity=10)
-        assert order.price == 2540.0
-
-    def test_quantity_matches(self):
-        signal = _make_signal()
-        order = build_tp_order(signal, quantity=77)
-        assert order.quantity == 77
-
-    def test_trigger_price_is_zero(self):
-        signal = _make_signal(tp=2540.0)
-        order = build_tp_order(signal, quantity=10)
-        assert order.trigger_price == 0.0
-
-    def test_symbol_and_strategy_captured(self):
-        signal = _make_signal(symbol="INFY", strategy="VWAP")
-        order = build_tp_order(signal, quantity=5)
-        assert order.symbol == "INFY"
-        assert order.strategy_tag == "VWAP"
 
 
 class TestSendBracketLegs:

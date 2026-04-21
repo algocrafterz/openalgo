@@ -73,26 +73,44 @@ def _tag(strategy: str) -> str:
     return f" | {strategy}" if strategy else ""
 
 
+def format_day_context(
+    day_trades: int,
+    day_wins: int,
+    day_losses: int,
+    day_pnl: float,
+    max_trades: int | None = None,
+) -> str:
+    """Compact per-day running context line shared across entry/exit messages."""
+    trades_str = f"{day_trades}/{max_trades}" if max_trades else str(day_trades)
+    return f"Day: {trades_str} trades (W:{day_wins} L:{day_losses}) | P&L: {_pnl(day_pnl)}"
+
+
+def format_slot_context(open_positions: int, max_positions: int) -> str:
+    """Compact slot usage line: 'Slot 2/3 used'."""
+    return f"Slot {open_positions}/{max_positions} used"
+
+
 # ── Order placement ────────────────────────────────────────────────────────────
 
 async def notify_order_placed(
     symbol: str,
     direction: str,
-    order_id: str,
     strategy: str = "",
     signal_price: float | None = None,
     sl: float | None = None,
     tp: float | None = None,
     rr: float | None = None,
+    slot_context: str = "",
 ) -> None:
     """Brief confirmation that the entry order reached the broker."""
     rr_str = f" | R:R 1:{rr:.1f}" if rr is not None else ""
     sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
     tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
     price_str = f"Signal: {signal_price:.2f}" if signal_price is not None else "Signal: —"
+    slot_line = f"\n{slot_context}" if slot_context else ""
     await notify(
         f"📤 ENTRY SENT | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
-        f"{price_str}{sl_str}{tp_str}{rr_str}"
+        f"{price_str}{sl_str}{tp_str}{rr_str}{slot_line}"
     )
 
 
@@ -135,7 +153,7 @@ async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") ->
 
 
 async def notify_sl_placed(
-    symbol: str, direction: str, order_id: str,
+    symbol: str, order_id: str,
     strategy: str = "", sl_price: float | None = None,
 ) -> None:
     """Log only — SL placement confirmation is embedded in the LIVE message."""
@@ -151,52 +169,10 @@ async def notify_sl_failed(symbol: str, reason: str, strategy: str = "") -> None
     )
 
 
-async def notify_tp_placed(symbol: str, direction: str, order_id: str) -> None:
-    logger.info(f"TP placed | {symbol} {_dir(direction)} | id={order_id}")
-
-
-async def notify_tp_failed(symbol: str, reason: str) -> None:
-    logger.warning(f"TP FAILED | {symbol} | {reason}")
-
-
-# ── Tracker-based TP monitoring ────────────────────────────────────────────────
-
-async def notify_tp_level_hit(symbol: str, ltp: float, tp: float, strategy: str = "") -> None:
-    logger.info(f"TP DETECTED | {symbol} [{strategy}] | LTP={ltp:.2f} >= TP={tp:.2f}")
-
-
-async def notify_tp_exit_placed(symbol: str, order_id: str, strategy: str = "") -> None:
-    logger.info(f"TP EXIT placed | {symbol} [{strategy}] | id={order_id}")
-
-
-async def notify_tp_exit_failed(
-    symbol: str, reason: str, strategy: str = "",
-    entry_price: float | None = None, qty: int = 0,
-) -> None:
-    """URGENT: TP market exit failed after SL was cancelled — position unprotected."""
-    context = ""
-    if entry_price is not None and qty > 0:
-        context = f"\nEntry: {entry_price:.2f} | Qty: {qty} — act NOW"
-    await notify(
-        f"🚨 MANUAL EXIT REQUIRED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
-        f"TP exit failed. SL was cancelled — position is UNPROTECTED.\n"
-        f"Reason: {reason}{context}"
-    )
-
-
-async def notify_sl_cancel_failed(symbol: str, sl_order_id: str, strategy: str = "") -> None:
-    """SL cancellation failed — non-critical, TP exit still proceeds."""
-    logger.warning(f"SL cancel failed | {symbol} [{strategy}] id={sl_order_id} — proceeding with TP exit")
-
-
 # ── EXIT signal handling ───────────────────────────────────────────────────────
 
 async def notify_exit_signal_received(symbol: str, strategy: str) -> None:
     logger.info(f"EXIT signal | {symbol} [{strategy}]")
-
-
-async def notify_exit_placed(symbol: str, order_id: str, strategy: str = "") -> None:
-    logger.info(f"EXIT order placed | {symbol} [{strategy}] | id={order_id}")
 
 
 async def notify_partial_exit(
@@ -265,11 +241,20 @@ async def notify_position_closed(
     r_multiple: float | None = None,
     entry_price: float | None = None,
     hold_minutes: int = 0,
+    exit_types: list[str] | None = None,
+    day_context: str = "",
 ) -> None:
-    if pnl >= 0:
-        icon = "✅ TP WIN"
-    else:
+    # Choose label based on last exit type (more accurate than PnL sign alone).
+    # exit_types is cumulative, e.g. ["TP1", "SL"] means TP1 booked then SL hit on remainder.
+    last_exit = (exit_types or [])[-1].upper() if exit_types else ""
+    if last_exit == "SL":
         icon = "❌ SL HIT"
+    elif last_exit in ("TIME", "EXIT"):
+        icon = "⏰ TIME EXIT" if last_exit == "TIME" else "🚪 MANUAL EXIT"
+    elif last_exit.startswith("TP"):
+        icon = f"✅ {last_exit} HIT"
+    else:
+        icon = "✅ TP WIN" if pnl >= 0 else "❌ SL HIT"
 
     dir_str = f" {_dir(direction)}" if direction else ""
     dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
@@ -283,9 +268,10 @@ async def notify_position_closed(
     else:
         traj = "—"
 
+    ctx_str = f"\n{day_context}" if day_context else ""
     await notify(
         f"{icon} | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
-        f"{traj} | {_pnl(pnl)}{_r(r_multiple)}"
+        f"{traj} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
     )
 
 
@@ -374,6 +360,7 @@ async def notify_time_exit(
     r_multiple: float | None = None,
     entry_price: float | None = None,
     hold_minutes: int = 0,
+    day_context: str = "",
 ) -> None:
     dir_str = f" {_dir(direction)}" if direction else ""
     dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
@@ -384,8 +371,9 @@ async def notify_time_exit(
     if pnl is not None:
         pnl_str = f"\n{traj} | {_pnl(pnl)}{_r(r_multiple)}"
 
+    ctx_str = f"\n{day_context}" if day_context else ""
     await notify(
-        f"⏰ TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}"
+        f"⏰ TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}"
     )
 
 

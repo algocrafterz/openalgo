@@ -1304,7 +1304,7 @@ class TestBracketOrderFlow:
 
     @pytest.mark.asyncio
     async def test_tracker_receives_bracket_order_ids(self):
-        """TrackedPosition must be registered with sl_order_id and tp_order_id."""
+        """TrackedPosition must be registered with sl_order_id."""
         mock_signal = _mock_signal()
         valid_result = ValidationResult(status=ValidationStatus.VALID)
         mock_order = MagicMock()

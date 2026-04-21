@@ -329,7 +329,6 @@ class TestOCOCancellation:
             "tp": 2540.0,
             "entry_order_id": "ENTRY001",
             "sl_order_id": "SL001",
-            "tp_order_id": "TP001",
             "entry_time": _AGED,
         }
         defaults.update(overrides)
@@ -343,7 +342,6 @@ class TestOCOCancellation:
         tracker.register(pos)
         key = "RELIANCE:ORB"
         assert tracker._positions[key].sl_order_id == "SL001"
-        assert tracker._positions[key].tp_order_id == "TP001"
 
     @pytest.mark.asyncio
     async def test_sl_triggered_position_closed(self):
