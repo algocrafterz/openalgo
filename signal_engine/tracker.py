@@ -501,6 +501,8 @@ class PositionTracker:
                         pos.symbol, be_price, ltp, progress,
                         strategy=pos.strategy, direction=pos.direction.value,
                         age_minutes=int(age.total_seconds() / 60),
+                        entry_price=base_entry,
+                        original_sl=pos.sl if pos.sl != be_price else None,
                     )
                 else:
                     logger.error(f"No-progress: break-even SL failed for {pos.symbol}: {sl_result.message}")

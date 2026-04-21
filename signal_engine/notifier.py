@@ -106,13 +106,13 @@ async def notify_entry_filled(
     sl: float | None = None,
     tp: float | None = None,
 ) -> None:
-    """Position is live: entry filled and SL is active. Definitive confirmation."""
+    """Position is live: SL is active. Sent even when fill price is still pending."""
     if fill_price > 0:
         diff = fill_price - signal_price
         diff_str = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
         fill_line = f"Fill: {fill_price:.2f} (slip {diff_str}) × {qty} qty"
     else:
-        fill_line = f"Fill: pending — signal {signal_price:.2f} × {qty} qty"
+        fill_line = f"Waiting for fill confirmation — signal {signal_price:.2f} × {qty} qty"
 
     sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
     tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
@@ -130,7 +130,7 @@ async def notify_entry_filled(
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
     await notify(
         f"🚫 ENTRY REJECTED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
-        f"Reason: {reason} | Slot free"
+        f"No trade taken. Reason: {reason}"
     )
 
 
@@ -239,7 +239,7 @@ async def notify_partial_exit(
     await notify(
         f"🎯 {tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
         f"{traj} → {pnl_str}\n"
-        f"Runner: {remaining_qty} qty{sl_str}{next_str}"
+        f"Remaining: {remaining_qty} qty{sl_str}{next_str}"
     )
 
 
@@ -297,12 +297,26 @@ async def notify_be_stop_applied(
     strategy: str = "",
     direction: str | None = None,
     age_minutes: int = 0,
+    entry_price: float | None = None,
+    original_sl: float | None = None,
 ) -> None:
     dir_str = f" {_dir(direction)}" if direction else ""
+
+    # Show where price is relative to entry in plain language
+    if entry_price is not None:
+        diff = ltp - entry_price
+        diff_pct = diff / entry_price * 100
+        sign = "+" if diff >= 0 else ""
+        price_context = f"LTP {ltp:.2f} ({sign}{diff:.2f}, {sign}{diff_pct:.1f}% from entry {entry_price:.2f})"
+    else:
+        price_context = f"LTP {ltp:.2f} — {progress:.0%} toward TP"
+
+    old_sl_str = f" from {original_sl:.2f}" if original_sl is not None else ""
+
     await notify(
-        f"⚠️ STOP → BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)}\n"
-        f"Stuck {age_minutes}min: LTP {ltp:.2f} only {progress:.0%} toward TP → SL now {be_price:.2f}\n"
-        f"Risk eliminated. Next: TP hit or flat exit at {be_price:.2f}"
+        f"⚠️ SL MOVED TO BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)}\n"
+        f"Held {age_minutes}min without progress. {price_context}\n"
+        f"SL moved{old_sl_str} to {be_price:.2f} (entry). No loss possible now."
     )
 
 
@@ -316,11 +330,14 @@ async def notify_no_progress_exit(
     age_minutes: int = 0,
 ) -> None:
     dir_str = f" {_dir(direction)}" if direction else ""
-    pnl_sign = "+" if ltp >= entry else ""
+    diff = ltp - entry
+    diff_pct = diff / entry * 100 if entry > 0 else 0
+    sign = "+" if diff >= 0 else ""
+    status = "in profit" if diff >= 0 else "at a loss"
     await notify(
-        f"🚪 NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)}\n"
-        f"Stuck {age_minutes}min: LTP {ltp:.2f} only {progress:.0%} toward TP\n"
-        f"Time exit near — closing at market. Entry {entry:.2f} → {pnl_sign}{ltp - entry:.2f}"
+        f"🚪 CLOSING — NO PROGRESS | {symbol}{dir_str}{_tag(strategy)}\n"
+        f"Held {age_minutes}min, {status}: LTP {ltp:.2f} ({sign}{diff:.2f}, {sign}{diff_pct:.1f}% from entry {entry:.2f})\n"
+        f"Time exit approaching — closing at market now."
     )
 
 
@@ -331,11 +348,21 @@ async def notify_orphaned_position(
     order_id: str,
     reason: str,
 ) -> None:
-    """Order was placed but never filled — slot released without recording a trade."""
+    """Entry order was rejected or never confirmed — no position was taken."""
+    # Map technical reason strings to plain language
+    if "rejected" in reason.lower() or "cancel" in reason.lower():
+        plain_reason = "Entry order was rejected by the broker."
+    elif "unresolved" in reason.lower() or "status" in reason.lower():
+        plain_reason = "Entry order status could not be confirmed — assumed not filled."
+    elif "zero pnl" in reason.lower() or "unconfirmed fill" in reason.lower():
+        plain_reason = "No fill detected — order likely did not execute."
+    else:
+        plain_reason = reason
+
     await notify(
         f"⚠️ ORDER NOT FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
-        f"Slot released. Reason: {reason}\n"
-        f"Order ID: {order_id} — verify in broker terminal"
+        f"No position taken. {plain_reason}\n"
+        f"Check broker terminal: order {order_id}"
     )
 
 

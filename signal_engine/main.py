@@ -331,9 +331,41 @@ async def _handle_exit_locked(signal) -> None:
                 pos.exit_pending = False
             return
 
-    # 4. Resolve exit quantity (partial or full based on tp_level config)
-    exit_qty, is_full_exit = _resolve_exit_qty(signal, pos)
+    # 4. SL HIT reconcile path — broker SL-M already closed this position.
+    # Do NOT place another SELL (would create naked short). Just clean up tracker.
     tp_level = getattr(signal, "tp_level", None)
+    if tp_level == "SL":
+        logger.info(f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker")
+        if pos.sl_order_id:
+            await cancel_order(pos.sl_order_id, pos.strategy)
+        async with tracker._pnl_lock:
+            current_realised = await fetch_realised_pnl()
+            pnl_delta = current_realised - tracker._last_realised_pnl
+            tracker._last_realised_pnl = current_realised
+        total_trade_pnl = pos.realized_pnl + pnl_delta
+        base_price = pos.fill_price or pos.entry_price
+        hold_min = int((datetime.now(_IST) - pos.entry_time).total_seconds() / 60) if hasattr(pos, 'entry_time') else 0
+        r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+        tracker.add_trade_record(TradeRecord(
+            symbol=pos.symbol, direction=pos.direction.value,
+            entry_price=base_price, exit_price=pos.sl,
+            original_qty=pos.original_quantity or pos.quantity,
+            total_pnl=total_trade_pnl, r_multiple=r, exit_types=["SL"],
+        ))
+        await notifier.notify_position_closed(
+            pos.symbol, total_trade_pnl, strategy=pos.strategy,
+            exit_price=pos.sl, direction=pos.direction.value,
+            r_multiple=r, entry_price=base_price, hold_minutes=hold_min,
+        )
+        tracker.unregister(signal.symbol, signal.strategy)
+        risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+        tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
+        if not tracker._positions:
+            await tracker.send_day_summary()
+        return
+
+    # 5. Resolve exit quantity (partial or full based on tp_level config)
+    exit_qty, is_full_exit = _resolve_exit_qty(signal, pos)
     logger.info(
         f"EXIT: {pos.symbol} tp_level={tp_level} exit_qty={exit_qty}/{pos.quantity} "
         f"full_exit={is_full_exit}"
@@ -388,6 +420,9 @@ async def _handle_exit_locked(signal) -> None:
         base_price = pos.fill_price or pos.entry_price
         hold_min = int((datetime.now(_IST) - pos.entry_time).total_seconds() / 60) if hasattr(pos, 'entry_time') else 0
 
+        # Use the signal's TP price as approximate exit price — MARKET order fills at ~TP.
+        approx_exit_price = signal.tp if signal.tp and signal.tp > 0 else None
+
         if is_full_exit:
             # Full exit: unregister position, free risk slot, notify with total trade P&L + R
             r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
@@ -396,7 +431,7 @@ async def _handle_exit_locked(signal) -> None:
                 symbol=pos.symbol,
                 direction=pos.direction.value,
                 entry_price=base_price,
-                exit_price=None,  # market exit — exact fill fetched separately if needed
+                exit_price=approx_exit_price,
                 original_qty=pos.original_quantity or pos.quantity,
                 total_pnl=total_trade_pnl,
                 r_multiple=r,
@@ -404,7 +439,7 @@ async def _handle_exit_locked(signal) -> None:
             ))
             await notifier.notify_position_closed(
                 pos.symbol, total_trade_pnl, strategy=pos.strategy,
-                direction=pos.direction.value, r_multiple=r,
+                exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
                 entry_price=base_price, hold_minutes=hold_min,
             )
             tracker.unregister(signal.symbol, signal.strategy)
@@ -425,7 +460,7 @@ async def _handle_exit_locked(signal) -> None:
                     symbol=pos.symbol,
                     direction=pos.direction.value,
                     entry_price=base_price,
-                    exit_price=None,
+                    exit_price=approx_exit_price,
                     original_qty=pos.original_quantity or pos.quantity,
                     total_pnl=total_trade_pnl,
                     r_multiple=r,
@@ -435,7 +470,7 @@ async def _handle_exit_locked(signal) -> None:
                 risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
                 await notifier.notify_position_closed(
                     pos.symbol, total_trade_pnl, strategy=pos.strategy,
-                    direction=pos.direction.value, r_multiple=r,
+                    exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
                     entry_price=base_price, hold_minutes=hold_min,
                 )
                 tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
@@ -715,12 +750,14 @@ async def _handle_entry(signal) -> None:
                 f"Entry fill: {signal.symbol} avg_price={entry_fill_price:.2f} "
                 f"(signal={signal.entry:.2f}, slippage={slippage:+.2f})"
             )
-            await notifier.notify_entry_filled(
-                signal.symbol, signal.direction.value, entry_fill_price,
-                quantity, signal.entry, strategy=signal.strategy, sl=signal.sl, tp=signal.tp,
-            )
         else:
             logger.warning(f"Entry fill price unavailable for {signal.symbol} id={trade_result.order_id}")
+        # Always notify LIVE so trader knows position is active and SL is protecting it.
+        # fill_price=0 triggers "fill pending" wording in the message.
+        await notifier.notify_entry_filled(
+            signal.symbol, signal.direction.value, entry_fill_price or 0.0,
+            quantity, signal.entry, strategy=signal.strategy, sl=signal.sl, tp=signal.tp,
+        )
 
         # 11. Register in position tracker for P&L monitoring and SL close-detection
         tracker.register(TrackedPosition(
