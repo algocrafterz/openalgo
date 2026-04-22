@@ -124,25 +124,8 @@ async def notify_entry_filled(
     sl: float | None = None,
     tp: float | None = None,
 ) -> None:
-    """Position is live: SL is active. Sent even when fill price is still pending."""
-    if fill_price > 0:
-        diff = fill_price - signal_price
-        diff_str = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
-        fill_line = f"Fill: {fill_price:.2f} (slip {diff_str}) × {qty} qty"
-    else:
-        fill_line = f"Waiting for fill confirmation — signal {signal_price:.2f} × {qty} qty"
-
-    sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
-    tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
-    risk_str = ""
-    if sl is not None and fill_price > 0:
-        risk_inr = qty * abs(fill_price - sl)
-        risk_str = f" | Risk: ₹{risk_inr:,.0f}"
-
-    await notify(
-        f"💰 LIVE | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
-        f"{fill_line}{sl_str}{tp_str}{risk_str}"
-    )
+    slip = fill_price - signal_price if fill_price > 0 else 0.0
+    logger.info(f"LIVE | {symbol} [{strategy}] fill={fill_price:.2f} slip={slip:+.2f} qty={qty} sl={sl}")
 
 
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
@@ -191,31 +174,9 @@ async def notify_partial_exit(
     exit_price: float | None = None,
     hold_minutes: int = 0,
 ) -> None:
-    """Partial TP exit — position remains open with reduced quantity."""
-    dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
-
-    # Price trajectory: entry → exit if both known
-    if entry_price is not None and exit_price is not None:
-        traj = f"{entry_price:.2f} → {exit_price:.2f} × {exit_qty}"
-    elif entry_price is not None:
-        traj = f"{entry_price:.2f} → — × {exit_qty}"
-    else:
-        traj = f"{exit_qty} qty"
-
-    pnl_str = f"{_pnl(pnl)}{_r(r_multiple)}"
-
-    sl_str = f" | SL → {new_sl:.2f}" if new_sl and new_sl > 0 else ""
-    next_str = (
-        f" | Next {next_tp_label}: {next_tp_price:.2f}"
-        if next_tp_label and next_tp_price
-        else ""
-    )
-
-    dir_str = f" {_dir(direction)}" if direction else ""
-    await notify(
-        f"🎯 {tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
-        f"{traj} → {pnl_str}\n"
-        f"Remaining: {remaining_qty} qty{sl_str}{next_str}"
+    logger.info(
+        f"{tp_level} HIT | {symbol} [{strategy}] exit={exit_qty} remaining={remaining_qty} "
+        f"pnl={_pnl(pnl)}{_r(r_multiple)} new_sl={new_sl}"
     )
 
 
@@ -244,34 +205,10 @@ async def notify_position_closed(
     exit_types: list[str] | None = None,
     day_context: str = "",
 ) -> None:
-    # Choose label based on last exit type (more accurate than PnL sign alone).
-    # exit_types is cumulative, e.g. ["TP1", "SL"] means TP1 booked then SL hit on remainder.
     last_exit = (exit_types or [])[-1].upper() if exit_types else ""
-    if last_exit == "SL":
-        icon = "❌ SL HIT"
-    elif last_exit in ("TIME", "EXIT"):
-        icon = "⏰ TIME EXIT" if last_exit == "TIME" else "🚪 MANUAL EXIT"
-    elif last_exit.startswith("TP"):
-        icon = f"✅ {last_exit} HIT"
-    else:
-        icon = "✅ TP WIN" if pnl >= 0 else "❌ SL HIT"
-
-    dir_str = f" {_dir(direction)}" if direction else ""
-    dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
-
-    if entry_price is not None and exit_price is not None:
-        traj = f"{entry_price:.2f} → {exit_price:.2f}"
-    elif entry_price is not None:
-        traj = f"{entry_price:.2f} → —"
-    elif exit_price is not None:
-        traj = f"— → {exit_price:.2f}"
-    else:
-        traj = "—"
-
-    ctx_str = f"\n{day_context}" if day_context else ""
-    await notify(
-        f"{icon} | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
-        f"{traj} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
+    logger.info(
+        f"CLOSED | {symbol} [{strategy}] {last_exit} entry={entry_price} exit={exit_price} "
+        f"pnl={_pnl(pnl)}{_r(r_multiple)} held={hold_minutes}min"
     )
 
 
@@ -286,23 +223,9 @@ async def notify_be_stop_applied(
     entry_price: float | None = None,
     original_sl: float | None = None,
 ) -> None:
-    dir_str = f" {_dir(direction)}" if direction else ""
-
-    # Show where price is relative to entry in plain language
-    if entry_price is not None:
-        diff = ltp - entry_price
-        diff_pct = diff / entry_price * 100
-        sign = "+" if diff >= 0 else ""
-        price_context = f"LTP {ltp:.2f} ({sign}{diff:.2f}, {sign}{diff_pct:.1f}% from entry {entry_price:.2f})"
-    else:
-        price_context = f"LTP {ltp:.2f} — {progress:.0%} toward TP"
-
-    old_sl_str = f" from {original_sl:.2f}" if original_sl is not None else ""
-
-    await notify(
-        f"⚠️ SL MOVED TO BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)}\n"
-        f"Held {age_minutes}min without progress. {price_context}\n"
-        f"SL moved{old_sl_str} to {be_price:.2f} (entry). No loss possible now."
+    logger.info(
+        f"BE stop | {symbol} [{strategy}] sl_moved={original_sl}->{be_price:.2f} ltp={ltp:.2f} "
+        f"progress={progress:.0%} age={age_minutes}min"
     )
 
 
@@ -315,15 +238,10 @@ async def notify_no_progress_exit(
     direction: str | None = None,
     age_minutes: int = 0,
 ) -> None:
-    dir_str = f" {_dir(direction)}" if direction else ""
     diff = ltp - entry
-    diff_pct = diff / entry * 100 if entry > 0 else 0
-    sign = "+" if diff >= 0 else ""
-    status = "in profit" if diff >= 0 else "at a loss"
-    await notify(
-        f"🚪 CLOSING — NO PROGRESS | {symbol}{dir_str}{_tag(strategy)}\n"
-        f"Held {age_minutes}min, {status}: LTP {ltp:.2f} ({sign}{diff:.2f}, {sign}{diff_pct:.1f}% from entry {entry:.2f})\n"
-        f"Time exit approaching — closing at market now."
+    logger.info(
+        f"No-progress exit | {symbol} [{strategy}] ltp={ltp:.2f} entry={entry:.2f} "
+        f"diff={diff:+.2f} progress={progress:.0%} age={age_minutes}min"
     )
 
 

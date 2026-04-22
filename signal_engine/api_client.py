@@ -169,7 +169,8 @@ async def fetch_order_status(order_id: str, strategy: str) -> str:
             if data.get("status") != "success":
                 logger.warning(f"Order status {order_id} returned non-success: {data}")
                 return ""
-            return str(data.get("data", {}).get("orderstatus", ""))
+            d = data.get("data", {})
+            return str(d.get("order_status") or d.get("orderstatus", ""))
     except Exception as e:
         logger.error(f"Failed to fetch order status for {order_id}: {e}")
         return ""
@@ -200,7 +201,7 @@ async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int
                 if data.get("status") != "success":
                     return None
                 order_data = data.get("data", {})
-                status = str(order_data.get("orderstatus", "")).lower()
+                status = str(order_data.get("order_status") or order_data.get("orderstatus", "")).lower()
                 if status == "complete":
                     # Try common broker field names for average fill price
                     raw = (

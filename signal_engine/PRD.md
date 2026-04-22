@@ -60,6 +60,30 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Recent Changes (2026-04-22)
+
+### Bug Fix
+
+**`orderstatus` field name mismatch (api_client.py)**  
+`fetch_order_fill_price` and `fetch_order_status` looked for `"orderstatus"` but the OpenAlgo orderstatus API returns `"order_status"`. This caused entry fill price to always be `None`, which set `pos.fill_price = 0.0` for every trade. The cascading effect:
+1. Guard 2 (orphan check) fired on every position close after 60 min — treating legitimate no-progress exits as orphaned rejections.
+2. P&L was not tracked for those positions (slot released as rejection), so the untracked broker P&L bled into the next ORB position's `pnl_delta` via the `m2mrealized` delta.
+
+Fix: both functions now check `order_status` first with `orderstatus` as fallback.
+
+### Notification Reduction
+
+Granular per-trade Telegram messages removed. Five functions converted to log-only (signal_engine.log only, no Telegram):
+- `notify_entry_filled` — "LIVE | fill confirmed, SL active"
+- `notify_partial_exit` — TP1/TP1.5 partial exit with runner qty
+- `notify_position_closed` — full close (TP win / SL hit)
+- `notify_be_stop_applied` — SL moved to break-even
+- `notify_no_progress_exit` — no-progress market exit fired
+
+Signal-engine channel now receives only: entry placement, rejections, SL failures, orphaned orders, time exits, risk halts, day summary, engine lifecycle.
+
+---
+
 ## Recent Changes (2026-04-17)
 
 ### New Features
@@ -86,14 +110,13 @@ Minimum age before a position can be detected as closed (default: 30s). Protects
 
 ### Notification Changes
 
-**Redesigned Telegram Notifications** — trader-friendly format with:
-- Entry lifecycle: `📤 ENTRY SENT`, `💰 LIVE`, `🚫 ENTRY REJECTED`
-- Exit lifecycle: `🎯 TP1 HIT` (partial), `✅ TP WIN` (full), `❌ SL HIT`, `⏰ TIME EXIT`
-- Risk events: `⚠️ STOP → BREAK-EVEN`, `⚠️ ORDER NOT FILLED`, `🛑 TRADING HALTED`
-- Daily summary: trades, win rate, net P&L, capital, per-trade table with exit types
-- All messages include IST timestamp, symbol with direction arrow (▲/▼), R-multiple, hold duration
-- P&L shows both absolute (₹) and risk-adjusted (R) values
-- Day summary includes avg R, capital trajectory, and orphan-flag warnings
+**Redesigned Telegram Notifications** — trader-friendly format added:
+- Entry: `📤 ENTRY SENT`, `🚫 ENTRY REJECTED`, `🚨 SL NOT PLACED`, `⚠️ ORDER NOT FILLED`
+- Exit: `⏰ TIME EXIT`, `❌ EXIT FAILED`
+- Risk/system: `🛑 TRADING HALTED`, `🟢/🔴 Engine started/stopped`
+- Daily summary: trades, win rate, net P&L, capital, per-trade table
+
+Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`, `⚠️ STOP → BREAK-EVEN` were removed from Telegram (converted to log-only). See 2026-04-22 changes.
 
 ---
 
@@ -126,10 +149,12 @@ Minimum age before a position can be detected as closed (default: 30s). Protects
 | `record_rejection()` | `risk.py` | Release position slot for phantom/unfilled orders without counting trade |
 | `is_t2t_symbol()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
 | `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
-| `notify_be_stop_applied()` | `notifier.py` | Telegram alert for break-even SL move (no progress) |
-| `notify_partial_exit()` | `notifier.py` | Trader-friendly partial TP exit notification with hold duration, next TP, runner SL |
-| `notify_position_closed()` | `notifier.py` | Unified position close notification; icon driven by `exit_types` list (❌ SL / ⏰ TIME / 🚪 EXIT / ✅ TPn); appends running day context line |
-| `notify_day_summary()` | `notifier.py` | EOD summary with trades, win rate, per-trade table, capital trajectory |
+| `notify_be_stop_applied()` | `notifier.py` | Log-only: SL moved to break-even (no Telegram) |
+| `notify_partial_exit()` | `notifier.py` | Log-only: partial TP exit (no Telegram) |
+| `notify_position_closed()` | `notifier.py` | Log-only: full position close (no Telegram) |
+| `notify_no_progress_exit()` | `notifier.py` | Log-only: no-progress market exit fired (no Telegram) |
+| `notify_entry_filled()` | `notifier.py` | Log-only: entry fill confirmed (no Telegram) |
+| `notify_day_summary()` | `notifier.py` | EOD Telegram summary: trades, win rate, per-trade table, capital trajectory |
 | `_poll_positions()` | `tracker.py` | Detects closed positions with min_position_age_seconds guard |
 | `_check_no_progress()` | `tracker.py` | Detects stuck trades and moves SL to break-even |
 
@@ -315,31 +340,32 @@ Flattrade blocks raw MARKET and SL-MKT order types via API.
 
 All notifications sent via `notifier.py` to `telegram.notify_channel`. Format is trader-friendly with timestamps, direction arrows (▲/▼), hold duration, and risk-adjusted metrics.
 
-### Entry lifecycle
+### Entry
 
 | Message | Trigger | Example |
 |---------|---------|---------|
-| `📤 ENTRY SENT` | Order placed to broker | `📤 ENTRY SENT \| SBIN ▲ \| ORB \| 10:15 IST\nSignal: 800.50 \| SL: 793.00 \| TP: 815.00 \| R:R 1:1.9` |
-| `💰 LIVE` | Entry filled, SL active | `💰 LIVE \| SBIN ▲ \| ORB \| 10:16 IST\nFill: 800.75 (slip +0.25) × 25 qty \| SL: 793.00 \| TP: 815.00 \| Risk: ₹193` |
-| `🚫 ENTRY REJECTED` | Order rejected or risk limit hit | `🚫 ENTRY REJECTED \| SBIN \| ORB \| 10:15 IST\nReason: max_open_positions exceeded \| Slot free` |
+| `📤 ENTRY SENT` | Order placed to broker | `📤 ENTRY SENT \| SBIN LONG ▲ \| ORB \| 10:15 IST`<br>`Signal: 800.50 \| SL: 793.00 \| TP: 815.00 \| R:R 1:1.9` |
+| `🚫 ENTRY REJECTED` | Risk check failed or order rejected | `🚫 ENTRY REJECTED \| SBIN \| ORB \| 10:15 IST`<br>`No trade taken. Reason: max_open_positions exceeded` |
+| `🚨 SL NOT PLACED` | Entry filled but SL order failed | `🚨 SL NOT PLACED \| SBIN \| ORB \| 10:15 IST`<br>`Position UNPROTECTED. Reason: broker rejected`<br>`Place SL manually or close position.` |
+| `⚠️ ORDER NOT FILLED` | Entry order rejected or unconfirmed after timeout | `⚠️ ORDER NOT FILLED \| SBIN LONG ▲ \| ORB \| 10:15 IST`<br>`No position taken. Entry order was rejected by the broker.`<br>`Check broker terminal: order 260422XXXXXX` |
 
-### Exit lifecycle
+### Exit
 
 | Message | Trigger | Example |
 |---------|---------|---------|
-| `🎯 TP1 HIT` | Partial exit (qty remains) | `🎯 TP1 HIT \| SBIN ▲ \| ORB \| held 2h 15m\n800.50 → 814.95 × 12 → +₹170 (+0.8R)\nRunner: 13 qty \| SL → 800.50 \| Next TP1.5: 829.00` |
-| `✅ TP WIN` | Position closed, P&L ≥ 0 | `✅ TP WIN \| SBIN ▲ \| ORB \| held 4h 30m\n800.50 → 829.20 \| +₹722 (+1.8R)` |
-| `❌ SL HIT` | Position closed, P&L < 0 | `❌ SL HIT \| SBIN ▼ \| ORB \| held 1h 22m\n800.50 → 793.00 \| -₹187 (-1.0R)` |
-| `⏰ TIME EXIT` | Forced close at `time_exit.hour:minute` | `⏰ TIME EXIT \| SBIN ▲ \| ORB \| held 6h 45m\n800.50 → — \| +₹243 (+0.6R)` |
-| `⚠️ STOP → BREAK-EVEN` | SL moved due to no progress (no_progress) | `⚠️ STOP → BREAK-EVEN \| SBIN ▲ \| ORB\nStuck 90min: LTP 801.10 only 2% toward TP → SL now 800.50\nRisk eliminated. Next: TP hit or flat exit at 800.50` |
+| `⏰ TIME EXIT` | Forced close at `time_exit.hour:minute` | `⏰ TIME EXIT \| SBIN LONG ▲ \| ORB \| held 4h 45m`<br>`800.50 → — \| +₹243 (+0.6R)` |
+| `❌ EXIT FAILED` | Exit order placement failed | `❌ EXIT FAILED \| SBIN \| ORB \| 10:45 IST`<br>`Reason: API timeout` |
 
-**P&L and R-multiple semantics:**
-- `TP1 HIT R`: partial leg only — `pnl_delta / (exit_qty × abs(entry - sl))`
-- `TP WIN / SL HIT R`: total trade — `(sum of all partial P&L + final leg) / (original_qty × abs(entry - sl))`
-- Multi-leg trades (e.g. TP1 50% + runner SL 50%) show the correct net R on the closing notification
-- Hold duration shown as `held Xh Ym` or `held Xm` for shorter holds
+### Risk & System
 
-**Noise suppression:** TP detection internals (TP detected, TP exit placed, EXIT signal received) are log-only — not sent to Telegram. SL placement confirmation is embedded in the LIVE message. signal_engine.log file sink defaults to INFO; set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` to enable poll-level debug traces.
+| Message | Trigger |
+|---------|---------|
+| `🛑 TRADING HALTED` | Daily/weekly/monthly loss limit exceeded |
+| `🟢 Engine started` | Startup complete, capital initialised |
+| `🔴 Engine stopped` | Engine shutdown |
+| `🟢 READY` / `🔴 STARTUP FAILED` | Pre-market health check result |
+
+**Log-only (not sent to Telegram):** fill confirmation, partial TP exits, position close (TP win / SL hit), break-even SL move, no-progress exit. All appear in signal_engine.log at INFO level. Set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` for poll-level traces.
 
 ### Risk and System Events
 
@@ -354,19 +380,14 @@ All notifications sent via `notifier.py` to `telegram.notify_channel`. Format is
 ### EOD Day Summary
 
 ```
-📊 DAY SUMMARY | 17-Apr-2026
-Trades: 8 | W: 6  L: 2 | Win Rate: 75%
-Net: +₹1,240 (+3.5%) | Avg R: +0.8R
-Capital: ₹35,000 → ₹36,240
-────────────────────────────────────
-▲ SBIN         800.50→815.20   +₹370    (+1.0R)  TP1+TP1.5
-▲ INFY         1950.00→1965.50 +₹248    (+0.8R)  TP1
-▼ WIPRO        620.50→615.00   -₹137    (-1.0R)  SL
-▲ HDFC         2800.00→2814.75 +₹472    (+0.9R)  TP1+TP1.5
-▼ RELIANCE     2300.00→2295.00 -₹150    (-1.0R)  SL
-▲ BAJAJFINSV   15800→16100     +₹750    (+1.2R)  TP1
-▲ MARUTI       9950→10050      +₹301    (+1.1R)  TP1
-▼ TECHM        4150→4100       +₹127    (+0.6R)  TIME_EXIT  ⚠️
+📊 DAY SUMMARY | 22-Apr-2026
+Trades: 3 | W: 1  L: 0  T: 2 | Win Rate: 100%
+Net: +₹102 (+0.7%) | Avg R: +0.8R
+Capital: ₹14,465 → ₹14,567
+────────────────────────────────────────
+▲ EXIDEIND     339.80→347.90   +₹102    (+0.8R)  TP1+TP1.5
+▲ NATIONALUM   432.85→431.00   -₹17     (-0.1R)  TIME
+▲ JSWENERGY    554.35→554.50   +₹1      (+0.0R)  TIME
 ```
 
 **Summary components:**
