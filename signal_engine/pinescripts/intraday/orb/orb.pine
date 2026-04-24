@@ -695,7 +695,7 @@ getTimeIST() =>
     str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
 
 // Build Entry Alert Message (LONG/SHORT) - Telegram JSON format
-buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float riskAmt, float rewardAmt) =>
+buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float tp1_5Price, float tp2Price, float tp3Price, float riskAmt, float rewardAmt) =>
     string direction = isLong ? "LONG" : "SHORT"
     string emoji = isLong ? "🟢" : "🔴"
     float riskVal = math.abs(entryPrice - slPrice)
@@ -707,6 +707,10 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
     msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Target: " + str.tostring(tpPrice, "#.##") + "\\n"
     msg += "SL: " + str.tostring(slPrice, "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += "TP1_5: " + str.tostring(tp1_5Price, "#.##") + "\\n"
+    msg += "TP2: " + str.tostring(tp2Price, "#.##") + "\\n"
+    msg += "TP3: " + str.tostring(tp3Price, "#.##") + "\\n"
     msg += "------------------------\\n"
     msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
     msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + "\\n"
@@ -2064,7 +2068,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry
             // Send Entry Alert - ALWAYS use TP1 for signal engine execution
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
             float tpForAlert = tp1
-            alert(buildEntryAlert(true, entry, sl, tpForAlert, maxLossCalc, math.abs(tpForAlert - entry) * shares), alert.freq_once_per_bar)
+            alert(buildEntryAlert(true, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(tpForAlert - entry) * shares), alert.freq_once_per_bar)
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2165,7 +2169,7 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             // Send Entry Alert - ALWAYS use TP1 for signal engine execution
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
             float tpForAlert = tp1
-            alert(buildEntryAlert(false, entry, sl, tpForAlert, maxLossCalc, math.abs(entry - tpForAlert) * shares), alert.freq_once_per_bar)
+            alert(buildEntryAlert(false, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(entry - tpForAlert) * shares), alert.freq_once_per_bar)
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -3516,14 +3520,14 @@ if showDashboard and enableHTF
                     table.cell(dashTable, 1, row, str.format("{0}{1} ({2}%)", currencySymbol, str.tostring(displayRiskAmount / (symbolCurrency != accountCurrency ? exchangeRate : 1), "#"), str.tostring(riskPctOfAcct, "#.#")), text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
                     row += 1
 
-                    // Reward amount (based on highest enabled TP)
-                    float rewardTP = showTP3 ? tp3 : showTP2 ? tp2 : showTP1_5 ? tp1_5 : showTP1 ? tp1 : na
+                    // Reward amount (based on TP1 = execution target, matches telegram)
+                    float rewardTP = showTP1 ? tp1 : na
                     if not na(rewardTP) and not na(entry) and displayShares > 0
                         float rewardPerShare = math.abs(rewardTP - entry)
                         float rewardAmount = displayShares * rewardPerShare
                         float rewardInAcctCurr = rewardAmount / (symbolCurrency != accountCurrency ? exchangeRate : 1)
                         float rewardPctOfAcct = (rewardAmount / accountSize) * 100
-                        string tpLabel = showTP3 ? "TP3" : showTP2 ? "TP2" : showTP1_5 ? "TP1.5" : "TP1"
+                        string tpLabel = "TP1"
                         string rewardTooltip = "Potential Reward in " + accountCurrency + "\n\nProfit if highest target (" + tpLabel + ") is hit.\n\nCALCULATED BY:\nShares x Distance to " + tpLabel + "\n\nThis is your POTENTIAL GAIN at " + tpLabel + "."
                         table.cell(dashTable, 0, row, "Reward:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=rewardTooltip)
                         table.cell(dashTable, 1, row, str.format("{0}{1} ({2}%)", currencySymbol, str.tostring(rewardInAcctCurr, "#"), str.tostring(rewardPctOfAcct, "#.#")), text_color=color.new(color.green, 0), text_size=txtSize, text_halign=text.align_right)
@@ -3599,8 +3603,8 @@ if showDashboard and enableHTF
                 // Determine if adaptive R:R extends to TP2
                 bool adaptiveExtended = enableAdaptiveRR and isTrendingMarket and showTP1
 
-                // Determine target: Hit TPs priority, then adaptive logic, then highest enabled
-                float rrTarget = orbTP3Hit and showTP3 ? tp3 : orbTP2Hit and (showTP2 or adaptiveExtended) ? tp2 : orbTP1_5Hit and showTP1_5 ? tp1_5 : orbTP1Hit and showTP1 ? tp1 : showTP3 ? tp3 : (showTP2 or adaptiveExtended) ? tp2 : showTP1_5 ? tp1_5 : showTP1 ? tp1 : tp1
+                // R:R always based on TP1 (execution target) to match telegram signal
+                float rrTarget = tp1
                 bool anyHit = orbTP3Hit or orbTP2Hit or orbTP1_5Hit or orbTP1Hit
 
                 rewardDist = math.abs(rrTarget - entry)
