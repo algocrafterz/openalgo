@@ -73,6 +73,18 @@ main.py (_handle_entry / _handle_exit)
 **Files**: `config.yaml`, `config.py`, `tracker.py`, `tests/test_config.py`, `pinescripts/intraday/orb/ORB-STRATEGY-ANALYSIS.md`.
 **Next phases**: Phase 2 (risk.py soft-blacklist sizing) and Phase 3 (PineScript NR filter input). Tracking via `pre-orb-improvements-2026-04-25` git tag.
 
+### ORB strategy improvements — Phase 2 (risk engine soft sizing)
+
+`RiskEngine` now accepts `soft_blacklist` (per-strategy frozenset map) and `soft_blacklist_multipliers` (per-strategy float map). New private method `_apply_soft_scaling(signal, qty)` is invoked between baseline mode dispatch and the `qty <= 0` skip. When the signal's symbol is in `soft_blacklist[signal.strategy]`, qty is multiplied by `soft_blacklist_multipliers.get(strategy, 0.5)` and the floor is taken. Result is logged as `[soft-sized] SYMBOL (STRATEGY): qty A -> B (multiplier xN)`.
+
+Risk-shape preservation: scaling is applied to final qty, NOT to `risk_per_share`. So actual rupee-risk is exactly `multiplier × baseline_risk` — half-size = half-risk. The 1% per-trade guarantee is unaffected for non-soft symbols.
+
+`main.py` passes `settings.soft_blacklist` and `settings.soft_blacklist_multipliers` into the global engine. CANBK, FEDERALBNK, WIPRO, BANKBARODA now trade at 50% qty for ORB instead of being fully blocked.
+
+**Tests**: 8 new cases in `TestSoftBlacklist` covering halve-default, non-soft passthrough, strategy scoping, multiplier=1 noop, multiplier=0 → skip, slippage interaction, missing-config noop, missing-multiplier-key fallback.
+
+**Files**: `risk.py`, `main.py`, `tests/test_risk.py`, `PRD.md`. Bandit clean.
+
 ---
 
 ## Recent Changes (2026-04-22)
@@ -332,7 +344,7 @@ On startup, `open_positions` is reconciled against actual broker positionbook.
 | Duplicate window | `risk.duplicate_window_seconds` | Dedup identical signals |
 | Stale signal | `risk.stale_signal_seconds` | Reject old signals |
 | Hard blacklist | `blacklist._global` / `blacklist.STRATEGY.hard` (or flat list) | Validator rejects with IGNORED status — no order placed |
-| Soft blacklist | `blacklist.STRATEGY.soft` + `soft_multiplier` | Risk engine scales qty by `soft_multiplier` (default 0.5). Use for regime-flipped stocks where full block discards optionality. Wired in Phase 2 (currently parsed only). |
+| Soft blacklist | `blacklist.STRATEGY.soft` + `soft_multiplier` | Risk engine scales qty by `soft_multiplier` (default 0.5) via `_apply_soft_scaling`. Use for regime-flipped stocks where full block discards optionality. Logged as `[soft-sized]` in signal_engine.log. |
 
 ---
 

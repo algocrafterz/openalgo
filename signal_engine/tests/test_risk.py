@@ -752,3 +752,96 @@ class TestMaxSlPctForSizing:
         expected_rps = 490.8 * 0.015 * 1.10
         expected = int(150 / expected_rps)
         assert qty == expected
+
+
+@pytest.mark.unit
+class TestSoftBlacklist:
+    """Soft-blacklist symbols get qty scaled by per-strategy multiplier.
+
+    Use case: Q1→Q2 grade-flip stocks (e.g. CANBK, FEDERALBNK) where full block
+    discards optionality. Risk engine reduces qty so the stock keeps
+    participating but with limited downside.
+    """
+
+    def test_soft_listed_symbol_qty_halved_default(self):
+        engine = _engine(
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={"ORB": 0.5},
+        )
+        # Baseline qty for this signal would be 66 (TestFixedFractionalSizing.test_basic_calculation)
+        sig = _make_signal(symbol="CANBK", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 33  # floor(66 * 0.5)
+
+    def test_non_soft_symbol_qty_unchanged(self):
+        engine = _engine(
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={"ORB": 0.5},
+        )
+        sig = _make_signal(symbol="RELIANCE", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 66  # unchanged
+
+    def test_soft_check_is_strategy_scoped(self):
+        # Symbol soft-listed for ORB only — RSI-TP-MR signal must not scale
+        engine = _engine(
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={"ORB": 0.5},
+        )
+        sig = _make_signal(strategy="RSI-TP-MR", symbol="CANBK", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 66  # not in RSI-TP-MR's soft set
+
+    def test_soft_multiplier_one_is_noop(self):
+        engine = _engine(
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={"ORB": 1.0},
+        )
+        sig = _make_signal(symbol="CANBK", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 66
+
+    def test_soft_multiplier_zero_returns_zero(self):
+        # 0 multiplier => qty rounds to 0 => skip via existing path
+        engine = _engine(
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={"ORB": 0.0},
+        )
+        sig = _make_signal(symbol="CANBK", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 0
+
+    def test_soft_scaling_after_slippage_buffer_preserves_risk_shape(self):
+        # The 1% risk guarantee is computed on risk_per_share (slippage applied there).
+        # Soft scaling reduces final share count but does NOT widen risk_per_share.
+        # So actual risk = soft_qty * risk_per_share = (full_qty * 0.5) * risk_per_share
+        # = exactly half of the configured 1% risk amount. Validate via comparison.
+        engine_full = _engine(slippage_factor=0.10)
+        engine_soft = _engine(
+            slippage_factor=0.10,
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={"ORB": 0.5},
+        )
+        sig_full = _make_signal(symbol="RELIANCE", entry=2500, sl=2485)
+        sig_soft = _make_signal(symbol="CANBK", entry=2500, sl=2485)
+        qty_full = engine_full.calculate_quantity(sig_full, capital=100_000)
+        qty_soft = engine_soft.calculate_quantity(sig_soft, capital=100_000)
+        assert qty_soft == qty_full // 2
+
+    def test_no_soft_blacklist_configured_is_noop(self):
+        # When soft_blacklist is None / empty, behavior is identical to baseline.
+        engine = _engine()
+        sig = _make_signal(symbol="CANBK", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 66
+
+    def test_default_multiplier_when_strategy_missing_from_multiplier_map(self):
+        # Defensive: if soft_blacklist has the symbol but multiplier map is missing
+        # the strategy key, fall back to 0.5.
+        engine = _engine(
+            soft_blacklist={"ORB": frozenset({"CANBK"})},
+            soft_blacklist_multipliers={},  # explicitly empty
+        )
+        sig = _make_signal(symbol="CANBK", entry=2500, sl=2485)
+        qty = engine.calculate_quantity(sig, capital=100_000)
+        assert qty == 33  # 66 * 0.5

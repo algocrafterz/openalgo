@@ -31,6 +31,10 @@ class RiskEngine:
     are persisted back.
     """
 
+    # Default soft-blacklist multiplier when a strategy has soft symbols configured
+    # but the per-strategy multiplier is missing. 0.5 = half size.
+    DEFAULT_SOFT_MULTIPLIER: float = 0.5
+
     def __init__(
         self,
         risk_per_trade: float,
@@ -52,6 +56,8 @@ class RiskEngine:
         max_positions_per_sector: int = 0,
         sectors: Dict[str, List[str]] = None,
         use_day_start_capital: bool = False,
+        soft_blacklist: Optional[Dict[str, frozenset]] = None,
+        soft_blacklist_multipliers: Optional[Dict[str, float]] = None,
     ):
         self.risk_per_trade = risk_per_trade
         self.use_day_start_capital = use_day_start_capital
@@ -71,6 +77,17 @@ class RiskEngine:
         self._default_product = default_product
         self.max_positions_per_symbol = max_positions_per_symbol
         self.max_positions_per_sector = max_positions_per_sector
+
+        # Soft blacklist — per-strategy qty scaling for regime-flipped stocks.
+        # Copy into immutable form so callers can't mutate engine state via the input.
+        raw_soft = soft_blacklist if soft_blacklist is not None else {}
+        self._soft_blacklist: Dict[str, frozenset] = {
+            k.upper(): frozenset(v) for k, v in raw_soft.items()
+        }
+        raw_mult = soft_blacklist_multipliers if soft_blacklist_multipliers is not None else {}
+        self._soft_blacklist_multipliers: Dict[str, float] = {
+            k.upper(): float(v) for k, v in raw_mult.items()
+        }
 
         # Build reverse lookup: symbol -> sector
         raw_sectors: Dict[str, List[str]] = sectors if sectors is not None else {}
@@ -231,8 +248,15 @@ class RiskEngine:
                 f"Must be 'fixed_fractional' or 'pct_of_capital'."
             )
 
+        # Soft-blacklist scaling — applied AFTER baseline sizing so risk_per_share
+        # is unchanged. Final qty is reduced by the per-strategy multiplier.
+        # Use case: regime-flipped stocks (e.g. CANBK Q1->Q2) where full block
+        # discards optionality. Half-size keeps participation, halves downside.
+        qty = self._apply_soft_scaling(signal, qty)
+
         # If the sizing formula produced qty <= 0, the stock is
         # too expensive for the allocated capital — do not force a trade.
+        # (Also catches soft_multiplier=0 which legitimately drops qty to 0.)
         if qty <= 0:
             logger.warning(
                 f"Skipping {signal.symbol}: stock price {signal.entry} exceeds "
@@ -241,6 +265,39 @@ class RiskEngine:
             return 0
 
         return qty
+
+    def _apply_soft_scaling(self, signal: Signal, qty: int) -> int:
+        """Scale qty by the per-strategy soft-blacklist multiplier if symbol matches.
+
+        Returns qty unchanged when:
+          - no soft blacklist configured
+          - signal's strategy has no soft set
+          - symbol not in the strategy's soft set
+
+        Multiplier resolution order:
+          1. soft_blacklist_multipliers[strategy] if present
+          2. DEFAULT_SOFT_MULTIPLIER (0.5)
+        """
+        if not self._soft_blacklist:
+            return qty
+
+        strategy_key = signal.strategy.upper()
+        soft_set = self._soft_blacklist.get(strategy_key)
+        if not soft_set:
+            return qty
+
+        if signal.symbol.upper() not in soft_set:
+            return qty
+
+        multiplier = self._soft_blacklist_multipliers.get(
+            strategy_key, self.DEFAULT_SOFT_MULTIPLIER
+        )
+        scaled = math.floor(qty * multiplier)
+        logger.info(
+            f"[soft-sized] {signal.symbol} ({signal.strategy}): "
+            f"qty {qty} -> {scaled} (multiplier x{multiplier:.2f})"
+        )
+        return scaled
 
     def _fixed_fractional(self, signal: Signal, capital: float) -> int:
         """Risk a fixed % of capital, sized by distance to SL.

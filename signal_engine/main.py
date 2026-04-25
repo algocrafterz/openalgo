@@ -79,6 +79,8 @@ risk_engine = RiskEngine(
     max_positions_per_sector=settings.max_positions_per_sector,
     sectors=settings.sectors,
     use_day_start_capital=settings.use_day_start_capital,
+    soft_blacklist=settings.soft_blacklist,
+    soft_blacklist_multipliers=settings.soft_blacklist_multipliers,
 )
 
 # Global position tracker
