@@ -85,6 +85,17 @@ Risk-shape preservation: scaling is applied to final qty, NOT to `risk_per_share
 
 **Files**: `risk.py`, `main.py`, `tests/test_risk.py`, `PRD.md`. Bandit clean.
 
+### ORB strategy improvements — Phase 3 (PineScript NR filter)
+
+`orb.pine` adds a Crabel narrow-range pre-filter as a regime gate:
+- New input group `🔻 NR FILTER (Crabel)`
+- `enableNRFilter` (default false), `nrLookback` (default 7, options 4/7/10/20), `nrMode` (default "Prefer", options Prefer/Require)
+- Daily-timeframe security call computes `cachedNRPreferHit` = whether yesterday's range ≤ lowest of last `nrLookback` daily ranges. CRITICAL: `lookahead=barmerge.lookahead_off` to prevent repainting.
+- `nrRequireGate` ANDed into `canTakeEntry` — only blocks in Require mode. In Prefer mode (default on enable), zero behaviour change vs baseline.
+- Validation contract: `enableNRFilter=false` produces an identical backtest to before. Manual TradingView Strategy Tester check required before flipping to Require.
+
+**Files**: `pinescripts/intraday/orb/orb.pine`, `PRD.md`. Pine has no unit framework — validation is Strategy-Tester diff.
+
 ---
 
 ## Recent Changes (2026-04-22)

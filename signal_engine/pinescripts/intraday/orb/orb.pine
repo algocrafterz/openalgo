@@ -88,6 +88,7 @@ grp_dash     = "📊 DASHBOARD ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬�
 grp_htf      = "📈 HIGHER TIMEFRAME ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_index    = "📊 INDEX DIRECTION FILTER ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_smart    = "🧠 SMART ENTRY FILTERS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_nrfilter = "🔻 NR FILTER (Crabel) ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
 // ============================================ CONSTANTS ============================================
 
@@ -345,6 +346,23 @@ enableMinEntryTime = input.bool(true, "Enable Min Entry Time", group=grp_smart, 
 minEntryHour = input.int(9, "Hour", minval=9, maxval=12, group=grp_smart, inline="mintime")
 minEntryMinute = input.int(45, "Min", minval=0, maxval=59, group=grp_smart, inline="mintime", tooltip="Minimum time before taking entries\n\nRECOMMENDED: 9:45 AM\nLets first 30 min volatility settle")
 
+// ====================== NR FILTER (Toby Crabel narrow-range pre-filter) =====================
+// Daily-timeframe regime filter: trade only when yesterday's range was the narrowest
+// of the last N trading days. Academic research and Crabel's "Day Trading with Short
+// Term Price Patterns" show ORB breakouts after a narrow-range day have ~70-75% follow-
+// through vs 55-60% baseline. NR7 fires on roughly 14% of days per stock — intentionally rare.
+//
+// Two modes:
+//   Prefer  — track NR state for visual / future scoring; do NOT block any entries.
+//             Default-on shape lets you measure NR-day WR uplift without hurting density.
+//   Require — block entries when yesterday was NOT NR. Strict; cuts daily trade count by ~85%.
+//
+// Default enableNRFilter=false: turning the input on with mode=Prefer is a pure no-op for
+// trade execution (so backtests with feature on/off must produce identical results).
+enableNRFilter = input.bool(false, "Enable NR Filter", group=grp_nrfilter, inline="nr1", tooltip="Toby Crabel narrow-range pre-filter\n\nTrade only after a narrow-range day\n\nWHY:\n• ORB breakouts after NR days have ~70-75% follow-through\n• Baseline (no NR filter): ~55-60%\n• Identifies coiled-spring setups\n\nFires on ~14% of days per stock (NR7 default)\n\nDEFAULT: OFF — turn on after Strategy-Tester validates NR uplift")
+nrLookback = input.int(7, "Lookback Days", options=[4, 7, 10, 20], group=grp_nrfilter, inline="nr1", tooltip="N days for narrow-range comparison\n\n4  = NR4, fires ~25% of days, weaker edge\n7  = NR7 (Crabel classic, recommended) ⭐\n10 = NR10, fires ~10% of days, stronger edge\n20 = NR20, fires ~5%, strongest edge / very rare")
+nrMode = input.string("Prefer", "Mode", options=["Prefer", "Require"], group=grp_nrfilter, inline="nr2", tooltip="How NR result affects entries\n\nPREFER (default):\n• Tracks NR state\n• Does NOT block any entries\n• Use to A/B measure NR-day WR uplift before promoting\n\nREQUIRE:\n• Blocks entries when yesterday was NOT NR\n• Strict — cuts daily trade count by ~85%\n• Use only after Prefer-mode data confirms uplift")
+
 // ============================================= ALERTS ==============================================
 bool enableAlerts = true
 
@@ -592,6 +610,12 @@ var bool cachedIndexBullish = false
 var bool cachedIndexBearish = false
 var string cachedIndexBiasText = "Neutral"
 var int cachedIndexBar = -1
+
+// Cached NR filter values (Crabel narrow-range pre-filter)
+var bool  cachedNRPreferHit = false      // True when yesterday's range <= lowest of last nrLookback days
+var float cachedNRYesterdayRange = na    // Yesterday's daily range (high - low)
+var float cachedNRMinPrev = na           // Lowest daily range over last nrLookback days
+var int   cachedNRBar = -1               // Bar index when last computed (cache invalidation)
 
 var float actH = na
 var float actL = na
@@ -1988,6 +2012,26 @@ if enableIndexFilter and barstate.isconfirmed and bar_index != cachedIndexBar
         cachedIndexBiasText := cachedIndexBullish ? "Bullish" : cachedIndexBearish ? "Bearish" : "Neutral"
     cachedIndexBar := bar_index
 
+// ====================================== NR FILTER CALCULATION ======================================
+// Daily timeframe lookup for narrow-range detection. Computed once per intraday bar
+// and cached. CRITICAL: lookahead=barmerge.lookahead_off prevents repainting — yesterday's
+// range value would otherwise be visible "early" during today's session in backtest.
+//
+// `(high - low)[1]` is yesterday's range on the DAILY timeframe (security context).
+// `ta.lowest((high - low)[1], nrLookback)` is the lowest of (yesterday + nrLookback-1 prior days).
+// If yesterday's range == that lowest value, yesterday IS the narrowest of the last N days.
+if enableNRFilter and barstate.isconfirmed and bar_index != cachedNRBar
+    [nrYesterdayRange, nrMinRange] = request.security(syminfo.tickerid, "D", [(high - low)[1], ta.lowest((high - low)[1], nrLookback)], barmerge.gaps_off, barmerge.lookahead_off)
+    cachedNRYesterdayRange := nrYesterdayRange
+    cachedNRMinPrev := nrMinRange
+    cachedNRPreferHit := not na(nrYesterdayRange) and not na(nrMinRange) and nrYesterdayRange <= nrMinRange
+    cachedNRBar := bar_index
+
+// In Require mode, an entry is gated unless yesterday was an NR day.
+// In Prefer mode (default), the gate is always open — NR state is observed only.
+// When enableNRFilter is false, the gate is always open (zero impact on backtest).
+bool nrRequireGate = not enableNRFilter or nrMode != "Require" or cachedNRPreferHit
+
 // ====================================== BREAKOUT DETECTION =========================================
 canDetectBreakout = not isHTF and enableBreakout and not na(activeORB) and barstate.isconfirmed
 volumeMA := cachedVolumeMA
@@ -2003,7 +2047,9 @@ bool isAfterMinTime = not enableMinEntryTime or (currentHourNow > minEntryHour) 
 // Smart Entry: Combined filter check
 bool smartFiltersPass = gapFilterPassed and orbRangeFilterPassed and isAfterMinTime
 
-bool canTakeEntry = isBeforeCutoff and not sessionEntryTaken and smartFiltersPass
+// nrRequireGate is always true unless: enableNRFilter=true AND nrMode="Require" AND yesterday was not NR.
+// In Prefer mode (default-on shape), this is a no-op — NR state is tracked only via cachedNRPreferHit.
+bool canTakeEntry = isBeforeCutoff and not sessionEntryTaken and smartFiltersPass and nrRequireGate
 
 // Entry conditions - Trend/HTF filtering is now handled at breakout detection time
 // using the "both against" logic (only blocks when BOTH filters are against the direction)
