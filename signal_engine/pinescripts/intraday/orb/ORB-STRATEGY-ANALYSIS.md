@@ -298,48 +298,22 @@ All modes enforce a **minimum stop distance** to prevent unrealistically tight s
 
 ### Priority 1: High Impact, Moderate Effort
 
-#### 1.1 Trailing Stop After TP1
-Add a trailing stop mechanism once TP1 is hit:
-```
-After TP1 hit:
-- Move SL to breakeven (entry price)
-- Trail stop at ATR * 1.5 below current high (for longs)
-- Locks in gains while allowing runners to TP2/TP3
-```
-**Impact:** Significantly improves R:R on trending days. Currently, the 50/50 split still risks the runner portion at original SL.
+#### 1.1 Trailing Stop After TP1 — ✅ DONE (2026-03-27)
+Implemented as **runner SL buffer** rather than full ATR trail:
+- After TP1 partial exit (50% of position), remaining runner SL is moved to `TP1 - 0.3R` (longs) / `TP1 + 0.3R` (shorts)
+- This locks in ~0.35R profit on the runner even if stopped before TP1.5
+- Signal engine: `config.yaml:227` — `tp1_runner_sl_buffer: 0.3`
+- Chosen over ATR-trailing because it's simpler, avoids wick-back stop-outs (TMPV 2026-04-13 incident), and works without tick-level data.
 
-#### 1.2 Multi-Entry Per Session
-Allow configurable max entries per session (e.g., 2):
-```
-- After SL hit, reset sessionEntryTaken after cooldown period (e.g., 5 bars)
-- Allow opposite direction entry after failed breakout
-- Cap total session risk (e.g., max 2% account risk per day)
-```
-**Impact:** Captures reversal opportunities after failed breakouts - very common in Indian markets.
+#### 1.2 Multi-Entry Per Session — ❌ Open
+Still blocked by `sessionEntryTaken` flag in `orb.pine:506`. Per-symbol re-entry after SL is not enabled. `max_trades_per_day: 12` caps portfolio-wide, not per-symbol.
+**Next step:** Allow reverse-direction re-entry after failed breakout with a cooldown window.
 
-#### 1.3 Index Correlation Filter (NIFTY/BANKNIFTY)
-Add NIFTY 50 direction as a filter:
-```
-- Request NIFTY 50 data via request.security()
-- Check if NIFTY is above/below its VWAP or ORB
-- Block counter-index entries (e.g., don't go long on a stock when NIFTY is breaking down)
-```
-**Impact:** Could reduce false signals by 20-30% based on Indian market correlation patterns.
+#### 1.3 Index Correlation Filter (NIFTY/BANKNIFTY) — ✅ DONE (2026-03-12)
+NSE:NIFTY direction integrated into the 2-of-3 filter stack (Trend + HTF + Index). See [orb.pine:323](orb.pine) and the "2-of-3 Rule" table in Entry Conditions above.
 
-#### 1.4 Realistic Indian Market Costs
-Update commission model:
-```
-Current:  commission_value=0.03 (brokerage only)
-Actual costs for intraday:
-- Brokerage: 0.03% or flat Rs 20 (whichever lower)
-- STT: 0.025% (on sell side)
-- GST: 18% on brokerage
-- Exchange fees: 0.00345%
-- SEBI charges: 0.0001%
-- Stamp duty: 0.003% (buy side)
-Total: ~0.1% round trip
-```
-**Impact:** More accurate backtesting results, avoiding overestimated profitability.
+#### 1.4 Realistic Indian Market Costs — ✅ DONE (2026-03-12)
+mStock pricing model applied — `commission_value=0.06`, `slippage=2`. See "Changes Implemented (2026-03-12)" section below for full cost breakdown.
 
 ### Priority 2: Medium Impact, Lower Effort
 
@@ -525,16 +499,24 @@ See [SIGNAL-PERFORMANCE-2026-Q1.md](SIGNAL-PERFORMANCE-2026-Q1.md) for full anal
 
 The ORB strategy is a **well-engineered, feature-rich** implementation with strong foundations for Indian intraday trading. Its multi-stage ORB architecture, comprehensive filter stack, and smart entry mechanisms make it significantly more sophisticated than typical ORB scripts.
 
-**Key strengths:** Multi-stage ORB, "2-of-3 against" filter logic (Trend + HTF + Index), retest entry, adaptive R:R, Telegram integration.
+**Key strengths:** Multi-stage ORB, "2-of-3 against" filter logic (Trend + HTF + Index), retest entry, runner SL at TP1−0.3R (locks in profit), daily/weekly/monthly loss limits, Telegram integration.
+
+**Completed since initial analysis:**
+- ✅ Runner SL at TP1−0.3R (`tp1_runner_sl_buffer: 0.3`) — replaces full trailing stop
+- ✅ Daily loss limit (`daily_loss_limit: 0.04` + weekly/monthly) — enforced in `risk.py`
+- ✅ Index correlation filter (NIFTY via 2-of-3 rule)
+- ✅ Realistic Indian market costs (mStock model, commission=0.06, slippage=2)
+- ✅ Volume MA 50 (was 20) — fixes gap-day distortion
+- ✅ `max_trades_per_day: 12` portfolio cap
+- ✅ TP1/TP1.5/TP2/TP3 observation alerts for ongoing data collection
 
 **Remaining improvements:**
-1. Trailing stop after TP1 (biggest single improvement for profitability)
-2. Multi-entry capability per session
-3. Daily loss limit (stop after 2 consecutive SL hits/day) - would save ~4% from data analysis
+1. **Friday position sizing / filter** — Fri 55.2% WR vs 70%+ other days; still manual discipline only
+2. **Multi-entry per session (reversal re-entry)** — `sessionEntryTaken` still blocks per-symbol re-entry after SL
+3. **Grade-based position sizing** (A=100%, B=75%, C=50%) — still manual discipline only
 
 **Operational recommendations (manual discipline):**
 - Grade-based position sizing: A=100%, B=75%, C=50%
-- Stop taking signals after 2 consecutive losses in a day
 - Tighter filters on Fridays (or reduced position size)
 - Monthly stock review using Grade system
 
@@ -544,15 +526,19 @@ The strategy is best suited for **liquid large-cap stocks and index futures** on
 
 ## Chartink Scanners
 
-Two scanners support the ORB pipeline: a **setup scanner** (run night before / pre-market) to build the TradingView watchlist, and a **live breakout scanner** (run during market hours) for discovery.
+Four scanners support the ORB pipeline:
+1. **Setup Scanner** (Nifty 500) — night-before / pre-market watchlist build
+2. **Live Breakout Scanner** — discovery during market hours
+3. **Pre-market Gap Scanner** — 9:10 AM dynamic watchlist augmentation
+4. **NR7 End-of-Day Pre-filter** — flags tomorrow's high-probability candidates (Crabel narrow-range)
 
 ### Scanner 1: Setup Scanner (Night Before / Pre-Market)
 
 **When to run:** 3:30-4:00 PM after market close, or 9:00-9:10 AM pre-market.
-**Purpose:** Find liquid, trending, volatile Nifty 200 stocks to add to TradingView watchlist and set ORB alerts on. Targets 10-20 stocks per day.
+**Purpose:** Find liquid, trending, volatile Nifty 500 stocks to add to TradingView watchlist and set ORB alerts on. Targets 15-30 stocks per day.
 
 ```
-( {nifty200} (
+( {nifty500} (
   latest close > latest sma( close, 200 )
   and latest close > latest sma( close, 50 )
   and latest volume > 1500000
@@ -563,7 +549,7 @@ Two scanners support the ORB pipeline: a **setup scanner** (run night before / p
   and latest average true range ( 14 ) / latest close * 100 < 4
 ) )
 or
-( {nifty200} (
+( {nifty500} (
   latest close < latest sma( close, 200 )
   and latest close < latest sma( close, 50 )
   and latest volume > 1500000
@@ -583,9 +569,12 @@ or
 | Price band | 150 - 800 | same | Matches `min_entry_price` / `max_entry_price` in config.yaml |
 | Market Cap | > 10,000 Cr | same | Institutional grade — avoids illiquid / manipulated stocks |
 | ATR(14) % | 1% - 4% of price | same | Meaningful range regardless of price level. Maps to PineScript ORB range filter (0.4-3.5%). Absolute ATR > 5 was misleading: same number means 3% for ₹150 stock vs 0.6% for ₹800 stock |
-| Universe | `{nifty200}` | same | Wider pool than Nifty 100 — includes mid-caps in 150-800 sweet spot. Q1 top performers (NATIONALUM, APOLLOTYRE, ASHOKLEY, EXIDEIND) are Nifty 200 stocks. Volume + market cap filters already ensure quality |
+| Universe | `{nifty500}` | same | Widened from Nifty 200 (2026-04-25) — adds liquid mid-caps in 150-800 band from sectors currently under-represented (auto ancillary, chemicals, specialty pharma). Vol + mcap filters still reject small caps |
 
-**After scan:** Manually remove blacklisted symbols (BHEL, MANAPPURAM, GAIL, JIOFIN, TATAPOWER) from results before adding to TradingView.
+**After scan:**
+1. Drop symbols in `blacklist.ORB.hard` (BHEL, MANAPPURAM, GAIL, JIOFIN, TATAPOWER, BEL, PNBHOUSING, UNIONBANK, ADANIPOWER, USHAMART, HINDPETRO, SYNGENE) — full block.
+2. Tag symbols in `blacklist.ORB.soft` (CANBK, FEDERALBNK, WIPRO, BANKBARODA) with `[soft]` prefix in TradingView watchlist as a visual reminder. The signal engine auto-scales these to 50% qty; no operator action needed.
+3. **Sector rotation overlay (manual):** Chartink has no native sector filter. After the scan, glance at 5-day returns of sector indices (NIFTY BANK / METAL / AUTO / PHARMA / IT / FMCG / ENERGY / REALTY / PSU BANK / FIN SERVICE) and prioritise watchlist slots for symbols in the top 3 sectors. De-prioritise (don't drop) bottom 3.
 
 **SMA(50) direction is critical:** Bearish group must use `less than` SMA(50) — not `greater than`. A stock below 200 SMA but above 50 SMA is in a transitioning/recovering phase and may bounce instead of breaking down.
 
@@ -626,12 +615,102 @@ or
 
 **Free tier caveat:** Chartink free accounts have 15-min delayed data. This scanner is for **discovery and audit** only — your primary execution signals come from TradingView real-time alerts. By the time Chartink shows a breakout, the signal engine has already placed the order.
 
+### Scanner 3: Pre-Market Gap Scanner
+
+**When to run:** 09:10 AM IST (after NSE pre-open auction completes at 09:08).
+**Purpose:** Augment the static watchlist with today's actual movers. Add the top ~10 stocks showing moderate directional gap and strong first-minute participation. Removes the static-list blind spot where today's big mover wasn't on yesterday's list.
+
+```
+( {nifty500} (
+  [0] 1 minute open > [=1] 1 day close * 1.005
+  and [0] 1 minute open < [=1] 1 day close * 1.02
+  and [0] 1 minute volume > [=1] 1 day volume / 375 * 1.5
+  and [0] 1 minute close > 150
+  and [0] 1 minute close < 800
+  and [=1] 1 day volume > 1500000
+  and latest market cap > 10000
+) )
+or
+( {nifty500} (
+  [0] 1 minute open < [=1] 1 day close * 0.995
+  and [0] 1 minute open > [=1] 1 day close * 0.98
+  and [0] 1 minute volume > [=1] 1 day volume / 375 * 1.5
+  and [0] 1 minute close > 150
+  and [0] 1 minute close < 800
+  and [=1] 1 day volume > 1500000
+  and latest market cap > 10000
+) )
+```
+
+| Filter | Bullish (gap up) | Bearish (gap down) | Why |
+|---|---|---|---|
+| Gap range | +0.5% to +2.0% | -0.5% to -2.0% | <0.5% is noise; >2.0% tends to fade. Sweet spot for ORB follow-through |
+| First-minute volume | > 1.5× of prev-day-vol/375 | same | 375 = number of 1-min candles in NSE session. 1.5× the avg slice = strong participation |
+| Liquidity floor | prev-day vol > 1.5M | same | Same liquidity gate as setup scanner |
+| Price + mcap | 150-800, mcap > 10K Cr | same | Match config |
+| Universe | `{nifty500}` | same | Match setup scanner |
+
+**Expected yield:** 5–15 rows. **Post-processing:** sort by absolute gap %, take top 10, add to TradingView for today only, remove at EOD.
+
+### Scanner 4: NR7 End-of-Day Pre-filter
+
+**When to run:** 3:25 PM IST (just before close, after today's range is final).
+**Purpose:** Find tomorrow's highest-probability ORB breakout candidates — stocks where TODAY's range is the narrowest of the last 7 days AND they pass the setup-scanner quality filters. Per Crabel's NR7 research, breakouts after a narrow-range day have ~70-75% follow-through (vs 55-60% baseline). Fires on roughly 14% of days per stock — these get priority slots in tomorrow's watchlist.
+
+```
+( {nifty500} (
+  latest high - latest low < 1 day ago high - 1 day ago low
+  and latest high - latest low < 2 days ago high - 2 days ago low
+  and latest high - latest low < 3 days ago high - 3 days ago low
+  and latest high - latest low < 4 days ago high - 4 days ago low
+  and latest high - latest low < 5 days ago high - 5 days ago low
+  and latest high - latest low < 6 days ago high - 6 days ago low
+  and latest close > latest sma( close, 200 )
+  and latest close > latest sma( close, 50 )
+  and latest volume > 1500000
+  and latest close > 150
+  and latest close < 800
+  and latest market cap > 10000
+  and latest average true range ( 14 ) / latest close * 100 > 1
+  and latest average true range ( 14 ) / latest close * 100 < 4
+) )
+or
+( {nifty500} (
+  latest high - latest low < 1 day ago high - 1 day ago low
+  and latest high - latest low < 2 days ago high - 2 days ago low
+  and latest high - latest low < 3 days ago high - 3 days ago low
+  and latest high - latest low < 4 days ago high - 4 days ago low
+  and latest high - latest low < 5 days ago high - 5 days ago low
+  and latest high - latest low < 6 days ago high - 6 days ago low
+  and latest close < latest sma( close, 200 )
+  and latest close < latest sma( close, 50 )
+  and latest volume > 1500000
+  and latest close > 150
+  and latest close < 800
+  and latest market cap > 10000
+  and latest average true range ( 14 ) / latest close * 100 > 1
+  and latest average true range ( 14 ) / latest close * 100 < 4
+) )
+```
+
+| Filter | Bullish | Bearish | Why |
+|---|---|---|---|
+| NR7 | today's range < each of last 6 days' ranges | same | Crabel's classic narrow-range-7. The 6 explicit AND conditions make today the narrowest of the last 7 trading days |
+| Trend + Liquidity + Price + mcap + ATR | identical to Scanner 1 | same | Filter must compose with the existing quality gates — NR7 alone catches dead stocks too |
+| Universe | `{nifty500}` | same | Match setup scanner |
+
+**Expected yield:** 3–8 rows on most days, 0–2 on trendy markets (by design — NR7 is intentionally rare). **Post-processing:** these get a `[NR7]` prefix in the TradingView watchlist; they are the day's premier candidates. The PineScript `enableNRFilter` (Phase 3) provides the same gate at signal-generation time, so even if you forget to mark them in TradingView, the strategy itself can prefer-rank them.
+
+**Note on Chartink syntax:** Chartink does not currently support a clean `min(N, …)` aggregator over historical bars. The 6-AND form is the verified working syntax (each `N days ago` reference is independently supported). If a future Chartink release adds `min(7, latest high - latest low)`, the queries can be shortened.
+
 ### Workflow Summary
 
 | Time | Scanner | Action |
 |---|---|---|
-| 3:30-4:00 PM | Setup Scanner | Export results → remove blacklisted → add to TradingView → create ORB alerts |
-| 9:00-9:10 AM | Setup Scanner | Quick re-run — catches overnight movers not on yesterday's list |
-| 9:45 AM | Live Breakout Scanner | First run after 2nd 15-min candle closes |
-| 10:00, 10:15, 10:30 AM | Live Breakout Scanner | Repeat each candle — spot missed symbols for future watchlist |
-| After entry cutoff | — | Stop scanning, no new entries valid |
+| 3:25 PM (prev day) | Scanner 4 (NR7) | Tag with `[NR7]` in tomorrow's TradingView watchlist — premier candidates |
+| 3:30-4:00 PM | Scanner 1 (Setup, Nifty 500) | Build watchlist; drop hard-blacklist; tag soft-blacklist `[soft]`; merge with NR7 stars |
+| 9:00-9:10 AM | Scanner 1 re-run | Catches overnight movers not on yesterday's list |
+| 9:10 AM | Scanner 3 (Pre-market Gap) | Append top 10 gap movers; remove at EOD |
+| 9:45 AM | Scanner 2 (Live Breakout) | First run after 2nd 15-min candle closes |
+| 10:00, 10:15, 10:30 AM | Scanner 2 (Live Breakout) | Repeat each candle — spot missed symbols for future watchlist |
+| After entry cutoff (11:00 AM) | — | Stop scanning, no new entries valid |

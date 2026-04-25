@@ -173,9 +173,19 @@ class Settings:
     strategy_profiles: Dict[str, dict]
 
     # Symbol blacklist (from yaml) — per-strategy + _global
-    # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR") or "_global"
-    # Values: frozenset of uppercase symbol names
+    # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR") or "_GLOBAL"
+    # Values: frozenset of uppercase symbol names — HARD blocklist only.
+    # Validator rejects signals for these symbols (IGNORED status, no order placed).
     blacklist: Dict[str, frozenset]
+
+    # Soft blacklist (from yaml) — per-strategy regime-sensitive list.
+    # Risk engine reduces qty by soft_blacklist_multipliers[strategy] for these symbols.
+    # Keys: strategy tag (uppercase). Values: frozenset of uppercase symbol names.
+    soft_blacklist: Dict[str, frozenset]
+
+    # Soft blacklist qty multipliers per strategy (from yaml). Default 0.5 (50% qty).
+    # Keys: strategy tag (uppercase). Values: float in (0, 1].
+    soft_blacklist_multipliers: Dict[str, float]
 
     # Time exit (from yaml) — close positions before broker auto square-off
     time_exit_enabled: bool
@@ -187,6 +197,7 @@ class Settings:
     no_progress_check_after_minutes: int
     no_progress_min_progress_pct: float
     no_progress_profit_lock_ratio: float  # 0.0 = strict break-even; 0.4 = lock 40% of unrealized profit
+    no_progress_ab_test_disable: bool     # When true, the entire no-progress check is skipped
 
 
 def _parse_no_progress(cfg: dict) -> dict:
@@ -196,9 +207,75 @@ def _parse_no_progress(cfg: dict) -> dict:
     return {
         "no_progress_enabled": bool(cfg.get("enabled", False)),
         "no_progress_check_after_minutes": int(cfg.get("check_after_minutes", 90)),
-        "no_progress_min_progress_pct": float(cfg.get("min_progress_pct", 0.33)),
+        "no_progress_min_progress_pct": float(cfg.get("min_progress_pct", 0.20)),
         "no_progress_profit_lock_ratio": float(cfg.get("profit_lock_ratio", 0.0)),
+        "no_progress_ab_test_disable": bool(cfg.get("ab_test_disable", False)),
     }
+
+
+def _parse_blacklist(
+    raw: dict,
+) -> Tuple[Dict[str, frozenset], Dict[str, frozenset], Dict[str, float]]:
+    """Parse the blacklist section into (hard, soft, soft_multipliers).
+
+    Two accepted shapes per strategy key:
+
+    1. Flat list (legacy / _global):
+           ORB:
+             - BHEL
+             - GAIL
+       Treated as hard blocklist; no soft entries.
+
+    2. Tiered dict:
+           ORB:
+             hard: [BHEL, GAIL]
+             soft: [CANBK, FEDERALBNK]
+             soft_multiplier: 0.5
+
+    Returns three dicts keyed by uppercase strategy tag:
+      hard: Dict[str, frozenset]   — fully-blocked symbols
+      soft: Dict[str, frozenset]   — qty-reduced symbols
+      multipliers: Dict[str, float] — per-strategy soft multiplier (default 0.5)
+    """
+    if not isinstance(raw, dict):
+        raw = {}
+
+    hard: Dict[str, frozenset] = {}
+    soft: Dict[str, frozenset] = {}
+    multipliers: Dict[str, float] = {}
+
+    for strategy_key, value in raw.items():
+        key = strategy_key.upper()
+
+        if isinstance(value, list):
+            hard[key] = frozenset(
+                s.upper().strip() for s in value if isinstance(s, str)
+            )
+            continue
+
+        if not isinstance(value, dict):
+            continue
+
+        hard_list = value.get("hard", [])
+        soft_list = value.get("soft", [])
+        multiplier = float(value.get("soft_multiplier", 0.5))
+
+        if not 0.0 <= multiplier <= 1.0:
+            raise ConfigError(
+                f"blacklist.{strategy_key}.soft_multiplier must be in [0, 1], got {multiplier}"
+            )
+
+        if isinstance(hard_list, list):
+            hard[key] = frozenset(
+                s.upper().strip() for s in hard_list if isinstance(s, str)
+            )
+        if isinstance(soft_list, list) and soft_list:
+            soft[key] = frozenset(
+                s.upper().strip() for s in soft_list if isinstance(s, str)
+            )
+            multipliers[key] = multiplier
+
+    return hard, soft, multipliers
 
 
 def _build_settings() -> Settings:
@@ -262,15 +339,10 @@ def _build_settings() -> Settings:
             }
 
     # Blacklist section (optional — empty if missing)
-    raw_blacklist = yml.get("blacklist", {})
-    if not isinstance(raw_blacklist, dict):
-        raw_blacklist = {}
-    blacklist: Dict[str, frozenset] = {}
-    for strategy_key, symbols in raw_blacklist.items():
-        if isinstance(symbols, list):
-            blacklist[strategy_key.upper()] = frozenset(
-                s.upper().strip() for s in symbols if isinstance(s, str)
-            )
+    # Two-tier: hard = full block (validator), soft = qty reduction (risk engine).
+    blacklist, soft_blacklist, soft_blacklist_multipliers = _parse_blacklist(
+        yml.get("blacklist", {})
+    )
 
     # Time exit section (optional — defaults to disabled if missing)
     time_exit = yml.get("time_exit", {})
@@ -356,8 +428,10 @@ def _build_settings() -> Settings:
         # Strategy profiles — per-strategy TP levels and product
         strategy_profiles=strategy_profiles,
 
-        # Symbol blacklist — per-strategy + _global
+        # Symbol blacklist — per-strategy + _global (hard tier only)
         blacklist=blacklist,
+        soft_blacklist=soft_blacklist,
+        soft_blacklist_multipliers=soft_blacklist_multipliers,
 
         # Time exit — optional section with safe defaults
         time_exit_enabled=bool(time_exit.get("enabled", False)),

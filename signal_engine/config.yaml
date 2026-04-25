@@ -112,26 +112,37 @@ risk:
 # ── Symbol Blacklist ─────────────────────────────────────
 # [tune] Review monthly using SIGNAL-PERFORMANCE-*.md. Add D-grade symbols (WR < 35%, PnL < -0.5%).
 # _global applies to ALL strategies. Strategy-specific keys by strategy tag (ORB, RSI-TP-MR, etc.)
+#
+# Two tiers per strategy (since 2026-04-25):
+#   hard: full block — validator rejects signal at IGNORED status (no order placed)
+#   soft: regime-sensitive — order is placed but qty is scaled by soft_multiplier
+#         use for Q1->Q2 grade flips where the symbol may recover; full block discards
+#         optionality, half-size keeps participation while limiting downside.
+#
+# Backward compat: a flat list under a strategy key (e.g. RSI-TP-MR) is treated as hard-only.
 blacklist:
   _global:
     - YESBANK            # Erratic price action, manipulation risk
   ORB:
-    - BHEL               # 0% WR, -4.1% PnL (Q1 2026) — PSU, wide spreads
-    - MANAPPURAM         # 16.7% WR, -3.2% PnL — NBFC, gaps on RBI news
-    - GAIL               # 33.3% WR, -0.5% PnL — policy-driven moves
-    - JIOFIN             # 33.3% WR, -0.5% PnL (downgraded C->D in Q2)
-    - TATAPOWER          # 25.0% WR, -0.7% PnL — PSU power, slow momentum
-    - BEL                # 0% WR, -1.2% PnL (new Q2, immediate loss — PSU defence)
-    - PNBHOUSING         # 33.3% WR, -1.2% PnL — NBFC, policy-sensitive
-    - UNIONBANK          # 0% WR, -0.8% PnL (new Q2)
-    - ADANIPOWER         # 33.3% WR, -0.8% PnL — erratic, event-driven
-    - USHAMART           # 28.6% WR, -0.7% PnL — thin liquidity, wide spreads
-    - HINDPETRO          # 33.3% WR, -0.6% PnL — OMC, policy-sensitive
-    - SYNGENE            # 0% WR, -0.4% PnL — pharma, unpredictable gaps
-    - CANBK              # A->D in Q2: +3.30% Q1 -> -0.70% Q2 — sharp reversal
-    - FEDERALBNK         # A->D in Q2: +2.41% Q1 -> -0.70% Q2 — sharp reversal
-    - WIPRO              # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — consistent deterioration
-    - BANKBARODA         # B->D: +0.60% Q1 -> -0.70% Q2 — crossed into negative
+    hard:
+      - BHEL             # 0% WR, -4.1% PnL (Q1 2026) — PSU, wide spreads
+      - MANAPPURAM       # 16.7% WR, -3.2% PnL — NBFC, gaps on RBI news
+      - GAIL             # 33.3% WR, -0.5% PnL — policy-driven moves
+      - JIOFIN           # 33.3% WR, -0.5% PnL (downgraded C->D in Q2)
+      - TATAPOWER        # 25.0% WR, -0.7% PnL — PSU power, slow momentum
+      - BEL              # 0% WR, -1.2% PnL (new Q2, immediate loss — PSU defence)
+      - PNBHOUSING       # 33.3% WR, -1.2% PnL — NBFC, policy-sensitive
+      - UNIONBANK        # 0% WR, -0.8% PnL (new Q2)
+      - ADANIPOWER       # 33.3% WR, -0.8% PnL — erratic, event-driven
+      - USHAMART         # 28.6% WR, -0.7% PnL — thin liquidity, wide spreads
+      - HINDPETRO        # 33.3% WR, -0.6% PnL — OMC, policy-sensitive
+      - SYNGENE          # 0% WR, -0.4% PnL — pharma, unpredictable gaps
+    soft:
+      - CANBK            # A->D in Q2: +3.30% Q1 -> -0.70% Q2 — banking regime flip
+      - FEDERALBNK       # A->D in Q2: +2.41% Q1 -> -0.70% Q2 — banking regime flip
+      - WIPRO            # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — IT regime flip
+      - BANKBARODA       # B->D: +0.60% Q1 -> -0.70% Q2 — banking regime flip
+    soft_multiplier: 0.5 # 50% qty for soft-listed symbols. 0 = effectively hard-block.
 
 # ── Time Exit ────────────────────────────────────────────
 # [tune] Close all open positions before broker auto square-off (typically 15:10-15:20 IST).
@@ -148,13 +159,16 @@ time_exit:
 #   - Project time needed to reach TP1 at current rate: minutes_needed = (1 - progress) / rate
 #   - If minutes_needed > minutes_to_exit  -> MARKET EXIT (won't make it, capture what exists)
 #   - Otherwise                            -> break-even SL (position still has runway)
-# Example: JSWENERGY entry=541.8 TP=551.1, fired at 13:26 with 94min to 15:00.
-#   31.2% in 146min → rate=0.00214/min → needed=321min > 94min → market exit ✓
+#
+# Loosened 2026-04-25: was 60min/33%. Apr 13–24 logs showed ~17 firings/week with
+# JSWENERGY/EXIDEIND/NATIONALUM cut at 31.2%/31.7%/31.1% — 1–2% short of threshold and
+# 1–2% short of TP1 itself. 90min/20% gives genuinely-stuck trades a wider lane to resolve.
 no_progress:
   enabled: true
-  check_after_minutes: 60        # Grace period — ORB momentum shows within 60min; 90min is too late
-  min_progress_pct: 0.33         # Must have moved >= 33% of entry→TP1 distance toward TP
+  check_after_minutes: 90        # Was 60. Most ORB trades resolve within 90–150min; 60 was cutting winners
+  min_progress_pct: 0.20         # Was 0.33. 20% is the minimum to qualify as "real progress"
   profit_lock_ratio: 0.0         # 0.0 = strict break-even for SL path (recommended)
+  ab_test_disable: false         # When true, disables the entire no-progress check. Use for A/B comparison.
 
 # ── Position Tracking ────────────────────────────────────
 tracking:

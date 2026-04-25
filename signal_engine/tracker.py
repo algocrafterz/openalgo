@@ -424,7 +424,13 @@ class PositionTracker:
             await self.send_day_summary()
 
         # No-progress check: move SL to entry for stuck positions
-        if _settings.no_progress_enabled and self._positions:
+        # ab_test_disable short-circuits the entire check without changing thresholds —
+        # used for clean A/B comparison with the feature off.
+        if (
+            _settings.no_progress_enabled
+            and not _settings.no_progress_ab_test_disable
+            and self._positions
+        ):
             await self._check_no_progress(book_data)
 
     async def _check_no_progress(self, book_data: dict) -> None:

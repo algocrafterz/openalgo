@@ -60,6 +60,21 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Recent Changes (2026-04-25)
+
+### ORB strategy improvements — Phase 1 (config + scanners)
+
+**No-progress thresholds loosened.** `check_after_minutes` 60→90, `min_progress_pct` 0.33→0.20. Apr 13–24 logs showed the old gates cut JSWENERGY/EXIDEIND/NATIONALUM at 31.x%-progress, 1–2% short of TP1. New `ab_test_disable: false` flag short-circuits the entire check without changing thresholds — for clean A/B measurement.
+
+**Tiered blacklist.** `blacklist.ORB` now splits into `hard` (full block, validator) and `soft` (qty reduction by `soft_multiplier`, risk engine — Phase 2 wires this). CANBK, FEDERALBNK, WIPRO, BANKBARODA moved from hard to soft (Q1→Q2 grade flips that may recover). Backward compat: flat list under a strategy key still parses as hard-only.
+
+**ORB-STRATEGY-ANALYSIS.md scanners updated.** Setup Scanner widened `{nifty200}`→`{nifty500}`. Two new scanners added: pre-market gap scanner (Scanner 3, 09:10 AM) and NR7 end-of-day pre-filter (Scanner 4, 15:25). Workflow table updated. Sector-rotation overlay documented (Chartink has no native sector filter — manual sector-index check).
+
+**Files**: `config.yaml`, `config.py`, `tracker.py`, `tests/test_config.py`, `pinescripts/intraday/orb/ORB-STRATEGY-ANALYSIS.md`.
+**Next phases**: Phase 2 (risk.py soft-blacklist sizing) and Phase 3 (PineScript NR filter input). Tracking via `pre-orb-improvements-2026-04-25` git tag.
+
+---
+
 ## Recent Changes (2026-04-22)
 
 ### Bug Fix
@@ -316,7 +331,8 @@ On startup, `open_positions` is reconciled against actual broker positionbook.
 | Symbol concentration | `risk.max_positions_per_symbol` | Per-symbol cap |
 | Duplicate window | `risk.duplicate_window_seconds` | Dedup identical signals |
 | Stale signal | `risk.stale_signal_seconds` | Reject old signals |
-| Blacklist | `blacklist._global` / `blacklist.STRATEGY` | Per-strategy + global |
+| Hard blacklist | `blacklist._global` / `blacklist.STRATEGY.hard` (or flat list) | Validator rejects with IGNORED status — no order placed |
+| Soft blacklist | `blacklist.STRATEGY.soft` + `soft_multiplier` | Risk engine scales qty by `soft_multiplier` (default 0.5). Use for regime-flipped stocks where full block discards optionality. Wired in Phase 2 (currently parsed only). |
 
 ---
 
@@ -465,26 +481,31 @@ strategy_profiles:
       TP1: 1.0          # Exit 100% at TP1
 ```
 
-### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20)
+### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20, loosened — 2026-04-25)
 ```yaml
 no_progress:
   enabled: true
-  check_after_minutes: 60        # Grace period — ORB momentum shows within 60min
-  min_progress_pct: 0.33         # Must move ≥33% of entry→TP1 distance to skip check
+  check_after_minutes: 90        # Was 60. Grace period — most ORB winners need >60min to develop
+  min_progress_pct: 0.20         # Was 0.33. 20% qualifies as "real progress"
   profit_lock_ratio: 0.0         # 0.0 = strict break-even SL (recommended)
+  ab_test_disable: false         # Master kill-switch for A/B comparison; skips entire check when true
 ```
-At 60min, if progress < 33%: project `minutes_needed = (1 - progress) / rate` and compare to minutes remaining until time exit. If the trade cannot reach TP1 before 15:00 at its current pace → market exit. Otherwise → break-even SL.
+At 90min, if progress < 20%: project `minutes_needed = (1 - progress) / rate` and compare to minutes remaining until time exit. If the trade cannot reach TP1 before 15:00 at its current pace → market exit. Otherwise → break-even SL.
+
+**2026-04-25 loosen rationale:** Apr 13–24 logs showed ~17 firings/week with JSWENERGY (146min/31.2%), EXIDEIND (162min/31.7%), NATIONALUM (84min/31.1%) cut at 1–2% short of the 33% threshold AND 1–2% short of TP1. The 60min/33% gates were trimming would-be winners. New 90min/20% lets genuinely-stuck trades resolve.
+
+**`ab_test_disable`:** When true, the entire no-progress check is skipped without altering thresholds — used to compare 10 days with the feature off vs on for clean PnL attribution.
 
 **Decision thresholds by entry time** (entry window 9:45–11:00 AM, time exit 15:00):
 
 | Entry | Check at | Time to exit | Break-even SL if progress ≥ | Market exit if progress < |
 |---|---|---|---|---|
-| 9:45 AM | 10:45 AM | 255 min | 19% | 19% |
-| 10:00 AM | 11:00 AM | 240 min | 20% | 20% |
-| 10:30 AM | 11:30 AM | 210 min | 22% | 22% |
-| 11:00 AM | 12:00 PM | 180 min | 25% | 25% |
+| 9:45 AM | 11:15 AM | 225 min | 21% | 21% |
+| 10:00 AM | 11:30 AM | 210 min | 22% | 22% |
+| 10:30 AM | 12:00 PM | 180 min | 25% | 25% |
+| 11:00 AM | 12:30 PM | 150 min | 27% | 27% |
 
-Progress ≥ 33% → no action (on track). Between threshold and 33% → break-even SL. Below threshold → market exit. Formula: `threshold = 60 / (60 + minutes_to_exit)`.
+Progress ≥ 20% → no action (on track). Between threshold and 20% → break-even SL. Below threshold → market exit. Formula: `threshold = check_after_minutes / (check_after_minutes + minutes_to_exit)`.
 
 ### `time_exit`
 ```yaml
