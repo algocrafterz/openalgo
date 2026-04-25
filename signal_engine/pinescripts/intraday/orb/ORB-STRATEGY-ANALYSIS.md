@@ -372,22 +372,65 @@ At ORB completion, send a "watchlist" alert listing all symbols where ORB range 
 
 ## Configuration Recommendations for Indian Markets
 
-### Optimal Settings for NSE Intraday
+### Recommended ORB Configuration (2026-04-25)
 
-| Parameter | Recommended | Rationale |
-|-----------|-------------|-----------|
-| ORB Period | 15 min (primary), 30 min (secondary) | 5 min too noisy for NSE, 60 min too late |
-| Session | 9:15-15:30 IST | NSE regular hours |
-| Min Entry Time | 9:30 AM | Skip first 15 min auction settlement |
-| Entry Cutoff | 14:00 | Allow 1.5 hours for targets to be reached |
-| Time Exit | 15:15 | Close before market close |
-| Stop Mode | Smart Adaptive or Scaled ATR | Indian stocks have variable volatility profiles |
-| Volume Filter | Enable, 1.2x multiplier, 50-bar MA | 50-bar MA resists gap-day opening volume distortion |
-| HTF Bias | Daily, Price vs EMA 20 | Aligns with institutional flow |
-| Trend Filter | VWAP | Most relevant intraday indicator for Indian markets |
-| Risk Per Trade | 1% of account | Conservative for volatile Indian stocks |
-| Gap Filter | Enable, max 2% | Indian stocks gap heavily; >2% gaps tend to fill |
-| ORB Range Filter | 0.3% - 2.0% | Filters out dead stocks and over-volatile ones |
+These values reflect current production configuration and explicitly address the shortcomings observed in Q2 2026 (lower trade density, regime-flipped Q1 winners, premature no-progress exits).
+
+#### PineScript inputs (`orb.pine`) — TradingView side
+
+| Parameter | Recommended | Addresses |
+|---|---|---|
+| `enableORB15Signals` | `true` (only) | ORB5 too noisy on NSE (auction settlement), ORB30/60 too late |
+| Session | `0915-1530:23456` IST | NSE regular hours, Mon–Fri |
+| `enableMinEntryTime` / hh:mm | `true` / 09:45 | Skip first 30 min volatility |
+| `entryCutoffHour` / minute | 11 / 00 | Q1 data: post-11:00 entries underperform; 10:45–11:00 still catches valid late breakouts |
+| `timeExitHour` / minute | 15 / 00 | 10-min buffer before broker auto square-off at 15:10 |
+| `stopMode` | `Smart Adaptive` or `Scaled ATR` | NSE volatility varies — fixed % too tight on banks, too loose on power |
+| `enableVolumeFilter` / `volumeMaLength` / `volumeMultiplier` / `strongVolumeMultiplier` | `true` / 50 / 1.2 / 1.8 | MA(50) survives gap-day distortion; 1.2× = quality threshold; 1.8× skips retest wait |
+| `enableTrendFilter` / `trendMode` | `true` / `VWAP` | Most-watched intraday institutional reference on NSE |
+| `enableHTF` / `htfTF` / `htfMethod` / `htfEMA` | `true` / `D` / `Price vs MA` / 20 | Daily 20 EMA = the most-followed institutional bias line |
+| `blockCounterTrend` | `true` | Counter-HTF entries showed disproportionate Q1 losses |
+| `enableIndexFilter` / `indexSymbol` / `indexFilterMethod` | `true` / `NSE:NIFTY` / `Price vs VWAP` | 60–80% of stock movement correlates with NIFTY intraday |
+| `enableGapFilter` / `maxGapPercent` | `true` / 2.5 | >2.5% gaps tend to fade; sweet spot ±0.5–2.0% (now caught by Scanner 3) |
+| `enableORBRangeFilter` / `min` / `max` | `true` / 0.4 / 3.5 | Filters dead stocks and over-volatile ones |
+| `tp1ExitQtyPct` / `tp1_5ExitQtyPct` | 50 / 100 | 72.3% of TP1 trades reach TP1.5 — partial exit captures both wins |
+| `enableNRFilter` / `nrMode` / `nrLookback` | `true` / `Prefer` / 7 | **NEW** — Prefer mode is a no-op for trade execution but tracks NR-day state for A/B uplift measurement. Once 20-day data confirms uplift, flip to `Require`. |
+| `riskPct` (Pine UI display) | 1.0 | Conservative for Indian volatility |
+
+#### Signal engine (`signal_engine/config.yaml`) — execution side
+
+| Section | Key | Recommended | Addresses shortcoming |
+|---|---|---|---|
+| sizing | `risk_per_trade` | 0.01 (1%) | Capital preservation |
+| sizing | `slippage_factor` | 0.10 | Both entry + TP exit are MARKET orders; double slippage |
+| sizing | `min_entry_price` / `max_entry_price` | 150 / 800 | Matches Chartink Scanner 1 universe |
+| sizing | `use_day_start_capital` | true | Equal risk across all trades regardless of margin held |
+| risk | `daily_loss_limit` | 0.04 | Stops after 4 full-risk losers in a day |
+| risk | `weekly_loss_limit` / `monthly_loss_limit` | 0.08 / 0.10 | Bad-week / bad-month protection |
+| risk | `max_open_positions` | 2 (₹15K MIS) → 3–4 (₹25K+) | Capital-tier dependent — see PRD |
+| risk | `max_trades_per_day` | 12 | Caps portfolio-wide daily trades; recent days only hit 4 anyway |
+| risk | `min_rr` | 1.0 | TP1 = 1R |
+| risk | `min_sl_pct` | 0.005 (0.5%) | Filters noise; SL below this is inside bid-ask spread |
+| risk | `max_positions_per_symbol` | 1 | One concurrent position per symbol |
+| no_progress | `enabled` / `check_after_minutes` / `min_progress_pct` | true / 90 / 0.20 | **TUNED 2026-04-25** — 60/0.33 was cutting winners 1–2% short of TP1 |
+| no_progress | `ab_test_disable` | false | Flip to true for a 10-day control comparison; default false in production |
+| bracket | `tp1_runner_sl_buffer` | 0.3 | Locks ~0.35R profit on the runner (replaces full trailing stop) |
+| blacklist | `ORB.hard` | (12 D-grade symbols) | Full block — see config.yaml |
+| blacklist | `ORB.soft` + `soft_multiplier` | (4 regime-flipped) + 0.5 | **NEW 2026-04-25** — half-size keeps participation while limiting downside |
+| time_exit | `hour` / `minute` | 15 / 0 | 10-min broker buffer |
+
+#### How each shortcoming is addressed
+
+| Shortcoming | Mitigation now in place |
+|---|---|
+| **Trade density dropped (4.7→2.2/day)** | (a) Setup Scanner widened to Nifty 500, (b) regime-flipped stocks moved hard→soft (still trade at 50% qty), (c) Pre-market Gap Scanner adds today's movers |
+| **Premature no-progress exits at 31.x%** | Loosened to 90min / 20% — gives genuinely-stuck trades wider lane to resolve |
+| **Q1 A-graders flipped negative in Q2 (regime change)** | Soft blacklist with 50% qty preserves optionality if regime rotates back |
+| **Banks/IT sector weakness** | (a) Soft-blacklist for the affected symbols, (b) Sector-rotation overlay in Scanner 1 post-processing — manually deprioritise bottom-3 sectors by 5-day return |
+| **Static watchlist misses today's movers** | Pre-market Gap Scanner at 9:10 AM — appends top 10 gap movers, removed at EOD |
+| **No statistical edge boost beyond 67% baseline WR** | NR Filter (Prefer mode) — collects data on NR-day uplift; promote to Require once 20-day data confirms ≥3pp uplift |
+| **Friday WR weak (55.2%)** | NOT addressed in code — operational discipline only: reduce position size 50% on Fridays via `test_qty_cap` toggle, or skip Friday signals manually |
+| **Per-symbol re-entry blocked after SL** | NOT addressed in code — `sessionEntryTaken` flag still blocks. Operational workaround: monitor for failed-breakout reversals manually; do not implement until impact data justifies the complexity |
 
 ### Best Suited Instruments
 
@@ -526,7 +569,39 @@ The strategy is best suited for **liquid large-cap stocks and index futures** on
 
 ## Chartink Scanners
 
-Four scanners support the ORB pipeline:
+### What is Chartink (in plain English)
+
+**Chartink** is a free Indian stock screening website — https://chartink.com — that lets you write SQL-like queries against live and historical NSE/BSE data and get a list of stocks matching your conditions. Think of it as "Google for stocks where I get to define the search."
+
+It is **not** a community plugin or a TradingView product — it is its own standalone web tool, owned and operated by Chartink. The "community" aspect is that users publish their custom screens publicly at https://chartink.com/screeners — anyone can browse and copy them. The four scanners in this document are **custom queries we wrote for the ORB strategy**, not borrowed community screens. You use them by:
+
+1. Sign up for a free Chartink account at https://chartink.com
+2. Click "Screener" in the top nav → "Create Screener"
+3. Paste one of the queries below into the text area
+4. Click "Run Scan"
+5. Chartink returns the matching stocks in seconds
+
+You can save each query under your account, then run any saved scan in one click. Free tier is enough for everything in this document — paid tier mainly buys faster intra-bar updates and email alerts (we don't need either).
+
+**Free tier caveat:** intraday data is delayed 15 minutes. So Scanner 2 and Scanner 3 are for *audit and discovery*, not real-time execution. Your actual trade signals come from TradingView (real-time) → Telegram → signal engine. The scanners feed your TradingView **watchlist** so TradingView is watching the right stocks in the first place.
+
+### How to use the four scanners (workflow)
+
+| When | Run | What you do with the result |
+|---|---|---|
+| 3:25 PM previous day | Scanner 4 (NR7) | Mark these symbols `[NR7]` in TradingView — they are tomorrow's premier candidates |
+| 3:30–4:00 PM previous day | Scanner 1 (Setup, Nifty 500) | Build tomorrow's watchlist. Drop hard-blacklisted symbols. Tag soft-blacklisted with `[soft]`. Merge with NR7 stars. |
+| 9:00–9:10 AM market day | Scanner 1 again | Catches overnight movers that were not on yesterday's list |
+| 9:10 AM | Scanner 3 (Gap) | Top 10 by gap % go into TradingView for today only — append to watchlist, remove at end of day |
+| 9:45 / 10:00 / 10:15 / 10:30 AM | Scanner 2 (Live Breakout) | Sanity check — if Chartink shows a stock breaking out that TradingView did not alert on, that stock is missing from your watchlist. Add it for next time. |
+| After 11:00 AM | Stop scanning | Entry cutoff has passed; no new entries are valid |
+
+You do not need to do all four every day. The minimum useful loop is **Scanner 1 (3:30 PM) + Scanner 3 (9:10 AM)**. Scanners 2 and 4 are bonuses — Scanner 2 helps you find missed stocks for next time, Scanner 4 finds the highest-conviction setups.
+
+---
+
+### The four scanners
+
 1. **Setup Scanner** (Nifty 500) — night-before / pre-market watchlist build
 2. **Live Breakout Scanner** — discovery during market hours
 3. **Pre-market Gap Scanner** — 9:10 AM dynamic watchlist augmentation
