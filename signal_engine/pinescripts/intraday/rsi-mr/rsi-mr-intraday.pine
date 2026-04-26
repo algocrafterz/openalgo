@@ -1,5 +1,23 @@
 //@version=6
-// RSI(2) Mean Reversion — Intraday v3 (NSE 5-min)
+// RSI(2) Mean Reversion — Intraday v3.1 (NSE 5-min)
+// ─────────────────────────────────────────────────────────────────────────────
+// Changes from v3 (2026-04-25) — Indian NSE tuning:
+//   1. rsiThresh default: 10 → 7
+//      (deeper oversold = higher expected bounce per Connors research;
+//       7 is a balance between Canonical Connors <5 and permissive <10,
+//       favours quality over signal count)
+//   2. atrSlMult default: 1.0 → 1.25
+//      (v3 default of 1.0× is flagged "SL hunting risk" by the tooltip itself;
+//       1.25× widens SL just enough to avoid noise stops while slCapPct=1.5%
+//       still caps outsized risk; ATR meaningfully adapts to per-stock volatility)
+//   3. Entry window end: 9:44 → 9:59
+//      (STRATEGY-ANALYSIS §5.2 identifies 9:30–10:15 as the primary opportunity
+//       zone; v3 window cut off at 9:44 — only 4 entry bars. Extending to 9:59
+//       gives 7 entry bars (9:25–9:55) covering most of the primary zone while
+//       leaving 75 min for VWAP reclaim before 11:15 time exit)
+//   4. slippage: 2 → 3 ticks
+//      (₹0.15 per share on ₹150–500 NSE stocks; realistic for mid-cap liquidity
+//       during opening volatility; 2 ticks was optimistic for non-large-caps)
 // ─────────────────────────────────────────────────────────────────────────────
 // Changes from v2:
 //   1. minRR default: 0.0 → 0.5
@@ -22,12 +40,12 @@
 //   3. Volume multiplier default lowered: 1.2× → 1.0×
 // ─────────────────────────────────────────────────────────────────────────────
 // Stock selection: Chartink scanner (RSI(2) < threshold, daily).
-// Entry: 9:15–9:44 AM, price below VWAP, first qualifying 5-min bar.
+// Entry: 9:25–9:59 AM, price below VWAP, first qualifying 5-min bar.
 // TP: VWAP at entry (fixed). SL: ATR(10)×mult (primary), PDL if lower, capped at cap%.
 // Time exit: 11:15 AM. One trade per symbol per session.
 // Telegram alerts → Bot API JSON format (observation channel).
 // ─────────────────────────────────────────────────────────────────────────────
-strategy("intraday-rsi-mr-v3", shorttitle="RSI-MR", overlay=true,
+strategy("intraday-rsi-mr-v3", shorttitle="", overlay=true,
      pyramiding=0,
      default_qty_type=strategy.percent_of_equity,
      default_qty_value=10,
@@ -35,7 +53,7 @@ strategy("intraday-rsi-mr-v3", shorttitle="RSI-MR", overlay=true,
      currency=currency.INR,
      commission_type=strategy.commission.percent,
      commission_value=0.094,
-     slippage=2,
+     slippage=3,
      process_orders_on_close=false,
      calc_on_every_tick=false)
 
@@ -50,12 +68,13 @@ string GRP_TELEGRAM = "Telegram Alerts"
 // ═══════════════════════════════════════════════════════════════════════════
 // DAILY FILTER
 // ═══════════════════════════════════════════════════════════════════════════
-float rsiThresh = input.float(10.0, "RSI(2) Threshold", minval=2.0, maxval=15.0, step=1.0,
+float rsiThresh = input.float(7.0, "RSI(2) Threshold", minval=2.0, maxval=15.0, step=1.0,
      group=GRP_DAILY,
      tooltip="Match to your Chartink scanner filter.\n\n" +
      "< 5: Canonical Connors (most oversold, fewer signals)\n" +
-     "< 10: Standard starting point\n" +
-     "< 15: Permissive — more signals, lower avg quality")
+     "< 7: v3.1 default — quality/count balance for Indian mid-caps\n" +
+     "< 10: Permissive (more signals, lower avg quality)\n" +
+     "< 15: Very permissive — noisy setups")
 
 bool useTrendFilter = input.bool(true, "Require Close > SMA (Daily)", inline="trend", group=GRP_DAILY,
      tooltip="Only trade stocks above this SMA. Keeps you on the right side of the trend.")
@@ -89,10 +108,13 @@ bool requireMomentum = input.bool(true, "Momentum Filter", group=GRP_ENTRY,
 // ═══════════════════════════════════════════════════════════════════════════
 // RISK / EXIT
 // ═══════════════════════════════════════════════════════════════════════════
-float atrSlMult = input.float(1.0, "ATR(10) SL Multiplier", minval=0.5, maxval=3.0, step=0.25,
+float atrSlMult = input.float(1.25, "ATR(10) SL Multiplier", minval=0.5, maxval=3.0, step=0.25,
      group=GRP_RISK,
      tooltip="SL = entry − ATR(10) × multiplier  (adapts to each stock's volatility)\n" +
-     "1.0×: Very tight (SL hunting risk)  1.5×: Standard  2.0×: Wide (high-ATR stocks)\n\n" +
+     "1.0×: Very tight (SL hunting risk)\n" +
+     "1.25×: v3.1 default — avoids noise stops, cap still protects high-ATR cases\n" +
+     "1.5×: Standard (cap often binds on typical Indian mid-caps)\n" +
+     "2.0×: Wide (high-ATR stocks only)\n\n" +
      "ATR adapts automatically: liquid large-caps get a tighter SL, volatile mid-caps get wider.")
 
 float slCapPct = input.float(1.5, "SL Cap (% from entry)", minval=0.5, maxval=5.0, step=0.5,
@@ -154,7 +176,7 @@ _hhmm() =>
 int cur = _hhmm()
 
 int T_ENTRY_START = 9 * 60 + 25   // 9:25 AM — skip first 2 bars (VWAP/ATR unreliable before 3 bars)
-int T_ENTRY_END   = 9 * 60 + 44   // 9:44 AM — last bar start allowed
+int T_ENTRY_END   = 9 * 60 + 59   // 9:59 AM — last qualifying bar starts 9:55 (v3.1: extends into primary 9:30-10:15 zone)
 int T_TIME_EXIT   = 11 * 60 + 10  // 11:10 AM bar (closes 11:15) — v2: was 10:25
 
 bool in_entry_window = cur >= T_ENTRY_START and cur <= T_ENTRY_END
@@ -390,7 +412,7 @@ if sendTestAlert and barstate.islastconfirmedhistory
 // ═══════════════════════════════════════════════════════════════════════════
 // VISUALS — Chart background, markers, reference lines
 // ═══════════════════════════════════════════════════════════════════════════
-bgcolor(in_entry_window ? color.new(color.yellow, 93) : na, title="Entry Window 9:15-9:44")
+bgcolor(in_entry_window ? color.new(color.yellow, 93) : na, title="Entry Window 9:25-9:59")
 
 plotshape(entry_signal,
      title="Entry", style=shape.triangleup, location=location.belowbar,
@@ -547,7 +569,7 @@ if barstate.islastconfirmedhistory or barstate.isrealtime
     // ── SECTION: ENTRY CONDITIONS ────────────────────────────────
     bool entry_ok = c_vwap_gap and c_momentum and c_rr
     color ehdr_col = day_fired ? GRY : (entry_ok and filters_ok ? TEL : ORG)
-    table.cell(dash, 0, 6, "── Entry  9:15–9:44",
+    table.cell(dash, 0, 6, "── Entry  9:25–9:59",
          text_color=ehdr_col, text_size=SZT, text_halign=text.align_left)
     string win_status = day_fired ? "Done" : in_entry_window ? "Open" : cur < T_ENTRY_START ? "Waiting" : "Closed"
     table.cell(dash, 1, 6, win_status,

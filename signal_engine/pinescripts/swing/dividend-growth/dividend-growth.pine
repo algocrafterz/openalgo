@@ -467,10 +467,15 @@ visual_buy_signal = main_buy_signal
 position_crossunder = ta.crossunder(current_position, deep_value_threshold)
 deep_dip_signal = enable_dip_buying and position_crossunder and rsi_current < 50 and volume_ratio >= 1.3 and close > open
 
+// Calendar date tracking (IST) — enforces one signal per calendar day
+var int last_buy_date_id = 0
+var int last_sell_date_id = 0
+today_date_id = year(time, "Asia/Kolkata") * 10000 + month(time, "Asia/Kolkata") * 100 + dayofmonth(time, "Asia/Kolkata")
+
 // Buy signal timing
 var last_signal_bar = 0
 bars_since_last = bar_index - last_signal_bar
-sufficient_gap = bars_since_last >= min_days_between_signals
+sufficient_gap = bars_since_last >= min_days_between_signals and today_date_id != last_buy_date_id
 
 // Final buy signals
 primary_signal = main_buy_signal and sufficient_gap
@@ -484,6 +489,7 @@ var signal_strength = ""
 if final_buy_signal
     signal_strength := final_score >= strong_signal_score ? "STRONG" : final_score >= medium_signal_score ? "MEDIUM" : "WEAK"
     last_signal_bar := bar_index
+    last_buy_date_id := today_date_id
     // Store persistent signal info for live bar tracking
     if last_buy_signal_bar_index != bar_index
         last_buy_signal_bar_index := bar_index
@@ -510,7 +516,7 @@ extreme_sell_signal = enable_sell_signals and position_crossover and rsi_current
 // Sell signal timing
 var last_sell_signal_bar = 0
 bars_since_last_sell = bar_index - last_sell_signal_bar
-sufficient_sell_gap = bars_since_last_sell >= min_days_between_sell_signals
+sufficient_sell_gap = bars_since_last_sell >= min_days_between_sell_signals and today_date_id != last_sell_date_id
 
 // Final sell signals
 primary_sell_signal = main_sell_signal and sufficient_sell_gap
@@ -524,6 +530,7 @@ var sell_strength = ""
 if final_sell_signal
     sell_strength := final_sell_score >= strong_sell_score ? "STRONG" : final_sell_score >= medium_sell_score ? "MEDIUM" : "WEAK"
     last_sell_signal_bar := bar_index
+    last_sell_date_id := today_date_id
     // Store persistent signal info for live bar tracking
     if last_sell_signal_bar_index != bar_index
         last_sell_signal_bar_index := bar_index
