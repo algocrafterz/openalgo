@@ -1705,3 +1705,174 @@ class TestComputeNextTp:
         result_upper = compute_next_tp(pos, "TP1")
         result_lower = compute_next_tp(pos, "tp1")
         assert result_upper == result_lower
+
+
+class TestFillOvershotTP:
+    """Fill price exceeds TP at entry (high slippage) — position must auto-close immediately.
+
+    Reproduces the VBL Apr-29 bug: MARKET order filled at 533.95 vs TP 532.75.
+    System must cancel SL, send market close, and NOT register in tracker.
+    """
+
+    def _mock_signal(self, direction=Direction.LONG, entry=528.0, sl=519.34, tp=532.75):
+        sig = MagicMock()
+        sig.strategy = "ORB"
+        sig.symbol = "VBL"
+        sig.direction = direction
+        sig.entry = entry
+        sig.sl = sl
+        sig.tp = tp
+        sig.exchange = "NSE"
+        sig.product = "MIS"
+        return sig
+
+    @pytest.mark.asyncio
+    async def test_long_fill_above_tp_auto_closes(self):
+        """LONG fill above TP → SL cancelled, market close placed, tracker not registered."""
+        mock_signal = self._mock_signal()
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        entry_result = TradeResult(order_id="E_VBL", status=OrderStatus.SUCCESS, message="ok")
+        sl_result = TradeResult(order_id="SL_VBL", status=OrderStatus.SUCCESS, message="ok")
+        close_result = TradeResult(order_id="CLOSE_VBL", status=OrderStatus.SUCCESS, message="ok")
+
+        sent_orders = []
+
+        async def capture_send(order):
+            sent_orders.append(order)
+            if not sent_orders or len(sent_orders) == 1:
+                return entry_result
+            return close_result
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=15_000.0),
+            patch("signal_engine.main.build_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, side_effect=[entry_result, close_result]),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock,
+                  return_value=(sl_result, MagicMock())),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock) as mock_cancel,
+            patch("signal_engine.main.fetch_order_fill_price", new_callable=AsyncMock,
+                  return_value=533.95),  # fill above TP 532.75
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 15_000.0
+            mock_risk.calculate_quantity.return_value = 22
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_cnc_sl_enabled = False
+            mock_settings.risk_per_trade = 0.015
+            mock_settings.slippage_factor = 0.10
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0
+            mock_settings.mis_margin_pct = 0.20
+            mock_settings.max_sl_pct_for_sizing = 0.0
+
+            await handle_message("ORB LONG\nSymbol: VBL\nEntry: 528\nSL: 519.34\nTP: 532.75")
+
+        # SL must be cancelled before close
+        mock_cancel.assert_awaited_once_with("SL_VBL", mock_signal.strategy)
+        # Tracker must NOT have a new position registered
+        mock_tracker.register.assert_not_called()
+        # risk_engine.record_close must be called to free the slot
+        mock_risk.record_close.assert_called_once_with(0.0, symbol="VBL")
+
+    @pytest.mark.asyncio
+    async def test_short_fill_below_tp_auto_closes(self):
+        """SHORT fill below TP → same auto-close path triggered."""
+        mock_signal = self._mock_signal(
+            direction=Direction.SHORT, entry=413.5, sl=421.91, tp=408.75
+        )
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        entry_result = TradeResult(order_id="E_SHORT", status=OrderStatus.SUCCESS, message="ok")
+        sl_result = TradeResult(order_id="SL_SHORT", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=15_000.0),
+            patch("signal_engine.main.build_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock,
+                  return_value=TradeResult(order_id="E_SHORT", status=OrderStatus.SUCCESS, message="ok")),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock,
+                  return_value=(sl_result, MagicMock())),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock),
+            patch("signal_engine.main.fetch_order_fill_price", new_callable=AsyncMock,
+                  return_value=407.0),  # fill below TP 408.75 for SHORT
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 15_000.0
+            mock_risk.calculate_quantity.return_value = 23
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_cnc_sl_enabled = False
+            mock_settings.risk_per_trade = 0.015
+            mock_settings.slippage_factor = 0.10
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0
+            mock_settings.mis_margin_pct = 0.20
+            mock_settings.max_sl_pct_for_sizing = 0.0
+
+            await handle_message("ORB SHORT\nSymbol: POONAWALLA\nEntry: 413.5\nSL: 421.91\nTP: 408.75")
+
+        mock_tracker.register.assert_not_called()
+        mock_risk.record_close.assert_called_once_with(0.0, symbol="VBL")
+
+    @pytest.mark.asyncio
+    async def test_normal_fill_within_tp_registers_in_tracker(self):
+        """Fill within TP range (normal slippage) must proceed to tracker registration."""
+        mock_signal = self._mock_signal()
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        entry_result = TradeResult(order_id="E_NORM", status=OrderStatus.SUCCESS, message="ok")
+        sl_result = TradeResult(order_id="SL_NORM", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=15_000.0),
+            patch("signal_engine.main.build_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
+            patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock,
+                  return_value=(sl_result, MagicMock())),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock) as mock_cancel,
+            patch("signal_engine.main.fetch_order_fill_price", new_callable=AsyncMock,
+                  return_value=529.5),  # fill within TP 532.75 — normal
+            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+        ):
+            mock_risk.check_exposure.return_value = True
+            mock_risk.get_sizing_capital.return_value = 15_000.0
+            mock_risk.calculate_quantity.return_value = 22
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_cnc_sl_enabled = False
+            mock_settings.risk_per_trade = 0.015
+            mock_settings.slippage_factor = 0.10
+            mock_settings.sizing_mode = "fixed_fractional"
+            mock_settings.exchange = "NSE"
+            mock_settings.product = "MIS"
+            mock_settings.test_qty_cap = 0
+            mock_settings.min_capital_for_entry = 0
+            mock_settings.mis_margin_pct = 0.20
+            mock_settings.max_sl_pct_for_sizing = 0.0
+
+            await handle_message("ORB LONG\nSymbol: VBL\nEntry: 528\nSL: 519.34\nTP: 532.75")
+
+        mock_cancel.assert_not_called()       # SL must NOT be cancelled
+        mock_tracker.register.assert_called_once()  # must register normally

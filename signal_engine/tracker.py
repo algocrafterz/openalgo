@@ -65,6 +65,7 @@ class TrackedPosition:
     exit_types: List[str] = field(default_factory=list)  # labels appended at each exit leg
     entry_time: datetime = field(default_factory=lambda: datetime.now(_IST))
     be_stop_applied: bool = False  # True after no-progress detection moved SL to break-even
+    ever_seen_nonzero_qty: bool = False  # True once positionbook confirmed qty > 0 (fill proof)
 
 
 class PositionTracker:
@@ -262,6 +263,8 @@ class PositionTracker:
             qty, ltp = book_data.get(pos.symbol, (0, 0.0))
 
             if qty != 0:
+                if not pos.ever_seen_nonzero_qty:
+                    pos.ever_seen_nonzero_qty = True
                 continue
 
             # Guard 1: Min age — skip positions younger than the configured threshold.
@@ -301,26 +304,37 @@ class PositionTracker:
                 elif status_lower not in ("complete", "filled"):
                     timeout = timedelta(minutes=_settings.tracker_guard2_timeout_minutes)
                     if age >= timeout:
-                        # Order status never resolved after timeout — the positionbook has
-                        # shown qty=0 since entry with no confirmed fill. Treat as orphaned
-                        # rejection: cancel any associated SL and release the slot.
-                        # (A genuinely filled position would have appeared in positionbook
-                        # with non-zero qty for some time before closing.)
-                        logger.error(
-                            f"check_positions: {key} order status={order_status!r} still unresolved "
-                            f"after {age.total_seconds()/60:.0f}min — treating as orphaned rejection, "
-                            "releasing slot"
-                        )
-                        if pos.sl_order_id:
-                            await cancel_order(pos.sl_order_id, pos.strategy)
-                            logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
-                        self._risk_engine.record_rejection(symbol=pos.symbol)
-                        await notifier.notify_orphaned_position(
-                            pos.symbol, pos.strategy, pos.direction.value,
-                            pos.entry_order_id,
-                            f"order status={order_status!r} unresolved after {age.total_seconds()/60:.0f}min",
-                        )
-                        closed_keys.append(key)
+                        if pos.ever_seen_nonzero_qty:
+                            # Positionbook previously confirmed qty > 0, so the order DID fill.
+                            # The orderstatus API is unreliable (intermittent 500s / empty responses),
+                            # but the fill is proven. Use signal entry price as fill fallback so
+                            # Guard 3 (zero-PnL orphan check) doesn't misfire on break-even closes.
+                            logger.warning(
+                                f"check_positions: {key} order status={order_status!r} unresolved "
+                                f"after {age.total_seconds()/60:.0f}min but position was confirmed "
+                                "in positionbook — processing as real close (not orphan)"
+                            )
+                            pos.fill_price = pos.entry_price
+                            # Fall through to close processing below (no continue)
+                        else:
+                            # Never appeared in positionbook with qty > 0 — order never filled.
+                            logger.error(
+                                f"check_positions: {key} order status={order_status!r} still unresolved "
+                                f"after {age.total_seconds()/60:.0f}min and never seen in positionbook "
+                                "— treating as orphaned rejection, releasing slot"
+                            )
+                            if pos.sl_order_id:
+                                await cancel_order(pos.sl_order_id, pos.strategy)
+                                logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
+                            self._risk_engine.record_rejection(symbol=pos.symbol)
+                            await notifier.notify_orphaned_position(
+                                pos.symbol, pos.strategy, pos.direction.value,
+                                pos.entry_order_id,
+                                f"order status={order_status!r} unresolved after {age.total_seconds()/60:.0f}min, "
+                                "never seen in positionbook",
+                            )
+                            closed_keys.append(key)
+                            continue
                     else:
                         # Pending, unknown, or API error — wait for next poll cycle.
                         # Throttled: poll runs every 5s but we only need periodic
@@ -331,7 +345,7 @@ class PositionTracker:
                                 f"positionbook not yet updated — waiting "
                                 f"(age={age.total_seconds()/60:.0f}min)"
                             )
-                    continue
+                        continue
                 # status == complete/filled: order traded, position now closed (e.g. instant SL)
                 # Fall through to normal close processing.
 

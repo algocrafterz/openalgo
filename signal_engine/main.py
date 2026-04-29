@@ -769,6 +769,38 @@ async def _handle_entry(signal) -> None:
             )
         else:
             logger.warning(f"Entry fill price unavailable for {signal.symbol} id={trade_result.order_id}")
+
+        # 10a. Post-fill TP overshoot check — high slippage can push fill past the TP target,
+        # leaving the position with negative reward and a disproportionately wide SL.
+        # Detect and auto-close before registering in the tracker.
+        fill_overshot_tp = entry_fill_price and (
+            (signal.direction == Direction.LONG  and entry_fill_price >= signal.tp) or
+            (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
+        )
+        if fill_overshot_tp:
+            logger.error(
+                f"Fill overshot TP for {signal.symbol}: fill={entry_fill_price:.2f} "
+                f"tp={signal.tp:.2f} direction={signal.direction.value} — auto-closing position"
+            )
+            if sl_order_id:
+                await cancel_order(sl_order_id, signal.strategy)
+            close_order = build_exit_order(
+                symbol=signal.symbol,
+                exchange=signal.exchange or settings.exchange,
+                quantity=quantity,
+                product=signal.product or settings.product,
+                strategy_tag=signal.strategy,
+                direction=signal.direction,
+            )
+            await send_order(close_order)
+            risk_engine.record_close(0.0, symbol=signal.symbol)
+            await notifier.notify_order_rejected(
+                signal.symbol,
+                f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} — auto-closed",
+                strategy=signal.strategy,
+            )
+            return
+
         # Always notify LIVE so trader knows position is active and SL is protecting it.
         # fill_price=0 triggers "fill pending" wording in the message.
         await notifier.notify_entry_filled(

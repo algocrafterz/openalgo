@@ -27,7 +27,7 @@ sizing:
 
   # [tune] Fraction of capital to risk per trade (fixed_fractional mode).
   # 1% is conservative — Kelly fraction for this strategy is ~34%. Keep at 1% until ₹1L+.
-  risk_per_trade: 0.01
+  risk_per_trade: 0.015
 
   # [tune] Fraction of capital per trade (pct_of_capital mode only — unused when mode=fixed_fractional).
   pct_of_capital: 0.05
@@ -137,11 +137,13 @@ blacklist:
       - USHAMART         # 28.6% WR, -0.7% PnL — thin liquidity, wide spreads
       - HINDPETRO        # 33.3% WR, -0.6% PnL — OMC, policy-sensitive
       - SYNGENE          # 0% WR, -0.4% PnL — pharma, unpredictable gaps
+      - HUDCO            # 0% WR, -₹194 Apr 2026 (4 trades) — PSU housing finance, erratic ORB
     soft:
       - CANBK            # A->D in Q2: +3.30% Q1 -> -0.70% Q2 — banking regime flip
       - FEDERALBNK       # A->D in Q2: +2.41% Q1 -> -0.70% Q2 — banking regime flip
       - WIPRO            # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — IT regime flip
       - BANKBARODA       # B->D: +0.60% Q1 -> -0.70% Q2 — banking regime flip
+      - NATIONALUM       # Mixed Apr 2026: 3 break-even/small-loss closes, 1 good TP — erratic follow-through
     soft_multiplier: 0.5 # 50% qty for soft-listed symbols. 0 = effectively hard-block.
 
 # ── Time Exit ────────────────────────────────────────────

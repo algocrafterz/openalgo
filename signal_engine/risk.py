@@ -421,10 +421,11 @@ class RiskEngine:
         """Release an open-position slot for a rejected/phantom entry.
 
         Called when the tracker detects that an order was never filled (broker rejection,
-        cancelled, or zero-PnL orphan). Frees the slot WITHOUT counting a trade or
-        touching W/L/loss counters — the position never existed at the broker.
+        cancelled, or zero-PnL orphan). Frees the slot AND un-counts the trade —
+        the position never existed at the broker so it should not consume a daily slot.
         """
         self.open_positions = max(0, self.open_positions - 1)
+        self.trades_today = max(0, self.trades_today - 1)
         if symbol:
             self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
             sector = self._symbol_to_sector.get(symbol)

@@ -732,7 +732,7 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
     msg += "Target: " + str.tostring(tpPrice, "#.##") + "\\n"
     msg += "SL: " + str.tostring(slPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
-    msg += "TP1_5: " + str.tostring(tp1_5Price, "#.##") + "\\n"
+    msg += "TP1.5: " + str.tostring(tp1_5Price, "#.##") + "\\n"
     msg += "TP2: " + str.tostring(tp2Price, "#.##") + "\\n"
     msg += "TP3: " + str.tostring(tp3Price, "#.##") + "\\n"
     msg += "------------------------\\n"

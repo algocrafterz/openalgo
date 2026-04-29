@@ -38,9 +38,11 @@ main.py (_handle_entry / _handle_exit)
 5. Apply `test_qty_cap` if set
 6. `build_order()` + `send_order()` → `POST /api/v1/placeorder`
 7. `send_bracket_legs()` → SL-M order only (see OCO constraint below)
-8. `tracker.register()` → track for SL fill detection
-9. `risk_engine.record_trade()` → persist counters
-10. Notify + persist to DB
+8. `fetch_order_fill_price()` → confirm actual fill price
+   - **10a. Fill overshoot check**: if fill ≥ TP (LONG) or fill ≤ TP (SHORT), cancel SL + send MARKET close + `record_close(0.0)` + return. Position never registered in tracker. Triggered by MARKET order execution lag on fast ORB breakouts where the entire TP range (e.g. 0.9%) is consumed before the order reaches the broker (VBL 2026-04-29: fill 533.95 vs TP 532.75).
+9. `tracker.register()` → track for SL fill detection
+10. `risk_engine.record_trade()` → persist counters
+11. Notify + persist to DB
 
 ### Exit (TP HIT / SL HIT / EXIT signal)
 1. Normalizer converts `"ORB TP1 HIT | SYMBOL"` or `"ORB SL HIT | SYMBOL"` → canonical EXIT signal
@@ -57,6 +59,36 @@ main.py (_handle_entry / _handle_exit)
    - Telegram notification includes: booked qty, remaining qty, new SL, next TP price
    - **TP1.5 exit fires only on TradingView TP1.5 HIT alert** — engine has no autonomous LTP monitoring for TP exits. If the alert is delayed/missing, runner holds until runner SL fires or time exit at 15:00.
 9. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
+
+---
+
+## Recent Changes (2026-04-29)
+
+### Bug Fix: Fill-above-TP auto-close (main.py)
+
+MARKET entry orders on fast ORB breakouts can fill past the TP price due to execution lag (Telegram delivery + API round-trip, typically 2–5s). When the TP range is narrow (e.g. 0.9%), the entire target can be consumed before the broker executes. VBL 2026-04-29: fill 533.95 vs TP 532.75 (range 4.75pts), SL at 519.34 — holding the position would mean full downside with no upside.
+
+**Fix:** Post-fill overshoot check added after `fetch_order_fill_price()` (pipeline step 10a). If fill ≥ TP (LONG) or fill ≤ TP (SHORT): SL cancelled, MARKET close sent, `record_close(0.0)` called, function returns. Position is never registered in tracker.
+
+### Bug Fix: Rejected trades un-counted from daily trade limit (risk.py)
+
+When the broker rejects a MIS order (T2T/BE series stocks, margin issues), `record_rejection()` released the open-position slot but left `trades_today` incremented. On active days with repeated rejections (e.g. 3 MIS-restricted stocks), the daily trade limit could be exhausted by phantom trades, blocking valid signals for the rest of the day.
+
+**Fix:** `record_rejection()` now decrements both `open_positions` and `trades_today` (with floor at 0). Only `open_positions` and `trades_today` are touched — loss counters are unchanged (the trade never existed at the broker).
+
+### Bug Fix: Guard 2 orphan false-positive on filled positions (tracker.py)
+
+Guard 2 relied solely on `orderstatus` API to determine fill status. When the broker API returns HTTP 500 or empty strings (as seen in the Apr-22 incident), Guard 2 times out and incorrectly treats a genuinely filled position as an orphaned rejection — cancelling the SL and releasing the slot on a live position.
+
+**Fix:** `TrackedPosition` gains `ever_seen_nonzero_qty: bool`. Set to `True` in the poll loop whenever positionbook reports qty > 0. Guard 2 timeout now checks this flag: if set, processes as real close (calls `_process_close`) rather than orphan cleanup — because positionbook qty > 0 is broker-side proof of fill, independent of the orderstatus API.
+
+### Config Updates (config.yaml)
+
+- `risk_per_trade: 0.015` (was 0.01) — temporary 1.5% until capital raised to ₹35K
+- `blacklist.ORB.hard` — added HUDCO (0% WR, 4 trades, -₹194 Apr 2026, erratic ORB)
+- `blacklist.ORB.soft` — added NATIONALUM (mixed Apr 2026: 3 break-even/small-loss, 1 good TP, erratic follow-through)
+
+**Files**: `main.py`, `risk.py`, `tracker.py`, `config.yaml`, `tests/test_main.py`, `tests/test_risk.py`, `tests/test_tracker.py`.
 
 ---
 
@@ -170,7 +202,7 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 | `risk.py` | Position sizing (`RiskEngine`), exposure limits, portfolio heat; `record_rejection()` for phantom orders |
 | `risk_store.py` | SQLite persistence for risk counters (restart-safe). Path: `RISK_DB_PATH` |
 | `executor.py` | Order construction + OpenAlgo API calls |
-| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; three-guard close detection (Guard 1: min age, Guard 2: orderstatus with rejection/timeout-orphan, Guard 3: zero-PnL orphan); all orphan paths cancel associated SL order; race guard (`_positions.get(key) is not pos`) under `_pnl_lock` prevents double-close; per-(key,kind) debug throttling via `_should_log_debug()` |
+| `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; three-guard close detection (Guard 1: min age, Guard 2: orderstatus with rejection/timeout-orphan, Guard 3: zero-PnL orphan); `ever_seen_nonzero_qty` flag — set when positionbook shows qty>0 at any poll; Guard 2 timeout treats position as real close (not orphan) when flag is set; all orphan paths cancel associated SL order; race guard (`_positions.get(key) is not pos`) under `_pnl_lock` prevents double-close; per-(key,kind) debug throttling via `_should_log_debug()` |
 | `api_client.py` | All async OpenAlgo API calls |
 | `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary); `format_day_context()` / `format_slot_context()` helpers for running day telemetry lines |
 | `config.py` | Fail-fast config loader (`Settings` dataclass singleton); no_progress, tracking sections |
@@ -184,7 +216,7 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 
 | Function | Module | Purpose |
 |----------|--------|---------|
-| `record_rejection()` | `risk.py` | Release position slot for phantom/unfilled orders without counting trade |
+| `record_rejection()` | `risk.py` | Release position slot AND un-count `trades_today` for rejected/phantom orders (position never existed at broker) |
 | `is_t2t_symbol()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
 | `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
 | `notify_be_stop_applied()` | `notifier.py` | Log-only: SL moved to break-even (no Telegram) |
@@ -717,7 +749,7 @@ openalgoctl.sh run
 ## Testing
 
 ```bash
-# Full test suite (406 tests)
+# Full test suite (446 tests)
 PYTHONPATH=. uv run pytest signal_engine/tests/ -v
 
 # With coverage

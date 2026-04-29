@@ -676,6 +676,39 @@ class TestGuard2Timeout:
         assert tracker.tracked_count == 0  # orphan released
         mock_cancel.assert_awaited_once_with("SL_ORPHAN", pos.strategy)  # orphaned SL cancelled
 
+    @pytest.mark.asyncio
+    async def test_guard2_processes_real_close_when_position_was_seen_filled(self):
+        """Guard 2 timeout with ever_seen_nonzero_qty=True must NOT orphan the position.
+
+        Reproduces the Apr 22 bug: orderstatus API returns '' (500 errors) but the position
+        DID appear in positionbook with qty > 0 earlier. The tracker was wrongly releasing
+        the slot as an orphan rejection, leaving live unmanaged broker positions.
+        """
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 1000.0  # baseline
+        old_entry = datetime.now(_IST) - timedelta(minutes=35)  # > 30 min guard2_timeout
+        pos = _make_position(fill_price=0.0, entry_order_id="ORDER_REAL", entry_time=old_entry)
+        pos.sl_order_id = "SL_REAL"
+        pos.ever_seen_nonzero_qty = True  # position WAS confirmed in positionbook
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1200.0),
+            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock) as mock_orphan,
+            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        # Must NOT be treated as orphan — slot released via record_close, not record_rejection
+        mock_orphan.assert_not_awaited()
+        mock_cancel.assert_not_awaited()  # SL not cancelled (already gone with the close)
+        assert tracker.tracked_count == 0  # position recorded as closed
+
 
 class TestNoProgressProfitLock:
     """no_progress break-even with profit_lock_ratio locks partial unrealized profit."""

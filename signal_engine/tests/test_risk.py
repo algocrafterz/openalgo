@@ -385,6 +385,31 @@ class TestRecordTrade:
         assert engine.open_positions == 2
 
 
+class TestRecordRejection:
+    def test_rejection_frees_slot_and_uncounts_trade(self):
+        engine = _engine()
+        engine.record_trade(symbol="IIFL")
+        assert engine.trades_today == 1
+        assert engine.open_positions == 1
+
+        engine.record_rejection(symbol="IIFL")
+        assert engine.open_positions == 0
+        assert engine.trades_today == 0  # broker rejection: slot AND trade count restored
+
+    def test_rejection_does_not_go_negative(self):
+        engine = _engine()
+        engine.record_rejection(symbol="POONAWALLA")
+        assert engine.trades_today == 0
+        assert engine.open_positions == 0
+
+    def test_rejection_does_not_touch_loss_counters(self):
+        engine = _engine()
+        engine.record_trade(symbol="ITCHOTELS")
+        engine.record_rejection(symbol="ITCHOTELS")
+        assert engine.daily_realised_loss == 0
+        assert engine.weekly_realised_loss == 0
+
+
 class TestRecordClose:
     def test_loss_updates_counters(self):
         engine = _engine()
