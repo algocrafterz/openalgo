@@ -90,7 +90,7 @@ risk:
 
   # [tune] Minimum reward:risk ratio to accept a signal. Strategy-level minimums are enforced
   # by PineScript (ORB >= 1:1, RSI-TP-MR >= 0.5). This is a safety net for parser edge cases.
-  min_rr: 0.5
+  min_rr: 0.75
 
   # [tune] Suppress duplicate signals for the same symbol+strategy within this window.
   duplicate_window_seconds: 60

@@ -850,24 +850,14 @@ hasVolumeConfirmation(volMA, mult, strongMult) =>
 // =========================================== TARGET & STOP FUNCTIONS ================================
 calculateTargets(entry, sl, isBullish) =>
     float risk = math.abs(entry - sl)
-    float orbWidth = actH - actL  // Current ORB width
+    // Slight discount for high-priced stocks (less volatile in absolute terms)
+    float riskAdjustment = entry < 1000 ? 1.0 : entry < 5000 ? 0.8 : 0.6
 
-    float riskAdjustment = entry < 1000 ? 1.0 : entry < 5000 ? 0.8 :  0.6
-
-    float tp1_orb = isBullish ? entry + (orbWidth * 1.0) : entry - (orbWidth * 1.0)
-    float tp1_5_orb = isBullish ? entry + (orbWidth * 1.5) : entry - (orbWidth * 1.5)
-    float tp2_orb = isBullish ? entry + (orbWidth * 2.0) : entry - (orbWidth * 2.0)
-    float tp3_orb = isBullish ? entry + (orbWidth * 3.0) : entry - (orbWidth * 3.0)
-
-    float tp1_risk = isBullish ? entry + (risk * 1.0 * riskAdjustment) : entry - (risk * 1.0 * riskAdjustment)
-    float tp1_5_risk = isBullish ? entry + (risk * 1.5 * riskAdjustment) : entry - (risk * 1.5 * riskAdjustment)
-    float tp2_risk = isBullish ? entry + (risk * 2.0 * riskAdjustment) : entry - (risk * 2.0 * riskAdjustment)
-    float tp3_risk = isBullish ? entry + (risk * 3.0 * riskAdjustment) : entry - (risk * 3.0 * riskAdjustment)
-
-    float tp1 = isBullish ? math.min(tp1_orb, tp1_risk) : math.max(tp1_orb, tp1_risk)
-    float tp1_5 = isBullish ? math.min(tp1_5_orb, tp1_5_risk) : math.max(tp1_5_orb, tp1_5_risk)
-    float tp2 = isBullish ? math.min(tp2_orb, tp2_risk) : math.max(tp2_orb, tp2_risk)
-    float tp3 = isBullish ? math.min(tp3_orb, tp3_risk) : math.max(tp3_orb, tp3_risk)
+    // Risk-only TPs: 1R, 1.5R, 2R, 3R — consistent R:R regardless of ORB width
+    float tp1   = isBullish ? entry + (risk * 1.0 * riskAdjustment) : entry - (risk * 1.0 * riskAdjustment)
+    float tp1_5 = isBullish ? entry + (risk * 1.5 * riskAdjustment) : entry - (risk * 1.5 * riskAdjustment)
+    float tp2   = isBullish ? entry + (risk * 2.0 * riskAdjustment) : entry - (risk * 2.0 * riskAdjustment)
+    float tp3   = isBullish ? entry + (risk * 3.0 * riskAdjustment) : entry - (risk * 3.0 * riskAdjustment)
 
     [tp1, tp1_5, tp2, tp3]
 
