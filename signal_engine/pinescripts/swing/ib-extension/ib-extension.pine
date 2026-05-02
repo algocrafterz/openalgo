@@ -42,8 +42,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
 strategy(
-     title                   = "IB Extension Strategy v2",
-     shorttitle              = "IB-EXT v2",
+     title                   = "swing-ib-extension",
+     shorttitle              = "",
      overlay                 = true,
      pyramiding              = 0,
      default_qty_type        = strategy.percent_of_equity,
