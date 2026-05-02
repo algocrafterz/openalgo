@@ -160,6 +160,8 @@ showSessionBg    = input.bool(true,  "Highlight IB Formation Windows", group=grp
      tooltip="Cyan tint = Daily IB forming (09:15-10:15 IST). Amber tint = Weekly IB forming (Mon-Tue session). Helps visually separate the setup phase from the signal phase.")
 showIBLabels     = input.bool(true,  "Show IB Level Price Labels",     group=grp_display,
      tooltip="Tags showing exact price of each IB level at the right edge of the chart. Eliminates the need to hover over lines to read prices.")
+ibLookbackWeeks  = input.int(4, "IB Lines Lookback (weeks)", minval=1, maxval=52, group=grp_display,
+     tooltip="How far back IB lines are drawn, measured in bar count from the newest bar (1 week = 65 bars = 5 days × 13 NSE 30-min bars). Bar-index based — consistent across all stocks regardless of each symbol's data depth on TradingView.")
 
 // ─── Telegram ──────────────────────────────────────────────────────────────────────────
 telegram_chat_id = input.string("-1003971195800", "Telegram Chat ID", group=grp_telegram,
@@ -521,34 +523,40 @@ if inShort and not na(entrySL) and not na(entryTP1)
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // PLOTS — IB lines + Extensions
 // ═══════════════════════════════════════════════════════════════════════════════════════
+// Lookback gate: bar-index distance from last bar — pure integer arithmetic, no timestamp
+// precision issues. (last_bar_index - bar_index) = 0 on newest bar, grows as you go back.
+// 65 bars ≈ 1 week on NSE 30-min chart (5 trading days × 13 bars/day).
+// This is consistent across symbols regardless of each stock's data depth on TradingView.
+bool inLookback = (last_bar_index - bar_index) <= ibLookbackWeeks * 65
+
 // Daily IB lines: only shown Wed-Fri (weeklyDow). Mon-Tue are IB formation days —
 // no signal can fire there, so rendering D levels creates misleading reference lines.
-plot(showDailyIB and dailyValidNow and weeklyDow ? dailyIBHigh : na, "Daily IB High", color=colDailyIB,
+plot(showDailyIB and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh : na, "Daily IB High", color=colDailyIB,
      style=plot.style_linebr, linewidth=2)
-plot(showDailyIB and dailyValidNow and weeklyDow ? dailyIBLow  : na, "Daily IB Low",  color=colDailyIB,
+plot(showDailyIB and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  : na, "Daily IB Low",  color=colDailyIB,
      style=plot.style_linebr, linewidth=2)
-plot(showDailyIB and dailyValidNow and weeklyDow ? dailyIBMid  : na, "Daily IB Mid",  color=colDailyIB,
+plot(showDailyIB and dailyValidNow and weeklyDow and inLookback ? dailyIBMid  : na, "Daily IB Mid",  color=colDailyIB,
      style=plot.style_linebr, linewidth=1)
 
-plot(showWeeklyIB and weeklyValidDay ? weeklyIBHigh : na, "Weekly IB High", color=colWeeklyIB,
+plot(showWeeklyIB and weeklyValidDay and inLookback ? weeklyIBHigh : na, "Weekly IB High", color=colWeeklyIB,
      style=plot.style_linebr, linewidth=2)
-plot(showWeeklyIB and weeklyValidDay ? weeklyIBLow  : na, "Weekly IB Low",  color=colWeeklyIB,
+plot(showWeeklyIB and weeklyValidDay and inLookback ? weeklyIBLow  : na, "Weekly IB Low",  color=colWeeklyIB,
      style=plot.style_linebr, linewidth=2)
-plot(showWeeklyIB and weeklyValidDay ? weeklyIBMid  : na, "Weekly IB Mid",  color=colWeeklyIB,
+plot(showWeeklyIB and weeklyValidDay and inLookback ? weeklyIBMid  : na, "Weekly IB Mid",  color=colWeeklyIB,
      style=plot.style_linebr, linewidth=1)
 
-// Extension levels: same weeklyDow gate as D lines
-plot(showExtensions and dailyValidNow and weeklyDow ? dailyIBHigh + dailyIBRange * 0.5 : na, "DIB Hi 50%",
+// Extension levels: same weeklyDow + inLookback gate as D lines
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 0.5 : na, "DIB Hi 50%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow ? dailyIBHigh + dailyIBRange * 1.0 : na, "DIB Hi 100%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 1.0 : na, "DIB Hi 100%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow ? dailyIBHigh + dailyIBRange * 2.0 : na, "DIB Hi 200%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 2.0 : na, "DIB Hi 200%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow ? dailyIBLow  - dailyIBRange * 0.5 : na, "DIB Lo 50%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 0.5 : na, "DIB Lo 50%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow ? dailyIBLow  - dailyIBRange * 1.0 : na, "DIB Lo 100%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 1.0 : na, "DIB Lo 100%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow ? dailyIBLow  - dailyIBRange * 2.0 : na, "DIB Lo 200%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 2.0 : na, "DIB Lo 200%",
      color=colExtension, style=plot.style_cross, linewidth=1)
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
