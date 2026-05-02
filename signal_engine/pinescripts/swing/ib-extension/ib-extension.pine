@@ -15,7 +15,7 @@
 // 3-CONDITION AND GATE FOR STRONG BUY:
 //   • Close > Weekly IB High         (W-BO = weekly breakout above Mon+Tue range)
 //   • Close > Daily  IB High         (D-BO = daily breakout above morning range)
-//   • Volume > 1.5× 20-period avg    (VOL  = confirms real buying interest)
+//   • Volume > 1.5× 65-bar SMA (5 days)  (VOL  = confirms real buying interest)
 // (STRONG SELL = mirror; WATCH LONG/SHORT = weekly broken but daily still inside)
 //
 // BACKTESTING (Strategy Report):
@@ -72,7 +72,7 @@ grp_display  = "🎨 DISPLAY ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
 grp_telegram = "📱 TELEGRAM ALERTS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
 // ─── Mode ──────────────────────────────────────────────────────────────────────────────
-tradeMode = input.string("Intraday", "Trade Mode", options=["Intraday", "Swing"], group=grp_mode,
+tradeMode = input.string("Swing", "Trade Mode", options=["Intraday", "Swing"], group=grp_mode,
      tooltip="Passed to the signal_engine in the alert JSON. INTRADAY = signal_engine exits position by 15:00 IST. SWING = signal_engine holds up to 5 days.")
 
 // ─── IB Definitions ────────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ useVolFilter   = input.bool(true, "Enable Volume Filter",        group=grp_signa
 volMaLength    = input.int(65,    "Volume SMA Length",            minval=5,   group=grp_signal,
      tooltip="NSE has 13 thirty-minute bars per day (9:00–15:30). 65 bars = 5 trading days (1 week) of baseline. Short values like 20 (= 1.5 days) are skewed by a single high-volume morning.")
 volMultiplier  = input.float(1.5, "Volume Confirmation × SMA",   minval=1.0, step=0.1, group=grp_signal,
-     tooltip="1.5 = breakout bar must have 50% more volume than the 20-bar average. Below this threshold the move is likely a low-conviction drift that reverses. 1.2 is too easy (most bars pass); 2.0 is too strict (filters genuine setups).")
+     tooltip="1.5 = breakout bar must have 50% more volume than the 65-bar SMA (5-day baseline). Below this threshold the move is likely a low-conviction drift that reverses. 1.2 is too easy (most bars pass); 2.0 is too strict (filters genuine setups).")
 
 useRRFilter    = input.bool(false, "Enable Min R:R Filter",       group=grp_signal,
      tooltip="OFF by default. When on, a signal is suppressed if the estimated R:R (SL = D-IB-Low minus ATR buffer, TP = D-IB-High plus extension) is below the threshold. Useful to skip setups where the morning range is too wide relative to the target.")
@@ -656,6 +656,10 @@ f_remoteSignal(string sym) =>
 
     bool valid = not na(dH) and not na(dL) and not na(wH) and not na(wL)
 
+    // D-Range % and Vol multiple — returned to scanner regardless of signal
+    float dRangePct = valid ? (dH - dL) / ((dH + dL) / 2.0) * 100.0 : na
+    float volMult   = (not na(vS) and vS > 0) ? v / vS : na
+
     string sig = "NO TRADE"
     if valid
         float dM = (dH + dL) / 2.0
@@ -684,25 +688,25 @@ f_remoteSignal(string sym) =>
             sig := "WATCH UP"
         else if wbN and wbLo and not (dbHi or dbLo)
             sig := "WATCH DN"
-    sig
+    [sig, dRangePct, volMult]
 
-// Build scanner table once
-var table scanner = table.new(position.top_right, 3, 11,
+// Build scanner table once — 5 cols: SYMBOL | SIGNAL | D-RNG% | VOL× | TIME
+var table scanner = table.new(position.top_right, 5, 11,
      bgcolor=color.new(color.black, 80),
      border_width=1,
      border_color=color.new(color.gray, 50))
 
-// Pull signals once per bar (lightweight on barstate.islast)
-string s1  = f_remoteSignal(sym1)
-string s2  = f_remoteSignal(sym2)
-string s3  = f_remoteSignal(sym3)
-string s4  = f_remoteSignal(sym4)
-string s5  = f_remoteSignal(sym5)
-string s6  = f_remoteSignal(sym6)
-string s7  = f_remoteSignal(sym7)
-string s8  = f_remoteSignal(sym8)
-string s9  = f_remoteSignal(sym9)
-string s10 = f_remoteSignal(sym10)
+// Pull signals — returns [signal, dRangePct, volMult] per symbol
+[s1,  dr1,  vm1]  = f_remoteSignal(sym1)
+[s2,  dr2,  vm2]  = f_remoteSignal(sym2)
+[s3,  dr3,  vm3]  = f_remoteSignal(sym3)
+[s4,  dr4,  vm4]  = f_remoteSignal(sym4)
+[s5,  dr5,  vm5]  = f_remoteSignal(sym5)
+[s6,  dr6,  vm6]  = f_remoteSignal(sym6)
+[s7,  dr7,  vm7]  = f_remoteSignal(sym7)
+[s8,  dr8,  vm8]  = f_remoteSignal(sym8)
+[s9,  dr9,  vm9]  = f_remoteSignal(sym9)
+[s10, dr10, vm10] = f_remoteSignal(sym10)
 
 f_rowColor(string sig) =>
     color c = colNoTrade
@@ -714,31 +718,47 @@ f_rowColor(string sig) =>
         c := colWatch
     c
 
-f_renderRow(int row, string sym, string sig) =>
-    color rc = f_rowColor(sig)
+f_renderRow(int row, string sym, string sig, float dRangePct, float volMult) =>
+    color rc  = f_rowColor(sig)
+    color hdr = color.new(#1F3864, 0)
+    // Col 0: symbol
     table.cell(scanner, 0, row, sym, bgcolor=rc, text_color=color.white, text_size=size.small)
+    // Col 1: signal
     table.cell(scanner, 1, row, sig, bgcolor=rc, text_color=color.white, text_size=size.small,
          text_halign=text.align_center)
-    table.cell(scanner, 2, row, str.format_time(time, "HH:mm", nseTimezone),
-         bgcolor=rc, text_color=color.white, text_size=size.small)
+    // Col 2: D-Range% — green=valid (0.15–2.5%), red=invalid/na
+    string drStr = not na(dRangePct) ? str.tostring(dRangePct, "#.##") + "%" : "N/A"
+    bool   drOK  = not na(dRangePct) and dRangePct >= dailyRangeMinPct and dRangePct <= dailyRangeMaxPct
+    color  drBg  = na(dRangePct) ? color.new(color.gray, 70) : drOK ? color.new(color.teal, 40) : color.new(color.red, 50)
+    table.cell(scanner, 2, row, drStr, bgcolor=drBg, text_color=color.white, text_size=size.small,
+         text_halign=text.align_center)
+    // Col 3: Vol× — green=above threshold, red=below, gray=filter off
+    string vmStr = not na(volMult) ? str.tostring(volMult, "#.#") + "×" : "N/A"
+    bool   vmOK  = not na(volMult) and volMult >= volMultiplier
+    color  vmBg  = not useVolFilter ? color.new(color.gray, 70) : na(volMult) ? color.new(color.gray, 70) : vmOK ? color.new(color.teal, 40) : color.new(color.red, 50)
+    table.cell(scanner, 3, row, vmStr, bgcolor=vmBg, text_color=color.white, text_size=size.small,
+         text_halign=text.align_center)
+    // Col 4: time
+    table.cell(scanner, 4, row, str.format_time(time, "HH:mm", nseTimezone),
+         bgcolor=rc, text_color=color.white, text_size=size.small, text_halign=text.align_center)
 
 if showScanner and barstate.islast
-    table.cell(scanner, 0, 0, "SYMBOL",  bgcolor=color.new(#1F3864, 0), text_color=color.white,
-         text_size=size.small)
-    table.cell(scanner, 1, 0, "SIGNAL",  bgcolor=color.new(#1F3864, 0), text_color=color.white,
-         text_size=size.small, text_halign=text.align_center)
-    table.cell(scanner, 2, 0, "TIME",    bgcolor=color.new(#1F3864, 0), text_color=color.white,
-         text_size=size.small)
-    f_renderRow(1,  sym1,  s1)
-    f_renderRow(2,  sym2,  s2)
-    f_renderRow(3,  sym3,  s3)
-    f_renderRow(4,  sym4,  s4)
-    f_renderRow(5,  sym5,  s5)
-    f_renderRow(6,  sym6,  s6)
-    f_renderRow(7,  sym7,  s7)
-    f_renderRow(8,  sym8,  s8)
-    f_renderRow(9,  sym9,  s9)
-    f_renderRow(10, sym10, s10)
+    color hdrBg = color.new(#1F3864, 0)
+    table.cell(scanner, 0, 0, "SYMBOL",  bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+    table.cell(scanner, 1, 0, "SIGNAL",  bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    table.cell(scanner, 2, 0, "D-RNG%",  bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    table.cell(scanner, 3, 0, "VOL×",    bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    table.cell(scanner, 4, 0, "TIME",    bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    f_renderRow(1,  sym1,  s1,  dr1,  vm1)
+    f_renderRow(2,  sym2,  s2,  dr2,  vm2)
+    f_renderRow(3,  sym3,  s3,  dr3,  vm3)
+    f_renderRow(4,  sym4,  s4,  dr4,  vm4)
+    f_renderRow(5,  sym5,  s5,  dr5,  vm5)
+    f_renderRow(6,  sym6,  s6,  dr6,  vm6)
+    f_renderRow(7,  sym7,  s7,  dr7,  vm7)
+    f_renderRow(8,  sym8,  s8,  dr8,  vm8)
+    f_renderRow(9,  sym9,  s9,  dr9,  vm9)
+    f_renderRow(10, sym10, s10, dr10, vm10)
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // PLOTSHAPES (visual entry markers on chart)
@@ -788,7 +808,7 @@ if showDebugPanel and barstate.islast
     string dPctStr = not na(dailyIBRange) and not na(dailyIBMid) and dailyIBMid > 0 ? str.tostring(dailyIBRange / dailyIBMid * 100.0, "#.##") + "%" : "N/A"
     table.cell(debugTbl, 0, 2, "D-IB valid?",
          bgcolor=f_passCol(dailyIBValid),  text_color=color.white, text_size=size.normal,
-         tooltip="Daily IB (09:15–09:45 bars, 2 candles) must be between 0.15%–2.5% of mid. Too tight = choppy open. Too wide = gap or news spike. Both are unreliable setups.")
+         tooltip="Daily IB (09:00, 09:30, 10:00 bars — 3 candles on 30-min TF) must be between 0.15%–2.5% of mid. Too tight = choppy open. Too wide = gap or news spike. Both are unreliable setups.")
     table.cell(debugTbl, 1, 2, dPctStr,
          bgcolor=f_passCol(dailyIBValid),  text_color=color.white, text_size=size.normal)
 
@@ -809,7 +829,7 @@ if showDebugPanel and barstate.islast
     // Row 5 — Daily Breakout (Gate 2)
     table.cell(debugTbl, 0, 5, "D-BO (>D-High)",
          bgcolor=f_passCol(dBOHigh), text_color=color.white, text_size=size.normal,
-         tooltip="Gate 2: Close must be ABOVE today's Daily IB High (the high of the 09:15 + 09:45 candles). Confirms intraday momentum agrees with the weekly direction. FAIL = price is inside or below this morning's range.")
+         tooltip="Gate 2: Close must be ABOVE today's Daily IB High (max of the 09:00, 09:30, 10:00 candles on 30-min TF). Confirms intraday momentum agrees with the weekly direction. FAIL = price is inside or below this morning's range.")
     table.cell(debugTbl, 1, 5, f_passStr(dBOHigh),
          bgcolor=f_passCol(dBOHigh), text_color=color.white, text_size=size.normal)
 
@@ -819,7 +839,7 @@ if showDebugPanel and barstate.islast
     color  volBg    = useVolFilter ? f_passCol(volAboveSMA) : color.new(color.gray, 60)
     table.cell(debugTbl, 0, 6, volLabel,
          bgcolor=volBg, text_color=color.white, text_size=size.normal,
-         tooltip="Optional gate (toggle in Inputs > Signal Filters). When ON: signal fires only when volume >= " + str.tostring(volMultiplier, "#.#") + "× the 20-bar SMA. When OFF: volume is ignored and all IB breakouts are shown regardless of participation.")
+         tooltip="Optional gate (toggle in Inputs > Signal Filters). When ON: signal fires only when volume >= " + str.tostring(volMultiplier, "#.#") + "× the " + str.tostring(volMaLength) + "-bar SMA. When OFF: volume is ignored and all IB breakouts are shown regardless of participation.")
     table.cell(debugTbl, 1, 6, volVal,
          bgcolor=volBg, text_color=color.white, text_size=size.normal)
 
