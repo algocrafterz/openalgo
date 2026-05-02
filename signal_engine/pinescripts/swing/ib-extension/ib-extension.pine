@@ -162,7 +162,7 @@ showIBLabels     = input.bool(true,  "Show IB Level Price Labels",     group=grp
      tooltip="Tags showing exact price of each IB level at the right edge of the chart. Eliminates the need to hover over lines to read prices.")
 
 // ─── Telegram ──────────────────────────────────────────────────────────────────────────
-telegram_chat_id = input.string("-1003518225740", "Telegram Chat ID", group=grp_telegram,
+telegram_chat_id = input.string("-1003971195800", "Telegram Chat ID", group=grp_telegram,
      tooltip="Your Telegram channel/group chat ID (starts with -).\n\nHOW TO GET:\n1. Add @userinfobot to your channel\n2. Forward any message to the bot\n3. Copy the chat ID shown")
 sendTestAlert    = input.bool(false, "Send Test Alert", group=grp_telegram,
      tooltip="HOW TO TEST:\n1. Enable this toggle\n2. Create a TradingView alert: 'Any alert() function call'\n3. Webhook URL: https://api.telegram.org/bot<TOKEN>/sendMessage\n4. Alert fires on last bar — check Telegram\n5. Disable after verifying")
