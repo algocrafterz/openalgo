@@ -529,23 +529,22 @@ if inShort and not na(entrySL) and not na(entryTP1)
 // This is consistent across symbols regardless of each stock's data depth on TradingView.
 bool inLookback = (last_bar_index - bar_index) <= ibLookbackWeeks * 65
 
-// Daily IB lines: only shown Wed-Fri (weeklyDow). Mon-Tue are IB formation days —
-// no signal can fire there, so rendering D levels creates misleading reference lines.
-plot(showDailyIB and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh : na, "Daily IB High", color=colDailyIB,
-     style=plot.style_linebr, linewidth=2)
-plot(showDailyIB and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  : na, "Daily IB Low",  color=colDailyIB,
-     style=plot.style_linebr, linewidth=2)
-plot(showDailyIB and dailyValidNow and weeklyDow and inLookback ? dailyIBMid  : na, "Daily IB Mid",  color=colDailyIB,
-     style=plot.style_linebr, linewidth=1)
+// Display rule: show lines whenever IB data exists within the lookback window.
+// Validity (range bounds) is signal logic only — never affects line visibility.
+// dailyHasData  = IB computed + post-formation window + Wed-Fri + within lookback
+// weeklyHasData = Wed-Fri + IB computed + within lookback
+bool dailyHasData  = not na(dailyIBHigh) and not inDailyIB and weeklyDow and inLookback
+bool weeklyHasData = weeklyDow and not na(weeklyIBHigh) and inLookback
 
-plot(showWeeklyIB and weeklyValidDay and inLookback ? weeklyIBHigh : na, "Weekly IB High", color=colWeeklyIB,
-     style=plot.style_linebr, linewidth=2)
-plot(showWeeklyIB and weeklyValidDay and inLookback ? weeklyIBLow  : na, "Weekly IB Low",  color=colWeeklyIB,
-     style=plot.style_linebr, linewidth=2)
-plot(showWeeklyIB and weeklyValidDay and inLookback ? weeklyIBMid  : na, "Weekly IB Mid",  color=colWeeklyIB,
-     style=plot.style_linebr, linewidth=1)
+plot(showDailyIB  and dailyHasData  ? dailyIBHigh  : na, "Daily IB High",  color=colDailyIB,  style=plot.style_linebr, linewidth=2)
+plot(showDailyIB  and dailyHasData  ? dailyIBLow   : na, "Daily IB Low",   color=colDailyIB,  style=plot.style_linebr, linewidth=2)
+plot(showDailyIB  and dailyHasData  ? dailyIBMid   : na, "Daily IB Mid",   color=colDailyIB,  style=plot.style_linebr, linewidth=1)
 
-// Extension levels: same weeklyDow + inLookback gate as D lines
+plot(showWeeklyIB and weeklyHasData ? weeklyIBHigh : na, "Weekly IB High", color=colWeeklyIB, style=plot.style_linebr, linewidth=2)
+plot(showWeeklyIB and weeklyHasData ? weeklyIBLow  : na, "Weekly IB Low",  color=colWeeklyIB, style=plot.style_linebr, linewidth=2)
+plot(showWeeklyIB and weeklyHasData ? weeklyIBMid  : na, "Weekly IB Mid",  color=colWeeklyIB, style=plot.style_linebr, linewidth=1)
+
+// Extensions: trade targets — only render when daily IB is valid (no point showing TP levels for invalid IB)
 plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 0.5 : na, "DIB Hi 50%",
      color=colExtension, style=plot.style_cross, linewidth=1)
 plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 1.0 : na, "DIB Hi 100%",
@@ -945,9 +944,13 @@ if barstate.islast
         pDL := na
         pWM := na
 
+        // Labels follow same rule as lines: always show when IB data exists, no validity gate.
+        bool dailyHasLbl  = not na(dailyIBHigh) and not inDailyIB
+        bool weeklyHasLbl = not na(weeklyIBHigh)
+
         // W-H (merge text with D-H when they're within one labelGap of each other)
-        if weeklyValidDay and not na(weeklyIBHigh)
-            bool dHNear = dailyValidNow and not na(dailyIBHigh) and math.abs(dailyIBHigh - weeklyIBHigh) < labelGap
+        if weeklyDow and weeklyHasLbl
+            bool dHNear = dailyHasLbl and math.abs(dailyIBHigh - weeklyIBHigh) < labelGap
             string wHText = dHNear ? "W-H~D-H  " + str.tostring(weeklyIBHigh, format.mintick) : "W-H  " + str.tostring(weeklyIBHigh, format.mintick)
             lWH := label.new(bar_index, weeklyIBHigh, wHText,
                  style=label.style_label_left, color=color.new(colWeeklyIB, 20),
@@ -955,19 +958,18 @@ if barstate.islast
             pWH := weeklyIBHigh
 
         // W-L (merge text with D-L when close)
-        if weeklyValidDay and not na(weeklyIBLow)
-            bool dLNear = dailyValidNow and not na(dailyIBLow) and math.abs(dailyIBLow - weeklyIBLow) < labelGap
+        if weeklyDow and weeklyHasLbl and not na(weeklyIBLow)
+            bool dLNear = dailyHasLbl and not na(dailyIBLow) and math.abs(dailyIBLow - weeklyIBLow) < labelGap
             string wLText = dLNear ? "W-L~D-L  " + str.tostring(weeklyIBLow, format.mintick) : "W-L  " + str.tostring(weeklyIBLow, format.mintick)
             lWL := label.new(bar_index, weeklyIBLow, wLText,
                  style=label.style_label_left, color=color.new(colWeeklyIB, 20),
                  textcolor=color.white, size=size.small)
             pWL := weeklyIBLow
 
-        // D labels only on Wed-Fri: on Mon-Tue the daily IB is valid but no signal can fire,
-        // so rendering D-H/D-L/D-Mid there misleads the trader about tradeable levels.
+        // D labels only on Wed-Fri — no signal possible on Mon-Tue
         if weeklyDow
             // D-H: separate label only when far enough from W-H
-            if dailyValidNow and not na(dailyIBHigh)
+            if dailyHasLbl and not na(dailyIBHigh)
                 if na(pWH) or math.abs(dailyIBHigh - pWH) >= labelGap
                     lDH := label.new(bar_index, dailyIBHigh,
                          "D-H  " + str.tostring(dailyIBHigh, format.mintick),
@@ -976,7 +978,7 @@ if barstate.islast
                     pDH := dailyIBHigh
 
             // D-L: separate label only when far from W-L and D-H
-            if dailyValidNow and not na(dailyIBLow)
+            if dailyHasLbl and not na(dailyIBLow)
                 bool dLFarWL = na(pWL) or math.abs(dailyIBLow - pWL) >= labelGap
                 bool dLFarDH = na(pDH) or math.abs(dailyIBLow - pDH) >= labelGap
                 if dLFarWL and dLFarDH
@@ -987,7 +989,7 @@ if barstate.islast
                     pDL := dailyIBLow
 
             // W-Mid: by definition between W-H and W-L, so only check against daily labels
-            if weeklyValidDay and not na(weeklyIBMid)
+            if weeklyHasLbl and not na(weeklyIBMid)
                 bool wMFar = (na(pDH) or math.abs(weeklyIBMid - pDH) >= labelGap) and
                              (na(pDL) or math.abs(weeklyIBMid - pDL) >= labelGap)
                 if wMFar
@@ -997,8 +999,8 @@ if barstate.islast
                          textcolor=color.white, size=size.small)
                     pWM := weeklyIBMid
 
-            // D-Mid: key equilibrium reference — always show when on a signal day
-            if dailyValidNow and not na(dailyIBMid)
+            // D-Mid: always show on signal days
+            if dailyHasLbl and not na(dailyIBMid)
                 lDM := label.new(bar_index, dailyIBMid,
                      "D-Mid " + str.tostring(dailyIBMid, format.mintick),
                      style=label.style_label_left, color=color.new(colDailyIB, 50),
