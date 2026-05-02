@@ -62,13 +62,14 @@ strategy(
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // INPUT GROUPS
 // ═══════════════════════════════════════════════════════════════════════════════════════
-grp_mode    = "🎯 STRATEGY MODE ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-grp_ib      = "📊 IB DEFINITIONS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-grp_signal  = "⚡ SIGNAL FILTERS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-grp_exits   = "🚪 ALERT LEVELS (SL/TP for signal JSON) ▬▬▬▬▬▬▬▬▬▬"
-grp_filters = "🔍 GUARD FILTERS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-grp_universe= "🌐 SCANNER UNIVERSE (all 10 symbols customizable) ▬▬▬▬▬▬▬▬"
-grp_display = "🎨 DISPLAY ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_mode     = "🎯 STRATEGY MODE ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_ib       = "📊 IB DEFINITIONS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_signal   = "⚡ SIGNAL FILTERS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_exits    = "🚪 ALERT LEVELS (SL/TP) ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_filters  = "🔍 GUARD FILTERS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_universe = "🌐 SCANNER UNIVERSE (all 10 symbols customizable) ▬▬▬▬▬▬▬▬"
+grp_display  = "🎨 DISPLAY ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+grp_telegram = "📱 TELEGRAM ALERTS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
 // ─── Mode ──────────────────────────────────────────────────────────────────────────────
 tradeMode = input.string("Intraday", "Trade Mode", options=["Intraday", "Swing"], group=grp_mode,
@@ -159,6 +160,12 @@ showSessionBg    = input.bool(true,  "Highlight IB Formation Windows", group=grp
      tooltip="Cyan tint = Daily IB forming (09:15-10:15 IST). Amber tint = Weekly IB forming (Mon-Tue session). Helps visually separate the setup phase from the signal phase.")
 showIBLabels     = input.bool(true,  "Show IB Level Price Labels",     group=grp_display,
      tooltip="Tags showing exact price of each IB level at the right edge of the chart. Eliminates the need to hover over lines to read prices.")
+
+// ─── Telegram ──────────────────────────────────────────────────────────────────────────
+telegram_chat_id = input.string("-1003518225740", "Telegram Chat ID", group=grp_telegram,
+     tooltip="Your Telegram channel/group chat ID (starts with -).\n\nHOW TO GET:\n1. Add @userinfobot to your channel\n2. Forward any message to the bot\n3. Copy the chat ID shown")
+sendTestAlert    = input.bool(false, "Send Test Alert", group=grp_telegram,
+     tooltip="HOW TO TEST:\n1. Enable this toggle\n2. Create a TradingView alert: 'Any alert() function call'\n3. Webhook URL: https://api.telegram.org/bot<TOKEN>/sendMessage\n4. Alert fires on last bar — check Telegram\n5. Disable after verifying")
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // IB CALCULATION — DAILY (session-mask 09:15–10:15 IST on chart timeframe)
@@ -386,52 +393,92 @@ else if watchShort
     compositeSignal := SIG_WATCH_SHORT
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
-// ALERT JSON BUILDER
-// ═══════════════════════════════════════════════════════════════════════════════════════
-//
-// All order management (position sizing, partial exits, breakeven, daily loss halt)
-// is handled by the signal_engine Python module.  This script only fires alerts.
-
-f_alertJSON(string sigStr, float e, float sl, float tp1, float tp2, float rr) =>
-    string action = sigStr == "STRONG BUY" ? "buy" : "sell"
-    string s = "{"
-    s += "\"symbol\":\""    + syminfo.tickerid                                   + "\","
-    s += "\"signal\":\""    + sigStr                                             + "\","
-    s += "\"action\":\""    + action                                             + "\","
-    s += "\"entry\":"       + str.tostring(e,   format.mintick)                  + ","
-    s += "\"sl\":"          + str.tostring(sl,  format.mintick)                  + ","
-    s += "\"tp1\":"         + str.tostring(tp1, format.mintick)                  + ","
-    s += "\"tp2\":"         + str.tostring(tp2, format.mintick)                  + ","
-    s += "\"rr\":\"1:"      + str.tostring(rr,  "#.##")                          + "\","
-    s += "\"timeframe\":\"" + timeframe.period                                   + "\","
-    s += "\"mode\":\""      + tradeMode                                          + "\","
-    s += "\"time\":\""      + str.format_time(time, "yyyy-MM-dd HH:mm", nseTimezone) + "\""
-    s += "}"
-    s
-
-// ═══════════════════════════════════════════════════════════════════════════════════════
-// ALERT GENERATION
+// TELEGRAM ALERT BUILDERS
 // ═══════════════════════════════════════════════════════════════════════════════════════
 //
 // HOW TO SET UP TRADINGVIEW ALERTS:
-//   1. Add indicator to 30-min NSE chart
+//   1. Add strategy to 30-min NSE chart
 //   2. Create alert: condition = "Any alert() function call"
-//   3. Notification: Webhook URL → your signal_engine endpoint (or Telegram bot)
-//   4. The JSON payload is forwarded as-is to the signal_engine workflow
-//
-// finalStrongBuy/Sell already include barstate.isconfirmed — fires only on bar close.
+//   3. Webhook URL: https://api.telegram.org/bot<TOKEN>/sendMessage
+//   4. Alerts fire on confirmed bar close — no repainting
 
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker + "&interval=30"
+
+getTimeIST() =>
+    str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
+
+buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tp1Price, float tp2Price, float wibLevel, float dibLevel) =>
+    string direction = isLong ? "LONG"    : "SHORT"
+    string emoji     = isLong ? "🟢"     : "🔴"
+    string wibLbl    = isLong ? "W-H"    : "W-L"
+    string dibLbl    = isLong ? "D-H"    : "D-L"
+    float  riskVal   = math.abs(entryPrice - slPrice)
+    float  rewardVal = math.abs(tp1Price   - entryPrice)
+    float  rrRatio   = riskVal > 0 ? rewardVal / riskVal : 0
+    string msg = emoji + " IB-EXT " + direction + " | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Entry : " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "SL    : " + str.tostring(slPrice,    "#.##") + "\\n"
+    msg += "TP1   : " + str.tostring(tp1Price,   "#.##") + "\\n"
+    msg += "TP2   : " + str.tostring(tp2Price,   "#.##") + "\\n"
+    msg += "------------------------\\n"
+    msg += wibLbl + ": " + str.tostring(wibLevel, "#.##") + " | " + dibLbl + ": " + str.tostring(dibLevel, "#.##") + "\\n"
+    msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + " | Mode: " + tradeMode + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildWatchAlert(bool isLong, float wibLevel, float dibLevel) =>
+    string direction = isLong ? "LONG"        : "SHORT"
+    string wibLbl    = isLong ? "W-H broken"  : "W-L broken"
+    string dibLbl    = isLong ? "D-H intact"  : "D-L intact"
+    string watchDir  = isLong ? "above"       : "below"
+    string dibTag    = isLong ? "D-H"         : "D-L"
+    string msg = "👀 WATCH " + direction + " | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += wibLbl + ": " + str.tostring(wibLevel, "#.##") + "\\n"
+    msg += dibLbl + ": " + str.tostring(dibLevel, "#.##") + " <- breakout needed\\n"
+    msg += "Signal fires when close goes " + watchDir + " " + dibTag + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildTestAlert() =>
+    string msg = "🧪 TEST — IB Extension Strategy\\n\\n"
+    msg += "✅ Webhook connected!\\n\\n"
+    msg += "Symbol: " + syminfo.ticker + "\\n"
+    msg += "Exchange: " + syminfo.prefix + "\\n"
+    msg += "Price: " + str.tostring(close, "#.##") + "\\n"
+    msg += "Time: " + getTimeIST() + "\\n\\n"
+    msg += "Alert types configured:\\n"
+    msg += "• Entry LONG / SHORT\\n"
+    msg += "• Watch LONG / SHORT\\n\\n"
+    msg += "View: " + getChartUrl()
+    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// ─── Fire alerts on confirmed bar close ────────────────────────────────────────────────
 if finalStrongBuy
-    alert(f_alertJSON("STRONG BUY",  longEntry,  longSL,  longTP1,  longTP2,  nz(longRR,  0.0)), alert.freq_once_per_bar_close)
+    alert(buildEntryAlert(true,  longEntry,  longSL,  longTP1,  longTP2,
+         nz(weeklyIBHigh, 0.0), nz(dailyIBHigh, 0.0)), alert.freq_once_per_bar_close)
 
 if finalStrongSell
-    alert(f_alertJSON("STRONG SELL", shortEntry, shortSL, shortTP1, shortTP2, nz(shortRR, 0.0)), alert.freq_once_per_bar_close)
+    alert(buildEntryAlert(false, shortEntry, shortSL, shortTP1, shortTP2,
+         nz(weeklyIBLow,  0.0), nz(dailyIBLow,  0.0)), alert.freq_once_per_bar_close)
 
-// WATCH alerts — weekly IB broken but daily IB still inside (pre-signal, heads-up)
 if finalWatchLong
-    alert('{"symbol":"' + syminfo.tickerid + '","signal":"WATCH LONG","timeframe":"' + timeframe.period + '","time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", nseTimezone) + '"}', alert.freq_once_per_bar_close)
+    alert(buildWatchAlert(true,  nz(weeklyIBHigh, 0.0), nz(dailyIBHigh, 0.0)), alert.freq_once_per_bar_close)
+
 if finalWatchShort
-    alert('{"symbol":"' + syminfo.tickerid + '","signal":"WATCH SHORT","timeframe":"' + timeframe.period + '","time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", nseTimezone) + '"}', alert.freq_once_per_bar_close)
+    alert(buildWatchAlert(false, nz(weeklyIBLow,  0.0), nz(dailyIBLow,  0.0)), alert.freq_once_per_bar_close)
+
+// Test alert — fires on last bar when Send Test Alert is ON
+var bool testAlertSent = false
+if sendTestAlert and barstate.islast and not testAlertSent
+    testAlertSent := true
+    alert(buildTestAlert(), alert.freq_all)
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // STRATEGY ENTRIES & EXITS — for TradingView Strategy Report (backtesting)
