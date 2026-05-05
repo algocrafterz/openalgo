@@ -162,6 +162,7 @@ Right after the entry, the engine places a **separate SL-M (stop-market SELL)** 
 Adds the position to an in-memory tracker and starts polling the broker every 5s:
 - Did qty drop to 0? → trade closed (probably by SL hit). Compute PnL.
 - Has the trade been open >90 min with <20% progress toward TP? → "no-progress exit" — close at market to free the slot.
+- **Chop tightener (2026-05-05):** after 2 no-progress firings in today's session, the early gate shrinks from 45min/5% to 30min/5%. Main 90min/20% gate is unchanged so slow-developing winners still get room.
 - Is it 15:00 IST? → "time exit" — close all MIS positions before broker auto-square-off.
 
 ### Step 9 — Handle TP Alerts (`main.py:_handle_exit`)

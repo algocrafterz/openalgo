@@ -78,15 +78,20 @@ risk:
   monthly_loss_limit: 0.10       # 10% of capital
 
   # [tune] Max concurrent open positions.
-  # At ₹35K capital: each full-risk slot uses ~31% margin (₹350 risk / 0.64% avg SL = ₹54K position × 20% MIS).
-  # 3 concurrent slots = ~93% capital utilization — slots 4-5 get auto-scaled down via Margin API.
-  # Increasing beyond 5 has no effect; capital constrains to 3 meaningful positions at ₹35K.
-  # In practice, utilization is limited by signal frequency (avg 4.7 signals/day), not this cap.
-  max_open_positions: 5
+  # Bumped 5 -> 7 (2026-05-04). Today's session showed all 5 slots filled by 10:40
+  # with valid signals (AMBUJACEM, CGCL, SWIGGY all skipped on 5/5 cap). With the
+  # broker pre-reject list (broker_restrictions) and engine-restart tracker recovery
+  # in place, slots are no longer wasted on doomed-to-reject orders. Capital headroom
+  # exists: today's 5 filled positions used ~14.6K margin against 14.6K capital, but
+  # SL distances vary — small-cap signals (₹150–250) consume ~6–9K each, mid-caps
+  # (₹300–500) consume ~9–12K. With slot recycling on TP1 / no-progress, 7 keeps the
+  # engine engaged on active mornings without forcing tighter sizing.
+  max_open_positions: 7
 
   # [tune] Hard cap on total trades per day (slots can recycle within this limit).
-  # 12 allows 5 concurrent + 7 recycles on active days without over-trading.
-  max_trades_per_day: 12
+  # 16 = 7 concurrent + 9 recycles. Previously 12 (5 concurrent + 7 recycles); scaled
+  # proportionally with max_open_positions.
+  max_trades_per_day: 16
 
   # [tune] Minimum reward:risk ratio to accept a signal. Strategy-level minimums are enforced
   # by PineScript (ORB >= 1:1, RSI-TP-MR >= 0.5). This is a safety net for parser edge cases.
@@ -172,6 +177,52 @@ no_progress:
   profit_lock_ratio: 0.0         # 0.0 = strict break-even for SL path (recommended)
   ab_test_disable: false         # When true, disables the entire no-progress check. Use for A/B comparison.
 
+  # Optional EARLY no-progress gate. Independent of the main gate above — fires
+  # at a much lower threshold to catch "going nowhere" trades and free the slot
+  # before the 90min main check. Same exit logic as main gate (market-exit if
+  # the trade can't reach TP before time-exit; break-even SL otherwise).
+  #
+  # Defaults are conservative: 45min / 5% only catches genuinely catastrophic
+  # stalls (≤ 5% of the way to TP after 45 min). It does NOT replace the main
+  # gate — both gates run; whichever fires first wins.
+  #
+  # 2026-05-04 OIL example: at 45min OIL had moved ~8% toward TP — would NOT
+  # have fired this gate (threshold is 5%). At ~70-80min it was ~13%, would
+  # have caught it earlier than the 97min main gate.
+  #
+  # Tune ranges for the operator:
+  #   - early_check_after_minutes: 30–60 (sweet spot 45)
+  #   - early_min_progress_pct:    0.03–0.10 (sweet spot 0.05)
+  early_check_enabled: true
+  early_check_after_minutes: 45
+  early_min_progress_pct: 0.05
+
+  # Adaptive chop tightener: shorten the EARLY gate after the day shows clear chop
+  # signs (multiple stalled trades). Self-resets each session along with day counters.
+  # Main gate is intentionally NOT tightened — it protects slow-developing winners
+  # (e.g., 2026-05-05 PETRONET reached TP-territory at 127min on the 90/20% main gate).
+  #
+  # Trigger: count of no-progress firings today (across early + main gates) reaches
+  # `chop_tightener_trigger_count`. From that point, early gate uses the tightened
+  # `chop_tightener_early_check_after_minutes` instead of `early_check_after_minutes`.
+  #
+  # Empirical justification (Apr 20–May 5):
+  #   - 4/10 days had ≥2 no-progress exits (Apr 22, 24, 30, May 4, May 5)
+  #   - On 2026-05-05, 7/8 filled positions hit no-progress; first 2 fired at 10:45/10:50.
+  #     A tightened 30-min gate would have force-exited 4 in-flight stalled trades
+  #     ~15 min earlier and freed capital sooner. Main gate would still have caught
+  #     PETRONET's eventual recovery.
+  #
+  # Conservative defaults: trigger=2 (avoids 1-trade noise), tightened=30min.
+  chop_tightener_enabled: true
+  chop_tightener_trigger_count: 2
+  chop_tightener_early_check_after_minutes: 30
+
+  # Use actual broker fill_price (not signal entry) when computing progress.
+  # Recommended true — keeps the metric aligned with what the trade actually risks.
+  # Set false to revert to legacy signal-entry-based progress (less accurate).
+  use_fill_price_for_progress: true
+
 # ── Position Tracking ────────────────────────────────────
 tracking:
   # [tune] Seconds between position checks. Detects broker SL-M fills (qty drops to 0).
@@ -200,6 +251,25 @@ broker:
   # Flattrade = 20% (5x leverage). Used to estimate whether full-risk qty fits in live capital.
   # If wrong, margin floor check will either reject valid trades or allow broker rejections.
   mis_margin_pct: 0.20
+
+# ── Broker Restrictions ──────────────────────────────────
+# [tune] Symbols the broker is known to reject for a given product, regardless of capital.
+# The engine skips these before placing the order — saves a wasted slot, a rejected order
+# in the broker book, and the back-and-forth Telegram noise.
+#
+# Categories (NSE/BSE equity MIS):
+#   • T2T (BE series)        — handled separately via _is_be_series() symtoken lookup
+#   • GSM Stage 1+           — Graded Surveillance Measure, MIS not allowed
+#   • ASM Stage IV+          — Additional Surveillance Measure, no leverage
+#   • Stock-specific overrides — broker won't offer MIS leverage on these even outside surveillance
+#
+# Maintenance: append a symbol here when "Order Rejected: <reason>" appears in the engine
+# log for that symbol consistently across days. See FLATTRADE-RESTRICTIONS.md for the
+# full procedure and current categorisation.
+broker_restrictions:
+  flattrade:
+    # Stocks Flattrade rejects for MIS regardless of capital. UPPERCASE only.
+    mis_rejected: []
 
 # ── Listener ─────────────────────────────────────────────
 listener:

@@ -89,6 +89,8 @@ class PositionTracker:
         self._day_losses: int = 0
         self._day_time_exits: int = 0  # positions force-closed at 15:00 (not W or L)
         self._day_pnl: float = 0.0
+        self._day_no_progress_exits: int = 0  # firings of no-progress gate today (chop signal)
+        self._chop_tightener_logged: bool = False  # one-shot info log when tightener engages
         self._day_summary_sent: bool = False  # prevent duplicate summaries
         self._completed_trades: List[TradeRecord] = []  # one record per closed position
         # Per-(key, log-kind) throttle to suppress repeated debug lines on every 5s poll.
@@ -448,33 +450,78 @@ class PositionTracker:
             await self._check_no_progress(book_data)
 
     async def _check_no_progress(self, book_data: dict) -> None:
-        """Move SL to entry fill price for positions that haven't progressed toward TP1.
+        """Move SL to entry fill price (or market-exit) for positions that haven't progressed toward TP1.
 
         Runs on every poll cycle after check_positions closes any SL-triggered positions.
         Only acts once per position (be_stop_applied flag prevents re-triggering).
 
-        Logic per position (after check_after_minutes have elapsed since entry):
-          progress = (ltp - entry) / (tp1 - entry)   # LONG
-                   = (entry - ltp) / (entry - tp1)   # SHORT
-          If progress < min_progress_pct -> cancel existing SL, place new SL at fill price.
+        Two gates run independently:
+          - Early gate (optional): fires at early_check_after_minutes if progress < early_min_progress_pct.
+            Catches catastrophic stalls and frees the slot earlier.
+          - Main gate: fires at check_after_minutes if progress < min_progress_pct.
+            The historically tuned threshold (90min / 20%).
+        Whichever gate's age threshold has been crossed AND its progress threshold is breached fires first.
+
+        progress = (ltp - base_entry) / (tp - base_entry)   # LONG
+                 = (base_entry - ltp) / (base_entry - tp)   # SHORT
+        Where base_entry = fill_price (when use_fill_price=true and available) else signal entry_price.
         """
         from signal_engine.config import settings as _settings
 
         now = datetime.now(_IST)
-        min_age = timedelta(minutes=_settings.no_progress_check_after_minutes)
+        # Build gate list: early (if enabled) first, main always.
+        # Each gate = (age_threshold, progress_threshold, label).
+        # Chop tightener: if today already hit `trigger_count` no-progress firings, the
+        # early gate's age threshold is shortened. Main gate is intentionally untouched
+        # to preserve slow-developing winners.
+        chop_active = (
+            _settings.no_progress_chop_tightener_enabled
+            and self._day_no_progress_exits >= _settings.no_progress_chop_tightener_trigger_count
+        )
+        early_minutes = (
+            _settings.no_progress_chop_tightener_early_check_after_minutes
+            if chop_active
+            else _settings.no_progress_early_check_after_minutes
+        )
+        if chop_active and not self._chop_tightener_logged:
+            logger.info(
+                f"Chop tightener engaged: {self._day_no_progress_exits} no-progress exits today "
+                f">= {_settings.no_progress_chop_tightener_trigger_count} trigger; "
+                f"early gate {_settings.no_progress_early_check_after_minutes}min -> {early_minutes}min"
+            )
+            self._chop_tightener_logged = True
+
+        gates: List[tuple] = []
+        if _settings.no_progress_early_check_enabled:
+            gates.append((
+                timedelta(minutes=early_minutes),
+                _settings.no_progress_early_min_progress_pct,
+                "early",
+            ))
+        gates.append((
+            timedelta(minutes=_settings.no_progress_check_after_minutes),
+            _settings.no_progress_min_progress_pct,
+            "main",
+        ))
 
         for pos in list(self._positions.values()):
             if pos.be_stop_applied:
                 continue
 
             age = now - pos.entry_time
-            if age < min_age:
+            # Skip if age hasn't crossed even the earliest configured gate.
+            if not any(age >= g[0] for g in gates):
                 continue
 
-            # Need valid TP and entry to compute progress
+            # Need valid TP and entry to compute progress.
             if pos.tp <= 0 or pos.entry_price <= 0:
                 continue
-            tp_distance = abs(pos.tp - pos.entry_price)
+            # Choose progress base: fill_price (accurate) or signal entry (legacy).
+            if _settings.no_progress_use_fill_price and pos.fill_price > 0:
+                progress_base = pos.fill_price
+            else:
+                progress_base = pos.entry_price
+            tp_distance = abs(pos.tp - progress_base)
             if tp_distance <= 0:
                 continue
 
@@ -483,14 +530,25 @@ class PositionTracker:
                 continue
 
             if pos.direction == Direction.LONG:
-                progress = (ltp - pos.entry_price) / tp_distance
+                progress = (ltp - progress_base) / tp_distance
             else:
-                progress = (pos.entry_price - ltp) / tp_distance
+                progress = (progress_base - ltp) / tp_distance
 
-            if progress >= _settings.no_progress_min_progress_pct:
-                continue  # Making progress — leave it
+            # Find the first gate whose age threshold is crossed AND whose progress
+            # threshold is breached. Iteration order: early first, then main.
+            firing_gate = None
+            for age_threshold, progress_threshold, label in gates:
+                if age >= age_threshold and progress < progress_threshold:
+                    firing_gate = (age_threshold, progress_threshold, label)
+                    break
 
-            # Use actual fill price as break-even; fall back to signal entry
+            if firing_gate is None:
+                continue  # No gate fired — making enough progress for current age band.
+            _, fired_threshold, fired_label = firing_gate
+
+            # Use actual fill price as break-even; fall back to signal entry.
+            # Same fallback as progress_base above — but kept as a separate name to
+            # preserve the existing variable used by downstream profit-lock logic.
             base_entry = pos.fill_price if pos.fill_price > 0 else pos.entry_price
             lock_ratio = _settings.no_progress_profit_lock_ratio
             in_profit = (pos.direction == Direction.LONG and ltp > base_entry) or \
@@ -525,11 +583,14 @@ class PositionTracker:
             action_label = "market-exit" if use_market_exit else \
                            ("profit-lock" if be_price != base_entry else "break-even")
             logger.info(
-                f"No-progress [{pos.symbol}]: age={age.total_seconds()/60:.0f}min "
-                f"ltp={ltp:.2f} entry={base_entry:.2f} tp={pos.tp:.2f} "
-                f"progress={progress:.1%} < {_settings.no_progress_min_progress_pct:.0%} "
+                f"No-progress [{pos.symbol}] gate={fired_label}: age={age.total_seconds()/60:.0f}min "
+                f"ltp={ltp:.2f} entry={progress_base:.2f} tp={pos.tp:.2f} "
+                f"progress={progress:.1%} < {fired_threshold:.0%} "
                 f"-> {action_label}"
             )
+            # Chop signal: count this firing toward the daily tightener.
+            # Counted once per position via be_stop_applied dedup below.
+            self._day_no_progress_exits += 1
 
             # Cancel existing SL order first (required before any sell on Indian brokers)
             if pos.sl_order_id:
@@ -619,6 +680,8 @@ class PositionTracker:
             self._day_wins = 0
             self._day_losses = 0
             self._day_pnl = 0.0
+            self._day_no_progress_exits = 0
+            self._chop_tightener_logged = False
             self._day_summary_sent = False
             self._completed_trades = []
             return
@@ -690,6 +753,8 @@ class PositionTracker:
         self._day_losses = 0
         self._day_time_exits = 0
         self._day_pnl = 0.0
+        self._day_no_progress_exits = 0
+        self._chop_tightener_logged = False
         self._day_summary_sent = False
         self._completed_trades = []
 

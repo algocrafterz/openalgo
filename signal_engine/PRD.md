@@ -536,7 +536,7 @@ strategy_profiles:
       TP1: 1.0          # Exit 100% at TP1
 ```
 
-### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20, loosened — 2026-04-25)
+### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20, loosened — 2026-04-25, chop tightener — 2026-05-05)
 ```yaml
 no_progress:
   enabled: true
@@ -544,12 +544,23 @@ no_progress:
   min_progress_pct: 0.20         # Was 0.33. 20% qualifies as "real progress"
   profit_lock_ratio: 0.0         # 0.0 = strict break-even SL (recommended)
   ab_test_disable: false         # Master kill-switch for A/B comparison; skips entire check when true
+  early_check_enabled: true
+  early_check_after_minutes: 45
+  early_min_progress_pct: 0.05
+  # Adaptive chop tightener (2026-05-05) — shortens ONLY the early gate after N firings today.
+  chop_tightener_enabled: true
+  chop_tightener_trigger_count: 2
+  chop_tightener_early_check_after_minutes: 30
 ```
 At 90min, if progress < 20%: project `minutes_needed = (1 - progress) / rate` and compare to minutes remaining until time exit. If the trade cannot reach TP1 before 15:00 at its current pace → market exit. Otherwise → break-even SL.
 
 **2026-04-25 loosen rationale:** Apr 13–24 logs showed ~17 firings/week with JSWENERGY (146min/31.2%), EXIDEIND (162min/31.7%), NATIONALUM (84min/31.1%) cut at 1–2% short of the 33% threshold AND 1–2% short of TP1. The 60min/33% gates were trimming would-be winners. New 90min/20% lets genuinely-stuck trades resolve.
 
 **`ab_test_disable`:** When true, the entire no-progress check is skipped without altering thresholds — used to compare 10 days with the feature off vs on for clean PnL attribution.
+
+**Chop tightener (2026-05-05):** After `chop_tightener_trigger_count` (default 2) no-progress firings in the current session, the **early gate** age threshold drops from `early_check_after_minutes` (45) to `chop_tightener_early_check_after_minutes` (30). Main gate is intentionally untouched — it protects slow-developing winners (e.g., 2026-05-05 PETRONET reached recovery at 127min on the 90/20% main gate). Counter resets at session reset / time exit alongside other day counters.
+
+Empirical basis (Apr 20–May 5 logs): 4/10 days had ≥2 no-progress exits; on 2026-05-05, 7/8 filled positions hit no-progress and the 1st two fired at 10:45/10:50 — the tightener engages here, force-exiting subsequent stalled trades ~15min sooner and recycling capital. Trades on a real path clear the 5% progress floor well before 30min, so winners are not affected.
 
 **Decision thresholds by entry time** (entry window 9:45–11:00 AM, time exit 15:00):
 

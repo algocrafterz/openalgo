@@ -150,6 +150,11 @@ class Settings:
     allow_off_hours_testing: bool
     mis_margin_pct: float  # NSE/BSE equity MIS margin % for live capital floor check
 
+    # Broker pre-reject list (from yaml) — symbols the broker is known to reject for MIS.
+    # Skipped before order placement to avoid wasted slot + Telegram rejection notice.
+    # See FLATTRADE-RESTRICTIONS.md for source / maintenance procedure.
+    broker_mis_rejected: frozenset
+
     # Listener (from yaml)
     listener_max_retries: int
     listener_base_backoff: int
@@ -198,6 +203,17 @@ class Settings:
     no_progress_min_progress_pct: float
     no_progress_profit_lock_ratio: float  # 0.0 = strict break-even; 0.4 = lock 40% of unrealized profit
     no_progress_ab_test_disable: bool     # When true, the entire no-progress check is skipped
+    # Early no-progress gate — independent of the main gate. Fires earlier with
+    # a lower progress threshold to catch catastrophic stalls.
+    no_progress_early_check_enabled: bool
+    no_progress_early_check_after_minutes: int
+    no_progress_early_min_progress_pct: float
+    # Adaptive chop tightener — shortens early gate after N no-progress firings today.
+    no_progress_chop_tightener_enabled: bool
+    no_progress_chop_tightener_trigger_count: int
+    no_progress_chop_tightener_early_check_after_minutes: int
+    # Use broker fill_price for progress calc (more accurate). False = signal entry (legacy).
+    no_progress_use_fill_price: bool
 
 
 def _parse_no_progress(cfg: dict) -> dict:
@@ -210,6 +226,15 @@ def _parse_no_progress(cfg: dict) -> dict:
         "no_progress_min_progress_pct": float(cfg.get("min_progress_pct", 0.20)),
         "no_progress_profit_lock_ratio": float(cfg.get("profit_lock_ratio", 0.0)),
         "no_progress_ab_test_disable": bool(cfg.get("ab_test_disable", False)),
+        "no_progress_early_check_enabled": bool(cfg.get("early_check_enabled", False)),
+        "no_progress_early_check_after_minutes": int(cfg.get("early_check_after_minutes", 45)),
+        "no_progress_early_min_progress_pct": float(cfg.get("early_min_progress_pct", 0.05)),
+        "no_progress_chop_tightener_enabled": bool(cfg.get("chop_tightener_enabled", False)),
+        "no_progress_chop_tightener_trigger_count": int(cfg.get("chop_tightener_trigger_count", 2)),
+        "no_progress_chop_tightener_early_check_after_minutes": int(
+            cfg.get("chop_tightener_early_check_after_minutes", 30)
+        ),
+        "no_progress_use_fill_price": bool(cfg.get("use_fill_price_for_progress", True)),
     }
 
 
@@ -276,6 +301,28 @@ def _parse_blacklist(
             multipliers[key] = multiplier
 
     return hard, soft, multipliers
+
+
+def _parse_broker_mis_rejected(raw: dict) -> frozenset:
+    """Parse broker_restrictions.<broker>.mis_rejected into an uppercase frozenset.
+
+    The active broker is taken from broker.product/exchange downstream — for now we
+    union all configured broker entries so the filter is conservative even if the
+    operator switches brokers without updating both sections.
+    """
+    if not isinstance(raw, dict):
+        return frozenset()
+    symbols: set[str] = set()
+    for _broker_name, cfg in raw.items():
+        if not isinstance(cfg, dict):
+            continue
+        rejected = cfg.get("mis_rejected", [])
+        if not isinstance(rejected, list):
+            continue
+        for s in rejected:
+            if isinstance(s, str) and s.strip():
+                symbols.add(s.strip().upper())
+    return frozenset(symbols)
 
 
 def _build_settings() -> Settings:
@@ -407,6 +454,8 @@ def _build_settings() -> Settings:
         order_type=_require_key(broker, "broker", "order_type"),
         allow_off_hours_testing=bool(broker.get("allow_off_hours_testing", False)),
         mis_margin_pct=float(_require_key(broker, "broker", "mis_margin_pct")),
+
+        broker_mis_rejected=_parse_broker_mis_rejected(yml.get("broker_restrictions", {})),
 
         # Listener from yaml
         listener_max_retries=int(_require_key(listener, "listener", "max_retries")),
