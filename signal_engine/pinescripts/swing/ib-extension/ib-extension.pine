@@ -170,6 +170,22 @@ sendTestAlert    = input.bool(false, "Send Test Alert", group=grp_telegram,
      tooltip="HOW TO TEST:\n1. Enable this toggle\n2. Create a TradingView alert: 'Any alert() function call'\n3. Webhook URL: https://api.telegram.org/bot<TOKEN>/sendMessage\n4. Alert fires on last bar — check Telegram\n5. Disable after verifying")
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
+// TIMEFRAME WARNING — strategy is calibrated for 30-min NSE bars
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// Volume SMA window (default 65 = 5 days × 13 bars/day) and the IB session capture
+// (09:00 / 09:30 / 10:00 bar opens) both assume a 30-min chart. Other timeframes
+// silently distort the volume baseline AND may miss / overshoot the IB window.
+var label _tfWarn = na
+if barstate.islast
+    label.delete(_tfWarn)
+    if timeframe.period != "30"
+        _tfWarn := label.new(bar_index, high,
+             "Strategy expects 30-min TF (current: " + timeframe.period + "). " +
+             "Volume SMA window and IB session capture both assume 30-min bars.",
+             style=label.style_label_down, color=color.new(color.orange, 0),
+             textcolor=color.white, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
 // IB CALCULATION — DAILY (session-mask 09:15–10:15 IST on chart timeframe)
 // ═══════════════════════════════════════════════════════════════════════════════════════
 //
@@ -237,11 +253,17 @@ var float wibLRunning = na
 var float wibHFrozen  = na
 var float wibLFrozen  = na
 
-// Reset on each new week's Monday open (BEFORE accumulation)
-bool newWeek = isMonday and not isMonday[1]
-if newWeek
+// Reset on each new ISO week — fires regardless of whether Monday is a holiday.
+// Without this, a holiday-Monday week would inherit the prior week's running totals,
+// and a both-Mon+Tue holiday week would inherit the prior week's frozen IB.
+// Frozen pair is also cleared so Wed-Fri can't read stale values until this week's
+// Tuesday session ends and weeklyIBEnd freezes a fresh pair.
+bool newIsoWeek = ta.change(weekofyear(time, nseTimezone)) != 0
+if newIsoWeek
     wibHRunning := na
     wibLRunning := na
+    wibHFrozen  := na
+    wibLFrozen  := na
 
 // Holiday detection: if Monday session never fires, accumulation starts on Tuesday
 if weeklyIBStart
@@ -383,11 +405,14 @@ bool finalStrongSell = signalSellGated and not signalSellGated[1] and barstate.i
 bool finalWatchLong  = watchLong  and not watchLong[1]  and barstate.isconfirmed
 bool finalWatchShort = watchShort and not watchShort[1] and barstate.isconfirmed
 
-// Composite signal int (for display)
+// Composite signal int (for display).
+// Uses fully-gated raw signals (not rising-edge) so the debug panel reflects the
+// CURRENT state on the last bar — not just the bar where the trigger first fired.
+// Plotshapes / strategy entries still use rising-edge so chart isn't spammed.
 int compositeSignal = SIG_NONE
-if finalStrongBuy
+if signalBuyGated
     compositeSignal := SIG_STRONGBUY
-else if finalStrongSell
+else if signalSellGated
     compositeSignal := SIG_STRONGSELL
 else if watchLong
     compositeSignal := SIG_WATCH_LONG
@@ -544,18 +569,20 @@ plot(showWeeklyIB and weeklyHasData ? weeklyIBHigh : na, "Weekly IB High", color
 plot(showWeeklyIB and weeklyHasData ? weeklyIBLow  : na, "Weekly IB Low",  color=colWeeklyIB, style=plot.style_linebr, linewidth=2)
 plot(showWeeklyIB and weeklyHasData ? weeklyIBMid  : na, "Weekly IB Mid",  color=colWeeklyIB, style=plot.style_linebr, linewidth=1)
 
-// Extensions: trade targets — only render when daily IB is valid (no point showing TP levels for invalid IB)
-plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 0.5 : na, "DIB Hi 50%",
+// Extensions: trade targets — only render when daily IB is valid.
+// 50% = mid-extension reference; TP1 / TP2 follow tp1ExtMult / tp2ExtMult inputs so the
+// chart matches the trade ticket and strategy SL/TP. Default 1.0× and 2.0×.
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 0.5 : na, "DIB Hi +50%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 1.0 : na, "DIB Hi 100%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * tp1ExtMult : na, "DIB Hi TP1",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * 2.0 : na, "DIB Hi 200%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBHigh + dailyIBRange * tp2ExtMult : na, "DIB Hi TP2",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 0.5 : na, "DIB Lo 50%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 0.5 : na, "DIB Lo -50%",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 1.0 : na, "DIB Lo 100%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * tp1ExtMult : na, "DIB Lo TP1",
      color=colExtension, style=plot.style_cross, linewidth=1)
-plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * 2.0 : na, "DIB Lo 200%",
+plot(showExtensions and dailyValidNow and weeklyDow and inLookback ? dailyIBLow  - dailyIBRange * tp2ExtMult : na, "DIB Lo TP2",
      color=colExtension, style=plot.style_cross, linewidth=1)
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -679,23 +706,21 @@ f_remoteSignal(string sym) =>
         bool wValid = wM > 0 and (wRange / wM * 100.0) >= weeklyRangeMinPct and (wRange / wM * 100.0) <= weeklyRangeMaxPct
         bool wValidDay = (sDow == dayofweek.wednesday or sDow == dayofweek.thursday or sDow == dayofweek.friday) and wValid
 
-        bool wbP = wValidDay and c > wM
-        bool wbN = wValidDay and c < wM
+        // c > wH implies c > wM (mid is between H and L), so the explicit "above mid"
+        // check is redundant — same for daily. Kept the structural breakout + volume gate.
         bool wbHi = wValidDay and c > wH
         bool wbLo = wValidDay and c < wL
-        bool dbP = dValid and c > dM
-        bool dbN = dValid and c < dM
         bool dbHi = dValid and c > dH
         bool dbLo = dValid and c < dL
-        bool vC  = not na(vS) and v >= vS * volMultiplier
+        bool vC   = not na(vS) and v >= vS * volMultiplier
 
-        if wbP and wbHi and dbP and dbHi and vC
+        if wbHi and dbHi and vC
             sig := "STRONG BUY"
-        else if wbN and wbLo and dbN and dbLo and vC
+        else if wbLo and dbLo and vC
             sig := "STRONG SELL"
-        else if wbP and wbHi and not (dbHi or dbLo)
+        else if wbHi and not (dbHi or dbLo)
             sig := "WATCH UP"
-        else if wbN and wbLo and not (dbHi or dbLo)
+        else if wbLo and not (dbHi or dbLo)
             sig := "WATCH DN"
     [sig, dRangePct, volMult]
 
@@ -725,15 +750,33 @@ f_rowColor(string sig) =>
         c := colSell
     else if sig == "WATCH UP" or sig == "WATCH DN"
         c := colWatch
+    // EVENT-DAY and REGIME-BLOCK fall through to colNoTrade (gray) — gate-blocked.
     c
 
+// Apply the global gates that the strategy entry path applies, but that are uniform
+// across all symbols (regime is one index; event-day is calendar). Per-symbol gates
+// (circuit guard, R:R, rising-edge) are NOT applied — they need the chart's own
+// timeframe context. The header tooltip notes this so users don't expect parity.
+f_applyGlobalGates(string sig) =>
+    string out = sig
+    bool isStrongLong  = sig == "STRONG BUY"  or sig == "WATCH UP"
+    bool isStrongShort = sig == "STRONG SELL" or sig == "WATCH DN"
+    if isEventDay and (isStrongLong or isStrongShort)
+        out := "EVENT-DAY"
+    else if useRegimeFilter and isStrongLong  and not longRegimeOK
+        out := "REGIME-BLOCK"
+    else if useRegimeFilter and isStrongShort and not shortRegimeOK
+        out := "REGIME-BLOCK"
+    out
+
 f_renderRow(int row, string sym, string sig, float dRangePct, float volMult) =>
-    color rc  = f_rowColor(sig)
+    string gatedSig = f_applyGlobalGates(sig)
+    color rc  = f_rowColor(gatedSig)
     color hdr = color.new(#1F3864, 0)
     // Col 0: symbol
     table.cell(scanner, 0, row, sym, bgcolor=rc, text_color=color.white, text_size=size.small)
-    // Col 1: signal
-    table.cell(scanner, 1, row, sig, bgcolor=rc, text_color=color.white, text_size=size.small,
+    // Col 1: signal — uses gated value so REGIME-BLOCK / EVENT-DAY override structural sig
+    table.cell(scanner, 1, row, gatedSig, bgcolor=rc, text_color=color.white, text_size=size.small,
          text_halign=text.align_center)
     // Col 2: D-Range% — green=valid (0.15–2.5%), red=invalid/na
     string drStr = not na(dRangePct) ? str.tostring(dRangePct, "#.##") + "%" : "N/A"
@@ -754,7 +797,8 @@ f_renderRow(int row, string sym, string sig, float dRangePct, float volMult) =>
 if showScanner and barstate.islast
     color hdrBg = color.new(#1F3864, 0)
     table.cell(scanner, 0, 0, "SYMBOL",  bgcolor=hdrBg, text_color=color.white, text_size=size.small)
-    table.cell(scanner, 1, 0, "SIGNAL",  bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    table.cell(scanner, 1, 0, "SIGNAL",  bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center,
+         tooltip="Structural breakout state per symbol. Applies: daily/weekly IB validity, breakouts, volume, event-day, regime filter.\nNOT applied (chart-symbol-only): circuit guard, R:R floor, rising-edge trigger.\nA STRONG BUY/SELL here means the chart strategy MAY enter on this symbol — verify the chart's debug panel for full gate state.")
     table.cell(scanner, 2, 0, "D-RNG%",  bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
     table.cell(scanner, 3, 0, "VOL×",    bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
     table.cell(scanner, 4, 0, "TIME",    bgcolor=hdrBg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
@@ -828,19 +872,23 @@ if showDebugPanel and barstate.islast
     table.cell(debugTbl, 1, 3, f_passStr(weeklyDow),
          bgcolor=f_passCol(weeklyDow), text_color=color.white, text_size=size.normal)
 
-    // Row 4 — Weekly Breakout (Gate 1)
-    table.cell(debugTbl, 0, 4, "W-BO (>W-High)",
-         bgcolor=f_passCol(wBOHigh), text_color=color.white, text_size=size.normal,
-         tooltip="Gate 1: Close must be ABOVE the Weekly IB High (the highest point of Mon+Tue). This confirms the stock is trending UP beyond the week's early reference range. FAIL = still inside the weekly range.")
-    table.cell(debugTbl, 1, 4, f_passStr(wBOHigh),
-         bgcolor=f_passCol(wBOHigh), text_color=color.white, text_size=size.normal)
+    // Row 4 — Weekly Breakout (Gate 1) — two-sided so SHORT setups don't read as FAIL
+    bool wBOEither = wBOHigh or wBOLow
+    string wBOStr  = "U:" + f_passStr(wBOHigh) + "  D:" + f_passStr(wBOLow)
+    table.cell(debugTbl, 0, 4, "W-BO U/D",
+         bgcolor=f_passCol(wBOEither), text_color=color.white, text_size=size.normal,
+         tooltip="Gate 1: Close must be OUTSIDE the Weekly IB band. U = close > W-High (long bias), D = close < W-Low (short bias). Either side passing keeps the gate green. Both FAIL = still inside the weekly range.")
+    table.cell(debugTbl, 1, 4, wBOStr,
+         bgcolor=f_passCol(wBOEither), text_color=color.white, text_size=size.normal)
 
-    // Row 5 — Daily Breakout (Gate 2)
-    table.cell(debugTbl, 0, 5, "D-BO (>D-High)",
-         bgcolor=f_passCol(dBOHigh), text_color=color.white, text_size=size.normal,
-         tooltip="Gate 2: Close must be ABOVE today's Daily IB High (max of the 09:00, 09:30, 10:00 candles on 30-min TF). Confirms intraday momentum agrees with the weekly direction. FAIL = price is inside or below this morning's range.")
-    table.cell(debugTbl, 1, 5, f_passStr(dBOHigh),
-         bgcolor=f_passCol(dBOHigh), text_color=color.white, text_size=size.normal)
+    // Row 5 — Daily Breakout (Gate 2) — two-sided
+    bool dBOEither = dBOHigh or dBOLow
+    string dBOStr  = "U:" + f_passStr(dBOHigh) + "  D:" + f_passStr(dBOLow)
+    table.cell(debugTbl, 0, 5, "D-BO U/D",
+         bgcolor=f_passCol(dBOEither), text_color=color.white, text_size=size.normal,
+         tooltip="Gate 2: Close must be OUTSIDE today's Daily IB band (max/min of the 09:00, 09:30, 10:00 candles on 30-min TF). U = close > D-High, D = close < D-Low. Confirms intraday momentum agrees with the weekly direction.")
+    table.cell(debugTbl, 1, 5, dBOStr,
+         bgcolor=f_passCol(dBOEither), text_color=color.white, text_size=size.normal)
 
     // Row 6 — Volume (optional gate)
     string volLabel = useVolFilter ? "VOL (x" + str.tostring(volMultiplier, "#.#") + "×SMA)" : "VOL (off)"
@@ -859,14 +907,18 @@ if showDebugPanel and barstate.islast
     table.cell(debugTbl, 1, 7, f_passStr(guardsOK),
          bgcolor=f_passCol(guardsOK), text_color=color.white, text_size=size.normal)
 
-    // Row 8 — R:R (optional gate)
-    bool rrPass = not na(longRR) and longRR >= minRRThreshold
+    // Row 8 — R:R (optional gate) — two-sided
+    bool rrLongPass   = not na(longRR)  and longRR  >= minRRThreshold
+    bool rrShortPass  = not na(shortRR) and shortRR >= minRRThreshold
+    bool rrEitherPass = rrLongPass or rrShortPass
     string rrLabel  = useRRFilter ? "R:R (min " + str.tostring(minRRThreshold, "#.#") + ")" : "R:R (off)"
-    string rrValStr = not na(longRR) ? "1:" + str.tostring(longRR, "#.##") : "N/A"
-    color  rrBg     = useRRFilter ? f_passCol(rrPass) : color.new(color.gray, 60)
+    string rrLongStr  = not na(longRR)  ? str.tostring(longRR,  "#.#") : "—"
+    string rrShortStr = not na(shortRR) ? str.tostring(shortRR, "#.#") : "—"
+    string rrValStr = "L:" + rrLongStr + "  S:" + rrShortStr
+    color  rrBg     = useRRFilter ? f_passCol(rrEitherPass) : color.new(color.gray, 60)
     table.cell(debugTbl, 0, 8, rrLabel,
          bgcolor=rrBg, text_color=color.white, text_size=size.normal,
-         tooltip="Optional gate (toggle in Inputs > Signal Filters). When ON: signal suppressed if estimated R:R < " + str.tostring(minRRThreshold, "#.#") + ". R:R uses TP1 (Daily IB High + 1×Range) and SL (Daily IB Low - ATR buffer). When OFF: R:R is displayed for info only.")
+         tooltip="Optional gate (toggle in Inputs > Signal Filters). When ON: signal suppressed if BOTH long and short estimated R:R are below " + str.tostring(minRRThreshold, "#.#") + ". L = long R:R, S = short R:R. When OFF: shown for info only.")
     table.cell(debugTbl, 1, 8, rrValStr,
          bgcolor=rrBg, text_color=color.white, text_size=size.normal)
 
@@ -894,13 +946,13 @@ if showDebugPanel and barstate.islast
 // SESSION BACKGROUND HIGHLIGHTS
 // ═══════════════════════════════════════════════════════════════════════════════════════
 //
-// Cyan tint  = Daily IB window forming   (09:15-10:15 IST, every day)
+// Cyan tint  = Daily IB window forming   (09:15-10:15 IST, Wed-Fri only)
 // Amber tint = Weekly IB window forming  (Mon + Tue full session)
-// Both can fire simultaneously on Monday/Tuesday 09:15-10:15.
 // After the tint disappears, the frozen IB lines become tradeable levels.
-
-// Cyan tint only on Wed-Fri IB window — Mon-Tue already have amber (weekly IB forming).
-// Showing cyan on Mon-Tue would imply "get ready to trade" which is incorrect.
+//
+// Cyan is suppressed Mon-Tue: those days already get amber for weekly IB formation,
+// and showing cyan would imply "get ready to trade" — but Mon-Tue are formation days,
+// not signal days.
 bgcolor(showSessionBg and inDailyIB  and weeklyDow ? color.new(color.aqua,   91) : na, title="Daily IB Window")
 bgcolor(showSessionBg and inWeeklyIB             ? color.new(color.orange,  93) : na, title="Weekly IB Window")
 
@@ -999,12 +1051,18 @@ if barstate.islast
                          textcolor=color.white, size=size.small)
                     pWM := weeklyIBMid
 
-            // D-Mid: always show on signal days
+            // D-Mid: skip if it would overlap with W-H/W-L/D-H/D-L/W-Mid (within labelGap)
             if dailyHasLbl and not na(dailyIBMid)
-                lDM := label.new(bar_index, dailyIBMid,
-                     "D-Mid " + str.tostring(dailyIBMid, format.mintick),
-                     style=label.style_label_left, color=color.new(colDailyIB, 50),
-                     textcolor=color.black, size=size.small)
+                bool dMFar = (na(pWH) or math.abs(dailyIBMid - pWH) >= labelGap) and
+                             (na(pWL) or math.abs(dailyIBMid - pWL) >= labelGap) and
+                             (na(pDH) or math.abs(dailyIBMid - pDH) >= labelGap) and
+                             (na(pDL) or math.abs(dailyIBMid - pDL) >= labelGap) and
+                             (na(pWM) or math.abs(dailyIBMid - pWM) >= labelGap)
+                if dMFar
+                    lDM := label.new(bar_index, dailyIBMid,
+                         "D-Mid " + str.tostring(dailyIBMid, format.mintick),
+                         style=label.style_label_left, color=color.new(colDailyIB, 50),
+                         textcolor=color.black, size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // END OF FILE
