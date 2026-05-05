@@ -233,13 +233,12 @@ def check_risk_engine_state() -> str:
     open_pos = engine.open_positions
     trades_today = engine.trades_today
     realised_loss = engine.daily_realised_loss
-    heat = engine.portfolio_heat
     can_trade = engine.check_exposure()
     limit_info = "" if can_trade else f" | BLOCKED: {engine.exposure_block_reason()}"
     return (
         f"OK — open={open_pos}/{settings.max_open_positions} "
         f"trades_today={trades_today}/{settings.max_trades_per_day} "
-        f"daily_loss={realised_loss:.2f} heat={heat:.2f}{limit_info}"
+        f"daily_loss={realised_loss:.2f}{limit_info}"
     )
 
 

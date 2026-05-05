@@ -177,12 +177,14 @@ function Invoke-Start {
     }
     catch {}
 
-    # Kill old service window if it exists
+    # Kill old service window if it exists.
+    # Note: with $ErrorActionPreference = "Stop" + $PSNativeCommandUseErrorActionPreference,
+    # a missing PID makes taskkill throw a terminating exception. Probe first, swallow last.
     if (Test-Path $servicePidFile) {
         $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue
-        if ($oldPid) {
+        if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
             Write-Log "Killing old service window (PID $oldPid)..."
-            taskkill /T /F /PID $oldPid 2>$null | Out-Null
+            try { & taskkill /T /F /PID $oldPid 2>&1 | Out-Null } catch { Write-Log "taskkill ignored: $($_.Exception.Message)" }
         }
         Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
     }
@@ -244,9 +246,9 @@ function Stop-ServiceWindow {
 
     if (Test-Path $servicePidFile) {
         $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue
-        if ($oldPid) {
+        if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
             Write-Log "Killing service window (PID $oldPid)..."
-            taskkill /T /F /PID $oldPid 2>$null | Out-Null
+            try { & taskkill /T /F /PID $oldPid 2>&1 | Out-Null } catch { Write-Log "taskkill ignored: $($_.Exception.Message)" }
         }
         Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
     }

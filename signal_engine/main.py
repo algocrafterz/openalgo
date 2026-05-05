@@ -12,7 +12,7 @@ from loguru import logger
 
 from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_order_fill_price, fetch_order_status, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
-from signal_engine.db import save
+from signal_engine.db import fetch_last_entry_trade, save
 from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
@@ -280,7 +280,7 @@ async def _handle_exit_locked(signal) -> None:
     if pos is not None:
         pos.exit_pending = True
 
-    # 2. Fallback: if tracker lost state (engine restart), query broker API
+    # 2. Fallback: if tracker lost state (engine restart), query broker API and trades.db
     if pos is None:
         logger.warning(
             f"EXIT: {signal.symbol} not in tracker for strategy={signal.strategy}, "
@@ -296,16 +296,42 @@ async def _handle_exit_locked(signal) -> None:
         # Negative qty from broker means SHORT position; positive means LONG.
         # Use the absolute value for quantity and set direction accordingly.
         fallback_direction = Direction.SHORT if api_qty < 0 else Direction.LONG
+
+        # Recover entry context (entry/sl/tp/order_id) from the audit trail. EXIT signals
+        # synthesize entry=sl=tp=0, so without this lookup the partial-exit SL re-placement
+        # logic computes new_sl=0 and skips bracket → remaining qty runs un-protected.
+        # (RBLBANK incident, 2026-05-04: 18 qty unprotected after engine restart + TP1.)
+        recovered = fetch_last_entry_trade(signal.symbol, signal.strategy)
+        if recovered is not None:
+            entry_price = recovered["entry"]
+            sl_price = recovered["sl"]
+            tp_price = recovered["tp"]
+            entry_order_id = recovered["order_id"]
+            logger.info(
+                f"EXIT recovery [{signal.symbol}]: restored from trades.db "
+                f"entry={entry_price} sl={sl_price} tp={tp_price} order_id={entry_order_id}"
+            )
+        else:
+            entry_price = signal.entry
+            sl_price = signal.sl
+            tp_price = signal.tp
+            entry_order_id = ""
+            logger.warning(
+                f"EXIT recovery [{signal.symbol}]: no entry trade found in trades.db today "
+                "— partial-exit SL re-placement may be skipped"
+            )
+
         pos = TrackedPosition(
             symbol=signal.symbol,
             strategy=signal.strategy,
             exchange=exchange,
             product=product,
-            entry_price=signal.entry,
+            entry_price=entry_price,
             quantity=abs(api_qty),
-            sl=signal.sl,
-            tp=signal.tp,
+            sl=sl_price,
+            tp=tp_price,
             direction=fallback_direction,
+            entry_order_id=entry_order_id,
             sl_order_id="",
         )
 
@@ -600,6 +626,18 @@ async def _handle_entry(signal) -> None:
             logger.warning(msg)
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
             return
+
+    # 2a. Pre-flight broker reject list — symbols the broker is known to refuse for MIS
+    # (GSM, ASM stage IV, F&O ban list, stock-specific overrides). Avoids a wasted slot
+    # and a guaranteed rejection round-trip. Maintained in config.yaml broker_restrictions.
+    if product == "MIS" and signal.symbol.upper() in settings.broker_mis_rejected:
+        msg = (
+            f"{signal.symbol} is on broker MIS reject list (broker_restrictions.flattrade.mis_rejected) "
+            "— skipping to avoid certain rejection"
+        )
+        logger.warning(msg)
+        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        return
 
     # 3. Check exposure limits
     if not risk_engine.check_exposure():
@@ -987,9 +1025,12 @@ def main() -> None:
             logger.info("Trading mode: LIVE (broker capital)")
 
         # ── Position reconciliation ────────────────────────────────────────────
-        # Reconcile stored open_positions against actual broker positions on startup.
-        # Prevents stale counter from blocking new trades if engine was stopped while
-        # positions were open (broker auto-squareoff, SL hit during downtime, etc.).
+        # Reconcile stored open_positions against actual broker positions on startup
+        # AND restore tracker state for any open positions found at the broker.
+        # Without restoration the in-memory tracker is empty after a restart, so any
+        # subsequent TP HIT alert hits the fallback path with EXIT-signal zeroes
+        # (entry=sl=tp=0) and the partial-exit SL re-placement is skipped, leaving
+        # the runner qty un-protected. RBLBANK incident, 2026-05-04.
         if risk_engine.open_positions > 0:
             from signal_engine.api_client import fetch_positionbook
             positions = await fetch_positionbook()
@@ -997,27 +1038,78 @@ def main() -> None:
                 configured_product = settings.product  # MIS or CNC
                 product_map = {"MIS": "I", "CNC": "C", "NRML": "M"}
                 broker_product = product_map.get(configured_product, configured_product)
-                actual_open = sum(
-                    1 for p in positions
+                open_broker_positions = [
+                    p for p in positions
                     if int(p.get("quantity", 0)) != 0
                     and p.get("product", "").upper() in (configured_product, broker_product)
-                )
+                ]
+                actual_open = len(open_broker_positions)
                 if actual_open != risk_engine.open_positions:
                     logger.warning(
                         f"Position mismatch: stored open_positions={risk_engine.open_positions}, "
                         f"broker reports {actual_open} open — correcting and persisting"
                     )
-                    # Correct heat proportionally if positions differ
-                    if actual_open == 0:
-                        risk_engine.portfolio_heat = 0.0
-                    elif risk_engine.open_positions > 0:
-                        risk_engine.portfolio_heat = (
-                            risk_engine.portfolio_heat * actual_open / risk_engine.open_positions
-                        )
                     risk_engine.open_positions = actual_open
                     risk_engine._persist()
                 else:
                     logger.info(f"Position reconciliation: stored={risk_engine.open_positions} matches broker={actual_open}")
+
+                # Restore tracker state from trades.db so partial-exit / time-exit / no-progress
+                # paths see real entry/sl/tp values instead of EXIT-signal zeroes.
+                restored = 0
+                for bp in open_broker_positions:
+                    bsymbol = bp.get("symbol", "")
+                    if not bsymbol:
+                        continue
+                    bqty = abs(int(bp.get("quantity", 0)))
+                    bdir = Direction.LONG if int(bp.get("quantity", 0)) > 0 else Direction.SHORT
+                    bexch = bp.get("exchange", settings.exchange)
+                    bprod = configured_product
+                    # Look up the most recent entry trade today; fall back to a partial
+                    # registration if absent so at least time-exit and no-progress paths
+                    # have something to work with.
+                    found = fetch_last_entry_trade(bsymbol, "ORB")
+                    if found is None:
+                        for sk in settings.strategy_profiles.keys():
+                            found = fetch_last_entry_trade(bsymbol, sk)
+                            if found is not None:
+                                strategy_for_pos = sk
+                                break
+                        else:
+                            strategy_for_pos = "ORB"
+                    else:
+                        strategy_for_pos = "ORB"
+                    if found is None:
+                        logger.warning(
+                            f"Tracker restore [{bsymbol}]: no entry trade in trades.db today "
+                            "— skipping (TP/SL alerts will use fallback path)"
+                        )
+                        continue
+                    if tracker.find_position(bsymbol, strategy_for_pos) is not None:
+                        continue
+                    pos = TrackedPosition(
+                        symbol=bsymbol,
+                        strategy=strategy_for_pos,
+                        exchange=bexch,
+                        product=bprod,
+                        entry_price=found["entry"],
+                        quantity=bqty,
+                        sl=found["sl"],
+                        tp=found["tp"],
+                        direction=bdir,
+                        entry_order_id=found["order_id"],
+                        sl_order_id="",  # unknown after restart; new SL placed only on partial-exit
+                        fill_price=float(bp.get("average_price", 0) or 0),
+                        ever_seen_nonzero_qty=True,
+                    )
+                    tracker.register(pos)
+                    restored += 1
+                    logger.info(
+                        f"Tracker restored [{bsymbol}:{strategy_for_pos}]: qty={bqty} "
+                        f"entry={found['entry']} sl={found['sl']} tp={found['tp']}"
+                    )
+                if restored > 0:
+                    logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
             else:
                 logger.warning("Position reconciliation: could not fetch positionbook, skipping")
         # ── End position reconciliation ────────────────────────────────────────
