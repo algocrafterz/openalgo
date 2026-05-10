@@ -27,7 +27,7 @@ sizing:
 
   # [tune] Fraction of capital to risk per trade (fixed_fractional mode).
   # 1% is conservative — Kelly fraction for this strategy is ~34%. Keep at 1% until ₹1L+.
-  risk_per_trade: 0.015
+  risk_per_trade: 0.01
 
   # [tune] Fraction of capital per trade (pct_of_capital mode only — unused when mode=fixed_fractional).
   pct_of_capital: 0.05
@@ -193,7 +193,12 @@ no_progress:
   # Tune ranges for the operator:
   #   - early_check_after_minutes: 30–60 (sweet spot 45)
   #   - early_min_progress_pct:    0.03–0.10 (sweet spot 0.05)
-  early_check_enabled: true
+  # 2026-05-07: disabled. Early gate was force-exiting trades at small adverse
+  # drift (e.g. TATASTEEL -24%, VOLTAS -8%) before the broker SL had any chance
+  # to fire — adding market-order slippage on top of an unrealised loss.
+  # On 2026-05-07 4/4 trades hit early gate; TATASTEEL slipped -1.5R past SL.
+  # Keep only the main gate (90min/20%) to catch truly stuck trades.
+  early_check_enabled: false
   early_check_after_minutes: 45
   early_min_progress_pct: 0.05
 
@@ -214,7 +219,8 @@ no_progress:
   #     PETRONET's eventual recovery.
   #
   # Conservative defaults: trigger=2 (avoids 1-trade noise), tightened=30min.
-  chop_tightener_enabled: true
+  # 2026-05-07: disabled. Tightener only shortens the early gate, which is now off.
+  chop_tightener_enabled: false
   chop_tightener_trigger_count: 2
   chop_tightener_early_check_after_minutes: 30
 
