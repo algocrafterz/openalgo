@@ -492,6 +492,12 @@ class PositionTracker:
             self._chop_tightener_logged = True
 
         gates: List[tuple] = []
+        if _settings.no_progress_loss_cut_enabled:
+            gates.append((
+                timedelta(minutes=_settings.no_progress_loss_cut_min_age_minutes),
+                _settings.no_progress_loss_cut_progress_threshold,  # negative threshold
+                "loss-cut",
+            ))
         if _settings.no_progress_early_check_enabled:
             gates.append((
                 timedelta(minutes=early_minutes),

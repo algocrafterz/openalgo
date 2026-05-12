@@ -753,6 +753,7 @@ class TestNoProgressProfitLock:
                 mock_settings.no_progress_chop_tightener_enabled = False
                 mock_settings.no_progress_chop_tightener_trigger_count = 2
                 mock_settings.no_progress_chop_tightener_early_check_after_minutes = 30
+                mock_settings.no_progress_loss_cut_enabled = False
                 mock_settings.time_exit_enabled = False  # disable market-exit path
                 await tracker._check_no_progress(book_data)
 
@@ -802,6 +803,7 @@ class TestNoProgressProfitLock:
                 mock_settings.no_progress_chop_tightener_enabled = False
                 mock_settings.no_progress_chop_tightener_trigger_count = 2
                 mock_settings.no_progress_chop_tightener_early_check_after_minutes = 30
+                mock_settings.no_progress_loss_cut_enabled = False
                 mock_settings.time_exit_enabled = False  # disable market-exit path
                 await tracker._check_no_progress(book_data)
 
@@ -856,6 +858,7 @@ class TestNoProgressProfitLock:
                 mock_settings.no_progress_chop_tightener_enabled = False
                 mock_settings.no_progress_chop_tightener_trigger_count = 2
                 mock_settings.no_progress_chop_tightener_early_check_after_minutes = 30
+                mock_settings.no_progress_loss_cut_enabled = False
                 mock_settings.time_exit_enabled = True
                 mock_settings.time_exit_hour = exit_time.hour
                 mock_settings.time_exit_minute = exit_time.minute
@@ -890,6 +893,7 @@ class TestChopTightener:
         mock_settings.no_progress_chop_tightener_enabled = enabled
         mock_settings.no_progress_chop_tightener_trigger_count = trigger
         mock_settings.no_progress_chop_tightener_early_check_after_minutes = tight
+        mock_settings.no_progress_loss_cut_enabled = False
         mock_settings.time_exit_enabled = False  # default off; override in market-exit tests
 
     @pytest.mark.asyncio
@@ -1073,3 +1077,158 @@ class TestChopTightener:
 
         assert tracker._day_no_progress_exits == 0
         assert tracker._chop_tightener_logged is False
+
+
+class TestLossCutGate:
+    """Loss-cut gate: exits immediately when progress is deeply negative.
+
+    Behaviour contract:
+      - Fires when age >= loss_cut_min_age_minutes AND progress < loss_cut_progress_threshold.
+      - Does NOT fire before min_age even with very negative progress.
+      - Does NOT fire when progress is bad but not below the threshold.
+      - Disabled by default; existing gates unaffected when disabled.
+    """
+
+    @staticmethod
+    def _apply_settings(mock_settings, *, enabled: bool, min_age: int = 20, threshold: float = -0.80):
+        mock_settings.no_progress_enabled = True
+        mock_settings.no_progress_check_after_minutes = 90
+        mock_settings.no_progress_min_progress_pct = 0.20
+        mock_settings.no_progress_profit_lock_ratio = 0.0
+        mock_settings.no_progress_ab_test_disable = False
+        mock_settings.no_progress_early_check_enabled = False
+        mock_settings.no_progress_early_check_after_minutes = 45
+        mock_settings.no_progress_early_min_progress_pct = 0.05
+        mock_settings.no_progress_use_fill_price = True
+        mock_settings.no_progress_chop_tightener_enabled = False
+        mock_settings.no_progress_chop_tightener_trigger_count = 2
+        mock_settings.no_progress_chop_tightener_early_check_after_minutes = 30
+        mock_settings.no_progress_loss_cut_enabled = enabled
+        mock_settings.no_progress_loss_cut_min_age_minutes = min_age
+        mock_settings.no_progress_loss_cut_progress_threshold = threshold
+        # Enable time exit so negative-rate positions use market exit (not break-even SL).
+        mock_settings.time_exit_enabled = True
+        mock_settings.time_exit_hour = 15
+        mock_settings.time_exit_minute = 0
+
+    @pytest.mark.asyncio
+    async def test_fires_when_progress_below_threshold_after_min_age(self):
+        """Gate fires when deeply negative progress AND age >= min_age."""
+        from signal_engine.models import Direction, TradeResult, OrderStatus
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        # 30min old, progress = (390 - 406.85) / (413.01 - 406.85) = -16.85/6.16 = -2.74 (274%)
+        # Use simpler numbers: fill=400, tp=410, ltp=391 -> progress=(391-400)/(410-400)=-90%
+        pos = _make_position(
+            entry_price=400.0,
+            fill_price=400.0,
+            sl=390.0,
+            tp=410.0,
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=30),
+        )
+        tracker.register(pos)
+        book_data = {"RELIANCE": (1, 391.0)}  # progress = (391-400)/(410-400) = -90%
+
+        with (
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.tracker.send_order", new_callable=AsyncMock) as mock_exit,
+            patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
+            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
+        ):
+            from signal_engine.models import TradeResult, OrderStatus
+            mock_exit.return_value = TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT", message="")
+            with patch("signal_engine.config.settings") as mock_settings:
+                self._apply_settings(mock_settings, enabled=True, min_age=20, threshold=-0.80)
+                await tracker._check_no_progress(book_data)
+
+        mock_exit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_fire_before_min_age(self):
+        """Gate must not fire even with terrible progress if age < min_age."""
+        from signal_engine.models import Direction
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        # 10min old — below min_age of 20min
+        pos = _make_position(
+            entry_price=400.0,
+            fill_price=400.0,
+            sl=390.0,
+            tp=410.0,
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=10),
+        )
+        tracker.register(pos)
+        book_data = {"RELIANCE": (1, 388.0)}  # progress = -120%, well below threshold
+
+        with (
+            patch("signal_engine.tracker.send_order", new_callable=AsyncMock) as mock_exit,
+        ):
+            with patch("signal_engine.config.settings") as mock_settings:
+                self._apply_settings(mock_settings, enabled=True, min_age=20, threshold=-0.80)
+                await tracker._check_no_progress(book_data)
+
+        mock_exit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_fire_when_progress_above_threshold(self):
+        """Gate must not fire when progress is negative but above the threshold."""
+        from signal_engine.models import Direction
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = _make_position(
+            entry_price=400.0,
+            fill_price=400.0,
+            sl=390.0,
+            tp=410.0,
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=30),
+        )
+        tracker.register(pos)
+        # progress = (396 - 400) / (410 - 400) = -40%, above -80% threshold
+        book_data = {"RELIANCE": (1, 396.0)}
+
+        with (
+            patch("signal_engine.tracker.send_order", new_callable=AsyncMock) as mock_exit,
+        ):
+            with patch("signal_engine.config.settings") as mock_settings:
+                self._apply_settings(mock_settings, enabled=True, min_age=20, threshold=-0.80)
+                await tracker._check_no_progress(book_data)
+
+        mock_exit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disabled_does_not_affect_main_gate(self):
+        """When loss_cut disabled, main gate still fires normally at 90min."""
+        from signal_engine.models import Direction, TradeResult, OrderStatus
+
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        pos = _make_position(
+            entry_price=400.0,
+            fill_price=400.0,
+            sl=390.0,
+            tp=410.0,
+            direction=Direction.LONG,
+            entry_time=datetime.now(_IST) - timedelta(minutes=95),
+        )
+        tracker.register(pos)
+        book_data = {"RELIANCE": (1, 399.0)}  # progress = -10%, below main gate's 20%
+
+        with (
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.tracker.send_order", new_callable=AsyncMock) as mock_exit,
+            patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
+            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
+        ):
+            from signal_engine.models import TradeResult, OrderStatus
+            mock_exit.return_value = TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT", message="")
+            with patch("signal_engine.config.settings") as mock_settings:
+                self._apply_settings(mock_settings, enabled=False)  # loss-cut OFF
+                await tracker._check_no_progress(book_data)
+
+        mock_exit.assert_called_once()

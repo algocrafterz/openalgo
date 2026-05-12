@@ -78,23 +78,19 @@ risk:
   monthly_loss_limit: 0.10       # 10% of capital
 
   # [tune] Max concurrent open positions.
-  # Bumped 5 -> 7 (2026-05-04). Today's session showed all 5 slots filled by 10:40
-  # with valid signals (AMBUJACEM, CGCL, SWIGGY all skipped on 5/5 cap). With the
-  # broker pre-reject list (broker_restrictions) and engine-restart tracker recovery
-  # in place, slots are no longer wasted on doomed-to-reject orders. Capital headroom
-  # exists: today's 5 filled positions used ~14.6K margin against 14.6K capital, but
-  # SL distances vary — small-cap signals (₹150–250) consume ~6–9K each, mid-caps
-  # (₹300–500) consume ~9–12K. With slot recycling on TP1 / no-progress, 7 keeps the
-  # engine engaged on active mornings without forcing tighter sizing.
-  max_open_positions: 7
+  # Reduced 7 -> 4 (2026-05-12). Q1 data: signals 1-2 have 90% WR, signals 3+ drop to
+  # 57% WR. On chop days (May 5, 7, 12) all 7 slots filled with correlated losers — more
+  # positions amplified losses without edge. 4 slots capture the best morning breakouts
+  # while limiting exposure when the market isn't following through.
+  max_open_positions: 4
 
   # [tune] Hard cap on total trades per day (slots can recycle within this limit).
-  # 16 = 7 concurrent + 9 recycles. Previously 12 (5 concurrent + 7 recycles); scaled
-  # proportionally with max_open_positions.
-  max_trades_per_day: 16
+  # 10 = 4 concurrent + 6 recycles. Proportional to max_open_positions reduction 7->4.
+  max_trades_per_day: 10
 
-  # [tune] Minimum reward:risk ratio to accept a signal. Strategy-level minimums are enforced
-  # by PineScript (ORB >= 1:1, RSI-TP-MR >= 0.5). This is a safety net for parser edge cases.
+  # [tune] Minimum reward:risk ratio to accept a signal.
+  # ORB PineScript guarantees >= 0.8R (ORB-width TP, floor at 0.8R). 0.75 is a safety net
+  # for parser edge cases only — no valid ORB signal should be rejected by this threshold.
   min_rr: 0.75
 
   # [tune] Suppress duplicate signals for the same symbol+strategy within this window.
@@ -130,25 +126,8 @@ blacklist:
     - YESBANK            # Erratic price action, manipulation risk
   ORB:
     hard:
-      - BHEL             # 0% WR, -4.1% PnL (Q1 2026) — PSU, wide spreads
-      - MANAPPURAM       # 16.7% WR, -3.2% PnL — NBFC, gaps on RBI news
-      - GAIL             # 33.3% WR, -0.5% PnL — policy-driven moves
-      - JIOFIN           # 33.3% WR, -0.5% PnL (downgraded C->D in Q2)
-      - TATAPOWER        # 25.0% WR, -0.7% PnL — PSU power, slow momentum
-      - BEL              # 0% WR, -1.2% PnL (new Q2, immediate loss — PSU defence)
-      - PNBHOUSING       # 33.3% WR, -1.2% PnL — NBFC, policy-sensitive
-      - UNIONBANK        # 0% WR, -0.8% PnL (new Q2)
-      - ADANIPOWER       # 33.3% WR, -0.8% PnL — erratic, event-driven
-      - USHAMART         # 28.6% WR, -0.7% PnL — thin liquidity, wide spreads
-      - HINDPETRO        # 33.3% WR, -0.6% PnL — OMC, policy-sensitive
-      - SYNGENE          # 0% WR, -0.4% PnL — pharma, unpredictable gaps
-      - HUDCO            # 0% WR, -₹194 Apr 2026 (4 trades) — PSU housing finance, erratic ORB
-    soft:
-      - CANBK            # A->D in Q2: +3.30% Q1 -> -0.70% Q2 — banking regime flip
-      - FEDERALBNK       # A->D in Q2: +2.41% Q1 -> -0.70% Q2 — banking regime flip
-      - WIPRO            # B->D in Q2: +1.70% Q1 -> -1.30% Q2 — IT regime flip
-      - BANKBARODA       # B->D: +0.60% Q1 -> -0.70% Q2 — banking regime flip
-      - NATIONALUM       # Mixed Apr 2026: 3 break-even/small-loss closes, 1 good TP — erratic follow-through
+      - BHEL             # 0% WR across Q1+Q2 2026; false breakout 2026-05-12 (-0.8R)
+    soft: []
     soft_multiplier: 0.5 # 50% qty for soft-listed symbols. 0 = effectively hard-block.
 
 # ── Time Exit ────────────────────────────────────────────
@@ -223,6 +202,15 @@ no_progress:
   chop_tightener_enabled: false
   chop_tightener_trigger_count: 2
   chop_tightener_early_check_after_minutes: 30
+
+  # Loss-cut gate: exit immediately when progress is deeply negative (price running hard
+  # against the position), regardless of age — subject to loss_cut_min_age_minutes.
+  # At 1:1 R:R, progress=-1.0 ≈ at-SL from fill. -0.80 = 80% of the way to SL.
+  # Today's example: BHEL -121% at 90min (would have fired much earlier at -80%).
+  # Set min_age_minutes to skip opening-candle noise (20 min recommended).
+  loss_cut_enabled: true
+  loss_cut_min_age_minutes: 20        # don't fire in first N min after entry
+  loss_cut_progress_threshold: -0.80  # fire when progress < -80% (deep loss, heading to SL)
 
   # Use actual broker fill_price (not signal entry) when computing progress.
   # Recommended true — keeps the metric aligned with what the trade actually risks.

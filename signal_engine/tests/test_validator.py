@@ -62,8 +62,8 @@ class TestRRRatio:
         assert result.status == ValidationStatus.IGNORED
 
     def test_at_min_rr_valid(self):
-        # R:R = (2510 - 2500) / (2500 - 2480) = 0.5 (equals min_rr)
-        result = validate(_make_signal(entry=2500, sl=2480, tp=2510))
+        # R:R = (2515 - 2500) / (2500 - 2480) = 0.75 (equals min_rr)
+        result = validate(_make_signal(entry=2500, sl=2480, tp=2515))
         assert result.status == ValidationStatus.VALID
 
     def test_above_min_rr_valid(self):
@@ -168,20 +168,21 @@ class TestBlacklist:
     """Per-strategy symbol blacklist — reject signals for known bad symbols."""
 
     def test_blacklisted_symbol_ignored(self):
-        """BHEL is blacklisted for ORB — should be IGNORED."""
+        """BHEL is ORB hard-blacklisted — should be IGNORED."""
         result = validate(_make_signal(strategy=ORB, symbol="BHEL"))
         assert result.status == ValidationStatus.IGNORED
         assert "blacklisted" in result.reason.lower()
-
-    def test_blacklisted_symbol_different_strategy_allowed(self):
-        """BHEL blacklisted for ORB but not RSI-TP-MR — should pass."""
-        result = validate(_make_signal(strategy=RSI_TP_MR, symbol="BHEL"))
-        assert result.status == ValidationStatus.VALID
 
     def test_non_blacklisted_symbol_allowed(self):
         """RELIANCE is not blacklisted — should pass."""
         result = validate(_make_signal(strategy=ORB, symbol="RELIANCE"))
         assert result.status == ValidationStatus.VALID
+
+    def test_previously_orb_blacklisted_now_allowed(self):
+        """SYNGENE/MANAPPURAM were removed from ORB hard list — should pass now."""
+        for symbol in ("SYNGENE", "MANAPPURAM"):
+            result = validate(_make_signal(strategy=ORB, symbol=symbol))
+            assert result.status == ValidationStatus.VALID, f"{symbol} should now be tradeable"
 
     def test_global_blacklist_blocks_all_strategies(self):
         """Symbol in _global blacklist is blocked regardless of strategy."""
@@ -196,19 +197,19 @@ class TestBlacklist:
 
     def test_blacklist_case_insensitive(self):
         """Blacklist should match regardless of case."""
-        result = validate(_make_signal(strategy=ORB, symbol="bhel"))
+        result = validate(_make_signal(strategy=ORB, symbol="yesbank"))
         assert result.status == ValidationStatus.IGNORED
 
     def test_exit_skips_blacklist(self):
         """EXIT signals should not be blocked by blacklist (closing existing position)."""
         result = validate(_make_signal(
-            strategy=ORB, symbol="BHEL", direction=Direction.EXIT,
+            strategy=ORB, symbol="YESBANK", direction=Direction.EXIT,
         ))
         assert result.status == ValidationStatus.VALID
 
     def test_blacklisted_reason_includes_strategy(self):
         """Rejection reason should mention the strategy for clarity."""
-        result = validate(_make_signal(strategy=ORB, symbol="BHEL"))
+        result = validate(_make_signal(strategy=ORB, symbol="YESBANK"))
         assert "ORB" in result.reason or "blacklisted" in result.reason.lower()
 
 

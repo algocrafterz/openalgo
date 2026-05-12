@@ -214,6 +214,10 @@ class Settings:
     no_progress_chop_tightener_early_check_after_minutes: int
     # Use broker fill_price for progress calc (more accurate). False = signal entry (legacy).
     no_progress_use_fill_price: bool
+    # Loss-cut gate: exit when progress drops below a deep negative threshold.
+    no_progress_loss_cut_enabled: bool
+    no_progress_loss_cut_min_age_minutes: int
+    no_progress_loss_cut_progress_threshold: float  # negative, e.g. -0.80
 
 
 def _parse_no_progress(cfg: dict) -> dict:
@@ -235,6 +239,9 @@ def _parse_no_progress(cfg: dict) -> dict:
             cfg.get("chop_tightener_early_check_after_minutes", 30)
         ),
         "no_progress_use_fill_price": bool(cfg.get("use_fill_price_for_progress", True)),
+        "no_progress_loss_cut_enabled": bool(cfg.get("loss_cut_enabled", False)),
+        "no_progress_loss_cut_min_age_minutes": int(cfg.get("loss_cut_min_age_minutes", 20)),
+        "no_progress_loss_cut_progress_threshold": float(cfg.get("loss_cut_progress_threshold", -0.80)),
     }
 
 

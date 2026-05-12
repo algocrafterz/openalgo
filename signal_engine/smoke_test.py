@@ -340,7 +340,7 @@ async def dry_run_entry_pipeline() -> str:
         return TradeResult(status=OrderStatus.SUCCESS, order_id="DRY-RUN-0001")
 
     with patch("signal_engine.executor.send_order", side_effect=_mock_send):
-        result2 = await _mock_send(order)
+        await _mock_send(order)
 
     o = captured["order"]
     risk_per_share = abs(signal.entry - signal.sl)

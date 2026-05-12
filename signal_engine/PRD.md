@@ -62,6 +62,61 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Recent Changes (2026-05-12)
+
+### ORB PineScript TP fix (`calculateTargets()` rewrite)
+
+The April 30 "pure 1R" fix overcorrected: with ATR×2.0 as default SL, TP1 was set 2–3× the ORB width — unreachable intraday (e.g. ₹8 TP on a ₹2 ORB). Q1 used `min(orbTP, riskTP)` which had the opposite problem (R:R collapse when SL floor expanded past orbWidth). New formula resolves both:
+
+```pine
+float tp1_dist = math.max(orbWidth, risk * 0.8)
+```
+
+Primary anchor is the ORB measured move (`orbWidth` = actH − actL). Floor at 0.8R prevents R:R collapse on wide-SL days. Removed `riskAdjustment` multiplier (was 1.0/0.8/0.6 by price tier — always 1.0 with max_entry_price=800, dead code).
+
+### Exposure reduction: `max_open_positions` 7→4 / `max_trades_per_day` 16→10
+
+Q1 data: signals 1–2 have 90% WR, signals 3+ drop to 57% WR. On chop days (May 5, 7, 12) all 7 slots filled with correlated losers — more positions amplified losses without edge. 4 slots capture the best morning breakouts while limiting exposure when market isn't following through. `max_trades_per_day` proportionally reduced (4 concurrent + 6 recycles).
+
+### Loss-cut gate (no-progress sub-gate)
+
+New exit gate fires before the 90-min main gate when progress drops past a deep negative threshold:
+- Config: `loss_cut_enabled: true`, `loss_cut_min_age_minutes: 20`, `loss_cut_progress_threshold: -0.80`
+- At progress < −80% (price has moved 80% of the way to SL against the trade), position is market-exited immediately — no waiting for the 90-min check or broker SL
+- `min_age_minutes: 20` skips opening-candle noise
+- Trigger: BHEL 2026-05-12 (−121% progress at 90min; loss-cut would have exited much earlier)
+
+**Files**: `config.py` (+3 settings), `config.yaml`, `tracker.py` (new gate in `_check_no_progress`)
+
+### `day_start_capital` persisted in RiskStore (engine-restart safe)
+
+Previously, a signal-engine restart mid-day (e.g. crash/watchdog) lost the cached day-start capital — the first post-restart trade re-fetched live capital, which was lower (open positions consuming margin) — producing inconsistently smaller qty for the same risk %. 
+
+**Fix**: `RiskStore.save()` / `load()` now include `day_start_capital` column. `RiskEngine._restore_state()` restores the cached value directly from DB and logs it on startup. Schema migration adds the column via `ALTER TABLE ... IF NOT EXISTS` guard.
+
+**Files**: `risk_store.py`, `risk.py`
+
+### `early_check_enabled` disabled (2026-05-07)
+
+The early gate (45min / 5%) was force-exiting trades at small adverse drift before the broker SL had a chance to fire — adding MARKET-order slippage on top of an unrealised loss. On 2026-05-07, 4/4 trades hit the early gate; TATASTEEL slipped −1.5R past SL on a market-exit at −8%. Disabled pending rework. Main gate (90min / 20%) and loss-cut gate remain active.
+
+### Config state as of 2026-05-12
+
+| Key | Value | Change |
+|-----|-------|--------|
+| `risk_per_trade` | 0.01 | Reverted from 0.015 (capital at ₹35K now) |
+| `max_open_positions` | 4 | Was 7 |
+| `max_trades_per_day` | 10 | Was 16 |
+| `min_rr` | 0.75 | Clarified: safety net only; ORB PineScript guarantees ≥0.8R |
+| `early_check_enabled` | false | Disabled 2026-05-07 |
+| `chop_tightener_enabled` | false | Disabled (redundant with max_open_positions=4) |
+| `loss_cut_enabled` | true | New |
+| Blacklist ORB hard | BHEL only | HUDCO / NATIONALUM removed (position closed) |
+
+**Files**: `orb.pine`, `config.yaml`, `config.py`, `risk.py`, `risk_store.py`, `tracker.py`, `tests/test_risk.py`, `tests/test_tracker.py`, `tests/test_validator.py`.
+
+---
+
 ## Recent Changes (2026-04-29)
 
 ### Bug Fix: Fill-above-TP auto-close (main.py)
@@ -536,7 +591,7 @@ strategy_profiles:
       TP1: 1.0          # Exit 100% at TP1
 ```
 
-### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20, loosened — 2026-04-25, chop tightener — 2026-05-05)
+### `no_progress` (new — 2026-04-17, rate-based — 2026-04-20, loosened — 2026-04-25, chop tightener — 2026-05-05, loss-cut — 2026-05-12)
 ```yaml
 no_progress:
   enabled: true
@@ -544,13 +599,17 @@ no_progress:
   min_progress_pct: 0.20         # Was 0.33. 20% qualifies as "real progress"
   profit_lock_ratio: 0.0         # 0.0 = strict break-even SL (recommended)
   ab_test_disable: false         # Master kill-switch for A/B comparison; skips entire check when true
-  early_check_enabled: true
+  early_check_enabled: false     # Disabled 2026-05-07: was adding slippage on top of SL loss
   early_check_after_minutes: 45
   early_min_progress_pct: 0.05
-  # Adaptive chop tightener (2026-05-05) — shortens ONLY the early gate after N firings today.
-  chop_tightener_enabled: true
+  # Adaptive chop tightener — disabled 2026-05-12 (max_open_positions=4 handles chop exposure)
+  chop_tightener_enabled: false
   chop_tightener_trigger_count: 2
   chop_tightener_early_check_after_minutes: 30
+  # Loss-cut gate (2026-05-12) — exits when trade is deeply against you, regardless of age
+  loss_cut_enabled: true
+  loss_cut_min_age_minutes: 20        # skip first N min (opening-candle noise)
+  loss_cut_progress_threshold: -0.80  # fire when progress < -80% (price 80% to SL)
 ```
 At 90min, if progress < 20%: project `minutes_needed = (1 - progress) / rate` and compare to minutes remaining until time exit. If the trade cannot reach TP1 before 15:00 at its current pace → market exit. Otherwise → break-even SL.
 
@@ -760,7 +819,7 @@ openalgoctl.sh run
 ## Testing
 
 ```bash
-# Full test suite (446 tests)
+# Full test suite (458 tests)
 PYTHONPATH=. uv run pytest signal_engine/tests/ -v
 
 # With coverage
@@ -797,7 +856,7 @@ PYTHONPATH=. uv run python -m signal_engine.main --test --test-file signal_engin
 ```bash
 # Today's risk state
 sqlite3 signal_engine/data/risk.db \
-  "SELECT mode, trade_date, trades_today, daily_loss, open_positions, portfolio_heat FROM risk_counters WHERE trade_date=date('now');"
+  "SELECT mode, trade_date, trades_today, daily_loss, open_positions, portfolio_heat, day_start_capital FROM risk_counters WHERE trade_date=date('now');"
 
 # Last 7 trading days
 sqlite3 signal_engine/data/risk.db \

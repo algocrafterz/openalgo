@@ -697,6 +697,45 @@ class TestRestartSafeCounters:
         engine.record_close(pnl=-100.0, symbol="RELIANCE")
         assert engine.trades_today == 1
 
+    def test_day_start_capital_persists_and_restores_across_restart(self, tmp_path):
+        db_path = str(tmp_path / "risk.db")
+        store1 = RiskStore(db_path)
+        engine1 = _engine(store=store1, trade_mode="live", use_day_start_capital=True)
+
+        # First trade of the day: caches and persists day-start capital
+        engine1.get_sizing_capital(14_400.0)
+        assert engine1._day_start_capital == 14_400.0
+
+        from datetime import datetime, timezone, timedelta
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(_IST).date()
+        row = store1.load("live", today)
+        assert row["day_start_capital"] == 14_400.0
+
+        # Simulate restart: new engine with same DB, live capital depleted by open positions
+        store2 = RiskStore(db_path)
+        engine2 = _engine(store=store2, trade_mode="live", use_day_start_capital=True)
+        assert engine2._day_start_capital == 14_400.0
+
+        # Subsequent sizing uses restored value, not the depleted live capital
+        assert engine2.get_sizing_capital(8_000.0) == 14_400.0
+
+    def test_day_start_capital_reset_on_new_day(self, tmp_path):
+        db_path = str(tmp_path / "risk.db")
+        store = RiskStore(db_path)
+        engine = _engine(store=store, trade_mode="live", use_day_start_capital=True)
+
+        engine.get_sizing_capital(14_400.0)
+        assert engine._day_start_capital == 14_400.0
+
+        # Simulate new day
+        engine._current_day = -1
+        engine.check_exposure()
+        assert engine._day_start_capital == 0.0
+
+        # Next capital fetch re-caches fresh value
+        assert engine.get_sizing_capital(16_000.0) == 16_000.0
+
 
 class TestMaxSlPctForSizing:
     """max_sl_pct_for_sizing caps the effective SL distance used in position sizing.

@@ -74,7 +74,6 @@ class RiskEngine:
         self.slippage_factor = slippage_factor
         self._store = store
         self._trade_mode = trade_mode
-        self._default_product = default_product
         self.max_positions_per_symbol = max_positions_per_symbol
         self.max_positions_per_sector = max_positions_per_sector
 
@@ -126,6 +125,7 @@ class RiskEngine:
         self.trades_today = row["trades_today"]
         self.daily_realised_loss = row["daily_loss"]
         self.open_positions = row["open_positions"]
+        self._day_start_capital = row["day_start_capital"]
 
         # Load weekly/monthly losses
         self.weekly_realised_loss = self._store.weekly_loss(self._trade_mode, today)
@@ -139,6 +139,11 @@ class RiskEngine:
         monthly_limit = self.monthly_loss_limit * capital
 
         logger.info("--- Risk State (restored from DB) ---")
+        if self._day_start_capital > 0:
+            logger.info(
+                f"Day-start capital restored: {self._day_start_capital:,.2f} INR "
+                f"(risk={self.risk_per_trade:.1%}={self._day_start_capital * self.risk_per_trade:,.0f}/trade)"
+            )
         logger.info(
             f"Positions: {self.open_positions}/{self.max_open_positions} | "
             f"Trades today: {self.trades_today}/{self.max_trades_per_day}"
@@ -179,6 +184,7 @@ class RiskEngine:
                 f"Day-start capital cached: {live_capital:,.2f} INR "
                 f"(risk={self.risk_per_trade:.1%}={live_capital * self.risk_per_trade:,.0f}/trade)"
             )
+            self._persist()
         return self._day_start_capital
 
     def _persist(self) -> None:
@@ -192,6 +198,7 @@ class RiskEngine:
             trades_today=self.trades_today,
             daily_loss=self.daily_realised_loss,
             open_positions=self.open_positions,
+            day_start_capital=self._day_start_capital,
         )
 
     def _maybe_reset_daily(self) -> None:

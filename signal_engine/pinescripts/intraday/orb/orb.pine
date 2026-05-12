@@ -849,15 +849,17 @@ hasVolumeConfirmation(volMA, mult, strongMult) =>
 
 // =========================================== TARGET & STOP FUNCTIONS ================================
 calculateTargets(entry, sl, isBullish) =>
-    float risk = math.abs(entry - sl)
-    // Slight discount for high-priced stocks (less volatile in absolute terms)
-    float riskAdjustment = entry < 1000 ? 1.0 : entry < 5000 ? 0.8 : 0.6
+    float risk    = math.abs(entry - sl)
+    float orbWidth = actH - actL
 
-    // Risk-only TPs: 1R, 1.5R, 2R, 3R — consistent R:R regardless of ORB width
-    float tp1   = isBullish ? entry + (risk * 1.0 * riskAdjustment) : entry - (risk * 1.0 * riskAdjustment)
-    float tp1_5 = isBullish ? entry + (risk * 1.5 * riskAdjustment) : entry - (risk * 1.5 * riskAdjustment)
-    float tp2   = isBullish ? entry + (risk * 2.0 * riskAdjustment) : entry - (risk * 2.0 * riskAdjustment)
-    float tp3   = isBullish ? entry + (risk * 3.0 * riskAdjustment) : entry - (risk * 3.0 * riskAdjustment)
+    // TP anchored to ORB measured move (natural breakout target).
+    // Floor at 0.8R prevents R:R collapse on days where ATR SL exceeds ORB width.
+    float tp1_dist = math.max(orbWidth, risk * 0.8)
+
+    float tp1   = isBullish ? entry + tp1_dist * 1.0 : entry - tp1_dist * 1.0
+    float tp1_5 = isBullish ? entry + tp1_dist * 1.5 : entry - tp1_dist * 1.5
+    float tp2   = isBullish ? entry + tp1_dist * 2.0 : entry - tp1_dist * 2.0
+    float tp3   = isBullish ? entry + tp1_dist * 3.0 : entry - tp1_dist * 3.0
 
     [tp1, tp1_5, tp2, tp3]
 
