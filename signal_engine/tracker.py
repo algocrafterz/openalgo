@@ -11,6 +11,7 @@ from signal_engine.api_client import (
     cancel_all_orders,
     cancel_order,
     close_all_positions,
+    fetch_open_position,
     fetch_order_status,
     fetch_positionbook,
     fetch_realised_pnl,
@@ -708,9 +709,50 @@ class PositionTracker:
         finally:
             self._time_exit_active = False
 
-        # Capture actual PnL of time-exited positions from broker realised PnL delta.
-        # close_all_positions is fire-and-forget so we wait briefly for fills.
-        await asyncio.sleep(2)
+        # Verify positions are actually closed at the broker; retry cancel+close if any remain.
+        _MAX_CLOSE_ATTEMPTS = 3
+        _VERIFY_WAIT = 3  # seconds per attempt
+        pending = list(mis_positions.items())  # [(key, pos), ...]
+
+        for attempt in range(1, _MAX_CLOSE_ATTEMPTS + 1):
+            await asyncio.sleep(_VERIFY_WAIT)
+            still_open = []
+            for k, pos in pending:
+                qty = await fetch_open_position(
+                    pos.symbol, pos.strategy, pos.exchange or "NSE", pos.product
+                )
+                if qty != 0 and qty != -1:
+                    still_open.append((k, pos))
+
+            if not still_open:
+                logger.info(
+                    f"Time exit: {len(mis_positions)} position(s) confirmed closed at broker "
+                    f"(attempt {attempt})"
+                )
+                break
+
+            pending = still_open
+            logger.warning(
+                f"Time exit: {len(still_open)} position(s) still open after attempt "
+                f"{attempt}/{_MAX_CLOSE_ATTEMPTS}: "
+                + ", ".join(pos.symbol for _, pos in still_open)
+            )
+            if attempt < _MAX_CLOSE_ATTEMPTS:
+                for strategy in {pos.strategy for _, pos in still_open}:
+                    await cancel_all_orders(strategy)
+                    await close_all_positions(strategy)
+        else:
+            # All retries exhausted and positions still open
+            symbols_str = ", ".join(pos.symbol for _, pos in pending)
+            logger.error(
+                f"Time exit: FAILED to close {symbols_str} after {_MAX_CLOSE_ATTEMPTS} attempts. "
+                f"Broker auto-square-off will apply charges!"
+            )
+            await notifier.notify(
+                f"TIME EXIT FAILED: {symbols_str} not closed after {_MAX_CLOSE_ATTEMPTS} attempts. "
+                f"Close manually before 15:20!"
+            )
+
         current_realised = await fetch_realised_pnl()
         time_exit_pnl = current_realised - self._last_realised_pnl
         self._last_realised_pnl = current_realised
@@ -828,11 +870,21 @@ class TimeExitScheduler:
                 not self._fired_today
                 and (now.hour > self._hour or (now.hour == self._hour and now.minute > self._minute + 5))
             ):
-                logger.info(f"Time exit: past configured time, firing catch-up exit")
+                # Distinguish: catch-up during market hours vs system woke from sleep after close
+                past_market_close = now.hour > 15 or (now.hour == 15 and now.minute >= 30)
+                if past_market_close:
+                    logger.warning(
+                        f"Time exit catch-up at {now.strftime('%H:%M')} IST: market already closed (15:30). "
+                        f"Engine was likely suspended (system sleep). "
+                        f"Broker auto-square-off should have closed open MIS positions at 15:20. "
+                        f"Running tracker cleanup."
+                    )
+                else:
+                    logger.info(f"Time exit: past configured time, firing catch-up exit")
                 await self._tracker.time_exit_all()
                 self._fired_today = True
 
-            await asyncio.sleep(30)
+            await asyncio.sleep(5)
 
     def stop(self) -> None:
         self._running = False

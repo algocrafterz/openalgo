@@ -2,10 +2,12 @@
 
 Startup: auto-login with TOTP, verify broker auth, send Telegram summary.
 Shutdown: send Telegram shutdown notification.
+Squareoff: cancel all pending orders and close all MIS positions (3:02 PM failsafe).
 
 Usage:
     uv run python -m signal_engine.scripts.openalgoscheduler startup
     uv run python -m signal_engine.scripts.openalgoscheduler shutdown [reason]
+    uv run python -m signal_engine.scripts.openalgoscheduler squareoff
 """
 
 import asyncio
@@ -569,6 +571,49 @@ def _run_shutdown(reason: str = "scheduled"):
         logger.exception("Telegram notification failed (non-fatal)")
 
 
+def _run_squareoff():
+    """3:02 PM failsafe: cancel all pending orders and close all MIS positions.
+
+    Called by Windows Task Scheduler at 3:02 PM, independent of the signal engine process.
+    Fires 2 minutes after the engine's own 3:00 PM time exit, so it's a no-op when the
+    engine already closed positions. Acts as the safety net when the engine is crashed,
+    frozen, or the system woke from sleep after 3:00 PM.
+    """
+    from utils.logging import get_logger
+    from signal_engine.config import settings
+    from signal_engine.api_client import cancel_all_orders, close_all_positions
+
+    logger = get_logger(__name__)
+    logger.info("Squareoff 15:02: failsafe close of all MIS positions")
+
+    mis_strategies = [
+        name for name, profile in settings.strategy_profiles.items()
+        if profile.get("product", "") == "MIS"
+    ]
+
+    if not mis_strategies:
+        logger.warning("Squareoff: no MIS strategies found in config")
+        return
+
+    logger.info(f"Squareoff: strategies={mis_strategies}")
+
+    async def _do():
+        for strategy in mis_strategies:
+            logger.info(f"Squareoff: cancelling orders for {strategy}")
+            await cancel_all_orders(strategy)
+            logger.info(f"Squareoff: closing positions for {strategy}")
+            await close_all_positions(strategy)
+
+    asyncio.run(_do())
+    logger.info("Squareoff: done")
+
+    try:
+        msg = f"Squareoff 15:02 (failsafe): {', '.join(mis_strategies)} processed"
+        asyncio.run(send_telegram_notification(msg))
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
 
@@ -581,6 +626,8 @@ if __name__ == "__main__":
         _run_startup()
     elif command == "shutdown":
         _run_shutdown(reason=reason)
+    elif command == "squareoff":
+        _run_squareoff()
     else:
-        print(f"Usage: python -m signal_engine.scripts.openalgoscheduler [startup|shutdown] [reason]")
+        print(f"Usage: python -m signal_engine.scripts.openalgoscheduler [startup|shutdown|squareoff] [reason]")
         sys.exit(1)

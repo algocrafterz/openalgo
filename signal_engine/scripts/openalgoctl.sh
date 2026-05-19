@@ -354,19 +354,27 @@ cmd_status() {
     fi
 }
 
+cmd_squareoff() {
+    log "Squareoff: cancelling orders and closing MIS positions"
+    "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler squareoff 2>&1 | tee -a "$LOG_FILE"
+    log "Squareoff: done"
+}
+
 case "${1:-}" in
-    start)   cmd_start ;;
-    run)     cmd_run ;;
-    stop)    cmd_stop ;;
-    restart) cmd_restart ;;
-    status)  cmd_status ;;
+    start)     cmd_start ;;
+    run)       cmd_run ;;
+    stop)      cmd_stop ;;
+    restart)   cmd_restart ;;
+    status)    cmd_status ;;
+    squareoff) cmd_squareoff ;;
     *)
-        echo "Usage: openalgoctl.sh {start|run|stop|restart|status}"
+        echo "Usage: openalgoctl.sh {start|run|stop|restart|status|squareoff}"
         echo ""
-        echo "  start    Start in background, return after health check"
-        echo "  run      Start in foreground, block until exit (Task Scheduler / systemd)"
-        echo "  stop     Stop all services"
-        echo "  restart  Stop then start"
-        echo "  status   Show running state"
+        echo "  start      Start in background, return after health check"
+        echo "  run        Start in foreground, block until exit (Task Scheduler / systemd)"
+        echo "  stop       Stop all services"
+        echo "  restart    Stop then start"
+        echo "  status     Show running state"
+        echo "  squareoff  Cancel orders and close all MIS positions (3:02 PM failsafe)"
         exit 1
 esac

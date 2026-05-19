@@ -21,7 +21,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "run", "stop", "restart", "status")]
+    [ValidateSet("start", "run", "stop", "restart", "status", "squareoff")]
     [string]$Command
 )
 
@@ -45,13 +45,14 @@ $servicePidFile = "$PSScriptRoot\openalgo-service.pid"
 
 if (-not $Command) {
 
-    Write-Host "Usage: .\openalgoctl.ps1 {start|run|stop|restart|status}" -ForegroundColor Yellow
+    Write-Host "Usage: .\openalgoctl.ps1 {start|run|stop|restart|status|squareoff}" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  start    Start in hidden window, return after health check"
-    Write-Host "  run      Start in foreground, block until exit (Task Scheduler)"
-    Write-Host "  stop     Stop all services"
-    Write-Host "  restart  Stop then start"
-    Write-Host "  status   Show running state"
+    Write-Host "  start      Start in hidden window, return after health check"
+    Write-Host "  run        Start in foreground, block until exit (Task Scheduler)"
+    Write-Host "  stop       Stop all services"
+    Write-Host "  restart    Stop then start"
+    Write-Host "  status     Show running state"
+    Write-Host "  squareoff  Cancel orders and close all MIS positions (3:02 PM failsafe)"
     exit 1
 }
 

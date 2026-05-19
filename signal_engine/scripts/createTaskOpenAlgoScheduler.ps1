@@ -1,10 +1,11 @@
 # -------------------------------------------------------
 # Create Windows Task Scheduler tasks for OpenAlgo
 #
-# Creates three tasks under the Anand user account:
+# Creates four tasks under the Anand user account:
 #   1. openAlgoAutoStart  -- Weekdays 8:50 AM  -- long-running foreground launcher
 #   2. openAlgoAutoStop   -- Weekdays 3:30 PM  -- graceful shutdown
 #   3. openAlgoWatchdog   -- Weekdays 9:00 AM-3:25 PM, every 5 min -- crash recovery
+#   4. openAlgoSquareOff  -- Weekdays 3:02 PM  -- failsafe MIS position close
 #
 # Run as Administrator:
 #   powershell -ExecutionPolicy Bypass -File createTaskOpenAlgoScheduler.ps1
@@ -20,10 +21,11 @@ if (!(Test-Path $ps1Path)) {
 }
 
 # --- Configuration ---
-$startTime    = "8:50AM"
-$stopTime     = "3:30PM"
-$watchdogTime = "9:00AM"
-$days         = @("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+$startTime      = "8:50AM"
+$stopTime       = "3:30PM"
+$squareoffTime  = "3:02PM"
+$watchdogTime   = "9:00AM"
+$days           = @("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
 
 # --- Principal: run as Anand in the interactive session ---
 $principal = New-ScheduledTaskPrincipal `
@@ -159,13 +161,56 @@ Register-ScheduledTask `
 
 Write-Host "Task 3 created: openAlgoWatchdog   (Weekdays $watchdogTime-3:25PM, every 5 min)" -ForegroundColor Green
 
+# -------------------------------------------------------
+# Task 4: Square-Off (3:02 PM failsafe)
+# Calls openalgoctl.ps1 squareoff — cancels all pending orders and closes all
+# MIS positions via the OpenAlgo API.
+#
+# Fires 2 minutes after the signal engine's own 3:00 PM time exit:
+#   - If engine closed positions successfully → this is a no-op (nothing to close)
+#   - If engine is crashed, frozen, or system was asleep → this saves the day
+#
+# WakeToRun: true — wakes the machine from sleep to fire at 3:02 PM.
+# This is the only task with WakeToRun at close time, making it the
+# hard guarantee that positions are closed even on a sleeping laptop.
+# -------------------------------------------------------
+
+Unregister-ScheduledTask -TaskName "openAlgoSquareOff" -Confirm:$false -ErrorAction SilentlyContinue
+
+$squareoffAction = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ps1Path`" squareoff"
+
+$squareoffTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $days -At $squareoffTime
+
+$squareoffSettings = New-ScheduledTaskSettingsSet `
+    -WakeToRun `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+
+Register-ScheduledTask `
+    -TaskName "openAlgoSquareOff" -TaskPath "\" `
+    -Action $squareoffAction -Trigger $squareoffTrigger -Settings $squareoffSettings -Principal $principal `
+    -Force | Out-Null
+
+Write-Host "Task 4 created: openAlgoSquareOff  (Weekdays $squareoffTime -- failsafe MIS close, WakeToRun)" -ForegroundColor Green
+
 # --- Summary ---
 Write-Host ""
-Write-Host "All 3 tasks registered under user: Anand" -ForegroundColor Cyan
+Write-Host "All 4 tasks registered under user: Anand" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "How they work together:" -ForegroundColor Cyan
-Write-Host "  8:50 AM  openAlgoAutoStart -- starts app.py + signal engine, stays running all day" -ForegroundColor White
-Write-Host "  9:00 AM  openAlgoWatchdog  -- fires every 5 min; no-op if running, restarts if dead" -ForegroundColor White
-Write-Host "  3:30 PM  openAlgoAutoStop  -- sends shutdown notification, kills all services" -ForegroundColor White
+Write-Host "  8:50 AM  openAlgoAutoStart  -- starts app.py + signal engine, stays running all day" -ForegroundColor White
+Write-Host "  9:00 AM  openAlgoWatchdog   -- fires every 5 min; no-op if running, restarts if dead" -ForegroundColor White
+Write-Host "  3:02 PM  openAlgoSquareOff  -- failsafe: closes MIS positions if engine didn't (WakeToRun)" -ForegroundColor White
+Write-Host "  3:30 PM  openAlgoAutoStop   -- sends shutdown notification, kills all services" -ForegroundColor White
+Write-Host ""
+Write-Host "Square-off design:" -ForegroundColor Cyan
+Write-Host "  Signal engine fires its own exit at 3:00 PM (asyncio scheduler, 5s polling)" -ForegroundColor White
+Write-Host "  openAlgoSquareOff fires at 3:02 PM via Task Scheduler (OS-level, survives engine crash)" -ForegroundColor White
+Write-Host "  If engine already closed at 3:00 => 3:02 squareoff is a no-op" -ForegroundColor White
+Write-Host "  If engine was dead/sleeping => 3:02 squareoff closes positions before broker auto-square (3:20)" -ForegroundColor White
 Write-Host ""
 Write-Host "Script path: $ps1Path" -ForegroundColor Cyan
