@@ -848,12 +848,12 @@ hasVolumeConfirmation(volMA, mult, strongMult) =>
         isStrongVolume or isNormalVolume
 
 // =========================================== TARGET & STOP FUNCTIONS ================================
-calculateTargets(entry, sl, isBullish) =>
+calculateTargets(entry, sl, isBullish, orbH, orbL) =>
     float risk    = math.abs(entry - sl)
-    float orbWidth = actH - actL
+    float orbWidth = orbH - orbL
 
     // TP anchored to ORB measured move (natural breakout target).
-    // Floor at 0.8R prevents R:R collapse on days where ATR SL exceeds ORB width.
+    // Floor at 0.8R prevents R:R collapse on tight-ORB / wide-ATR-SL days.
     float tp1_dist = math.max(orbWidth, risk * 0.8)
 
     float tp1   = isBullish ? entry + tp1_dist * 1.0 : entry - tp1_dist * 1.0
@@ -2074,7 +2074,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry
             float entry = open
             float atr = cachedATR
             float sl = calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
-            [tp1, tp1_5, tp2, tp3] = calculateTargets(entry, sl, true)
+            [tp1, tp1_5, tp2, tp3] = calculateTargets(entry, sl, true, activeHigh, activeLow)
 
             [shares, posValue, maxLossCalc, riskAmount] = calculatePositionSize(entry, sl)
 
@@ -2175,7 +2175,7 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             float entry = open
             float atr = cachedATR
             float sl = calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
-            [tp1, tp1_5, tp2, tp3] = calculateTargets(entry, sl, false)
+            [tp1, tp1_5, tp2, tp3] = calculateTargets(entry, sl, false, activeHigh, activeLow)
 
             [shares, posValue, maxLossCalc, riskAmount] = calculatePositionSize(entry, sl)
 
