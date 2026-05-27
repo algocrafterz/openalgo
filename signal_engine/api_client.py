@@ -230,22 +230,30 @@ async def fetch_positionbook():
 
     Returns list of position dicts on success, None on failure.
     Each dict has: symbol, exchange, product, quantity, pnl, average_price, ltp.
+    Retries up to 3 times with 2s backoff to ride out transient broker disconnects.
     """
     url = f"{settings.openalgo_base_url}/api/v1/positionbook"
     payload = {"apikey": settings.openalgo_api_key}
+    max_retries = 3
+    retry_delay = 2.0
 
-    try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") != "success":
-                logger.warning(f"Positionbook API returned non-success: {data}")
-                return None
-            return data.get("data", [])
-    except Exception as e:
-        logger.error(f"Failed to fetch positionbook: {e}")
-        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if data.get("status") != "success":
+                    logger.warning(f"Positionbook API returned non-success: {data}")
+                    return None
+                return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"Positionbook fetch attempt {attempt}/{max_retries}: {e}")
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+
+    logger.error(f"Failed to fetch positionbook after {max_retries} attempts")
+    return None
 
 
 async def close_all_positions(strategy: str) -> bool:

@@ -1,4 +1,5 @@
 import importlib
+import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -119,9 +120,22 @@ def get_positionbook_with_auth(
     if broker_funcs is None:
         return False, {"status": "error", "message": "Broker-specific module not found"}, 404
 
+    _max_retries = 3
+    _retry_delay = 2.0
+
     try:
-        # Get positions data using broker's implementation
-        positions_data = broker_funcs["get_positions"](auth_token)
+        # Get positions data using broker's implementation, with retry for transient disconnects
+        positions_data = None
+        for attempt in range(1, _max_retries + 1):
+            try:
+                positions_data = broker_funcs["get_positions"](auth_token)
+                break
+            except Exception as e:
+                if attempt < _max_retries:
+                    logger.warning(f"Positions fetch attempt {attempt}/{_max_retries}: {e}, retrying in {_retry_delay}s")
+                    time.sleep(_retry_delay)
+                else:
+                    raise
 
         if "status" in positions_data and positions_data["status"] == "error":
             return (
