@@ -73,9 +73,9 @@ sizing:
 risk:
   # [tune] Daily/weekly/monthly loss limits as fraction of capital. Engine locks out new entries
   # when cumulative loss hits the limit. Resets automatically at the start of each period.
-  daily_loss_limit: 0.04         # 4% = 4 losers at 1% risk before lockout
-  weekly_loss_limit: 0.08        # 8% = 2 bad days per week
-  monthly_loss_limit: 0.10       # 10% of capital
+  daily_loss_limit: 1.0          # TESTING: disabled
+  weekly_loss_limit: 1.0         # TESTING: disabled
+  monthly_loss_limit: 1.0        # TESTING: disabled
 
   # [tune] Max concurrent open positions.
   # Reduced 7 -> 4 (2026-05-12). Q1 data: signals 1-2 have 90% WR, signals 3+ drop to
