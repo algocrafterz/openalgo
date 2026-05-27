@@ -357,6 +357,58 @@ class TestTrackerCheckPositions:
             assert tracker.tracked_count == 1  # not removed
             assert engine.open_positions == 1  # unchanged
 
+    @pytest.mark.asyncio
+    async def test_ghost_close_mid_morning_does_not_send_day_summary(self):
+        """Ghost-close before the 30-min EOD window must NOT trigger send_day_summary.
+
+        Positionbook momentarily returns qty=0 mid-morning (10:46 scenario).
+        The time-exit scheduler will send the real summary at 3 PM.
+        """
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        fake_now = datetime.now(_IST).replace(hour=10, minute=46, second=0, microsecond=0)
+        entry_time = fake_now - timedelta(hours=1)  # entered at 09:46
+
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 1000.0
+        tracker.register(_make_position(entry_time=entry_time))
+        tracker.send_day_summary = AsyncMock()
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+            patch("signal_engine.tracker.datetime") as mock_dt,
+        ):
+            mock_dt.now.return_value = fake_now
+            await tracker.check_positions()
+
+        tracker.send_day_summary.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_legitimate_close_near_eod_sends_day_summary(self):
+        """Last position closing after 14:30 (within 30 min of 15:00) triggers summary."""
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        fake_now = datetime.now(_IST).replace(hour=14, minute=45, second=0, microsecond=0)
+        entry_time = fake_now - timedelta(hours=4)  # entered at ~10:45
+
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 1000.0
+        tracker.register(_make_position(entry_time=entry_time))
+        tracker.send_day_summary = AsyncMock()
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
+            patch("signal_engine.tracker.datetime") as mock_dt,
+        ):
+            mock_dt.now.return_value = fake_now
+            await tracker.check_positions()
+
+        tracker.send_day_summary.assert_called_once()
+
 
 class TestTrackerStop:
     def test_stop_sets_flag(self):

@@ -234,10 +234,10 @@ class TestTPHitMessages:
 
     # --- Strategy-prefixed TP HIT (new format, post PineScript update) ---
     def test_orb_tp1_hit_normalized_as_orb_exit(self):
-        """'✅ ORB TP1 HIT | SYMBOL' -> 'ORB EXIT' with TpLevel: TP1."""
+        """'✅ ORB TP1 HIT | SYMBOL' -> 'ORB EXIT' with TpLevel: TP1 and numeric Exit -> TP."""
         text = "✅ ORB TP1 HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 302.76"
         result = normalize(text)
-        assert result == "ORB EXIT\nSymbol: TMPV\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1"
+        assert result == "ORB EXIT\nSymbol: TMPV\nEntry: 0.0\nSL: 0.0\nTP: 302.76\nTpLevel: TP1"
 
     def test_rsi_tp_mr_tp1_hit_normalized_as_rsi_exit(self):
         """'RSI-TP-MR TP1 HIT | SYMBOL' -> 'RSI-TP-MR EXIT' with TpLevel: TP1."""
@@ -259,15 +259,28 @@ class TestTPHitMessages:
         assert "SL: 0.0" in result
         assert "TP: 0.0" in result
 
+    def test_exit_price_absent_falls_back_to_zero(self):
+        """No Exit: line in body -> TP stays 0.0 (non-numeric exit like SL reconcile)."""
+        text = "ORB TP1 HIT | SBIN"
+        result = normalize(text)
+        assert "TP: 0.0" in result
+
+    def test_non_numeric_exit_ignored(self):
+        """Exit: close > 5 SMA is non-numeric — TP stays 0.0."""
+        text = "RSI-TP-MR TP1 HIT | HDFCBANK\nExit: close > 5 SMA"
+        result = normalize(text)
+        assert "TP: 0.0" in result
+
     # --- Full pipeline tests ---
     def test_orb_tp_hit_parses_as_orb_exit_signal(self):
-        """Full pipeline: ORB TP1 HIT -> normalize -> parse -> ORB EXIT signal."""
+        """Full pipeline: ORB TP1 HIT -> normalize -> parse -> ORB EXIT signal with exit price."""
         text = "✅ ORB TP1 HIT | TMPV\n------------------------\n🟢 LONG | Entry: 305.10\nExit: 302.76"
         signal = parse(normalize(text))
         assert signal is not None
         assert signal.direction.value == "EXIT"
         assert signal.strategy == "ORB"
         assert signal.symbol == "TMPV"
+        assert signal.tp == 302.76
 
     def test_rsi_tp_hit_parses_as_rsi_exit_signal(self):
         """Full pipeline: RSI-TP-MR TP1 HIT -> normalize -> parse -> RSI-TP-MR EXIT signal."""

@@ -110,15 +110,20 @@ def normalize(text: Optional[str]) -> str:
         strategy = (tp_hit_match.group(1) or _DEFAULT_STRATEGY).upper()
         tp_level = tp_hit_match.group(2).upper()
         symbol = tp_hit_match.group(3).upper()
-        # Extract ExitQtyPct from remaining lines if present
+        # Extract ExitQtyPct and numeric exit price from remaining lines.
+        # Exit: <float> is the actual TP fill price from the PineScript alert;
+        # non-numeric Exit values (e.g. "close > 5 SMA") are ignored.
         exit_qty_pct_line = ""
+        exit_tp = "0.0"
         for line in lines[1:]:
             if re.match(r"^ExitQtyPct\s*:\s*\d+", line, re.IGNORECASE):
                 exit_qty_pct_line = f"\n{line}"
-                break
+            m = re.match(r"^Exit\s*:\s*([\d.]+)\s*$", line, re.IGNORECASE)
+            if m:
+                exit_tp = m.group(1)
         return (
             f"{strategy} EXIT\nSymbol: {symbol}\n"
-            f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: {tp_level}{exit_qty_pct_line}"
+            f"Entry: 0.0\nSL: 0.0\nTP: {exit_tp}\nTpLevel: {tp_level}{exit_qty_pct_line}"
         )
 
     # Handle SL HIT alert: "[STRATEGY] SL HIT | SYMBOL" -> canonical EXIT format

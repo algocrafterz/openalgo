@@ -436,9 +436,22 @@ class PositionTracker:
         for key in closed_keys:
             del self._positions[key]
 
-        # Send day summary if all positions are now closed
+        # Send day summary only if all positions are now closed AND we are within
+        # 30 min of time_exit (or past it).  Ghost-closes mid-morning can empty
+        # _positions prematurely; deferring to the time-exit scheduler prevents a
+        # premature summary being sent with stale / incorrect data.
         if closed_keys and not self._positions:
-            await self.send_day_summary()
+            now = datetime.now(_IST)
+            if _settings.time_exit_enabled:
+                time_exit_today = now.replace(
+                    hour=_settings.time_exit_hour,
+                    minute=_settings.time_exit_minute,
+                    second=0, microsecond=0,
+                )
+                if (time_exit_today - now).total_seconds() / 60 <= 30:
+                    await self.send_day_summary()
+            else:
+                await self.send_day_summary()
 
         # No-progress check: move SL to entry for stuck positions
         # ab_test_disable short-circuits the entire check without changing thresholds —
