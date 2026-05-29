@@ -1,0 +1,488 @@
+//@version=6
+indicator("Gap/ATR + RVOL + Index Pulse [v6]", overlay=true, max_labels_count=20, max_lines_count=50)
+
+//====================================================
+// ── INPUTS ──────────────────────────────────────────
+//====================================================
+
+grp_pd           = "Previous Day Levels"
+show_pdh         = input.bool(true,  "Show PDH",        group=grp_pd)
+show_pdl         = input.bool(true,  "Show PDL",        group=grp_pd)
+show_pdc         = input.bool(true,  "Show PDC",        group=grp_pd)
+line_width       = input.int(1,      "Line Width",      group=grp_pd, minval=1, maxval=5)
+pdh_color        = input.color(color.new(color.green,  20), "PDH Color", group=grp_pd)
+pdl_color        = input.color(color.new(color.red,    20), "PDL Color", group=grp_pd)
+pdc_color        = input.color(color.new(color.yellow, 20), "PDC Color", group=grp_pd)
+line_style_input = input.string("Dashed", "Line Style", group=grp_pd, options=["Solid","Dashed","Dotted"])
+line_style       = line_style_input == "Solid"  ? line.style_solid  :
+                   line_style_input == "Dashed" ? line.style_dashed : line.style_dotted
+
+grp_rv           = "Opening RVOL"
+opening_session  = input.session("0915-0930", "Opening Auction Window", group=grp_rv)
+rvol_lookback    = input.int(20, "RVOL Lookback (days)", group=grp_rv, minval=5, maxval=100)
+
+grp_orw          = "Opening Range (9:15–9:30)"
+show_orw         = input.bool(true, "Show OR Window in Table", group=grp_orw)
+
+// Index symbol reference:
+//   NSE:NIFTY     — Nifty 50     NSE:BANKNIFTY — Bank Nifty
+//   BSE:SENSEX    — Sensex       SP:SPX        — S&P 500
+//   NASDAQ:NDX    — Nasdaq 100   DJ:DJI        — Dow Jones
+grp_idx          = "Index Pulse"
+show_index       = input.bool(true,        "Show Index Pulse Panel", group=grp_idx)
+index_symbol     = input.symbol("NSE:NIFTY","Index Symbol",          group=grp_idx)
+idx_ema_fast     = input.int(9,  "EMA Fast", group=grp_idx, minval=2)
+idx_ema_slow     = input.int(21, "EMA Slow", group=grp_idx, minval=3)
+
+//====================================================
+// ── PREVIOUS DAY OHLC ───────────────────────────────
+//====================================================
+
+float prev_high  = request.security(syminfo.tickerid, "D", high[1],       lookahead=barmerge.lookahead_on)
+float prev_low   = request.security(syminfo.tickerid, "D", low[1],        lookahead=barmerge.lookahead_on)
+float prev_close = request.security(syminfo.tickerid, "D", close[1],      lookahead=barmerge.lookahead_on)
+float prev_atr   = request.security(syminfo.tickerid, "D", ta.atr(14)[1], lookahead=barmerge.lookahead_on)
+float daily_open = request.security(syminfo.tickerid, "D", open,          lookahead=barmerge.lookahead_on)
+
+bool new_day = ta.change(time("D")) != 0
+
+//====================================================
+// ── GAP CALCULATIONS ─────────────────────────────────
+//====================================================
+
+float gap_size = math.abs(daily_open - prev_close)
+float ratio    = prev_atr > 0 ? gap_size / prev_atr : na
+
+string gap_direction =
+     daily_open > prev_close ? "Gap Up ▲"   :
+     daily_open < prev_close ? "Gap Down ▼" : "Flat Open ─"
+
+string gap_strength =
+     na(ratio)    ? "N/A"    :
+     ratio < 0.20 ? "Weak"   :
+     ratio < 0.50 ? "Normal" :
+     ratio < 0.80 ? "Strong" : "Extreme"
+
+//====================================================
+// ── OPENING RVOL ─────────────────────────────────────
+//====================================================
+
+float open15_vol     = request.security(syminfo.tickerid, "15", volume, lookahead=barmerge.lookahead_off)
+bool  is_opening_bar = not na(time("15", opening_session))
+
+// OR window: track bar-by-bar on the chart's own timeframe so it works on
+// any resolution (1m, 5m, 15m…) and captures the true intrabar high/low.
+bool in_or_window = not na(time(timeframe.period, opening_session))
+
+var float today_opening_vol = na
+var bool  vol_captured       = false
+var float or_high            = na
+var float or_low             = na
+
+if new_day
+    today_opening_vol := na
+    vol_captured      := false
+    or_high           := na
+    or_low            := na
+
+if is_opening_bar and not vol_captured
+    today_opening_vol := open15_vol
+    vol_captured      := true
+
+if in_or_window
+    or_high := na(or_high) ? high : math.max(or_high, high)
+    or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+
+var array<float> vol_history       = array.new<float>()
+var float        prev_day_open_vol = na
+
+if new_day and not na(today_opening_vol)
+    prev_day_open_vol := today_opening_vol
+    array.push(vol_history, prev_day_open_vol)
+    if array.size(vol_history) > rvol_lookback
+        array.shift(vol_history)
+
+float hist_avg = array.size(vol_history) >= 5 ? array.avg(vol_history) : na
+float rvol     = not na(today_opening_vol) and not na(hist_avg) and hist_avg > 0 ?
+                 today_opening_vol / hist_avg : na
+
+string rvol_strength =
+     na(rvol)    ? "Waiting…" :
+     rvol < 0.80 ? "Low"      :
+     rvol < 1.20 ? "Normal"   :
+     rvol < 2.00 ? "High"     : "Extreme"
+
+float orw_pts = not na(or_high) and not na(or_low) ? or_high - or_low : na
+float orw_pct = not na(orw_pts) and daily_open > 0 ? orw_pts / daily_open * 100 : na
+
+//====================================================
+// ── MARKET CONTEXT & BIAS ────────────────────────────
+//====================================================
+
+string market_context =
+     na(rvol) or na(ratio)                           ? "Waiting…"          :
+     ratio >= 0.50 and rvol >= 1.20                  ? "Strong Initiative"  :
+     ratio >= 0.50 and rvol >= 0.80 and rvol < 1.20 ? "Gap Mod. Supported" :
+     ratio >= 0.50 and rvol < 0.80                   ? "Gap Weakly Supp."  :
+     ratio < 0.20 and rvol >= 1.20                   ? "Hidden Particip."  :
+     ratio < 0.20 and rvol < 0.80                    ? "Rotational / Chop" : "Balanced"
+
+string directional_bias =
+     na(rvol) or na(ratio)                                       ? "Waiting…"               :
+     ratio >= 0.80 and rvol >= 2.00                              ? "⚡ High Vol / Wait"      :
+     ratio >= 0.50 and rvol >= 1.20 and daily_open > prev_close  ? "▲ Bullish Continuation"  :
+     ratio >= 0.50 and rvol >= 1.20 and daily_open < prev_close  ? "▼ Bearish Continuation"  :
+     ratio < 0.20  and rvol < 0.80                               ? "↔ Rotational"            : "↔ Neutral / Structure"
+
+//====================================================
+// ── INDEX PULSE ──────────────────────────────────────
+//====================================================
+
+float idx_c          = request.security(index_symbol, timeframe.period, close,    lookahead=barmerge.lookahead_off)
+float idx_day_open   = request.security(index_symbol, "D", open,                  lookahead=barmerge.lookahead_on)
+float idx_prev_close = request.security(index_symbol, "D", close[1],              lookahead=barmerge.lookahead_on)
+
+float idx_ema_f = ta.ema(idx_c, idx_ema_fast)
+float idx_ema_s = ta.ema(idx_c, idx_ema_slow)
+
+float idx_move_pct =
+     not na(idx_c) and not na(idx_day_open) and idx_day_open != 0 ?
+     (idx_c - idx_day_open) / idx_day_open * 100 : na
+
+float idx_gap_pct =
+     not na(idx_day_open) and not na(idx_prev_close) and idx_prev_close != 0 ?
+     (idx_day_open - idx_prev_close) / idx_prev_close * 100 : na
+
+bool idx_valid      = not na(idx_ema_f) and not na(idx_ema_s)
+bool idx_bull_trend = idx_valid and idx_ema_f > idx_ema_s
+bool idx_bear_trend = idx_valid and idx_ema_f < idx_ema_s
+bool _cross_up      = ta.crossover(idx_ema_f,  idx_ema_s)
+bool _cross_dn      = ta.crossunder(idx_ema_f, idx_ema_s)
+bool idx_bull_cross = idx_valid and _cross_up and barstate.isconfirmed
+bool idx_bear_cross = idx_valid and _cross_dn and barstate.isconfirmed
+
+float idx_slope =
+     idx_valid and not na(idx_ema_f[3]) and idx_ema_f[3] != 0 ?
+     (idx_ema_f - idx_ema_f[3]) / idx_ema_f[3] * 100 : na
+
+string idx_trend_label =
+     not idx_valid                                                            ? "Waiting…"       :
+     idx_bull_cross                                                           ? "▲ Bull Cross"   :
+     idx_bear_cross                                                           ? "▼ Bear Cross"   :
+     idx_bull_trend and not na(idx_slope) and idx_slope >  0.05              ? "▲ Trending Up"  :
+     idx_bear_trend and not na(idx_slope) and idx_slope < -0.05              ? "▼ Trending Down" : "↔ Ranging"
+
+string idx_alignment =
+     na(idx_move_pct) or not idx_valid       ? "Waiting…"            :
+     idx_bull_trend   and idx_move_pct > 0   ? "✔ Long Aligned"      :
+     idx_bear_trend   and idx_move_pct < 0   ? "✔ Short Aligned"     :
+     idx_bull_trend   and idx_move_pct < 0   ? "⚠ Counter-trend Dip" :
+     idx_bear_trend   and idx_move_pct > 0   ? "⚠ Counter-trend Pop" : "↔ Neutral"
+
+//====================================================
+// ── PDH / PDL / PDC  LINES + LABELS ─────────────────
+//
+// Label placement strategy:
+//   • Anchor bar_index is captured at new_day (first
+//     bar of today).  label.style_label_right draws
+//     the tag box to the LEFT of that anchor bar —
+//     i.e. in yesterday's price area — so it never
+//     overlaps today's candles.
+//   • We do NOT slide these labels; they are fixed at
+//     the day-open bar and stay in yesterday's space.
+//   • The line extends right across today via
+//     extend=extend.right, making the level still
+//     visible across the whole session.
+//====================================================
+
+var line  pdh_line = na
+var line  pdl_line = na
+var line  pdc_line = na
+var label pdh_lbl  = na
+var label pdl_lbl  = na
+var label pdc_lbl  = na
+
+if new_day
+    line.delete(pdh_line)
+    line.delete(pdl_line)
+    line.delete(pdc_line)
+    label.delete(pdh_lbl)
+    label.delete(pdl_lbl)
+    label.delete(pdc_lbl)
+
+    if show_pdh and not na(prev_high)
+        pdh_line := line.new(
+             bar_index, prev_high, bar_index + 1, prev_high,
+             extend=extend.right, color=pdh_color, width=line_width, style=line_style)
+        // label.style_label_right → box renders to the LEFT of bar_index (in prior day space)
+        pdh_lbl := label.new(
+             bar_index, prev_high,
+             "PDH  " + str.tostring(prev_high, format.mintick),
+             style    = label.style_label_right,
+             color    = color.new(color.green, 78),
+             textcolor = color.green,
+             size     = size.tiny)
+
+    if show_pdl and not na(prev_low)
+        pdl_line := line.new(
+             bar_index, prev_low, bar_index + 1, prev_low,
+             extend=extend.right, color=pdl_color, width=line_width, style=line_style)
+        pdl_lbl := label.new(
+             bar_index, prev_low,
+             "PDL  " + str.tostring(prev_low, format.mintick),
+             style    = label.style_label_right,
+             color    = color.new(color.red, 78),
+             textcolor = color.red,
+             size     = size.tiny)
+
+    if show_pdc and not na(prev_close)
+        pdc_line := line.new(
+             bar_index, prev_close, bar_index + 1, prev_close,
+             extend=extend.right, color=pdc_color, width=line_width, style=line_style)
+        pdc_lbl := label.new(
+             bar_index, prev_close,
+             "PDC  " + str.tostring(prev_close, format.mintick),
+             style    = label.style_label_right,
+             color    = color.new(color.yellow, 78),
+             textcolor = color.yellow,
+             size     = size.tiny)
+
+//====================================================
+// ── DASHBOARD TABLE  (2 cols × 14 rows) ─────────────
+//
+// Tooltip approach:
+//   table.cell() renders the visible label + value.
+//   table.cell_set_tooltip() attaches hover text to
+//   the LABEL cell (col 0) — shown on mouse-over,
+//   keeping the table visually clean.
+//
+// Table is now 2 columns only (label | value).
+// The third "tip column" from the prior version is
+// removed entirely.
+//====================================================
+
+var table dash = table.new(
+     position.bottom_left, 2, 19,
+     bgcolor      = color.new(color.black, 18),
+     border_width = 1,
+     border_color = color.new(color.gray, 55),
+     frame_width  = 1,
+     frame_color  = color.new(color.gray, 35))
+
+// ── helpers ──────────────────────────────────────────
+
+// Section header — spans both columns
+f_hdr(row, txt) =>
+    table.cell(dash, 0, row, txt,
+         text_color   = color.white,
+         bgcolor      = color.new(color.blue, 38),
+         text_size    = size.small,
+         text_halign  = text.align_center)
+    table.merge_cells(dash, 0, row, 1, row)
+
+// Label cell — carries the hover tooltip
+f_lbl(row, txt, tip) =>
+    table.cell(dash, 0, row, txt,
+         text_color  = color.new(color.silver, 5),
+         bgcolor     = color.new(color.navy, 32),
+         text_size   = size.small,
+         text_halign = text.align_left)
+    table.cell_set_tooltip(dash, 0, row, tip)
+
+// Value cell — colour-coded, no tooltip needed
+f_val(row, txt, clr) =>
+    table.cell(dash, 1, row, txt,
+         text_color  = clr,
+         bgcolor     = color.new(color.gray, 74),
+         text_size   = size.small,
+         text_halign = text.align_center)
+
+if barstate.islast
+
+    // ── SECTION 1: GAP / ATR ─────────────────────────
+    f_hdr(0, "── GAP / ATR ──")
+
+    f_lbl(1, "Gap / ATR",
+         "Ratio of today's gap size to prior ATR(14).\n" +
+         "< 0.20  → weak gap; fade likely, expect full fill.\n" +
+         "0.20–0.50 → normal; watch for half-gap fill then direction.\n" +
+         "≥ 0.50  → strong; continuation bias, trade with momentum.\n" +
+         "≥ 0.80  → extreme; high-volatility open, await clear structure.")
+    f_val(1,
+         na(ratio) ? "N/A" : str.tostring(ratio, "#.##") + "x",
+         na(ratio) ? color.gray : ratio >= 0.80 ? color.orange : ratio >= 0.50 ? color.yellow : color.white)
+
+    f_lbl(2, "Direction",
+         "Gap direction relative to previous day's close.\n" +
+         "Gap Up above PDH  → bullish breakout, high conviction.\n" +
+         "Gap Up inside range → contested; gap fill risk still present.\n" +
+         "Gap Down below PDL → bearish breakout.\n" +
+         "Flat Open         → opening auction at PDC; wait for first move.")
+    f_val(2, gap_direction,
+         str.contains(gap_direction, "Up")   ? color.lime :
+         str.contains(gap_direction, "Down") ? color.red  : color.white)
+
+    f_lbl(3, "Strength",
+         "Qualitative gap strength band derived from Gap/ATR ratio.\n" +
+         "Extreme (≥0.80×): Often sees a half-gap fill before continuation.\n" +
+         "Strong  (0.50–0.80×): Directional bias is clear; manage stops tightly.\n" +
+         "Normal  (0.20–0.50×): Standard open; structure and RVOL decide direction.\n" +
+         "Weak    (<0.20×): Expect full gap fill; fade setups favoured.")
+    f_val(3, gap_strength,
+         gap_strength == "Extreme" ? color.orange :
+         gap_strength == "Strong"  ? color.yellow :
+         gap_strength == "Normal"  ? color.lime   : color.white)
+
+    f_lbl(4, "Gap Size (pts)",
+         "Absolute gap in price points (|today's open − prior close|).\n" +
+         "Compare this to the prior day's PDH–PDL range.\n" +
+         "Gap > 50% of prior range → significant overnight commitment.\n" +
+         "Gap < 25% of prior range → minor displacement; chop risk higher.")
+    f_val(4, str.tostring(gap_size, "#.##"), color.white)
+
+    f_lbl(5, "ATR(14) Prev",
+         "Prior day's 14-period Average True Range — the volatility baseline.\n" +
+         "Used to normalise gap size (Gap/ATR ratio above).\n" +
+         "Also use for TP projections: 0.5×ATR, 1.0×ATR from entry.\n" +
+         "Rising ATR day-on-day → expanding volatility regime; widen stops.")
+    f_val(5, str.tostring(prev_atr, "#.##"), color.white)
+
+    // ── SECTION 2: OPENING RVOL ───────────────────────
+    f_hdr(6, "── OPENING RVOL ──")
+
+    f_lbl(7, "Open15 RVOL",
+         "Opening 15-min volume relative to its " + str.tostring(rvol_lookback) + "-day historical average.\n" +
+         "≥ 2.00× Extreme  → institutional footprint; high conviction trend day.\n" +
+         "≥ 1.20× High     → strong participation; moves likely to extend.\n" +
+         "0.80–1.20× Normal → standard session; structure-led.\n" +
+         "< 0.80× Low      → thin open; false breaks and whipsaws more common.")
+    f_val(7,
+         na(rvol) ? "Waiting…" : str.tostring(rvol, "#.##") + "x",
+         na(rvol)    ? color.gray   :
+         rvol >= 2.00 ? color.orange :
+         rvol >= 1.20 ? color.lime   :
+         rvol < 0.80  ? color.red    : color.white)
+
+    f_lbl(8, "RVOL Type",
+         "Qualitative RVOL band.\n" +
+         "Extreme RVOL on a gap day → highest-probability trend-day setup.\n" +
+         "High RVOL, weak gap    → hidden accumulation/distribution; watch closely.\n" +
+         "Low RVOL, any gap      → reduce position size, widen stops or stay out.\n" +
+         "Low RVOL, flat open    → likely rotation/range day; fade extremes.")
+    f_val(8, rvol_strength,
+         rvol_strength == "Extreme" ? color.orange :
+         rvol_strength == "High"    ? color.lime   :
+         rvol_strength == "Low"     ? color.red    : color.white)
+
+    f_lbl(9, "Context",
+         "Combined Gap × RVOL market structure read.\n" +
+         "Strong Initiative  → gap ≥0.50 ATR + RVOL ≥1.20×; trend day expected.\n" +
+         "Gap Mod. Supported → gap ≥0.50 ATR + RVOL 0.80–1.20×; cautious follow-through.\n" +
+         "Gap Weakly Supp.   → gap ≥0.50 ATR + RVOL <0.80×; fade or wait.\n" +
+         "Hidden Particip.   → small gap + high RVOL; smart-money accumulation likely.\n" +
+         "Rotational/Chop    → small gap + low RVOL; range-trade, avoid breakout entries.\n" +
+         "Balanced           → mixed signals; wait for first 30-min structure to form.")
+    f_val(9, market_context, color.yellow)
+
+    f_lbl(10, "Bias",
+         "Primary directional lean combining gap direction, gap size, and RVOL.\n" +
+         "▲ Bullish Continuation → gap up + strong RVOL; longs favoured above PDH.\n" +
+         "▼ Bearish Continuation → gap down + strong RVOL; shorts favoured below PDL.\n" +
+         "↔ Rotational           → weak gap + low RVOL; mean-reversion plays.\n" +
+         "⚡ High Vol / Wait      → extreme gap + extreme RVOL; wait for structure.\n" +
+         "Always confirm with Index Alignment before entering any trade.")
+    f_val(10, directional_bias,
+         str.contains(directional_bias, "Bull")     ? color.lime   :
+         str.contains(directional_bias, "Bear")     ? color.red    :
+         str.contains(directional_bias, "High Vol") ? color.orange :
+         str.contains(directional_bias, "Wait")     ? color.gray   : color.white)
+
+    // ── SECTION 3: OR WINDOW (9:15–9:30) ─────────────
+    if show_orw
+        f_hdr(11, "── OR WINDOW (9:15–9:30) ──")
+
+        f_lbl(12, "OR Width (pts)",
+             "Opening Range width in absolute price points: OR High − OR Low.\n" +
+             "Measured over the 9:15–9:30 AM IST 15-min bar.\n" +
+             "Wide OR → high intraday volatility expected; larger stops needed.\n" +
+             "Narrow OR → contained auction; breakout of OR carries conviction.\n" +
+             "Use OR High/Low as key intraday S/R levels throughout the session.")
+        f_val(12,
+             na(orw_pts) ? "Waiting…" : str.tostring(orw_pts, "#.##"),
+             na(orw_pts)    ? color.gray   :
+             orw_pts > prev_atr * 0.5 ? color.orange :
+             orw_pts > prev_atr * 0.25 ? color.yellow : color.lime)
+
+        f_lbl(13, "OR Width (%)",
+             "Opening Range width as % of today's day open price.\n" +
+             "Normalises OR across price levels for cross-stock comparison.\n" +
+             "> 1.0% → very wide OR; high-vol open, wide SL required.\n" +
+             "0.5–1.0% → moderate OR; standard breakout setups apply.\n" +
+             "< 0.5% → tight OR; narrow-range breakout setups with good R:R.\n" +
+             "Compare OR% to prior-day ATR% for relative volatility context.")
+        f_val(13,
+             na(orw_pct) ? "Waiting…" : str.tostring(orw_pct, "#.##") + "%",
+             na(orw_pct)    ? color.gray   :
+             orw_pct > 1.0  ? color.orange :
+             orw_pct > 0.5  ? color.yellow : color.lime)
+
+    // ── SECTION 4: INDEX PULSE ────────────────────────
+    if show_index
+        f_hdr(14, "── INDEX PULSE (" + index_symbol + ") ──")
+
+        f_lbl(15, "Intraday Move",
+             "Index % price change from today's open — updated live.\n" +
+             "> +0.50% → sustained buying pressure; favour long setups.\n" +
+             "+0.10–0.50% → mild upside; wait for instrument confirmation.\n" +
+             "-0.10–0.50% → mild selling; reduce long aggression.\n" +
+             "< -0.50% → sustained selling pressure; favour short setups.\n" +
+             "Divergence between index move and instrument move often\nresolves in the index's direction.")
+        f_val(15,
+             na(idx_move_pct) ? "N/A" : str.tostring(idx_move_pct, "+#.##;-#.##") + "%",
+             na(idx_move_pct)     ? color.gray :
+             idx_move_pct >  0.50 ? color.lime :
+             idx_move_pct < -0.50 ? color.red  : color.white)
+
+        f_lbl(16, "Overnight Gap %",
+             "Index overnight gap % vs prior session close.\n" +
+             "Aligned gap (instrument and index gap same direction) → higher-odds trade.\n" +
+             "Misaligned gap (gaps in opposite directions) → conflicted open;\n" +
+             "  wait for first 15–30 min price discovery before entering.\n" +
+             "Large index gap (> 0.5%) with matching instrument gap → trend-day setup.")
+        f_val(16,
+             na(idx_gap_pct) ? "N/A" : str.tostring(idx_gap_pct, "+#.##;-#.##") + "%",
+             na(idx_gap_pct)   ? color.gray :
+             idx_gap_pct > 0   ? color.lime :
+             idx_gap_pct < 0   ? color.red  : color.white)
+
+        f_lbl(17, "Index Trend",
+             "EMA(" + str.tostring(idx_ema_fast) + "/" + str.tostring(idx_ema_slow) +
+             ") trend status on the current chart timeframe.\n" +
+             "▲ Bull Cross   → fast EMA crossed above slow EMA; fresh bullish momentum.\n" +
+             "▼ Bear Cross   → fast EMA crossed below slow EMA; fresh bearish momentum.\n" +
+             "▲ Trending Up  → EMAs aligned bullish with positive slope; longs in favour.\n" +
+             "▼ Trending Down → EMAs aligned bearish with negative slope; shorts in favour.\n" +
+             "↔ Ranging      → EMAs flat or converging; avoid trend trades, prefer fades.\n" +
+             "Cross signals are only fired on a confirmed closed bar (no repaint).")
+        f_val(17, idx_trend_label,
+             str.contains(idx_trend_label, "Up")   or
+             str.contains(idx_trend_label, "Bull") ? color.lime :
+             str.contains(idx_trend_label, "Down") or
+             str.contains(idx_trend_label, "Bear") ? color.red  : color.white)
+
+        f_lbl(18, "Alignment",
+             "Synthesis: index EMA trend × intraday direction → entry quality signal.\n" +
+             "✔ Long Aligned   → index trending up AND moving up from open;\n" +
+             "                   highest-probability condition for long entries.\n" +
+             "✔ Short Aligned  → index trending down AND moving down from open;\n" +
+             "                   highest-probability condition for short entries.\n" +
+             "⚠ Counter-trend Dip → bull trend but index pulling back intraday;\n" +
+             "                   acceptable for dip-buy setups; tighten stops.\n" +
+             "⚠ Counter-trend Pop → bear trend but index bouncing intraday;\n" +
+             "                   acceptable for pop-sell setups; tighten stops.\n" +
+             "↔ Neutral        → no clear EMA alignment; wait or reduce size.")
+        f_val(18, idx_alignment,
+             str.contains(idx_alignment, "Long")    ? color.lime   :
+             str.contains(idx_alignment, "Short")   ? color.red    :
+             str.contains(idx_alignment, "Counter") ? color.orange : color.white)
+
