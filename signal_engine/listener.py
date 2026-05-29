@@ -9,6 +9,10 @@ from loguru import logger
 from signal_engine.config import settings
 from signal_engine import notifier
 
+# Ping Telegram every 90s to detect stale connections (common in WSL2 where
+# TCP keepalives across the NAT bridge can silently die without triggering a reconnect).
+_KEEPALIVE_INTERVAL = 90
+
 
 async def start_listener(
     on_message: Callable[[str], Coroutine],
@@ -57,6 +61,19 @@ async def start_listener(
         logger.info(f"[{source}] Signal received: {clean_text}")
         await on_message(msg.text)
 
+    async def _keepalive(c: TelegramClient) -> None:
+        """Periodically ping Telegram to detect and surface stale connections."""
+        while True:
+            await asyncio.sleep(_KEEPALIVE_INTERVAL)
+            try:
+                await c.get_me()
+                logger.debug("Keepalive ping OK")
+            except Exception as e:
+                logger.warning(f"Keepalive ping failed: {e} — connection may be stale")
+                # Disconnect so run_until_disconnected returns and triggers a retry
+                await c.disconnect()
+                return
+
     retries = 0
     while retries < settings.listener_max_retries:
         try:
@@ -65,7 +82,11 @@ async def start_listener(
             for ch in settings.telegram_channels:
                 logger.info(f"Watching channel: {ch.name} ({ch.id})")
             retries = 0
-            await client.run_until_disconnected()
+            keepalive_task = asyncio.create_task(_keepalive(client))
+            try:
+                await client.run_until_disconnected()
+            finally:
+                keepalive_task.cancel()
         except Exception as e:
             retries += 1
             wait = settings.listener_base_backoff * (2 ** (retries - 1))
