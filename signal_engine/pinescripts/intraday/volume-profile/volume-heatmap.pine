@@ -49,11 +49,11 @@ bool is_t1 = volume > volMA * t1
 
 color volColor = color.rgb(120, 123, 134, 60)  // Grey — normal
 if is_t3
-    volColor := #e74c3c   // Red    — extreme (≥2.5×)
+    volColor := color.rgb(255, 0, 0)   // Red    — extreme (≥2.5×)
 else if is_t2
-    volColor := #e67e22   // Orange — heavy   (≥2.0×)
+    volColor := color.rgb(255, 153, 0)   // Orange — heavy   (≥2.0×)
 else if is_t1
-    volColor := #f1c40f   // Gold   — alert   (≥1.5×)
+    volColor := color.rgb(255, 230, 0)   // Gold   — alert   (≥1.5×)
 
 // ─── PLOTS ────────────────────────────────────────────────────────────────────
 float rvol = volMA > 0 ? volume / volMA : na
