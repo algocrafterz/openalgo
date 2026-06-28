@@ -263,7 +263,7 @@ broker:
 broker_restrictions:
   flattrade:
     # Stocks Flattrade rejects for MIS regardless of capital. UPPERCASE only.
-    mis_rejected: []
+    mis_rejected: [APOLLOTYRE]
 
 # ── Listener ─────────────────────────────────────────────
 listener:

@@ -154,6 +154,7 @@ def transform_order_data(orders):
             "product": order.get("prd", ""),
             "orderid": order.get("norenordno", ""),
             "order_status": order.get("status", "").lower(),
+            "rejection_reason": order.get("rejreason", ""),
             "timestamp": order.get("norentm", ""),
         }
 

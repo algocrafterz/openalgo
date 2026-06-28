@@ -155,8 +155,10 @@ def get_order_status_with_auth(
 
         if current_orderid == str(orderid):
             order_found = order
+            rej = order.get("rejection_reason", "")
             logger.info(
                 f"[OrderStatus] Found matching order - Symbol: {order.get('symbol')}, Status: {order.get('order_status')}, Price: {order.get('price')}"
+                + (f", Rejection: {rej}" if rej else "")
             )
             break
 

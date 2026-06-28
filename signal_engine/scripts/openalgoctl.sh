@@ -170,6 +170,23 @@ bootstrap() {
     wait_for_network || return 1
     kill_from_pidfile
 
+    # Wait for NTP sync before starting — required on WSL2 after wake-from-sleep.
+    # On wake, the clock can be off by minutes. systemd-timesyncd corrects it within
+    # ~10-30s after network is up, but TOTP login fails if attempted before the correction
+    # (Flattrade returns "Invalid Input: Invalid OTP" on any clock skew > ~15s).
+    local ntp_wait=0
+    while [ $ntp_wait -lt 60 ]; do
+        if timedatectl show 2>/dev/null | grep -q "NTPSynchronized=yes"; then
+            log "NTP synchronized (waited ${ntp_wait}s)"
+            break
+        fi
+        sleep 2
+        ntp_wait=$((ntp_wait + 2))
+    done
+    if [ $ntp_wait -ge 60 ]; then
+        log "WARNING: NTP sync timeout after 60s — TOTP login may fail if clock is drifted"
+    fi
+
     # Start OpenAlgo server
     log "Starting OpenAlgo server..."
     "$UV_BIN" run app.py &
