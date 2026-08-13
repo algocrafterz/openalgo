@@ -1,0 +1,598 @@
+//@version=6
+// ============================================================================
+// Volume Profile + Orderflow — Decision Assist  (Phase 1, Posture A: alert-only)
+// ----------------------------------------------------------------------------
+// PURPOSE
+//   Give the trader the COMPLETE objective picture at a glance so the only work
+//   left is the ONE discretionary read: the GoCharting footprint absorption
+//   check. This indicator computes and displays everything else:
+//     • Value-area levels (VAH/POC/VAL — operator-supplied AM) + PDH/PDL/OR/IB
+//     • VWAP, EMA9 + slope, RVOL, candle quality (CLV), delta PROXY
+//     • Auction state + which of the 8 diagram scenarios / setups A–E is live
+//     • Level confluence, weighted setup score, level-based SL / T1 / qty (est.)
+//     • A decision-packet alert with a setup-specific footprint checklist
+//
+//   It DOES NOT execute. Sizing shown is a display estimate (Pine can't read
+//   live capital). Real execution/risk stays in the signal engine (Phase 2).
+//
+// DESIGN
+//   Modular sections mirror the analysis doc's Module 1 (structure),
+//   Module 2 (setup engine), Module 3 (execution/display). Logic patterns are
+//   reused from initiative_drive_detector_v6.pine (score table, confirmed-bar
+//   alerts, JSON emit) and orb.pine (session windows, level tracking).
+//
+//   Levels source: MANUAL VAH/POC/VAL inputs (from GoCharting each morning).
+//   This deliberately sidesteps the profile-reconstruction accuracy risk
+//   (analysis §6). Auto-reconstruction is a later, separately-validated phase.
+// ============================================================================
+indicator("Volume Profile Decision Assist", overlay=true, max_labels_count=500, max_lines_count=100, max_boxes_count=20, max_bars_back=500)
+
+string TZ = "Asia/Kolkata"
+
+// ─── Inputs: Value-Area Levels (VAH/POC/VAL) ────────────────────────────────
+// Two sources, toggleable:
+//   AUTO  — reconstruct the previous-session profile inside this script from
+//           1-min data (no dependency on any other indicator). Approximate.
+//   MANUAL— type the three numbers read off TradingView's own native "Session
+//           Volume Profile" (previous-day) overlay. Exact, ~30s each morning.
+// Pine cannot read values from another indicator, so MANUAL is a typed input.
+grpProf = "Volume Profile — VAH/POC/VAL"
+autoProfile  = input.bool(true, "AUTO-reconstruct profile (off = use manual inputs)", group=grpProf, tooltip="ON: build previous-day VAH/POC/VAL from 1-min data. OFF: use the manual VAH/POC/VAL inputs below.")
+ticksPerRow  = input.int(5, "Auto: ticks per profile row", minval=1, group=grpProf, tooltip="Row height = mintick × this. Smaller = finer profile. Tune to match TV's Session Volume Profile row size.")
+valueAreaPct = input.float(70, "Auto: value area %", minval=50, maxval=90, step=5, group=grpProf)
+inVAH = input.float(0.0, "Manual VAH", group=grpProf, tooltip="Used only when AUTO is OFF. Read from TV Session Volume Profile (previous-day). 0 = disabled.")
+inPOC = input.float(0.0, "Manual POC", group=grpProf)
+inVAL = input.float(0.0, "Manual VAL", group=grpProf)
+
+// ─── Inputs: Session & Windows (IST) ────────────────────────────────────────
+// ORB is fixed at 15-min (09:15–09:30) — not configurable, per NSE opening range.
+string OR_SESSION   = "0915-0930"
+grpSess = "Session & Windows (IST)"
+ibSession    = input.session("0915-1015", "Initial Balance window", group=grpSess)
+entrySession1 = input.session("0915-1100", "Entry window 1",        group=grpSess)
+entrySession2 = input.session("1300-1445", "Entry window 2",        group=grpSess)
+
+// ─── Inputs: Volume / Candle ────────────────────────────────────────────────
+grpVol = "Volume / RVOL"
+volLen     = input.int(20, "RVOL SMA length", minval=1, group=grpVol)
+rvolMin    = input.float(1.5, "RVOL min (score +1)",    step=0.1, group=grpVol)
+rvolStrong = input.float(2.0, "RVOL strong (score +2)", step=0.1, group=grpVol)
+
+grpCandle = "Candle Quality"
+clvLongMin  = input.float(0.65, "CLV long min",  step=0.05, minval=0, maxval=1, group=grpCandle)
+clvShortMax = input.float(0.35, "CLV short max", step=0.05, minval=0, maxval=1, group=grpCandle)
+
+// ─── Inputs: Confluence / ATR ───────────────────────────────────────────────
+grpConf = "Confluence"
+atrLen      = input.int(14, "ATR length", minval=1, group=grpConf)
+confAtrMult = input.float(0.25, "Confluence band (× ATR)", step=0.05, minval=0.01, group=grpConf, tooltip="Two levels within this many ATRs are treated as confluent.")
+
+// ─── Inputs: Setup detection ────────────────────────────────────────────────
+grpSetup = "Setup Detection"
+retestMaxBars = input.int(6, "Retest window (bars after break)", minval=1, group=grpSetup)
+cooldownBars  = input.int(3, "Min bars between alerts",          minval=0, group=grpSetup)
+
+// ─── Inputs: Position sizing (display estimate only) ────────────────────────
+grpSize = "Position Sizing (display estimate only)"
+capital      = input.float(100000, "Capital (INR)", minval=0, group=grpSize)
+riskPct      = input.float(1.0, "Risk % per trade", step=0.1, minval=0.1, group=grpSize)
+slBufferMult = input.float(0.15, "SL buffer (× ATR beyond level)", step=0.05, minval=0, group=grpSize)
+
+// ─── Inputs: Scoring / display ──────────────────────────────────────────────
+grpScore = "Scoring"
+scoreThreshold = input.int(7, "Alert score threshold", minval=1, group=grpScore)
+
+grpDisp = "Display"
+showTable     = input.bool(true,  "Show dashboard",                group=grpDisp)
+showLabels    = input.bool(true,  "Show setup labels",             group=grpDisp)
+showVA        = input.bool(true,  "Show value area (VAH/POC/VAL)", group=grpDisp)
+showSecondary = input.bool(true,  "Show PDH/PDL/OR/IB",            group=grpDisp, tooltip="Secondary structure levels, drawn muted. Turn off for a value-area-only view.")
+showVWAP      = input.bool(true,  "Show VWAP",                     group=grpDisp)
+showEMA       = input.bool(false, "Show EMA9",                     group=grpDisp)
+showTags      = input.bool(true,  "Show level price tags (right)", group=grpDisp)
+
+// ============================================================================
+// MODULE 1 — MARKET STRUCTURE
+// ============================================================================
+// ── Base series ─────────────────────────────────────────────────────────────
+float atr      = ta.atr(atrLen)
+float ema9     = ta.ema(close, 9)
+float emaSlope = ema9 - ema9[1]
+float vwapVal  = ta.vwap(close)
+
+float rng   = high - low
+float clv   = rng > 0 ? (close - low) / rng : 0.5
+float volMA = ta.sma(volume, volLen)
+float rvol  = volMA > 0 ? volume / volMA : 0.0
+
+// Previous-day high/low (non-repainting idiom: prior confirmed daily bar)
+float pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+float pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+// ── Session flags ────────────────────────────────────────────────────────────
+bool newDay     = ta.change(time("D")) != 0
+bool inOR       = not na(time(timeframe.period, OR_SESSION, TZ))
+bool inIB       = not na(time(timeframe.period, ibSession, TZ))
+bool inProfSess = not na(time(timeframe.period, "0915-1530", TZ))
+
+// ── Opening Range (15m) / Initial Balance — accumulate in window, reset daily ─
+var float orH = na
+var float orL = na
+var float ibH = na
+var float ibL = na
+var int   dayStartBar = na   // bar_index of the session's first bar (day-anchored drawing)
+if newDay
+    orH := na
+    orL := na
+    ibH := na
+    ibL := na
+    dayStartBar := bar_index
+if inOR
+    orH := na(orH) ? high : math.max(orH, high)
+    orL := na(orL) ? low  : math.min(orL, low)
+if inIB
+    ibH := na(ibH) ? high : math.max(ibH, high)
+    ibL := na(ibL) ? low  : math.min(ibL, low)
+float orM = na(orH) or na(orL) ? na : (orH + orL) / 2
+float ibM = na(ibH) or na(ibL) ? na : (ibH + ibL) / 2
+
+// ── Volume Profile reconstruction (previous session) ─────────────────────────
+// Accumulate a 1-min volume histogram (map: price-bucket -> volume) through the
+// session; on the first bar of the next day, finalize the just-completed day
+// into VAH/POC/VAL and freeze it for use during the new day. 1-min data pulled
+// via request.security_lower_tf so resolution is independent of chart timeframe.
+// NOTE: an approximation of TradingView's Session Volume Profile — tune
+// `ticksPerRow` to match; use MANUAL inputs when exact levels are required.
+float vpStep = syminfo.mintick * ticksPerRow
+var map<int, float> vpMap = map.new<int, float>()   // volume-at-price histogram
+var float pdVAH = na
+var float pdPOC = na
+var float pdVAL = na
+
+// Volume-at-price: distribute each 1-min bar's volume evenly across the price
+// rows it spans (the same method TradingView's Session Volume Profile uses).
+// This dilutes wide high-volume spikes across their range, so the POC lands
+// where price actually consolidated — NOT at a single crash/spike price.
+f_addBar(map<int, float> m, float lo, float hi, float vol, float step) =>
+    if not na(lo) and not na(hi) and not na(vol) and vol > 0
+        int b0 = int(math.floor(lo / step))
+        int b1 = int(math.floor(hi / step))
+        int span = b1 - b0 + 1
+        if span <= 1
+            map.put(m, b0, (map.contains(m, b0) ? map.get(m, b0) : 0.0) + vol)
+        else if span > 1000
+            int bm = int(math.floor(((lo + hi) / 2) / step))
+            map.put(m, bm, (map.contains(m, bm) ? map.get(m, bm) : 0.0) + vol)
+        else
+            float per = vol / span
+            for b = b0 to b1
+                map.put(m, b, (map.contains(m, b) ? map.get(m, b) : 0.0) + per)
+
+// Finalize one histogram into [VAH, POC, VAL]:
+//   POC = the single highest-volume row (guaranteed inside the value area).
+//   VAH/VAL = grow the value area outward from POC until it holds >= vaFrac.
+f_finalize(map<int, float> m, float vaFrac, float step) =>
+    int[] keys = map.keys(m)
+    int n = array.size(keys)
+    float rVAH = na
+    float rPOC = na
+    float rVAL = na
+    if n > 0
+        float total  = 0.0
+        int   pocKey = 0
+        float pocVol = -1.0
+        int   minKey = na
+        int   maxKey = na
+        for i = 0 to n - 1
+            int k = array.get(keys, i)
+            float v = map.get(m, k)
+            total += v
+            if v > pocVol
+                pocVol := v
+                pocKey := k
+            minKey := na(minKey) or k < minKey ? k : minKey
+            maxKey := na(maxKey) or k > maxKey ? k : maxKey
+        float target = total * vaFrac
+        float acc = pocVol
+        int up = pocKey
+        int dn = pocKey
+        int guard = 0
+        int maxIter = (maxKey - minKey) + 2
+        while acc < target and guard < maxIter
+            bool canUp = up + 1 <= maxKey
+            bool canDn = dn - 1 >= minKey
+            if not canUp and not canDn
+                break
+            float volUp = canUp and map.contains(m, up + 1) ? map.get(m, up + 1) : 0.0
+            float volDn = canDn and map.contains(m, dn - 1) ? map.get(m, dn - 1) : 0.0
+            if canUp and (not canDn or volUp >= volDn)
+                up += 1
+                acc += volUp
+            else
+                dn -= 1
+                acc += volDn
+            guard += 1
+        rPOC := (pocKey + 0.5) * step
+        rVAH := (up + 0.5) * step
+        rVAL := (dn + 0.5) * step
+    [rVAH, rPOC, rVAL]
+
+// 1-min sub-bars for the current chart bar (global scope, required by Pine)
+float[] loLTF  = request.security_lower_tf(syminfo.tickerid, "1", low)
+float[] hiLTF  = request.security_lower_tf(syminfo.tickerid, "1", high)
+float[] volLTF = request.security_lower_tf(syminfo.tickerid, "1", volume)
+
+if autoProfile
+    if newDay
+        [fVAH, fPOC, fVAL] = f_finalize(vpMap, valueAreaPct / 100.0, vpStep)
+        if not na(fVAH)
+            pdVAH := fVAH
+            pdPOC := fPOC
+            pdVAL := fVAL
+        map.clear(vpMap)
+    if inProfSess and array.size(volLTF) > 0
+        for i = 0 to array.size(volLTF) - 1
+            f_addBar(vpMap, array.get(loLTF, i), array.get(hiLTF, i), array.get(volLTF, i), vpStep)
+
+// Resolve active VAH/POC/VAL from the chosen source
+float vah = autoProfile ? pdVAH : (inVAH > 0 ? inVAH : na)
+float poc = autoProfile ? pdPOC : (inPOC > 0 ? inPOC : na)
+float val = autoProfile ? pdVAL : (inVAL > 0 ? inVAL : na)
+
+// Entry windows
+bool inEntryWindow = (not na(time(timeframe.period, entrySession1, TZ))) or (not na(time(timeframe.period, entrySession2, TZ)))
+
+// Auction state (current price vs value area)
+string auction = na(vah) or na(val) ? "n/a" : close > vah ? "Above VAH" : close < val ? "Below VAL" : "Inside Value"
+
+// ── Market-Profile scanner metrics (mapped to our levels) ────────────────────
+float atrD = request.security(syminfo.tickerid, "D", ta.atr(14)[1], lookahead=barmerge.lookahead_on)   // avg daily range
+var float dayOpen = na
+if newDay
+    dayOpen := open
+// Opening Position: where TODAY opened vs prev value area (trend-day tell)
+string openPos = na(vah) or na(val) or na(dayOpen) ? "n/a" : dayOpen > vah ? "Above VAH" : dayOpen < val ? "Below VAL" : "In VA"
+// IB %: initial-balance range as % of avg daily range — day-type predictor
+float ibRange = na(ibH) or na(ibL) ? na : ibH - ibL
+float ibPct   = na(ibRange) or na(atrD) or atrD == 0 ? na : ibRange / atrD * 100.0
+string ibType = na(ibPct) ? "-" : ibPct < 35 ? "narrow/trend?" : ibPct > 60 ? "wide/range?" : "normal"
+
+// All levels (VA + structural) for next-target search — built directly to avoid
+// empty-array for-loops (Pine counts DOWN when start > end).
+var float[] allLevels = array.new_float()
+array.clear(allLevels)
+if not na(poc)
+    array.push(allLevels, poc)
+if not na(vah)
+    array.push(allLevels, vah)
+if not na(val)
+    array.push(allLevels, val)
+if not na(pdh)
+    array.push(allLevels, pdh)
+if not na(pdl)
+    array.push(allLevels, pdl)
+if not na(orH)
+    array.push(allLevels, orH)
+if not na(orL)
+    array.push(allLevels, orL)
+if not na(ibH)
+    array.push(allLevels, ibH)
+if not na(ibL)
+    array.push(allLevels, ibL)
+
+// Confluence: count + names of structural levels near a target price
+f_confluence(float px) =>
+    float band = atr * confAtrMult
+    int cnt = 0
+    string names = ""
+    if not na(px)
+        if not na(pdh) and math.abs(px - pdh) <= band
+            cnt += 1
+            names += "PDH "
+        if not na(pdl) and math.abs(px - pdl) <= band
+            cnt += 1
+            names += "PDL "
+        if not na(orH) and math.abs(px - orH) <= band
+            cnt += 1
+            names += "ORH "
+        if not na(orL) and math.abs(px - orL) <= band
+            cnt += 1
+            names += "ORL "
+        if not na(ibH) and math.abs(px - ibH) <= band
+            cnt += 1
+            names += "IBH "
+        if not na(ibL) and math.abs(px - ibL) <= band
+            cnt += 1
+            names += "IBL "
+    [cnt, names]
+
+// ============================================================================
+// MODULE 2 — SETUP ENGINE
+// ============================================================================
+bool bullCandle = clv >= clvLongMin
+bool bearCandle = clv <= clvShortMax
+string deltaProxy = clv > 0.55 ? "buy" : clv < 0.45 ? "sell" : "neutral"   // PROXY only (no footprint data)
+
+// Objective setup definitions (analysis §2 / requirements §7)
+// A. VAH rejection / failed auction — short
+bool sVahRej = not na(vah) and high > vah and close < vah and bearCandle
+// B. VAL rejection / failed auction — long
+bool lValRej = not na(val) and low  < val and close > val and bullCandle
+// C. VAH breakout + acceptance — long (two consecutive closes above VAH)
+bool lVahAcc = not na(vah) and close > vah and close[1] > vah
+// D. VAL breakdown + acceptance — short (two consecutive closes below VAL)
+bool sValAcc = not na(val) and close < val and close[1] < val
+
+// E. Breakout + retest — track break bar, then a pullback that holds the level
+var int vahBreakBar = na
+var int valBreakBar = na
+if not na(vah) and close > vah and close[1] <= vah
+    vahBreakBar := bar_index
+if not na(val) and close < val and close[1] >= val
+    valBreakBar := bar_index
+float retestBand = atr * confAtrMult
+bool lVahRetest = not na(vah) and not na(vahBreakBar) and (bar_index - vahBreakBar <= retestMaxBars) and low <= vah + retestBand and close > vah and bullCandle
+bool sValRetest = not na(val) and not na(valBreakBar) and (bar_index - valBreakBar <= retestMaxBars) and high >= val - retestBand and close < val and bearCandle
+
+// Resolve active setup (priority: retest > rejection > acceptance)
+// setupName = full (dashboard/alert); setupCode = short (on-chart label)
+string setupName = ""
+string setupCode = ""
+int dir = 0
+float setupLevel = na
+bool rejectionFamily = false
+if lVahRetest
+    setupName := "VAH breakout-retest"
+    setupCode := "VAH-RT"
+    dir := 1
+    setupLevel := vah
+    rejectionFamily := true
+else if sValRetest
+    setupName := "VAL breakdown-retest"
+    setupCode := "VAL-RT"
+    dir := -1
+    setupLevel := val
+    rejectionFamily := true
+else if lValRej
+    setupName := "VAL rejection"
+    setupCode := "VAL-REJ"
+    dir := 1
+    setupLevel := val
+    rejectionFamily := true
+else if sVahRej
+    setupName := "VAH rejection"
+    setupCode := "VAH-REJ"
+    dir := -1
+    setupLevel := vah
+    rejectionFamily := true
+else if lVahAcc
+    setupName := "VAH acceptance"
+    setupCode := "VAH-ACC"
+    dir := 1
+    setupLevel := vah
+    rejectionFamily := false
+else if sValAcc
+    setupName := "VAL breakdown-acceptance"
+    setupCode := "VAL-ACC"
+    dir := -1
+    setupLevel := val
+    rejectionFamily := false
+
+bool isRetest = lVahRetest or sValRetest
+
+// ─── Scoring (analysis §7) ──────────────────────────────────────────────────
+[confCnt, confNames] = f_confluence(setupLevel)
+int score = 0
+if dir != 0
+    score += 2                                   // major VA level interaction
+    score += confCnt > 3 ? 3 : confCnt           // per-structural-level confluence (cap 3, int)
+    if confCnt >= 2
+        score += 2                               // multi-level confluence bonus
+    if isRetest
+        score += 2                               // breakout + retest structure
+    // VWAP alignment
+    if (dir == 1 and close > vwapVal) or (dir == -1 and close < vwapVal)
+        score += 1
+    // EMA9 alignment + slope
+    if (dir == 1 and close > ema9 and emaSlope > 0) or (dir == -1 and close < ema9 and emaSlope < 0)
+        score += 1
+    // RVOL tiers
+    if rvol >= rvolStrong
+        score += 2
+    else if rvol >= rvolMin
+        score += 1
+    // Strong candle outcome
+    if (dir == 1 and bullCandle) or (dir == -1 and bearCandle)
+        score += 1
+    // Delta proxy agrees
+    if (dir == 1 and deltaProxy == "buy") or (dir == -1 and deltaProxy == "sell")
+        score += 1
+
+// ============================================================================
+// MODULE 3 — EXECUTION MAP (display estimate) + DECISION PACKET
+// ============================================================================
+float entry  = close
+float slBuf  = atr * slBufferMult
+float slLvl  = dir == 1 ? setupLevel - slBuf : dir == -1 ? setupLevel + slBuf : na
+float riskPts = na(slLvl) ? na : math.abs(entry - slLvl)
+float qtyEst  = na(riskPts) or riskPts <= 0 ? na : math.floor(capital * (riskPct / 100) / riskPts)
+
+// Next target: nearest level beyond entry in the trade direction
+float t1 = na
+if dir != 0 and array.size(allLevels) > 0
+    for i = 0 to array.size(allLevels) - 1
+        float lv = array.get(allLevels, i)
+        if dir == 1 and lv > entry + syminfo.mintick
+            t1 := na(t1) ? lv : math.min(t1, lv)
+        if dir == -1 and lv < entry - syminfo.mintick
+            t1 := na(t1) ? lv : math.max(t1, lv)
+
+// Footprint checklist (the ONE manual decision), tailored to setup family
+string lvlName = setupLevel == vah ? "VAH" : setupLevel == val ? "VAL" : "level"
+string footprintCue = dir == 0 ? "" : dir == 1 ? (rejectionFamily ? "Sellers absorbed near " + lvlName + "? Buy imbalance? Delta flips up?" : "Buyers stacked above " + lvlName + "? No absorption? Delta up?") : (rejectionFamily ? "Buyers absorbed near " + lvlName + "? Sell imbalance? Delta flips down?" : "Sellers stacked below " + lvlName + "? No absorption? Delta down?")
+
+// ─── Alert firing (confirmed bar, in window, cooldown) ──────────────────────
+var int lastAlertBar = na
+bool candidate = dir != 0 and score >= scoreThreshold and inEntryWindow
+bool fresh     = na(lastAlertBar) or (bar_index - lastAlertBar > cooldownBars)
+bool fire      = barstate.isconfirmed and candidate and fresh
+if fire
+    lastAlertBar := bar_index
+
+string dirStr = dir == 1 ? "LONG" : "SHORT"
+
+// Human-readable decision line
+f_humanMsg() =>
+    string s = syminfo.ticker + " " + dirStr + " | " + setupName + " | Score " + str.tostring(score) + " | RVOL " + str.tostring(rvol, "#.0") + "\n"
+    s += "Level: " + lvlName + " " + str.tostring(setupLevel, format.mintick) + (confCnt > 0 ? "  (+" + confNames + ")" : "") + "\n"
+    s += "Trend: " + (close > vwapVal ? "vwap+ " : "vwap- ") + (close > ema9 ? "ema+ " : "ema- ") + (emaSlope > 0 ? "slope+" : "slope-") + "   CLV " + str.tostring(clv, "#.00") + "   d-proxy " + deltaProxy + "\n"
+    s += "Entry ~" + str.tostring(entry, format.mintick) + "  SL " + str.tostring(slLvl, format.mintick) + "  Risk " + str.tostring(riskPts, format.mintick) + "  Qty~" + str.tostring(qtyEst) + "  T1 " + str.tostring(t1, format.mintick) + "\n"
+    s += "FOOTPRINT: " + footprintCue
+    s
+
+// Machine JSON (for future signal-engine ingestion; no execution now)
+f_jsonMsg() =>
+    string j = '{"source":"volume_profile"'
+    j += ',"id":"' + syminfo.ticker + "-" + str.format_time(time, "yyyyMMdd-HHmm", TZ) + '"'
+    j += ',"symbol":"' + syminfo.tickerid + '"'
+    j += ',"direction":"' + (dir == 1 ? "long" : "short") + '"'
+    j += ',"setup":"' + setupName + '"'
+    j += ',"score":' + str.tostring(score)
+    j += ',"rvol":' + str.tostring(rvol, "#.00")
+    j += ',"level":' + str.tostring(setupLevel, format.mintick)
+    j += ',"entry":' + str.tostring(entry, format.mintick)
+    j += ',"sl":' + str.tostring(slLvl, format.mintick)
+    j += ',"t1":' + (na(t1) ? "null" : str.tostring(t1, format.mintick))
+    j += ',"qty_est":' + (na(qtyEst) ? "null" : str.tostring(qtyEst))
+    j += ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", TZ) + '"}'
+    j
+
+if fire
+    alert(f_humanMsg() + "\n" + f_jsonMsg(), alert.freq_once_per_bar_close)
+
+// alertcondition hooks (optional TradingView alert creation without exec)
+alertcondition(fire, "VP Decision Packet", "Volume Profile decision candidate — check footprint")
+
+// ============================================================================
+// VISUALS — Levels (day-anchored DOTTED lines + value-area box + readable tags)
+// Colours per spec: VAH light-green, POC purple, VAL red, OR orange, IB yellow,
+// PD gray. VWAP/EMA stay continuous plots.
+// ============================================================================
+color C_VAH = color.new(#90ee90,       0)   // light green
+color C_POC = color.new(color.purple,  0)
+color C_VAL = color.new(color.red,     0)
+color C_PD  = color.new(color.gray,    0)
+color C_OR  = color.new(color.orange,  0)
+color C_IB  = color.new(color.yellow,  0)
+
+plot(showVWAP ? vwapVal : na, "VWAP", color=color.new(color.blue, 0),    linewidth=1, display=display.pane)
+plot(showEMA  ? ema9    : na, "EMA9", color=color.new(color.yellow, 30), linewidth=1, display=display.pane)
+
+var line[]  lvlLines = array.new<line>()
+var label[] lvlTags  = array.new<label>()
+var box[]   vaBoxes  = array.new<box>()
+
+f_clearLines(line[] arr) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            line.delete(array.get(arr, i))
+        array.clear(arr)
+f_clearTags(label[] arr) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            label.delete(array.get(arr, i))
+        array.clear(arr)
+f_clearBoxes(box[] arr) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            box.delete(array.get(arr, i))
+        array.clear(arr)
+
+// Dotted level line for the current session + a readable text tag at the right.
+f_drawLevel(line[] larr, label[] tarr, float price, string name, color c, int x1, int x2, int w) =>
+    if not na(price)
+        array.push(larr, line.new(x1, price, x2, price, xloc=xloc.bar_index, color=c, style=line.style_dotted, width=w))
+        if showTags
+            array.push(tarr, label.new(x2, price, name + " " + str.tostring(price, format.mintick), xloc=xloc.bar_index, style=label.style_none, textcolor=c, size=size.normal))
+
+if barstate.islast
+    f_clearLines(lvlLines)
+    f_clearTags(lvlTags)
+    f_clearBoxes(vaBoxes)
+    int x1 = na(dayStartBar) ? bar_index - 30 : dayStartBar
+    int x2 = bar_index + 2
+    if showVA
+        if not na(vah) and not na(val)
+            array.push(vaBoxes, box.new(x1, vah, x2, val, xloc=xloc.bar_index, border_width=0, bgcolor=color.new(#90ee90, 92)))
+        f_drawLevel(lvlLines, lvlTags, vah, "VAH", C_VAH, x1, x2, 1)
+        f_drawLevel(lvlLines, lvlTags, poc, "POC", C_POC, x1, x2, 2)   // POC = magnet, thicker
+        f_drawLevel(lvlLines, lvlTags, val, "VAL", C_VAL, x1, x2, 1)
+    if showSecondary
+        f_drawLevel(lvlLines, lvlTags, pdh, "PDH", C_PD, x1, x2, 1)
+        f_drawLevel(lvlLines, lvlTags, pdl, "PDL", C_PD, x1, x2, 1)
+        f_drawLevel(lvlLines, lvlTags, orH, "ORH", C_OR, x1, x2, 1)
+        f_drawLevel(lvlLines, lvlTags, orL, "ORL", C_OR, x1, x2, 1)
+        f_drawLevel(lvlLines, lvlTags, ibH, "IBH", C_IB, x1, x2, 1)
+        f_drawLevel(lvlLines, lvlTags, ibL, "IBL", C_IB, x1, x2, 1)
+
+// Signal flag: green up-arrow (long) / red down-arrow (short) when a NEW setup
+// fires (price breaches a key level). Only on setup change so a held trend does
+// not stack repeats. Concise detail sits offset from the candle, not on it.
+bool newSetup = dir != 0 and (setupCode != setupCode[1] or dir != dir[1])
+bool sigLong  = showLabels and fire and newSetup and dir == 1
+bool sigShort = showLabels and fire and newSetup and dir == -1
+plotshape(sigLong,  title="Long signal",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.small)
+plotshape(sigShort, title="Short signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0),   size=size.small)
+if sigLong or sigShort
+    float yoff = atr * 0.7
+    string ltxt = setupCode + " " + str.tostring(score) + " R" + str.tostring(rvol, "#.0")
+    if sigLong
+        label.new(bar_index, low - yoff, ltxt, style=label.style_none, textcolor=color.new(color.green, 0), size=size.small)
+    else
+        label.new(bar_index, high + yoff, ltxt, style=label.style_none, textcolor=color.new(color.red, 0), size=size.small)
+
+// ============================================================================
+// VISUALS — Dashboard (complete picture; hover any row name for a description).
+// Values are for the current (live/forming) bar; alerts fire on bar close.
+// ============================================================================
+var table dash = table.new(position.top_right, 2, 20, bgcolor=color.new(color.black, 65), border_width=1, border_color=color.new(color.gray, 50))
+
+f_row(int r, string k, string v, color vcol, string tip) =>
+    table.cell(dash, 0, r, k, text_color=color.new(color.gray, 0), text_size=size.small, text_halign=text.align_left, tooltip=tip)
+    table.cell(dash, 1, r, v, text_color=vcol, text_size=size.small, text_halign=text.align_left)
+
+f_sub(int r, string title) =>
+    table.cell(dash, 0, r, title, text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(color.gray, 55))
+    table.cell(dash, 1, r, "", bgcolor=color.new(color.gray, 55))
+
+if showTable and barstate.islast
+    color okC = color.lime
+    color noC = color.new(color.gray, 20)
+    string trendBias = (close > vwapVal and close > ema9 and emaSlope > 0) ? "Bull" : (close < vwapVal and close < ema9 and emaSlope < 0) ? "Bear" : "Mixed"
+    color trendCol = trendBias == "Bull" ? okC : trendBias == "Bear" ? color.red : noC
+    // Header (profile source in the title bar)
+    table.cell(dash, 0, 0, "VP Decision Assist", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 40))
+    table.cell(dash, 1, 0, syminfo.ticker + " " + timeframe.period + " " + (autoProfile ? "AUTO" : "MAN"), text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 40))
+    // Profile levels
+    f_row(1, "VAH", na(vah) ? "-" : str.tostring(vah, format.mintick), na(vah) ? noC : C_VAH, "Value Area High: upper edge of prev session's 70% volume zone.")
+    f_row(2, "POC", na(poc) ? "-" : str.tostring(poc, format.mintick), na(poc) ? noC : C_POC, "Point of Control: prev session's most-traded price (magnet).")
+    f_row(3, "VAL", na(val) ? "-" : str.tostring(val, format.mintick), na(val) ? noC : C_VAL, "Value Area Low: lower edge of prev session's 70% volume zone.")
+    f_row(4, "Auction", auction, auction == "n/a" ? noC : color.aqua, "Current price vs value area: Above VAH / Inside / Below VAL.")
+    // Context
+    f_row(5, "Open pos", openPos, openPos == "n/a" ? noC : color.aqua, "Where TODAY opened vs prev value area. Above VAH / below VAL often = trend day.")
+    f_row(6, "IB %", na(ibPct) ? "-" : (str.tostring(ibPct, "#") + "% " + ibType), na(ibPct) ? noC : (ibPct < 35 ? okC : ibPct > 60 ? color.orange : color.new(color.white, 0)), "Initial Balance (09:15-10:15) as % of avg daily range. <35% = trend-day potential; >60% = range day.")
+    f_row(7, "RVOL", str.tostring(rvol, "#.00"), rvol >= rvolMin ? okC : noC, "Relative Volume = current bar volume / SMA(20). >=1.5 elevated, >=2 strong.")
+    f_row(8, "Trend", trendBias, trendCol, "Combined VWAP + 9EMA bias. Bull = above both & EMA rising; Bear = below both & falling.")
+    f_row(9, "Window", inEntryWindow ? "IN" : "out", inEntryWindow ? okC : noC, "Entry window (09:15-11:00 or 13:00-14:45 IST). IN = entries allowed now.")
+    // Setup
+    f_sub(10, "-- Setup --")
+    f_row(11, "Setup", dir == 0 ? "-" : (dirStr + " " + setupName), dir == 0 ? noC : (dir == 1 ? okC : color.red), "Active setup + direction. Blank when no objective setup is live.")
+    f_row(12, "Score", dir == 0 ? "-" : (str.tostring(score) + (score >= scoreThreshold ? " OK" : "")), dir == 0 ? noC : (score >= scoreThreshold ? okC : color.orange), "Weighted setup score; >= threshold fires the alert.")
+    f_row(13, "Confluence", confCnt == 0 ? "-" : (str.tostring(confCnt) + "  " + confNames), confCnt >= 2 ? okC : noC, "Count + names of nearby structural levels (PDH/OR/IB). 2+ = stronger.")
+    // Execution (estimate)
+    f_sub(14, "-- Exec (est) --")
+    f_row(15, "Entry~", dir == 0 ? "-" : str.tostring(entry, format.mintick), dir == 0 ? noC : color.white, "Reference entry = current close.")
+    f_row(16, "SL", na(slLvl) ? "-" : (str.tostring(slLvl, format.mintick) + "  (" + str.tostring(riskPts, format.mintick) + ")"), na(slLvl) ? noC : color.red, "Level-based stop (beyond the level) + risk in points.")
+    f_row(17, "T1", na(t1) ? "-" : str.tostring(t1, format.mintick), na(t1) ? noC : okC, "First target = nearest structural level in the trade direction.")
+    f_row(18, "Qty~est", na(qtyEst) ? "-" : str.tostring(qtyEst), na(qtyEst) ? noC : color.white, "Display-only size estimate = capital x risk% / stop distance.")
+    f_row(19, "Footprint", dir == 0 ? "-" : "CHECK", dir == 0 ? noC : color.yellow, "The ONE manual step: confirm absorption on the GoCharting footprint before entry.")
