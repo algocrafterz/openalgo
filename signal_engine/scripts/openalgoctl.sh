@@ -166,7 +166,34 @@ wait_for_health() {
 
 # --- Core bootstrap: start server + login + signal engine ---
 #     Writes PID file as soon as each process starts.
+
+AUTH_COOLDOWN_FILE="$LOG_DIR/auth_cooldown.txt"
+AUTH_COOLDOWN_SECS=86400  # 24 hours between auth failure retries — token expires at midnight per SEBI
+
+# Check if we're in auth cooldown (too many recent broker auth failures).
+# Returns 0 (in cooldown) or 1 (ok to proceed).
+check_auth_cooldown() {
+    [ -f "$AUTH_COOLDOWN_FILE" ] || return 1
+    local stamp elapsed
+    stamp=$(cat "$AUTH_COOLDOWN_FILE" 2>/dev/null || echo 0)
+    elapsed=$(( $(date +%s) - stamp ))
+    if [ "$elapsed" -lt "$AUTH_COOLDOWN_SECS" ]; then
+        local remaining=$(( AUTH_COOLDOWN_SECS - elapsed ))
+        log "AUTH COOLDOWN: broker auth failed recently. Waiting ${remaining}s before retry to avoid API lockout."
+        log "To force a retry now: rm $AUTH_COOLDOWN_FILE && openalgoctl.sh run"
+        return 0
+    fi
+    rm -f "$AUTH_COOLDOWN_FILE"
+    return 1
+}
+
 bootstrap() {
+    # Abort early if broker auth failed recently — prevents Task Scheduler from hammering
+    # the broker's auth API and triggering account lockout (228+ failures/day pattern).
+    if check_auth_cooldown; then
+        return 1
+    fi
+
     wait_for_network || return 1
     kill_from_pidfile
 
@@ -203,8 +230,10 @@ bootstrap() {
 
     if "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler startup; then
         log "Startup successful"
+        rm -f "$AUTH_COOLDOWN_FILE"
     else
-        log "ERROR: Startup failed"
+        log "ERROR: Startup failed — writing auth cooldown to prevent API lockout"
+        date +%s > "$AUTH_COOLDOWN_FILE"
         kill "$APP_PID" 2>/dev/null || true
         rm -f "$PID_FILE"
         return 1

@@ -234,17 +234,37 @@ def auto_login(
 
         feed_token = None  # Feed token not needed by scheduler; already in DB
     else:
-        # 2. Validate env (password + TOTP secret only required for programmatic login)
+        # 2. Reuse existing token if still valid — avoids unnecessary TOTP calls.
+        # Flattrade tokens expire at midnight per SEBI rules, so re-auth is only
+        # needed once per day. On any intra-day restart the stored token is reused.
+        if _get_existing_auth is None:
+            from database.auth_db import get_auth_token as _dba_get
+            from database.auth_db import get_auth_token_dbquery as _dba_query
+            def _get_existing_auth(uname):
+                return _dba_get(uname), _dba_query(uname)
+
+        existing_token, _ = _get_existing_auth(username)
+        if existing_token:
+            fund_data = verify_broker_auth(existing_token)
+            if fund_data:
+                logger.info(
+                    "Existing session valid — skipping TOTP for user: %s", username
+                )
+                return True, f"Session reused (no TOTP needed) for user: {username}", existing_token
+
+        logger.info("No valid session found — authenticating via TOTP")
+
+        # 3. Validate env (password + TOTP secret required for fresh login)
         try:
             env = validate_auto_login_env()
         except EnvironmentError as e:
             return False, str(e), None
 
-        # 3. Generate TOTP
+        # 4. Generate TOTP
         totp_code = generate_totp(env["totp_secret"])
         logger.info("TOTP code generated")
 
-        # 4. Authenticate with broker
+        # 5. Authenticate with broker
         auth_token, feed_token, error = _authenticate_with_totp(
             env["broker_password"], totp_code
         )
@@ -256,7 +276,7 @@ def auto_login(
             logger.error("Broker authentication returned empty token for user: %s", username)
             return False, "Authentication succeeded but returned empty/null token", None
 
-        # 5. Store token in DB
+        # 6. Store token in DB
         inserted_id = _upsert_auth(
             username, auth_token, broker_name, feed_token=feed_token
         )
