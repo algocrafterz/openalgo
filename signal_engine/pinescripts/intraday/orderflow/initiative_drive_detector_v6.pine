@@ -1,0 +1,173 @@
+//@version=6
+indicator("Initiative Drive Detector v6", overlay=true, max_labels_count=500, max_bars_back=500)
+
+// ============================================================================
+// PURPOSE
+// A candidate flags an expansion candle that meets a majority of "initiative"
+// criteria — range, RVOL, body dominance, trend/VWAP alignment, breakout.
+// This script does NOT confirm order flow. Treat every flagged candle as a
+// prompt to open the footprint chart and check for:
+//   - Stacked imbalances in the direction of the flag
+//   - Absorption at the opposite extreme (would invalidate the candidate)
+//   - Delta agreeing with price direction
+// Convention: BID = left = sellers, ASK = right = buyers (fixed, regardless
+// of candle colour).
+// ============================================================================
+
+// ── Inputs ───────────────────────────────────────────────────────────────
+grpRange   = "Range & Volatility"
+atrLen     = input.int(14, "ATR Length", group=grpRange)
+atrMult    = input.float(1.15, "ATR Multiplier", step=0.05, group=grpRange)
+rangeSmaLen = input.int(5, "Avg Range Lookback", group=grpRange)
+
+grpVol     = "Volume"
+volLen     = input.int(20, "Volume SMA Length", group=grpVol)
+rvolMin    = input.float(1.50, "Minimum RVOL", step=0.1, group=grpVol)
+
+grpBody    = "Body / Close Location"
+bodyMinPct = input.float(65.0, "Minimum Body %", step=5, group=grpBody)
+closeZonePct = input.float(25.0, "Close-Within-Extreme Zone %", step=5, group=grpBody,
+     tooltip="Bull candidate requires close within this % of the high; bear candidate within this % of the low.")
+
+grpTrend   = "Trend / VWAP"
+emaLen     = input.int(9, "EMA Length", group=grpTrend)
+
+grpBreak   = "Breakout"
+lookback   = input.int(3, "Breakout Lookback", group=grpBreak)
+
+grpFilter  = "Signal Filtering"
+scoreMin      = input.int(6, "Minimum Score (of 8)", minval=1, maxval=8, group=grpFilter)
+cooldownBars  = input.int(4, "Minimum Bars Between Signals", group=grpFilter)
+useSession    = input.bool(true, "Restrict to NSE Cash Session (09:15–15:30 IST)", group=grpFilter)
+sessionString = input.session("0915-1530", "Session", group=grpFilter)
+
+grpVis     = "Display"
+showTable  = input.bool(true, "Show Score Table", group=grpVis)
+showLabels = input.bool(true, "Show Signal Labels", group=grpVis)
+
+// ── Calculations ─────────────────────────────────────────────────────────
+float atr = ta.atr(atrLen)
+
+float barRange = high - low
+float body     = math.abs(close - open)
+float bodyPct  = barRange > 0 ? body / barRange * 100 : 0.0
+
+float volMA = ta.sma(volume, volLen)
+float rvol  = volMA > 0 ? volume / volMA : 0.0
+
+float ema  = ta.ema(close, emaLen)
+float vwap = ta.vwap(close)
+
+float avgRange = ta.sma(barRange, rangeSmaLen)
+
+bool inSession = not useSession or not na(time(timeframe.period, sessionString, "Asia/Kolkata"))
+
+// ── Core Conditions ──────────────────────────────────────────────────────
+bool atrPass   = barRange >= atr * atrMult
+bool rangePass = barRange > avgRange
+bool rvolPass  = rvol >= rvolMin
+bool bodyPass  = bodyPct >= bodyMinPct
+
+bool bullClose = close >= high - barRange * (closeZonePct / 100)
+bool bearClose = close <= low  + barRange * (closeZonePct / 100)
+
+bool bullTrend = close > ema and ema > ema[1]
+bool bearTrend = close < ema and ema < ema[1]
+
+bool bullVWAP = close > vwap
+bool bearVWAP = close < vwap
+
+bool bullBreak = high > ta.highest(high[1], lookback)
+bool bearBreak = low  < ta.lowest(low[1], lookback)
+
+// ── Score ────────────────────────────────────────────────────────────────
+int bullScore = (atrPass ? 1 : 0) + (rangePass ? 1 : 0) + (rvolPass ? 1 : 0) + (bodyPass ? 1 : 0) +
+     (bullClose ? 1 : 0) + (bullTrend ? 1 : 0) + (bullVWAP ? 1 : 0) + (bullBreak ? 1 : 0)
+
+int bearScore = (atrPass ? 1 : 0) + (rangePass ? 1 : 0) + (rvolPass ? 1 : 0) + (bodyPass ? 1 : 0) +
+     (bearClose ? 1 : 0) + (bearTrend ? 1 : 0) + (bearVWAP ? 1 : 0) + (bearBreak ? 1 : 0)
+
+bool bullCandidate = bullScore >= scoreMin and inSession
+bool bearCandidate = bearScore >= scoreMin and inSession
+
+// ── First Expansion Only, Confirmed Bar ─────────────────────────────────
+bool bullRaw = bullCandidate and not bullCandidate[1] and barstate.isconfirmed
+bool bearRaw = bearCandidate and not bearCandidate[1] and barstate.isconfirmed
+
+// ── Cooldown Filter ──────────────────────────────────────────────────────
+var int lastBullBar = na
+var int lastBearBar = na
+
+bool bullSignal = false
+bool bearSignal = false
+
+if bullRaw
+    if na(lastBullBar) or (bar_index - lastBullBar > cooldownBars)
+        bullSignal := true
+        lastBullBar := bar_index
+
+if bearRaw
+    if na(lastBearBar) or (bar_index - lastBearBar > cooldownBars)
+        bearSignal := true
+        lastBearBar := bar_index
+
+// ── Visuals ──────────────────────────────────────────────────────────────
+barcolor(bullSignal ? color.lime : bearSignal ? color.red : na)
+bgcolor(bullSignal ? color.new(color.green, 88) : bearSignal ? color.new(color.red, 88) : na)
+
+if showLabels and bullSignal
+    string msg = "ID ▲ " + str.tostring(bullScore) + "/8\nCheck footprint:\nask-side stacking + no absorption"
+    label.new(bar_index, low, text=msg, style=label.style_labelup, location=location.belowbar,
+         color=color.new(color.green, 10), textcolor=color.white, size=size.small)
+
+if showLabels and bearSignal
+    string msg = "ID ▼ " + str.tostring(bearScore) + "/8\nCheck footprint:\nbid-side stacking + no absorption"
+    label.new(bar_index, high, text=msg, style=label.style_labeldown, location=location.abovebar,
+         color=color.new(color.red, 10), textcolor=color.white, size=size.small)
+
+// ── Score Breakdown Table (last bar) ────────────────────────────────────
+var table scoreTable = table.new(position.top_right, 2, 10,
+     bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+
+f_cell(_row, _label, _pass) =>
+    table.cell(scoreTable, 0, _row, _label, text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, _row, _pass ? "✓" : "✗",
+         text_color = _pass ? color.lime : color.red, text_size=size.small)
+
+if showTable and barstate.islast
+    table.cell(scoreTable, 0, 0, "Criteria", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
+    table.cell(scoreTable, 1, 0, "Bull/Bear", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
+    table.cell(scoreTable, 0, 1, "Range ≥ ATR×mult", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 1, (atrPass ? "✓" : "✗"), text_color= atrPass ? color.lime : color.red, text_size=size.small)
+    table.cell(scoreTable, 0, 2, "Range > Avg", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 2, (rangePass ? "✓" : "✗"), text_color= rangePass ? color.lime : color.red, text_size=size.small)
+    table.cell(scoreTable, 0, 3, "RVOL ≥ min", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 3, (rvolPass ? "✓" : "✗"), text_color= rvolPass ? color.lime : color.red, text_size=size.small)
+    table.cell(scoreTable, 0, 4, "Body % ≥ min", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 4, (bodyPass ? "✓" : "✗"), text_color= bodyPass ? color.lime : color.red, text_size=size.small)
+    table.cell(scoreTable, 0, 5, "Close in extreme zone", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 5, (bullClose ? "▲" : bearClose ? "▼" : "✗"),
+         text_color = bullClose ? color.lime : bearClose ? color.red : color.gray, text_size=size.small)
+    table.cell(scoreTable, 0, 6, "EMA trend align", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 6, (bullTrend ? "▲" : bearTrend ? "▼" : "✗"),
+         text_color = bullTrend ? color.lime : bearTrend ? color.red : color.gray, text_size=size.small)
+    table.cell(scoreTable, 0, 7, "VWAP side", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 7, (bullVWAP ? "▲" : bearVWAP ? "▼" : "✗"),
+         text_color = bullVWAP ? color.lime : bearVWAP ? color.red : color.gray, text_size=size.small)
+    table.cell(scoreTable, 0, 8, "Breakout", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 8, (bullBreak ? "▲" : bearBreak ? "▼" : "✗"),
+         text_color = bullBreak ? color.lime : bearBreak ? color.red : color.gray, text_size=size.small)
+    table.cell(scoreTable, 0, 9, "Score  Bull / Bear", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
+    table.cell(scoreTable, 1, 9, str.tostring(bullScore) + " / " + str.tostring(bearScore), text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.gray, 60))
+
+// ── Alerts ───────────────────────────────────────────────────────────────
+alertcondition(bullSignal, "Bull Initiative Drive", "Bullish Initiative Drive candidate — verify on footprint (ask-side stacking, no absorption)")
+alertcondition(bearSignal, "Bear Initiative Drive", "Bearish Initiative Drive candidate — verify on footprint (bid-side stacking, no absorption)")
+
+if bullSignal
+    alert('{"symbol":"' + syminfo.tickerid + '","direction":"bull","score":' + str.tostring(bullScore) +
+         ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", "Asia/Kolkata") + '"}', alert.freq_once_per_bar_close)
+
+if bearSignal
+    alert('{"symbol":"' + syminfo.tickerid + '","direction":"bear","score":' + str.tostring(bearScore) +
+         ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", "Asia/Kolkata") + '"}', alert.freq_once_per_bar_close)
