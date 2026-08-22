@@ -1172,3 +1172,92 @@ awk '/^[a-zA-Z_][a-zA-Z0-9_]*[ ]*=[ ]*[^=]/ && !/input\./ {q=gsub(/"/,"\""); if 
 Plus an arity checker comparing each function definition's argument count against every call
 site — run across all 15 changed functions, all match. (`renderKeyLevels()` inside a comment
 reads as a 1-arg call; that one is a false positive.)
+
+---
+
+## 2026-08-22m — Key-level-only mode; corrections from the model doc
+
+Chart `charts/TCS_2026-08-22_18-23-51_99355.png`. **A real key-level trade was placed** —
+`LONG IBH-RT 8/7 +1lvl 10:50`, entry 2296, stop 2291.23, TP1 2303.98, 20 shares, risk ₹95 (1%).
+
+Validated by that chart:
+- Compiles and runs with execution on.
+- **Blocker 2 fix works.** Stop 2291.23 sits just under IBH 2292.0 — level-based. The ORB-derived
+  stop would have been near ORB-L ≈ 2266. TP1 2303.98 sits just under VAH 2304.8: the structural
+  target with its pad.
+- Leading-zero fix works (`0.70x`, previously rendered `70x`).
+- Setup row latches with time and folded confluence; IB row carries both denominators.
+- Session VF is live: the 10:50 signal label reads `0.9x`, the end-of-day panel `0.70x`.
+
+### I was wrong about VA acceptance
+
+`volume-profile-model.md` makes acceptance **four of its eight scenarios** (①②④⑤), co-equal with
+rejection — not a weak afterthought. Suppressing it was wrong and it is back on.
+
+But the doc also requires **RVOL >= 1.5 on every entry** (§4C, §5C), and the implementation's
+acceptance had *no volume condition of its own* — volume reached it only through the score, worth
++1 or +2 out of 7. That gap, not the family, was the real problem. New `klAccMinRvol` (1.5) gates
+acceptance specifically. Rejection and retest are untouched: their thesis is absorption, which
+does not require expansion.
+
+### ORB demoted from trigger to level
+
+`enableBreakout` now defaults **false**. `canDetectBreakout` and the breakout block are the only
+consumers, so **ORB level building is untouched** — ORBH/ORBL still populate `klBuildRegistry`
+and still earn confluence points. ORB stops competing for the session's single entry slot.
+
+That answers "what if ORB breaks first, then IB?": previously first-come-first-served, so a 10:00
+ORB break consumed the slot and the 10:50 IBH-RT never fired. Now the slot is always the key-level
+engine's, and ORB contributes what it is actually good for — a level other levels can stack on.
+
+### Day type now named by the doc's denominator
+
+The doc (§8) defines IB% as **IB / average daily range**, `<35%` narrow, `>60%` wide. That is now
+what names the day. The IB-vs-average-IB figure stays as a second reading — "is this IB unusual
+for this stock" and "how much of a normal day's range did the first hour eat" are different
+questions. Row reads `82%IB/49%ADR normal`.
+
+### Key-level stops had no minimum distance
+
+The live trade printed a **0.2% stop** (4.77 points at 2296). `calculateStopLoss()` floors ORB
+stops at `max(0.5-1.5x ATR, 0.3% of price)`; `klExecMap()` bypassed that entirely and returned
+`level ∓ 0.15 x ATR` raw. A 0.2% stop on a 5-min chart is inside the noise band — precisely the
+sweep bait this whole effort is meant to avoid.
+
+`klExecMap` now applies `minDist = max(0.5 x ATR, 0.3% of entry)`, and the stop may only move
+**further** from entry, never nearer, so the level still governs whenever it is already wide
+enough. `klSlBufferMult` raised 0.15 -> 0.35.
+
+**Be aware of the trade-off.** On that TCS trade the floor would have widened risk from 4.77 to
+~6.9 points. The structural target does not move, so R:R falls from ~1.67 to ~1.16 and position
+size drops from 20 shares to ~13. That is the correct trade: 1.16R that survives beats 1.67R that
+gets wicked out. The alternative — **skipping** setups whose level-based stop lands inside the
+noise floor — is arguably cleaner and is the obvious next lever if signal quality matters more
+than count.
+
+### PM window widened to the doc's hours
+
+Doc §4E gives `09:15-11:00 or 13:00-14:45`. PM window moved 13:45-14:15 -> **13:00-14:30**. Not
+14:45: the time exit is 15:00, and an entry with 15 minutes left is a coin flip. Raise the time
+exit if the full doc window is wanted.
+
+### Why the entry was 10:50 and not 10:20
+
+Structural, not a miss. Two independent gates made 10:20 impossible:
+
+1. **IB does not close until 10:15.** `ibDone` requires `not klInIB`, so no IB setup can exist
+   before then.
+2. **The HTF gate reads the last CLOSED 15-min bar.** At 10:20 that is the **10:00-10:15** bar —
+   a bar wholly inside the IB window, whose close is by construction `<= IBH`. `klHTFClose > IBH`
+   cannot be true. The earliest 15-min bar that *can* close above IBH is 10:15-10:30, which only
+   becomes readable from ~10:35.
+
+From ~10:35 the `-RT` pattern still has to complete: break bar, pullback into the band, close back
+above on a bull candle. **10:50 is the first bar where all of it was true.**
+
+### Still not automatable: the doc's §7 footprint gate
+
+The model doc is explicit — *"No footprint confirmation → no trade, regardless of score"* — and
+that read (absorption vs follow-through on a GoCharting footprint) has no Pine equivalent. A fully
+automated pipeline **drops that gate**. What stands in for it here is CLV, RVOL, the session volume
+factor and the HTF close. Weaker than a footprint, and worth knowing you are trading without it.
