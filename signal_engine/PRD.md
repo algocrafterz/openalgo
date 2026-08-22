@@ -62,6 +62,132 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Recent Changes (2026-08-22)
+
+### Key-level execution blockers + headroom gate (`breakout.pine`)
+
+- **Fixed:** `canTakeEntry` folded in `orbRangeFilterPassed`, so IB/VA setups were rejected on
+  ORB width. Split out `canTakeKeyLevelEntry` (cutoff + slot + gap + minTime + NR, no ORB width).
+- **⚠ NOT fixed — must be before `enableKeyLevelExecution = true`:** a key-level entry hands off
+  to the shared pending processor, which derives SL from **ORB levels** and TP from **ORB width**.
+  The observation alert reports level-based `Ref SL`/`Ref T1` from `klExecMap()`. **The executed
+  trade would not match the alert.** Fix: latch `klSLLevel`/`klT1` at arming and prefer them when
+  `klPendingSource != ""`.
+- **Headroom gate** `klMinHeadroomR` (1.0R default): projects the day's extension to a full ADR,
+  measures entry-to-there in units of the trade's own risk, refuses setups with no room. Verdict
+  shows `⛔ NO ROOM`. Objective form of "don't buy a breakout after the move is done".
+- **IB% denominator corrected** — was `IB / daily ATR` (no literature threshold), now
+  `IB / average IB` over 14 sessions with Market Profile bands (<80% narrow, >120% wide).
+- **Entry cutoff 11:00 -> 11:45.** IB triggers cannot arm before 10:15 and the HTF gate adds up
+  to 15 min, leaving the primary family ~30 usable minutes. 11:45 gives 90 and stops where the
+  cheat sheet puts the lunch trap.
+
+**Static vs live:** IB% is **static after 10:15** (day-type classifier). ADR is static; `% used`
+is live and only rises. `Room (R)` is live and directional — the metric that answers "steam left
+for this trade".
+
+Net session token change **-1,790 proxy (~-7,770 compiled)**; est. ~89,500 / 100,256.
+
+---
+
+### Input diet + verdict dashboard (`breakout.pine`)
+
+Reframed around the fact that signals reach the broker via webhook -> signal_engine -> trade
+bridge. The panel is not a decision aid for a human clicking buy; it reports what the system
+is doing and why.
+
+- **Inputs 141 -> 59.** Deleted 13 dead (FVG subsystem — its filter was never called; pullback
+  filter; currency conversion, which also freed a `request.security` slot, now 13 total).
+  Froze 67 to constants (colours, display toggles, legacy retest machinery, position-sizing
+  config since signal_engine owns sizing, ADX, HTF/index/trend sub-params, VP resolution).
+  Freezing keeps value and consumers identical, so behaviour is provably unchanged.
+- **`renderVerdict()`** — one line plus one reason at the top: `⛔ NO TRADE` (naming the first
+  failing filter) / `⏰ TOO EARLY` / `🏁 CUTOFF` / `🏁 DONE` / `🟡 ARMED` / `⏳ WAITING` (HTF) /
+  `🟢🔴 SIGNAL` / `✅ IN TRADE`.
+- **`dashMode`** Focus (default) / Full. Focus = verdict + Vol Factor, Auction, IB, ADR, Setup,
+  KL Mode. Confluence folded into Setup as `+2lvl`.
+- **Signal tooltip rebuilt** with labelled columns, plain language, and volume (session factor,
+  break-bar ratio, bar close quality). Chart text beside the triangle carries the factor too.
+
+Net token change **-2,201 proxy (~-9,550 compiled)** — the file is now well clear of the ceiling.
+
+**Known defect, not yet fixed:** `canTakeEntry` includes `orbRangeFilterPassed`, so an IB or VA
+setup can be rejected because the *Opening Range* width was out of band. Latent while
+`enableKeyLevelExecution = false`; **must be fixed before execution is enabled.**
+
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `breakout.md`, `PRD.md`. `orb.pine` untouched.
+
+---
+
+### Volume Factor replaces the rolling volume MA (`breakout.pine`)
+
+`volumeMA = ta.sma(volume, 50)` was **time-of-day blind** — on a 5-min chart the denominator
+at 09:20 was mostly the previous session's dead close bars while the numerator ran 5-10x
+normal, making the 1.2x test near-inert in the window this strategy trades most. Replaced by
+`klVolFactor()`, which compares each bar against **the same slot of the session on prior days**.
+
+| Read | Question | Consumer |
+|---|---|---|
+| per-slot mean bar volume | Does this break carry participation? | `volBaseline` — every existing `volume / volBaseline` ratio is now normalised |
+| cumulative session factor | Is this stock in play today? | New `Vol Factor` dashboard row, +1 score component, alert |
+
+At slot 0 this is the Zarattini/Barbon/Aziz (SFI 2024) relative-volume measure, which that
+study found did almost all the work in ORB selection across 7,000+ US stocks.
+
+**Removed**: `volumeMaLength` input, the `ta.sma` cache, the 3-bar `max()` numerator (let a
+spike two bars *before* a weak breaking candle pass the filter), and the **GOD MODE quality
+score** (`godScore`/`godGrade`/`ORB Quality` row) — grep-verified to appear only in label text
+and table cells, never in a breakout or entry condition. Its removal funded the volume engine:
+net session cost **+15 proxy ≈ +65 compiled**. GOD MODE's adaptive buffer, chop guard and
+both-pending fix are kept.
+
+`volumeMA` → `volBaseline` (renamed, not silently redefined — it is no longer a moving average).
+
+**⚠ Two consequences:**
+1. **The `orb.pine` regression gate no longer holds — deliberately.** `volBaseline` feeds
+   `volumeOK` in ORB breakout detection, so ORB trade selection changes. Strategy Tester will
+   differ from `orb.pine`; that is now expected.
+2. **`volumeMultiplier` / `strongVolumeMultiplier` (1.2 / 1.8) are no longer calibrated** — they
+   were tuned against an inflated-at-open denominator. Normalised, morning ratios read lower, so
+   the filter is now **stricter in the morning**. Expect fewer signals initially. Observe before
+   re-tuning; change one at a time.
+
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `breakout.md`, `PRD.md`. `orb.pine` untouched.
+
+---
+
+### Key-level signal quality batch (`breakout.pine`)
+
+Three changes to key-level signal generation. **No Python changes** — key levels remain
+`enableKeyLevelExecution = false` (alert-only), and the decision packet stays deliberately
+unparseable by `parser.py` (`Ref Entry` / `Ref SL` / `Ref T1`).
+
+| Change | Effect |
+|---|---|
+| **Removed `deltaProxy` from `klComputeScore()`** | It was derived from CLV, which was already scored — one strong close collected +2 of the 7-point threshold for a single input. Max score 15 -> 14 |
+| **`klT1PadMult` (0.15 ATR)** | T1 now sits in front of the next structural level instead of on it, where the crowd's resting limits sit. Reports `-` when the pad leaves no workable target |
+| **`klRequireHTFClose` + `klConfirmTF` (15m, default ON)** | A setup needs a *closed* HTF bar on the correct side of the level. Direction-uniform, so rejections are not inverted. Non-repainting (`close[1]` + `lookahead_off`); costs up to one HTF bar of lag. RVOL >= `strongVolumeMultiplier` bypasses the wait |
+
+Dashboard `Setup:` row shows `⏳HTF` while a scoring setup waits on confirmation.
+
+**Threshold caution:** combined with the earlier confluence fix, scores now read up to 4
+points lower than the build that chose `klScoreThreshold = 7`. Observe alert rate before
+re-tuning.
+
+**Evidence base** (outside sources, not the legacy ORB log — that measures a different
+strategy): Zarattini/Barbon/Aziz (SFI 2024) found plain ORB weak across 7,000+ US stocks
+2016-2023, with **opening relative volume doing almost all the work** — motivating the
+Volume Factor work still outstanding, since `volume / sma(volume, 50)` is not time-of-day
+normalised. Breakout literature supports close-beyond-level over wick, and higher-timeframe
+confirmation over lower. SMC order blocks (~50-55% raw WR, high discretion) were reviewed
+and deliberately not ported.
+
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orb/breakout.md`,
+`PRD.md`. `orb.pine` untouched. Validation is TradingView compile + Strategy-Tester diff.
+**Token cost**: +201 proxy ≈ +872 compiled.
+
+---
+
 ## Recent Changes (2026-08-20)
 
 ### Key-level breakout strategy (`breakout.pine`, new)

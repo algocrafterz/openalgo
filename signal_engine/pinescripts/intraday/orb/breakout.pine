@@ -79,9 +79,7 @@ grp_colors   = "🎨 ORB COLORS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
 grp_session  = "⏰ SESSION SETTINGS ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_breakout = "⚡ BREAKOUT DETECTION ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_targets  = "🎯 TARGETS & RISK ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-grp_FVG      = "↩️ FVG FILTER ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_lines    = "📍 TP/SL LINES ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-grp_pullback = "↩️ PULLBACK FILTER ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_volume   = "📊 VOLUME FILTER ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_trend    = "📈 TREND FILTER ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 grp_dash     = "📊 DASHBOARD ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
@@ -108,21 +106,21 @@ MAX_BARS_FAILED_BREAK = 5  // Maximum bars to consider a retest as "failed break
 KL_TAG_OFFSET_BARS = 6
 KL_TAG_STEP_BARS   = 11
 KL_LABEL_MIN_GAP   = 6
-showEdgeLabels = input.bool(false, "Show Edge Labels", inline = "core", group=grp_colors)
-labelFormat = input.string("Detailed", "Label Format", options=["Simple", "Detailed"], group=grp_colors, inline="core1")
-labelSize = input.string("Small", "All Label Size", inline = "core1", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=grp_colors, tooltip="Display ORB stage labels at the edge of price levels\n\nShows which ORB period is active (5min/15min/30min/60min)\nLabels follow price as chart scrolls\n\nON = Labels visible\nOFF = Clean chart\n\nVisual size for ALL labels (breakout, retest, failed)\n\nTINY: Minimal space, cluttered on small screens\nSMALL: Clean and readable (recommended)\nNORMAL: Good for presentations\nLARGE: High visibility\nHUGE: Maximum visibility\n\nLabel text format for ALL labels (TP/SL and Breakouts)\n\nSIMPLE:\n• Minimal text\n• TP/SL: 'ENTRY', 'TP1', 'SL'\n• Breakout: '🔼 BREAKOUT UP #1'\n• Clean and compact\n• Good for: Small screens, many lines\n\nDETAILED:\n• Full info with context\n• TP/SL: 'ENTRY: $150.50', 'TP1: $152.20 +1.1%'\n• Breakout: 'ORB15 | #1 | Vol: 2.3x'\n• Shows prices, percentages, ORB stage, volume\n• Good for: Analysis, larger screens (recommended) ⭐\n\nAFTER HIT:\n• TP: '✅ TP1: $152.20'\n• SL: '❌ SL: $148.50'")
-showBG = input.bool(true, "Show Background", inline="BG", group=grp_colors)
-fillTransparency = input.int(95, "  | Transparency", inline="BG", minval=0, maxval=100, step=5, group=grp_colors, tooltip="Background fill transparency for ORB range\n\n0 = Fully opaque (solid color)\n50 = Semi-transparent\n95 = Nearly invisible (recommended)\n100 = Completely invisible")
-enableORB15Signals = input.bool(true, "Enable ORB15", group=grp_colors, inline="5-15")
-orb15LineColor = input.color(#FF9800, "", inline = "5-15",group=grp_colors)
-showMidLine = input.bool(true, "Mid-Range Line", group=grp_colors, tooltip="Display a thin line at the midpoint between ORB High and Low\n\nUSEFUL FOR:\n• Visual center reference\n• Mean reversion trading\n• Support/resistance level\n• Range symmetry analysis\n\nThe line uses the same color as the ORB boundaries but thinner\n\nON = Midpoint line visible\nOFF = Only High/Low lines")
+showEdgeLabels = false
+labelFormat = "Detailed"
+labelSize = "Small"
+showBG = true
+fillTransparency = 95
+enableORB15Signals = true
+orb15LineColor = #FF9800
+showMidLine = true
 
-sessionMode = input.string("Auto-Detect", "Session Mode", options=["Auto-Detect", "Custom"], group=grp_session, tooltip="Define trading session for ORB calculation\n\n🎯 AUTO-DETECT (Recommended):\n• TradingView automatically detects symbol's native hours\n• Stocks: Exchange hours (NYSE 9:30-16:00, LSE 8:00-16:30, etc.)\n• E-mini Futures: See 'Futures Trading Hours' setting below\n• Crypto: 24/7\n• Forex: Native forex session\n• Works perfectly for 99% of cases!\n\n⚙️ CUSTOM:\n• Define your own session hours manually\n• Use format: HHMM-HHMM (e.g., '0930-1600')\n• Set in 'Custom Session Hours' below\n• Timezone: Chart timezone\n\n💡 TIP: Auto-Detect handles timezone/DST automatically!\nIf ORB appears 1 hour off, check chart timezone:\nRight-click chart → Settings → Symbol → Timezone")
-customSession = input.session("0915-1530", "Custom Session Hours", group=grp_session, tooltip="Custom trading session definition\n\nONLY ACTIVE when Session Mode = Custom\n\nFORMAT: HHMM-HHMM (24-hour)\n\nEXAMPLES:\n• 0915-1530 = NSE/BSE regular hours (India)\n• 0930-1600 = NYSE regular hours\n• 0000-2359 = Full 24 hours\n\nTIMEZONE: Chart timezone")
+sessionMode = "Auto-Detect"
+customSession = "0915-1530"
 
 
 entryCutoffHour = input.int(11, "Entry Cutoff Hour", minval=9, maxval=15, group=grp_session, inline="cutoff", tooltip="Stop taking new entries after this hour\n\nRECOMMENDED: 11:00 AM for Indian market\n\nWHY:\n• ORB momentum strongest 09:45-10:30\n• 10:30-11:00 still catches valid late breakouts\n• Entries after 11:00 show lower win rates\n• Avoids weak momentum / choppy midday signals\n\nOPTIONS:\n• 11 (+ 0 min): Default - balances signal capture vs quality\n• 10 (+ 30 min): Aggressive filter based on Q1 2026 data\n• 12: Too late (not recommended)")
-entryCutoffMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff", tooltip="Minutes past the hour for cutoff\n\nEXAMPLE: Hour=11, Minute=0 = 11:00 AM cutoff")
+entryCutoffMinute = input.int(45, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff", tooltip="Minutes past the hour for cutoff\n\nEXAMPLE: Hour=11, Minute=0 = 11:00 AM cutoff")
 
 timeExitHour = input.int(15, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 15:00 (3 PM) for Indian market\n\nWHY:\n• Gives trades 4.5 hours from 10:30 entry to hit TP\n• Exits before broker auto square-off at 15:10-15:20\n• Avoids auto square-off penalty charges (Rs 20-50/order)\n\nOPTIONS:\n• 14: Conservative (exit early, may cut winners short)\n• 15: Balanced — avoids broker charges\n• 15 (+05 min): Risky — too close to auto square-off")
 timeExitMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\nSet to 0 (15:00) to exit before broker auto square-off at 15:10")
@@ -177,29 +175,17 @@ if tradingSession != ""
 
 enableBreakout = input.bool(true, "Enable Breakout Detection", inline = "Show", group=grp_breakout)
 showBreakLabels = input.bool(true, "Show Breakout Labels", group=grp_breakout, inline = "Show", tooltip="Detect and label breakouts above ORB High or below ORB Low\n\nON: Shows breakout labels when price exits ORB range\nOFF: Only displays ORB levels without signals\n\nBreakouts detected on CLOSE (no repaint)")
-enableRetest = input.bool(true, "Show Retest Labels", group=grp_breakout, inline="retest", tooltip="Show labels when price returns to ORB after breakout\n\nRETEST = Price broke out, then came back to test ORB level\n\nUSEFUL FOR:\n• Re-entry opportunities\n• Confirming support/resistance\n• Failed breakout detection\n\nON: Shows retest labels\nOFF: Only shows initial breakout")
-signalMode = input.string("Track Cycles", "Signal Mode", options=["First Only", "Track Cycles"], group=grp_breakout, inline="mode", tooltip="How many breakout signals to show per day\n\nFIRST ONLY:\n• Shows only the FIRST breakout in each direction\n• One UP signal, one DOWN signal max per day\n• Clean chart, less noise\n• Good for: Swing traders, position traders\n\nTRACK CYCLES:\n• Tracks Breakout → Retest → Re-breakout cycles\n• Multiple signals as price oscillates\n• Detects momentum returns\n• Good for: Active traders, scalpers\n\nRECOMMENDED: Track Cycles")
-maxCycles = input.int(6, "Max Cycles", minval=1, maxval=10, group=grp_breakout, inline="mode", tooltip="Maximum cycles to track when Signal Mode = Track Cycles\n\nCYCLE = Breakout → Retest → Re-breakout sequence\n\n1-2 cycles: Clean chart, fewer signals\n4-6 cycles: Balanced (recommended)\n8-10 cycles: Very active, may clutter chart\n\nIGNORED when Signal Mode = First Only")
+enableRetest = true
+signalMode = "Track Cycles"
+maxCycles = 6
 breakoutBuffer = input.float(0.5, "Breakout Buffer (%)", minval=0, maxval=5, step=0.1, group=grp_breakout, inline="buffer", tooltip="Extra distance required beyond ORB level for breakout\n\nPREVENTS: False breakouts from tiny penetrations\n\nHOW IT WORKS:\n• UP: Price must close ABOVE (ORB High + buffer%)\n• DOWN: Price must close BELOW (ORB Low - buffer%)\n\nRECOMMENDATIONS:\n• 0.0% = Exact level (sensitive, more signals)\n• 0.1% = Tiny buffer (recommended)\n• 0.3% = Moderate filter\n• 0.5%+ = Conservative (fewer signals)\n\nHigher = fewer but stronger breakouts")
-retestBuffer = input.float(0.0, "Retest Buffer (%)", minval=0, maxval=5, step=0.1, group=grp_breakout, inline="buffer", tooltip="Tolerance for retest detection\n\nALLOWS: Price to slightly penetrate ORB during retest\n\nHOW IT WORKS:\n• After UP breakout: Retest if price returns to ORB High ± buffer\n• After DOWN breakout: Retest if price returns to ORB Low ± buffer\n\nRECOMMENDATIONS:\n• 0.0% = Must touch exact level (strict)\n• 0.1-0.2% = Slight tolerance (recommended)\n• 0.3-0.5% = Generous tolerance\n\nHigher = more retests detected")
-minRetestDistancePct = input.float(0.5, "Min Distance for Retest (%)", minval=0.5, maxval=10, step=0.5, group=grp_breakout, tooltip="How far price must travel away from ORB before retest is valid\n\nPREVENTS: Labeling tiny bounces as 'retests'\n\nEXAMPLE: ORB High = $10.00, Distance = 2%\n• Price breaks to $10.20 (2% away) ✓ Valid\n• Price returns to $10.00 → RETEST LABEL\n• If only went to $10.05 (0.5% away) ✗ Not valid\n\nRECOMMENDATIONS:\n• 0.5% = Very sensitive (many retests)\n• 2.0% = Balanced (filters noise) ⭐\n• 3.0%+ = Only strong moves\n\nHigher = fewer but more meaningful retests")
-minBarsOutside = input.int(2, "Min Bars Outside ORB", minval=1, maxval=10, group=grp_breakout, tooltip="How many bars price must stay outside ORB for 'committed' breakout\n\nPREVENTS: Labeling quick failures as breakouts\n\nEXAMPLE: Min Bars = 2\n• Bar 1: Price breaks above ORB High\n• Bar 2: Still above ORB High ✓\n• Bar 3: Returns inside → Now can show retest\n\nIf returned on Bar 2 → Shows 'FAILED BREAK' instead\n\nRECOMMENDATIONS:\n• 1 bar = Aggressive (more signals, more failures)\n• 2 bars = Balanced (recommended) ⭐\n• 3-4 bars = Conservative (only strong moves)\n\nHigher = fewer but stronger breakouts")
-minPullbackPct = input.float(0.3, "Min Pullback for Re-break (%)", minval=0.1, maxval=2, step=0.1, group=grp_breakout, tooltip="How far price must pull back before detecting new breakout\n\nPREVENTS: Too many signals from small wiggles\n\nEXAMPLE: Last breakout at $10.00\n• Price reaches $10.50\n• Must pull back to $10.35 (0.3% = $0.15) before new breakout counted\n\nRECOMMENDED:\n• 0.3% = Balanced (recommended) ⭐\n• 0.5% = Less sensitive\n• 1.0% = Very selective")
-
-enableFVGFilter = input.bool(false, "Enable FVG Filter  | ", group=grp_FVG, inline="fvg1")
-showFVG = input.bool(true, "Show FVG Boxes", group=grp_FVG, inline="fvg1", tooltip="Fair Value Gap Filter\n\nRequires breakout through FVG for confirmation\n\nFVG = Price gap from strong momentum\nON: Only signals with FVG\nOFF: All signals")
-maxFVGtoKeep = input.int(5, "Max FVG", minval=1, maxval=20, inline="fvg2", group=grp_FVG)
-fvgProximity = input.float(2.0, "FVG Proximity", minval=0.5, maxval=5.0, inline="fvg2", step=0.5, group=grp_FVG, tooltip="How close to FVG?\n\n1.0 = Must be IN the FVG\n2.0 = Within 2x FVG size (recommended)\n3.0 = Within 3x FVG size (very permissive)")
-fvgTransparency = input.int(90, "Transparency", minval=0, maxval=100, step=5, inline="fvgcolor", group=grp_FVG)
-fvgBullColor = input.color(#2E7D32, "Bullish FVG", inline="fvgcolor", group=grp_FVG)
-fvgBearColor = input.color(#C62828, "Bearish FVG", inline="fvgcolor", group=grp_FVG)
-
-enablePullbackFilter = input.bool(false, "Enable Pullback Filter", group=grp_pullback, tooltip="Require pullback confirmation before showing breakout signal\n\nWHY: Filters weak breakouts that reverse immediately\nHOW: Waits for price to pull back slightly, then continue breakout direction\n\nWORKFLOW:\n1. Price breaks above/below ORB\n2. Wait for pullback (small dip/rise)\n3. Price continues in breakout direction\n4. NOW show signal ✅\n\nBENEFITS:\n• Better entry prices\n• Fewer false breakouts\n• Improved risk/reward\n• Confirmation of strength\n\nDRAWBACKS:\n• Misses fast runners\n• Slower signals\n• More conservative\n\nON: Wait for pullback confirmation\nOFF: Immediate signals (current behavior)\n\nRECOMMENDED: Try OFF first, enable if too many false signals")
-pullbackPercent = input.float(0.3, "Pullback Required (%)", minval=0.1, maxval=2.0, step=0.1, group=grp_pullback, inline="pb", tooltip="How much pullback required for confirmation\n\nEXAMPLE: ORB High = $100, Pullback = 0.5%\n• Breaks to $100.60 (above ORB)\n• Pulls back to $100.10 (0.5% dip) ✓\n• Continues to $100.70 → SIGNAL!\n\nSMALLER % = More signals, faster\nLARGER % = Fewer signals, stronger\n\nRECOMMENDED:\n• 0.3% = Sensitive (active trading) ⭐\n• 0.5% = Balanced\n• 1.0% = Conservative (swing trading)")
-pullbackTimeout = input.int(10, "Timeout (bars)", minval=3, maxval=30, group=grp_pullback, inline="pb", tooltip="Max bars to wait for pullback\n\nIf pullback doesn't happen within this time:\n→ Shows signal anyway (prevents missing strong moves)\n\nEXAMPLE: Timeout = 10 bars\n• Breakout occurs\n• Wait 10 bars for pullback\n• No pullback? → Show signal at bar 10\n• Pullback at bar 5? → Show signal when continues\n\nSHORTER = Less waiting, more immediate signals\nLONGER = More patient, better confirmation\n\nRECOMMENDED:\n• 5 bars = Quick (5min chart = 25 min)\n• 10 bars = Balanced (5min chart = 50 min) ⭐\n• 15 bars = Patient (5min chart = 75 min)")
+retestBuffer = 0.0
+minRetestDistancePct = 0.5
+minBarsOutside = 2
+minPullbackPct = 0.3
 
 enableVolumeFilter = input.bool(true, "Enable Volume Filter", group=grp_volume, inline="enable", tooltip="Require volume confirmation for breakout signals\n\nWHY: High volume breakouts are more reliable\nWHAT: Compares current volume to moving average\n\nON: Only shows breakouts with sufficient volume\nOFF: Shows all breakouts regardless of volume\n\nRECOMMENDED: ON for stocks, OFF for crypto")
-volumeMaLength = input.int(50, "| MA Length", minval=1, group=grp_volume, inline="enable", tooltip="Volume moving average period for comparison\n\nSHORTER = More sensitive to recent volume spikes\nLONGER = Smoother average, resists gap-day distortion\n\nRECOMMENDATIONS:\n• 10 periods: Very responsive\n• 20 periods: Sensitive to opening volume spikes\n• 50 periods: Stable baseline (recommended) ⭐\n\nWHY 50: On gap days, first 3 candles have 5-10x normal volume,\ninflating a short MA unfairly. 50 bars includes previous session,\nso 1.2x threshold means the same on gap and non-gap days.\n\nCHART TIMEFRAME affects calculation:\n• 5min chart, MA=50 → Last ~4 hours (includes prev session)\n• 1hour chart, MA=50 → Last 50 hours")
+volBaseDays    = input.int(14, "| Baseline days", minval=2, maxval=30, group=grp_volume, inline="enable", tooltip="How many PREVIOUS sessions form the volume baseline.\n\nEach bar is compared against the same slot of the session on these prior days, so the reading is time-of-day normalised: a 09:20 bar is measured against 09:20 bars, not against a rolling window that is mostly yesterday's close.\n\n14 = matches the Zarattini/Barbon/Aziz (SFI 2024) relative-volume definition, which that study found did almost all the work in ORB selection across 7,000+ stocks\n7  = the BreakingTrade cheat sheet's Volume Factor window; faster to adapt, noisier\n\nNeeds at least 3 prior sessions loaded before it reads; it does NOT wait for the full window. Until then the volume filter passes everything rather than blocking (fail-open).")
 volumeMultiplier = input.float(1.2, "Min Volume ×", minval=0.5, step=0.1, group=grp_volume, inline="mult", tooltip="Minimum volume multiplier required for breakout\n\nCURRENT VOLUME must be ≥ (Volume MA × Multiplier)\n\nEXAMPLE: Volume MA = 1M shares, Multiplier = 1.2\n• Breakout with 1.3M volume = Valid\n• Breakout with 1.0M volume = Rejected\n\nRECOMMENDATIONS:\n• 1.0x = Any above-average volume\n• 1.2x = Balanced for Indian stocks (recommended)\n• 1.5x = Moderate requirement\n• 2.0x+ = Very selective\n\nHigher = fewer but higher-quality signals")
 strongVolumeMultiplier = input.float(1.8, "Strong ×", minval=1.0, step=0.1, group=grp_volume, inline="mult", tooltip="Strong volume override threshold\n\nSPECIAL RULE: If volume exceeds this multiplier:\n→ SKIPS retest wait, enters immediately\n\nRATIONALE: Strong volume = institutional activity, no need to wait\n\nEXAMPLE: Volume MA = 1M, Strong = 1.8×\n• Breakout with 2M volume → Enters immediately without waiting for retest\n\nRECOMMENDATIONS:\n• 1.8× = More entries (recommended) ⭐\n• 2.0× = Balanced\n• 2.5× = More selective\n\nMUST BE ≥ Min Volume Multiplier")
 
@@ -207,17 +193,17 @@ strongVolumeMultiplier = input.float(1.8, "Strong ×", minval=1.0, step=0.1, gro
 enableTrendFilter = input.bool(true, "Enable Trend Filter", group=grp_trend, inline = "FILTER", tooltip="Only show breakouts that align with broader trend\n\nWHY: Trend-aligned breakouts have higher success rate\nWHAT: Checks if price is above/below trend indicator\n\nRULES:\n• UP breakout: Only if price ABOVE trend\n• DOWN breakout: Only if price BELOW trend\n\nON: Filters against-trend breakouts\nOFF: Shows all breakouts\n\nRECOMMENDED: ON for conservative trading")
 trendMode = input.string("VWAP", "| Trend Mode",inline = "FILTER", options=["VWAP", "EMA", "Custom EMA", "SuperTrend", "VWAP+EMA", "VWAP+SuperTrend"], group=grp_trend, tooltip="Method to determine trend direction\n\nVWAP (Volume-Weighted Average Price):\n• Accounts for volume in price calculation\n• Good for: Intraday trading\n• Above VWAP = Bullish, Below = Bearish\n\nEMA (12-period):\n• Fast exponential moving average\n• Responsive to recent price action\n• Good for: Quick trends\n\nCUSTOM EMA:\n• Your own EMA period\n• Longer = Smoother trend\n• Good for: Swing trading (50-200 period)\n\nSUPERTREND:\n• ATR-based trailing stop\n• Clear trend direction\n• Good for: Strong trends\n\nVWAP+EMA:\n• BOTH must agree\n• More conservative\n• Fewer but higher quality signals\n\nVWAP+SUPERTREND:\n• BOTH must agree\n• Most conservative\n• Best signal quality")
 
-customEmaLength = input.int(50, "Custom EMA Length", minval=1, group=grp_trend, inline="ema", tooltip="EMA period when Trend Mode = Custom EMA\n\nSHORTER = More reactive, more signals\nLONGER = Smoother, fewer signals\n\nRECOMMENDATIONS:\n• 20-30: Intraday trading\n• 50: Swing trading (recommended) ⭐\n• 100-200: Position trading\n\nIGNORED for other trend modes")
-supertrendPeriod = input.int(10, "SuperTrend Period", minval=1, group=grp_trend, inline="st", tooltip="ATR period for SuperTrend calculation\n\nSHORTER = More sensitive, tighter stops\nLONGER = Smoother, wider stops\n\nRECOMMENDATIONS:\n• 7: Aggressive\n• 10: Balanced (recommended) ⭐\n• 14: Conservative\n\nONLY USED when Trend Mode includes SuperTrend")
-supertrendMult = input.float(3.0, "Mult", minval=0.1, step=0.1, group=grp_trend, inline="st", tooltip="ATR multiplier for SuperTrend bands\n\nLOWER = Tighter bands, more trend changes\nHIGHER = Wider bands, fewer changes\n\nRECOMMENDATIONS:\n• 2.0: Sensitive (more signals)\n• 3.0: Balanced (recommended) ⭐\n• 4.0+: Conservative (fewer signals)\n\nONLY USED when Trend Mode includes SuperTrend")
+customEmaLength = 50
+supertrendPeriod = 10
+supertrendMult = 3.0
 
 // ========================================= TARGETS & RISK MANAGEMENT ================================
 enableTargets = input.bool(true, "Enable Targets & Stop-Loss", group=grp_targets, tooltip="Calculate and display profit targets (TP) and stop-loss (SL)\n\nWHEN ENABLED:\n• Shows TP/SL lines on chart during breakout\n• Displays values in dashboard\n• Calculates Risk/Reward ratio\n\nWHEN DISABLED:\n• Only shows ORB levels\n• No trade management\n\nRECOMMENDED: ON for active trading")
 
-showTP1 = input.bool(true, "TP1 (1R)", group=grp_targets, inline="show")
-showTP1_5 = input.bool(true, "TP1.5 (1.5R)", group=grp_targets, inline="show")
-showTP2 = input.bool(true, "TP2 (2R)", group=grp_targets, inline="show")
-showTP3 = input.bool(true, "TP3 (3R)", group=grp_targets, inline="show", tooltip="EXECUTION: Each TP level alert includes ExitQtyPct field — signal engine reads it directly.\n\nR = RISK UNITS (1R = distance from entry to stop-loss)\n\nTP1 (1R): 1:1 — partial exit (see tp1ExitQtyPct below)\nTP1.5 (1.5R): exit remaining position (tp1_5ExitQtyPct)\nTP2 (2R): exit remaining position\nTP3 (3R): exit remaining position")
+showTP1 = true
+showTP1_5 = true
+showTP2 = true
+showTP3 = true
 
 // Exit quantity percentages per TP level — included in TP HIT alerts as ExitQtyPct field.
 // Signal engine reads ExitQtyPct directly; no tp_levels config needed in signal engine.
@@ -227,88 +213,54 @@ tp1ExitQtyPct   = input.int(50,  "TP1 Exit %",   minval=0, maxval=100, group=grp
 tp1_5ExitQtyPct = input.int(100, "TP1.5 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP1.5\n\n100 = exit remaining position fully\n\nTP2/TP3 also default to 100 (exit whatever remains).")
 
 // Adaptive R:R - Auto-switch to TP2 when trending
-enableAdaptiveRR = input.bool(false, "Adaptive R:R", group=grp_targets, inline="adaptive", tooltip="Automatically extend to TP2 (2R) when market is trending\n\nHOW IT WORKS:\n• Uses ADX (trend strength indicator)\n• ADX > 25 = Trending → Target TP2\n• ADX < 25 = Ranging → Target TP1\n\nBENEFITS:\n• Best of both worlds\n• Higher win rate in choppy markets (1:1)\n• Capture big moves in trends (1:2)\n\nDEFAULT: OFF (Beginners use TP1 only)\nENABLE: When comfortable with the strategy")
-adxThreshold = input.int(25, "ADX >", minval=15, maxval=40, group=grp_targets, inline="adaptive", tooltip="ADX threshold to detect trending market\n\nADX (Average Directional Index) measures trend strength:\n• < 20: Weak/No trend (ranging)\n• 20-25: Developing trend\n• 25-50: Strong trend\n• > 50: Very strong trend\n\nRECOMMENDED: 25 (balanced)")
-adxLength = input.int(14, "Len", minval=7, maxval=30, group=grp_targets, inline="adaptive", tooltip="ADX calculation period\n\nSHORTER = More responsive\nLONGER = Smoother\n\nRECOMMENDED: 14 (standard)")
+enableAdaptiveRR = false
+adxThreshold = 25
+adxLength = 14
 
 stopMode = input.string("ATR", "Stop Method", options=["ATR", "ORB %", "Swing", "Safer", "Scaled ATR", "% Based", "Smart Adaptive"], group=grp_targets, inline="tgt", tooltip="How to calculate Stop Loss placement\n\n🆕 ATR-BASED VOLATILITY SYSTEM:\n\nSMART ADAPTIVE (Recommended) ⭐:\n• Adjusts to ACTUAL volatility (not price)\n• ATR < 1.5% = Tight stop (0.7× ATR)\n• ATR 1.5-3% = Normal stop (1.0× ATR)\n• ATR > 3% = Wide stop (1.5× ATR)\n• Perfect for: ALL assets automatically\n\nSCALED ATR:\n• Dynamic multiplier based on volatility %\n• Very volatile (>5% ATR): 2.5× ATR\n• High volatility (3-5%): 2.0× ATR\n• Normal (1.5-3%): 1.5× ATR\n• Low (<1.5%): 1.2× ATR\n• Good for: Mixed portfolios\n\nATR:\n• Standard ATR with volatility adjustment\n• Multiplier adjusts to market conditions\n• Formula: SL = Entry ± (ATR × Multiplier × VolAdjust)\n• Good for: Traditional traders\n\n% BASED:\n• Fixed percentage from entry\n• You set the % (e.g., 1.0%)\n• Simple and consistent\n• Good for: Beginners\n\n────────────────────────\n\n🔥 NEW VOLATILITY PROTECTION:\n\nALL METHODS NOW USE ATR-BASED MINIMUMS:\n• Crypto: Min 1.0× ATR (wider for volatility)\n• Forex: Min 0.3× ATR (tighter for stability)\n• Stocks: Min 0.5-1.5× ATR (based on volatility)\n\nABSOLUTE MINIMUMS:\n• Crypto: 1.0% of price\n• Forex: 0.2% of price\n• Stocks: 0.3% of price\n\n────────────────────────\n\nORB %:\n• Fixed percentage beyond ORB level\n• Simple and predictable\n• Formula: SL = ORB_Level ± (ORB_Range × %)\n• Good for: ORB-focused trading\n\nSWING:\n• Placed at recent swing high/low\n• Technical support/resistance\n• Respects chart structure\n• May be far from entry\n• Good for: Technical traders\n\nSAFER:\n• Widest stop of all methods\n• Lowest chance of stop-out\n• Largest potential loss\n• Good for: Risk-averse traders")
 atrLength = input.int(14, "ATR", minval=5, maxval=50, group=grp_targets, inline="atr2", tooltip="ATR calculation period\n\nATR = Average True Range = How much price moves\n\nSHORTER = More reactive to recent volatility\nLONGER = Smoother, stable average\n\nRECOMMENDATIONS:\n• 7-10: Day trading, responsive\n• 14: Standard, balanced (recommended) ⭐\n• 20-30: Swing trading, smooth\n\nUSED FOR: ATR-based targets and stops")
 atrMultiplier = input.float(2.0, "×", minval=0.5, maxval=3, step=0.1, group=grp_targets, inline="atr2", tooltip="ATR multiplier for stop-loss distance\n\nSL = Entry ± (ATR × Multiplier)\n\nLOWER = Tighter stop, less risk, more stop-outs\nHIGHER = Wider stop, more risk, fewer stop-outs\n\nRECOMMENDATIONS:\n• 1.0×: Tight stop (aggressive)\n• 1.5×: Balanced (recommended) ⭐\n• 2.0×: Loose stop (conservative)\n• 2.5×+: Very loose (volatile stocks)\n\nONLY AFFECTS: ATR stop method")
-percentBasedStop = input.float(1.0, "% Based Stop", minval=0.1, maxval=5.0, step=0.1, group=grp_targets, inline="pct", tooltip="Stop Loss percentage from entry\n\nONLY USED when Stop Method = % Based\n\nFORMULA:\n• LONG: SL = Entry × (1 - Stop%)\n• SHORT: SL = Entry × (1 + Stop%)\n\nEXAMPLE: Entry = $100, Stop = 1.0%\n• LONG SL: $99.00 (1% below)\n• SHORT SL: $101.00 (1% above)\n\nRECOMMENDATIONS:\n• 0.5%: Tight (day trading, scalping)\n• 1.0%: Balanced (recommended) ⭐\n• 1.5%: Medium (swing trading)\n• 2.0%+: Wide (position trading)\n\nPERFECT FOR:\n• High-price assets (BTC, TSLA)\n• Consistent risk management\n• Easy to understand")
-stopOrbFraction = input.float(20, "ORB Stop %", minval=10, maxval=50, step=5, group=grp_targets, inline="stop", tooltip="Stop distance as percentage of ORB range\n\nONLY USED when Stop Method = ORB %\n\nFORMULA:\n• LONG: SL = ORB_Low - (ORB_Range × 20%)\n• SHORT: SL = ORB_High + (ORB_Range × 20%)\n\nEXAMPLE: ORB Range = $1.00, Fraction = 20%\n• SL placed $0.20 beyond ORB boundary\n\nRECOMMENDATIONS:\n• 10-15%: Tight (more stop-outs)\n• 20%: Balanced (recommended) ⭐\n• 30-40%: Loose (fewer stop-outs)\n• 50%: Very loose")
-swingBars = input.int(3, "Swing Bars", minval=1, maxval=10, group=grp_targets, inline="stop", tooltip="Lookback period to find swing high/low\n\nONLY USED when Stop Method = Swing\n\nSWING = Local high/low point (reversal point)\n\nSHORTER = Recent swing (closer SL)\nLONGER = Deeper swing (farther SL)\n\nEXAMPLE: Swing Bars = 3\n• Looks back 3 bars\n• Finds lowest low (for LONG) or highest high (for SHORT)\n• Places SL there\n\nRECOMMENDATIONS:\n• 2: Very recent swing (aggressive)\n• 3: Recent swing (recommended) ⭐\n• 5: Moderate swing\n• 7-10: Deep swing (conservative)")
-showTPSLLines = input.bool(true, "Show TP/SL Lines on Chart", group=grp_lines, tooltip="Display Entry, TP, and SL as horizontal lines on chart\n\nWHEN BREAKOUT OCCURS:\n• Lines appear instantly\n• Extend forward as chart progresses\n• Update with each new bar\n\nLINES FREEZE (stop updating) when:\n• Last TP is hit ✓\n• Stop Loss is hit ✗\n• End of Day (if enabled)\n\nCOLORS:\n• Entry: Cyan (LONG) / Orange (SHORT)\n• TP: Green when hit, cyan/orange before\n• SL: Red always\n\nON: Shows lines (recommended)\nOFF: Only dashboard display")
-freezeOnEOD = input.bool(true, "Freeze Lines at End of Day", group=grp_lines, inline="freeze", tooltip="Stop updating lines when trading session ends\n\nON (Recommended):\n• Lines freeze at session close\n• Keeps intraday setup visible\n• Clean daily reset\n• Good for: ORB strategy (intraday)\n\nOFF:\n• Lines continue extending until hit\n• May cross multiple sessions\n• Good for: Swing trading, 24/7 markets\n\nNOTE: Lines also freeze when SL hit or last TP hit")
+percentBasedStop = 1.0
+stopOrbFraction = 20
+swingBars = 3
+showTPSLLines = true
+freezeOnEOD = true
 
 // ============================================ DASHBOARD ============================================
 showDashboard = input.bool(true, "Show Info Panel", group=grp_dash, inline="theme")
-dashTheme = input.string("Dark", "| Theme", options=["Dark", "Light"], group=grp_dash, inline="theme", tooltip="Dashboard color scheme\n\nDARK (Recommended):\n• Light text on dark background\n• Matches dark chart themes\n• Less eye strain\n• Professional look\n\nLIGHT:\n• Dark text on light background\n• Matches light chart themes\n• Good for presentations\n• High contrast")
+dashTheme = "Dark"
 dashPos = input.string("Bottom Left", "Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Middle Right"], group=grp_dash, inline="pos", tooltip="Dashboard placement on chart\n\nTOP LEFT: Good for price action top-right\nTOP RIGHT: Good for price action top-left\nBOTTOM LEFT: Classic placement (recommended) ⭐\nBOTTOM RIGHT: Avoid volume bars\nMIDDLE RIGHT: Floating position\n\nChoose based on where price usually is")
+dashMode = input.string("Focus", "Detail", options=["Focus", "Full"], group=grp_dash, tooltip="FOCUS (default) — the verdict line plus the handful of readings that produced it. Built for a live session where trades are placed automatically: you need to know what the system is doing and why, not re-derive the decision yourself.\n\nFULL — every legacy ORB row as well: stage, range, volatility, the individual filter pass/fail lines, all level prices, position sizing. Use it when auditing why something did or did not fire.")
 dashSize = input.string("Auto", "Text Size", options=["Auto", "Small", "Normal", "Large"], group=grp_dash, inline="pos", tooltip="Text size inside dashboard\n\nAUTO: Adapts to chart zoom (recommended) ⭐\nSMALL: Compact, more screen space\nNORMAL: Readable\nLARGE: Presentations, poor eyesight")
-showStage = input.bool(true, "Show Stage", group=grp_dash, inline="rows1", tooltip="Display current ORB stage\n\nSHOWS: Which timeframe is active\nâ€¢ ORB 5 (5 minutes)\nâ€¢ ORB 15 (15 minutes)\nâ€¢ ORB 30 (30 minutes)\nâ€¢ ORB 60 (60 minutes)\n\nUseful for knowing which ORB you're trading")
-showRange = input.bool(true, "Show Range", group=grp_dash, inline="rows1", tooltip="Display ORB range size\n\nSHOWS:\nâ€¢ High-Low difference (dollars)\nâ€¢ Range as percentage\n\nEXAMPLE: '$0.50 (2.5%)'\n\nUseful for assessing if range is significant")
-showStatus = input.bool(true, "Show Status", group=grp_dash, inline="rows1", tooltip="Display breakout status\n\nSTATES:\nINSIDE RANGE: Price within ORB\nâ€¢ ðŸŸ¢ BREAK UP: Above ORB High\n´ BREAK DOWN: Below ORB Low\nâ€¢ ðŸŸ  RETEST: Returned to ORB after breakout\n\nQuick visual confirmation of position")
-showVol = input.bool(true, "Show Volume", group=grp_dash, inline="rows2", tooltip="Display volume status\n\nONLY SHOWN when Volume Filter enabled\n\nSHOWS:\nâ€¢ Current volume vs average\nâ€¢ Multiplier (e.g., '1.8x')\nâ€¢ âœ… if above threshold\nâ€¢ âŒ if below threshold\n\nUseful for confirming breakout strength")
-showTrend = input.bool(true, "Show Trend", group=grp_dash, inline="rows2", tooltip="Display trend direction\n\nONLY SHOWN when Trend Filter enabled\n\nSHOWS:\nâ€¢ Trend direction (UP/DOWN/NEUTRAL)\nâ€¢ Method used (VWAP/EMA/etc.)\nâ€¢ âœ… Aligned / âŒ Against trend\n\nUseful for context")
-showRisk = input.bool(true, "Show Risk/Reward", group=grp_dash, inline="rows2", tooltip="Display Risk/Reward ratio\n\nSHOWS: Ratio of potential profit to risk\n\nFORMAT: '1:2.5' means:\n• Risk: $100\n• Reward: $250\n\nINDICATORS:\n• ✅ Ratio ≥ 2.0 (good)\n• ⚠️ Ratio 1.5-2.0 (acceptable)\n• ❌ Ratio < 1.5 (poor)\n\nBased on highest enabled TP")
-showVolatilityMeter = input.bool(true, "Show Volatility Meter", group=grp_dash, inline="rows3", tooltip="Display current market volatility level\n\nMEASURES: ATR as percentage of price\n\nLEVELS:\n🔥🔥🔥 EXTREME (>3%): Very volatile, wider stops needed\n🔥🔥 HIGH (2-3%): Active movement, standard stops\n🔥 MEDIUM (1-2%): Normal trading range\n⚪ LOW (<1%): Quiet market, tight stops possible\n\nUSE FOR:\n• Adjusting position size\n• Setting appropriate stops\n• Understanding market conditions\n\nHigh volatility = Bigger potential moves but more risk")
+showStage = dashMode == "Full"
+showRange = dashMode == "Full"
+showStatus = dashMode == "Full"
+showVol = dashMode == "Full"
+showTrend = dashMode == "Full"
+showRisk = dashMode == "Full"
+showVolatilityMeter = dashMode == "Full"
 
-enablePosSizing = input.bool(true, "Calculate Position Size", group=grp_dash, tooltip="Calculate shares to buy based on risk management\n\nCALCULATES:\n• Max shares to buy\n• Position dollar value\n• Risk amount\n• TP profit projections\n• TP allocation splits\n\nWHY:\n• Consistent risk per trade\n• Proper position sizing\n• Prevents over-leveraging\n\nSHOWS: Extra section in dashboard\n\nON: Shows position sizing\nOFF: Only price levels")
-riskMode = input.string("% of Account", "Risk", options=["% of Account", "$ Amount"], group=grp_dash, inline="risk", tooltip="How to define your risk per trade\n\n$ AMOUNT:\n• Risk fixed dollar amount\n• Simple and direct\n• Example: '$150 per trade'\n• Good for: Consistent trading\n\n% OF ACCOUNT:\n• Risk percentage of total account\n• Scales with account size\n• Example: '1% of $25,000 = $250'\n• Good for: Account growth\n\nRECOMMENDED: % of Account")
-fixedRisk = input.float(200, "INR", minval=50, maxval=100000, group=grp_dash, inline="risk", tooltip="Fixed INR amount to risk per trade\n\nONLY USED when Risk Mode = INR Amount\n\nEXAMPLE: Fixed Risk = INR 200\n• Entry: 100\n• Stop: 98 (2 risk per share)\n• Position: 100 shares (200 / 2)\n• Total position value: INR 10,000\n\nRECOMMENDATIONS:\n• INR 100-200: Small accounts (10K)\n• INR 500-1000: Medium accounts (50K)\n• INR 2000+: Large accounts (1L+)")
+enablePosSizing = true
+riskMode = "% of Account"
+fixedRisk = 200
 accountSize = input.float(10000, "Account INR", minval=1000, group=grp_dash, inline="acct", tooltip="Total trading account size in INR\n\nUSED FOR: Calculating risk percentage\n\nEXAMPLE: Account = INR 10,000, Risk = 2%\n• Risk per trade = INR 200\n\nUPDATE THIS:\n• When account grows/shrinks significantly\n• For accurate position sizing\n• Monthly review recommended")
 riskPct = input.float(1.0, "Risk %", minval=0.1, maxval=5, step=0.1, group=grp_dash, inline="acct", tooltip="Percentage of account to risk per trade\n\nONLY USED when Risk Mode = % of Account\n\nRISK LEVELS:\n• 0.5-1%: Conservative\n• 1-2%: Balanced (recommended) ⭐\n• 2-3%: Aggressive\n• 3%+: Very aggressive, not recommended\n\nEXAMPLE: Account = INR 10,000, Risk = 2%\n• Risk per trade = INR 200\n• Entry: 100, Stop: 98 (2 risk per share)\n• Position: 100 shares\n\nRECOMMENDED: 1-2% for most traders")
-enablePosLimit = input.bool(false, "Limit Position Size", group=grp_dash, inline="poslimit", tooltip="Enable position size cap as % of account\n\nWHEN OFF (Recommended):\n• Pure risk-based sizing\n• Your Risk % always works as intended\n• Position size determined only by risk\n\nWHEN ON:\n• Caps position to Max Position %\n• May reduce actual risk below intended\n• Use for liquidity concerns on large accounts\n\nRECOMMENDED: OFF for most traders")
-maxPositionPct = input.float(100.0, "Max %", minval=5, maxval=100, step=5, group=grp_dash, inline="poslimit", tooltip="Maximum position size as % of account\n\nONLY USED when 'Limit Position Size' is ON\n\nEXAMPLE: Account = 100,000, Max = 50%\n• Maximum position value = 50,000\n• Caps shares even if risk allows more\n\nRECOMMENDED LEVELS:\n• 50-75%: Large accounts (liquidity)\n• 100%: Effectively no limit\n\nUSE THIS FOR:\n• Large accounts with liquidity concerns\n• Low-volume stocks\n• Risk of slippage on big positions")
-
-accountCurrency = input.string("INR", "Account Currency", options=["INR", "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"], group=grp_dash, inline="currency", tooltip="Currency of your trading account\n\nINR: Indian Rupee (default)\nUSD: U.S. Dollar\nEUR: Euro\nGBP: British Pound\nJPY: Japanese Yen\nCAD: Canadian Dollar\nAUD: Australian Dollar\nCHF: Swiss Franc\n\nIMPORTANT: Affects position sizing calculations\nAll risk and position values are shown in this currency")
-useDynamicRates = input.bool(true, "Live Exchange Rates", group=grp_dash, inline="exchange", tooltip="Fetch live exchange rates from market data\n\nON: Uses real-time rates from TradingView (recommended)\nOFF: Use manual rate input\n\nNOTE: Live rates may not be available for all pairs")
-manualRate = input.float(1.0, "/ Or set manual Rate: $1=", minval=0.001, maxval=10000, step=0.1, group=grp_dash, inline="exchange", tooltip="Fallback exchange rate when live rates unavailable\n\nFrom USD to your account currency\n\nEXAMPLES:\n• USD to INR = 83.0\n• USD to EUR = 0.92\n• USD to JPY = 150.0")
-
-symbolCurrency = syminfo.currency
-
-float liveRate = na
-string currencyPair = ""
-
-if useDynamicRates and accountCurrency != "USD"
-    currencyPair := accountCurrency == "EUR" ? "EURUSD" :
-                   accountCurrency == "GBP" ? "GBPUSD" :
-                   accountCurrency == "JPY" ? "USDJPY" :
-                   accountCurrency == "INR" ? "USDINR" :
-                   accountCurrency == "CAD" ? "USDCAD" :
-                   accountCurrency == "AUD" ? "AUDUSD" :
-                   accountCurrency == "CHF" ? "USDCHF" : ""
-
-    if currencyPair != ""
-        liveRate := request.security(currencyPair, "D", close, lookahead=barmerge.lookahead_off)
-
-float defaultRate = accountCurrency == "EUR" ? 0.92 :
-                   accountCurrency == "GBP" ? 0.79 :
-                   accountCurrency == "JPY" ? 150.0 :
-                   accountCurrency == "INR" ? 83.0 :
-                   accountCurrency == "CAD" ? 1.38 :
-                   accountCurrency == "AUD" ? 1.55 :
-                   accountCurrency == "CHF" ? 0.90 : 1.0
-exchangeRate = accountCurrency == "USD" ? 1.0 :
-               not useDynamicRates ? manualRate :
-               na(liveRate) ? defaultRate :
-               // Invert rates for pairs where USD is quote currency (EUR, GBP, AUD)
-               (accountCurrency == "EUR" or accountCurrency == "GBP" or accountCurrency == "AUD") ? 1/liveRate :
-               liveRate  // Direct rate for pairs where USD is base currency (JPY, INR, CAD, CHF)
+enablePosLimit = false
+maxPositionPct = 100.0
 
 // ======================================= HIGHER TIMEFRAME FILTER ===================================
 enableHTF = input.bool(true, "Check Daily Trend", group=grp_htf, tooltip="Check higher timeframe trend before taking breakouts\n\nWHY: Breakouts WITH higher timeframe trend have higher success rate\n\nWHAT IT DOES:\n• Checks daily/4H/weekly trend\n• Shows warning if breakout against trend\n• Displays HTF bias in dashboard\n\nDOES NOT BLOCK signals - only warns you\n\nON: Shows HTF context (recommended for swing traders)\nOFF: Focuses only on intraday ORB")
 htfTF = input.string("D", "Timeframe", options=["15", "30", "60", "120", "240", "D", "W", "M"], group=grp_htf, inline="htf", tooltip="Higher timeframe to analyze for trend\n\nRECOMMENDED OPTIONS:\n• 15/30/60 min: For 1-5 min charts\n• 240 (4H): For 15-60 min charts\n• D (Daily): For intraday trading ⭐\n• W (Weekly): For swing trading\n• M (Monthly): For position trading\n\nRULE: HTF should be 4-10× your chart timeframe\n\nEXAMPLES:\n• 5min chart → Use 30/60/D\n• 15min chart → Use 60/240/D\n• 1H chart → Use 240/D/W")
-htfMethod = input.string("Price vs MA", "Method", options=["Price vs MA", "Candle Direction"], group=grp_htf, inline="htf", tooltip="How to determine HTF trend\n\nPRICE VS MA (Recommended):\n• Compares HTF close to moving average\n• Above MA = Bullish\n• Below MA = Bearish\n• Smooth and reliable\n• Less prone to whipsaws\n\nCANDLE DIRECTION:\n• Based on HTF candle color\n• Green candle = Bullish\n• Red candle = Bearish\n• More reactive\n• Can change quickly\n\nRECOMMENDED: Price vs MA for stability")
-htfEMA = input.int(20, "MA", minval=5, maxval=200, group=grp_htf, inline="htf2", tooltip="")
-htfMinStrength = input.float(2.0, "Min Distance %", minval=0.0, maxval=10.0, step=0.5, group=grp_htf, inline="htf2", tooltip="Moving average period for HTF trend\n\nONLY USED when Method = Price vs MA\n\nSHORTER = More reactive, frequent changes\nLONGER = Smoother, stable trend\n\nRECOMMENDATIONS:\n• 10-20: Responsive (short-term trend)\n• 20-50: Balanced (recommended) ⭐\n• 50-100: Smooth (intermediate trend)\n• 100-200: Very smooth (long-term trend)\n\nCOMMON CHOICES:\n• Daily TF + 20 EMA: Classic\n• Daily TF + 50 EMA: Swing trading\n• Weekly TF + 20 EMA: Position trading\n\nMinimum distance from MA to consider trend valid\n\nPrice must be at least X% away from MA\n\nLOWER = Accept weak trends\nHIGHER = Only strong trends\n\nRECOMMENDATIONS:\n• 0-1%: Very permissive\n• 1-2%: Balanced ⭐\n• 2-3%: Conservative\n• 3%+: Very selective\n\nHELPS AVOID:\n• Choppy/sideways markets\n• Weak trend signals\n• False breakouts")
+htfMethod = "Price vs MA"
+htfEMA = 20
+htfMinStrength = 2.0
 blockCounterTrend = input.bool(true, "Block Counter-Trend", group=grp_htf, inline="htf3", tooltip="BLOCK entries that go against the HTF (daily) trend\n\nWHEN ENABLED:\n• LONG entries blocked when HTF is bearish\n• SHORT entries blocked when HTF is bullish\n• Significantly reduces losing trades\n\nWHEN DISABLED:\n• Shows warning only (original behavior)\n• Entries allowed against HTF trend\n\nRECOMMENDED: ON - Today's losses were all counter-trend trades")
 
 // ======================================= INDEX DIRECTION FILTER ==================================
 enableIndexFilter = input.bool(true, "Enable Index Filter", group=grp_index, inline="idx1", tooltip="Filter trades based on broad market (NIFTY 50) direction\n\nWHY: 60-80% of intraday stock movement correlates with NIFTY direction\nBlocking counter-index entries significantly reduces false breakouts\n\nIntegrates into 'both against' blocking logic:\n- Entry blocked only when MULTIPLE filters oppose the direction\n\nON: Check NIFTY direction before entry\nOFF: Ignore market direction")
 indexSymbol = input.string("NSE:NIFTY", "Index Symbol", group=grp_index, inline="idx1", tooltip="Reference index for direction filter\n\nRECOMMENDED:\n• NSE:NIFTY - Best for most Indian stocks (default)\n• NSE:BANKNIFTY - Banking/finance stocks\n\nNIFTY 50 correlates with 60-80% of all NSE stocks on intraday basis\nEven non-NIFTY stocks follow broad market direction")
-indexFilterMethod = input.string("Price vs VWAP", "Method", options=["Price vs VWAP", "Price vs EMA", "ORB Direction"], group=grp_index, inline="idx2", tooltip="How to determine index direction\n\nPRICE VS VWAP (Recommended):\n• NIFTY close > VWAP = Bullish\n• NIFTY close < VWAP = Bearish\n• Best for intraday (VWAP is institutional reference)\n\nPRICE VS EMA:\n• NIFTY close > EMA = Bullish\n• Smoother, less reactive\n\nORB DIRECTION:\n• NIFTY above its own ORB high = Bullish\n• NIFTY below its own ORB low = Bearish\n• Most aligned with ORB strategy logic")
-indexEMALength = input.int(20, "EMA Length", minval=5, maxval=50, group=grp_index, inline="idx2", tooltip="EMA period for index direction (only used with Price vs EMA method)")
+indexFilterMethod = "Price vs VWAP"
+indexEMALength = 20
 
 // ======================================= SMART ENTRY FILTERS =====================================
 // These filters help avoid exhaustion moves in gap stocks
@@ -320,11 +272,11 @@ enableORBRangeFilter = input.bool(true, "Enable ORB Range Filter", group=grp_sma
 minORBRangePercent = input.float(0.4, "Min ORB Range %", minval=0.0, maxval=2.0, step=0.1, group=grp_smart, inline="orbrange1", tooltip="Minimum ORB range as % of price\n\nIf ORB range < this %, skip the trade\n\nToo narrow ORB = choppy, no clear range\n\nRECOMMENDED: 0.4% to allow more setups")
 maxORBRangePercent = input.float(3.5, "Max %", minval=0.5, maxval=10.0, step=0.25, group=grp_smart, inline="orbrange1", tooltip="Maximum ORB range as % of price\n\nIf ORB High-Low > this %, skip the trade\n\nRECOMMENDED: 3.5% for volatile Indian stocks")
 
-enableRetestEntry = input.bool(false, "Retest Entry Mode", group=grp_smart, inline="retest1", tooltip="Wait for price to retest OR consolidate near ORB level\n\nTRIGGERS ENTRY WHEN:\n1. Price pulls back to touch ORB level, OR\n2. Price consolidates near level for 3+ bars\n\nFILTERS: Exhaustion moves that don't return\nBETTER: Entry price and risk:reward\n\nON: Enter on retest/consolidation\nOFF: Enter immediately on breakout (recommended)")
-retestEntryBuffer = input.float(0.6, "Retest Buffer %", minval=0.0, maxval=1.5, step=0.05, group=grp_smart, inline="retest1", tooltip="How close price must come to ORB level\n\n0.0% = Must touch exact level\n0.3% = Strict\n0.6% = Default (recommended)\n0.8%+ = Very permissive")
-retestEntryTimeout = input.int(20, "Timeout (bars)", minval=3, maxval=30, group=grp_smart, inline="retest2", tooltip="Max bars to wait for retest/consolidation\n\nRECOMMENDED: 20 bars on 5-min (100 min)\n\nIf no valid entry within this time:\n- Skips trade if price ran too far\n- Enters if price consolidated near level")
-consolidationBars = input.int(2, "Consolidation Bars", minval=2, maxval=6, group=grp_smart, inline="retest2", tooltip="Bars price must hold near breakout level to trigger consolidation entry\n\nIf price stays within buffer zone for this many bars, triggers entry even without touching exact level\n\nCatches strong breakouts that don't pull back")
-consolidationZonePercent = input.float(1.2, "Zone %", minval=0.5, maxval=2.0, step=0.1, group=grp_smart, inline="retest2", tooltip="Consolidation zone size as % above ORB level\n\n0.8% = Tight zone (strict)\n1.2% = Default (recommended)\n1.5%+ = Wide zone (permissive)")
+enableRetestEntry = false
+retestEntryBuffer = 0.6
+retestEntryTimeout = 20
+consolidationBars = 2
+consolidationZonePercent = 1.2
 
 enableMinEntryTime = input.bool(true, "Enable Min Entry Time", group=grp_smart, inline="mintime", tooltip="Don't enter trades before this time\n\nLets initial gap volatility settle\nBreakouts after 9:45 are more reliable\n\nON: Wait for minimum time\nOFF: Enter anytime after ORB forms")
 minEntryHour = input.int(9, "Hour", minval=9, maxval=12, group=grp_smart, inline="mintime")
@@ -344,18 +296,18 @@ minEntryMinute = input.int(45, "Min", minval=0, maxval=59, group=grp_smart, inli
 // Default enableNRFilter=false: turning the input on with mode=Prefer is a pure no-op for
 // trade execution (so backtests with feature on/off must produce identical results).
 enableNRFilter = input.bool(false, "Enable NR Filter", group=grp_nrfilter, inline="nr1", tooltip="Toby Crabel narrow-range pre-filter\n\nTrade only after a narrow-range day\n\nWHY:\n• ORB breakouts after NR days have ~70-75% follow-through\n• Baseline (no NR filter): ~55-60%\n• Identifies coiled-spring setups\n\nFires on ~14% of days per stock (NR7 default)\n\nDEFAULT: OFF — turn on after Strategy-Tester validates NR uplift")
-nrLookback = input.int(7, "Lookback Days", options=[4, 7, 10, 20], group=grp_nrfilter, inline="nr1", tooltip="N days for narrow-range comparison\n\n4  = NR4, fires ~25% of days, weaker edge\n7  = NR7 (Crabel classic, recommended) ⭐\n10 = NR10, fires ~10% of days, stronger edge\n20 = NR20, fires ~5%, strongest edge / very rare")
-nrMode = input.string("Prefer", "Mode", options=["Prefer", "Require"], group=grp_nrfilter, inline="nr2", tooltip="How NR result affects entries\n\nPREFER (default):\n• Tracks NR state\n• Does NOT block any entries\n• Use to A/B measure NR-day WR uplift before promoting\n\nREQUIRE:\n• Blocks entries when yesterday was NOT NR\n• Strict — cuts daily trade count by ~85%\n• Use only after Prefer-mode data confirms uplift")
+nrLookback = 7
+nrMode = "Prefer"
 
 // ============================================ GOD MODE =============================================
 // Ported from the upstream Luxy indicator. Grades the ORB breakout itself 0-100 (A+..D),
 // widens the breakout buffer on volatile tickers, and flags chop days. Distinct from the
 // key-level score below: that one grades VA/PD/IB setups, this one grades the ORB break.
-// Rebuilt on this file's existing state (cachedVolumeMA, cachedHTF*, klATRDaily, todayOpen,
+// Rebuilt on this file's existing state (cachedVolBaseline, cachedHTF*, klATRDaily, todayOpen,
 // prevDayClose, sessionBreakouts*) rather than re-deriving it — no new request.security.
-godModeEnabled = input.bool(true, "Enable GOD MODE", group=grp_god, tooltip="Breakout-quality intelligence layer for the ORB signal\n\nADDS:\n• Quality Score 0-100 graded A+ to D on breakout labels and the dashboard\n• Adaptive breakout buffer scaled by ATR\n• Chop-Day Guard after repeated failed breaks\n\nScoring inputs: volume strength, HTF bias alignment, ORB width vs daily ATR (narrow is better), gap direction, PDH/PDL confluence, and how many breaks already failed today.\n\nOFF = classic behaviour, exactly as before.")
-godAdaptiveBuffer = input.bool(true, "Adaptive Buffer", group=grp_god, inline="god1", tooltip="Effective buffer = max(Breakout Buffer %, 10% of ATR).\n\nA FLOOR, never a reduction: volatile tickers get a wider buffer, quiet ones keep the fixed %.\n\nThis is what makes a LOW Breakout Buffer % safe — set 0.1-0.2% and let ATR widen it per ticker.")
-godChopGuard = input.bool(true, "Chop-Day Guard", group=grp_god, inline="god1", tooltip="2+ failed breaks in a session = CHOP DAY: dashboard warning, quality score capped at 40.\n\nGuards ORB's most common failure mode — range-day whipsaws.")
+godModeEnabled = input.bool(true, "Enable GOD MODE", group=grp_god, tooltip="Breakout-quality layer for the ORB signal\n\nADDS:\n• Adaptive breakout buffer scaled by ATR\n• Chop-Day Guard after repeated failed breaks\n\nThe 0-100 quality score was REMOVED: it appeared only in label text and dashboard cells, never in a breakout or entry condition, so it changed no trade while costing ~90% of this layer's tokens. The two remaining pieces both affect trade selection.\n\nOFF = classic behaviour, exactly as before.")
+godAdaptiveBuffer = true
+godChopGuard = true
 
 // ================================= KEY-LEVEL BREAKOUT (VP / PD / IB) ===============================
 // ORB is one key level among several. This section adds the other levels a breakout
@@ -376,11 +328,11 @@ godChopGuard = input.bool(true, "Chop-Day Guard", group=grp_god, inline="god1", 
 // MANUAL — type the three numbers off TradingView's native Session Volume Profile.
 //          Exact, ~30s each morning. Pine cannot read another indicator's values.
 klAutoProfile  = input.bool(true, "Auto-reconstruct profile", group=grp_vp, inline="src", tooltip="Where VAH/POC/VAL come from\n\nON (Auto):\n• Builds the previous session's volume-at-price histogram from 1-min data\n• No dependency on any other indicator\n• APPROXIMATE — tune 'Ticks per row' to match TradingView\n\nOFF (Manual):\n• Uses the Manual VAH/POC/VAL inputs below\n• Read them off TradingView's native Session Volume Profile (previous day)\n• Exact, but needs ~30 seconds of typing each morning\n\nUse Manual whenever exact levels matter.")
-klTicksPerRow  = input.int(5, "| Ticks per row", minval=1, maxval=100, group=grp_vp, inline="src", tooltip="Profile row height = symbol mintick × this value\n\nSMALLER = finer profile, more precise POC, slower\nLARGER  = coarser profile, faster\n\nTune until the auto POC matches TradingView's Session\nVolume Profile POC on the same symbol.\n\nRECOMMENDED: 5 for most NSE cash stocks")
-klValueAreaPct = input.float(70, "Value area %", minval=50, maxval=90, step=5, group=grp_vp, tooltip="Percentage of session volume enclosed by the value area\n\n70% is the Market Profile standard (one standard deviation)\n\nThe area grows outward from POC until it holds this share\nof total session volume. VAH/VAL are its edges.")
-klManualVAH    = input.float(0.0, "Manual VAH", minval=0, group=grp_vp, inline="man", tooltip="Used ONLY when 'Auto-reconstruct profile' is OFF\n\nRead from TradingView's Session Volume Profile (previous day)\n\n0 = disabled")
-klManualPOC    = input.float(0.0, "POC", minval=0, group=grp_vp, inline="man", tooltip="Manual Point of Control. Used only when Auto is OFF. 0 = disabled")
-klManualVAL    = input.float(0.0, "VAL", minval=0, group=grp_vp, inline="man", tooltip="Manual Value Area Low. Used only when Auto is OFF. 0 = disabled")
+klTicksPerRow  = 5
+klValueAreaPct = 70
+klManualVAH    = 0.0
+klManualPOC    = 0.0
+klManualVAL    = 0.0
 
 // ─── Trigger families ───────────────────────────────────────────────────────
 enableKeyLevels    = input.bool(true, "Enable Key-Level Engine", group=grp_keylevel, tooltip="Master switch for the whole key-level layer\n\nOFF: no levels resolved, no profile accumulation, no scoring,\nno drawing, no key-level alerts. The script behaves exactly\nlike the original ORB strategy.\n\nON: levels are computed, drawn and scored. Whether they can\nOPEN A TRADE is controlled separately by 'Execute key-level\nsetups' below (default OFF).")
@@ -393,19 +345,23 @@ klCooldownBars     = input.int(3, "| Cooldown", minval=0, maxval=50, group=grp_k
 enableKeyLevelExecution = input.bool(false, "⚠ Execute key-level setups", group=grp_keylevel, tooltip="Let key-level setups OPEN REAL TRADES\n\nOFF (default) ⭐:\n• Setups draw arrows, score, and fire alerts\n• strategy.entry is NEVER called for them\n• Backtest is identical to the plain ORB strategy\n• Use this to observe and validate first\n\nON:\n• A qualifying key-level setup enters through the SAME\n  pipeline as an ORB breakout (next-bar fill, same SL/TP,\n  same Telegram entry alert)\n• Still bound by the one-trade-per-session cap and the\n  entry cutoff time\n\nTurn this on only after the Strategy Tester and live alert\nlog confirm the setups are worth trading.")
 
 // ─── Scoring ────────────────────────────────────────────────────────────────
-klScoreThreshold = input.int(7, "Alert score threshold", minval=1, maxval=20, group=grp_score, tooltip="Minimum weighted score for a key-level setup to fire\n\nSCORE COMPONENTS:\n+2  major level interaction\n+1  per confluent structural level (max +3)\n+2  two or more confluent levels\n+2  breakout-and-retest structure\n+1  VWAP aligned with direction\n+1  EMA9 aligned + sloping with direction\n+1/+2 RVOL at min / strong threshold\n+1  strong candle close (CLV)\n+1  delta proxy agrees\n\nLOWER = more signals, more noise\nHIGHER = rare, high-conviction only\n\nRECOMMENDED: 7")
+klScoreThreshold = input.int(7, "Alert score threshold", minval=1, maxval=20, group=grp_score, tooltip="Minimum weighted score for a key-level setup to fire\n\nSCORE COMPONENTS:\n+2  major level interaction\n+1  per confluent structural level (max +3)\n+2  two or more confluent levels\n+2  breakout-and-retest structure\n+1  VWAP aligned with direction\n+1  EMA9 aligned + sloping with direction\n+1/+2 RVOL at min / strong threshold\n+1  strong candle close (CLV)\n+1  session volume factor at or above Min Volume ×\n\nLOWER = more signals, more noise\nHIGHER = rare, high-conviction only\n\nRECOMMENDED: 7")
 // RVOL tiers reuse volumeMultiplier / strongVolumeMultiplier from the VOLUME FILTER
 // group — one definition of "strong volume" for the whole script, not two.
-klClvLongMin     = input.float(0.65, "CLV long ≥", minval=0, maxval=1, step=0.05, group=grp_score, inline="clv", tooltip="Close Location Value threshold for a bullish candle\n\nCLV = (close - low) / (high - low)\n\n0.65 means the bar closed in the top 35% of its range —\nbuyers held the close. Used for rejection/retest quality.")
-klClvShortMax    = input.float(0.35, "| short ≤", minval=0, maxval=1, step=0.05, group=grp_score, inline="clv", tooltip="Close Location Value threshold for a bearish candle\n\n0.35 means the bar closed in the bottom 35% of its range —\nsellers held the close.")
+klClvLongMin     = 0.65
+klClvShortMax    = 0.35
 klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, maxval=2, step=0.05, group=grp_score, tooltip="Two levels within this many ATRs are treated as confluent\n\nAlso used as the retest tolerance band.\n\nTIGHTER = fewer confluence hits, stricter retests\nWIDER   = more confluence hits, looser retests\n\nRECOMMENDED: 0.25 × ATR")
 klSlBufferMult   = input.float(0.15, "SL buffer (× ATR beyond level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far beyond the triggering level the stop sits\n\nA level-based stop goes just past the level that was defended,\nplus this ATR cushion to survive normal noise and stop hunts.\n\nUsed only for key-level setups. ORB entries keep their own\nstop-loss mode from the TARGETS & RISK group.")
+klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far IN FRONT of the next structural level the first target sits\n\nThe level itself is where every other trader's limit orders rest, so price\nfrequently stalls a few ticks short of it and reverses. Parking T1 inside\nthat queue trades a little reward for a materially better fill rate.\n\n0 = target exactly at the level (old behaviour)\n0.15 = recommended\n\nIf the pad would put T1 inside the noise around entry, T1 reports '-'\ninstead: that setup has no room to a structural target.")
+klMinHeadroomR   = input.float(1.0, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
+klRequireHTFClose = input.bool(true, "Require HTF close confirmation", group=grp_score, inline="htfc", tooltip="Demand a CLOSED higher-timeframe bar on the correct side of the level before a key-level setup can fire.\n\nWHY: a 5-min close beyond a level is cheap to fake -- most liquidity sweeps complete and reverse inside a single 15-min bar. A closed 15-min bar on the far side is materially harder to fake, and published breakout research is consistent that lower-timeframe breaks carry a higher false-break rate.\n\nThe test follows trade DIRECTION, so it works for every family:\n\u2022 long  setups need HTF close ABOVE the level\n\u2022 short setups need HTF close BELOW the level\nA VAH rejection short therefore needs the HTF close back under VAH -- which is exactly the rejection thesis.\n\nCOST: up to one HTF bar of lag on entry, because this reads the LAST CLOSED bar (non-repainting). Setups printing RVOL at or above the Strong \u00d7 threshold bypass the wait.\n\nOFF = previous behaviour (chart-timeframe close only).")
+klConfirmTF       = input.timeframe("15", "| timeframe", group=grp_score, inline="htfc", tooltip="Higher timeframe used for the close confirmation above.\n\n15 = recommended for a 5-min chart: one confirmation bar per three chart bars\n30/60 = stricter, materially more lag\n\nMust be HIGHER than the chart timeframe or the test is meaningless.")
 
 // ─── Key-level display ──────────────────────────────────────────────────────
-klShowVA        = input.bool(true,  "Show value area (VAH/POC/VAL)", group=grp_keylevel, tooltip="Draw VAH, POC and VAL as dotted day-anchored lines plus a shaded value-area box")
-klShowSecondary = input.bool(true,  "Show PDH/PDL/IB levels",        group=grp_keylevel, tooltip="Draw the secondary structure levels, muted.\n\nTurn off for a value-area-only view when the chart gets noisy.\n\nORB levels are drawn by the ORB COLORS group, not here.")
-klShowTags      = input.bool(true,  "Show level price tags",         group=grp_keylevel, inline="tag", tooltip="Print 'VAH 2345.60' style text tags at the right edge of each level line")
-klTagMaxATR     = input.float(6.0,  "| within ATR", minval=0, maxval=50, step=0.5, group=grp_keylevel, inline="tag", tooltip="Only tag levels within this many ATRs of the current price.\n\nWith ORB, VA, IB and PD all drawn there are up to nine tags competing for the right edge; levels far from price are context, not decisions, so their prices do not need to be readable.\n\nThe LINE is always drawn — this hides only the price tag.\n\n0 = tag every level regardless of distance.")
+klShowVA        = true
+klShowSecondary = true
+klShowTags      = true
+klTagMaxATR     = 6.0
 klShowSignals   = input.bool(true,  "Show key-level signal arrows",  group=grp_keylevel, tooltip="Green up / red down triangle when a key-level setup fires, with a compact\n'CODE score RVOL' tag offset from the candle.\n\nORB breakouts keep their own labels from the BREAKOUT DETECTION group.")
 
 // ============================================= ALERTS ==============================================
@@ -431,8 +387,8 @@ if enableVolumeFilter
         runtime.error("❌ Volume Multiplier too low. Must be >= 0.5x. Current: " + str.tostring(volumeMultiplier))
     if strongVolumeMultiplier < volumeMultiplier
         runtime.error("❌ Strong Volume Multiplier must be >= Min Volume Multiplier. Strong: " + str.tostring(strongVolumeMultiplier) + ", Min: " + str.tostring(volumeMultiplier))
-    if volumeMaLength < 1
-        runtime.error("❌ Volume MA Length must be >= 1. Current: " + str.tostring(volumeMaLength))
+    if volBaseDays < 2
+        runtime.error("❌ Volume baseline days must be >= 2. Current: " + str.tostring(volBaseDays))
 if enableTargets
     if atrLength < 5 or atrLength > 50
         runtime.error("❌ ATR Length must be between 5-50. Current: " + str.tostring(atrLength))
@@ -581,8 +537,13 @@ var int lastDashUpdateBar = -1
 
 var float cachedATR = na
 var int cachedATRBar = -1
-var float cachedVolumeMA = na
-var int cachedVolumeMABar = -1
+var float cachedVolBaseline = na
+var float cachedSessionVF = na
+var int cachedVolBaselineBar = -1
+// Session slots for the volume baseline matrix, derived from the chart timeframe so the
+// same code works on 1/5/15-min. 390 minutes covers 09:15-15:45 with margin; +2 guards
+// the boundary bar. Capped so a 1-min chart cannot allocate an unreasonable matrix.
+int volSlotCount = math.min(400, math.max(10, int(math.ceil(390.0 * 60.0 / math.max(timeframe.in_seconds(), 60))) + 2))
 var float cachedADX = na
 var int cachedADXBar = -1
 var bool isTrendingMarket = false
@@ -598,12 +559,6 @@ var float cachedPosValue = na
 var float cachedMaxLoss = na
 var float cachedRiskAmount = na
 
-var array<box> fvgBoxes = array.new<box>()
-var array<float> fvgTops = array.new<float>()
-var array<float> fvgBottoms = array.new<float>()
-var array<bool> fvgIsBullish = array.new<bool>()
-var array<bool> fvgIsActive = array.new<bool>()
-var array<int> fvgStartBar = array.new<int>()
 
 var bool hadRetestUp = false
 var bool hadRetestDown = false
@@ -638,15 +593,13 @@ var float trendEMACustom = na
 var float trendSTUp = na
 var float trendSTDown = na
 var int trendSTDirection = 0
-var float volumeMA = na
+var float volBaseline = na
 
 // Session VWAP for key-level scoring. Separate from trendVWAP because trendVWAP is
 // only assigned when enableTrendFilter is on AND trendMode contains "VWAP" — the
 // key-level score must not silently lose its VWAP component based on an unrelated
 // filter setting.
 var int   godFailedBreaks = 0
-var float godLastScore = na
-var bool  godLastUp = true
 var float sessionVWAP = na
 var int   sessionVWAPBar = -1
 
@@ -892,18 +845,86 @@ buildTestAlert() =>
     msg
 
 // ========================================== VALIDATION FUNCTIONS ===================================
+// ─── Time-of-day volume baseline ────────────────────────────────────────────
+// Replaces the old ta.sma(volume, 50) denominator, which was time-of-day BLIND: a 50-bar
+// average on a 5-min chart spans ~4 hours, so at 09:20 the denominator was mostly the
+// previous session's dead close bars while the numerator was an opening bar running 5-10x
+// normal. The 1.2x test was therefore near-inert in exactly the window this strategy
+// trades most, and over-strict around lunch.
+//
+// This compares like with like: each bar is measured against the SAME slot of the session
+// on previous days. Zarattini/Barbon/Aziz (SFI 2024) found across 7,000+ US stocks that
+// plain ORB was weak and selection by opening RELATIVE volume did almost all the work;
+// their measure is first-5-min volume over the mean first-5-min volume of 14 prior days,
+// which is the `slot 0` case of this function.
+//
+// Returns BOTH reads, because they answer different questions:
+//   vf   - cumulative session volume vs the same point of day. "Is this stock in play?"
+//   base - mean bar volume at THIS slot. Denominator for per-bar breakout confirmation.
+//
+// STATEFUL: holds its own vars, so it MUST be called unconditionally with `en` passed in.
+// Accumulation advances on CONFIRMED bars only; the forming bar is added for the live read
+// without mutating state, so a realtime bar cannot freeze a partial volume into history.
+klVolFactor(bool en, bool reset, bool inSess, bool confirmed, int days, int slots) =>
+    // Allocated at the INPUT MAXIMA rather than at the configured size: Pine can reject a
+    // series/simple int as a matrix dimension, and 30 x 400 floats is cheap enough that
+    // taking the compile risk to save the allocation would be a bad trade. days/slots are
+    // used only to bound the indices actually touched.
+    var matrix<float> hist = matrix.new<float>(30, 400, na)
+    var int   vRow    = 0
+    var int   slot    = -1
+    var float cumPrev = 0.0
+    float vf   = na
+    float base = na
+    if en
+        if reset
+            // Yesterday's row is complete. Advance; the oldest session is overwritten.
+            if slot > 0
+                vRow := (vRow + 1) % days
+            slot := 0
+            cumPrev := 0.0
+        if inSess and slot >= 0 and slot < slots
+            float cumNow = cumPrev + nz(volume)
+            matrix.set(hist, vRow, slot, cumNow)
+            // Mean cumulative volume at this slot, and at the previous slot, across the
+            // other sessions held. Their difference is the mean BAR volume for this slot,
+            // so one pass yields both the session factor and the per-bar denominator.
+            float sNow  = 0.0
+            float sPrev = 0.0
+            int   n     = 0
+            for r = 0 to days - 1
+                if r != vRow
+                    float c = matrix.get(hist, r, slot)
+                    if not na(c) and c > 0
+                        sNow  += c
+                        sPrev += slot > 0 ? nz(matrix.get(hist, r, slot - 1)) : 0.0
+                        n     += 1
+            // Minimum history before the reading is trusted. With a single prior session
+            // the denominator is just yesterday, so one heavy day would suppress the factor
+            // all through the next. Below this the function reports na and the volume filter
+            // fails OPEN, matching how it behaves before any history exists.
+            if n >= math.min(3, days - 1)
+                float baseCum = sNow / n
+                float baseBar = (sNow - sPrev) / n
+                vf   := baseCum > 0 ? cumNow / baseCum : na
+                base := baseBar > 0 ? baseBar : na
+            if confirmed
+                cumPrev := cumNow
+                slot    += 1
+    [vf, base]
+
 hasVolumeConfirmation(volMA, mult, strongMult) =>
     if na(volMA) or volMA == 0
         true
     else
-        // Use max volume of last 3 bars (current + 2 prior)
-        // WHY: Breakout momentum often builds 1-2 bars before price crosses the level.
-        // Checking only the exact crossover bar misses breakouts where volume arrived
-        // slightly earlier. This is the #1 cause of "Crossed ORB but low volume" on
-        // stocks with clearly strong volume in the breakout zone.
-        maxRecentVol = math.max(volume, math.max(nz(volume[1]), nz(volume[2])))
-        isStrongVolume = strongMult > 0 and maxRecentVol >= volMA * strongMult
-        isNormalVolume = maxRecentVol >= volMA * mult
+        // Volume is measured ON THE BREAKING BAR, not as a 3-bar max. The old max() let a
+        // spike two bars BEFORE a weak breaking candle satisfy the filter. Breakout research
+        // is consistent that what matters is expansion AT the level, in the candle doing the
+        // breaking -- volume arriving after the break is the crowd, by which point the
+        // risk/reward has already deteriorated. The old 3-bar window was a workaround for a
+        // time-of-day-blind denominator; with a per-slot baseline it is no longer needed.
+        isStrongVolume = strongMult > 0 and volume >= volMA * strongMult
+        isNormalVolume = volume >= volMA * mult
         isStrongVolume or isNormalVolume
 
 // =========================================== TARGET & STOP FUNCTIONS ================================
@@ -1027,9 +1048,6 @@ calculatePositionSize(entry, sl) =>
     else
         riskAmount := fixedRisk
 
-    if symbolCurrency != accountCurrency
-        riskAmount := riskAmount * exchangeRate
-
     float riskPerShare = math.abs(entry - sl)
     float sharesFromRisk = riskPerShare > 0 ? math.floor(riskAmount / riskPerShare) : 0
 
@@ -1038,8 +1056,6 @@ calculatePositionSize(entry, sl) =>
     // Only apply position limit if enabled
     if enablePosLimit
         float maxPositionValue = accountSize * (maxPositionPct / 100)
-        if symbolCurrency != accountCurrency
-            maxPositionValue := maxPositionValue * exchangeRate
         float maxSharesFromLimit = entry > 0 ? math.floor(maxPositionValue / entry) : 0
         shares := math.min(sharesFromRisk, maxSharesFromLimit)
     float posValue = shares * entry
@@ -1413,20 +1429,15 @@ renderFilterStatus(table dashTable, int startRow, string txtSize, color txtColor
         row += 1
     row
 
-// Grade lookup is dependency-free, so it sits here — renderGodRow below calls it, and
-// Pine resolves identifiers in source order.
-godGrade(float sc) => sc >= 85 ? "A+" : sc >= 70 ? "A" : sc >= 55 ? "B" : sc >= 40 ? "C" : "D"
-
-// ======================================= GOD MODE DASHBOARD ROW ===================================
-renderGodRow(table dashTable, int startRow, string txtSize, color txtColor, float sc, bool isUp, bool chop, int fails) =>
+// Chop-day warning row. The 0-100 quality SCORE that used to live here was removed: it
+// was referenced only in label text and table cells -- never in any breakout or entry
+// condition -- so ~90% of GOD MODE's token cost bought no change in trade selection. The
+// chop guard, the adaptive buffer and the both-pending-due fix are the pieces that do
+// something, and they are near-free. Removed to fund the volume-factor engine.
+renderGodRow(table dashTable, int startRow, string txtSize, color txtColor, bool chop, int fails) =>
     int row = startRow
-    string val = na(sc) ? "-" : (isUp ? "▲ " : "▼ ") + str.tostring(sc, "#") + " (" + godGrade(sc) + ")"
-    color col = na(sc) ? color.new(color.gray, 20) : sc >= 70 ? color.lime : sc >= 55 ? color.new(color.white, 0) : sc >= 40 ? color.orange : color.red
-    table.cell(dashTable, 0, row, "ORB Quality:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Quality of the last ORB break, 0-100.\nA+ 85+ · A 70+ · B 55+ · C 40+ · D below 40.\n\nFrom volume, HTF bias, ORB width vs daily ATR, gap direction, PDH/PDL confluence, prior breaks. Chop day caps it at 40.")
-    table.cell(dashTable, 1, row, val, text_color=col, text_size=txtSize, text_halign=text.align_right)
-    row += 1
     if chop
-        table.cell(dashTable, 0, row, "Chop Day:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="2+ breakouts already failed this session — range-day whipsaw. Quality score capped at 40 while showing.")
+        table.cell(dashTable, 0, row, "Chop Day:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="2+ breakouts already failed this session - range-day whipsaw.\n\nORB's most common failure mode. Treat further breaks in either direction with suspicion.")
         table.cell(dashTable, 1, row, "⚠ " + str.tostring(fails) + " failed breaks", text_color=color.orange, text_size=txtSize, text_halign=text.align_right)
         row += 1
     row
@@ -1437,7 +1448,7 @@ renderGodRow(table dashTable, int startRow, string txtSize, color txtColor, floa
 // dashboard block) to keep the script's global scope under Pine's main-body size limit.
 // Values are passed in rather than read from globals so this can sit here, ahead of the
 // key-level engine that computes them.
-renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing) =>
+renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full) =>
     int row = startRow
     color okC = color.lime
     color noC = color.new(color.gray, 20)
@@ -1446,18 +1457,28 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, b
     table.cell(dashTable, 1, row, autoProfile ? "AUTO" : "MANUAL", text_color=color.new(color.aqua, 0), text_size=txtSize, text_halign=text.align_right)
     row += 1
 
-    table.cell(dashTable, 0, row, "VAH/POC/VAL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous session's value area.\n\nVAH = upper edge of the 70% volume zone\nPOC = most-traded price (acts as a magnet)\nVAL = lower edge\n\nPrice above VAH or below VAL means today is auctioning outside yesterday's accepted value — the precondition for a trend day.")
-    table.cell(dashTable, 1, row, na(vah) ? "-" : str.tostring(vah, "#.##") + " / " + str.tostring(poc, "#.##") + " / " + str.tostring(val, "#.##"), text_color=na(vah) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
+    // Session volume factor. Bands are the BreakingTrade cheat sheet's, including its rule
+    // that >=3x is a WARNING (block deal / news) rather than a green light.
+    string vfTxt = na(vf) ? "-" : str.tostring(vf, "0.00") + "x " + (vf >= 3.0 ? "⚠ extreme" : vf >= 1.5 ? "strong" : vf >= 1.2 ? "elevated" : vf >= 0.8 ? "normal" : vf >= 0.5 ? "thin" : "dead")
+    color vfCol = na(vf) ? noC : vf >= 3.0 ? color.orange : vf >= 1.5 ? okC : vf >= 1.2 ? color.new(color.lime, 40) : vf >= 0.8 ? txtColor : color.new(color.gray, 20)
+    table.cell(dashTable, 0, row, "Vol Factor:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Session volume so far divided by the mean volume to the SAME point of day over the previous N sessions.\n\nTime-of-day normalised, so it means the same thing at 09:20 as at 14:00 -- unlike a rolling bar average, which is inflated at the open and depressed at lunch.\n\n>=3.0  extreme -- CHECK NEWS before trading; block deals and news spikes live here\n1.5-3.0 strong\n1.2-1.5 elevated\n0.8-1.2 normal\n0.5-0.8 thin\n<0.5   dead -- stand aside\n\nThe live session reads low early and fills in as the day runs; judge by pace, not face value. Blank until enough sessions of history are loaded.")
+    table.cell(dashTable, 1, row, vfTxt, text_color=vfCol, text_size=txtSize, text_halign=text.align_right)
     row += 1
+
+    if full
+        table.cell(dashTable, 0, row, "VAH/POC/VAL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous session's value area.\n\nVAH = upper edge of the 70% volume zone\nPOC = most-traded price (acts as a magnet)\nVAL = lower edge\n\nPrice above VAH or below VAL means today is auctioning outside yesterday's accepted value — the precondition for a trend day.")
+        table.cell(dashTable, 1, row, na(vah) ? "-" : str.tostring(vah, "#.##") + " / " + str.tostring(poc, "#.##") + " / " + str.tostring(val, "#.##"), text_color=na(vah) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
+        row += 1
 
     table.cell(dashTable, 0, row, "Auction:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Where price trades NOW vs the previous value area, then where today OPENED.\n\nAbove VAH / Inside Value / Below VAL.\n\nOpening outside prior value is the classic trend-day tell — the market gapped out of value and is unlikely to return.")
     table.cell(dashTable, 1, row, auction + "  (open " + openPos + ")", text_color=auction == "n/a" ? noC : color.aqua, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
 
-    table.cell(dashTable, 0, row, "PDH/PDL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous Day High / Low — the most widely watched intraday levels.\n\nA clean break with volume tends to run; a failed break reverses hard.")
-    table.cell(dashTable, 1, row, na(pdh) ? "-" : str.tostring(pdh, "#.##") + " / " + str.tostring(pdl, "#.##"), text_color=na(pdh) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
-    row += 1
+    if full
+        table.cell(dashTable, 0, row, "PDH/PDL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous Day High / Low — the most widely watched intraday levels.\n\nA clean break with volume tends to run; a failed break reverses hard.")
+        table.cell(dashTable, 1, row, na(pdh) ? "-" : str.tostring(pdh, "#.##") + " / " + str.tostring(pdl, "#.##"), text_color=na(pdh) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
+        row += 1
 
     table.cell(dashTable, 0, row, "IB H/L:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Initial Balance high/low (09:15-10:15) and its width as a % of average daily range.\n\nBreaking IB after 10:15 on expanding volume is the classic trend-day continuation; rotating inside it all day is a range day.\n\n<35% narrow — coiled, trend-day potential\n35-60% normal\n>60% wide — range day, IB likely holds")
     table.cell(dashTable, 1, row, na(ibh) ? "-" : str.tostring(ibh, "#.##") + "/" + str.tostring(ibl, "#.##") + (na(ibPct) ? "" : "  " + str.tostring(ibPct, "#") + "% " + ibType), text_color=na(ibh) ? noC : #FFEB3B, text_size=txtSize, text_halign=text.align_right)
@@ -1468,7 +1489,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, b
     // average daily range is a materially worse trade than the same signal at 40%.
     float dayRange = na(dayHigh) or na(dayLow) ? na : dayHigh - dayLow
     float adrUsed  = na(dayRange) or na(adr) or adr <= 0 ? na : dayRange / adr * 100.0
-    string adrTxt  = na(adr) ? "-" : str.tostring(adr, "#.#") + " | " + (na(adrUsed) ? "-" : str.tostring(adrUsed, "#") + "% used")
+    string adrTxt  = na(adr) ? "-" : (na(adrUsed) ? "-" : str.tostring(adrUsed, "#") + "% used") + (na(headroom) ? "" : "  |  " + str.tostring(headroom, "0.0") + "R room")
     color adrCol   = na(adrUsed) ? noC : adrUsed >= 100 ? color.red : adrUsed >= 80 ? color.orange : adrUsed >= 50 ? txtColor : okC
     table.cell(dashTable, 0, row, "ADR / used:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Average Daily Range (14 sessions, high-low) and how much of it today has already travelled.\n\n<50%   room left — breakouts have somewhere to go\n50-80% normal\n80-100% stretched — expect chop, take partials earlier\n>100%  today is already an outlier move; late entries are poor risk\n\nUses high-low, not ATR, so overnight gaps do not inflate the reading.")
     table.cell(dashTable, 1, row, adrTxt, text_color=adrCol, text_size=txtSize, text_halign=text.align_right)
@@ -1479,20 +1500,93 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, b
     // row always agrees with what the strategy would actually place.
     float slDist = na(atrVal) ? na : atrVal * slMult
     string atrTxt = na(atrVal) ? "-" : str.tostring(atrVal, "#.##") + " | SL " + str.tostring(slMult, "#.#") + "x = " + str.tostring(slDist, "#.##")
-    table.cell(dashTable, 0, row, "ATR / SL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="ATR(14) on this timeframe, and the stop DISTANCE it implies at the ATR multiplier configured in TARGETS & RISK.\n\nUse it as a sanity check: if the level-based stop for a setup is much tighter than this, the stop is inside the noise and will be taken out; much wider, and the position size has to come down.\n\nSL distance / entry gives the % risk per share.")
-    table.cell(dashTable, 1, row, atrTxt, text_color=na(atrVal) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
+    if full
+        table.cell(dashTable, 0, row, "ATR / SL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="ATR(14) on this timeframe, and the stop DISTANCE it implies at the ATR multiplier configured in TARGETS & RISK.\n\nUse it as a sanity check: if the level-based stop for a setup is much tighter than this, the stop is inside the noise and will be taken out; much wider, and the position size has to come down.\n\nSL distance / entry gives the % risk per share.")
+        table.cell(dashTable, 1, row, atrTxt, text_color=na(atrVal) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
+        row += 1
+
+    table.cell(dashTable, 0, row, "Setup:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Key-level setup, direction, and weighted score against the alert threshold.\n\nBright = firing on THIS bar. Dimmed with a time = the last one that fired, kept so the row still tells you something between signals. ⏳HTF = scored, waiting on the higher-timeframe close.\n\n\"-\" means nothing has fired yet today. Retests outrank rejections, which outrank plain breaks. Confluence and retest structure carry the most score weight, then RVOL.")
+    string stTxt = dir == 0 ? "-" : (dir == 1 ? "LONG " : "SHORT ") + setupCode + "  " + str.tostring(score) + "/" + str.tostring(threshold) + (confCnt > 0 ? " +" + str.tostring(confCnt) + "lvl" : "") + (isLive ? (score >= threshold ? (htfOK ? " ✅" : " ⏳HTF") : "") : (na(lastT) ? "" : "  " + str.format_time(lastT, "HH:mm", syminfo.timezone)))
+    // Live setups keep the direction colour; a latched one is dimmed, so "firing now" and
+    // "last fired at 11:05" can never be confused at a glance.
+    color stCol = dir == 0 ? noC : not isLive ? color.new(color.gray, 10) : score >= threshold ? (htfOK ? (dir == 1 ? okC : color.red) : color.orange) : color.orange
+    table.cell(dashTable, 1, row, stTxt, text_color=stCol, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
-    table.cell(dashTable, 0, row, "Setup:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Active key-level setup, direction, and its weighted score against the alert threshold.\n\nBlank when no objective setup is live on this bar. Retests outrank rejections, which outrank plain breaks. Confluence and retest structure carry the most score weight, then RVOL.")
-    table.cell(dashTable, 1, row, dir == 0 ? "-" : (dir == 1 ? "LONG " : "SHORT ") + setupCode + "  " + str.tostring(score) + "/" + str.tostring(threshold) + (score >= threshold ? " ✅" : ""), text_color=dir == 0 ? noC : score >= threshold ? (dir == 1 ? okC : color.red) : color.orange, text_size=txtSize, text_halign=text.align_right)
-    row += 1
-
-    table.cell(dashTable, 0, row, "Confluence:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="How many other structural levels sit within the confluence band of the triggering level, and which ones.\n\n2 or more stacked levels is the strongest quality signal in this model.")
-    table.cell(dashTable, 1, row, confCnt == 0 ? "-" : (str.tostring(confCnt) + " " + confNames), text_color=confCnt >= 2 ? okC : noC, text_size=txtSize, text_halign=text.align_right)
-    row += 1
+    if full
+        table.cell(dashTable, 0, row, "Confluence:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Which other structural levels sit within the confluence band of the triggering level.\n\nTwo or more stacked levels is the strongest quality signal in this model. The count is also appended to the Setup row as \"+2lvl\".")
+        table.cell(dashTable, 1, row, confCnt == 0 ? "-" : (str.tostring(confCnt) + " " + confNames), text_color=confCnt >= 2 ? okC : noC, text_size=txtSize, text_halign=text.align_right)
+        row += 1
 
     table.cell(dashTable, 0, row, "KL Mode:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Whether key-level setups can open trades.\n\nOBSERVE = alerts and arrows only, strategy.entry is never called for them (default)\nEXECUTE = they enter through the same pipeline as an ORB breakout")
     table.cell(dashTable, 1, row, executing ? "⚠ EXECUTE" : "OBSERVE", text_color=executing ? color.orange : noC, text_size=txtSize, text_halign=text.align_right)
+    row += 1
+    row
+
+// ====================================== VERDICT ROW ===============================================
+// The single line this panel exists for. Every filter, gate and setup collapses into one
+// answer plus the reason behind it, because during a live session there is no time to read
+// twelve rows and synthesise them -- and with trades placed automatically off the alerts,
+// the trader's real question is "what is the system doing and why", not "what should I do".
+// Priority order matters: the FIRST blocking condition is the one reported, so the detail
+// line always names the thing that actually has to change.
+renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool taken, bool beforeCut, bool afterMin, bool gapOK, bool widthOK, bool volOK, float volRatio, float volMult, bool nrOK, bool chop, int dir, int score, int thr, bool htfOK, float vf, bool roomOK, float headroom) =>
+    int row = startRow
+    string verdict = ""
+    string detail = ""
+    color vcol = color.new(color.gray, 0)
+    if inTrade
+        verdict := "✅ IN TRADE"
+        detail := "position open — managing exits"
+        vcol := color.aqua
+    else if taken
+        verdict := "🏁 DONE"
+        detail := "session entry already taken"
+    else if not beforeCut
+        verdict := "🏁 CUTOFF"
+        detail := "past entry cutoff — no new trades"
+    else if not afterMin
+        verdict := "⏰ TOO EARLY"
+        detail := "before minimum entry time"
+    else if not gapOK
+        verdict := "⛔ NO TRADE"
+        detail := "gap too large — prior-day levels unreliable"
+        vcol := color.red
+    else if not widthOK
+        verdict := "⛔ NO TRADE"
+        detail := "ORB width outside range"
+        vcol := color.red
+    else if not volOK
+        verdict := "⛔ NO TRADE"
+        detail := "volume " + str.tostring(volRatio, "0.0") + "x < " + str.tostring(volMult, "0.0") + "x needed"
+        vcol := color.red
+    else if not nrOK
+        verdict := "⛔ NO TRADE"
+        detail := "NR gate — yesterday was not a narrow range"
+        vcol := color.red
+    else if dir != 0 and score >= thr and not roomOK
+        verdict := "⛔ NO ROOM"
+        detail := "setup valid but only " + str.tostring(headroom, "0.0") + "R to a normal day's extension"
+        vcol := color.red
+    else if dir != 0 and score >= thr and htfOK
+        verdict := dir == 1 ? "🟢 SIGNAL — LONG" : "🔴 SIGNAL — SHORT"
+        detail := "score " + str.tostring(score) + "/" + str.tostring(thr) + " — alert fires this bar"
+        vcol := dir == 1 ? color.lime : color.red
+    else if dir != 0 and score >= thr
+        verdict := "⏳ WAITING"
+        detail := "scored " + str.tostring(score) + "/" + str.tostring(thr) + " — needs the HTF close to confirm"
+        vcol := color.orange
+    else
+        verdict := "🟡 ARMED"
+        detail := chop ? "filters pass — but CHOP DAY, be selective" : (not na(vf) and vf < 0.8 ? "filters pass — session volume thin (" + str.tostring(vf, "0.00") + "x)" : "filters pass — waiting for a setup")
+        vcol := chop ? color.orange : color.yellow
+    table.cell(dashTable, 0, row, verdict, text_color=vcol, text_size=txtSize, text_halign=text.align_center, bgcolor=color.new(vcol, 85), tooltip="What the system will do RIGHT NOW, and why.\n\n⛔ NO TRADE — a filter is blocking; the line below names which one\n⏰ TOO EARLY / 🏁 CUTOFF / 🏁 DONE — outside the trading window, or the session slot is spent\n🟡 ARMED — every filter passes, waiting for a setup to appear\n⏳ WAITING — a setup has scored, but the higher-timeframe close has not confirmed it yet\n🟢/🔴 SIGNAL — the alert fires on this bar\n✅ IN TRADE — a position is open\n\nOnly the FIRST blocking condition is shown, so the reason line is always the thing that actually has to change.")
+    table.cell(dashTable, 1, row, "", bgcolor=color.new(vcol, 85))
+    table.merge_cells(dashTable, 0, row, 1, row)
+    row += 1
+    table.cell(dashTable, 0, row, detail, text_color=color.new(color.silver, 0), text_size=txtSize, text_halign=text.align_center)
+    table.cell(dashTable, 1, row, "")
+    table.merge_cells(dashTable, 0, row, 1, row)
     row += 1
     row
 
@@ -1606,64 +1700,6 @@ createTradeLine(int startBar, float price, float entryPrice, bool isLong, string
     newLabel = label.new(startBar, price, labelText, xloc=xloc.bar_index, style=label.style_label_left, textcolor=color.white, color=lineColor, size=getLabelSize(labelSize))
     [newLine, newLabel]
 
-// ===================================== FVG DETECTION FUNCTIONS =====================================
-detectBullishFVG() =>
-    bool hasFVG = false
-    float fvgTop = na
-    float fvgBottom = na
-
-    if bar_index >= 2
-        if high[2] < low[0]
-            hasFVG := true
-            fvgTop := low[0]
-            fvgBottom := high[2]
-
-    [hasFVG, fvgTop, fvgBottom]
-
-detectBearishFVG() =>
-    bool hasFVG = false
-    float fvgTop = na
-    float fvgBottom = na
-
-    if bar_index >= 2
-        if low[2] > high[0]
-            hasFVG := true
-            fvgTop := low[2]
-            fvgBottom := high[0]
-
-    [hasFVG, fvgTop, fvgBottom]
-
-hasValidFVGNearLevel(level, isBullish) =>
-    bool foundFVG = false
-
-    if array.size(fvgTops) > 0
-        for i = 0 to array.size(fvgTops) - 1
-            if array.get(fvgIsBullish, i) == isBullish
-                fvgTop = array.get(fvgTops, i)
-                fvgBottom = array.get(fvgBottoms, i)
-                fvgSize = fvgTop - fvgBottom
-
-                // Use user-defined proximity
-                expandedTop = fvgTop + (fvgSize * fvgProximity)
-                expandedBottom = fvgBottom - (fvgSize * fvgProximity)
-
-                if level >= expandedBottom and level <= expandedTop
-                    foundFVG := true
-                    break
-
-    foundFVG
-
-cleanupOldFVG() =>
-    while array.size(fvgBoxes) > maxFVGtoKeep
-        oldBox = array.shift(fvgBoxes)
-        array.shift(fvgTops)
-        array.shift(fvgBottoms)
-        array.shift(fvgIsBullish)
-        array.shift(fvgIsActive)
-        array.shift(fvgStartBar)
-        if not na(oldBox)
-            box.delete(oldBox)
-
 // ================================ SESSION STATUS DETECTION FUNCTIONS ===============================
 isWithinDisplayHours() =>
     bool withinDisplay = false
@@ -1770,7 +1806,6 @@ if shouldReset
 
     orbNavigationCached := false
     godFailedBreaks := 0
-    godLastScore := na
     if shouldReset
         hadSessionToday := false
         orbNavigationCached := false
@@ -1977,9 +2012,13 @@ if barstate.isconfirmed or barstate.islast
         cachedATR := ta.atr(atrLength)
         cachedATRBar := bar_index
 
-    if bar_index != cachedVolumeMABar
-        cachedVolumeMA := ta.sma(volume, volumeMaLength)
-        cachedVolumeMABar := bar_index
+    // Time-of-day volume baseline + session volume factor. klVolFactor is STATEFUL, so it
+    // is called on every pass rather than behind the bar_index guard the old ta.sma used --
+    // its accumulator advances only on confirmed bars, which is the guard that matters.
+    [vfNow, vbNow] = klVolFactor(true, shouldReset, inSession, barstate.isconfirmed, volBaseDays, volSlotCount)
+    cachedVolBaseline := vbNow
+    cachedSessionVF := vfNow
+    cachedVolBaselineBar := bar_index
 
     // Key-level scoring needs VWAP regardless of the trend-filter configuration
     if enableKeyLevels and bar_index != sessionVWAPBar
@@ -2007,9 +2046,9 @@ if barstate.isconfirmed or barstate.islast
 
 // ================================ KEY-LEVEL ENGINE: LEVEL CONSTRUCTION =============================
 // Non-ORB key levels: prev-session VAH/POC/VAL, PDH/PDL, Initial Balance. Sits after the
-// global cache (cachedATR/volumeMA/sessionVWAP ready) and before ORB level building.
+// global cache (cachedATR/volBaseline/sessionVWAP ready) and before ORB level building.
 // Ported from volume-profile-decision-assist.pine; kl-prefixed to avoid collisions, and
-// reuses this file's cachedATR/volumeMA/sessionVWAP/shouldReset rather than recomputing.
+// reuses this file's cachedATR/volBaseline/sessionVWAP/shouldReset rather than recomputing.
 
 // ─── Previous Day High/Low ──────────────────────────────────────────────────
 // lookahead_on + [1] is the canonical NON-repainting idiom: [1] guarantees a closed day,
@@ -2143,18 +2182,52 @@ klInitialBalance(bool en, bool reset, bool inIB, bool inSess) =>
             dl := na(dl) ? low  : math.min(dl, low)
     [h, l, o, sb, dh, dl]
 
+// Rolling average IB RANGE. Market Profile grades an IB narrow or wide against the AVERAGE
+// IB, not against daily ATR -- different quantities, different answers. The old reading
+// divided by klATRDaily, so "47%" meant "IB is 47% of a daily ATR", which has no threshold
+// in the literature. STATEFUL: must be called unconditionally.
+klIBAverage(bool en, bool reset, float ibRange, int days) =>
+    var float[] hist = array.new_float()
+    var float pending = na
+    float avg = na
+    if en
+        // On rollover `pending` holds yesterday's FINAL IB range, so bank it before clearing.
+        if reset
+            if not na(pending)
+                array.push(hist, pending)
+                if array.size(hist) > days
+                    array.shift(hist)
+            pending := na
+        if not na(ibRange)
+            pending := ibRange
+        if array.size(hist) > 0
+            avg := array.avg(hist)
+    avg
+
+// Room left in the day's range, in units of THIS trade's risk. A breakout arriving with less
+// than ~1R of headroom to a normal day's extension has nowhere to go, however good it looks.
+// Built on ADR (high-low), so it measures RANGE remaining, not directional conviction -- a
+// genuine trend day exceeds the projection, which is why the gate default stays permissive.
+klHeadroomR(int d, float px, float dayH, float dayL, float adr, float riskPts) =>
+    float r = na
+    if d != 0 and not na(adr) and adr > 0 and not na(riskPts) and riskPts > 0 and not na(dayH) and not na(dayL)
+        float proj = d == 1 ? dayL + adr : dayH - adr
+        r := (d == 1 ? proj - px : px - proj) / riskPts
+    r
+
 // Stateless context read: where price and today's open sit relative to prior value, and
 // how wide the Initial Balance came out relative to a normal day.
-klContext(float vah, float val, float dayOpen, float ibH, float ibL, float atrD) =>
+klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg) =>
     // Auction state: price above VAH / below VAL is trading outside yesterday's accepted
     // value — the precondition for a trend day.
     string auction = na(vah) or na(val) ? "n/a" : close > vah ? "Above VAH" : close < val ? "Below VAL" : "Inside Value"
     // Opening position: a gap that opens outside prior value is the classic trend-day tell.
     string openPos = na(vah) or na(val) or na(dayOpen) ? "n/a" : dayOpen > vah ? "Above VAH" : dayOpen < val ? "Below VAL" : "In VA"
-    // IB as a share of average daily range: <35% coiled, >60% wide/range day.
+    // IB vs the AVERAGE IB, with the cheat sheet's own thresholds: <80% narrow (coiled,
+    // trend-day candidate), >120% wide (balanced/rotational, IB extremes tend to hold).
     float ibRange = na(ibH) or na(ibL) ? na : ibH - ibL
-    float ibPct   = na(ibRange) or na(atrD) or atrD == 0 ? na : ibRange / atrD * 100.0
-    string ibType = na(ibPct) ? "-" : ibPct < 35 ? "narrow/trend?" : ibPct > 60 ? "wide/range?" : "normal"
+    float ibPct   = na(ibRange) or na(ibAvg) or ibAvg <= 0 ? na : ibRange / ibAvg * 100.0
+    string ibType = na(ibPct) ? "-" : ibPct < 80 ? "narrow/trend?" : ibPct > 120 ? "wide/range?" : "normal"
     [auction, openPos, ibPct, ibType]
 
 // ─── Main-body wiring (kept deliberately thin) ──────────────────────────────
@@ -2171,7 +2244,8 @@ bool klInIB = enableKeyLevels and not na(time(timeframe.period, klIBSession, ses
 
 [klVAH, klPOC, klVAL] = klProfile(enableKeyLevels, klAutoProfile, shouldReset, not na(time(timeframe.period, "0915-1530", sessionTimezone)), klLoLTF, klHiLTF, klVolLTF, klVPStep, klValueAreaPct, klManualVAH, klManualPOC, klManualVAL)
 [klIBH, klIBL, klDayOpen, klDayStartBar, klDayHigh, klDayLow] = klInitialBalance(enableKeyLevels, shouldReset, klInIB, inSession)
-[klAuction, klOpenPos, klIBPct, klIBType] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klATRDaily)
+float klIBAvg = klIBAverage(enableKeyLevels, shouldReset, na(klIBH) or na(klIBL) ? na : klIBH - klIBL, volBaseDays)
+[klAuction, klOpenPos, klIBPct, klIBType] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klIBAvg)
 
 // Cleared on session rollover so a stale trigger tag cannot leak into the next day.
 klPendingSource := shouldReset ? "" : klPendingSource
@@ -2341,35 +2415,15 @@ if enableNRFilter and barstate.isconfirmed and bar_index != cachedNRBar
 bool nrRequireGate = not enableNRFilter or nrMode != "Require" or cachedNRPreferHit
 
 // ========================================== GOD MODE SCORING =======================================
-godNear(float lvl, float ref, float tol) => not na(lvl) and not na(ref) and math.abs(lvl - ref) <= tol
-
-// Starts at 50 (neutral) and moves on six independent reads. `conf` is PDH/PDL confluence
-// and `chop` caps a whipsaw day at 40 no matter how good the rest looks.
-godScore(bool isUp, bool conf, bool chop) =>
-    float sc = 50.0
-    float vr = nz(cachedVolumeMA) > 0 ? volume / cachedVolumeMA : 1.0
-    sc += vr >= strongVolumeMultiplier ? 20 : vr >= volumeMultiplier ? 12 : vr >= 1.0 ? 4 : -10
-    sc += isUp ? (cachedHTFBullish ? 15 : cachedHTFBearish ? -15 : 0) : (cachedHTFBearish ? 15 : cachedHTFBullish ? -15 : 0)
-    // Narrow opening range vs a normal day = compressed spring, best expansion odds.
-    float ovr = not na(klATRDaily) and klATRDaily > 0 and not na(activeORB) ? activeORB.orbRange / klATRDaily : na
-    sc += na(ovr) ? 0 : ovr <= 0.25 ? 10 : ovr <= 0.5 ? 5 : ovr <= 0.75 ? 0 : -10
-    // Signed gap — gapPercent is abs() and cannot tell alignment from opposition.
-    float gp = na(prevDayClose) or prevDayClose <= 0 or na(todayOpen) ? na : (todayOpen - prevDayClose) / prevDayClose * 100
-    float ga = na(gp) ? na : isUp ? gp : -gp
-    sc += na(ga) ? 0 : ga >= 0.5 ? 8 : ga <= -0.5 ? -8 : 0
-    sc += conf ? 12 : 0
-    // Each earlier break in this direction already spent some of the move.
-    int pb = (isUp ? sessionBreakoutsUp : sessionBreakoutsDown) - 1
-    sc -= math.min(math.max(pb, 0) * 5, 15)
-    if chop
-        sc := math.min(sc, 40)
-    math.max(0.0, math.min(100.0, sc))
-
 bool godChopDay = godModeEnabled and godChopGuard and godFailedBreaks >= 2
 
 // ====================================== BREAKOUT DETECTION =========================================
 canDetectBreakout = not isHTF and enableBreakout and not na(activeORB) and barstate.isconfirmed
-volumeMA := cachedVolumeMA
+volBaseline := cachedVolBaseline
+// Session volume factor: cumulative volume vs the same point of day over volBaseDays
+// prior sessions. Distinct from the per-bar ratio -- this asks whether the STOCK is in
+// play today, the bar ratio asks whether THIS break carries participation.
+float klSessionVF = cachedSessionVF
 
 // ============================= ENTRY CUTOFF TIME CHECK ==========================================
 int currentHourNow = hour(time, sessionTimezone)
@@ -2385,6 +2439,12 @@ bool smartFiltersPass = gapFilterPassed and orbRangeFilterPassed and isAfterMinT
 // nrRequireGate is always true unless: enableNRFilter=true AND nrMode="Require" AND yesterday was not NR.
 // In Prefer mode (default-on shape), this is a no-op — NR state is tracked only via cachedNRPreferHit.
 bool canTakeEntry = isBeforeCutoff and not sessionEntryTaken and smartFiltersPass and nrRequireGate
+
+// Key-level entries deliberately DROP orbRangeFilterPassed. That filter asks whether the
+// OPENING RANGE was a tradeable width -- a property of the ORB and of nothing else. Applying
+// it to an IB extension or a value-area setup rejected them for a reason with no bearing on
+// their validity. Gap, min-entry-time and the NR gate are genuinely universal and are kept.
+bool canTakeKeyLevelEntry = isBeforeCutoff and not sessionEntryTaken and gapFilterPassed and isAfterMinTime and nrRequireGate
 
 // Entry conditions - Trend/HTF filtering is now handled at breakout detection time
 // using the "both against" logic (only blocks when BOTH filters are against the direction)
@@ -2612,65 +2672,6 @@ if not canTakeShortEntry and pendingShortEntry
     pendingShortBar := na
     klPendingSource := ""
 
-[bullFVG, bullTop, bullBottom] = detectBullishFVG()
-[bearFVG, bearTop, bearBottom] = detectBearishFVG()
-
-if bullFVG and showFVG and not na(activeORB)
-    fvgBox = box.new(left=bar_index-2, top=bullTop, right=bar_index, bottom=bullBottom,
-                     border_color=color.new(fvgBullColor, 0),
-                     bgcolor=color.new(fvgBullColor, fvgTransparency),
-                     border_width=1,
-                     extend=extend.none)  // Changed from extend.right to extend.none
-    array.push(fvgBoxes, fvgBox)
-    array.push(fvgTops, bullTop)
-    array.push(fvgBottoms, bullBottom)
-    array.push(fvgIsBullish, true)
-    array.push(fvgIsActive, true)
-    array.push(fvgStartBar, bar_index-2)
-    cleanupOldFVG()
-
-if bearFVG and showFVG and not na(activeORB)
-    fvgBox = box.new(left=bar_index-2, top=bearTop, right=bar_index, bottom=bearBottom,
-                     border_color=color.new(fvgBearColor, 0),
-                     bgcolor=color.new(fvgBearColor, fvgTransparency),
-                     border_width=1,
-                     extend=extend.none)  // Changed from extend.right to extend.none
-    array.push(fvgBoxes, fvgBox)
-    array.push(fvgTops, bearTop)
-    array.push(fvgBottoms, bearBottom)
-    array.push(fvgIsBullish, false)
-    array.push(fvgIsActive, true)
-    array.push(fvgStartBar, bar_index-2)
-    cleanupOldFVG()
-
-if showFVG and array.size(fvgBoxes) > 0 and (barstate.isnew or barstate.islast)
-    for i = 0 to array.size(fvgBoxes) - 1
-        if array.get(fvgIsActive, i)
-            fvgTop = array.get(fvgTops, i)
-            fvgBottom = array.get(fvgBottoms, i)
-            isBull = array.get(fvgIsBullish, i)
-            startBar = array.get(fvgStartBar, i)
-            currentBox = array.get(fvgBoxes, i)
-            boxColor = isBull ? fvgBullColor : fvgBearColor
-
-            fvgFilled = false
-            if isBull
-                fvgFilled := close < fvgBottom
-            else
-                fvgFilled := close > fvgTop
-
-            if not na(currentBox)
-                if fvgFilled
-                    box.set_right(currentBox, bar_index)
-                    box.set_border_style(currentBox, line.style_dashed)
-                    array.set(fvgIsActive, i, false)
-
-                    if bar_index - array.get(fvgStartBar, i) > 10
-                        box.delete(currentBox)
-                        array.set(fvgBoxes, i, na)
-                else
-                    box.set_right(currentBox, bar_index)
-
 // ======================= NEW ARCHITECTURE: BREAKOUT DETECTION WITH activeORB =======================
 if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout and barstate.isconfirmed
 
@@ -2683,11 +2684,7 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
     float effBreakoutBuffer = godModeEnabled and godAdaptiveBuffer and nz(cachedATR) > 0 and close > 0 ? math.max(breakoutBuffer, cachedATR * 0.10 / close * 100) : breakoutBuffer
     activeBufferUp = getBuffer(activeHigh, effBreakoutBuffer)
     activeBufferDown = getBuffer(activeLow, effBreakoutBuffer)
-    float godTol = nz(cachedATR) * 0.25
-    bool godConfUp = godNear(activeHigh, klPDH, godTol)
-    bool godConfDn = godNear(activeLow, klPDL, godTol)
-
-    volumeOK = not enableVolumeFilter or hasVolumeConfirmation(volumeMA, volumeMultiplier, strongVolumeMultiplier)
+    volumeOK = not enableVolumeFilter or hasVolumeConfirmation(volBaseline, volumeMultiplier, strongVolumeMultiplier)
 
     // BLOCKING LOGIC: Count how many directional filters are against the trade
     // Block entry when 2 or more filters oppose the direction
@@ -2719,7 +2716,7 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
     // Diagnostic: track why breakout was rejected + store filter values at attempt time
     if crossedAbove and not activeORB.breakoutUp
         priceCrossedUp := true
-        float volRatioNow = volumeMA > 0 ? math.max(volume, math.max(nz(volume[1]), nz(volume[2]))) / volumeMA : 0
+        float volRatioNow = volBaseline > 0 ? volume / volBaseline : 0
         attemptVolRatio := volRatioNow
         attemptVolOK := volumeOK
         attemptTrendOK := trendOK_Up
@@ -2752,20 +2749,14 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
         tradeOrbHigh := activeORB.high
         tradeOrbLow := activeORB.low
 
-        if godModeEnabled
-            godLastScore := godScore(true, godConfUp, godChopDay)
-            godLastUp := true
-
         if showBreakLabels
             string breakText = ""
             if labelFormat == "Simple"
                 breakText := "🔼 BREAKOUT UP #" + str.tostring(sessionBreakoutsUp)
             else  // Detailed
-                float volRatio = volumeMA > 0 ? volume / volumeMA : 0
+                float volRatio = volBaseline > 0 ? volume / volBaseline : 0
                 string volText = volRatio >= strongVolumeMultiplier ? str.tostring(volRatio, "#.#") + "x ⚡" : volRatio >= volumeMultiplier ? str.tostring(volRatio, "#.#") + "x" : str.tostring(volRatio, "#.#") + "x ⚠️"
                 breakText := "🔼 BREAKOUT UP\n" + activeORB.name + " #" + str.tostring(sessionBreakoutsUp) + "\nVol: " + volText
-            if godModeEnabled
-                breakText += "\n⚡ " + str.tostring(godLastScore, "#") + " (" + godGrade(godLastScore) + ")" + (godConfUp ? " 🏆" : "")
 
             float labelOffset = cachedATR * LABEL_OFFSET_ATR_MULTIPLIER
             float labelY = high + labelOffset
@@ -2774,7 +2765,7 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
             cleanupLabel(breakLabel)
 
     // ========== MARK PENDING LONG ENTRY (TP/SL created on NEXT bar) ==========
-        float breakoutVolRatio = volumeMA > 0 ? volume / volumeMA : 0
+        float breakoutVolRatio = volBaseline > 0 ? volume / volBaseline : 0
         bool isStrongVolumeBreakout = breakoutVolRatio >= strongVolumeMultiplier
 
         if enableRetestEntry and not isStrongVolumeBreakout
@@ -2792,7 +2783,7 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
     // Diagnostic: track why breakout was rejected + store filter values at attempt time
     if crossedBelow and not activeORB.breakoutDown
         priceCrossedDown := true
-        float volRatioNow = volumeMA > 0 ? math.max(volume, math.max(nz(volume[1]), nz(volume[2]))) / volumeMA : 0
+        float volRatioNow = volBaseline > 0 ? volume / volBaseline : 0
         attemptVolRatio := volRatioNow
         attemptVolOK := volumeOK
         attemptTrendOK := trendOK_Down
@@ -2826,20 +2817,14 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
         tradeOrbHigh := activeORB.high
         tradeOrbLow := activeORB.low
 
-        if godModeEnabled
-            godLastScore := godScore(false, godConfDn, godChopDay)
-            godLastUp := false
-
         if showBreakLabels
             string breakText = ""
             if labelFormat == "Simple"
                 breakText := "🔽 BREAKOUT DOWN #" + str.tostring(sessionBreakoutsDown)
             else  // Detailed
-                float volRatio = volumeMA > 0 ? volume / volumeMA : 0
+                float volRatio = volBaseline > 0 ? volume / volBaseline : 0
                 string volText = volRatio >= strongVolumeMultiplier ? str.tostring(volRatio, "#.#") + "x ⚡" : volRatio >= volumeMultiplier ? str.tostring(volRatio, "#.#") + "x" : str.tostring(volRatio, "#.#") + "x ⚠️"
                 breakText := "🔽 BREAKOUT DOWN\n" + activeORB.name + " | #" + str.tostring(sessionBreakoutsDown) + "\nVol: " + volText
-            if godModeEnabled
-                breakText += "\n⚡ " + str.tostring(godLastScore, "#") + " (" + godGrade(godLastScore) + ")" + (godConfDn ? " 🏆" : "")
 
             float labelOffset = cachedATR * LABEL_OFFSET_ATR_MULTIPLIER
             float labelY = low - labelOffset
@@ -2847,7 +2832,7 @@ if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout a
             breakLabel = label.new(bar_index, labelY, breakText, color = color.new(color.red, 0), style = label.style_label_up, textalign = text.align_center, textcolor = color.white, size = getLabelSize(labelSize))
             cleanupLabel(breakLabel)
 
-        float breakoutVolRatioShort = volumeMA > 0 ? volume / volumeMA : 0
+        float breakoutVolRatioShort = volBaseline > 0 ? volume / volBaseline : 0
         bool isStrongVolumeBreakoutShort = breakoutVolRatioShort >= strongVolumeMultiplier
 
         if enableRetestEntry and not isStrongVolumeBreakoutShort
@@ -3149,7 +3134,7 @@ klResolveSetup(bool en, bool vaOn, bool pdOn, bool ibOn, float vah, float val, f
     [cd, d, lv, rt, rej]
 
 // ─── Weighted score ─────────────────────────────────────────────────────────
-klComputeScore(int d, int confCnt, bool isRetest, float vwap, float ema9, float emaSlope, float rvol, bool bull, bool bear, string deltaProxy, float rvolMin, float rvolStrong) =>
+klComputeScore(int d, int confCnt, bool isRetest, float vwap, float ema9, float emaSlope, float rvol, bool bull, bool bear, float rvolMin, float rvolStrong, float sessVF) =>
     int s = 0
     if d != 0
         s += 2                                    // interacted with a major level
@@ -3166,16 +3151,24 @@ klComputeScore(int d, int confCnt, bool isRetest, float vwap, float ema9, float 
             s += 2
         else if rvol >= rvolMin
             s += 1
+        // CLV is scored ONCE. The old build also awarded +1 for deltaProxy, which is
+        // itself derived from clv (>0.55 = "buy"), so one strong close collected +2 of a
+        // 7-point threshold for a single piece of information -- and the weakest one,
+        // since Pine has no orderflow and CLV is only a proxy for it.
         if (d == 1 and bull) or (d == -1 and bear)
             s += 1
-        if (d == 1 and deltaProxy == "buy") or (d == -1 and deltaProxy == "sell")
+        // Session participation, scored separately from the bar ratio above: a break can
+        // carry a big single bar on a stock nobody is trading today, and that is the case
+        // the relative-volume research says to avoid. Not a double count -- different
+        // question, different denominator.
+        if not na(sessVF) and sessVF >= rvolMin
             s += 1
     s
 
 // ─── Level-based execution map ──────────────────────────────────────────────
 // First target = nearest structural level in the trade direction. Structure, not a
 // fixed R multiple, decides where this trade is likely to stall.
-klFindT1(float[] levels, int d, float ref) =>
+klFindT1(float[] levels, int d, float ref, float pad) =>
     float t1 = na
     if d != 0 and array.size(levels) > 0
         for i = 0 to array.size(levels) - 1
@@ -3184,7 +3177,13 @@ klFindT1(float[] levels, int d, float ref) =>
                 t1 := na(t1) ? lv : math.min(t1, lv)
             if d == -1 and lv < ref - syminfo.mintick
                 t1 := na(t1) ? lv : math.max(t1, lv)
-    t1
+    // Park the target just SHORT of the level, never ON it. The level is where the
+    // crowd's resting limit orders sit, so price routinely stalls a few ticks before
+    // reaching it and rolls over. Stops go BEYOND the crowd; targets go IN FRONT of it.
+    // If the pad would leave the target inside the noise band around entry there is no
+    // workable structural target -- report na rather than one that cannot be filled.
+    float p = na(t1) ? na : d == 1 ? t1 - pad : t1 + pad
+    na(p) ? na : d == 1 ? (p > ref + pad ? p : na) : (p < ref - pad ? p : na)
 
 klExecMap(int d, float lvl, float atrVal, float slMult, float acct, float rPct) =>
     float ref   = close
@@ -3198,9 +3197,14 @@ klExecMap(int d, float lvl, float atrVal, float slMult, float acct, float rPct) 
 // klEMA9 is computed here, unconditionally: a ta.* call reached on only some bars loses
 // its internal series state, so gating an EMA behind an input is a correctness bug.
 float klEMA9 = ta.ema(close, 9)
+// HTF confirmation series. close[1] + lookahead_off is the canonical NON-repainting
+// pair: it can never see inside the forming HTF bar, at the cost of up to one HTF bar
+// of lag. Requesting plain `close` here would just return current price between HTF
+// boundaries, which would make the confirmation test meaningless rather than strict.
+float klHTFClose = request.security(syminfo.tickerid, klConfirmTF, close[1], lookahead=barmerge.lookahead_off)
 float klEMASlope = klEMA9 - nz(klEMA9[1], klEMA9)
 
-[klCLV, klRVOL, klBullCandle, klBearCandle, klDeltaProxy] = klCandle(volumeMA, klClvLongMin, klClvShortMax)
+[klCLV, klRVOL, klBullCandle, klBearCandle, klDeltaProxy] = klCandle(volBaseline, klClvLongMin, klClvShortMax)
 [klAllLevels, klLevelNames] = klBuildRegistry(enableKeyLevels, klPOC, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL, activeORB)
 [klVAHBreakBar, klVALBreakBar, klPDHBreakBar, klPDLBreakBar, klIBHBreakBar, klIBLBreakBar] = klTrackBreaks(enableKeyLevels, barstate.isconfirmed, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL)
 
@@ -3208,9 +3212,19 @@ float klBand = nz(cachedATR) * klConfAtrMult
 
 [klSetupCode, klDir, klSetupLevel, klIsRetest, klRejectionFamily] = klResolveSetup(enableKeyLevels, enableVATriggers, enablePDTriggers, enableIBTriggers, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL, enableKeyLevels and not na(klIBH) and not na(klIBL) and not klInIB, klBullCandle, klBearCandle, klBand, klRetestMaxBars, klVAHBreakBar, klVALBreakBar, klPDHBreakBar, klPDLBreakBar, klIBHBreakBar, klIBLBreakBar)
 [klConfCnt, klConfNames] = klConfluence(klSetupLevel, klBand, klAllLevels, klLevelNames)
-int klScore = klComputeScore(klDir, klConfCnt, klIsRetest, sessionVWAP, klEMA9, klEMASlope, klRVOL, klBullCandle, klBearCandle, klDeltaProxy, volumeMultiplier, strongVolumeMultiplier)
+int klScore = klComputeScore(klDir, klConfCnt, klIsRetest, sessionVWAP, klEMA9, klEMASlope, klRVOL, klBullCandle, klBearCandle, volumeMultiplier, strongVolumeMultiplier, klSessionVF)
 [klEntryRef, klSLLevel, klRiskPts, klQtyEst] = klExecMap(klDir, klSetupLevel, cachedATR, klSlBufferMult, accountSize, riskPct)
-float klT1 = klFindT1(klAllLevels, klDir, klEntryRef)
+float klT1 = klFindT1(klAllLevels, klDir, klEntryRef, nz(cachedATR) * klT1PadMult)
+
+// Direction-uniform HTF test: longs need the HTF close ABOVE the level, shorts BELOW it.
+// One expression serves every family -- a VAH rejection short wants the HTF close back
+// under VAH, which is this same test at d == -1, so rejections are not inverted by it.
+// Exceptional volume bypasses the wait: a break carrying >= Strong x RVOL is order flow
+// arriving rather than a stop run, and holding it a full HTF bar gives back most of the move.
+float klHeadroom = klHeadroomR(klDir, klEntryRef, klDayHigh, klDayLow, klADR, klRiskPts)
+bool klRoomOK = klMinHeadroomR <= 0 or na(klHeadroom) or klHeadroom >= klMinHeadroomR
+
+bool klHTFOK = not klRequireHTFClose or na(klHTFClose) or na(klSetupLevel) or klRVOL >= strongVolumeMultiplier or (klDir == 1 and klHTFClose > klSetupLevel) or (klDir == -1 and klHTFClose < klSetupLevel)
 
 // ─── Decision-packet alert ──────────────────────────────────────────────────
 // Declared here, not with the other builders, because it reads ~15 key-level globals that
@@ -3237,7 +3251,7 @@ buildKeyLevelAlert() =>
     msg += "Ref Entry " + str.tostring(klEntryRef, format.mintick) + " | Ref SL " + str.tostring(klSLLevel, format.mintick) + "\\n"
     msg += "Ref T1 " + (na(klT1) ? "-" : str.tostring(klT1, format.mintick)) + " | Ref Qty " + (na(klQtyEst) ? "-" : str.tostring(klQtyEst)) + "\\n"
     msg += "Risk " + str.tostring(klRiskPts, format.mintick) + " pts\\n" + sep
-    msg += "RVOL " + str.tostring(klRVOL, "#.0") + " | CLV " + str.tostring(klCLV, "#.00") + " | d-proxy " + klDeltaProxy + "\\n"
+    msg += "VF " + (na(klSessionVF) ? "-" : str.tostring(klSessionVF, "0.00") + "x") + " | RVOL " + str.tostring(klRVOL, "0.0") + " | CLV " + str.tostring(klCLV, "0.00") + " | d-proxy " + klDeltaProxy + "\\n"
     msg += "Trend " + (not na(sessionVWAP) and close > sessionVWAP ? "vwap+ " : "vwap- ") + (close > klEMA9 ? "ema+ " : "ema- ") + (klEMASlope > 0 ? "slope+" : "slope-") + "\\n"
     msg += "Auction: " + klAuction + " | Open " + klOpenPos + " | ADR " + (na(klADR) or klADR <= 0 or na(klDayHigh) ? "-" : str.tostring((klDayHigh - klDayLow) / klADR * 100, "#") + "% used") + "\\n" + sep
     msg += "FOOTPRINT: " + klFootprintCue(klDir, klRejectionFamily, lvlName) + "\\n"
@@ -3248,16 +3262,34 @@ buildKeyLevelAlert() =>
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK) =>
     var int lastBar = na
-    bool candidate = en and d != 0 and score >= threshold
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK)
+
+// Latched last setup. The live row is blank on all but the single bar a setup fires, so
+// without this the panel reads 'nothing here' during the 99% of bars between signals --
+// which is indistinguishable from 'this engine produces nothing'.
+var string klLastCode  = ""
+var int    klLastDir   = 0
+var int    klLastScore = 0
+var int    klLastConf  = 0
+var string klLastConfN = ""
+var int    klLastTime  = na
+if klFire
+    klLastCode  := klSetupCode
+    klLastDir   := klDir
+    klLastScore := klScore
+    klLastConf  := klConfCnt
+    klLastConfN := klConfNames
+    klLastTime  := time
+
 
 if klFire
     alert(buildKeyLevelAlert(), alert.freq_once_per_bar_close)
@@ -3272,7 +3304,7 @@ alertcondition(klFire, title="Key-Level Decision Packet", message="Key-level bre
 // Reuses the ORB pendingLong/ShortEntry machinery, so fill, SL/TP, Telegram alert, trade
 // lines and the 1-trade-per-session cap are shared — no second execution path.
 // canTakeEntry already covers cutoff, sessionEntryTaken, smart filters and the NR gate.
-if klFire and enableKeyLevelExecution and canTakeEntry
+if klFire and enableKeyLevelExecution and canTakeKeyLevelEntry
     if klDir == 1 and not pendingLongEntry and not awaitingRetestLong
         pendingLongEntry := true
         pendingLongBar := bar_index
@@ -3981,6 +4013,10 @@ if showDashboard and enableHTF
             table.merge_cells(dashTable, 0, row, 1, row)
         row += 1
 
+        // VERDICT — first thing under the header, in both Focus and Full.
+        if not isHTF
+            row := renderVerdict(dashTable, row, txtSize, enableTargets and not na(orbEntryBar) and not (orbTP1Hit or orbSLHit), sessionEntryTaken, isBeforeCutoff, isAfterMinTime, gapFilterPassed, orbRangeFilterPassed, not enableVolumeFilter or hasVolumeConfirmation(volBaseline, volumeMultiplier, strongVolumeMultiplier), nz(volBaseline) > 0 ? volume / volBaseline : 0, volumeMultiplier, nrRequireGate, godChopDay, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klHTFOK, klSessionVF, klRoomOK, klHeadroom)
+
         if showStage and not na(activeORB)
             bool isMarketNow = isTradingDay() and isWithinSessionHours()
             bool showingPastData = hadSessionToday and not isMarketNow
@@ -4150,7 +4186,7 @@ if showDashboard and enableHTF
             bool trendBear = isTrendDown(trendMode, close, trendVWAP, trendEMA12, trendEMACustom, trendSTDirection)
             string liveTrendLbl = trendBull ? "Bullish" : trendBear ? "Bearish" : "Neutral"
             // Display values: attempt-time for modes 1&2 (have direction), live for mode 0
-            float dispVolRatio = useAttempt ? attemptVolRatio : (volumeMA > 0 ? volume / volumeMA : 0)
+            float dispVolRatio = useAttempt ? attemptVolRatio : (volBaseline > 0 ? volume / volBaseline : 0)
             bool dispVolOK = useAttempt ? attemptVolOK : true
             bool dispTrendAligned = useAttempt ? attemptTrendAligned : true
             bool dispHTFAligned = useAttempt ? attemptHTFAligned : true
@@ -4160,9 +4196,10 @@ if showDashboard and enableHTF
             string dispHTFLbl = useAttempt ? attemptHTFLabel : cachedHTFBiasText
             string dispIdxLbl = useAttempt ? attemptIdxLabel : cachedIndexBiasText
             // Live values for "→" arrow comparison (shows drift since attempt)
-            float liveVolRatio = volumeMA > 0 ? volume / volumeMA : 0
+            float liveVolRatio = volBaseline > 0 ? volume / volBaseline : 0
             bool brokeOutLate = (sessionBreakoutsUp > 0 or sessionBreakoutsDown > 0) and not (everHadBreakUp or everHadBreakDown)
-            row := renderFilterStatus(dashTable, row, txtSize, txtColor, enableGapFilter, gapFilterPassed, gapPercent, maxGapPercent, enableORBRangeFilter, orbRangeFilterPassed, orbRangePercent, minORBRangePercent, maxORBRangePercent, priceCrossedUp, priceCrossedDown, enableVolumeFilter, dispVolOK, dispVolRatio, volumeMultiplier, strongVolumeMultiplier, enableTrendFilter, dispTrendAligned, dispTrendLbl, enableHTF and blockCounterTrend, dispHTFAligned, dispHTFLbl, enableIndexFilter, dispIdxAligned, dispIdxLbl, liveVolRatio, liveTrendLbl, cachedHTFBiasText, cachedIndexBiasText, brokeOutLate, entryCutoffHour, entryCutoffMinute, filterMode)
+            if dashMode == "Full"
+                row := renderFilterStatus(dashTable, row, txtSize, txtColor, enableGapFilter, gapFilterPassed, gapPercent, maxGapPercent, enableORBRangeFilter, orbRangeFilterPassed, orbRangePercent, minORBRangePercent, maxORBRangePercent, priceCrossedUp, priceCrossedDown, enableVolumeFilter, dispVolOK, dispVolRatio, volumeMultiplier, strongVolumeMultiplier, enableTrendFilter, dispTrendAligned, dispTrendLbl, enableHTF and blockCounterTrend, dispHTFAligned, dispHTFLbl, enableIndexFilter, dispIdxAligned, dispIdxLbl, liveVolRatio, liveTrendLbl, cachedHTFBiasText, cachedIndexBiasText, brokeOutLate, entryCutoffHour, entryCutoffMinute, filterMode)
             // Retest status (not shown for trade-taken)
             if enableRetestEntry and not hasTrade
                 string retestSt = awaitingRetestLong ? (consolidationCountLong > 0 ? "Long (" + str.tostring(consolidationCountLong) + "/" + str.tostring(consolidationBars) + ")" : "Waiting Long") : awaitingRetestShort ? (consolidationCountShort > 0 ? "Short (" + str.tostring(consolidationCountShort) + "/" + str.tostring(consolidationBars) + ")" : "Waiting Short") : "Ready"
@@ -4172,12 +4209,12 @@ if showDashboard and enableHTF
                 row += 1
 
         if godModeEnabled
-            row := renderGodRow(dashTable, row, txtSize, txtColor, godLastScore, godLastUp, godChopDay, godFailedBreaks)
+            row := renderGodRow(dashTable, row, txtSize, txtColor, godChopDay, godFailedBreaks)
 
         /// Key-level section — the objective picture from the volume-profile model.
         /// Rows are rendered by renderKeyLevels(); hover any row label for what it means.
         if enableKeyLevels
-            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, cachedATR, atrMultiplier, klDir, klSetupCode, klScore, klScoreThreshold, klConfCnt, klConfNames, enableKeyLevelExecution)
+            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full")
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
@@ -4216,28 +4253,21 @@ if showDashboard and enableHTF
                     table.cell(dashTable, 1, row, tradeDir, text_color=tradeDirColor, text_size=txtSize, text_halign=text.align_right, bgcolor=headerColor)
                     row += 1
 
-                    string currencySymbol = accountCurrency == "EUR" ? "€" :
-                                          accountCurrency == "GBP" ? "£" :
-                                          accountCurrency == "JPY" ? "¥" :
-                                          accountCurrency == "USD" ? "$" :
-                                          accountCurrency == "CAD" ? "C$" :
-                                          accountCurrency == "AUD" ? "A$" :
-                                          accountCurrency == "CHF" ? "Fr." :
-                                          "₹"  // Default to INR for Indian market
+                    string currencySymbol = "₹"
 
-                    sharesTooltip = "Maximum Position Size in " + accountCurrency + "\n\nNumber of shares you can buy while staying within your risk limits.\n\nCALCULATED BY:\nRisk Amount ÷ Distance to Stop Loss\n\nEXAMPLE:\n• Risk: " + currencySymbol + "150\n• Entry: " + currencySymbol + "10.00\n• Stop: " + currencySymbol + "9.50 (50¢ distance)\n• Max Shares: 300 shares (" + currencySymbol + "150 ÷ " + currencySymbol + "0.50)\n• Position Value: " + currencySymbol + "3,000\n\nThis ensures consistent risk management across all trades.\n\n⚠️ FIXED at breakout - does not change with price!"
+                    sharesTooltip = "Maximum Position Size (INR)" + "\n\nNumber of shares you can buy while staying within your risk limits.\n\nCALCULATED BY:\nRisk Amount ÷ Distance to Stop Loss\n\nEXAMPLE:\n• Risk: " + currencySymbol + "150\n• Entry: " + currencySymbol + "10.00\n• Stop: " + currencySymbol + "9.50 (50¢ distance)\n• Max Shares: 300 shares (" + currencySymbol + "150 ÷ " + currencySymbol + "0.50)\n• Position Value: " + currencySymbol + "3,000\n\nThis ensures consistent risk management across all trades.\n\n⚠️ FIXED at breakout - does not change with price!"
                     table.cell(dashTable, 0, row, "Max Shares:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=sharesTooltip)
                     string sharesText = na(displayShares) ? "N/A" : str.tostring(displayShares, "#")
-                    float displayPosValueInAcctCurr = na(displayPosValue) ? na : displayPosValue / (symbolCurrency != accountCurrency ? exchangeRate : 1)
+                    float displayPosValueInAcctCurr = na(displayPosValue) ? na : displayPosValue
                     string posValueText = na(displayPosValueInAcctCurr) ? "N/A" : str.tostring(displayPosValueInAcctCurr, "#,###")
                     table.cell(dashTable, 1, row, sharesText + " (" + currencySymbol + posValueText + ")", text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                     row += 1
 
                     // Risk amount
                     riskPctOfAcct := (displayRiskAmount / accountSize) * 100
-                    riskTooltip = "Risk Amount in " + accountCurrency + "\n\nTotal amount you'll lose if stop loss is hit.\n\nSHOWS:\n• " + accountCurrency + " amount at risk\n• Percentage of total account\n\nRECOMMENDED RISK LEVELS:\n• 0.5-1% of account (conservative)\n• 1-2% of account (balanced)\n• 2-3% of account (aggressive)\n\nNEVER risk more than 3% on a single trade.\n\nThis is your MAXIMUM LOSS - stick to it!\n\n⚠️ FIXED at breakout - does not change!"
+                    riskTooltip = "Risk Amount (INR)" + "\n\nTotal amount you'll lose if stop loss is hit.\n\nSHOWS:\n• " + "INR" + " amount at risk\n• Percentage of total account\n\nRECOMMENDED RISK LEVELS:\n• 0.5-1% of account (conservative)\n• 1-2% of account (balanced)\n• 2-3% of account (aggressive)\n\nNEVER risk more than 3% on a single trade.\n\nThis is your MAXIMUM LOSS - stick to it!\n\n⚠️ FIXED at breakout - does not change!"
                     table.cell(dashTable, 0, row, "Risk:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=riskTooltip)
-                    table.cell(dashTable, 1, row, str.format("{0}{1} ({2}%)", currencySymbol, str.tostring(displayRiskAmount / (symbolCurrency != accountCurrency ? exchangeRate : 1), "#"), str.tostring(riskPctOfAcct, "#.#")), text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
+                    table.cell(dashTable, 1, row, str.format("{0}{1} ({2}%)", currencySymbol, str.tostring(displayRiskAmount, "#"), str.tostring(riskPctOfAcct, "#.#")), text_color=color.new(color.orange, 0), text_size=txtSize, text_halign=text.align_right)
                     row += 1
 
                     // Reward amount (based on TP1 = execution target, matches telegram)
@@ -4245,10 +4275,10 @@ if showDashboard and enableHTF
                     if not na(rewardTP) and not na(entry) and displayShares > 0
                         float rewardPerShare = math.abs(rewardTP - entry)
                         float rewardAmount = displayShares * rewardPerShare
-                        float rewardInAcctCurr = rewardAmount / (symbolCurrency != accountCurrency ? exchangeRate : 1)
+                        float rewardInAcctCurr = rewardAmount
                         float rewardPctOfAcct = (rewardAmount / accountSize) * 100
                         string tpLabel = "TP1"
-                        string rewardTooltip = "Potential Reward in " + accountCurrency + "\n\nProfit if highest target (" + tpLabel + ") is hit.\n\nCALCULATED BY:\nShares x Distance to " + tpLabel + "\n\nThis is your POTENTIAL GAIN at " + tpLabel + "."
+                        string rewardTooltip = "Potential Reward (INR)" + "\n\nProfit if highest target (" + tpLabel + ") is hit.\n\nCALCULATED BY:\nShares x Distance to " + tpLabel + "\n\nThis is your POTENTIAL GAIN at " + tpLabel + "."
                         table.cell(dashTable, 0, row, "Reward:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=rewardTooltip)
                         table.cell(dashTable, 1, row, str.format("{0}{1} ({2}%)", currencySymbol, str.tostring(rewardInAcctCurr, "#"), str.tostring(rewardPctOfAcct, "#.#")), text_color=color.new(color.green, 0), text_size=txtSize, text_halign=text.align_right)
                         row += 1
@@ -4551,18 +4581,24 @@ klDrawLevels(bool en, bool showVA, bool showSec, bool tags, float vah, float poc
 // name the setup that actually fired. The triangle always prints; the code text is
 // throttled to one per KL_LABEL_MIN_GAP bars, otherwise clustered setups (PDH-RT,
 // VAH-ACC, PDH-RT on consecutive bars) print three overlapping strings.
-klDrawSignal(bool isLong, bool isShort, string code, int score, int threshold, float rvol, int confCnt, string confNames, float lvl, float slLvl, float t1, float clv, string dProxy, float atrVal) =>
+klDrawSignal(bool isLong, bool isShort, string code, int score, int threshold, float rvol, int confCnt, string confNames, float lvl, float slLvl, float t1, float clv, float atrVal, float vf, float entryRef, float rvolStrong, float rvolMin, float headroom) =>
     var int lastTextBar = na
     if isLong or isShort
         color c = isLong ? #26A69A : #EF5350
         float yOff = nz(atrVal) * 0.35
         float yTri = isLong ? low - yOff : high + yOff
-        string tip = (isLong ? "LONG " : "SHORT ") + klSetupPhrase(code) + "   score " + str.tostring(score) + "/" + str.tostring(threshold) + "\nLevel " + str.tostring(lvl, format.mintick) + (confCnt > 0 ? "  +" + confNames : "") + "\nRef SL " + str.tostring(slLvl, format.mintick) + "   T1 " + (na(t1) ? "-" : str.tostring(t1, format.mintick)) + "\nRVOL " + str.tostring(rvol, "#.0") + "  CLV " + str.tostring(clv, "#.00") + "  delta " + dProxy
+        // Plain-language, labelled columns. The old one-line form used bare abbreviations
+        // ("d-proxy", "CLV") that meant nothing without reading the source.
+        string volWord = na(vf) ? "n/a" : vf >= 3.0 ? "EXTREME - check news" : vf >= 1.5 ? "strong" : vf >= 1.2 ? "elevated" : vf >= 0.8 ? "normal" : vf >= 0.5 ? "thin" : "dead"
+        string brkWord = rvol >= rvolStrong ? "strong" : rvol >= rvolMin ? "adequate" : "WEAK - below threshold"
+        string clvWord = clv >= 0.65 ? "closed strong into the break" : clv <= 0.35 ? "closed weak against it" : "closed mid-bar, indecisive"
+        float riskPts = na(slLvl) or na(entryRef) ? na : math.abs(entryRef - slLvl)
+        string tip = (isLong ? "LONG" : "SHORT") + "  |  " + klSetupPhrase(code) + "\n" + (score >= threshold ? "Score " + str.tostring(score) + "/" + str.tostring(threshold) + "  - fires" : "Score " + str.tostring(score) + "/" + str.tostring(threshold) + "  - below threshold") + "\n\n" + "LEVEL       " + str.tostring(lvl, format.mintick) + "\n" + "STACKED     " + (confCnt > 0 ? str.tostring(confCnt) + " more: " + confNames : "none - single level") + "\n\n" + "Entry ref   " + str.tostring(entryRef, format.mintick) + "\n" + "Stop ref    " + str.tostring(slLvl, format.mintick) + (na(riskPts) ? "" : "   (risk " + str.tostring(riskPts, format.mintick) + ")") + "\n" + "Target 1    " + (na(t1) ? "none - no room to the next level" : str.tostring(t1, format.mintick)) + "\n" + "Room left   " + (na(headroom) ? "-" : str.tostring(headroom, "0.0") + "R to a normal day's extension") + "\n\n" + "VOLUME\n" + "  Session   " + (na(vf) ? "-" : str.tostring(vf, "0.00") + "x") + "  " + volWord + "\n" + "  This bar  " + str.tostring(rvol, "0.0") + "x  " + brkWord + "\n" + "  Bar close " + str.tostring(clv, "0.00") + "  " + clvWord
         cleanupLabel(label.new(bar_index, yTri, "", style=isLong ? label.style_triangleup : label.style_triangledown, color=c, size=size.tiny, tooltip=tip))
         // Text label carries no tooltip of its own — the triangle is the hover target.
         if na(lastTextBar) or (bar_index - lastTextBar >= KL_LABEL_MIN_GAP)
             lastTextBar := bar_index
-            cleanupLabel(label.new(bar_index, isLong ? low - yOff * 3 : high + yOff * 3, code, style=label.style_none, textcolor=c, size=size.tiny))
+            cleanupLabel(label.new(bar_index, isLong ? low - yOff * 3 : high + yOff * 3, code + (na(vf) ? "" : "  " + str.tostring(vf, "0.0") + "x"), style=label.style_none, textcolor=c, size=size.tiny))
 
 klDrawLevels(enableKeyLevels, klShowVA, klShowSecondary, klShowTags, klVAH, klPOC, klVAL, klPDH, klPDL, klIBH, klIBL, klDayStartBar, cachedATR, activeORB, showMidLine, klTagMaxATR)
 
@@ -4571,7 +4607,7 @@ klDrawLevels(enableKeyLevels, klShowVA, klShowSecondary, klShowTags, klVAH, klPO
 bool klNewSetup = klDir != 0 and (klSetupCode != klSetupCode[1] or klDir != klDir[1])
 bool klSigLong  = klShowSignals and klFire and klNewSetup and klDir == 1
 bool klSigShort = klShowSignals and klFire and klNewSetup and klDir == -1
-klDrawSignal(klSigLong, klSigShort, klSetupCode, klScore, klScoreThreshold, klRVOL, klConfCnt, klConfNames, klSetupLevel, klSLLevel, klT1, klCLV, klDeltaProxy, cachedATR)
+klDrawSignal(klSigLong, klSigShort, klSetupCode, klScore, klScoreThreshold, klRVOL, klConfCnt, klConfNames, klSetupLevel, klSLLevel, klT1, klCLV, cachedATR, klSessionVF, klEntryRef, strongVolumeMultiplier, volumeMultiplier, klHeadroom)
 // ====================================== TRADE ALERTS ==========================================
 alertcondition(alertEntryTriggered and enableAlerts and enableTargets,
                title="ENTRY Triggered",

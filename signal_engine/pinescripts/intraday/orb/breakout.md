@@ -610,3 +610,434 @@ context rather than decisions. `0` disables the filter.
    high equals the visible high. Nothing in the script can move the native marker; the
    distance filter will usually hide the PDH tag anyway once price moves away.
 
+---
+
+## 2026-08-22f — Signal-quality batch: CLV double-count, T1 placement, HTF confirmation
+
+Three changes to key-level signal generation, chosen against outside evidence rather than
+the legacy ORB trade log (which measures a different strategy: ORB-only, 5-min, no key levels).
+
+### Bug: CLV was scored twice
+
+`klCandle()` returns both `clv >= klClvLongMin` **and** `deltaProxy`, which is itself derived
+from the same number (`clv > 0.55 ? "buy"`). `klComputeScore()` awarded **+1 for each**, so a
+single strong close collected **2 of the 7-point threshold** for one piece of information —
+and the weakest piece in the model, since Pine has no orderflow data and CLV is only a proxy
+for it. Removed the `deltaProxy` component; `deltaProxy` is still carried in the alert text
+and the signal tooltip, where it is a read rather than a weight.
+
+Max score 15 -> 14. Combined with the earlier confluence fix, scores now read up to 4 points
+lower than the build that set `klScoreThreshold = 7`. **Watch the alert rate before
+re-tuning the threshold** — 7 is now a materially stricter gate than when it was chosen.
+
+### T1 is placed short of the level, not on it
+
+`klFindT1()` returned the nearest structural level exactly. That is where every other
+trader's resting limit orders sit, so price routinely stalls a few ticks short and rolls
+over. T1 now sits `klT1PadMult` ATRs **in front of** the level (default 0.15).
+
+If the pad would leave T1 inside the noise band around entry, T1 reports `-` rather than a
+target that cannot be worked — that setup has no room to a structural target, which is
+itself information.
+
+Symmetry worth stating: stops go **beyond** the crowd, targets go **in front of** it. Both
+follow from the same fact about where liquidity rests.
+
+### HTF close confirmation (`klRequireHTFClose`, default ON, `klConfirmTF` = 15)
+
+A key-level setup now needs a **closed** higher-timeframe bar on the correct side of the
+level. The test follows trade direction, so one expression serves every family:
+
+| Setup | Requirement |
+|---|---|
+| long (`-RT`, `-BRK`, `-ACC`, `VAL-REJ`) | HTF close **above** the level |
+| short (`-RT`, `-BRK`, `-ACC`, `VAH-REJ`) | HTF close **below** the level |
+
+Rejections are not inverted by this — a `VAH-REJ` short wants the HTF close back *under*
+VAH, which is exactly the rejection thesis.
+
+`request.security(..., close[1], lookahead_off)` is the non-repainting pair. Requesting
+plain `close` would return current price between HTF boundaries, making the test
+meaningless rather than strict. **Cost: up to one HTF bar of entry lag.** Setups printing
+RVOL at or above `strongVolumeMultiplier` bypass the wait — volume that size is order flow
+arriving, not a stop run.
+
+Dashboard `Setup:` row now shows `⏳HTF` in orange when a setup clears the score threshold
+but is still waiting on confirmation, so the wait is visible rather than silent.
+
+**Known limitation:** if `klConfirmTF` is set at or below the chart timeframe the gate
+degrades toward permissive (fails open, reverting to previous behaviour) rather than
+blocking. No runtime guard was added — it would cost tokens for a misconfiguration the
+tooltip already warns about.
+
+### Evidence base
+
+- Zarattini, Barbon & Aziz (Swiss Finance Institute, 2024) — across 7,000+ US stocks
+  2016-2023, plain ORB was weak; **selecting by opening relative volume did almost all the
+  work.** Their measure is first-5-min volume / mean first-5-min volume over 14 prior days —
+  time-of-day normalised, which the current `volume / sma(volume, 50)` is not. This is the
+  case for the Volume Factor work, not yet built.
+- Breakout-confirmation literature is consistent that lower-timeframe breaks carry a higher
+  false-break rate, and that a **close** beyond the level (not a wick) is the discriminator.
+- Liquidity-sweep anatomy: wick through the level, close back inside, with the break bar
+  under ~1.5-2x average volume. Sweeps cluster at equal highs/lows.
+- SMC order blocks backtest at roughly 50-55% raw win rate with heavy discretion and real
+  alpha-decay exposure — consistent with the decision not to port them. The one SMC
+  construct with support is sweep + close-back-inside + LTF confirmation.
+
+### Token cost
+
++201 proxy ≈ **+872 compiled**. Estimated headroom before this batch was ~2,950 compiled,
+so roughly 2,080 should remain. Not verified against TradingView.
+
+### Not verified
+
+Pine has no local compiler. Still needs a TradingView session:
+
+1. Compiles clean.
+2. Regression gate: `enableKeyLevels = false` -> Strategy Tester still matches `orb.pine`.
+   (Should hold — every change is inside the key-level path.)
+3. `⏳HTF` actually appears and clears on a live break.
+4. Alert rate after the scoring change is still workable at threshold 7.
+
+---
+
+## 2026-08-22g — Volume Factor replaces the rolling MA; GOD MODE score removed to pay for it
+
+### The old denominator was the weak link
+
+`volumeMA = ta.sma(volume, 50)` was **time-of-day blind**. On a 5-min chart a 50-bar average
+spans ~4 hours, so at 09:20 the denominator was mostly the previous session's dead close bars
+while the numerator was an opening bar running 5-10x normal. The 1.2x test was therefore
+**near-inert in exactly the window this strategy trades most**, and over-strict around lunch.
+
+Two artefacts in the code were compensating for it rather than fixing it:
+- `max(volume, volume[1], volume[2])` in `hasVolumeConfirmation()`
+- the earlier 20 -> 50 MA change, recorded in `SIGNAL-PERFORMANCE-2026-Q1.md:183`
+
+Both are now gone.
+
+### What replaced it
+
+`klVolFactor()` compares each bar against **the same slot of the session on previous days**.
+One pass over the history matrix yields two different reads:
+
+| Read | Question it answers | Used by |
+|---|---|---|
+| `base` — mean bar volume at this slot | Does THIS break carry participation? | `volBaseline`, so every existing `volume / volBaseline` ratio is now time-of-day normalised |
+| `vf` — cumulative session volume vs the same point of day | Is this STOCK in play today? | New `Vol Factor` dashboard row, +1 score component, alert line |
+
+At slot 0 the `vf` read **is** the Zarattini/Barbon/Aziz relative-volume measure — first-5-min
+volume over the mean first-5-min volume of N prior days. That study (SFI 2024, 7,000+ US
+stocks, 2016-2023) found plain ORB was weak and **selection by opening relative volume did
+almost all the work**, which is why this moved ahead of everything else on the list.
+
+Bands on the dashboard row are the BreakingTrade cheat sheet's, including its rule that
+**>=3.0x is a WARNING** (block deal / news), not a green light.
+
+### Implementation notes
+
+- **Stateful, so called unconditionally** — the file's existing rule. Its accumulator advances
+  on **confirmed bars only**; the forming bar is added for the live read without mutating
+  state, so a realtime bar cannot freeze a partial volume into history.
+- **Matrix allocated at input maxima** (30 x 400) rather than at the configured size. Pine can
+  reject a series/simple int as a matrix dimension and 12,000 floats is cheap — not worth the
+  compile risk to save the allocation.
+- **Local `row` renamed `vRow`** — this file renames rather than shadows, because Pine
+  shadowing fails silently.
+- **Minimum 3 prior sessions** before the reading is trusted. With one prior session the
+  denominator is just yesterday, so a single heavy day would suppress the factor all through
+  the next. Below the minimum it reports `na` and the volume filter **fails open**.
+- `volSlotCount` derives from the chart timeframe (390 min / TF + 2), so 1/5/15-min all work.
+
+### Removed
+
+| Removed | Why safe |
+|---|---|
+| `volumeMaLength` input + its validation | No remaining consumer |
+| `ta.sma(volume, ...)` cache | Replaced by the per-slot baseline |
+| 3-bar `max()` in `hasVolumeConfirmation` and at 2 label sites | Let a spike two bars BEFORE a weak breaking candle satisfy the filter. Research is consistent that what matters is expansion AT the level, in the candle doing the breaking — volume arriving after is the crowd |
+| **GOD MODE quality score** — `godScore`, `godGrade`, `godNear`, `godConfUp/Dn`, `godLastScore/Up`, label appends, `ORB Quality` row | Referenced **only** in label text and table cells, never in any breakout or entry condition. Verified by grep before removal |
+
+`volumeMA` -> **`volBaseline`**, `cachedVolumeMA` -> `cachedVolBaseline`. Renamed rather than
+silently redefined: it is no longer a moving average, and leaving a misleading name in trading
+code is how the next bug gets made.
+
+**Kept from GOD MODE**: adaptive buffer, chop-day guard, both-pending-due fix — the three
+pieces that actually affect trade selection, all near-free. The chop row survives; only the
+score it used to sit beside is gone.
+
+### ⚠ Two consequences to watch
+
+**1. The regression gate against `orb.pine` no longer holds — deliberately.** `volBaseline`
+feeds `volumeOK` in ORB breakout detection, so ORB trade selection changes. This was the
+explicit instruction (replace, not opt-in). The Strategy Tester will differ from `orb.pine`
+and that is now expected, not a fault.
+
+**2. `volumeMultiplier` / `strongVolumeMultiplier` are no longer calibrated.** 1.2 / 1.8 were
+tuned against an inflated-at-open denominator. Properly normalised, morning ratios read
+**lower** — so the filter is now materially **stricter in the morning**, where most trades
+happen. Expect fewer signals at first. The cheat sheet's own bands (1.2-1.5 elevated,
+1.5-3.0 strong) suggest 1.2/1.8 remain sensible, but **observe before re-tuning**, and change
+one at a time.
+
+Score max returns to 15 (the new session-VF component offsets the removed delta proxy), so
+`klScoreThreshold = 7` sits roughly where 2026-08-22f left it.
+
+### Token accounting
+
+| | proxy | ~compiled |
+|---|---:|---:|
+| 22f batch (CLV / T1 / HTF) | +201 | +872 |
+| Volume factor engine | +485 | +2,105 |
+| GOD MODE score removal | -671 | -2,912 |
+| **Net for the session** | **+15** | **+65** |
+
+Headroom should be roughly where it started (~2,885 compiled). Not verified against TradingView.
+
+### Not verified
+
+1. Compiles clean — `matrix.new<float>` dimensions and the `var` matrix inside a function are
+   the two spots most likely to be rejected.
+2. Volume Factor reads sanely: ~1.0x on an ordinary day, and slot 0 should roughly reproduce a
+   manual first-bar-volume / 14-day-average calculation.
+3. Signal count after the recalibration is still workable.
+4. Chop row still renders now that the score above it is gone.
+
+---
+
+## 2026-08-22h — Chart review 3 (TCS 16:30): two fixes
+
+Chart `charts/TCS_2026-08-22_16-30-07_78c48.png`. **The build compiles and runs** — the
+`Vol Factor` row renders, `ORB Quality` is gone, and three key-level signals fired across the
+three visible sessions (VAL-RT Aug 19, PDH-RT Aug 20, IBH-RT Aug 21). That clears the compile,
+matrix-allocation and dashboard items from 22g's unverified list.
+
+### Bug: `"#.00"` drops the leading zero — a 100x misread
+
+`Vol Factor` printed **`70x thin`**. The value was **0.70**; Pine's `#` means "digit, omitted
+if zero", so `str.tostring(0.70, "#.00")` yields `.70`. On a volume gauge that reads as
+**seventy times** normal when it is seven tenths — the opposite conclusion. The band label
+(`thin`) was the tell that the number was misrendering.
+
+Fixed to `"0.00"` here and on CLV/RVOL, which had the same exposure. `"#.#"` elsewhere in the
+file renders `0.4x` correctly, so those sites were left alone.
+
+### Setup / Confluence rows were blank almost always
+
+Both showed only the CURRENT bar, and a setup exists for exactly one bar — so the rows read
+`-` on ~99% of bars, which is indistinguishable from "this engine produces nothing". The chart
+made the cost obvious: **IB-H 2292.0 and ORB-H 2292.0 were identical** — two levels stacked,
+the strongest tell in the model — and `Confluence:` showed `-`.
+
+Now latched: the last fired setup persists, dimmed and stamped `HH:mm`. Bright = firing on
+this bar, dim = history, so the two can never be confused.
+
+### Found, not fixed: ORB width filter gates key-level entries
+
+`smartFiltersPass = gapFilterPassed and orbRangeFilterPassed and isAfterMinTime`, and
+`canTakeEntry` consumes it. So an **IB or VA setup can be rejected because the Opening Range
+was too narrow or too wide** — a quantity with no bearing on whether an IB extension is valid.
+
+Latent while `enableKeyLevelExecution = false`, so nothing is being lost today. **Must be
+resolved before execution is switched on.** Gap, volume, trend, HTF and index are all
+genuinely universal; ORB width and ORB cross are the two that are ORB-only.
+
+### Still open from the chart
+
+- **POC 2291.25 sits 1.0 point above VAL 2290.25.** Possible with a bottom-heavy distribution,
+  but POC accuracy already drifted ~26 points once on TCS. Verify against TradingView's native
+  Session Volume Profile before trusting VA-family setups.
+- ORB fill and the value-area box still overlap into muddy olive on the right of the chart.
+- Volume filter blocked the session at 0.4x against a 1.2x threshold, with session VF 0.70x.
+  This is the 22g recalibration behaving as predicted, on a genuinely quiet day — not evidence
+  of a fault, but the signal-count question stays open until an active day is observed.
+
+---
+
+## 2026-08-22i — Input diet (141 -> 59), verdict-first dashboard, readable signal tooltip
+
+Reframed around one fact: **signals are consumed by webhook -> signal_engine -> trade bridge.**
+Nobody is reading this panel to decide whether to click buy. The panel's job is to answer
+"what is the system doing, and why" — which is a completely different design brief.
+
+### Inputs: 141 -> 59
+
+| Action | Count | What |
+|---|---:|---|
+| **Deleted — dead code** | 13 | FVG subsystem (7), pullback filter (3), currency conversion (3) |
+| **Frozen to constants** | 67 | Values that should never be touched mid-strategy: the 8 chart colours, label/TP display toggles, the legacy retest/cycle machinery, position-sizing config (signal_engine owns sizing), ADX/adaptive-RR, HTF/index/trend sub-parameters, NR internals, VP resolution, CLV thresholds, session mode |
+| **Added** | 1 | `dashMode` (Focus / Full) |
+
+**FVG was entirely decorative** — `hasValidFVGNearLevel()` was defined but never called, so
+`enableFVGFilter` did nothing. It drew boxes and affected no signal. Removed with its arrays,
+four functions and drawing block.
+
+**Currency conversion was dead weight** on an NSE-only script — 3 inputs, ~35 lines, and a
+whole `request.security` slot for an FX rate. `request.*` is now **13**.
+
+Freezing rather than deleting is deliberate: the value and every consumer stay identical, so
+behaviour is provably unchanged and anything can be re-exposed by putting `input.x(` back.
+
+### Dashboard: verdict first
+
+New `renderVerdict()` prints **one line plus one reason**, ahead of everything else:
+
+| Verdict | Meaning |
+|---|---|
+| `⛔ NO TRADE` | A filter blocks. The reason line names **which**, first-failure-wins |
+| `⏰ TOO EARLY` / `🏁 CUTOFF` / `🏁 DONE` | Outside the window, or the session slot is spent |
+| `🟡 ARMED` | Filters pass, waiting for a setup (flags chop day / thin volume) |
+| `⏳ WAITING` | Setup scored, HTF close has not confirmed |
+| `🟢/🔴 SIGNAL` | Alert fires this bar |
+| `✅ IN TRADE` | Position open |
+
+`dashMode = "Focus"` (default) shows the verdict plus Vol Factor, Auction, IB, ADR, Setup and
+KL Mode. `"Full"` restores every legacy ORB row for auditing. The seven `show*` flags were
+repointed at `dashMode == "Full"`, so one selector drives the whole panel. Confluence folded
+into the Setup row as `+2lvl`.
+
+### Signal tooltip rebuilt
+
+The old one-liner used bare abbreviations (`d-proxy`, `CLV`, `RVOL`) that meant nothing
+without reading the source. Now labelled columns, plain language, and **volume is included**:
+
+```
+LONG  |  IBH breakout-retest
+Score 9/7  - fires
+
+LEVEL       2292.00
+STACKED     1 more: ORBH
+
+Entry ref   2294.50
+Stop ref    2288.20   (risk 6.30)
+Target 1    2304.10
+
+VOLUME
+  Session   0.70x  thin
+  This bar  1.8x   strong
+  Bar close 0.82   closed strong into the break
+```
+
+The on-chart text beside the triangle now carries the session factor too (`IBH-RT  0.7x`).
+
+### Two over-deletions, caught and repaired
+
+Recorded because the technique caused them and the check is what saved it. Both cuts used a
+start marker plus a **section-header end marker**, and both swallowed everything in between:
+
+1. Cutting the pullback inputs to the `TARGETS & RISK` header removed the **volume and trend
+   input blocks** that sat between them.
+2. Cutting the FVG arrays to `var bool orbNavigationCached` removed **~100 unrelated variable
+   declarations** — nearly every ORB trade-state var in the file.
+
+Both restored from a pre-cut backup. **The check that caught them**, worth keeping:
+
+```bash
+# nothing should disappear except what you intended
+diff <(grep -oE '^var [a-z<>]+ +[A-Za-z_][A-Za-z0-9_]*' OLD | awk '{print $NF}' | sort) \
+     <(grep -oE '^var [a-z<>]+ +[A-Za-z_][A-Za-z0-9_]*' NEW | awk '{print $NF}' | sort)
+diff <(grep -oE '^[a-zA-Z_][a-zA-Z0-9_]*\(' OLD | sort -u) \
+     <(grep -oE '^[a-zA-Z_][a-zA-Z0-9_]*\(' NEW | sort -u)
+```
+
+**Lesson: never bound a deletion with a section header.** Bound it with the last line that
+belongs to the block being removed.
+
+### Token accounting
+
+Net for the session: **-2,201 proxy (~-9,550 compiled)**. The file is now far under the
+ceiling — roughly 12,500 compiled of headroom against the 100,256 limit.
+
+### Not verified
+
+1. Compiles. The freeze pass rewrote 67 declarations; a malformed default would surface here.
+2. Focus mode renders and Full still shows everything.
+3. Verdict reports the correct blocking reason on a day where more than one filter fails.
+
+---
+
+## 2026-08-22j — ORB-width blocker fixed, headroom gate, IB% denominator corrected, cutoff 11:45
+
+### Blocker 1 fixed: ORB width no longer gates non-ORB setups
+
+`canTakeEntry` folded in `orbRangeFilterPassed`, so an IB extension or value-area setup could
+be refused because the **Opening Range** was too narrow or too wide — a property of the ORB
+and of nothing else. Split:
+
+```pine
+canTakeEntry         = cutoff + slot + gap + ORB width + minTime + NR   // ORB path
+canTakeKeyLevelEntry = cutoff + slot + gap +             minTime + NR   // key-level path
+```
+
+Gap, min-entry-time and the NR gate are genuinely universal and are kept on both. ORB width
+and ORB cross are the only two that are ORB-specific.
+
+### ⚠ Blocker 2 found, NOT fixed: executed SL/TP would not match the alert
+
+A key-level setup that fires with execution enabled sets `pendingLongEntry` and hands off to
+the **shared** pending processor, which computes:
+
+```pine
+sl = calculateStopLoss(entry, activeHigh, activeLow, ...)   // ORB levels
+[tp1..] = calculateTargets(entry, sl, ..., activeHigh, activeLow)  // ORB width
+```
+
+So an `IBH-RT` entry would receive a stop derived from the **ORB low** and a target anchored to
+**ORB width**, while the observation alert reported `Ref SL` / `Ref T1` from `klExecMap()` —
+level-based, measured from the level that actually triggered. **The two disagree.**
+
+Harmless while `enableKeyLevelExecution = false`. **Must be fixed before execution is enabled.**
+Design: latch `klSLLevel` / `klT1` when the pending is armed, and have the processor prefer them
+whenever `klPendingSource != ""`, falling back to the ORB calculation for ORB entries.
+
+### Headroom gate — "is there anything left to take?"
+
+`klHeadroomR()` projects where the day tops out if its range expands to a normal ADR
+(`dayLow + ADR` for a long), measures entry-to-there, and divides by the trade's own risk.
+`klMinHeadroomR` (default 1.0R) refuses setups below the floor; the verdict reports
+`⛔ NO ROOM` with the figure.
+
+This is the objective form of "do not buy a breakout after the move is done". ADR is an
+average and a real trend day exceeds it, which is why the default is permissive rather than
+strict. **Live** — recomputed every bar from the running session high/low.
+
+### IB% denominator corrected
+
+Was `ibRange / klATRDaily` — "IB is 47% of a daily ATR", a number with no threshold anywhere in
+the literature. Now `ibRange / average IB` over `volBaseDays` sessions, with Market Profile's
+own bands: **<80% narrow** (coiled, trend-day candidate), **>120% wide** (rotational, IB
+extremes tend to hold). `klIBAverage()` keeps the rolling history; stateful, called
+unconditionally, banks the previous day's final IB range on rollover.
+
+`klATRDaily` is now unused (it also lost its `godScore` consumer). Left in the daily tuple —
+removing a tuple element for one unused warning is not worth the risk.
+
+### Entry cutoff 11:00 -> 11:45
+
+IB triggers cannot arm until the IB window closes at 10:15, and the HTF gate adds up to 15
+minutes on top. The old 11:00 cutoff left the family now rated **primary** with roughly 30
+usable minutes. 11:45 gives it 90, and stops exactly where the cheat sheet's session map puts
+the lunch trap (F-G, 11:45-12:45), so no lunch-window block is needed.
+
+### Static vs live — worth stating plainly
+
+| Reading | Denominator | Numerator | Behaviour |
+|---|---|---|---|
+| `IB H/L` + `%` | avg IB, **static** for the day | IB range, **frozen at 10:15** | **Static after 10:15.** A day-type classifier, not a live gauge |
+| `ADR / used` | ADR, **static** (prev 14 completed days) | session high-low, **live** | **Live, monotonically rising** — range only grows |
+| `Room (R)` | trade risk, live | ADR projection vs price, live | **Live**, and directional — unlike `% used` |
+
+`% used` is non-directional: a choppy day burns 100% of it going nowhere. `Room` is the metric
+that actually answers "is there steam left **for this trade**".
+
+### Token accounting
+
+Net for the session: **-1,790 proxy (~-7,770 compiled)**. Estimated ~89,500 / 100,256.
+
+### Not verified
+
+1. Compiles.
+2. `klIBAverage` reads sensibly — the first `volBaseDays` sessions warm up, and IB% should sit
+   near 100% on an ordinary day.
+3. `⛔ NO ROOM` fires on a late-session setup and not before.
