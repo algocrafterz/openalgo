@@ -356,6 +356,7 @@ klAccMinRvol     = input.float(1.5, "Acceptance min RVOL", minval=0, maxval=10, 
 klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, maxval=2, step=0.05, group=grp_score, tooltip="Two levels within this many ATRs are treated as confluent\n\nAlso used as the retest tolerance band.\n\nTIGHTER = fewer confluence hits, stricter retests\nWIDER   = more confluence hits, looser retests\n\nRECOMMENDED: 0.25 × ATR")
 klSlBufferMult   = input.float(0.35, "SL buffer (× ATR beyond level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far beyond the triggering level the stop sits\n\nA level-based stop goes just past the level that was defended,\nplus this ATR cushion to survive normal noise and stop hunts.\n\nUsed only for key-level setups. ORB entries keep their own\nstop-loss mode from the TARGETS & RISK group.")
 klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far IN FRONT of the next structural level the first target sits\n\nThe level itself is where every other trader's limit orders rest, so price\nfrequently stalls a few ticks short of it and reverses. Parking T1 inside\nthat queue trades a little reward for a materially better fill rate.\n\n0 = target exactly at the level (old behaviour)\n0.15 = recommended\n\nIf the pad would put T1 inside the noise around entry, T1 reports '-'\ninstead: that setup has no room to a structural target.")
+klBlockCounterBias = input.bool(true, "Block counter-bias on trend days", group=grp_score, tooltip="Refuse a setup that trades AGAINST the day's established direction, but only on the two day types where the rule is unconditional.\n\nThe cheat sheet's Avoid List opens with \"Never fade a Trend Day\", and a Double Distribution is a trend day that has relocated. On those two, a counter-directional setup is fighting the auction.\n\nDeliberately NOT applied to Normal, Normal Variation or Neutral days: on those the extremes hold and fading them IS the play, so blocking counter-bias setups would remove the correct trade.\n\nBias comes from which side of the Initial Balance the day has extended, so it only exists once the IB has closed and price has moved.")
 klMaxChaseATR    = input.float(1.0, "Max chase from level (× ATR)", minval=0, maxval=5, step=0.25, group=grp_score, tooltip="Refuse a setup whose confirming bar has already closed this far beyond the level.\n\nA retest is supposed to be entered NEAR the level it defended. If confirmation only arrives once price has run a full ATR past it, the good part of the move is gone and the stop — still measured from the level — is now much further away, so the R:R quietly collapses.\n\nThis does not improve the fill; it declines the ones that are already bad.\n\n1.0 = recommended\n0 = disabled")
 klMinHeadroomR   = input.float(1.5, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
 enableAfternoonWindow = input.bool(true, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
@@ -622,6 +623,7 @@ var int   sessionVWAPBar = -1
 // processor consumes it earlier in source order than the engine sets it.
 var float klArmedSL = na
 var float klArmedT1 = na
+var string klEntrySource = ""
 var string klPendingSource = ""
 
 var bool htfBullish = false
@@ -2378,6 +2380,7 @@ float klIBAvg = klIBAverage(enableKeyLevels, shouldReset, na(klIBH) or na(klIBL)
 string klBiasS = klBias(klDayTypeS, klOpenTypeS, klExtUp, klExtDn, klAuction)
 
 klPendingSource := shouldReset ? "" : klPendingSource
+klEntrySource := shouldReset ? "" : klEntrySource
 klArmedSL := shouldReset ? na : klArmedSL
 klArmedT1 := shouldReset ? na : klArmedT1
 
@@ -2589,12 +2592,19 @@ bool canTakeKeyLevelEntry = isBeforeCutoff and slotAvailable and gapFilterPassed
 // using the "both against" logic (only blocks when BOTH filters are against the direction)
 bool canTakeLongEntry = canTakeEntry
 bool canTakeShortEntry = canTakeEntry
+// A pending's gate must match the family that ARMED it. klPendingSource is non-empty only for
+// key-level pendings, and it survives from the arming bar to the fill bar, so it is the right
+// discriminator. Without this a key-level setup passed its own gate, armed, and was then
+// dropped at fill time by the ORB WIDTH filter -- a property of the Opening Range that has no
+// bearing on an IB or value-area trade. Same for the cancellation path.
+bool canFillLong  = klPendingSource != "" ? canTakeKeyLevelEntry : canTakeLongEntry
+bool canFillShort = klPendingSource != "" ? canTakeKeyLevelEntry : canTakeShortEntry
 
 // ============================= PENDING ENTRY PROCESSING (NEXT BAR AFTER BREAKOUT) ================
 // Upstream fix: when BOTH pending entries come due on the same bar, the long block used to
 // run first and then be overwritten by the short block, leaving strategy state and the
 // trade lines describing different trades. Short wins, matching upstream's resolution.
-if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not (pendingShortEntry and bar_index > pendingShortBar)
+if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pendingShortEntry and bar_index > pendingShortBar)
     if enableTargets
         // Get active ORB levels
         float activeHigh = not na(activeORB) ? activeORB.high : na
@@ -2663,6 +2673,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not 
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
             float tpForAlert = tp1
             alert(buildEntryAlert(true, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(tpForAlert - entry) * shares, klPendingSource), alert.freq_once_per_bar)
+            klEntrySource := klPendingSource
             klPendingSource := ""  // consumed — next entry defaults back to plain ORB
             klArmedSL := na
             klArmedT1 := na
@@ -2710,7 +2721,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not 
     pendingLongEntry := false
     pendingLongBar := na
 
-if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
+if pendingShortEntry and bar_index > pendingShortBar and canFillShort
     if enableTargets
         float activeHigh = not na(activeORB) ? activeORB.high : na
         float activeLow = not na(activeORB) ? activeORB.low : na
@@ -2778,6 +2789,7 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
             float tpForAlert = tp1
             alert(buildEntryAlert(false, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(entry - tpForAlert) * shares, klPendingSource), alert.freq_once_per_bar)
+            klEntrySource := klPendingSource
             klPendingSource := ""  // consumed — next entry defaults back to plain ORB
             klArmedSL := na
             klArmedT1 := na
@@ -2828,13 +2840,13 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
 // Clear pending entries if cutoff passed, entry already taken, or HTF blocks direction
 // klPendingSource is cleared alongside: a cancelled key-level pending must not leave its
 // trigger tag behind for a later ORB breakout to inherit and mislabel.
-if not canTakeLongEntry and pendingLongEntry
+if not canFillLong and pendingLongEntry
     pendingLongEntry := false
     pendingLongBar := na
     klPendingSource := ""
     klArmedSL := na
     klArmedT1 := na
-if not canTakeShortEntry and pendingShortEntry
+if not canFillShort and pendingShortEntry
     pendingShortEntry := false
     pendingShortBar := na
     klPendingSource := ""
@@ -3410,6 +3422,12 @@ bool klRoomOK = klMinHeadroomR <= 0 or na(klHeadroom) or klHeadroom >= klMinHead
 // Distance already travelled from the level, in ATRs. Entry quality, not direction quality.
 float klChase = na(klSetupLevel) or nz(cachedATR) <= 0 ? na : math.abs(close - klSetupLevel) / cachedATR
 bool klChaseOK = klMaxChaseATR <= 0 or na(klChase) or klChase <= klMaxChaseATR
+// Counter-bias veto, limited to the day types where "never fade" is unconditional. On a
+// Normal/Neutral day the extremes hold and fading them is the correct trade, so the veto
+// must not reach those.
+bool klTrendDay = klDayTypeS == "Trend" or klDayTypeS == "Double Distribution"
+bool klBiasLong = klExtUp > klExtDn
+bool klBiasOK = not klBlockCounterBias or not klTrendDay or klDir == 0 or (klDir == 1) == klBiasLong
 
 bool klHTFOK = not klRequireHTFClose or na(klHTFClose) or na(klSetupLevel) or klRVOL >= strongVolumeMultiplier or (klDir == 1 and klHTFClose > klSetupLevel) or (klDir == -1 and klHTFClose < klSetupLevel)
 
@@ -3449,16 +3467,16 @@ buildKeyLevelAlert() =>
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK) =>
     var int lastBar = na
-    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK)
 
 // Latched last setup. The live row is blank on all but the single bar a setup fires, so
 // without this the panel reads 'nothing here' during the 99% of bars between signals --
@@ -4453,7 +4471,7 @@ if showDashboard and enableHTF
                     string tradeDir = isBullish ? "LONG" : "SHORT"
                     color tradeDirColor = isBullish ? color.green : color.red
                     table.cell(dashTable, 0, row, "Position Size:", text_color=txtColor, text_size=txtSize, text_halign=text.align_center, bgcolor=headerColor)
-                    table.cell(dashTable, 1, row, tradeDir, text_color=tradeDirColor, text_size=txtSize, text_halign=text.align_right, bgcolor=headerColor)
+                    table.cell(dashTable, 1, row, tradeDir + (klEntrySource == "" ? "" : " · " + klEntrySource), text_color=tradeDirColor, text_size=txtSize, text_halign=text.align_right, bgcolor=headerColor)
                     row += 1
 
                     string currencySymbol = "₹"

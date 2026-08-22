@@ -1474,3 +1474,72 @@ existed. That is why it carries `~` while Open type carries `·`.
   ADR already consumed.
 - Dropped the `?` from `narrow/trend?` and `wide/range?`. The Day type row names the day outright
   now, so the IB row editorialising a guess alongside it read as a contradiction.
+
+---
+
+## 2026-08-22q — Eight-symbol validation: one real bug, one veto added
+
+Charts: FEDERALBNK, INDUSTOWER, JSWENERGY, ABCAPITAL, ITC, COALINDIA, GAIL, BANDHANBNK
+(5-min, 2026-08-22 20:34-20:37). All carry the `~` / `·` markers and the new slot verdict, so
+they include every fix through `a5375bcf`.
+
+### Confirmed working
+
+| Fix | Evidence |
+|---|---|
+| Direction bug | ABCAPITAL: `Position Size: SHORT` on a short (entry 409.85, TP1 408.03 below). Previously would have read LONG |
+| PM window verdict | ABCAPITAL: `SLOT USED — morning entry taken, afternoon window reopens at 13:00` |
+| Static/live markers | Every panel |
+| Stop floor | ABCAPITAL stop 410.88 vs signal-bar close ≈409.65 → 1.23 = exactly `0.3% × price`. FEDERALBNK identical |
+| Open/day type/bias | All four categories observed across the set: Open Drive, Test Drive, Rejection Reverse, Auction; Normal Variation and Double Distribution |
+
+### BUG: the ORB-width fix was only half applied
+
+**JSWENERGY: `SHORT PDL-RT 8/7 at 09:50` — cleared every gate, and no trade was taken.**
+
+`canTakeKeyLevelEntry` (without `orbRangeFilterPassed`) governed **arming** at line 3494. But the
+**fill** gates at 2597/2713 and the **cancel** gates at 2831/2837 still read
+`canTakeLongEntry` / `canTakeShortEntry`, which are `canTakeEntry` — carrying
+`orbRangeFilterPassed`.
+
+So a key-level setup passed its own gate, armed a pending, and was then **silently dropped on the
+next bar by the ORB WIDTH filter**. The observation alert had already gone out and the arrow was
+already drawn, which is why this looked like a working signal that simply never traded.
+
+Fixed with `canFillLong` / `canFillShort`, which select the gate by the pending's own source
+(`klPendingSource != ""` marks a key-level pending and survives from arming bar to fill bar).
+
+**Lesson for this file: a gate change has to follow the pending through arm -> fill -> cancel.**
+Three call sites, not one.
+
+### Counter-bias veto
+
+**ABCAPITAL took `SHORT VAH-REJ 8/7 +1lvl` while its own Bias row read `LONG — hold, do not
+fade`. It stopped out for -1R.** The bias was computed, displayed, and completely ignored.
+
+`klBlockCounterBias` (default on) vetoes a setup that opposes the day's established direction —
+but **only on `Trend` and `Double Distribution` days**, where the cheat sheet's Avoid List opens
+with "Never fade a Trend Day" and a Double Distribution is a trend that relocated.
+
+Deliberately **not** applied to Normal / Normal Variation / Neutral: on those the extremes hold
+and fading them *is* the play, so a blanket veto would remove the correct trade. ABCAPITAL was
+Normal Variation, so this veto would **not** have saved it — stated plainly rather than claimed.
+
+### Observations not acted on
+
+**The 0.3% stop floor binds on essentially every trade.** ATR on these names is 0.52-0.87 on
+₹350-550 prices — roughly 0.15-0.20% — so `klSlBufferMult × ATR` (0.35 × ATR ≈ 0.06%) is far
+inside the floor. Every stop observed landed at 0.3%.
+
+The stop is therefore **not level-based in practice**; it is a volatility-independent percentage.
+That is defensible — 0.3% is about 1.7 ATR here, a reasonable stop — but it should be a decision,
+not a side effect. Either accept it, or raise `klSlBufferMult` so structure binds more often.
+
+**`ADR/used` readings of 86% / 102% / 114% are END-OF-DAY figures, not entry-time.** The row is
+`~` (live). INDUSTOWER entered at 13:05 with roughly 2.0R of headroom by the projection; the 102%
+accumulated afterwards. The headroom gate was working — worth stating because the raw numbers
+look alarming.
+
+**Every fired setup scored exactly 8/7.** Across four inspected symbols nothing scored 9+, and
+nothing between 5 and 7 fired. The threshold is the binding constraint, and the score distribution
+is narrow — which means it discriminates less than the component count suggests.
