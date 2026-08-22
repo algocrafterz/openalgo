@@ -1543,3 +1543,85 @@ look alarming.
 **Every fired setup scored exactly 8/7.** Across four inspected symbols nothing scored 9+, and
 nothing between 5 and 7 fired. The threshold is the binding constraint, and the score distribution
 is narrow — which means it discriminates less than the component count suggests.
+
+---
+
+## 2026-08-22r — Renamed to intraday-breakout; morning-only; alert tags
+
+### Strategy renamed
+
+`strategy("intraday-orb")` -> **`strategy("intraday-breakout")`**.
+
+### Alert tags — all three types, not just the entry
+
+| Alert | Was | Now |
+|---|---|---|
+| Entry | `🟢 ORB LONG` | `🟢 BREAKOUT LONG` |
+| TP hit | `✅ ORB TP1 HIT` | `✅ BREAKOUT TP1 HIT` |
+| SL hit | `❌ SL HIT` *(no tag)* | `❌ BREAKOUT SL HIT` |
+| Test | `🧪 TEST ALERT - ORB Strategy` | `🧪 TEST ALERT - BREAKOUT Strategy` |
+
+**The SL alert carried no strategy tag at all.** `normalizer.py` falls back to
+`_DEFAULT_STRATEGY` (= `ORB`) when a prefix is absent, so tagging only the entry would have
+registered positions under `BREAKOUT` while routing their exits to `ORB`. All three now carry it.
+
+`⏰ TIME EXIT` is deliberately left untagged: `normalizer.py` has no regex for it, so it is a
+Telegram notification only. `signal_engine` runs its own time-exit scheduler (`main.py`).
+
+Both normalizer regexes already accept an optional `[\w-]+` prefix, so **no parser change is
+needed** — verified against `_TP_HIT_RE` and `_SL_HIT_RE`.
+
+### REQUIRED signal_engine work — NOT done in this change
+
+`signal_engine` must serve **both** `ORB` (from the frozen `orb.pine`) and `BREAKOUT`. These are
+**additive**; nothing existing should be modified.
+
+1. **`signal_engine/strategies.py`** — add alongside the existing constants:
+   `BREAKOUT = "BREAKOUT"`
+2. **`signal_engine/config.yaml`** — add a `BREAKOUT` key under **both** `blacklist:` and
+   `strategy_profiles:`, mirroring the `ORB` shape: `hard: []` / `soft: []` /
+   `soft_multiplier: 0.5`, and `product: MIS` with **no** `tp_levels` (the script sends
+   `ExitQtyPct` per TP HIT, exactly as ORB does).
+3. **`normalizer.py`** — leave `_DEFAULT_STRATEGY = ORB`. It is the fallback for *untagged*
+   alerts, which now means legacy `orb.pine` output only.
+
+**Unverified:** whether a missing `strategy_profiles.BREAKOUT` is tolerated or fatal.
+`config.py` reads it via `yml.get("strategy_profiles", {})` with upper-cased keys, so absence
+*probably* falls through to `broker.product` (MIS) — but this was not tested. Add the key rather
+than rely on it.
+
+**Until that config exists, do not run this script live.** A `BREAKOUT`-tagged alert reaching an
+engine that only knows `ORB` is the failure mode with real money attached.
+
+### Morning-only
+
+`enableAfternoonWindow` default **true -> false**. The window and its four inputs stay fully
+implemented and can be switched back on.
+
+**This is not a claim that the afternoon is worse.** There is no evidence either way — four
+inspected charts and roughly four trades is nothing, and the model doc endorses **both** windows
+(§4E: 09:15-11:00 *or* 13:00-14:45). The reasoning is risk surface:
+
+- Going live means every additional window is another set of behaviours to validate, and the
+  afternoon path has never produced an observed trade.
+- The structural argument favours the morning: the Initial Balance thesis *is* a morning thesis,
+  prior-day levels are freshest before price has interacted with them, and a 15:00 time exit
+  leaves an afternoon entry far less runway.
+- Every setup observed across all twelve charts fired between **09:50 and 13:05**.
+
+Turn it back on once the morning window has a track record worth comparing against.
+
+### Activating the alert in TradingView
+
+Script-side alerts are already enabled (`enableAlerts = true`). Nothing else to switch on.
+
+1. Add `intraday-breakout` to the chart, 5-min, NSE symbol.
+2. Create Alert -> Condition: **the script itself**, and choose **"Any alert() function call"** —
+   that is the surface carrying entry / TP HIT / SL HIT. The named `alertcondition()` entries are
+   a separate, optional surface.
+3. Trigger: **Once Per Bar Close**. Expiry: open-ended.
+4. Notifications -> **Webhook URL** -> the Telegram webhook, same as the ORB alerts.
+5. Message: leave **empty** — the script emits the full Telegram JSON payload
+   (`{"chat_id": ..., "text": ..., "parse_mode": "Markdown"}`) itself. Anything typed in that box
+   replaces it and breaks the format.
+6. Set `telegram_chat_id` in the script inputs to the destination channel.
