@@ -1736,3 +1736,57 @@ Two independent reasons, beyond needing the script re-applied in TradingView:
 If breaks still do not appear once the corrected labels are visible, the lever is
 `klScoreThreshold`, not `klBreakMinRvol` — and lowering a global threshold to admit one family is
 a blunt instrument. A per-family threshold would be the cleaner fix, and is not implemented.
+
+---
+
+## 2026-08-22u — TCS re-check: the corrected label settles it, and it was not break-vs-retest
+
+Chart `charts/TCS_2026-08-22_21-41-23_f20f5.png`, script renamed and re-applied
+(`intraday-breakout` in the chart legend).
+
+### Everything from the last three commits verified on one chart
+
+| Change | Evidence |
+|---|---|
+| Stop floor | Stop **2289.11**, was 2291.23. 2296 − 2289.11 = 6.89 = **exactly 0.3%** |
+| Size follows the wider stop | Max Shares **14**, was 20. Predicted "20 → ~13" |
+| R:R cost of the floor | Risk ₹96, Reward ₹112 = **1.16R**. Predicted "1.67 → ~1.16" |
+| `klEntrySource` | `Position Size: LONG · IBH-RT` — names the setup that opened the trade |
+| SL-after-TP fix | `✅ TP1: 2303.98` booked, and the SL label carries **no ❌** despite price returning to 2288-2292. Previously this printed both |
+| Retest window RVOL | Score **9/7**, was 8/7 — the window max supplied the volume points the trigger bar could not |
+
+### The label correction answers the question, and the answer is neither option
+
+**`IBH-RT 0.5x /0.9s`** — the retest bar traded on **half** its normal time-of-day volume.
+
+The old label was showing the session factor, so the earlier reading of "1.4x" was wrong, and so
+was the inference drawn from it. With the real number visible:
+
+- `klBreakMinRvol` is 1.5. A break bar on this session would have had to be **3x** the volume of
+  the bar that actually triggered. On a 0.70x session that is unlikely.
+- So **entering on the break would not have fired either.** The break-vs-retest framing was not
+  the binding constraint on this trade.
+
+**The binding constraint is that TCS should not have been traded at all that day.** Session
+factor 0.70x — "thin". The engine displayed that prominently and then ignored it, because the
+session reading gated only the afternoon window.
+
+### Session participation floor
+
+`klMinSessionVF` (default **0.8**) now gates **every** entry. The verdict names it:
+`⛔ NO TRADE — session volume 0.70x, stock is not in play today`.
+
+This is the Zarattini/Barbon/Aziz finding applied where it belongs. That study found selection by
+relative volume did almost all the work in breakout trading, and the pattern far less. Every
+marginal or losing trade reviewed across twelve charts came from a session at **0.47x-0.98x**.
+
+**Stated plainly: this filter cannot substitute for symbol selection.** It stops you trading a
+dead name. It cannot find you a live one. That still needs a pre-market relative-volume screen
+choosing which symbols the engine watches, which remains the largest single improvement available
+and is outside this script.
+
+### Also fixed
+
+The `SLOT USED` verdict still read "afternoon window reopens at 13:00" after the PM window was
+disabled by default — promising a window that no longer exists. Now reads "no second window
+today" when `enableAfternoonWindow` is off.

@@ -356,6 +356,7 @@ klAccMinRvol     = input.float(1.5, "Acceptance min RVOL", minval=0, maxval=10, 
 klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, maxval=2, step=0.05, group=grp_score, tooltip="Two levels within this many ATRs are treated as confluent\n\nAlso used as the retest tolerance band.\n\nTIGHTER = fewer confluence hits, stricter retests\nWIDER   = more confluence hits, looser retests\n\nRECOMMENDED: 0.25 × ATR")
 klSlBufferMult   = input.float(0.35, "SL buffer (× ATR beyond level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far beyond the triggering level the stop sits\n\nA level-based stop goes just past the level that was defended,\nplus this ATR cushion to survive normal noise and stop hunts.\n\nUsed only for key-level setups. ORB entries keep their own\nstop-loss mode from the TARGETS & RISK group.")
 klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far IN FRONT of the next structural level the first target sits\n\nThe level itself is where every other trader's limit orders rest, so price\nfrequently stalls a few ticks short of it and reverses. Parking T1 inside\nthat queue trades a little reward for a materially better fill rate.\n\n0 = target exactly at the level (old behaviour)\n0.15 = recommended\n\nIf the pad would put T1 inside the noise around entry, T1 reports '-'\ninstead: that setup has no room to a structural target.")
+klMinSessionVF   = input.float(0.8, "Min session volume factor", minval=0, maxval=5, step=0.1, group=grp_score, tooltip="Refuse every entry on a session running below this much of its normal participation.\n\nThis is the \"stock in play\" filter. Zarattini/Barbon/Aziz found across 7,000+ US stocks that selecting the day's highest relative-volume names did almost all the work in breakout trading — the pattern contributed far less than the selection.\n\nUntil now that reading was displayed and used only to gate the afternoon window, so a technically valid setup on a dead tape still traded. TCS on 2026-08-21 is the case: session factor 0.70x, the retest bar itself at 0.5x, and the trade returned 1.16R of a 2.5R-shaped setup.\n\n0.8 = skip dead tape (recommended; the cheat sheet's \"normal\" band starts here)\n1.0 = trade only average-or-better participation\n0 = disabled, previous behaviour\n\nNote this cannot substitute for symbol SELECTION. It stops you trading a dead name; it cannot find you a live one. That still wants a pre-market relative-volume screen.")
 klBreakMinRvol   = input.float(1.5, "Break-bar min RVOL (skips HTF wait)", minval=0, maxval=10, step=0.1, group=grp_score, tooltip="Volume a BREAK bar must carry to fire immediately, without waiting for the higher-timeframe close.\n\nWHY THIS EXISTS: a -BRK setup triggers on the FIRST bar closing beyond a level. The HTF gate asks for a CLOSED higher-timeframe bar already beyond that level — which on that same bar is nearly impossible, because the last closed HTF bar is by construction still on the old side. The two conditions are near mutually exclusive, so the HTF gate silently turned this into a retest-only engine.\n\nFor a break, the correct anti-fakeout filter is volume AT the break, not elapsed time. Published work on false breakouts is consistent that a break bar under roughly 1.5-2x average volume is a stop hunt, while one above it is order flow arriving.\n\n1.5 = recommended\n2.0 = stricter, fewer break entries\n0 = disabled, breaks go back to waiting for the HTF close (retest-only behaviour)\n\nRetest and acceptance setups are unaffected and still require the HTF close.")
 klBlockCounterBias = input.bool(true, "Block counter-bias on trend days", group=grp_score, tooltip="Refuse a setup that trades AGAINST the day's established direction, but only on the two day types where the rule is unconditional.\n\nThe cheat sheet's Avoid List opens with \"Never fade a Trend Day\", and a Double Distribution is a trend day that has relocated. On those two, a counter-directional setup is fighting the auction.\n\nDeliberately NOT applied to Normal, Normal Variation or Neutral days: on those the extremes hold and fading them IS the play, so blocking counter-bias setups would remove the correct trade.\n\nBias comes from which side of the Initial Balance the day has extended, so it only exists once the IB has closed and price has moved.")
 klMaxChaseATR    = input.float(1.0, "Max chase from level (× ATR)", minval=0, maxval=5, step=0.25, group=grp_score, tooltip="Refuse a setup whose confirming bar has already closed this far beyond the level.\n\nA retest is supposed to be entered NEAR the level it defended. If confirmation only arrives once price has run a full ATR past it, the good part of the move is gone and the stop — still measured from the level — is now much further away, so the R:R quietly collapses.\n\nThis does not improve the fill; it declines the ones that are already bad.\n\n1.0 = recommended\n0 = disabled")
@@ -1573,7 +1574,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
 // the trader's real question is "what is the system doing and why", not "what should I do".
 // Priority order matters: the FIRST blocking condition is the one reported, so the detail
 // line always names the thing that actually has to change.
-renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool taken, bool beforeCut, bool afterMin, bool gapOK, bool widthOK, bool volOK, float volRatio, float volMult, bool nrOK, bool chop, int dir, int score, int thr, bool htfOK, float vf, bool roomOK, float headroom, bool pmWin, int pmH, int pmM) =>
+renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool taken, bool beforeCut, bool afterMin, bool gapOK, bool widthOK, bool volOK, float volRatio, float volMult, bool nrOK, bool chop, int dir, int score, int thr, bool htfOK, float vf, bool roomOK, float headroom, bool pmWin, int pmH, int pmM, bool pmOn, bool sessOK) =>
     int row = startRow
     string verdict = ""
     string detail = ""
@@ -1584,7 +1585,7 @@ renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool 
         vcol := color.aqua
     else if taken
         verdict := "🏁 SLOT USED"
-        detail := pmWin ? "afternoon entry already taken" : "morning entry taken — afternoon window reopens at " + str.tostring(pmH) + ":" + (pmM < 10 ? "0" : "") + str.tostring(pmM)
+        detail := pmWin ? "afternoon entry already taken" : (pmOn ? "morning entry taken — afternoon window reopens at " + str.tostring(pmH) + ":" + (pmM < 10 ? "0" : "") + str.tostring(pmM) : "morning entry taken — no second window today")
     else if not beforeCut
         verdict := "🏁 CUTOFF"
         detail := "past entry cutoff — no new trades"
@@ -1606,6 +1607,10 @@ renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool 
     else if not nrOK
         verdict := "⛔ NO TRADE"
         detail := "NR gate — yesterday was not a narrow range"
+        vcol := color.red
+    else if not sessOK
+        verdict := "⛔ NO TRADE"
+        detail := "session volume " + (na(vf) ? "-" : str.tostring(vf, "0.00") + "x") + " — stock is not in play today"
         vcol := color.red
     else if dir != 0 and score >= thr and not roomOK
         verdict := "⛔ NO ROOM"
@@ -3432,6 +3437,8 @@ bool klChaseOK = klMaxChaseATR <= 0 or na(klChase) or klChase <= klMaxChaseATR
 bool klTrendDay = klDayTypeS == "Trend" or klDayTypeS == "Double Distribution"
 bool klBiasLong = klExtUp > klExtDn
 bool klBiasOK = not klBlockCounterBias or not klTrendDay or klDir == 0 or (klDir == 1) == klBiasLong
+// Session participation floor. Applies to every entry, not just the afternoon window.
+bool klSessionOK = klMinSessionVF <= 0 or na(klSessionVF) or klSessionVF >= klMinSessionVF
 
 // A break entry's entire value is immediacy, and the HTF gate is unsatisfiable on the bar that
 // first closes beyond a level (the last CLOSED HTF bar is still on the old side by
@@ -3480,21 +3487,21 @@ buildKeyLevelAlert() =>
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable, bool sessOK) =>
     var int lastBar = na
     // `tradeable` is the session slot. Once a position is taken the slot is gone, so any later
     // setup -- including one pointing the OPPOSITE way -- can never become a trade. Firing its
     // alert anyway put a SHORT packet in Telegram while a LONG was open, which is noise at best
     // and a contradictory instruction at worst. In OBSERVE mode this is left open so the engine
     // can still be watched.
-    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable and sessOK
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry, klSessionOK)
 
 // Latched last setup. The live row is blank on all but the single bar a setup fires, so
 // without this the panel reads 'nothing here' during the 99% of bars between signals --
@@ -4254,7 +4261,7 @@ if showDashboard and enableHTF
 
         // VERDICT — first thing under the header, in both Focus and Full.
         if not isHTF
-            row := renderVerdict(dashTable, row, txtSize, enableTargets and not na(orbEntryBar) and not (orbTP1Hit or orbSLHit), not slotAvailable, isBeforeCutoff, isAfterMinTime, gapFilterPassed, orbRangeFilterPassed, not enableVolumeFilter or hasVolumeConfirmation(volBaseline, volumeMultiplier, strongVolumeMultiplier), nz(volBaseline) > 0 ? volume / volBaseline : 0, volumeMultiplier, nrRequireGate, godChopDay, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klHTFOK, klSessionVF, klRoomOK, klHeadroom, inPMWindow, pmStartHour, pmStartMinute)
+            row := renderVerdict(dashTable, row, txtSize, enableTargets and not na(orbEntryBar) and not (orbTP1Hit or orbSLHit), not slotAvailable, isBeforeCutoff, isAfterMinTime, gapFilterPassed, orbRangeFilterPassed, not enableVolumeFilter or hasVolumeConfirmation(volBaseline, volumeMultiplier, strongVolumeMultiplier), nz(volBaseline) > 0 ? volume / volBaseline : 0, volumeMultiplier, nrRequireGate, godChopDay, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klHTFOK, klSessionVF, klRoomOK, klHeadroom, inPMWindow, pmStartHour, pmStartMinute, enableAfternoonWindow, klSessionOK)
 
         if showStage and not na(activeORB)
             bool isMarketNow = isTradingDay() and isWithinSessionHours()
