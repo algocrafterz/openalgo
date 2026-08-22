@@ -1790,3 +1790,68 @@ and is outside this script.
 The `SLOT USED` verdict still read "afternoon window reopens at 13:00" after the PM window was
 disabled by default — promising a window that no longer exists. Now reads "no second window
 today" when `enableAfternoonWindow` is off.
+
+---
+
+## 2026-08-22v — FEDERALBNK / ABCAPITAL on live sessions: the premise was session-specific
+
+Both symbols re-pulled with the current script, chosen because they were the only two of twelve
+with a session factor above 1.0.
+
+### ABCAPITAL: the same day, a different trade, opposite outcome
+
+| | 20:36 chart | 22:08 chart |
+|---|---|---|
+| Setup | `SHORT VAH-REJ 8/7 +1lvl` **10:05** | `LONG VAH-RT 10/7 +1lvl` **09:55** |
+| Result | **SL hit, -1R, WR 0%** | **✅ TP1 411.98 · ✅ TP1.5 412.75** |
+
+The mechanism is traceable and is not luck:
+
+1. Retests now score on `max(bar RVOL, window RVOL)`. The 09:55 `VAH-RT` had a modest trigger bar
+   but a strong window, so it moved from below threshold to **10/7** and became eligible.
+2. Being ten minutes earlier, it took the session slot.
+3. The new `tradeable` gate then suppressed the 10:05 `VAH-REJ` — the trade that previously took
+   the slot and lost.
+
+The Bias row read `LONG — hold, do not fade` in both captures. Previously the engine traded
+against it; now it does not. **Worth being precise: the counter-bias veto did not cause this.**
+That veto only applies to Trend and Double Distribution days, and this was Normal Variation. The
+improvement came from the scoring change plus the slot gate.
+
+### The break-versus-retest premise, tested on live sessions
+
+| Symbol | Setup | Bar RVOL | Level | Entry | Gap |
+|---|---|---|---|---|---|
+| FEDERALBNK | `IBH-RT` **11/7** | **4.1x** | IB-H 358.65 | 358.95 | 0.30 = **0.08%** |
+| ABCAPITAL | `VAH-RT` **10/7** | ~1.5x | VAH 410.15 | 410.45 | 0.30 = **0.07%** |
+
+**On sessions with real participation the retest entry arrives essentially AT the level, on high
+bar volume.** FEDERALBNK triggered on a 4.1x bar — four times its normal time-of-day volume — and
+filled 8 basis points above the level.
+
+So the premise behind "we should enter on the break instead" was **true on TCS and false on both
+of these**. TCS was a 0.70x dead session where the trigger bar itself ran 0.5x. These are 1.14x
+and 1.16x sessions, and there were no points left on the table to recover.
+
+That reinforces the session participation floor as the actual fix, and demotes break-versus-retest
+to a second-order question.
+
+### -BRK still has not fired
+
+Both entries were retests. The remaining argument for break entries is the **selection-bias** one
+— a trend day that never looks back is invisible to a retest filter — and neither of these days
+was a trend day (both Normal Variation). So this set neither supports nor refutes it.
+
+Given fills are landing within 0.08% of the level on live sessions, the practical case for `-BRK`
+is weaker than it looked. The honest test is a Strategy Tester run with `klBreakMinRvol` at 0
+versus 1.5 over a period containing genuine trend days.
+
+### Everything else confirmed
+
+- `SLOT USED — morning entry taken, no second window today` (PM window disabled, verdict correct)
+- `Position Size: LONG · VAH-RT` / `LONG · IBH-RT`
+- ABCAPITAL stop 408.92 = **0.373%**, wider than the 0.3% floor — so this one is genuinely
+  level-based (VAH 410.15 − 0.35 × ATR), not floored. The floor binds on tight levels, not all
+- ABCAPITAL TP1 = exactly 1.0R: no structural level sat far enough above entry, so `klCalcTargets`
+  fell back to the risk multiple, as designed
+- Both TP labels carry ✅ and neither SL label carries ❌ — the SL-after-TP gate holding
