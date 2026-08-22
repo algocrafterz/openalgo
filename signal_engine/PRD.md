@@ -64,6 +64,33 @@ main.py (_handle_entry / _handle_exit)
 
 ## Recent Changes (2026-08-22)
 
+### Key-level execution enabled (`breakout.pine`)
+
+- **Blocker 2 fixed.** Key-level entries were executed with ORB-derived SL and ORB-width targets
+  while the alert reported level-based `Ref SL`/`Ref T1`. `klSLLevel`/`klT1` are now latched into
+  `klArmedSL`/`klArmedT1` at arming; the pending processor branches on `klPendingSource != ""` and
+  uses `klCalcTargets()` (same 1/1.5/2/3x shape, anchored on the next structural level, 1.5R
+  fallback). Executed geometry now matches the signal.
+- **IB% carries both denominators** — `%IB` (vs average IB, Market Profile bands) types the day;
+  `%ADR` says how much of a normal day's range the first hour consumed. Daily ATR was indeed
+  wrong: true range folds the overnight gap in and makes the IB read falsely narrow on gap days.
+- **Afternoon window** `enableAfternoonWindow` 13:45–14:15, ON. Requires session volume factor ≥
+  Min Volume × (the morning window does not) — the PM wave is volume-driven. Ends 14:15 so an
+  entry still has 45 min to the 15:00 time exit.
+- **`enableKeyLevelExecution` now true.** `enableVAAcceptance` new, default false — suppresses the
+  weakest family (VAH-ACC/VAL-ACC).
+- **Entry stays breakout, not retest.** `enableRetestEntry` (wait-for-pullback) remains off —
+  already rejected for adverse selection. Retest *quality* comes from `-RT` setups, which detect a
+  completed break-and-retest and enter on the confirming bar without waiting.
+
+**⚠ NOT compiled since ~15 structural changes.** Before live use: compile clean; Strategy Tester
+with execution on, verifying key-level SL/TP match the alert; confirm `parser.py` handles a
+key-level entry alert (never fired before); observe the PM window opening/closing correctly.
+
+Inputs 60 → 66.
+
+---
+
 ### Key-level execution blockers + headroom gate (`breakout.pine`)
 
 - **Fixed:** `canTakeEntry` folded in `orbRangeFilterPassed`, so IB/VA setups were rejected on

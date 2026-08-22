@@ -336,13 +336,14 @@ klManualVAL    = 0.0
 
 // ─── Trigger families ───────────────────────────────────────────────────────
 enableKeyLevels    = input.bool(true, "Enable Key-Level Engine", group=grp_keylevel, tooltip="Master switch for the whole key-level layer\n\nOFF: no levels resolved, no profile accumulation, no scoring,\nno drawing, no key-level alerts. The script behaves exactly\nlike the original ORB strategy.\n\nON: levels are computed, drawn and scored. Whether they can\nOPEN A TRADE is controlled separately by 'Execute key-level\nsetups' below (default OFF).")
+enableVAAcceptance = input.bool(false, "| incl. VA acceptance", group=grp_keylevel, inline="fam1b", tooltip="Allow plain VALUE-AREA ACCEPTANCE (VAH-ACC / VAL-ACC) to fire.\n\nOFF by default, and recommended OFF for live trading. Acceptance is the weakest family in the model: no retest, no rejection structure, just two closes beyond the level. It was the family firing at exactly 7/7 before the confluence double-count was fixed.\n\nVA REJECTION and VA RETEST are unaffected — they keep firing whenever Value-Area triggers are on.")
 enableVATriggers   = input.bool(true, "| VAH / VAL setups", group=grp_keylevel, inline="fam1", tooltip="Value-Area setups from the volume-profile model\n\n• VAH rejection      — poke above VAH, close back inside → SHORT\n• VAL rejection      — poke below VAL, close back inside → LONG\n• VAH acceptance     — two consecutive closes above VAH   → LONG\n• VAL breakdown      — two consecutive closes below VAL   → SHORT\n• VAH/VAL retest     — break, pull back, hold the level")
 enablePDTriggers   = input.bool(true, "| PDH / PDL setups", group=grp_keylevel, inline="fam1", tooltip="Previous Day High / Low breakout + retest\n\nPDH/PDL are the most widely watched intraday levels.\nA clean break with volume tends to run; a failed break\nreverses hard.")
 enableIBTriggers   = input.bool(true, "| IBH / IBL setups", group=grp_keylevel, inline="fam2", tooltip="Initial Balance (09:15-10:15) High / Low breakout + retest\n\nIB extension is the classic Market Profile trend-day tell.\nBreaking IB after 10:15 on expanding volume is a strong\ncontinuation signal.")
 klIBSession        = input.session("0915-1015", "| IB window", group=grp_keylevel, inline="fam2", tooltip="Initial Balance window (IST)\n\nMarket Profile defines IB as the first hour of trade.\nFor NSE that is 09:15-10:15.")
 klRetestMaxBars    = input.int(6, "Retest window (bars)", minval=1, maxval=30, group=grp_keylevel, inline="tune", tooltip="How many bars after a level break a pullback still counts as a retest\n\nSHORTER = only immediate retests qualify\nLONGER  = late pullbacks still count, more signals\n\nRECOMMENDED: 6 bars")
 klCooldownBars     = input.int(3, "| Cooldown", minval=0, maxval=50, group=grp_keylevel, inline="tune", tooltip="Minimum bars between two key-level alerts\n\nPrevents a single level from spamming alerts while price\nchops around it.\n\n0 = no cooldown")
-enableKeyLevelExecution = input.bool(false, "⚠ Execute key-level setups", group=grp_keylevel, tooltip="Let key-level setups OPEN REAL TRADES\n\nOFF (default) ⭐:\n• Setups draw arrows, score, and fire alerts\n• strategy.entry is NEVER called for them\n• Backtest is identical to the plain ORB strategy\n• Use this to observe and validate first\n\nON:\n• A qualifying key-level setup enters through the SAME\n  pipeline as an ORB breakout (next-bar fill, same SL/TP,\n  same Telegram entry alert)\n• Still bound by the one-trade-per-session cap and the\n  entry cutoff time\n\nTurn this on only after the Strategy Tester and live alert\nlog confirm the setups are worth trading.")
+enableKeyLevelExecution = input.bool(true, "⚠ Execute key-level setups", group=grp_keylevel, tooltip="Let key-level setups OPEN REAL TRADES\n\nOFF (default) ⭐:\n• Setups draw arrows, score, and fire alerts\n• strategy.entry is NEVER called for them\n• Backtest is identical to the plain ORB strategy\n• Use this to observe and validate first\n\nON:\n• A qualifying key-level setup enters through the SAME\n  pipeline as an ORB breakout (next-bar fill, same SL/TP,\n  same Telegram entry alert)\n• Still bound by the one-trade-per-session cap and the\n  entry cutoff time\n\nTurn this on only after the Strategy Tester and live alert\nlog confirm the setups are worth trading.")
 
 // ─── Scoring ────────────────────────────────────────────────────────────────
 klScoreThreshold = input.int(7, "Alert score threshold", minval=1, maxval=20, group=grp_score, tooltip="Minimum weighted score for a key-level setup to fire\n\nSCORE COMPONENTS:\n+2  major level interaction\n+1  per confluent structural level (max +3)\n+2  two or more confluent levels\n+2  breakout-and-retest structure\n+1  VWAP aligned with direction\n+1  EMA9 aligned + sloping with direction\n+1/+2 RVOL at min / strong threshold\n+1  strong candle close (CLV)\n+1  session volume factor at or above Min Volume ×\n\nLOWER = more signals, more noise\nHIGHER = rare, high-conviction only\n\nRECOMMENDED: 7")
@@ -354,6 +355,11 @@ klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, ma
 klSlBufferMult   = input.float(0.15, "SL buffer (× ATR beyond level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far beyond the triggering level the stop sits\n\nA level-based stop goes just past the level that was defended,\nplus this ATR cushion to survive normal noise and stop hunts.\n\nUsed only for key-level setups. ORB entries keep their own\nstop-loss mode from the TARGETS & RISK group.")
 klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far IN FRONT of the next structural level the first target sits\n\nThe level itself is where every other trader's limit orders rest, so price\nfrequently stalls a few ticks short of it and reverses. Parking T1 inside\nthat queue trades a little reward for a materially better fill rate.\n\n0 = target exactly at the level (old behaviour)\n0.15 = recommended\n\nIf the pad would put T1 inside the noise around entry, T1 reports '-'\ninstead: that setup has no room to a structural target.")
 klMinHeadroomR   = input.float(1.0, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
+enableAfternoonWindow = input.bool(true, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
+pmStartHour = input.int(13, "PM from", minval=9, maxval=15, group=grp_session, inline="pm2", tooltip="Start of the afternoon entry window (IST). 13:45 is where the J-K pickup actually begins.")
+pmStartMinute = input.int(45, ":", minval=0, maxval=59, group=grp_session, inline="pm2")
+pmEndHour = input.int(14, "to", minval=9, maxval=15, group=grp_session, inline="pm3", tooltip="End of the afternoon entry window (IST).\n\nKept clear of the 15:00 time exit: an entry at 14:15 still has 45 minutes to work; one at 14:45 has 15 and is a coin flip.")
+pmEndMinute = input.int(15, ":", minval=0, maxval=59, group=grp_session, inline="pm3")
 klRequireHTFClose = input.bool(true, "Require HTF close confirmation", group=grp_score, inline="htfc", tooltip="Demand a CLOSED higher-timeframe bar on the correct side of the level before a key-level setup can fire.\n\nWHY: a 5-min close beyond a level is cheap to fake -- most liquidity sweeps complete and reverse inside a single 15-min bar. A closed 15-min bar on the far side is materially harder to fake, and published breakout research is consistent that lower-timeframe breaks carry a higher false-break rate.\n\nThe test follows trade DIRECTION, so it works for every family:\n\u2022 long  setups need HTF close ABOVE the level\n\u2022 short setups need HTF close BELOW the level\nA VAH rejection short therefore needs the HTF close back under VAH -- which is exactly the rejection thesis.\n\nCOST: up to one HTF bar of lag on entry, because this reads the LAST CLOSED bar (non-repainting). Setups printing RVOL at or above the Strong \u00d7 threshold bypass the wait.\n\nOFF = previous behaviour (chart-timeframe close only).")
 klConfirmTF       = input.timeframe("15", "| timeframe", group=grp_score, inline="htfc", tooltip="Higher timeframe used for the close confirmation above.\n\n15 = recommended for a 5-min chart: one confirmation bar per three chart bars\n30/60 = stricter, materially more lag\n\nMust be HIGHER than the chart timeframe or the test is meaningless.")
 
@@ -606,6 +612,8 @@ var int   sessionVWAPBar = -1
 // Names the key level that armed the current pending entry ("" = plain ORB breakout).
 // Declared here rather than beside the key-level engine because the pending-entry
 // processor consumes it earlier in source order than the engine sets it.
+var float klArmedSL = na
+var float klArmedT1 = na
 var string klPendingSource = ""
 
 var bool htfBullish = false
@@ -942,6 +950,15 @@ calculateTargets(entry, sl, isBullish, orbH, orbL) =>
     float tp3   = isBullish ? entry + tp1_dist * 3.0 : entry - tp1_dist * 3.0
 
     [tp1, tp1_5, tp2, tp3]
+
+// Targets for a KEY-LEVEL entry. calculateTargets() anchors to ORB width, which is
+// meaningless for an IB or value-area trade -- the structure that matters is the next level
+// in the trade's direction. Same 1x/1.5x/2x/3x shape, so the alert and TP tracking downstream
+// need no changes. Falls back to 1.5R when no structural level lies ahead.
+klCalcTargets(float entry, float sl, bool isBullish, float t1) =>
+    float risk = math.abs(entry - sl)
+    float d = na(t1) ? risk * 1.5 : math.max(math.abs(t1 - entry), risk * 1.0)
+    [isBullish ? entry + d : entry - d, isBullish ? entry + d * 1.5 : entry - d * 1.5, isBullish ? entry + d * 2.0 : entry - d * 2.0, isBullish ? entry + d * 3.0 : entry - d * 3.0]
 
 calculateStopLoss(entry, orbHigh, orbLow, orbRange, atr, mode, isBullish) =>
     float sl = na
@@ -1448,7 +1465,7 @@ renderGodRow(table dashTable, int startRow, string txtSize, color txtColor, bool
 // dashboard block) to keep the script's global scope under Pine's main-body size limit.
 // Values are passed in rather than read from globals so this can sit here, ahead of the
 // key-level engine that computes them.
-renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full) =>
+renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, float ibAdrPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full) =>
     int row = startRow
     color okC = color.lime
     color noC = color.new(color.gray, 20)
@@ -1481,7 +1498,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
         row += 1
 
     table.cell(dashTable, 0, row, "IB H/L:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Initial Balance high/low (09:15-10:15) and its width as a % of average daily range.\n\nBreaking IB after 10:15 on expanding volume is the classic trend-day continuation; rotating inside it all day is a range day.\n\n<35% narrow — coiled, trend-day potential\n35-60% normal\n>60% wide — range day, IB likely holds")
-    table.cell(dashTable, 1, row, na(ibh) ? "-" : str.tostring(ibh, "#.##") + "/" + str.tostring(ibl, "#.##") + (na(ibPct) ? "" : "  " + str.tostring(ibPct, "#") + "% " + ibType), text_color=na(ibh) ? noC : #FFEB3B, text_size=txtSize, text_halign=text.align_right)
+    table.cell(dashTable, 1, row, na(ibh) ? "-" : str.tostring(ibh, "#.##") + "/" + str.tostring(ibl, "#.##") + (na(ibPct) ? "" : "  " + str.tostring(ibPct, "#") + "%IB" + (na(ibAdrPct) ? "" : "/" + str.tostring(ibAdrPct, "#") + "%ADR") + " " + ibType), text_color=na(ibh) ? noC : #FFEB3B, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
     // ADR consumed — the single most useful "is there room left?" read on the panel.
@@ -2217,7 +2234,7 @@ klHeadroomR(int d, float px, float dayH, float dayL, float adr, float riskPts) =
 
 // Stateless context read: where price and today's open sit relative to prior value, and
 // how wide the Initial Balance came out relative to a normal day.
-klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg) =>
+klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg, float adr) =>
     // Auction state: price above VAH / below VAL is trading outside yesterday's accepted
     // value — the precondition for a trend day.
     string auction = na(vah) or na(val) ? "n/a" : close > vah ? "Above VAH" : close < val ? "Below VAL" : "Inside Value"
@@ -2228,7 +2245,12 @@ klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg
     float ibRange = na(ibH) or na(ibL) ? na : ibH - ibL
     float ibPct   = na(ibRange) or na(ibAvg) or ibAvg <= 0 ? na : ibRange / ibAvg * 100.0
     string ibType = na(ibPct) ? "-" : ibPct < 80 ? "narrow/trend?" : ibPct > 120 ? "wide/range?" : "normal"
-    [auction, openPos, ibPct, ibType]
+    // Second reading, different question: how much of a NORMAL DAY'S RANGE the first hour
+    // already consumed. ADR (high-low) is the right denominator for that -- daily ATR is TRUE
+    // range and folds the overnight gap in, inflating it and making the IB look falsely narrow
+    // on exactly the gap days where the reading matters most.
+    float ibAdrPct = na(ibRange) or na(adr) or adr <= 0 ? na : ibRange / adr * 100.0
+    [auction, openPos, ibPct, ibType, ibAdrPct]
 
 // ─── Main-body wiring (kept deliberately thin) ──────────────────────────────
 float klVPStep = syminfo.mintick * klTicksPerRow
@@ -2245,10 +2267,12 @@ bool klInIB = enableKeyLevels and not na(time(timeframe.period, klIBSession, ses
 [klVAH, klPOC, klVAL] = klProfile(enableKeyLevels, klAutoProfile, shouldReset, not na(time(timeframe.period, "0915-1530", sessionTimezone)), klLoLTF, klHiLTF, klVolLTF, klVPStep, klValueAreaPct, klManualVAH, klManualPOC, klManualVAL)
 [klIBH, klIBL, klDayOpen, klDayStartBar, klDayHigh, klDayLow] = klInitialBalance(enableKeyLevels, shouldReset, klInIB, inSession)
 float klIBAvg = klIBAverage(enableKeyLevels, shouldReset, na(klIBH) or na(klIBL) ? na : klIBH - klIBL, volBaseDays)
-[klAuction, klOpenPos, klIBPct, klIBType] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klIBAvg)
+[klAuction, klOpenPos, klIBPct, klIBType, klIBAdrPct] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klIBAvg, klADR)
 
 // Cleared on session rollover so a stale trigger tag cannot leak into the next day.
 klPendingSource := shouldReset ? "" : klPendingSource
+klArmedSL := shouldReset ? na : klArmedSL
+klArmedT1 := shouldReset ? na : klArmedT1
 
 // ======================================= ORB LEVEL BUILDING ========================================
 currentTF_seconds = timeframe.in_seconds()
@@ -2428,7 +2452,12 @@ float klSessionVF = cachedSessionVF
 // ============================= ENTRY CUTOFF TIME CHECK ==========================================
 int currentHourNow = hour(time, sessionTimezone)
 int currentMinuteNow = minute(time, sessionTimezone)
-bool isBeforeCutoff = (currentHourNow < entryCutoffHour) or (currentHourNow == entryCutoffHour and currentMinuteNow < entryCutoffMinute)
+bool isBeforeMorningCutoff = (currentHourNow < entryCutoffHour) or (currentHourNow == entryCutoffHour and currentMinuteNow < entryCutoffMinute)
+// Afternoon window, gated on session VOLUME as well as the clock: the PM wave is a volume
+// phenomenon, and without the volume it is a thin tape with less runway than the morning.
+int nowMins = currentHourNow * 60 + currentMinuteNow
+bool inPMWindow = enableAfternoonWindow and nowMins >= pmStartHour * 60 + pmStartMinute and nowMins < pmEndHour * 60 + pmEndMinute and not na(cachedSessionVF) and cachedSessionVF >= volumeMultiplier
+bool isBeforeCutoff = isBeforeMorningCutoff or inPMWindow
 
 // Smart Entry: Minimum entry time filter (e.g., 9:45 AM - let gap volatility settle)
 bool isAfterMinTime = not enableMinEntryTime or (currentHourNow > minEntryHour) or (currentHourNow == minEntryHour and currentMinuteNow >= minEntryMinute)
@@ -2479,8 +2508,12 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not 
 
             float entry = open
             float atr = cachedATR
-            float sl = calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
-            [tp1, tp1_5, tp2, tp3] = calculateTargets(entry, sl, true, activeHigh, activeLow)
+            // A key-level entry uses the stop and target measured from the level that actually
+            // triggered it -- NOT the ORB geometry. Without this the executed trade would not
+            // match the Ref SL / Ref T1 the observation alert reported.
+            bool fromKL = klPendingSource != "" and not na(klArmedSL)
+            float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
+            [tp1, tp1_5, tp2, tp3] = fromKL ? klCalcTargets(entry, sl, true, klArmedT1) : calculateTargets(entry, sl, true, activeHigh, activeLow)
 
             [shares, posValue, maxLossCalc, riskAmount] = calculatePositionSize(entry, sl)
 
@@ -2514,6 +2547,8 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not 
             float tpForAlert = tp1
             alert(buildEntryAlert(true, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(tpForAlert - entry) * shares, klPendingSource), alert.freq_once_per_bar)
             klPendingSource := ""  // consumed — next entry defaults back to plain ORB
+            klArmedSL := na
+            klArmedT1 := na
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2581,8 +2616,12 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
 
             float entry = open
             float atr = cachedATR
-            float sl = calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
-            [tp1, tp1_5, tp2, tp3] = calculateTargets(entry, sl, false, activeHigh, activeLow)
+            // A key-level entry uses the stop and target measured from the level that actually
+            // triggered it -- NOT the ORB geometry. Without this the executed trade would not
+            // match the Ref SL / Ref T1 the observation alert reported.
+            bool fromKL = klPendingSource != "" and not na(klArmedSL)
+            float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
+            [tp1, tp1_5, tp2, tp3] = fromKL ? klCalcTargets(entry, sl, false, klArmedT1) : calculateTargets(entry, sl, false, activeHigh, activeLow)
 
             [shares, posValue, maxLossCalc, riskAmount] = calculatePositionSize(entry, sl)
 
@@ -2616,6 +2655,8 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             float tpForAlert = tp1
             alert(buildEntryAlert(false, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(entry - tpForAlert) * shares, klPendingSource), alert.freq_once_per_bar)
             klPendingSource := ""  // consumed — next entry defaults back to plain ORB
+            klArmedSL := na
+            klArmedT1 := na
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2667,10 +2708,14 @@ if not canTakeLongEntry and pendingLongEntry
     pendingLongEntry := false
     pendingLongBar := na
     klPendingSource := ""
+    klArmedSL := na
+    klArmedT1 := na
 if not canTakeShortEntry and pendingShortEntry
     pendingShortEntry := false
     pendingShortBar := na
     klPendingSource := ""
+    klArmedSL := na
+    klArmedT1 := na
 
 // ======================= NEW ARCHITECTURE: BREAKOUT DETECTION WITH activeORB =======================
 if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout and barstate.isconfirmed
@@ -3041,7 +3086,7 @@ klTrackBreaks(bool en, bool confirmed, float vah, float val, float pdh, float pd
 // Priority: retest > rejection > break/acceptance, and within each tier VA > PD > IB.
 // Retests rank highest because a level that was broken and then successfully defended
 // has proven itself; a first touch has not.
-klResolveSetup(bool en, bool vaOn, bool pdOn, bool ibOn, float vah, float val, float pdh, float pdl, float ibh, float ibl, bool ibDone, bool bull, bool bear, float band, int maxBars, int vahBB, int valBB, int pdhBB, int pdlBB, int ibhBB, int iblBB) =>
+klResolveSetup(bool en, bool vaOn, bool vaAcc, bool pdOn, bool ibOn, float vah, float val, float pdh, float pdl, float ibh, float ibl, bool ibDone, bool bull, bool bear, float band, int maxBars, int vahBB, int valBB, int pdhBB, int pdlBB, int ibhBB, int iblBB) =>
     // Detection + priority in one function: every detector feeds the same chain, so
     // splitting them would mean returning ~16 booleans to consume them one line later.
     // Priority retest > rejection > break, and VA > PD > IB inside each tier. A level
@@ -3054,8 +3099,8 @@ klResolveSetup(bool en, bool vaOn, bool pdOn, bool ibOn, float vah, float val, f
     // Value-Area family (the 8-scenario model)
     bool vahRejShort = vaEn and not na(vah) and high > vah and close < vah and bear
     bool valRejLong  = vaEn and not na(val) and low  < val and close > val and bull
-    bool vahAccLong  = vaEn and not na(vah) and close > vah and close[1] > vah
-    bool valAccShort = vaEn and not na(val) and close < val and close[1] < val
+    bool vahAccLong  = vaEn and vaAcc and not na(vah) and close > vah and close[1] > vah
+    bool valAccShort = vaEn and vaAcc and not na(val) and close < val and close[1] < val
     bool vahRt = vaEn and not na(vah) and not na(vahBB) and (bar_index - vahBB <= maxBars) and low  <= vah + band and close > vah and bull
     bool valRt = vaEn and not na(val) and not na(valBB) and (bar_index - valBB <= maxBars) and high >= val - band and close < val and bear
     // Previous-Day family: break + retest only. A PDH/PDL "rejection" is just yesterday's
@@ -3210,7 +3255,7 @@ float klEMASlope = klEMA9 - nz(klEMA9[1], klEMA9)
 
 float klBand = nz(cachedATR) * klConfAtrMult
 
-[klSetupCode, klDir, klSetupLevel, klIsRetest, klRejectionFamily] = klResolveSetup(enableKeyLevels, enableVATriggers, enablePDTriggers, enableIBTriggers, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL, enableKeyLevels and not na(klIBH) and not na(klIBL) and not klInIB, klBullCandle, klBearCandle, klBand, klRetestMaxBars, klVAHBreakBar, klVALBreakBar, klPDHBreakBar, klPDLBreakBar, klIBHBreakBar, klIBLBreakBar)
+[klSetupCode, klDir, klSetupLevel, klIsRetest, klRejectionFamily] = klResolveSetup(enableKeyLevels, enableVATriggers, enableVAAcceptance, enablePDTriggers, enableIBTriggers, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL, enableKeyLevels and not na(klIBH) and not na(klIBL) and not klInIB, klBullCandle, klBearCandle, klBand, klRetestMaxBars, klVAHBreakBar, klVALBreakBar, klPDHBreakBar, klPDLBreakBar, klIBHBreakBar, klIBLBreakBar)
 [klConfCnt, klConfNames] = klConfluence(klSetupLevel, klBand, klAllLevels, klLevelNames)
 int klScore = klComputeScore(klDir, klConfCnt, klIsRetest, sessionVWAP, klEMA9, klEMASlope, klRVOL, klBullCandle, klBearCandle, volumeMultiplier, strongVolumeMultiplier, klSessionVF)
 [klEntryRef, klSLLevel, klRiskPts, klQtyEst] = klExecMap(klDir, klSetupLevel, cachedATR, klSlBufferMult, accountSize, riskPct)
@@ -3309,10 +3354,14 @@ if klFire and enableKeyLevelExecution and canTakeKeyLevelEntry
         pendingLongEntry := true
         pendingLongBar := bar_index
         klPendingSource := klSetupCode
+        klArmedSL := klSLLevel
+        klArmedT1 := klT1
     else if klDir == -1 and not pendingShortEntry and not awaitingRetestShort
         pendingShortEntry := true
         pendingShortBar := bar_index
         klPendingSource := klSetupCode
+        klArmedSL := klSLLevel
+        klArmedT1 := klT1
 
 // ====================================== BARS OUTSIDE TRACKING ======================================
 if not isHTF and barstate.isconfirmed
@@ -4214,7 +4263,7 @@ if showDashboard and enableHTF
         /// Key-level section — the objective picture from the volume-profile model.
         /// Rows are rendered by renderKeyLevels(); hover any row label for what it means.
         if enableKeyLevels
-            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full")
+            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBAdrPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full")
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)

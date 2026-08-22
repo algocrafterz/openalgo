@@ -1041,3 +1041,89 @@ Net for the session: **-1,790 proxy (~-7,770 compiled)**. Estimated ~89,500 / 10
 2. `klIBAverage` reads sensibly — the first `volBaseDays` sessions warm up, and IB% should sit
    near 100% on an ordinary day.
 3. `⛔ NO ROOM` fires on a late-session setup and not before.
+
+---
+
+## 2026-08-22k — Blocker 2 fixed, PM window, execution ON
+
+### Blocker 2 fixed: executed SL/TP now match the alert
+
+A key-level entry handed off to the shared pending processor, which derived the stop from
+**ORB levels** and the target from **ORB width** — so an `IBH-RT` trade was executed with
+geometry belonging to a completely different setup, while the alert reported `Ref SL` / `Ref T1`
+measured from the level that actually triggered.
+
+`klSLLevel` and `klT1` are now latched into `klArmedSL` / `klArmedT1` when the pending is armed.
+The processor branches on `klPendingSource != ""`:
+
+```pine
+sl  = fromKL ? klArmedSL : calculateStopLoss(..., activeHigh, activeLow, ...)
+tps = fromKL ? klCalcTargets(entry, sl, dir, klArmedT1) : calculateTargets(..., activeHigh, activeLow)
+```
+
+`klCalcTargets()` keeps the same 1x / 1.5x / 2x / 3x shape as the ORB version so the alert and TP
+tracking downstream need no changes, but anchors on the **next structural level** instead of ORB
+width, falling back to 1.5R when nothing lies ahead. Latches clear on consumption, cancellation
+and session reset, alongside the existing `klPendingSource` clears.
+
+### IB%: both denominators, and why ATR was wrong
+
+Confirmed — **daily ATR was the wrong denominator.** ATR is *true* range, so it folds the
+overnight gap into the number: on a gap day the denominator inflates and the IB reads falsely
+narrow, exactly when the reading matters most.
+
+But "ADR instead of ATR" only answers one of two different questions, so the row now carries both:
+
+| Reading | Denominator | Question |
+|---|---|---|
+| `%IB` | average IB over N sessions | **Is this IB narrow or wide?** Market Profile's own bands, <80 / >120. This is what types the day |
+| `%ADR` | ADR (high-low) | **How much of a normal day's range did the first hour eat?** A room question |
+
+Row now reads e.g. `2292/2263.3  103%IB/49%ADR normal`.
+
+### Afternoon entry window
+
+`enableAfternoonWindow` (default ON), 13:45-14:15. The cheat sheet's session map puts a real
+pickup at J-K (13:45-14:45) as the European open feeds through.
+
+Two deliberate constraints:
+- **Ends 14:15, not 14:45.** With the 15:00 time exit, a 14:15 entry has 45 minutes to work; a
+  14:45 entry has 15 and is a coin flip.
+- **Requires session volume factor >= Min Volume ×**, which the morning window does not. The PM
+  thesis is entirely volume-driven; without the wave it is a thin tape with less runway.
+
+### Production switches
+
+- `enableKeyLevelExecution` default **true**.
+- `enableVAAcceptance` (new, default **false**) suppresses plain VAH-ACC / VAL-ACC — the weakest
+  family, no retest and no rejection structure, and the one that was firing at exactly 7/7 before
+  the confluence double-count was fixed. VA rejection and VA retest are unaffected.
+
+### Retest vs breakout — the distinction that matters
+
+Two different things were being conflated:
+
+| | What it is | Verdict |
+|---|---|---|
+| `enableRetestEntry` | An **order-placement** strategy: after a break, WAIT for a pullback to the level | **Stays OFF.** Already tested and rejected — adverse selection, 30-50% fill rate. The pullback often never comes, and when it does it is frequently because the break failed |
+| `-RT` setups | A **pattern**: the engine detects a break-and-retest that has **already completed** and enters on the bar confirming the level held | **This is the retest quality worth having.** Nothing is waited for |
+
+So: **breakout mechanically, retest quality via setup selection.** The engine already ranks
+retest > rejection > break and awards +2 for retest structure. Raising `klScoreThreshold` biases
+toward retests without touching the entry mechanism — a plain break with no confluence tops out
+around 7-8; a retest with confluence clears 9-11.
+
+### ⚠ Execution is ON but the file has NOT been compiled
+
+Roughly fifteen structural changes have landed since the last successful TradingView compile
+(the 16:30 chart). **Do not run this live until:**
+
+1. It compiles clean.
+2. Strategy Tester runs with `enableKeyLevelExecution = true` and the trade list is inspected —
+   specifically that a key-level entry's SL/TP match its alert's `Ref SL` / `Ref T1`.
+3. A key-level entry alert is confirmed parseable by `signal_engine/parser.py` (it goes out
+   through `buildEntryAlert`, which is the proven format, but this path has never fired).
+4. The PM window is observed opening and closing at the right times, and staying shut on a
+   low-volume afternoon.
+
+Inputs 60 -> 66.
