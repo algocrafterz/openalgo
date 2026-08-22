@@ -1261,3 +1261,83 @@ The model doc is explicit — *"No footprint confirmation → no trade, regardle
 that read (absorption vs follow-through on a GoCharting footprint) has no Pine equivalent. A fully
 automated pipeline **drops that gate**. What stands in for it here is CLV, RVOL, the session volume
 factor and the HTF close. Weaker than a footprint, and worth knowing you are trading without it.
+
+---
+
+## 2026-08-22n — Direction bug, day/open type, break-bar volume, chase guard
+
+### BUG: every key-level LONG rendered as SHORT
+
+`isBullish = everHadBreakUp` — an **ORB-only** flag, set solely inside the ORB breakout block.
+With ORB demoted to a level it never sets, so the panel labelled a long trade SHORT and the
+header arrow pointed the wrong way.
+
+**Execution was never affected.** `orbTradeDirection` is set correctly by both pending
+processors and is what TP/SL tracking and the exit alerts actually read. The damage was confined
+to `isBullish` (dashboard label + trade-line drawing), `hasActiveBreakout` and the header arrow —
+all now read `orbTradeDirection`.
+
+Worth noting *why* this appeared only now: it was latent for as long as ORB was the only thing
+that traded. Demoting ORB exposed it. Anything else keying off `everHadBreakUp` /
+`everHadBreakDown` for "which way is this trade" is suspect for the same reason; the three genuine
+"did an ORB break happen" uses (`isFailedBreak`, `brokeOutLate`, `hasValidOrbData`) were left alone.
+
+### Open type, day type, bias
+
+Three new rows, in the cheat sheet's own categories.
+
+**`klOpenType()`** — classified over the first 30 minutes then **latched**. Measures excursion
+each way from the open against the net move:
+
+| Counter-move | Type | Expect |
+|---|---|---|
+| < 20% of total range | Open Drive | Trend day — enter first pullback with the drive |
+| < 45% | Open Test Drive | Normal variation — trade the reversal |
+| net move still > 35% | Open Rejection Reverse | Normal day — trade the gap fill toward POC |
+| otherwise | Open Auction | No edge yet; wait for IB |
+
+**`klDayType()`** — tracks extension beyond IBH/IBL as a % of the IB range, and names the day from
+that plus IB width. **Provisional and updates all day** — a day only truly types at the close.
+
+Both sides extended >15% → Neutral. One side >100% → Trend if IB narrow, else Double Distribution.
+>50% → Normal Variation. <10% → Non-Trend if narrow, else Normal.
+
+**`klBias()`** — the line the other two exist to produce: `STAND ASIDE` / `TWO-WAY — fade the
+extremes` / `LONG — hold, do not fade` / `SHORT`. **Directional context, not a signal.** A LONG
+bias with no setup is not a trade; the Setup row remains the only thing that fires.
+
+### Retests are now scored on the break bar's volume
+
+Your read of the chart was right: **the 10:20 break bar carried the volume, the 10:50 confirming
+bar did not.** Scoring only the confirming bar systematically under-rates the `-RT` family — which
+this model rates highest — because by the time price pulls back and closes back through the level,
+participation has dried up by construction.
+
+Retest setups now score on `max(current RVOL, highest RVOL over the retest window)`. Rejection and
+acceptance are unchanged: for those the trigger bar *is* the event.
+
+### Chase guard
+
+`klMaxChaseATR` (1.0). Refuses a setup whose confirming bar has already closed more than one ATR
+beyond its level. A retest is meant to be entered near the level it defended; if confirmation only
+arrives after price has run a full ATR, the good part of the move is gone and the stop — still
+measured from the level — is now far away, so R:R collapses quietly.
+
+This does not improve the fill. It declines the ones that are already bad.
+
+### The entry-timing problem this does NOT solve
+
+The TCS trade entered at 2296 when IBH was 2292 — four points, most of them given up to the HTF
+confirmation wait. The chase guard would have allowed it (4 points ≈ 0.8 ATR), correctly: it was a
+mediocre fill, not a bad one.
+
+Genuinely fixing the fill needs a **limit order at the level**, which is a `signal_engine` change,
+not a Pine one. Worth noting the earlier "MARKET only" finding does **not** apply here: that was
+about entering ON a breakout, where a limit only fills if price comes back — i.e. if the break
+failed. A **retest** setup is the opposite case: the pullback *is* the thesis, so a resting limit
+at level + buffer is exactly the right instrument. Options, in order of cost:
+
+1. Alert carries a `LIMIT` price at the level; `signal_engine` places a limit with a timeout.
+2. Lower `klConfirmTF` to 10 — less lag, weaker sweep filter.
+3. Lower the strong-volume HTF bypass so genuine break volume skips the wait (that TCS break was
+   0.9x, so it would not have qualified anyway).

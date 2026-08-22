@@ -355,6 +355,7 @@ klAccMinRvol     = input.float(1.5, "Acceptance min RVOL", minval=0, maxval=10, 
 klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, maxval=2, step=0.05, group=grp_score, tooltip="Two levels within this many ATRs are treated as confluent\n\nAlso used as the retest tolerance band.\n\nTIGHTER = fewer confluence hits, stricter retests\nWIDER   = more confluence hits, looser retests\n\nRECOMMENDED: 0.25 × ATR")
 klSlBufferMult   = input.float(0.35, "SL buffer (× ATR beyond level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far beyond the triggering level the stop sits\n\nA level-based stop goes just past the level that was defended,\nplus this ATR cushion to survive normal noise and stop hunts.\n\nUsed only for key-level setups. ORB entries keep their own\nstop-loss mode from the TARGETS & RISK group.")
 klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far IN FRONT of the next structural level the first target sits\n\nThe level itself is where every other trader's limit orders rest, so price\nfrequently stalls a few ticks short of it and reverses. Parking T1 inside\nthat queue trades a little reward for a materially better fill rate.\n\n0 = target exactly at the level (old behaviour)\n0.15 = recommended\n\nIf the pad would put T1 inside the noise around entry, T1 reports '-'\ninstead: that setup has no room to a structural target.")
+klMaxChaseATR    = input.float(1.0, "Max chase from level (× ATR)", minval=0, maxval=5, step=0.25, group=grp_score, tooltip="Refuse a setup whose confirming bar has already closed this far beyond the level.\n\nA retest is supposed to be entered NEAR the level it defended. If confirmation only arrives once price has run a full ATR past it, the good part of the move is gone and the stop — still measured from the level — is now much further away, so the R:R quietly collapses.\n\nThis does not improve the fill; it declines the ones that are already bad.\n\n1.0 = recommended\n0 = disabled")
 klMinHeadroomR   = input.float(1.0, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
 enableAfternoonWindow = input.bool(true, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
 pmStartHour = input.int(13, "PM from", minval=9, maxval=15, group=grp_session, inline="pm2", tooltip="Start of the afternoon entry window (IST). 13:45 is where the J-K pickup actually begins.")
@@ -1466,7 +1467,7 @@ renderGodRow(table dashTable, int startRow, string txtSize, color txtColor, bool
 // dashboard block) to keep the script's global scope under Pine's main-body size limit.
 // Values are passed in rather than read from globals so this can sit here, ahead of the
 // key-level engine that computes them.
-renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, float ibAdrPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full) =>
+renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, float ibAdrPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full, string openT, string dayT, string bias) =>
     int row = startRow
     color okC = color.lime
     color noC = color.new(color.gray, 20)
@@ -1490,6 +1491,18 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
 
     table.cell(dashTable, 0, row, "Auction:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Where price trades NOW vs the previous value area, then where today OPENED.\n\nAbove VAH / Inside Value / Below VAL.\n\nOpening outside prior value is the classic trend-day tell — the market gapped out of value and is unlikely to return.")
     table.cell(dashTable, 1, row, auction + "  (open " + openPos + ")", text_color=auction == "n/a" ? noC : color.aqua, text_size=txtSize, text_halign=text.align_right)
+    row += 1
+
+    table.cell(dashTable, 0, row, "Open type:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="How the session opened, in the cheat sheet's four categories. LATCHED after the first 30 minutes — an open type that kept revising itself would be worthless.\n\nOpen Drive — one-way from the first tick. Highest conviction; expect a TREND day, enter on the first pullback in the direction of the drive.\nOpen Test Drive — tested one side, rejected, drove the other way. Expect NORMAL VARIATION; trade the reversal.\nOpen Rejection Reverse — ran one way then reversed back through the open. Expect a NORMAL day; trade the gap fill toward yesterday's POC.\nOpen Auction — rotation with no net progress. No edge yet; wait for the IB to complete, then trade the break or fade it.")
+    table.cell(dashTable, 1, row, openT, text_color=openT == "-" ? noC : openT == "Open Drive" ? color.lime : txtColor, text_size=txtSize, text_halign=text.align_right)
+    row += 1
+
+    table.cell(dashTable, 0, row, "Day type:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="The session's character, in the cheat sheet's six categories. Derived from how far price has extended beyond the Initial Balance on each side, plus the IB's own width.\n\nPROVISIONAL — it updates all day. A day only truly types at the close, so read it as the current best guess, not a verdict.\n\nTrend — narrow IB, one-way extension. NEVER fade it.\nDouble Distribution — a second range forms away from the first. Trade the new one.\nNormal Variation — average IB, one-side extension. Trade the break, take profit early.\nNormal — wide IB, both sides tested. Fade the IB extremes.\nNeutral — extension on BOTH sides. Fade the extremes.\nNon-Trend — very narrow IB, no follow-through. Do not trade.")
+    table.cell(dashTable, 1, row, dayT, text_color=dayT == "-" ? noC : dayT == "Trend" ? color.lime : dayT == "Non-Trend" ? color.red : txtColor, text_size=txtSize, text_halign=text.align_right)
+    row += 1
+
+    table.cell(dashTable, 0, row, "Bias:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Which way to lean today, if either — the one line the two rows above exist to produce.\n\nThis is DIRECTIONAL CONTEXT, not a trade signal. It says which side the odds favour; the Setup row says whether an actual entry exists. A LONG bias with no setup is not a trade.\n\nSTAND ASIDE — Non-Trend day, no follow-through to be had\nTWO-WAY — Normal or Neutral day; the extremes hold, so fade them rather than chase breaks\nLONG / SHORT — the day is extending one way; hold winners in that direction and do not fade it")
+    table.cell(dashTable, 1, row, bias, text_color=str.startswith(bias, "LONG") ? color.lime : str.startswith(bias, "SHORT") ? color.red : str.startswith(bias, "STAND") ? color.orange : txtColor, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
 
@@ -2233,6 +2246,82 @@ klHeadroomR(int d, float px, float dayH, float dayL, float adr, float riskPts) =
         r := (d == 1 ? proj - px : px - proj) / riskPts
     r
 
+// Opening type, per the cheat sheet's four categories. Classified over the first
+// `bars` bars and then LATCHED -- an open type that kept revising itself all day would be
+// worthless. Measured as excursion each way from the open vs the net move:
+//   almost no counter-move            -> Open Drive        (expect a trend day)
+//   tested one way, rejected, drove    -> Open Test Drive   (expect normal variation)
+//   ran one way then reversed through  -> Open Rejection Reverse (expect gap fill toward POC)
+//   rotation with no net progress      -> Open Auction      (wait for IB, then trade the break)
+// STATEFUL: call unconditionally.
+klOpenType(bool en, bool reset, bool inSess, float dayOpen, int bars) =>
+    var string t = "-"
+    var int n = 0
+    var float hi = na
+    var float lo = na
+    var bool done = false
+    if en
+        if reset
+            t := "-"
+            n := 0
+            hi := na
+            lo := na
+            done := false
+        if inSess and not done and not na(dayOpen)
+            hi := na(hi) ? high : math.max(hi, high)
+            lo := na(lo) ? low : math.min(lo, low)
+            n += 1
+            if n >= bars
+                float up = math.max(hi - dayOpen, 0.0)
+                float dn = math.max(dayOpen - lo, 0.0)
+                float tot = up + dn
+                float net = close - dayOpen
+                if tot > 0
+                    float opp = net >= 0 ? dn : up
+                    float oppFrac = opp / tot
+                    float netFrac = math.abs(net) / tot
+                    t := oppFrac < 0.20 ? "Open Drive" : oppFrac < 0.45 ? "Open Test Drive" : netFrac > 0.35 ? "Open Rejection Reverse" : "Open Auction"
+                done := true
+    t
+
+// Day type, per the cheat sheet's six categories. Tracks how far price has extended beyond
+// the Initial Balance on each side, as a % of the IB range, and names the day from that plus
+// the IB's own width. PROVISIONAL and it updates all day -- a day only truly types at the
+// close, so treat it as the current best read, not a verdict.
+klDayType(bool en, bool reset, bool ibDone, float ibh, float ibl, float ibAdrPct) =>
+    var float extUp = 0.0
+    var float extDn = 0.0
+    string t = "-"
+    if en
+        if reset
+            extUp := 0.0
+            extDn := 0.0
+        if ibDone and not na(ibh) and not na(ibl) and ibh > ibl
+            float ibR = ibh - ibl
+            extUp := math.max(extUp, (high - ibh) / ibR * 100.0)
+            extDn := math.max(extDn, (ibl - low) / ibR * 100.0)
+            float mx = math.max(extUp, extDn)
+            bool both = extUp > 15 and extDn > 15
+            bool narrow = not na(ibAdrPct) and ibAdrPct < 35
+            bool wide = not na(ibAdrPct) and ibAdrPct > 60
+            t := both ? "Neutral" : mx > 100 ? (narrow ? "Trend" : "Double Distribution") : mx > 50 ? "Normal Variation" : mx < 10 ? (narrow ? "Non-Trend" : "Normal") : wide ? "Normal" : "Normal Variation"
+    [t, extUp, extDn]
+
+// The one line the other two exist to produce: which way to lean today, if either.
+klBias(string dayT, string openT, float extUp, float extDn, string auction) =>
+    string b = "-"
+    if dayT == "Non-Trend"
+        b := "STAND ASIDE — no follow-through"
+    else if dayT == "Neutral" or dayT == "Normal"
+        b := "TWO-WAY — fade the extremes"
+    else if dayT == "Trend" or dayT == "Double Distribution" or dayT == "Normal Variation"
+        b := extUp > extDn ? "LONG — hold, do not fade" : extDn > extUp ? "SHORT — hold, do not fade" : "TWO-WAY"
+    else if openT == "Open Drive"
+        b := auction == "Above VAH" ? "LONG — drive from the open" : auction == "Below VAL" ? "SHORT — drive from the open" : "Wait for IB"
+    else
+        b := "Wait for IB"
+    b
+
 // Stateless context read: where price and today's open sit relative to prior value, and
 // how wide the Initial Balance came out relative to a normal day.
 klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg, float adr) =>
@@ -2272,10 +2361,14 @@ bool klInIB = enableKeyLevels and not na(time(timeframe.period, klIBSession, ses
 
 [klVAH, klPOC, klVAL] = klProfile(enableKeyLevels, klAutoProfile, shouldReset, not na(time(timeframe.period, "0915-1530", sessionTimezone)), klLoLTF, klHiLTF, klVolLTF, klVPStep, klValueAreaPct, klManualVAH, klManualPOC, klManualVAL)
 [klIBH, klIBL, klDayOpen, klDayStartBar, klDayHigh, klDayLow] = klInitialBalance(enableKeyLevels, shouldReset, klInIB, inSession)
+string klOpenTypeS = klOpenType(enableKeyLevels, shouldReset, inSession, klDayOpen, 6)
 float klIBAvg = klIBAverage(enableKeyLevels, shouldReset, na(klIBH) or na(klIBL) ? na : klIBH - klIBL, volBaseDays)
 [klAuction, klOpenPos, klIBPct, klIBType, klIBAdrPct] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klIBAvg, klADR)
 
 // Cleared on session rollover so a stale trigger tag cannot leak into the next day.
+[klDayTypeS, klExtUp, klExtDn] = klDayType(enableKeyLevels, shouldReset, enableKeyLevels and not na(klIBH) and not na(klIBL) and not klInIB, klIBH, klIBL, klIBAdrPct)
+string klBiasS = klBias(klDayTypeS, klOpenTypeS, klExtUp, klExtDn, klAuction)
+
 klPendingSource := shouldReset ? "" : klPendingSource
 klArmedSL := shouldReset ? na : klArmedSL
 klArmedT1 := shouldReset ? na : klArmedT1
@@ -3274,11 +3367,17 @@ float klEMASlope = klEMA9 - nz(klEMA9[1], klEMA9)
 [klAllLevels, klLevelNames] = klBuildRegistry(enableKeyLevels, klPOC, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL, activeORB)
 [klVAHBreakBar, klVALBreakBar, klPDHBreakBar, klPDLBreakBar, klIBHBreakBar, klIBLBreakBar] = klTrackBreaks(enableKeyLevels, barstate.isconfirmed, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL)
 
+// Retest setups are scored on the highest RVOL in the retest window, not on the confirming
+// bar alone. The break is where participation shows up; by the time price pulls back and
+// closes back through the level, volume has usually dried up. Scoring only the confirming
+// bar systematically under-rates exactly the setups this model rates highest.
+float klWindowRvol = ta.highest(klRVOL, klRetestMaxBars)
+
 float klBand = nz(cachedATR) * klConfAtrMult
 
 [klSetupCode, klDir, klSetupLevel, klIsRetest, klRejectionFamily] = klResolveSetup(enableKeyLevels, enableVATriggers, enableVAAcceptance, klAccMinRvol, klRVOL, enablePDTriggers, enableIBTriggers, klVAH, klVAL, klPDH, klPDL, klIBH, klIBL, enableKeyLevels and not na(klIBH) and not na(klIBL) and not klInIB, klBullCandle, klBearCandle, klBand, klRetestMaxBars, klVAHBreakBar, klVALBreakBar, klPDHBreakBar, klPDLBreakBar, klIBHBreakBar, klIBLBreakBar)
 [klConfCnt, klConfNames] = klConfluence(klSetupLevel, klBand, klAllLevels, klLevelNames)
-int klScore = klComputeScore(klDir, klConfCnt, klIsRetest, sessionVWAP, klEMA9, klEMASlope, klRVOL, klBullCandle, klBearCandle, volumeMultiplier, strongVolumeMultiplier, klSessionVF)
+int klScore = klComputeScore(klDir, klConfCnt, klIsRetest, sessionVWAP, klEMA9, klEMASlope, klIsRetest ? math.max(klRVOL, klWindowRvol) : klRVOL, klBullCandle, klBearCandle, volumeMultiplier, strongVolumeMultiplier, klSessionVF)
 [klEntryRef, klSLLevel, klRiskPts, klQtyEst] = klExecMap(klDir, klSetupLevel, cachedATR, klSlBufferMult, accountSize, riskPct)
 float klT1 = klFindT1(klAllLevels, klDir, klEntryRef, nz(cachedATR) * klT1PadMult)
 
@@ -3289,6 +3388,9 @@ float klT1 = klFindT1(klAllLevels, klDir, klEntryRef, nz(cachedATR) * klT1PadMul
 // arriving rather than a stop run, and holding it a full HTF bar gives back most of the move.
 float klHeadroom = klHeadroomR(klDir, klEntryRef, klDayHigh, klDayLow, klADR, klRiskPts)
 bool klRoomOK = klMinHeadroomR <= 0 or na(klHeadroom) or klHeadroom >= klMinHeadroomR
+// Distance already travelled from the level, in ATRs. Entry quality, not direction quality.
+float klChase = na(klSetupLevel) or nz(cachedATR) <= 0 ? na : math.abs(close - klSetupLevel) / cachedATR
+bool klChaseOK = klMaxChaseATR <= 0 or na(klChase) or klChase <= klMaxChaseATR
 
 bool klHTFOK = not klRequireHTFClose or na(klHTFClose) or na(klSetupLevel) or klRVOL >= strongVolumeMultiplier or (klDir == 1 and klHTFClose > klSetupLevel) or (klDir == -1 and klHTFClose < klSetupLevel)
 
@@ -3328,16 +3430,16 @@ buildKeyLevelAlert() =>
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK) =>
     var int lastBar = na
-    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK)
 
 // Latched last setup. The live row is blank on all but the single bar a setup fires, so
 // without this the panel reads 'nothing here' during the 99% of bars between signals --
@@ -3515,7 +3617,7 @@ if not isHTF and enableRetest and haveRange and barstate.isconfirmed
                           size=getLabelSize(labelSize))
                 cleanupLabel(retestLabel)
 
-isBullish = everHadBreakUp
+isBullish = orbTradeDirection == 1
 entry = orbEntryPrice
 sl = orbSLPrice
 tp1 = orbTP1Price
@@ -3793,7 +3895,7 @@ if newBreakoutDetected
     tp2_counted := false
     tp3_counted := false
 
-bool hasActiveBreakout = (everHadBreakUp or everHadBreakDown) and not na(orbEntryBar)
+bool hasActiveBreakout = orbTradeDirection != 0 and not na(orbEntryBar)
 
 if hasActiveBreakout and not trade_closed
 
@@ -4064,11 +4166,11 @@ if showDashboard and enableHTF
             headerTooltip += "Pre-market (04:00-09:30) or After-hours (16:00-20:00)\n"
             headerTooltip += "Showing data from extended session.\n\n"
 
-        if everHadBreakUp
+        if orbTradeDirection == 1
             headerTitle += " ⬆️"
             headerBgColor := color.new(color.green, 10)
             headerTooltip += "⬆️ BREAKOUT UP active\n"
-        else if everHadBreakDown
+        else if orbTradeDirection == -1
             headerTitle += " ⬇️"
             headerBgColor := color.new(color.red, 10)
             headerTooltip += "⬇️ BREAKOUT DOWN active\n"
@@ -4284,7 +4386,7 @@ if showDashboard and enableHTF
         /// Key-level section — the objective picture from the volume-profile model.
         /// Rows are rendered by renderKeyLevels(); hover any row label for what it means.
         if enableKeyLevels
-            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBAdrPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full")
+            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBAdrPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full", klOpenTypeS, klDayTypeS, klBiasS)
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
@@ -4296,7 +4398,7 @@ if showDashboard and enableHTF
             table.cell_set_height(dashTable, 1, row, 0.1)
             row += 1
 
-            isBullish := everHadBreakUp
+            isBullish := orbTradeDirection == 1
             entry := orbEntryPrice
             sl := orbSLPrice
             tp1 := orbTP1Price
