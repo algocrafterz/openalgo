@@ -2513,7 +2513,10 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not 
             // match the Ref SL / Ref T1 the observation alert reported.
             bool fromKL = klPendingSource != "" and not na(klArmedSL)
             float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
-            [tp1, tp1_5, tp2, tp3] = fromKL ? klCalcTargets(entry, sl, true, klArmedT1) : calculateTargets(entry, sl, true, activeHigh, activeLow)
+            [tp1, tp1_5, tp2, tp3] = if fromKL
+                klCalcTargets(entry, sl, true, klArmedT1)
+            else
+                calculateTargets(entry, sl, true, activeHigh, activeLow)
 
             [shares, posValue, maxLossCalc, riskAmount] = calculatePositionSize(entry, sl)
 
@@ -2621,7 +2624,10 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             // match the Ref SL / Ref T1 the observation alert reported.
             bool fromKL = klPendingSource != "" and not na(klArmedSL)
             float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
-            [tp1, tp1_5, tp2, tp3] = fromKL ? klCalcTargets(entry, sl, false, klArmedT1) : calculateTargets(entry, sl, false, activeHigh, activeLow)
+            [tp1, tp1_5, tp2, tp3] = if fromKL
+                klCalcTargets(entry, sl, false, klArmedT1)
+            else
+                calculateTargets(entry, sl, false, activeHigh, activeLow)
 
             [shares, posValue, maxLossCalc, riskAmount] = calculatePositionSize(entry, sl)
 

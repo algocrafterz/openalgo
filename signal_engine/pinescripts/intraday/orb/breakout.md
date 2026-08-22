@@ -1127,3 +1127,48 @@ Roughly fifteen structural changes have landed since the last successful Trading
    low-volume afternoon.
 
 Inputs 60 -> 66.
+
+---
+
+## 2026-08-22l — Compile fix: Pine cannot return a tuple from a ternary
+
+First compile after the execution changes. Six errors, all one root cause at the two pending
+processors:
+
+```
+Cannot assign a variable to a tuple. The right side must be a function call or
+structure ("if", "switch", "for", "while") returning a tuple with the same number of elements.
+```
+
+`[tp1, tp1_5, tp2, tp3] = fromKL ? klCalcTargets(...) : calculateTargets(...)` is invalid —
+`?:` operates on values, and a tuple is not a value in Pine. Rewritten as the structure form the
+error message itself names:
+
+```pine
+[tp1, tp1_5, tp2, tp3] = if fromKL
+    klCalcTargets(entry, sl, true, klArmedT1)
+else
+    calculateTargets(entry, sl, true, activeHigh, activeLow)
+```
+
+The `sl` line above it is fine — that ternary returns a scalar.
+
+**Rule for this file: a ternary may select a value, never a tuple.** Tuple destructuring needs a
+function call or an `if`/`switch`/`for`/`while`.
+
+### Checks added to the validation sweep
+
+Two greps that would have caught this before the round trip, and a third that catches the other
+common cause of a failed compile after bulk edits:
+
+```bash
+# tuple destructuring whose RHS is a ternary
+grep -nE '^\s*\[[^]]+\]\s*=\s*[^=].*\?' breakout.pine | grep -v '= if'
+
+# frozen-constant conversions that came out malformed
+awk '/^[a-zA-Z_][a-zA-Z0-9_]*[ ]*=[ ]*[^=]/ && !/input\./ {q=gsub(/"/,"\""); if (q%2!=0) print NR": ODD QUOTES"; if ($0 ~ /,[ \t]*\r?$/) print NR": TRAILING COMMA"}' breakout.pine
+```
+
+Plus an arity checker comparing each function definition's argument count against every call
+site — run across all 15 changed functions, all match. (`renderKeyLevels()` inside a comment
+reads as a 1-arg call; that one is a false positive.)
