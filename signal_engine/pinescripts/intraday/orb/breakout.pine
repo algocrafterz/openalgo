@@ -3480,16 +3480,21 @@ buildKeyLevelAlert() =>
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable) =>
     var int lastBar = na
-    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK
+    // `tradeable` is the session slot. Once a position is taken the slot is gone, so any later
+    // setup -- including one pointing the OPPOSITE way -- can never become a trade. Firing its
+    // alert anyway put a SHORT packet in Telegram while a LONG was open, which is noise at best
+    // and a contradictory instruction at worst. In OBSERVE mode this is left open so the engine
+    // can still be watched.
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry)
 
 // Latched last setup. The live row is blank on all but the single bar a setup fires, so
 // without this the panel reads 'nothing here' during the 99% of bars between signals --
@@ -4832,7 +4837,7 @@ klDrawSignal(bool isLong, bool isShort, string code, int score, int threshold, f
         // Text label carries no tooltip of its own — the triangle is the hover target.
         if na(lastTextBar) or (bar_index - lastTextBar >= KL_LABEL_MIN_GAP)
             lastTextBar := bar_index
-            cleanupLabel(label.new(bar_index, isLong ? low - yOff * 3 : high + yOff * 3, code + (na(vf) ? "" : "  " + str.tostring(vf, "0.0") + "x"), style=label.style_none, textcolor=c, size=size.tiny))
+            cleanupLabel(label.new(bar_index, isLong ? low - yOff * 3 : high + yOff * 3, code + "  " + str.tostring(rvol, "0.0") + "x" + (na(vf) ? "" : " /" + str.tostring(vf, "0.0") + "s"), style=label.style_none, textcolor=c, size=size.tiny))
 
 klDrawLevels(enableKeyLevels, klShowVA, klShowSecondary, klShowTags, klVAH, klPOC, klVAL, klPDH, klPDL, klIBH, klIBL, klDayStartBar, cachedATR, activeORB, showMidLine, klTagMaxATR)
 

@@ -1689,3 +1689,50 @@ Those are tight fills, not chases. **TCS was the outlier, not the rule**, and th
 added earlier already declines the genuinely bad ones. So the case for break entry rests on the
 *selection bias* argument above, not on fill quality — which is a weaker and more honest basis
 than "we are leaving points on the table."
+
+---
+
+## 2026-08-22t — Opposite-direction alerts suppressed; label showed the wrong volume
+
+### FEDERALBNK: a LONG position with a SHORT alert behind it
+
+The session held a LONG (`IBH-RT`) while the Setup row read `SHORT VAL-RT 8/7 11:10`, and a red
+short arrow sits on the chart beside the long entry.
+
+**No second trade was ever placed** — `slotAvailable` had already been consumed by the long, so
+the short could not enter. But `klFire` did not know that: it fired the observation alert and drew
+the arrow regardless.
+
+With execution ON that is worse than untidy. A SHORT packet arrives in Telegram while a LONG is
+open — noise at best, a contradictory instruction at worst.
+
+`klFireGate` now takes `tradeable`, wired to `not enableKeyLevelExecution or canTakeKeyLevelEntry`.
+Once the slot is spent no further setup fires, so opposite-direction alerts within a session are
+gone. OBSERVE mode is deliberately left open so the engine can still be watched with execution off.
+
+Note this also answers "first breakout must be preferred": the slot is first-come-first-served and
+always was. What changed is that the losers of that race now stay quiet.
+
+### The signal label was showing the wrong volume number
+
+`klDrawSignal` printed `klSessionVF` — the **cumulative session** factor — not `klRVOL`, the
+**bar** volume that actually gates the trigger. So `VAL-RT 1.4x` meant "the session is running
+1.4x normal", *not* "this bar broke on 1.4x volume".
+
+That made the break-volume question undiagnosable from a chart, for both of us. Label is now
+`CODE  1.8x /0.7s` — **bar RVOL first**, session factor suffixed `s`.
+
+### Why breaks may still not fire, honestly
+
+Two independent reasons, beyond needing the script re-applied in TradingView:
+
+1. **`klBreakMinRvol` = 1.5 on the break bar.** Unknown whether the observed breaks cleared it —
+   see above, the labels were showing the wrong number. The corrected label will settle it.
+2. **Breaks score ~2 points below retests by design.** The `+2` breakout-and-retest bonus is
+   intentional, but against `klScoreThreshold = 7` it bites: a break with no confluence needs
+   VWAP *and* EMA *and* strong RVOL *and* CLV *and* session VF all aligned to reach 8. Reachable,
+   but demanding.
+
+If breaks still do not appear once the corrected labels are visible, the lever is
+`klScoreThreshold`, not `klBreakMinRvol` — and lowering a global threshold to admit one family is
+a blunt instrument. A per-family threshold would be the cleaner fix, and is not implemented.
