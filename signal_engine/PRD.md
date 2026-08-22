@@ -62,6 +62,48 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Recent Changes (2026-08-20)
+
+### Key-level breakout strategy (`breakout.pine`, new)
+
+New PineScript alongside `orb.pine` — a copy of it, extended so the Opening Range becomes
+one key level among several. Merges the volume-profile decision-assist logic
+(`pinescripts/intraday/volume-profile/volume-profile-decision-assist.pine`) into the ORB
+strategy, since ORB, Value Area, Previous Day and Initial Balance breaks are all the same
+key-level breakout with shared entry mechanics.
+
+Added trigger families, each toggleable and all running through the existing
+entry/SL/TP/alert pipeline:
+- **VA** — VAH/VAL rejection, acceptance, breakout-retest (previous-session volume profile,
+  auto-reconstructed from 1-min data or typed in manually)
+- **PD** — PDH/PDL break and break-retest
+- **IB** — IBH/IBL extension and extension-retest (09:15–10:15 window, active after IB closes)
+
+Plus a unified confluence registry spanning VA + PD + IB **and** today's ORB levels, a
+weighted setup score with alert threshold, level-based SL/T1, day-anchored level drawings,
+and a 9-row dashboard block.
+
+**Safety posture — alert-only.** `enableKeyLevelExecution` defaults to **false**: key-level
+setups draw arrows, score, and fire a decision-packet alert, but never call `strategy.entry`.
+The one-trade-per-session cap is unchanged, and ORB outranks every new family for that slot.
+
+**Validation contract**: only 8 lines of `orb.pine` were modified (a `srcTag` parameter on
+`buildEntryAlert`, its two call sites, and the dashboard table grown 36→48 rows) — all inert
+at default settings. With `enableKeyLevelExecution=false` the Strategy Tester report must
+match `orb.pine` exactly. TradingView compile + Strategy-Tester diff + POC-vs-native-profile
+check on 3+ symbols are **still outstanding**.
+
+**Engine impact**: none yet. The decision packet deliberately avoids the `Symbol:`/`Entry:`/
+`SL:`/`TP:` line prefixes `parser.py` keys off (it uses `Ref Entry`/`Ref SL`/`Ref T1`), so it
+cannot be mis-parsed into an order. Executed key-level entries reuse the unchanged
+`buildEntryAlert` format, and the new `Trigger:` line is ignored by the parser.
+
+**Files**: `pinescripts/intraday/orb/breakout.pine` (new), `pinescripts/intraday/orb/breakout.md`
+(new — full changelog), `PRD.md`. `orb.pine` untouched. Pine has no unit framework —
+validation is Strategy-Tester diff.
+
+---
+
 ## Recent Changes (2026-05-12)
 
 ### ORB PineScript TP fix (`calculateTargets()` rewrite)
