@@ -362,6 +362,7 @@ pmStartHour = input.int(13, "PM from", minval=9, maxval=15, group=grp_session, i
 pmStartMinute = input.int(0, ":", minval=0, maxval=59, group=grp_session, inline="pm2")
 pmEndHour = input.int(14, "to", minval=9, maxval=15, group=grp_session, inline="pm3", tooltip="End of the afternoon entry window (IST).\n\nKept clear of the 15:00 time exit: an entry at 14:15 still has 45 minutes to work; one at 14:45 has 15 and is a coin flip.")
 pmEndMinute = input.int(30, ":", minval=0, maxval=59, group=grp_session, inline="pm3")
+pmMinSessionVF = input.float(0.8, "PM needs session VF ≥", minval=0, maxval=5, step=0.1, group=grp_session, inline="pm4", tooltip="Minimum SESSION volume factor for the afternoon window to open at all.\n\nThis is a CUMULATIVE session reading, not a per-bar one, so it lives on a different scale: the cheat sheet's own bands put 0.8-1.2 at \"normal\". Requiring the per-bar 1.2x here (as this first shipped) demanded a genuinely heavy DAY and kept the window shut on roughly four sessions in five.\n\n0.8 = skip only dead tape (recommended)\n1.0 = at least an average day\n0 = clock only, no volume condition\n\nThe per-bar volume filter still applies at the trigger, so this is a floor on the day, not a substitute for confirmation.")
 klRequireHTFClose = input.bool(true, "Require HTF close confirmation", group=grp_score, inline="htfc", tooltip="Demand a CLOSED higher-timeframe bar on the correct side of the level before a key-level setup can fire.\n\nWHY: a 5-min close beyond a level is cheap to fake -- most liquidity sweeps complete and reverse inside a single 15-min bar. A closed 15-min bar on the far side is materially harder to fake, and published breakout research is consistent that lower-timeframe breaks carry a higher false-break rate.\n\nThe test follows trade DIRECTION, so it works for every family:\n\u2022 long  setups need HTF close ABOVE the level\n\u2022 short setups need HTF close BELOW the level\nA VAH rejection short therefore needs the HTF close back under VAH -- which is exactly the rejection thesis.\n\nCOST: up to one HTF bar of lag on entry, because this reads the LAST CLOSED bar (non-repainting). Setups printing RVOL at or above the Strong \u00d7 threshold bypass the wait.\n\nOFF = previous behaviour (chart-timeframe close only).")
 klConfirmTF       = input.timeframe("15", "| timeframe", group=grp_score, inline="htfc", tooltip="Higher timeframe used for the close confirmation above.\n\n15 = recommended for a 5-min chart: one confirmation bar per three chart bars\n30/60 = stricter, materially more lag\n\nMust be HIGHER than the chart timeframe or the test is meaningless.")
 
@@ -530,7 +531,11 @@ var int breakDownBarIndex = 0
 
 var bool pendingLongEntry = false
 var bool pendingShortEntry = false
-var bool sessionEntryTaken = false  // Track if entry already taken this session
+var bool sessionEntryTaken = false  // Any entry taken today (display + legacy reads)
+// One slot PER WINDOW. Sharing a single slot made the afternoon window unreachable on every
+// day the morning filled -- a "second entry window" that could not take a second entry.
+var bool amEntryTaken = false
+var bool pmEntryTaken = false
 var int pendingLongBar = na
 var int pendingShortBar = na
 
@@ -1561,7 +1566,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
 // the trader's real question is "what is the system doing and why", not "what should I do".
 // Priority order matters: the FIRST blocking condition is the one reported, so the detail
 // line always names the thing that actually has to change.
-renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool taken, bool beforeCut, bool afterMin, bool gapOK, bool widthOK, bool volOK, float volRatio, float volMult, bool nrOK, bool chop, int dir, int score, int thr, bool htfOK, float vf, bool roomOK, float headroom) =>
+renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool taken, bool beforeCut, bool afterMin, bool gapOK, bool widthOK, bool volOK, float volRatio, float volMult, bool nrOK, bool chop, int dir, int score, int thr, bool htfOK, float vf, bool roomOK, float headroom, bool pmWin, int pmH, int pmM) =>
     int row = startRow
     string verdict = ""
     string detail = ""
@@ -1571,8 +1576,8 @@ renderVerdict(table dashTable, int startRow, string txtSize, bool inTrade, bool 
         detail := "position open — managing exits"
         vcol := color.aqua
     else if taken
-        verdict := "🏁 DONE"
-        detail := "session entry already taken"
+        verdict := "🏁 SLOT USED"
+        detail := pmWin ? "afternoon entry already taken" : "morning entry taken — afternoon window reopens at " + str.tostring(pmH) + ":" + (pmM < 10 ? "0" : "") + str.tostring(pmM)
     else if not beforeCut
         verdict := "🏁 CUTOFF"
         detail := "past entry cutoff — no new trades"
@@ -1947,6 +1952,8 @@ if shouldReset
     pendingLongBar := na
     pendingShortBar := na
     sessionEntryTaken := false  // Reset for new session
+    amEntryTaken := false
+    pmEntryTaken := false
 
     deleteAllTradeLines()
     orbEntryLine := na
@@ -2555,7 +2562,7 @@ bool isBeforeMorningCutoff = (currentHourNow < entryCutoffHour) or (currentHourN
 // Afternoon window, gated on session VOLUME as well as the clock: the PM wave is a volume
 // phenomenon, and without the volume it is a thin tape with less runway than the morning.
 int nowMins = currentHourNow * 60 + currentMinuteNow
-bool inPMWindow = enableAfternoonWindow and nowMins >= pmStartHour * 60 + pmStartMinute and nowMins < pmEndHour * 60 + pmEndMinute and not na(cachedSessionVF) and cachedSessionVF >= volumeMultiplier
+bool inPMWindow = enableAfternoonWindow and nowMins >= pmStartHour * 60 + pmStartMinute and nowMins < pmEndHour * 60 + pmEndMinute and (pmMinSessionVF <= 0 or (not na(cachedSessionVF) and cachedSessionVF >= pmMinSessionVF))
 bool isBeforeCutoff = isBeforeMorningCutoff or inPMWindow
 
 // Smart Entry: Minimum entry time filter (e.g., 9:45 AM - let gap volatility settle)
@@ -2566,13 +2573,16 @@ bool smartFiltersPass = gapFilterPassed and orbRangeFilterPassed and isAfterMinT
 
 // nrRequireGate is always true unless: enableNRFilter=true AND nrMode="Require" AND yesterday was not NR.
 // In Prefer mode (default-on shape), this is a no-op — NR state is tracked only via cachedNRPreferHit.
-bool canTakeEntry = isBeforeCutoff and not sessionEntryTaken and smartFiltersPass and nrRequireGate
+// The slot belongs to the window price is currently in, so the day can produce at most one
+// morning entry and one afternoon entry -- never two of either.
+bool slotAvailable = inPMWindow ? not pmEntryTaken : not amEntryTaken
+bool canTakeEntry = isBeforeCutoff and slotAvailable and smartFiltersPass and nrRequireGate
 
 // Key-level entries deliberately DROP orbRangeFilterPassed. That filter asks whether the
 // OPENING RANGE was a tradeable width -- a property of the ORB and of nothing else. Applying
 // it to an IB extension or a value-area setup rejected them for a reason with no bearing on
 // their validity. Gap, min-entry-time and the NR gate are genuinely universal and are kept.
-bool canTakeKeyLevelEntry = isBeforeCutoff and not sessionEntryTaken and gapFilterPassed and isAfterMinTime and nrRequireGate
+bool canTakeKeyLevelEntry = isBeforeCutoff and slotAvailable and gapFilterPassed and isAfterMinTime and nrRequireGate
 
 // Entry conditions - Trend/HTF filtering is now handled at breakout detection time
 // using the "both against" logic (only blocks when BOTH filters are against the direction)
@@ -2643,6 +2653,10 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry and not 
             // === STRATEGY ENTRY - LONG ===
             strategy.entry("Long", strategy.long)
             sessionEntryTaken := true  // Mark entry taken for this session
+            if inPMWindow
+                pmEntryTaken := true
+            else
+                amEntryTaken := true
 
             // Send Entry Alert - ALWAYS use TP1 for signal engine execution
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
@@ -2754,6 +2768,10 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             // === STRATEGY ENTRY - SHORT ===
             strategy.entry("Short", strategy.short)
             sessionEntryTaken := true  // Mark entry taken for this session
+            if inPMWindow
+                pmEntryTaken := true
+            else
+                amEntryTaken := true
 
             // Send Entry Alert - ALWAYS use TP1 for signal engine execution
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
@@ -4187,7 +4205,7 @@ if showDashboard and enableHTF
 
         // VERDICT — first thing under the header, in both Focus and Full.
         if not isHTF
-            row := renderVerdict(dashTable, row, txtSize, enableTargets and not na(orbEntryBar) and not (orbTP1Hit or orbSLHit), sessionEntryTaken, isBeforeCutoff, isAfterMinTime, gapFilterPassed, orbRangeFilterPassed, not enableVolumeFilter or hasVolumeConfirmation(volBaseline, volumeMultiplier, strongVolumeMultiplier), nz(volBaseline) > 0 ? volume / volBaseline : 0, volumeMultiplier, nrRequireGate, godChopDay, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klHTFOK, klSessionVF, klRoomOK, klHeadroom)
+            row := renderVerdict(dashTable, row, txtSize, enableTargets and not na(orbEntryBar) and not (orbTP1Hit or orbSLHit), not slotAvailable, isBeforeCutoff, isAfterMinTime, gapFilterPassed, orbRangeFilterPassed, not enableVolumeFilter or hasVolumeConfirmation(volBaseline, volumeMultiplier, strongVolumeMultiplier), nz(volBaseline) > 0 ? volume / volBaseline : 0, volumeMultiplier, nrRequireGate, godChopDay, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klHTFOK, klSessionVF, klRoomOK, klHeadroom, inPMWindow, pmStartHour, pmStartMinute)
 
         if showStage and not na(activeORB)
             bool isMarketNow = isTradingDay() and isWithinSessionHours()

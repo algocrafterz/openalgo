@@ -1341,3 +1341,67 @@ at level + buffer is exactly the right instrument. Options, in order of cost:
 2. Lower `klConfirmTF` to 10 — less lag, weaker sweep filter.
 3. Lower the strong-volume HTF bypass so genuine break volume skips the wait (that TCS break was
    0.9x, so it would not have qualified anyway).
+
+---
+
+## 2026-08-22o — PM window never opened: two independent causes
+
+Charts: RELIANCE, AXISBANK, HDFCBANK, TCS (all 5-min, 2026-08-22 19:49-19:51). New rows all
+render correctly — Open type, Day type, Bias, both IB denominators, headroom in R.
+
+### Cause 1 — a per-bar threshold applied to a cumulative session measure
+
+`inPMWindow` required `cachedSessionVF >= volumeMultiplier`, i.e. **1.2x**. But session VF is
+*cumulative for the day*, not per-bar, and lives on a different scale — the cheat sheet's own
+bands put **0.8-1.2 at "normal"**. Requiring 1.2 demanded a genuinely heavy DAY.
+
+The four charts settle it: session VF of **0.47 / 0.70 / 0.76 / 0.98**. Not one reached 1.2, so
+the window could not open on any of them. My error, and an obvious one in hindsight: a threshold
+calibrated for one measure was pasted onto a different one.
+
+New `pmMinSessionVF` input, default **0.8** — skip dead tape, not normal tape. The per-bar volume
+filter still applies at the trigger, so this is a floor on the day, not a substitute for
+confirmation.
+
+### Cause 2 — both windows shared one entry slot
+
+`canTakeEntry` and `canTakeKeyLevelEntry` both tested `not sessionEntryTaken`, a single
+day-level flag. So on any day the morning filled, the afternoon window opened onto **no available
+slot** — a "second entry window" structurally incapable of taking a second entry.
+
+Split into `amEntryTaken` / `pmEntryTaken`, with `slotAvailable` resolving against whichever
+window price is currently in. The day can now produce **at most one morning and one afternoon
+entry**, never two of either. The verdict distinguishes them: a spent morning slot now reads
+`morning entry taken — afternoon window reopens at 13:00` rather than a flat `DONE`.
+
+### What the four charts say about setup quality
+
+| Symbol | Setup | Score | Session VF | Day type | ADR used | Fired |
+|---|---|---|---|---|---|---|
+| HDFCBANK | SHORT PDL-RT | **10/7 +1lvl** | 0.98x normal | Normal | 81% | yes |
+| TCS | LONG IBH-RT | **8/7 +1lvl** | 0.70x thin | — | 75% | yes |
+| AXISBANK | SHORT VAL-RT | 5/7 | 0.76x thin | Normal Variation | 85% | no |
+| RELIANCE | LONG VAL-REJ | 5/7 | 0.47x dead | Non-Trend | 32% | no |
+
+Both setups that cleared the threshold were **retests carrying confluence**. Both that failed
+landed at exactly 5/7 with **no confluence**. That is consistent with the model's own priority
+ordering, but it is four charts — it identifies which *components* discriminate, and says nothing
+statistically about whether IB beats PD beats VA. Ranking the level families needs a Strategy
+Tester run with one trigger family enabled at a time.
+
+### The finding that matters more than any of the above
+
+**Every one of these four symbols was running below normal participation** — 0.47x to 0.98x, not
+one above 1.0. Zarattini/Barbon/Aziz found that selecting the day's highest relative-volume names
+did almost all the work in ORB, and nothing about that conclusion is ORB-specific.
+
+Running this engine over a fixed mega-cap watchlist is fighting the edge rather than using it. The
+highest-value improvement available is **not in this script** — it is a pre-market screener that
+picks the day's top relative-volume symbols and points the engine at those.
+
+### Cosmetic inconsistency, not fixed
+
+RELIANCE shows `IB 52%IB/32%ADR narrow/trend?` while Day type reads `Non-Trend`. Not a
+contradiction — IB width states the *potential*, day type reports that the potential did not
+materialise (no extension) — but the two read as if they disagree. The `?` suffixes on the IB row
+are now redundant given the Day type row names the day outright.
