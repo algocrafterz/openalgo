@@ -1625,3 +1625,67 @@ Script-side alerts are already enabled (`enableAlerts = true`). Nothing else to 
    (`{"chat_id": ..., "text": ..., "parse_mode": "Markdown"}`) itself. Anything typed in that box
    replaces it and breaks the format.
 6. Set `telegram_chat_id` in the script inputs to the destination channel.
+
+---
+
+## 2026-08-22s — The HTF gate had made -BRK setups unfireable
+
+Raised from a chart observation: the breakout candle consistently carries more volume than the
+retest candle. That is correct, it is structural rather than coincidental, and chasing it down
+exposed a design defect.
+
+### Every observed setup was a retest — and not because of the priority ordering
+
+Across twelve charts every setup was `-RT` or `-REJ`. Not one `-BRK`. The engine *has* break
+setups (`pdhBrk`, `pdlBrk`, `ibhBrk`, `iblBrk`), so the assumption was that retest priority was
+simply winning. It was not.
+
+```pine
+ibhBrk  = close > ibh and close[1] <= ibh     // FIRST bar closing beyond the level
+klHTFOK = ... klHTFClose > klSetupLevel        // last CLOSED 15m bar ALREADY beyond it
+```
+
+On the bar that first closes beyond a level, the last closed higher-timeframe bar is — **by
+construction** — still on the old side. The two conditions are near mutually exclusive.
+
+**The HTF gate silently converted this into a retest-only engine.** The only escape was
+`klRVOL >= strongVolumeMultiplier` (1.8), and observed break RVOLs were 0.9x / 1.1x / 1.4x.
+
+### Fix: breaks qualify on break-bar volume, not elapsed time
+
+`klBreakMinRvol` (default 1.5). A `-BRK` now fires immediately when its break bar carries the
+volume, bypassing the HTF wait entirely.
+
+The reasoning is that **HTF confirmation is the wrong filter for a break.** It defends against
+sweeps by waiting, and waiting is precisely what destroys a breakout entry. For a break the
+discriminating filter is volume *at* the level, on the candle doing the breaking — which is what
+the false-breakout literature says, and what the chart observation independently found.
+
+Acceptance keeps the HTF requirement: its claim is that price is *holding* beyond value, and
+waiting is the right way to test that. Retests are unaffected — the HTF has caught up by then.
+
+### Honest expectation
+
+**More signals, probably a lower win rate, and a higher average win.**
+
+Requiring a retest systematically selects *against* the strongest breakouts: a genuine trend-day
+break runs and never looks back, so a retest filter only fills on breaks that weakened enough to
+return. That is a biased sample which excludes the fat tail where the large R multiples are.
+
+Whether the trade-off is net positive is **an empirical question this change does not answer.**
+It needs a Strategy Tester comparison with `klBreakMinRvol` at 0 (retest-only, the old behaviour)
+versus 1.5. Setting it to 0 restores the previous behaviour exactly.
+
+### On the fill-quality claim, more carefully
+
+The TCS case gave up ~4 points entering at 2296 against IBH 2292. But measuring the others:
+
+| Symbol | Level | Entry | Gap |
+|---|---|---|---|
+| FEDERALBNK | IB-H 358.65 | 358.95 | 0.30 (0.08%) |
+| INDUSTOWER | IB-H 374.95 | 375.55 | 0.60 (0.16%) |
+
+Those are tight fills, not chases. **TCS was the outlier, not the rule**, and the chase guard
+added earlier already declines the genuinely bad ones. So the case for break entry rests on the
+*selection bias* argument above, not on fill quality — which is a weaker and more honest basis
+than "we are leaving points on the table."
