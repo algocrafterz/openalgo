@@ -1,5 +1,9 @@
 # How the ORB Strategy Works — Plain-English Guide
 
+> Covers `orb.pine` (alert tag `ORB`), which is frozen and unchanged. A second strategy,
+> `breakout.pine` (tag `BREAKOUT`), is under development — see `PRD.md` and
+> `pinescripts/intraday/orb/breakout.md`. This guide does not describe it.
+
 Two things work together to place a live trade:
 
 1. **PineScript on TradingView** — watches the chart, decides when to enter/exit, and sends an alert (a Telegram message).

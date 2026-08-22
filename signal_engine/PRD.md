@@ -62,6 +62,88 @@ main.py (_handle_entry / _handle_exit)
 
 ---
 
+## Strategies in play
+
+| Script | Alert tag | Status |
+|---|---|---|
+| `pinescripts/intraday/orb/orb.pine` | `ORB` | **Frozen and live.** Unchanged. Documented in `HOW-IT-WORKS.md` |
+| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **In development.** Key-level engine. Changelog in `pinescripts/intraday/orb/breakout.md` |
+
+`BREAKOUT` has never traded. `signal_engine` does not yet know the tag — see the required work
+logged in `breakout.md` (2026-08-22r). Both strategies must be supported; nothing about `ORB`
+changes.
+
+---
+
+## Recent Changes (2026-08-22, current)
+
+<!-- AUTO-GENERATED: breakout.pine input defaults. Regenerate from source, do not hand-edit. -->
+### `breakout.pine` — current configuration
+
+| Setting | Value | Setting | Value |
+|---|---|---|---|
+| `enableKeyLevels` | true | `enableBreakout` (ORB entries) | **false** |
+| `enableKeyLevelExecution` | **true** | `enableVATriggers` | true |
+| `enableVAAcceptance` | **true** | `enablePDTriggers` / `enableIBTriggers` | true / true |
+| `klScoreThreshold` | 7 | `klRequireHTFClose` / `klConfirmTF` | true / 15 |
+| `klMinSessionVF` | 0.8 | `klMinHeadroomR` | 1.5 |
+| `klMaxChaseATR` | 1.0 | `klBreakMinRvol` | 1.5 |
+| `klAccMinRvol` | 1.5 | `klBlockCounterBias` | true |
+| `klSlBufferMult` | 0.35 | `klT1PadMult` | 0.15 |
+| `enableAfternoonWindow` | **false** | PM window (if enabled) | 13:00–14:30, `pmMinSessionVF` 0.8 |
+| Entry window | 09:45 – **11:45** | Time exit | 15:00 |
+| `volBaseDays` | 14 | `volumeMultiplier` / `strong` | 1.2 / 1.8 |
+| `riskPct` | 1.0 | `accountSize` | **10000 — still the template default** |
+<!-- END AUTO-GENERATED -->
+
+### Corrections to the entries below
+
+Statements in the older sections of this document that are **no longer true**. Left in place as
+history; superseded here:
+
+| Older claim | Current truth |
+|---|---|
+| "`%IB` (vs average IB) types the day" | **`%ADR` types the day**, with the model doc's <35 / >60 bands. IB-vs-average-IB is the second reading |
+| "Afternoon window 13:45–14:15, **ON**, requires VF ≥ Min Volume ×" | **13:00–14:30 and OFF by default**, gated by `pmMinSessionVF` 0.8 |
+| "`enableVAAcceptance` default **false**" | **true**, gated instead by `klAccMinRvol` 1.5 — the model doc makes acceptance four of its eight scenarios |
+| "`canTakeKeyLevelEntry` fixes the ORB-width gate" | **Was incomplete.** Only arming used it; fill and cancel still used `canTakeEntry`. Fixed with `canFillLong`/`canFillShort` |
+| "NOT compiled since ~15 structural changes" | **Compiles and runs.** Verified on TCS, FEDERALBNK, ABCAPITAL charts |
+
+### What changed since the entries below
+
+**Bugs fixed** (each was live behaviour, not cosmetic):
+
+- **Key-level longs rendered as SHORT.** `isBullish` read `everHadBreakUp`, an ORB-only flag that
+  never sets now ORB is demoted. Execution was unaffected (`orbTradeDirection` drives TP/SL).
+- **Stop stayed armed after a target was booked**, firing spurious `SL HIT` alerts into the
+  pipeline. Gated on `anyTPBooked`. The close-reason chain also reported a booked-then-stopped
+  trade as a flat −1R.
+- **Afternoon window could never open** — two causes: a per-bar volume threshold applied to a
+  cumulative session measure, and both windows sharing one entry slot.
+- **ORB width still killed key-level fills** (above).
+- **HTF gate made `-BRK` setups unfireable.** A break triggers on the first bar closing beyond a
+  level, while the gate demanded a closed HTF bar *already* beyond it — near mutually exclusive.
+  Breaks now qualify on break-bar volume instead.
+- **Alerts fired that could not trade**, putting a SHORT packet in Telegram while a LONG was open.
+
+**New gates:** session participation floor (`klMinSessionVF`), headroom (`klMinHeadroomR`),
+chase limit (`klMaxChaseATR`), counter-bias veto on trend days, break-bar volume.
+
+**Other:** renamed `intraday-orb` → `intraday-breakout`; all three alert types carry the
+`BREAKOUT` tag (the SL alert previously carried none and fell back to `ORB`); ORB demoted from
+trigger to level; day/open type and bias rows added, open type now carries direction.
+
+### Validation status — read before enabling live
+
+- **Zero Strategy Tester runs.** Every change is argued from first principles or read off charts.
+- **~6 trades observed** across 12 charts. Not statistically meaningful.
+- **Eight interacting gates, never validated in combination.** Two destructive interactions were
+  found and fixed in one session; there is no basis for assuming a third does not exist.
+- **Signal count unknown.** One trade/day/symbol, morning only, through eight filters.
+- **`signal_engine` config for the `BREAKOUT` tag does not exist.**
+
+---
+
 ## Recent Changes (2026-08-22)
 
 ### Key-level execution enabled (`breakout.pine`)
