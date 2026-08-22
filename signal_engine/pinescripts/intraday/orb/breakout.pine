@@ -1,6 +1,6 @@
 //@version=6
 // Adapted for Indian Stock Market (NSE/BSE) - Based on Luxy BIG beautiful Dynamic ORB - v5
-strategy("intraday-orb", shorttitle="", overlay=true,
+strategy("intraday-breakout", shorttitle="", overlay=true,
      default_qty_type=strategy.percent_of_equity, default_qty_value=10,
      initial_capital=100000, currency=currency.INR, commission_type=strategy.commission.percent,
      commission_value=0.06, slippage=2, calc_on_every_tick=false,
@@ -359,7 +359,7 @@ klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0,
 klBlockCounterBias = input.bool(true, "Block counter-bias on trend days", group=grp_score, tooltip="Refuse a setup that trades AGAINST the day's established direction, but only on the two day types where the rule is unconditional.\n\nThe cheat sheet's Avoid List opens with \"Never fade a Trend Day\", and a Double Distribution is a trend day that has relocated. On those two, a counter-directional setup is fighting the auction.\n\nDeliberately NOT applied to Normal, Normal Variation or Neutral days: on those the extremes hold and fading them IS the play, so blocking counter-bias setups would remove the correct trade.\n\nBias comes from which side of the Initial Balance the day has extended, so it only exists once the IB has closed and price has moved.")
 klMaxChaseATR    = input.float(1.0, "Max chase from level (× ATR)", minval=0, maxval=5, step=0.25, group=grp_score, tooltip="Refuse a setup whose confirming bar has already closed this far beyond the level.\n\nA retest is supposed to be entered NEAR the level it defended. If confirmation only arrives once price has run a full ATR past it, the good part of the move is gone and the stop — still measured from the level — is now much further away, so the R:R quietly collapses.\n\nThis does not improve the fill; it declines the ones that are already bad.\n\n1.0 = recommended\n0 = disabled")
 klMinHeadroomR   = input.float(1.5, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
-enableAfternoonWindow = input.bool(true, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
+enableAfternoonWindow = input.bool(false, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
 pmStartHour = input.int(13, "PM from", minval=9, maxval=15, group=grp_session, inline="pm2", tooltip="Start of the afternoon entry window (IST). 13:45 is where the J-K pickup actually begins.")
 pmStartMinute = input.int(0, ":", minval=0, maxval=59, group=grp_session, inline="pm2")
 pmEndHour = input.int(14, "to", minval=9, maxval=15, group=grp_session, inline="pm3", tooltip="End of the afternoon entry window (IST).\n\nKept clear of the 15:00 time exit: an entry at 14:15 still has 45 minutes to work; one at 14:45 has 15 and is a coin flip.")
@@ -745,9 +745,12 @@ getTimeIST() =>
 // Build Entry Alert Message (LONG/SHORT) - Telegram JSON format
 // srcTag names which key level triggered the entry ("" = a plain ORB breakout).
 // It is emitted as a separate "Trigger:" line, NOT folded into the first line: the
-// signal engine's normalizer parses "ORB LONG | SYMBOL" to derive the strategy name,
-// and renaming that prefix would break strategy routing and strategy_profiles lookup.
-// The executable shape of this alert is therefore unchanged.
+// signal engine's normalizer parses "BREAKOUT LONG | SYMBOL" to derive the strategy name.
+// ALL THREE alert types (entry / TP HIT / SL HIT) must carry the same tag: the normalizer
+// falls back to _DEFAULT_STRATEGY when a prefix is absent, so an untagged SL alert would
+// route exits to ORB while entries registered under BREAKOUT. Changing this tag requires
+// matching entries in signal_engine/strategies.py and config.yaml (strategy_profiles,
+// blacklist) or the engine will reject or mis-route every signal.
 buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float tp1_5Price, float tp2Price, float tp3Price, float riskAmt, float rewardAmt, string srcTag) =>
     string direction = isLong ? "LONG" : "SHORT"
     string emoji = isLong ? "🟢" : "🔴"
@@ -755,7 +758,7 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
     float rewardVal = math.abs(tpPrice - entryPrice)
     float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
 
-    string msg = emoji + " ORB " + direction + " | " + syminfo.ticker + "\\n"
+    string msg = emoji + " BREAKOUT " + direction + " | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
     msg += (srcTag != "" ? "Trigger: " + srcTag + "\\n" : "")
     msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
@@ -783,7 +786,7 @@ buildSLAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
     float rewardVal = math.abs(tpPrice - entryPrice)
     float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
 
-    string msg = "❌ SL HIT | " + syminfo.ticker + "\\n"
+    string msg = "❌ BREAKOUT SL HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
@@ -808,7 +811,7 @@ buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
     float rewardVal = math.abs(tpPrice - entryPrice)
     float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
 
-    string msg = "✅ ORB " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
+    string msg = "✅ BREAKOUT " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
@@ -848,7 +851,7 @@ buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, 
 
 // Build Test Alert Message
 buildTestAlert() =>
-    string msg = "🧪 TEST ALERT - ORB Strategy\n\n"
+    string msg = "🧪 TEST ALERT - BREAKOUT Strategy\n\n"
     msg += "✅ Webhook connection successful!\n\n"
     msg += "Symbol: " + syminfo.ticker + "\n"
     msg += "Exchange: " + syminfo.prefix + "\n"
