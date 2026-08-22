@@ -351,12 +351,13 @@ klScoreThreshold = input.int(7, "Alert score threshold", minval=1, maxval=20, gr
 // group — one definition of "strong volume" for the whole script, not two.
 klClvLongMin     = 0.65
 klClvShortMax    = 0.35
+klOpenTypeBars   = input.int(6, "Open-type window (bars)", minval=1, maxval=24, group=grp_score, tooltip="Bars from the open used to classify the opening type, after which it LATCHES.\n\n6 bars = 30 minutes on a 5-min chart — Market Profile's period A, and the textbook window.\n\nA SINGLE opening candle cannot separate the four types, because they differ in what happens AFTER the first move: Open Drive and Open Rejection Reverse both begin with a directional push and only diverge once you see whether it held. One bar gives you direction, not type.\n\nSet 1 for first-candle direction only, accepting that Drive / Test Drive / Rejection Reverse become indistinguishable.")
 klAccMinRvol     = input.float(1.5, "Acceptance min RVOL", minval=0, maxval=10, step=0.1, group=grp_score, tooltip="Extra volume bar that ACCEPTANCE setups (VAH-ACC / VAL-ACC) must clear, on top of the normal volume filter.\n\nThe model doc requires RVOL >= 1.5 for every entry, and acceptance is the family that most needs it: its whole thesis is that price is HOLDING beyond value with participation behind it. Two closes past a level on thin volume is drift, not acceptance.\n\nRejection and retest setups are unaffected — their thesis is absorption, which does not require expansion.\n\n0 = no extra requirement.")
 klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, maxval=2, step=0.05, group=grp_score, tooltip="Two levels within this many ATRs are treated as confluent\n\nAlso used as the retest tolerance band.\n\nTIGHTER = fewer confluence hits, stricter retests\nWIDER   = more confluence hits, looser retests\n\nRECOMMENDED: 0.25 × ATR")
 klSlBufferMult   = input.float(0.35, "SL buffer (× ATR beyond level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far beyond the triggering level the stop sits\n\nA level-based stop goes just past the level that was defended,\nplus this ATR cushion to survive normal noise and stop hunts.\n\nUsed only for key-level setups. ORB entries keep their own\nstop-loss mode from the TARGETS & RISK group.")
 klT1PadMult      = input.float(0.15, "T1 pad (× ATR short of level)", minval=0, maxval=2, step=0.05, group=grp_score, tooltip="How far IN FRONT of the next structural level the first target sits\n\nThe level itself is where every other trader's limit orders rest, so price\nfrequently stalls a few ticks short of it and reverses. Parking T1 inside\nthat queue trades a little reward for a materially better fill rate.\n\n0 = target exactly at the level (old behaviour)\n0.15 = recommended\n\nIf the pad would put T1 inside the noise around entry, T1 reports '-'\ninstead: that setup has no room to a structural target.")
 klMaxChaseATR    = input.float(1.0, "Max chase from level (× ATR)", minval=0, maxval=5, step=0.25, group=grp_score, tooltip="Refuse a setup whose confirming bar has already closed this far beyond the level.\n\nA retest is supposed to be entered NEAR the level it defended. If confirmation only arrives once price has run a full ATR past it, the good part of the move is gone and the stop — still measured from the level — is now much further away, so the R:R quietly collapses.\n\nThis does not improve the fill; it declines the ones that are already bad.\n\n1.0 = recommended\n0 = disabled")
-klMinHeadroomR   = input.float(1.0, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
+klMinHeadroomR   = input.float(1.5, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
 enableAfternoonWindow = input.bool(true, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
 pmStartHour = input.int(13, "PM from", minval=9, maxval=15, group=grp_session, inline="pm2", tooltip="Start of the afternoon entry window (IST). 13:45 is where the J-K pickup actually begins.")
 pmStartMinute = input.int(0, ":", minval=0, maxval=59, group=grp_session, inline="pm2")
@@ -1477,7 +1478,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     color okC = color.lime
     color noC = color.new(color.gray, 20)
 
-    table.cell(dashTable, 0, row, "── Key Levels", text_color=color.new(color.aqua, 0), text_size=txtSize, text_halign=text.align_left)
+    table.cell(dashTable, 0, row, "── Key Levels", text_color=color.new(color.aqua, 0), text_size=txtSize, text_halign=text.align_left, tooltip="Row labels carry a marker for how the value behaves:\n\n·  FIXED — set once, does not move again today. Prior-session levels, the Initial Balance after 10:15, the opening type once it latches.\n\n~  LIVE — recalculated every bar. Volume factor, ADR consumed, headroom, day type, the active setup.\n\nThe distinction matters: a · value read at 14:00 means what it meant at 10:30, while a ~ value is only true as of this bar.")
     table.cell(dashTable, 1, row, autoProfile ? "AUTO" : "MANUAL", text_color=color.new(color.aqua, 0), text_size=txtSize, text_halign=text.align_right)
     row += 1
 
@@ -1485,38 +1486,38 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     // that >=3x is a WARNING (block deal / news) rather than a green light.
     string vfTxt = na(vf) ? "-" : str.tostring(vf, "0.00") + "x " + (vf >= 3.0 ? "⚠ extreme" : vf >= 1.5 ? "strong" : vf >= 1.2 ? "elevated" : vf >= 0.8 ? "normal" : vf >= 0.5 ? "thin" : "dead")
     color vfCol = na(vf) ? noC : vf >= 3.0 ? color.orange : vf >= 1.5 ? okC : vf >= 1.2 ? color.new(color.lime, 40) : vf >= 0.8 ? txtColor : color.new(color.gray, 20)
-    table.cell(dashTable, 0, row, "Vol Factor:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Session volume so far divided by the mean volume to the SAME point of day over the previous N sessions.\n\nTime-of-day normalised, so it means the same thing at 09:20 as at 14:00 -- unlike a rolling bar average, which is inflated at the open and depressed at lunch.\n\n>=3.0  extreme -- CHECK NEWS before trading; block deals and news spikes live here\n1.5-3.0 strong\n1.2-1.5 elevated\n0.8-1.2 normal\n0.5-0.8 thin\n<0.5   dead -- stand aside\n\nThe live session reads low early and fills in as the day runs; judge by pace, not face value. Blank until enough sessions of history are loaded.")
+    table.cell(dashTable, 0, row, "Vol Factor ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Session volume so far divided by the mean volume to the SAME point of day over the previous N sessions.\n\nTime-of-day normalised, so it means the same thing at 09:20 as at 14:00 -- unlike a rolling bar average, which is inflated at the open and depressed at lunch.\n\n>=3.0  extreme -- CHECK NEWS before trading; block deals and news spikes live here\n1.5-3.0 strong\n1.2-1.5 elevated\n0.8-1.2 normal\n0.5-0.8 thin\n<0.5   dead -- stand aside\n\nThe live session reads low early and fills in as the day runs; judge by pace, not face value. Blank until enough sessions of history are loaded.")
     table.cell(dashTable, 1, row, vfTxt, text_color=vfCol, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
     if full
-        table.cell(dashTable, 0, row, "VAH/POC/VAL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous session's value area.\n\nVAH = upper edge of the 70% volume zone\nPOC = most-traded price (acts as a magnet)\nVAL = lower edge\n\nPrice above VAH or below VAL means today is auctioning outside yesterday's accepted value — the precondition for a trend day.")
+        table.cell(dashTable, 0, row, "VAH/POC/VAL ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous session's value area.\n\nVAH = upper edge of the 70% volume zone\nPOC = most-traded price (acts as a magnet)\nVAL = lower edge\n\nPrice above VAH or below VAL means today is auctioning outside yesterday's accepted value — the precondition for a trend day.")
         table.cell(dashTable, 1, row, na(vah) ? "-" : str.tostring(vah, "#.##") + " / " + str.tostring(poc, "#.##") + " / " + str.tostring(val, "#.##"), text_color=na(vah) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
         row += 1
 
-    table.cell(dashTable, 0, row, "Auction:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Where price trades NOW vs the previous value area, then where today OPENED.\n\nAbove VAH / Inside Value / Below VAL.\n\nOpening outside prior value is the classic trend-day tell — the market gapped out of value and is unlikely to return.")
+    table.cell(dashTable, 0, row, "Auction ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Where price trades NOW vs the previous value area, then where today OPENED.\n\nAbove VAH / Inside Value / Below VAL.\n\nOpening outside prior value is the classic trend-day tell — the market gapped out of value and is unlikely to return.")
     table.cell(dashTable, 1, row, auction + "  (open " + openPos + ")", text_color=auction == "n/a" ? noC : color.aqua, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
-    table.cell(dashTable, 0, row, "Open type:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="How the session opened, in the cheat sheet's four categories. LATCHED after the first 30 minutes — an open type that kept revising itself would be worthless.\n\nOpen Drive — one-way from the first tick. Highest conviction; expect a TREND day, enter on the first pullback in the direction of the drive.\nOpen Test Drive — tested one side, rejected, drove the other way. Expect NORMAL VARIATION; trade the reversal.\nOpen Rejection Reverse — ran one way then reversed back through the open. Expect a NORMAL day; trade the gap fill toward yesterday's POC.\nOpen Auction — rotation with no net progress. No edge yet; wait for the IB to complete, then trade the break or fade it.")
+    table.cell(dashTable, 0, row, "Open type ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="How the session opened, in the cheat sheet's four categories. LATCHED after the first 30 minutes — an open type that kept revising itself would be worthless.\n\nOpen Drive — one-way from the first tick. Highest conviction; expect a TREND day, enter on the first pullback in the direction of the drive.\nOpen Test Drive — tested one side, rejected, drove the other way. Expect NORMAL VARIATION; trade the reversal.\nOpen Rejection Reverse — ran one way then reversed back through the open. Expect a NORMAL day; trade the gap fill toward yesterday's POC.\nOpen Auction — rotation with no net progress. No edge yet; wait for the IB to complete, then trade the break or fade it.")
     table.cell(dashTable, 1, row, openT, text_color=openT == "-" ? noC : openT == "Open Drive" ? color.lime : txtColor, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
-    table.cell(dashTable, 0, row, "Day type:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="The session's character, in the cheat sheet's six categories. Derived from how far price has extended beyond the Initial Balance on each side, plus the IB's own width.\n\nPROVISIONAL — it updates all day. A day only truly types at the close, so read it as the current best guess, not a verdict.\n\nTrend — narrow IB, one-way extension. NEVER fade it.\nDouble Distribution — a second range forms away from the first. Trade the new one.\nNormal Variation — average IB, one-side extension. Trade the break, take profit early.\nNormal — wide IB, both sides tested. Fade the IB extremes.\nNeutral — extension on BOTH sides. Fade the extremes.\nNon-Trend — very narrow IB, no follow-through. Do not trade.")
+    table.cell(dashTable, 0, row, "Day type ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="The session's character, in the cheat sheet's six categories. Derived from how far price has extended beyond the Initial Balance on each side, plus the IB's own width.\n\nPROVISIONAL — it updates all day. A day only truly types at the close, so read it as the current best guess, not a verdict.\n\nTrend — narrow IB, one-way extension. NEVER fade it.\nDouble Distribution — a second range forms away from the first. Trade the new one.\nNormal Variation — average IB, one-side extension. Trade the break, take profit early.\nNormal — wide IB, both sides tested. Fade the IB extremes.\nNeutral — extension on BOTH sides. Fade the extremes.\nNon-Trend — very narrow IB, no follow-through. Do not trade.")
     table.cell(dashTable, 1, row, dayT, text_color=dayT == "-" ? noC : dayT == "Trend" ? color.lime : dayT == "Non-Trend" ? color.red : txtColor, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
-    table.cell(dashTable, 0, row, "Bias:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Which way to lean today, if either — the one line the two rows above exist to produce.\n\nThis is DIRECTIONAL CONTEXT, not a trade signal. It says which side the odds favour; the Setup row says whether an actual entry exists. A LONG bias with no setup is not a trade.\n\nSTAND ASIDE — Non-Trend day, no follow-through to be had\nTWO-WAY — Normal or Neutral day; the extremes hold, so fade them rather than chase breaks\nLONG / SHORT — the day is extending one way; hold winners in that direction and do not fade it")
+    table.cell(dashTable, 0, row, "Bias ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Which way to lean today, if either — the one line the two rows above exist to produce.\n\nThis is DIRECTIONAL CONTEXT, not a trade signal. It says which side the odds favour; the Setup row says whether an actual entry exists. A LONG bias with no setup is not a trade.\n\nSTAND ASIDE — Non-Trend day, no follow-through to be had\nTWO-WAY — Normal or Neutral day; the extremes hold, so fade them rather than chase breaks\nLONG / SHORT — the day is extending one way; hold winners in that direction and do not fade it")
     table.cell(dashTable, 1, row, bias, text_color=str.startswith(bias, "LONG") ? color.lime : str.startswith(bias, "SHORT") ? color.red : str.startswith(bias, "STAND") ? color.orange : txtColor, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
 
     if full
-        table.cell(dashTable, 0, row, "PDH/PDL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous Day High / Low — the most widely watched intraday levels.\n\nA clean break with volume tends to run; a failed break reverses hard.")
+        table.cell(dashTable, 0, row, "PDH/PDL ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous Day High / Low — the most widely watched intraday levels.\n\nA clean break with volume tends to run; a failed break reverses hard.")
         table.cell(dashTable, 1, row, na(pdh) ? "-" : str.tostring(pdh, "#.##") + " / " + str.tostring(pdl, "#.##"), text_color=na(pdh) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
         row += 1
 
-    table.cell(dashTable, 0, row, "IB H/L:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Initial Balance high/low (09:15-10:15) and its width as a % of average daily range.\n\nBreaking IB after 10:15 on expanding volume is the classic trend-day continuation; rotating inside it all day is a range day.\n\n<35% narrow — coiled, trend-day potential\n35-60% normal\n>60% wide — range day, IB likely holds")
+    table.cell(dashTable, 0, row, "IB H/L ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Initial Balance high/low (09:15-10:15) and its width as a % of average daily range.\n\nBreaking IB after 10:15 on expanding volume is the classic trend-day continuation; rotating inside it all day is a range day.\n\n<35% narrow — coiled, trend-day potential\n35-60% normal\n>60% wide — range day, IB likely holds")
     table.cell(dashTable, 1, row, na(ibh) ? "-" : str.tostring(ibh, "#.##") + "/" + str.tostring(ibl, "#.##") + (na(ibPct) ? "" : "  " + str.tostring(ibPct, "#") + "%IB" + (na(ibAdrPct) ? "" : "/" + str.tostring(ibAdrPct, "#") + "%ADR") + " " + ibType), text_color=na(ibh) ? noC : #FFEB3B, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
@@ -1527,7 +1528,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     float adrUsed  = na(dayRange) or na(adr) or adr <= 0 ? na : dayRange / adr * 100.0
     string adrTxt  = na(adr) ? "-" : (na(adrUsed) ? "-" : str.tostring(adrUsed, "#") + "% used") + (na(headroom) ? "" : "  |  " + str.tostring(headroom, "0.0") + "R room")
     color adrCol   = na(adrUsed) ? noC : adrUsed >= 100 ? color.red : adrUsed >= 80 ? color.orange : adrUsed >= 50 ? txtColor : okC
-    table.cell(dashTable, 0, row, "ADR / used:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Average Daily Range (14 sessions, high-low) and how much of it today has already travelled.\n\n<50%   room left — breakouts have somewhere to go\n50-80% normal\n80-100% stretched — expect chop, take partials earlier\n>100%  today is already an outlier move; late entries are poor risk\n\nUses high-low, not ATR, so overnight gaps do not inflate the reading.")
+    table.cell(dashTable, 0, row, "ADR/used ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Average Daily Range (14 sessions, high-low) and how much of it today has already travelled.\n\n<50%   room left — breakouts have somewhere to go\n50-80% normal\n80-100% stretched — expect chop, take partials earlier\n>100%  today is already an outlier move; late entries are poor risk\n\nUses high-low, not ATR, so overnight gaps do not inflate the reading.")
     table.cell(dashTable, 1, row, adrTxt, text_color=adrCol, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
@@ -1537,11 +1538,11 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     float slDist = na(atrVal) ? na : atrVal * slMult
     string atrTxt = na(atrVal) ? "-" : str.tostring(atrVal, "#.##") + " | SL " + str.tostring(slMult, "#.#") + "x = " + str.tostring(slDist, "#.##")
     if full
-        table.cell(dashTable, 0, row, "ATR / SL:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="ATR(14) on this timeframe, and the stop DISTANCE it implies at the ATR multiplier configured in TARGETS & RISK.\n\nUse it as a sanity check: if the level-based stop for a setup is much tighter than this, the stop is inside the noise and will be taken out; much wider, and the position size has to come down.\n\nSL distance / entry gives the % risk per share.")
+        table.cell(dashTable, 0, row, "ATR / SL ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="ATR(14) on this timeframe, and the stop DISTANCE it implies at the ATR multiplier configured in TARGETS & RISK.\n\nUse it as a sanity check: if the level-based stop for a setup is much tighter than this, the stop is inside the noise and will be taken out; much wider, and the position size has to come down.\n\nSL distance / entry gives the % risk per share.")
         table.cell(dashTable, 1, row, atrTxt, text_color=na(atrVal) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
         row += 1
 
-    table.cell(dashTable, 0, row, "Setup:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Key-level setup, direction, and weighted score against the alert threshold.\n\nBright = firing on THIS bar. Dimmed with a time = the last one that fired, kept so the row still tells you something between signals. ⏳HTF = scored, waiting on the higher-timeframe close.\n\n\"-\" means nothing has fired yet today. Retests outrank rejections, which outrank plain breaks. Confluence and retest structure carry the most score weight, then RVOL.")
+    table.cell(dashTable, 0, row, "Setup ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Key-level setup, direction, and weighted score against the alert threshold.\n\nBright = firing on THIS bar. Dimmed with a time = the last one that fired, kept so the row still tells you something between signals. ⏳HTF = scored, waiting on the higher-timeframe close.\n\n\"-\" means nothing has fired yet today. Retests outrank rejections, which outrank plain breaks. Confluence and retest structure carry the most score weight, then RVOL.")
     string stTxt = dir == 0 ? "-" : (dir == 1 ? "LONG " : "SHORT ") + setupCode + "  " + str.tostring(score) + "/" + str.tostring(threshold) + (confCnt > 0 ? " +" + str.tostring(confCnt) + "lvl" : "") + (isLive ? (score >= threshold ? (htfOK ? " ✅" : " ⏳HTF") : "") : (na(lastT) ? "" : "  " + str.format_time(lastT, "HH:mm", syminfo.timezone)))
     // Live setups keep the direction colour; a latched one is dimmed, so "firing now" and
     // "last fired at 11:05" can never be confused at a glance.
@@ -1550,7 +1551,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     row += 1
 
     if full
-        table.cell(dashTable, 0, row, "Confluence:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Which other structural levels sit within the confluence band of the triggering level.\n\nTwo or more stacked levels is the strongest quality signal in this model. The count is also appended to the Setup row as \"+2lvl\".")
+        table.cell(dashTable, 0, row, "Confluence ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Which other structural levels sit within the confluence band of the triggering level.\n\nTwo or more stacked levels is the strongest quality signal in this model. The count is also appended to the Setup row as \"+2lvl\".")
         table.cell(dashTable, 1, row, confCnt == 0 ? "-" : (str.tostring(confCnt) + " " + confNames), text_color=confCnt >= 2 ? okC : noC, text_size=txtSize, text_halign=text.align_right)
         row += 1
 
@@ -2341,7 +2342,7 @@ klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg
     // trend-day candidate), >120% wide (balanced/rotational, IB extremes tend to hold).
     float ibRange = na(ibH) or na(ibL) ? na : ibH - ibL
     float ibPct   = na(ibRange) or na(ibAvg) or ibAvg <= 0 ? na : ibRange / ibAvg * 100.0
-    string ibType = na(ibPct) ? "-" : ibPct < 80 ? "narrow/trend?" : ibPct > 120 ? "wide/range?" : "normal"
+    string ibType = na(ibPct) ? "-" : ibPct < 80 ? "narrow" : ibPct > 120 ? "wide" : "normal"
     // Second reading, different question: how much of a NORMAL DAY'S RANGE the first hour
     // already consumed. ADR (high-low) is the right denominator for that -- daily ATR is TRUE
     // range and folds the overnight gap in, inflating it and making the IB look falsely narrow
@@ -2351,7 +2352,7 @@ klContext(float vah, float val, float dayOpen, float ibH, float ibL, float ibAvg
     // is what NAMES the day. IB-vs-average-IB rides alongside as a second read: "is this IB
     // unusual for this stock" and "how much of a normal day's range did the first hour eat"
     // are different questions, and both are worth seeing.
-    string ibTypeAdr = na(ibAdrPct) ? ibType : ibAdrPct < 35 ? "narrow/trend?" : ibAdrPct > 60 ? "wide/range?" : "normal"
+    string ibTypeAdr = na(ibAdrPct) ? ibType : ibAdrPct < 35 ? "narrow" : ibAdrPct > 60 ? "wide" : "normal"
     [auction, openPos, ibPct, ibTypeAdr, ibAdrPct]
 
 // ─── Main-body wiring (kept deliberately thin) ──────────────────────────────
@@ -2368,7 +2369,7 @@ bool klInIB = enableKeyLevels and not na(time(timeframe.period, klIBSession, ses
 
 [klVAH, klPOC, klVAL] = klProfile(enableKeyLevels, klAutoProfile, shouldReset, not na(time(timeframe.period, "0915-1530", sessionTimezone)), klLoLTF, klHiLTF, klVolLTF, klVPStep, klValueAreaPct, klManualVAH, klManualPOC, klManualVAL)
 [klIBH, klIBL, klDayOpen, klDayStartBar, klDayHigh, klDayLow] = klInitialBalance(enableKeyLevels, shouldReset, klInIB, inSession)
-string klOpenTypeS = klOpenType(enableKeyLevels, shouldReset, inSession, klDayOpen, 6)
+string klOpenTypeS = klOpenType(enableKeyLevels, shouldReset, inSession, klDayOpen, klOpenTypeBars)
 float klIBAvg = klIBAverage(enableKeyLevels, shouldReset, na(klIBH) or na(klIBL) ? na : klIBH - klIBL, volBaseDays)
 [klAuction, klOpenPos, klIBPct, klIBType, klIBAdrPct] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klIBAvg, klADR)
 
@@ -3778,7 +3779,12 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if lastTPHit
             orbLinesFrozen := true
 
-        if not orbSLHit and not na(orbSLPrice) and bar_index > orbEntryBar and low <= orbSLPrice
+        // Once ANY target is booked the original stop is dead: either TP1 closed the position
+        // outright (backtest model) or signal_engine has already moved the stop up to the
+        // runner level (live model). Firing an SL alert at the ORIGINAL price after a TP
+        // tells the engine to exit a position that is closed, or protected somewhere else.
+        bool anyTPBooked = orbTP1Hit or orbTP1_5Hit or orbTP2Hit or orbTP3Hit
+        if not orbSLHit and not anyTPBooked and not na(orbSLPrice) and bar_index > orbEntryBar and low <= orbSLPrice
             orbSLHit := true
             alertSLTriggered := true  // Trigger SL alert
             orbLinesFrozen := true
@@ -3854,7 +3860,12 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if lastTPHit
             orbLinesFrozen := true
 
-        if not orbSLHit and not na(orbSLPrice) and bar_index > orbEntryBar and high >= orbSLPrice
+        // Once ANY target is booked the original stop is dead: either TP1 closed the position
+        // outright (backtest model) or signal_engine has already moved the stop up to the
+        // runner level (live model). Firing an SL alert at the ORIGINAL price after a TP
+        // tells the engine to exit a position that is closed, or protected somewhere else.
+        bool anyTPBooked = orbTP1Hit or orbTP1_5Hit or orbTP2Hit or orbTP3Hit
+        if not orbSLHit and not anyTPBooked and not na(orbSLPrice) and bar_index > orbEntryBar and high >= orbSLPrice
             orbSLHit := true
             alertSLTriggered := true  // Trigger SL alert for short
             orbLinesFrozen := true
@@ -3939,7 +3950,9 @@ if hasActiveBreakout and not trade_closed
     string resultText = ""
     bool isWin = false
 
-    if orbSLHit
+    // SL is the outcome only when NOTHING was booked first. Checking it ahead of the targets
+    // meant a trade that took TP1 and later stopped out reported a flat -1R.
+    if orbSLHit and not (orbTP1Hit or orbTP1_5Hit or orbTP2Hit or orbTP3Hit)
         shouldClose := true
         isWin := false
         current_trade_r := -1.0

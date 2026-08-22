@@ -1405,3 +1405,72 @@ RELIANCE shows `IB 52%IB/32%ADR narrow/trend?` while Day type reads `Non-Trend`.
 contradiction — IB width states the *potential*, day type reports that the potential did not
 materialise (no extension) — but the two read as if they disagree. The `?` suffixes on the IB row
 are now redundant given the Day type row names the day outright.
+
+---
+
+## 2026-08-22p — SL fired after a booked target; static/live markers
+
+### BUG: the stop stayed armed at its ORIGINAL price after a target was booked
+
+Traced from the TCS panel showing both `✅ TP1` and a hit SL.
+
+The SL check sits inside `if not orbLinesFrozen ...`, and `orbLinesFrozen` is only set when
+`lastTPHit` — the **last enabled** target. All four TP toggles are on, so that means **TP3**.
+A trade that books TP1 and never reaches TP3 therefore keeps its original stop armed for the
+rest of the session, and a later retrace to that price sets `orbSLHit` **and fires an SL alert**.
+
+That alert reaches `signal_engine` as a live `SL HIT`. Either:
+- TP1 closed the position outright (backtest model) — the alert refers to nothing; or
+- TP1 was a 50% partial (live model) — `signal_engine` has already moved the stop to
+  `TP1 − 0.3R`, so the original price is **below** where protection actually sits.
+
+Both ways the alert is wrong. The phantom-exit guard on the Python side would likely catch it,
+but the script should not be sending it.
+
+Fixed: the SL setter is now gated on `not anyTPBooked` in both direction blocks.
+
+**Also fixed:** the close-reason chain tested `if orbSLHit` *before* the targets, so a trade that
+took TP1 and later stopped out reported a flat **-1R** — understating results and corrupting the
+R accounting. It now requires that nothing was booked first.
+
+**Known limitation, unchanged:** when one bar touches both a target and the stop, resolution stays
+**optimistic** — the target is evaluated first in source order, so it wins. Intrabar order cannot
+be recovered from a 5-min bar. The file already pulls 1-min arrays via `request.security_lower_tf`
+for the volume profile, so a conservative resolution is available if this ever matters; it is not
+implemented.
+
+### Static vs live, marked on every row
+
+Row labels now carry the convention, with the legend in the `── Key Levels` header tooltip:
+
+| Marker | Meaning | Rows |
+|---|---|---|
+| **·** | Fixed once set, does not move again today | VAH/POC/VAL, PDH/PDL, IB H/L (after 10:15), Open type (after it latches) |
+| **~** | Recalculated every bar | Vol Factor, Auction, Day type, Bias, ADR/used, ATR/SL, Setup, Confluence |
+
+A `·` value read at 14:00 means what it meant at 10:30; a `~` value is only true as of this bar.
+
+### Why open type is not a single-candle read
+
+Asked whether open type and day type should come from the 09:15 candle alone. They should not,
+and the reason is structural rather than a preference:
+
+**The four opening types differ in what happens AFTER the first move.** Open Drive and Open
+Rejection Reverse both begin with a directional push — they only diverge once you see whether it
+held or reversed back through the open. One candle gives you *direction*; it cannot give you
+*type*. Market Profile classifies on period A, the first 30 minutes, which is what the 6-bar
+default already does, and it **latches** there.
+
+`klOpenTypeBars` is now an input so it can be set to 1, accepting that Drive / Test Drive /
+Rejection Reverse collapse into one bucket at that setting.
+
+**Day type genuinely is live and should stay that way** — a day reveals its character through
+extension beyond the IB, and freezing it at 09:20 would mean naming a Trend day before any trend
+existed. That is why it carries `~` while Open type carries `·`.
+
+### Also
+
+- `klMinHeadroomR` 1.0 -> **1.5**. Three of the four reviewed charts produced setups at 75-85% of
+  ADR already consumed.
+- Dropped the `?` from `narrow/trend?` and `wide/range?`. The Day type row names the day outright
+  now, so the IB row editorialising a guess alongside it read as a contradiction.
