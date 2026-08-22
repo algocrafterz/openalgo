@@ -1480,7 +1480,7 @@ renderGodRow(table dashTable, int startRow, string txtSize, color txtColor, bool
 // dashboard block) to keep the script's global scope under Pine's main-body size limit.
 // Values are passed in rather than read from globals so this can sit here, ahead of the
 // key-level engine that computes them.
-renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, float ibAdrPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full, string openT, string dayT, string bias) =>
+renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, float vf, bool autoProfile, float vah, float poc, float val, string auction, string openPos, float ibPct, float ibAdrPct, string ibType, float pdh, float pdl, float ibh, float ibl, float adr, float dayHigh, float dayLow, float headroom, float atrVal, float slMult, int dir, string setupCode, int score, int threshold, int confCnt, string confNames, bool executing, bool htfOK, bool isLive, int lastT, bool full, string openT, int openDir, string dayT, string bias) =>
     int row = startRow
     color okC = color.lime
     color noC = color.new(color.gray, 20)
@@ -1507,7 +1507,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     row += 1
 
     table.cell(dashTable, 0, row, "Open type ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="How the session opened, in the cheat sheet's four categories. LATCHED after the first 30 minutes — an open type that kept revising itself would be worthless.\n\nOpen Drive — one-way from the first tick. Highest conviction; expect a TREND day, enter on the first pullback in the direction of the drive.\nOpen Test Drive — tested one side, rejected, drove the other way. Expect NORMAL VARIATION; trade the reversal.\nOpen Rejection Reverse — ran one way then reversed back through the open. Expect a NORMAL day; trade the gap fill toward yesterday's POC.\nOpen Auction — rotation with no net progress. No edge yet; wait for the IB to complete, then trade the break or fade it.")
-    table.cell(dashTable, 1, row, openT, text_color=openT == "-" ? noC : openT == "Open Drive" ? color.lime : txtColor, text_size=txtSize, text_halign=text.align_right)
+    table.cell(dashTable, 1, row, openT + (openDir == 1 ? "  ▲" : openDir == -1 ? "  ▼" : ""), text_color=openT == "-" ? noC : openDir == 1 ? color.lime : openDir == -1 ? color.red : txtColor, text_size=txtSize, text_halign=text.align_right)
     row += 1
 
     table.cell(dashTable, 0, row, "Day type ~", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="The session's character, in the cheat sheet's six categories. Derived from how far price has extended beyond the Initial Balance on each side, plus the IB's own width.\n\nPROVISIONAL — it updates all day. A day only truly types at the close, so read it as the current best guess, not a verdict.\n\nTrend — narrow IB, one-way extension. NEVER fade it.\nDouble Distribution — a second range forms away from the first. Trade the new one.\nNormal Variation — average IB, one-side extension. Trade the break, take profit early.\nNormal — wide IB, both sides tested. Fade the IB extremes.\nNeutral — extension on BOTH sides. Fade the extremes.\nNon-Trend — very narrow IB, no follow-through. Do not trade.")
@@ -2275,6 +2275,7 @@ klHeadroomR(int d, float px, float dayH, float dayL, float adr, float riskPts) =
 // STATEFUL: call unconditionally.
 klOpenType(bool en, bool reset, bool inSess, float dayOpen, int bars) =>
     var string t = "-"
+    var int dir = 0
     var int n = 0
     var float hi = na
     var float lo = na
@@ -2282,6 +2283,7 @@ klOpenType(bool en, bool reset, bool inSess, float dayOpen, int bars) =>
     if en
         if reset
             t := "-"
+            dir := 0
             n := 0
             hi := na
             lo := na
@@ -2300,8 +2302,12 @@ klOpenType(bool en, bool reset, bool inSess, float dayOpen, int bars) =>
                     float oppFrac = opp / tot
                     float netFrac = math.abs(net) / tot
                     t := oppFrac < 0.20 ? "Open Drive" : oppFrac < 0.45 ? "Open Test Drive" : netFrac > 0.35 ? "Open Rejection Reverse" : "Open Auction"
+                    // Direction of the NET move over the window. For a Drive that is the
+                    // direction to trade with; for a Rejection Reverse it is the direction
+                    // price reversed INTO, which is likewise the tradeable side.
+                    dir := net > 0 ? 1 : net < 0 ? -1 : 0
                 done := true
-    t
+    [t, dir]
 
 // Day type, per the cheat sheet's six categories. Tracks how far price has extended beyond
 // the Initial Balance on each side, as a % of the IB range, and names the day from that plus
@@ -2327,7 +2333,7 @@ klDayType(bool en, bool reset, bool ibDone, float ibh, float ibl, float ibAdrPct
     [t, extUp, extDn]
 
 // The one line the other two exist to produce: which way to lean today, if either.
-klBias(string dayT, string openT, float extUp, float extDn, string auction) =>
+klBias(string dayT, string openT, int openDir, float extUp, float extDn, string auction) =>
     string b = "-"
     if dayT == "Non-Trend"
         b := "STAND ASIDE — no follow-through"
@@ -2335,8 +2341,8 @@ klBias(string dayT, string openT, float extUp, float extDn, string auction) =>
         b := "TWO-WAY — fade the extremes"
     else if dayT == "Trend" or dayT == "Double Distribution" or dayT == "Normal Variation"
         b := extUp > extDn ? "LONG — hold, do not fade" : extDn > extUp ? "SHORT — hold, do not fade" : "TWO-WAY"
-    else if openT == "Open Drive"
-        b := auction == "Above VAH" ? "LONG — drive from the open" : auction == "Below VAL" ? "SHORT — drive from the open" : "Wait for IB"
+    else if openT == "Open Drive" and openDir != 0
+        b := openDir == 1 ? "LONG — drive from the open" : "SHORT — drive from the open"
     else
         b := "Wait for IB"
     b
@@ -2380,13 +2386,13 @@ bool klInIB = enableKeyLevels and not na(time(timeframe.period, klIBSession, ses
 
 [klVAH, klPOC, klVAL] = klProfile(enableKeyLevels, klAutoProfile, shouldReset, not na(time(timeframe.period, "0915-1530", sessionTimezone)), klLoLTF, klHiLTF, klVolLTF, klVPStep, klValueAreaPct, klManualVAH, klManualPOC, klManualVAL)
 [klIBH, klIBL, klDayOpen, klDayStartBar, klDayHigh, klDayLow] = klInitialBalance(enableKeyLevels, shouldReset, klInIB, inSession)
-string klOpenTypeS = klOpenType(enableKeyLevels, shouldReset, inSession, klDayOpen, klOpenTypeBars)
+[klOpenTypeS, klOpenDir] = klOpenType(enableKeyLevels, shouldReset, inSession, klDayOpen, klOpenTypeBars)
 float klIBAvg = klIBAverage(enableKeyLevels, shouldReset, na(klIBH) or na(klIBL) ? na : klIBH - klIBL, volBaseDays)
 [klAuction, klOpenPos, klIBPct, klIBType, klIBAdrPct] = klContext(klVAH, klVAL, klDayOpen, klIBH, klIBL, klIBAvg, klADR)
 
 // Cleared on session rollover so a stale trigger tag cannot leak into the next day.
 [klDayTypeS, klExtUp, klExtDn] = klDayType(enableKeyLevels, shouldReset, enableKeyLevels and not na(klIBH) and not na(klIBL) and not klInIB, klIBH, klIBL, klIBAdrPct)
-string klBiasS = klBias(klDayTypeS, klOpenTypeS, klExtUp, klExtDn, klAuction)
+string klBiasS = klBias(klDayTypeS, klOpenTypeS, klOpenDir, klExtUp, klExtDn, klAuction)
 
 klPendingSource := shouldReset ? "" : klPendingSource
 klEntrySource := shouldReset ? "" : klEntrySource
@@ -4460,7 +4466,7 @@ if showDashboard and enableHTF
         /// Key-level section — the objective picture from the volume-profile model.
         /// Rows are rendered by renderKeyLevels(); hover any row label for what it means.
         if enableKeyLevels
-            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBAdrPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full", klOpenTypeS, klDayTypeS, klBiasS)
+            row := renderKeyLevels(dashTable, row, txtSize, txtColor, klSessionVF, klAutoProfile, klVAH, klPOC, klVAL, klAuction, klOpenPos, klIBPct, klIBAdrPct, klIBType, klPDH, klPDL, klIBH, klIBL, klADR, klDayHigh, klDayLow, klHeadroom, cachedATR, atrMultiplier, klDir != 0 ? klDir : klLastDir, klDir != 0 ? klSetupCode : klLastCode, klDir != 0 ? klScore : klLastScore, klScoreThreshold, klDir != 0 ? klConfCnt : klLastConf, klDir != 0 ? klConfNames : klLastConfN, enableKeyLevelExecution, klHTFOK, klDir != 0, klLastTime, dashMode == "Full", klOpenTypeS, klOpenDir, klDayTypeS, klBiasS)
 
         /// Trade info section (only if ENTRY occurred AND targets enabled)
         /// Position sizing remains visible even after trade closes (SL/TP hit)
