@@ -526,7 +526,8 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 
 | File | Responsibility |
 |------|---------------|
-| `main.py` | Pipeline orchestration, startup checks, entry/exit routing, T2T (BE series) filter |
+| `main.py` | Pipeline orchestration: entry/exit routing, T2T (BE series) filter, message dispatch. Decomposed 2026-08-23 — `_handle_entry` and `_handle_exit_locked` are now thin orchestrators over named stage functions (`_entry_rejected_by_symbol_rules`, `_resolve_entry_quantity`, `_establish_position`, `_recover_position_from_broker`, `_reconcile_sl_hit`, `_book_exit_result`, `_finalize_full_exit`, `_finalize_partial_exit`, ...). No function exceeds 50 lines. |
+| `startup.py` | Process startup and engine lifecycle (added 2026-08-23, extracted from `main.py`): CLI flags (`--smoke-test`, `--dry-run`, `--test`), startup health checks, broker position reconciliation and tracker restore, event loop and graceful shutdown. Collaborators are passed in — no global state. |
 | `listener.py` | Async Telegram channel listener (Telethon) |
 | `normalizer.py` | Raw message preprocessing → canonical format; handles TP HIT, SL HIT, pipe-delimited, emoji stripping |
 | `parser.py` | Canonical text → `Signal` model |
@@ -539,17 +540,25 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 | `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary); `format_day_context()` / `format_slot_context()` helpers for running day telemetry lines |
 | `config.py` | Fail-fast config loader (`Settings` dataclass singleton); no_progress, tracking sections |
 | `models.py` | `Signal`, `Order`, `TradeResult`, `ValidationResult` |
+| `runtime.py` | Composition root (added 2026-08-23): `build_risk_engine()` wires `settings` -> `RiskEngine`. Used by both `main.py` and `smoke_test.py` — previously three separate constructions had drifted by three sizing parameters, so the dry run did not size like production. |
+| `timeutils.py` | Shared `IST` timezone and `now_ist()` (added 2026-08-23). Previously redefined independently in five modules. |
 | `strategies.py` | Strategy name constants |
 | `db.py` | SQLite trade audit trail. Path: `_DB_PATH` |
 | `logger_setup.py` | Loguru daily rotation; file sink defaults to INFO (set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` for verbose mode) |
 | `smoke_test.py` | Pre-session health checks + dry run |
+
+### Known defects (documented, not fixed)
+
+| Defect | Location | Notes |
+|---|---|---|
+| `notify_be_stop_applied(original_sl=...)` is always `None` | `tracker.py` `_no_progress_break_even` | `pos.sl` is assigned `be_price` immediately before the notification is built, so the `pos.sl != be_price` guard can never be true. The break-even alert therefore never shows the stop it replaced. Preserved as-is by the 2026-08-23 refactor (behaviour-preserving); fixing it changes the notification payload. |
 
 ### Key Functions & Methods (2026-04-17 additions)
 
 | Function | Module | Purpose |
 |----------|--------|---------|
 | `record_rejection()` | `risk.py` | Release position slot AND un-count `trades_today` for rejected/phantom orders (position never existed at broker) |
-| `is_t2t_symbol()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
+| `_is_be_series()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
 | `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
 | `notify_be_stop_applied()` | `notifier.py` | Log-only: SL moved to break-even (no Telegram) |
 | `notify_partial_exit()` | `notifier.py` | Log-only: partial TP exit (no Telegram) |
