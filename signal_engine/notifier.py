@@ -9,18 +9,18 @@ Uses the same TelegramClient as the listener (set via set_client once connected)
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine.timeutils import IST
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
 
 _client: TelegramClient | None = None
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def set_client(client: TelegramClient) -> None:
@@ -66,7 +66,7 @@ def _dur(minutes: int) -> str:
 
 
 def _now_ist() -> str:
-    return datetime.now(_IST).strftime("%H:%M IST")
+    return datetime.now(IST).strftime("%H:%M IST")
 
 
 def _tag(strategy: str) -> str:
@@ -316,61 +316,72 @@ async def notify_day_summary(
     time_exits: int = 0,
     trade_records=None,
 ) -> None:
-    today = datetime.now(_IST).strftime("%d-%b-%Y")
+    today = datetime.now(IST).strftime("%d-%b-%Y")
 
     if trades == 0:
         await notify(f"📊 DAY SUMMARY | {today}\nNo trades taken today.")
         return
 
+    lines = _day_summary_header(today, trades, wins, losses, net_pnl, capital, time_exits, trade_records)
+    if trade_records:
+        lines.append("─" * 36)
+        # Best trade first
+        lines += [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
+
+    await notify("\n".join(lines))
+
+
+def _day_summary_header(
+    today: str, trades: int, wins: int, losses: int, net_pnl: float,
+    capital: float, time_exits: int, trade_records,
+) -> list:
+    """Headline block: counts, win rate, net P&L, average R, capital trajectory."""
     decided = wins + losses
     win_rate = wins / decided * 100 if decided > 0 else 0
     pct = net_pnl / capital * 100 if capital > 0 else 0
     pct_str = f"+{pct:.1f}%" if pct >= 0 else f"{pct:.1f}%"
 
     # Avg R across all decided trades (wins+losses)
-    avg_r: float | None = None
-    if trade_records:
-        r_values = [r.r_multiple for r in trade_records if r.r_multiple is not None]
-        if r_values:
-            avg_r = sum(r_values) / len(r_values)
-
+    avg_r = _average_r(trade_records)
     t_str = f"  T: {time_exits}" if time_exits > 0 else ""
     opening_capital = capital - net_pnl
 
-    lines = [
+    return [
         f"📊 DAY SUMMARY | {today}",
         f"Trades: {trades} | W: {wins}  L: {losses}{t_str} | Win Rate: {win_rate:.0f}%",
         f"Net: {_pnl(net_pnl)} ({pct_str})" + (f" | Avg R: {avg_r:+.1f}R" if avg_r is not None else ""),
         f"Capital: ₹{opening_capital:,.0f} → ₹{capital:,.0f}",
     ]
 
-    if trade_records:
-        # Sort by total_pnl descending (best trade first)
-        sorted_records = sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)
-        lines.append("─" * 36)
-        for rec in sorted_records:
-            dir_icon = "▲" if rec.direction == "LONG" else "▼"
-            exit_str = f"{rec.exit_price:.2f}" if rec.exit_price is not None else "—"
-            pnl_str = _pnl(rec.total_pnl) if rec.total_pnl != 0 else "₹0"
-            r_str = f"  ({rec.r_multiple:+.1f}R)" if rec.r_multiple is not None else ""
-            types_str = "+".join(rec.exit_types) if rec.exit_types else ""
-            # Flag orphan/suspicious trades (0 PnL and entry == exit price)
-            orphan_flag = ""
-            if (
-                rec.total_pnl == 0.0
-                and rec.exit_price is not None
-                and abs(rec.entry_price - rec.exit_price) < 0.01
-            ):
-                orphan_flag = "  ⚠️"
-            lines.append(
-                f"{dir_icon} {rec.symbol:<12} {rec.entry_price:.2f}→{exit_str:<8} "
-                f"{pnl_str:<10}{r_str}  {types_str}{orphan_flag}"
-            )
 
-    await notify("\n".join(lines))
+def _average_r(trade_records) -> float | None:
+    """Mean R-multiple across trades that have one, or None."""
+    if not trade_records:
+        return None
+    r_values = [r.r_multiple for r in trade_records if r.r_multiple is not None]
+    return sum(r_values) / len(r_values) if r_values else None
 
 
-# ── Engine lifecycle ───────────────────────────────────────────────────────────
+def _trade_line(rec) -> str:
+    """One row of the per-trade table in the day summary."""
+    dir_icon = "▲" if rec.direction == "LONG" else "▼"
+    exit_str = f"{rec.exit_price:.2f}" if rec.exit_price is not None else "—"
+    pnl_str = _pnl(rec.total_pnl) if rec.total_pnl != 0 else "₹0"
+    r_str = f"  ({rec.r_multiple:+.1f}R)" if rec.r_multiple is not None else ""
+    types_str = "+".join(rec.exit_types) if rec.exit_types else ""
+    # Flag orphan/suspicious trades (0 PnL and entry == exit price)
+    orphan_flag = ""
+    if (
+        rec.total_pnl == 0.0
+        and rec.exit_price is not None
+        and abs(rec.entry_price - rec.exit_price) < 0.01
+    ):
+        orphan_flag = "  ⚠️"
+    return (
+        f"{dir_icon} {rec.symbol:<12} {rec.entry_price:.2f}→{exit_str:<8} "
+        f"{pnl_str:<10}{r_str}  {types_str}{orphan_flag}"
+    )
+
 
 async def notify_engine_started(capital: float, mode: str) -> None:
     await notify(

@@ -55,6 +55,23 @@ def build_order(
 async def send_order(order: Order) -> TradeResult:
     """Send order to OpenAlgo REST API asynchronously."""
     url = f"{settings.openalgo_base_url}/api/v1/placeorder"
+    payload = _placeorder_payload(order)
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+            response = await client.post(url, json=payload)
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            return _interpret_placeorder(order, response, data)
+    except httpx.TimeoutException:
+        logger.error(f"Timeout sending order for {order.symbol}")
+        return TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+    except Exception as e:
+        logger.error(f"Error sending order for {order.symbol}: {e}")
+        return TradeResult(status=OrderStatus.ERROR, message=str(e))
+
+
+def _placeorder_payload(order: Order) -> dict:
+    """Map an Order onto the OpenAlgo placeorder request body."""
     payload = {
         "apikey": settings.openalgo_api_key,
         "strategy": order.strategy_tag,
@@ -68,55 +85,39 @@ async def send_order(order: Order) -> TradeResult:
     }
     if order.trigger_price > 0:
         payload["trigger_price"] = order.trigger_price
+    return payload
 
-    try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
 
-            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+def _interpret_placeorder(order: Order, response, data: dict) -> TradeResult:
+    """Turn a placeorder response into a TradeResult.
 
-            # Handle non-success responses without raise_for_status
-            # so we can extract the JSON error message
-            if response.status_code >= 400:
-                reason = data.get("message", response.text)
-                mode = data.get("mode", "")
-                mode_tag = f" [{mode}]" if mode else ""
-                logger.warning(f"Order rejected for {order.symbol}{mode_tag}: {reason}")
-                return TradeResult(
-                    status=OrderStatus.REJECTED,
-                    message=reason,
-                )
+    Deliberately avoids raise_for_status so the JSON error message survives, and
+    treats a success status with a null orderid as a rejection — some brokers answer
+    that way when the order was refused downstream.
+    """
+    if response.status_code >= 400:
+        reason = data.get("message", response.text)
+        mode = data.get("mode", "")
+        mode_tag = f" [{mode}]" if mode else ""
+        logger.warning(f"Order rejected for {order.symbol}{mode_tag}: {reason}")
+        return TradeResult(status=OrderStatus.REJECTED, message=reason)
 
-            if data.get("status") == "error":
-                reason = data.get("message", "Unknown error")
-                logger.warning(f"Order failed for {order.symbol}: {reason}")
-                return TradeResult(
-                    status=OrderStatus.REJECTED,
-                    message=reason,
-                )
+    if data.get("status") == "error":
+        reason = data.get("message", "Unknown error")
+        logger.warning(f"Order failed for {order.symbol}: {reason}")
+        return TradeResult(status=OrderStatus.REJECTED, message=reason)
 
-            # Broker may return status=success but with null orderid
-            # when the order was actually rejected at broker level
-            raw_order_id = data.get("orderid")
-            if raw_order_id is None:
-                reason = data.get("message", "Order returned success but no order ID")
-                logger.warning(f"Order rejected for {order.symbol}: {reason}")
-                return TradeResult(
-                    status=OrderStatus.REJECTED,
-                    message=reason,
-                )
+    raw_order_id = data.get("orderid")
+    if raw_order_id is None:
+        reason = data.get("message", "Order returned success but no order ID")
+        logger.warning(f"Order rejected for {order.symbol}: {reason}")
+        return TradeResult(status=OrderStatus.REJECTED, message=reason)
 
-            return TradeResult(
-                order_id=str(raw_order_id),
-                status=OrderStatus.SUCCESS,
-                message=str(data.get("status", "")),
-            )
-    except httpx.TimeoutException:
-        logger.error(f"Timeout sending order for {order.symbol}")
-        return TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
-    except Exception as e:
-        logger.error(f"Error sending order for {order.symbol}: {e}")
-        return TradeResult(status=OrderStatus.ERROR, message=str(e))
+    return TradeResult(
+        order_id=str(raw_order_id),
+        status=OrderStatus.SUCCESS,
+        message=str(data.get("status", "")),
+    )
 
 
 def build_exit_order(

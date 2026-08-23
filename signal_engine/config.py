@@ -245,6 +245,13 @@ def _parse_no_progress(cfg: dict) -> dict:
     }
 
 
+def _symbol_set(raw) -> frozenset:
+    """Normalise a YAML symbol list into an upper-cased frozenset."""
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(s.upper().strip() for s in raw if isinstance(s, str))
+
+
 def _parse_blacklist(
     raw: dict,
 ) -> Tuple[Dict[str, frozenset], Dict[str, frozenset], Dict[str, float]]:
@@ -280,34 +287,30 @@ def _parse_blacklist(
         key = strategy_key.upper()
 
         if isinstance(value, list):
-            hard[key] = frozenset(
-                s.upper().strip() for s in value if isinstance(s, str)
-            )
+            hard[key] = _symbol_set(value)
             continue
-
         if not isinstance(value, dict):
             continue
 
-        hard_list = value.get("hard", [])
-        soft_list = value.get("soft", [])
-        multiplier = float(value.get("soft_multiplier", 0.5))
-
-        if not 0.0 <= multiplier <= 1.0:
-            raise ConfigError(
-                f"blacklist.{strategy_key}.soft_multiplier must be in [0, 1], got {multiplier}"
-            )
-
-        if isinstance(hard_list, list):
-            hard[key] = frozenset(
-                s.upper().strip() for s in hard_list if isinstance(s, str)
-            )
-        if isinstance(soft_list, list) and soft_list:
-            soft[key] = frozenset(
-                s.upper().strip() for s in soft_list if isinstance(s, str)
-            )
+        multiplier = _soft_multiplier(strategy_key, value)
+        if isinstance(value.get("hard", []), list):
+            hard[key] = _symbol_set(value.get("hard", []))
+        soft_symbols = _symbol_set(value.get("soft", []))
+        if soft_symbols:
+            soft[key] = soft_symbols
             multipliers[key] = multiplier
 
     return hard, soft, multipliers
+
+
+def _soft_multiplier(strategy_key: str, value: dict) -> float:
+    """Per-strategy qty multiplier for soft-blacklisted symbols. Must be in [0, 1]."""
+    multiplier = float(value.get("soft_multiplier", 0.5))
+    if not 0.0 <= multiplier <= 1.0:
+        raise ConfigError(
+            f"blacklist.{strategy_key}.soft_multiplier must be in [0, 1], got {multiplier}"
+        )
+    return multiplier
 
 
 def _parse_broker_mis_rejected(raw: dict) -> frozenset:
@@ -332,90 +335,60 @@ def _parse_broker_mis_rejected(raw: dict) -> frozenset:
     return frozenset(symbols)
 
 
-def _build_settings() -> Settings:
-    yml = _load_yaml()
-    env = _load_env()
+def _parse_channel(raw: dict) -> TelegramChannel:
+    """Build a TelegramChannel, keeping the id numeric when it parses as one."""
+    raw_id = raw.get("id", "")
+    try:
+        ch_id = int(raw_id)
+    except (ValueError, TypeError):
+        ch_id = str(raw_id)
+    return TelegramChannel(name=raw.get("name", ""), id=ch_id)
 
-    # Required top-level sections
-    telegram = yml.get("telegram", {})
-    sizing = _require_section(yml, "sizing")
-    risk = _require_section(yml, "risk")
-    tracking = _require_section(yml, "tracking")
-    broker = _require_section(yml, "broker")
-    listener = _require_section(yml, "listener")
-    api = _require_section(yml, "api")
-    bracket = _require_section(yml, "bracket")
 
-    # Validate sizing mode
-    mode = _require_key(sizing, "sizing", "mode")
-    if mode not in VALID_SIZING_MODES:
-        raise ConfigError(
-            f"Invalid sizing.mode '{mode}'. Must be one of: {', '.join(VALID_SIZING_MODES)}"
-        )
-
-    # Parse channel list
-    raw_channels = telegram.get("channels", [])
-    channels = []
-    for ch in raw_channels:
-        raw_id = ch.get("id", "")
-        try:
-            ch_id = int(raw_id)
-        except (ValueError, TypeError):
-            ch_id = str(raw_id)
-        channels.append(TelegramChannel(name=ch.get("name", ""), id=ch_id))
-
-    # Parse optional notify channel
-    raw_notify = telegram.get("notify_channel")
-    notify_channel = None
-    if raw_notify and isinstance(raw_notify, dict):
-        raw_nid = raw_notify.get("id", "")
-        try:
-            n_id = int(raw_nid)
-        except (ValueError, TypeError):
-            n_id = str(raw_nid)
-        notify_channel = TelegramChannel(name=raw_notify.get("name", ""), id=n_id)
-
-    # Strategy profiles section (optional — empty if missing)
+def _parse_strategy_profiles(yml: dict) -> Dict[str, dict]:
+    """Per-strategy TP levels and product. Optional section — empty if missing."""
     raw_profiles = yml.get("strategy_profiles", {})
     if not isinstance(raw_profiles, dict):
-        raw_profiles = {}
-    strategy_profiles: Dict[str, dict] = {}
+        return {}
+    profiles: Dict[str, dict] = {}
     for strategy_key, profile in raw_profiles.items():
-        if isinstance(profile, dict):
-            tp_levels = profile.get("tp_levels", {})
-            if isinstance(tp_levels, dict):
-                tp_levels = {k.upper(): float(v) for k, v in tp_levels.items()}
-            else:
-                tp_levels = {}
-            strategy_profiles[strategy_key.upper()] = {
-                "tp_levels": tp_levels,
-                "product": str(profile.get("product", "")),
-            }
+        if not isinstance(profile, dict):
+            continue
+        tp_levels = profile.get("tp_levels", {})
+        if isinstance(tp_levels, dict):
+            tp_levels = {k.upper(): float(v) for k, v in tp_levels.items()}
+        else:
+            tp_levels = {}
+        profiles[strategy_key.upper()] = {
+            "tp_levels": tp_levels,
+            "product": str(profile.get("product", "")),
+        }
+    return profiles
 
-    # Blacklist section (optional — empty if missing)
-    # Two-tier: hard = full block (validator), soft = qty reduction (risk engine).
-    blacklist, soft_blacklist, soft_blacklist_multipliers = _parse_blacklist(
-        yml.get("blacklist", {})
-    )
 
-    # Time exit section (optional — defaults to disabled if missing)
-    time_exit = yml.get("time_exit", {})
-    if not isinstance(time_exit, dict):
-        time_exit = {}
-
-    return Settings(
-        # Secrets from .env
+def _secret_fields(env: dict) -> dict:
+    """Credentials — always from .env, never from config.yaml."""
+    return dict(
         telegram_api_id=int(env.get("TELEGRAM_API_ID", 0)),
         telegram_api_hash=env.get("TELEGRAM_API_HASH", ""),
         telegram_phone=env.get("TELEGRAM_PHONE", ""),
         openalgo_base_url=env.get("OPENALGO_BASE_URL", "http://127.0.0.1:5000"),
         openalgo_api_key=env.get("OPENALGO_API_KEY", ""),
+    )
 
-        # Telegram channels from yaml
-        telegram_channels=tuple(channels),
-        notify_channel=notify_channel,
 
-        # Position sizing from yaml — all required
+def _telegram_fields(telegram: dict) -> dict:
+    """Signal channels to listen on, plus the optional system-alert channel."""
+    raw_notify = telegram.get("notify_channel")
+    return dict(
+        telegram_channels=tuple(_parse_channel(ch) for ch in telegram.get("channels", [])),
+        notify_channel=_parse_channel(raw_notify) if isinstance(raw_notify, dict) and raw_notify else None,
+    )
+
+
+def _sizing_fields(sizing: dict, mode: str) -> dict:
+    """Position sizing — how many shares a signal turns into."""
+    return dict(
         sizing_mode=mode,
         risk_per_trade=float(_require_key(sizing, "sizing", "risk_per_trade")),
         pct_of_capital=float(_require_key(sizing, "sizing", "pct_of_capital")),
@@ -423,8 +396,16 @@ def _build_settings() -> Settings:
         max_entry_price=float(_require_key(sizing, "sizing", "max_entry_price")),
         slippage_factor=float(_require_key(sizing, "sizing", "slippage_factor")),
         max_sl_pct_for_sizing=float(sizing.get("max_sl_pct_for_sizing", 0.0)),
+        sandbox_capital=float(_require_key(sizing, "sizing", "sandbox_capital")),
+        use_day_start_capital=bool(sizing.get("use_day_start_capital", False)),
+        test_qty_cap=int(sizing.get("test_qty_cap", 0)),
+        min_capital_for_entry=float(_require_key(sizing, "sizing", "min_capital_for_entry")),
+    )
 
-        # Risk management from yaml — all required
+
+def _risk_fields(risk: dict) -> dict:
+    """Loss limits, slot caps, signal quality floors, concentration limits."""
+    return dict(
         daily_loss_limit=float(_require_key(risk, "risk", "daily_loss_limit")),
         weekly_loss_limit=float(_require_key(risk, "risk", "weekly_loss_limit")),
         monthly_loss_limit=float(_require_key(risk, "risk", "monthly_loss_limit")),
@@ -437,42 +418,33 @@ def _build_settings() -> Settings:
         max_positions_per_symbol=int(_require_key(risk, "risk", "max_positions_per_symbol")),
         max_positions_per_sector=int(_require_key(risk, "risk", "max_positions_per_sector")),
         sectors=_load_sectors(),
+    )
 
-        # Capital override from yaml
-        sandbox_capital=float(_require_key(sizing, "sizing", "sandbox_capital")),
 
-        # Day-start capital caching from yaml
-        use_day_start_capital=bool(sizing.get("use_day_start_capital", False)),
-
-        # Test mode qty cap from yaml (0 = disabled)
-        test_qty_cap=int(sizing.get("test_qty_cap", 0)),
-
-        # Minimum live capital for new entries
-        min_capital_for_entry=float(_require_key(sizing, "sizing", "min_capital_for_entry")),
-
-        # Tracking from yaml
+def _tracking_fields(tracking: dict) -> dict:
+    """Position polling cadence and the close-detection guard thresholds."""
+    return dict(
         poll_interval=int(_require_key(tracking, "tracking", "poll_interval")),
         tracker_min_position_age_seconds=int(tracking.get("min_position_age_seconds", 30)),
         tracker_guard2_timeout_minutes=int(tracking.get("guard2_timeout_minutes", 30)),
+    )
 
-        # Broker from yaml — all required
+
+def _broker_fields(broker: dict, yml: dict) -> dict:
+    """Exchange/product defaults and the broker's known MIS reject list."""
+    return dict(
         exchange=_require_key(broker, "broker", "exchange"),
         product=_require_key(broker, "broker", "product"),
         order_type=_require_key(broker, "broker", "order_type"),
         allow_off_hours_testing=bool(broker.get("allow_off_hours_testing", False)),
         mis_margin_pct=float(_require_key(broker, "broker", "mis_margin_pct")),
-
         broker_mis_rejected=_parse_broker_mis_rejected(yml.get("broker_restrictions", {})),
+    )
 
-        # Listener from yaml
-        listener_max_retries=int(_require_key(listener, "listener", "max_retries")),
-        listener_base_backoff=int(_require_key(listener, "listener", "base_backoff")),
 
-        # API from yaml
-        api_timeout=float(_require_key(api, "api", "timeout")),
-        margin_api_retries=int(api.get("margin_retries", 3)),
-
-        # Bracket orders from yaml
+def _bracket_fields(bracket: dict) -> dict:
+    """SL bracket leg behaviour, retries, and the runner-SL buffer."""
+    return dict(
         bracket_enabled=bool(_require_key(bracket, "bracket", "enabled")),
         bracket_cnc_sl_enabled=bool(bracket.get("cnc_sl_enabled", False)),
         bracket_sl_order_type=str(_require_key(bracket, "bracket", "sl_order_type")),
@@ -480,21 +452,63 @@ def _build_settings() -> Settings:
         bracket_retry_delay=float(bracket.get("retry_delay", 0.5)),
         bracket_tp_exit_retries=int(bracket.get("tp_exit_retries", 3)),
         tp1_runner_sl_buffer=float(bracket.get("tp1_runner_sl_buffer", 0.3)),
+    )
 
-        # Strategy profiles — per-strategy TP levels and product
-        strategy_profiles=strategy_profiles,
 
-        # Symbol blacklist — per-strategy + _global (hard tier only)
-        blacklist=blacklist,
-        soft_blacklist=soft_blacklist,
-        soft_blacklist_multipliers=soft_blacklist_multipliers,
-
-        # Time exit — optional section with safe defaults
+def _time_exit_fields(yml: dict) -> dict:
+    """Square-off schedule. Optional section — defaults to disabled if missing."""
+    time_exit = yml.get("time_exit", {})
+    if not isinstance(time_exit, dict):
+        time_exit = {}
+    return dict(
         time_exit_enabled=bool(time_exit.get("enabled", False)),
         time_exit_hour=int(time_exit.get("hour", 15)),
         time_exit_minute=int(time_exit.get("minute", 0)),
+    )
 
-        # No-progress detection — optional section with safe defaults
+
+def _build_settings() -> Settings:
+    """Assemble the Settings singleton, one builder per config.yaml section."""
+    yml = _load_yaml()
+    env = _load_env()
+
+    telegram = yml.get("telegram", {})
+    sizing = _require_section(yml, "sizing")
+    risk = _require_section(yml, "risk")
+    tracking = _require_section(yml, "tracking")
+    broker = _require_section(yml, "broker")
+    listener = _require_section(yml, "listener")
+    api = _require_section(yml, "api")
+    bracket = _require_section(yml, "bracket")
+
+    mode = _require_key(sizing, "sizing", "mode")
+    if mode not in VALID_SIZING_MODES:
+        raise ConfigError(
+            f"Invalid sizing.mode '{mode}'. Must be one of: {', '.join(VALID_SIZING_MODES)}"
+        )
+
+    # Two-tier blacklist: hard = full block (validator), soft = qty reduction (risk engine).
+    blacklist, soft_blacklist, soft_blacklist_multipliers = _parse_blacklist(
+        yml.get("blacklist", {})
+    )
+
+    return Settings(
+        **_secret_fields(env),
+        **_telegram_fields(telegram),
+        **_sizing_fields(sizing, mode),
+        **_risk_fields(risk),
+        **_tracking_fields(tracking),
+        **_broker_fields(broker, yml),
+        **_bracket_fields(bracket),
+        **_time_exit_fields(yml),
+        listener_max_retries=int(_require_key(listener, "listener", "max_retries")),
+        listener_base_backoff=int(_require_key(listener, "listener", "base_backoff")),
+        api_timeout=float(_require_key(api, "api", "timeout")),
+        margin_api_retries=int(api.get("margin_retries", 3)),
+        strategy_profiles=_parse_strategy_profiles(yml),
+        blacklist=blacklist,
+        soft_blacklist=soft_blacklist,
+        soft_blacklist_multipliers=soft_blacklist_multipliers,
         **_parse_no_progress(yml.get("no_progress", {})),
     )
 

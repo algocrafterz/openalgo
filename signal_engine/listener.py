@@ -14,6 +14,78 @@ from signal_engine import notifier
 _KEEPALIVE_INTERVAL = 90
 
 
+def _channel_names() -> dict:
+    """Chat-id -> channel name, with the string form mapped too for lookup safety."""
+    names = {}
+    for ch in settings.telegram_channels:
+        names[ch.id] = ch.name
+        names[str(ch.id)] = ch.name
+    return names
+
+
+def _is_stale(msg) -> float | None:
+    """Age of a message in seconds if it is too old to act on, else None."""
+    msg_time = msg.date.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - msg_time).total_seconds()
+    return age if age > settings.stale_signal_seconds else None
+
+
+def _make_handler(on_message, channel_names: dict):
+    """Build the NewMessage handler bound to this run's channel-name lookup."""
+
+    async def handler(event):
+        msg = event.message
+        if not msg.text:
+            return
+
+        chat_id = event.chat_id
+        source = channel_names.get(chat_id, channel_names.get(str(chat_id), str(chat_id)))
+
+        stale_age = _is_stale(msg)
+        if stale_age is not None:
+            logger.debug(f"Skipping stale message from [{source}] ({stale_age:.0f}s old)")
+            return
+
+        clean_text = " | ".join(line.strip() for line in msg.text.strip().splitlines() if line.strip())
+        logger.info(f"[{source}] Signal received: {clean_text}")
+        await on_message(msg.text)
+
+    return handler
+
+
+async def _keepalive(client) -> None:
+    """Periodically ping Telegram to detect and surface stale connections.
+
+    On failure, disconnect so run_until_disconnected returns and triggers a retry.
+    """
+    while True:
+        await asyncio.sleep(_KEEPALIVE_INTERVAL)
+        try:
+            await client.get_me()
+            logger.debug("Keepalive ping OK")
+        except Exception as e:
+            logger.warning(f"Keepalive ping failed: {e} — connection may be stale")
+            await client.disconnect()
+            return
+
+
+async def _connect(client) -> None:
+    """Authenticate and register the client as the notification transport."""
+    await client.start(phone=settings.telegram_phone)
+    notifier.set_client(client)
+    for ch in settings.telegram_channels:
+        logger.info(f"Watching channel: {ch.name} ({ch.id})")
+
+
+async def _serve(client) -> None:
+    """Hold a connected session open until Telegram drops it."""
+    keepalive_task = asyncio.create_task(_keepalive(client))
+    try:
+        await client.run_until_disconnected()
+    finally:
+        keepalive_task.cancel()
+
+
 async def start_listener(
     on_message: Callable[[str], Coroutine],
 ) -> None:
@@ -24,69 +96,24 @@ async def start_listener(
         logger.error("No Telegram channels configured in config.yaml (telegram.channels)")
         return
 
-    session_path = "signal_engine/data/telegram"
     client = TelegramClient(
-        session_path,
+        "signal_engine/data/telegram",
         settings.telegram_api_id,
         settings.telegram_api_hash,
     )
-
-    # Build chat list and name lookup from configured channels
-    chat_ids = []
-    channel_names = {}
-    for ch in settings.telegram_channels:
-        chat_ids.append(ch.id)
-        channel_names[ch.id] = ch.name
-        # Also map string version for lookup safety
-        channel_names[str(ch.id)] = ch.name
-
-    @client.on(events.NewMessage(chats=chat_ids))
-    async def handler(event):
-        msg = event.message
-        if not msg.text:
-            return
-
-        # Identify which channel the message came from
-        chat_id = event.chat_id
-        source = channel_names.get(chat_id, channel_names.get(str(chat_id), str(chat_id)))
-
-        # Stale signal guard
-        msg_time = msg.date.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - msg_time).total_seconds()
-        if age > settings.stale_signal_seconds:
-            logger.debug(f"Skipping stale message from [{source}] ({age:.0f}s old)")
-            return
-
-        clean_text = " | ".join(line.strip() for line in msg.text.strip().splitlines() if line.strip())
-        logger.info(f"[{source}] Signal received: {clean_text}")
-        await on_message(msg.text)
-
-    async def _keepalive(c: TelegramClient) -> None:
-        """Periodically ping Telegram to detect and surface stale connections."""
-        while True:
-            await asyncio.sleep(_KEEPALIVE_INTERVAL)
-            try:
-                await c.get_me()
-                logger.debug("Keepalive ping OK")
-            except Exception as e:
-                logger.warning(f"Keepalive ping failed: {e} — connection may be stale")
-                # Disconnect so run_until_disconnected returns and triggers a retry
-                await c.disconnect()
-                return
+    chat_ids = [ch.id for ch in settings.telegram_channels]
+    channel_names = _channel_names()
+    client.on(events.NewMessage(chats=chat_ids))(
+        _make_handler(on_message, channel_names)
+    )
 
     retries = 0
     while retries < settings.listener_max_retries:
         try:
-            await client.start(phone=settings.telegram_phone)
-            notifier.set_client(client)
-            for ch in settings.telegram_channels:
-                logger.info(f"Watching channel: {ch.name} ({ch.id})")
+            await _connect(client)
+            # Only a successful connect clears the backoff counter.
             retries = 0
-            keepalive_task = asyncio.create_task(_keepalive(client))
-            try:
-                await client.run_until_disconnected()
-            finally:
-                keepalive_task.cancel()
+            await _serve(client)
         except Exception as e:
             retries += 1
             wait = settings.listener_base_backoff * (2 ** (retries - 1))

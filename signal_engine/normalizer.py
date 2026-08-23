@@ -84,69 +84,90 @@ def normalize(text: Optional[str]) -> str:
     Returns:
         Cleaned text in canonical format, or empty string if input is empty.
     """
-    if not text or not text.strip():
-        return ""
-
-    # Strip emoji/unicode decorations
-    cleaned = _EMOJI_RE.sub("", text)
-
-    # Split into lines, strip whitespace
-    lines = [line.strip() for line in cleaned.strip().splitlines()]
-
-    # Remove empty and separator-only lines
-    lines = [line for line in lines if line and not _SEPARATOR_RE.match(line)]
-
+    lines = _clean_lines(text)
     if not lines:
         return ""
 
-    # Handle TP HIT alert: "[STRATEGY] TP1 HIT | SYMBOL" -> canonical EXIT format
-    # Group 1: optional strategy prefix; Group 2: symbol
-    # Bare format (no prefix) defaults to _DEFAULT_STRATEGY for backward compatibility.
-    # Entry/SL/TP synthesized as 0.0 (validator skips them for EXIT direction).
-    # ExitQtyPct field (if present in alert body) is passed through — signal engine
-    # uses it directly so no tp_levels config is needed in config.yaml.
-    tp_hit_match = _TP_HIT_RE.match(lines[0])
-    if tp_hit_match:
-        strategy = (tp_hit_match.group(1) or _DEFAULT_STRATEGY).upper()
-        tp_level = tp_hit_match.group(2).upper()
-        symbol = tp_hit_match.group(3).upper()
-        # Extract ExitQtyPct and numeric exit price from remaining lines.
-        # Exit: <float> is the actual TP fill price from the PineScript alert;
-        # non-numeric Exit values (e.g. "close > 5 SMA") are ignored.
-        exit_qty_pct_line = ""
-        exit_tp = "0.0"
-        for line in lines[1:]:
-            if re.match(r"^ExitQtyPct\s*:\s*\d+", line, re.IGNORECASE):
-                exit_qty_pct_line = f"\n{line}"
-            m = re.match(r"^Exit\s*:\s*([\d.]+)\s*$", line, re.IGNORECASE)
-            if m:
-                exit_tp = m.group(1)
-        return (
-            f"{strategy} EXIT\nSymbol: {symbol}\n"
-            f"Entry: 0.0\nSL: 0.0\nTP: {exit_tp}\nTpLevel: {tp_level}{exit_qty_pct_line}"
-        )
+    for rewrite in (_rewrite_tp_hit, _rewrite_sl_hit):
+        canonical = rewrite(lines)
+        if canonical is not None:
+            return canonical
 
-    # Handle SL HIT alert: "[STRATEGY] SL HIT | SYMBOL" -> canonical EXIT format
-    # TradingView sends this when the strategy's SL level is breached on the chart.
-    # The broker SL-M order may have already executed; this signal lets the engine
-    # reconcile tracker state and cancel any lingering orders.
-    sl_hit_match = _SL_HIT_RE.match(lines[0])
-    if sl_hit_match:
-        strategy = (sl_hit_match.group(1) or _DEFAULT_STRATEGY).upper()
-        symbol = sl_hit_match.group(2).upper()
-        return (
-            f"{strategy} EXIT\nSymbol: {symbol}\n"
-            f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: SL"
-        )
-
-    # Handle pipe-delimited first line: "ORB LONG | NATIONALUM"
-    pipe_match = _PIPE_FIRST_LINE_RE.match(lines[0])
-    if pipe_match:
-        strategy_direction = pipe_match.group(1).strip()
-        symbol = pipe_match.group(2).strip().upper()
-        lines = [strategy_direction, f"Symbol: {symbol}"] + lines[1:]
-
+    lines = _expand_pipe_header(lines)
     # Alias legacy "Target:" -> "TP:"
     lines = [_TARGET_ALIAS_RE.sub(r"TP: \1", line) for line in lines]
-
     return "\n".join(lines)
+
+
+def _clean_lines(text: Optional[str]) -> list:
+    """Strip emoji decorations, whitespace, and separator-only lines."""
+    if not text or not text.strip():
+        return []
+    cleaned = _EMOJI_RE.sub("", text)
+    lines = [line.strip() for line in cleaned.strip().splitlines()]
+    return [line for line in lines if line and not _SEPARATOR_RE.match(line)]
+
+
+def _rewrite_tp_hit(lines: list) -> Optional[str]:
+    """Rewrite "[STRATEGY] TP1 HIT | SYMBOL" into the canonical EXIT format.
+
+    Group 1: optional strategy prefix; Group 2: TP level; Group 3: symbol.
+    Bare format (no prefix) defaults to _DEFAULT_STRATEGY for backward compatibility.
+    Entry/SL synthesized as 0.0 (validator skips them for EXIT direction).
+    ExitQtyPct (if present in the alert body) is passed through — the signal engine
+    uses it directly so no tp_levels config is needed in config.yaml.
+    """
+    match = _TP_HIT_RE.match(lines[0])
+    if not match:
+        return None
+    strategy = (match.group(1) or _DEFAULT_STRATEGY).upper()
+    tp_level = match.group(2).upper()
+    symbol = match.group(3).upper()
+    exit_qty_pct_line, exit_tp = _read_tp_hit_body(lines[1:])
+    return (
+        f"{strategy} EXIT\nSymbol: {symbol}\n"
+        f"Entry: 0.0\nSL: 0.0\nTP: {exit_tp}\nTpLevel: {tp_level}{exit_qty_pct_line}"
+    )
+
+
+def _read_tp_hit_body(body_lines: list) -> tuple:
+    """Extract ExitQtyPct and the numeric exit price from a TP HIT alert body.
+
+    "Exit: <float>" is the actual TP fill price from the PineScript alert;
+    non-numeric Exit values (e.g. "close > 5 SMA") are ignored.
+    """
+    exit_qty_pct_line = ""
+    exit_tp = "0.0"
+    for line in body_lines:
+        if re.match(r"^ExitQtyPct\s*:\s*\d+", line, re.IGNORECASE):
+            exit_qty_pct_line = f"\n{line}"
+        m = re.match(r"^Exit\s*:\s*([\d.]+)\s*$", line, re.IGNORECASE)
+        if m:
+            exit_tp = m.group(1)
+    return exit_qty_pct_line, exit_tp
+
+
+def _rewrite_sl_hit(lines: list) -> Optional[str]:
+    """Rewrite "[STRATEGY] SL HIT | SYMBOL" into the canonical EXIT format.
+
+    TradingView sends this when the strategy's SL level is breached on the chart.
+    The broker SL-M order may have already executed; this signal lets the engine
+    reconcile tracker state and cancel any lingering orders.
+    """
+    match = _SL_HIT_RE.match(lines[0])
+    if not match:
+        return None
+    strategy = (match.group(1) or _DEFAULT_STRATEGY).upper()
+    symbol = match.group(2).upper()
+    return (
+        f"{strategy} EXIT\nSymbol: {symbol}\n"
+        f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: SL"
+    )
+
+
+def _expand_pipe_header(lines: list) -> list:
+    """Split a pipe-delimited first line: "ORB LONG | NATIONALUM"."""
+    match = _PIPE_FIRST_LINE_RE.match(lines[0])
+    if not match:
+        return lines
+    return [match.group(1).strip(), f"Symbol: {match.group(2).strip().upper()}"] + lines[1:]

@@ -91,6 +91,204 @@ def validate_auto_login_env() -> dict:
     }
 
 
+def _log():
+    """Module logger.
+
+    `utils.logging` pulls in the OpenAlgo app configuration, so the import stays
+    deferred to call time — the scheduler is also run as a standalone CLI.
+    """
+    from utils.logging import get_logger
+    return get_logger(__name__)
+
+
+def _resolve_totp_authenticator(broker_name: str):
+    """Find the broker's programmatic TOTP login, if it has one.
+
+    Returns a callable normalising the broker's return shape to (token, feed, err),
+    or None when the broker is OAuth-only (browser redirect, e.g. flattrade/zerodha).
+    """
+    logger = _log()
+    import importlib
+
+    try:
+        auth_module = importlib.import_module(f"broker.{broker_name}.api.auth_api")
+    except Exception as e:
+        logger.error("Failed to import auth module for broker '%s': %s", broker_name, e)
+        return None
+
+    if not hasattr(auth_module, "authenticate_with_totp"):
+        return None
+
+    base_fn = auth_module.authenticate_with_totp
+
+    def _normalize_and_call(password, totp_code):
+        """Call base_fn and normalize return to (token, feed, err)."""
+        try:
+            result = base_fn(password, totp_code)
+        except TypeError:
+            try:
+                result = base_fn(password)
+            except Exception as e:
+                return None, None, str(e)
+        except Exception as e:
+            return None, None, str(e)
+
+        if result is None:
+            return None, None, "Authentication returned no result"
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                return result
+            if len(result) == 2:
+                token, err = result
+                return token, None, err
+            if len(result) == 1:
+                return result[0], None, None
+        return result, None, None
+
+    return _normalize_and_call
+
+
+def _default_existing_auth_lookup():
+    """Default (token, auth_row) lookup for a username."""
+    from database.auth_db import get_auth_token as _dba_get
+    from database.auth_db import get_auth_token_dbquery as _dba_query
+
+    def _lookup(uname):
+        return _dba_get(uname), _dba_query(uname)
+
+    return _lookup
+
+
+def _oauth_session_token(broker_name: str, username: str, get_existing_auth) -> tuple:
+    """Retrieve the token a browser OAuth login already stored.
+
+    Returns (success, message, auth_token).
+    """
+    logger = _log()
+    logger.info("Broker '%s' uses OAuth — retrieving existing session token", broker_name)
+    auth_token, auth_obj = get_existing_auth(username)
+
+    if not auth_token:
+        msg = (
+            f"Broker '{broker_name}' requires OAuth login. "
+            "Please authenticate via the OpenAlgo web interface first, "
+            "then restart the signal engine."
+        )
+        logger.error(msg)
+        return False, msg, None
+
+    # Detect broker mismatch: stored token is for a different broker
+    if auth_obj is not None and auth_obj.broker != broker_name:
+        msg = (
+            f"Broker changed from '{auth_obj.broker}' to '{broker_name}'. "
+            "Please log in via the OpenAlgo web interface to authenticate "
+            "with the new broker, then restart the signal engine."
+        )
+        logger.error(msg)
+        return False, msg, None
+
+    return True, "", auth_token
+
+
+def _totp_session_token(
+    broker_name: str, username: str, get_existing_auth,
+    authenticate_with_totp, upsert_auth,
+) -> tuple:
+    """Reuse a live session, else authenticate with TOTP and store the new token.
+
+    Flattrade tokens expire at midnight per SEBI rules, so re-auth is only needed
+    once per day. On any intra-day restart the stored token is reused.
+
+    Returns (success, message, auth_token). A non-empty message on success means
+    the session was reused and the caller should return immediately.
+    """
+    logger = _log()
+    existing_token, _ = get_existing_auth(username)
+    if existing_token and verify_broker_auth(existing_token):
+        logger.info("Existing session valid — skipping TOTP for user: %s", username)
+        return True, f"Session reused (no TOTP needed) for user: {username}", existing_token
+
+    logger.info("No valid session found — authenticating via TOTP")
+
+    try:
+        env = validate_auto_login_env()
+    except EnvironmentError as e:
+        return False, str(e), None
+
+    totp_code = generate_totp(env["totp_secret"])
+    logger.info("TOTP code generated")
+
+    auth_token, feed_token, error = authenticate_with_totp(env["broker_password"], totp_code)
+    if error:
+        logger.error("Broker authentication failed: %s", error)
+        return False, error, None
+    if not auth_token:
+        logger.error("Broker authentication returned empty token for user: %s", username)
+        return False, "Authentication succeeded but returned empty/null token", None
+
+    if not upsert_auth(username, auth_token, broker_name, feed_token=feed_token):
+        return False, "Failed to store auth token in database", None
+
+    logger.info("Auth token stored for user: %s", username)
+    return True, "", auth_token
+
+
+def _start_master_contract_load(
+    broker_name, init_broker_status, should_download_master_contract,
+    async_master_contract_download, load_existing_master_contract,
+) -> None:
+    """Init broker status and load the symbol master in the background."""
+    logger = _log()
+    from threading import Thread
+
+    init_broker_status(broker_name)
+
+    should_download, reason = should_download_master_contract(broker_name)
+    logger.info("Smart download check: should_download=%s, reason=%s", should_download, reason)
+
+    target = async_master_contract_download if should_download else load_existing_master_contract
+    Thread(target=target, args=(broker_name,), daemon=True).start()
+    if should_download:
+        logger.info("Master contract download started in background")
+    else:
+        logger.info("Loading cached master contract: %s", reason)
+
+
+def _auto_login_deps(
+    upsert_auth, find_user_by_username, init_broker_status,
+    should_download_master_contract, async_master_contract_download,
+    load_existing_master_contract, get_existing_auth,
+) -> dict:
+    """Fill in the real OpenAlgo collaborators for any that were not injected.
+
+    Imports stay deferred: the scheduler also runs as a standalone CLI where the
+    app's database modules may not be importable.
+    """
+    if upsert_auth is None:
+        from database.auth_db import upsert_auth
+    if find_user_by_username is None:
+        from database.user_db import find_user_by_username
+    if init_broker_status is None:
+        from database.master_contract_status_db import init_broker_status
+    if should_download_master_contract is None:
+        from utils.auth_utils import should_download_master_contract
+    if async_master_contract_download is None:
+        from utils.auth_utils import async_master_contract_download
+    if load_existing_master_contract is None:
+        from utils.auth_utils import load_existing_master_contract
+    if get_existing_auth is None:
+        get_existing_auth = _default_existing_auth_lookup()
+    return {
+        "upsert_auth": upsert_auth,
+        "find_user_by_username": find_user_by_username,
+        "init_broker_status": init_broker_status,
+        "should_download_master_contract": should_download_master_contract,
+        "async_master_contract_download": async_master_contract_download,
+        "load_existing_master_contract": load_existing_master_contract,
+        "get_existing_auth": get_existing_auth,
+    }
+
+
 def auto_login(
     _authenticate_with_totp=None,
     _upsert_auth=None,
@@ -125,75 +323,27 @@ def auto_login(
 
     # Detect auth mode: programmatic (TOTP) vs OAuth-only.
     # When _authenticate_with_totp is injected (tests), always use programmatic path.
-    # In production, check if the broker module exposes authenticate_with_totp.
     is_oauth_only = False
     if _authenticate_with_totp is None:
-        import importlib
+        _authenticate_with_totp = _resolve_totp_authenticator(broker_name)
+        is_oauth_only = _authenticate_with_totp is None
 
-        auth_module = None
-        try:
-            auth_module = importlib.import_module(f"broker.{broker_name}.api.auth_api")
-        except Exception as e:
-            logger.error("Failed to import auth module for broker '%s': %s", broker_name, e)
+    deps = _auto_login_deps(
+        _upsert_auth, _find_user_by_username, _init_broker_status,
+        _should_download_master_contract, _async_master_contract_download,
+        _load_existing_master_contract, _get_existing_auth,
+    )
+    _upsert_auth = deps["upsert_auth"]
+    _find_user_by_username = deps["find_user_by_username"]
+    _init_broker_status = deps["init_broker_status"]
+    _should_download_master_contract = deps["should_download_master_contract"]
+    _async_master_contract_download = deps["async_master_contract_download"]
+    _load_existing_master_contract = deps["load_existing_master_contract"]
+    _get_existing_auth = deps["get_existing_auth"]
 
-        if auth_module is not None and hasattr(auth_module, "authenticate_with_totp"):
-            # Broker supports direct TOTP login
-            base_fn = auth_module.authenticate_with_totp
+    logger = _log()
 
-            def _normalize_and_call(password, totp_code):
-                """Call base_fn and normalize return to (token, feed, err)."""
-                try:
-                    result = base_fn(password, totp_code)
-                except TypeError:
-                    try:
-                        result = base_fn(password)
-                    except Exception as e:
-                        return None, None, str(e)
-                except Exception as e:
-                    return None, None, str(e)
-
-                if result is None:
-                    return None, None, "Authentication returned no result"
-                if isinstance(result, tuple):
-                    if len(result) == 3:
-                        return result
-                    if len(result) == 2:
-                        token, err = result
-                        return token, None, err
-                    if len(result) == 1:
-                        return result[0], None, None
-                return result, None, None
-
-            _authenticate_with_totp = _normalize_and_call
-        else:
-            # OAuth-only broker (e.g. flattrade, zerodha) — no programmatic login
-            is_oauth_only = True
-
-    if _upsert_auth is None:
-        from database.auth_db import upsert_auth
-        _upsert_auth = upsert_auth
-    if _find_user_by_username is None:
-        from database.user_db import find_user_by_username
-        _find_user_by_username = find_user_by_username
-    if _init_broker_status is None:
-        from database.master_contract_status_db import init_broker_status
-        _init_broker_status = init_broker_status
-    if _should_download_master_contract is None:
-        from utils.auth_utils import should_download_master_contract
-        _should_download_master_contract = should_download_master_contract
-    if _async_master_contract_download is None:
-        from utils.auth_utils import async_master_contract_download
-        _async_master_contract_download = async_master_contract_download
-    if _load_existing_master_contract is None:
-        from utils.auth_utils import load_existing_master_contract
-        _load_existing_master_contract = load_existing_master_contract
-
-    from threading import Thread
-
-    from utils.logging import get_logger
-    logger = get_logger(__name__)
-
-    # 1. Find admin user (env vars only needed for programmatic login)
+    # Find admin user (env vars only needed for programmatic login)
     admin_user = _find_user_by_username()
     if not admin_user:
         return False, "No admin user found in database. Run setup first.", None
@@ -202,110 +352,22 @@ def auto_login(
     logger.info("Auto-login starting for user: %s (broker: %s)", username, broker_name)
 
     if is_oauth_only:
-        # OAuth broker: use the token already stored in DB via browser login
-        logger.info("Broker '%s' uses OAuth — retrieving existing session token", broker_name)
-
-        if _get_existing_auth is None:
-            from database.auth_db import get_auth_token as _dba_get
-            from database.auth_db import get_auth_token_dbquery as _dba_query
-            def _get_existing_auth(uname):
-                return _dba_get(uname), _dba_query(uname)
-
-        auth_token, auth_obj = _get_existing_auth(username)
-
-        if not auth_token:
-            msg = (
-                f"Broker '{broker_name}' requires OAuth login. "
-                "Please authenticate via the OpenAlgo web interface first, "
-                "then restart the signal engine."
-            )
-            logger.error(msg)
+        ok, msg, auth_token = _oauth_session_token(broker_name, username, _get_existing_auth)
+        if not ok:
             return False, msg, None
-
-        # Detect broker mismatch: stored token is for a different broker
-        if auth_obj is not None and auth_obj.broker != broker_name:
-            msg = (
-                f"Broker changed from '{auth_obj.broker}' to '{broker_name}'. "
-                "Please log in via the OpenAlgo web interface to authenticate "
-                "with the new broker, then restart the signal engine."
-            )
-            logger.error(msg)
+    else:
+        ok, msg, auth_token = _totp_session_token(
+            broker_name, username, _get_existing_auth, _authenticate_with_totp, _upsert_auth
+        )
+        if not ok:
             return False, msg, None
+        if msg:  # session reused — nothing further to set up
+            return True, msg, auth_token
 
-        feed_token = None  # Feed token not needed by scheduler; already in DB
-    else:
-        # 2. Reuse existing token if still valid — avoids unnecessary TOTP calls.
-        # Flattrade tokens expire at midnight per SEBI rules, so re-auth is only
-        # needed once per day. On any intra-day restart the stored token is reused.
-        if _get_existing_auth is None:
-            from database.auth_db import get_auth_token as _dba_get
-            from database.auth_db import get_auth_token_dbquery as _dba_query
-            def _get_existing_auth(uname):
-                return _dba_get(uname), _dba_query(uname)
-
-        existing_token, _ = _get_existing_auth(username)
-        if existing_token:
-            fund_data = verify_broker_auth(existing_token)
-            if fund_data:
-                logger.info(
-                    "Existing session valid — skipping TOTP for user: %s", username
-                )
-                return True, f"Session reused (no TOTP needed) for user: {username}", existing_token
-
-        logger.info("No valid session found — authenticating via TOTP")
-
-        # 3. Validate env (password + TOTP secret required for fresh login)
-        try:
-            env = validate_auto_login_env()
-        except EnvironmentError as e:
-            return False, str(e), None
-
-        # 4. Generate TOTP
-        totp_code = generate_totp(env["totp_secret"])
-        logger.info("TOTP code generated")
-
-        # 5. Authenticate with broker
-        auth_token, feed_token, error = _authenticate_with_totp(
-            env["broker_password"], totp_code
-        )
-        if error:
-            logger.error("Broker authentication failed: %s", error)
-            return False, error, None
-
-        if not auth_token:
-            logger.error("Broker authentication returned empty token for user: %s", username)
-            return False, "Authentication succeeded but returned empty/null token", None
-
-        # 6. Store token in DB
-        inserted_id = _upsert_auth(
-            username, auth_token, broker_name, feed_token=feed_token
-        )
-        if not inserted_id:
-            return False, "Failed to store auth token in database", None
-
-        logger.info("Auth token stored for user: %s", username)
-
-    # 6. Init broker status and trigger master contract download
-    _init_broker_status(broker_name)
-
-    should_download, reason = _should_download_master_contract(broker_name)
-    logger.info("Smart download check: should_download=%s, reason=%s",
-                should_download, reason)
-
-    if should_download:
-        thread = Thread(
-            target=_async_master_contract_download,
-            args=(broker_name,), daemon=True
-        )
-        thread.start()
-        logger.info("Master contract download started in background")
-    else:
-        thread = Thread(
-            target=_load_existing_master_contract,
-            args=(broker_name,), daemon=True
-        )
-        thread.start()
-        logger.info("Loading cached master contract: %s", reason)
+    _start_master_contract_load(
+        broker_name, _init_broker_status, _should_download_master_contract,
+        _async_master_contract_download, _load_existing_master_contract,
+    )
 
     return True, f"Auto-login successful for {username}", auth_token
 

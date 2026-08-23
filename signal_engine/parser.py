@@ -33,60 +33,14 @@ def parse(text: str) -> Optional[Signal]:
     if len(lines) < 2:
         return None
 
-    # First line: STRATEGY DIRECTION
-    first_line_parts = lines[0].strip().split()
-    if len(first_line_parts) < 2:
+    header = _parse_header(lines[0])
+    if header is None:
         return None
+    strategy, direction_str = header
 
-    strategy = first_line_parts[0].upper()
-    direction_str = first_line_parts[1].upper()
-
-    if direction_str not in _VALID_DIRECTIONS:
+    fields = _parse_fields(lines[1:])
+    if fields is None:
         return None
-
-    # Remaining lines: key-value pairs
-    fields = {}
-    for line in lines[1:]:
-        match = _KV_PATTERN.match(line.strip())
-        if match:
-            key = match.group(1).lower()
-            value = match.group(2).strip()
-            fields[key] = value
-
-    # Check mandatory fields
-    if not _MANDATORY_FIELDS.issubset(fields.keys()):
-        return None
-
-    # Convert numeric fields
-    for field in _NUMERIC_FIELDS:
-        try:
-            fields[field] = float(fields[field])
-        except (ValueError, TypeError):
-            return None
-
-    # Uppercase optional string fields
-    exchange = fields.get("exchange")
-    if exchange:
-        exchange = exchange.upper()
-    product = fields.get("product")
-    if product:
-        product = product.upper()
-
-    # TP level from TP HIT normalizer (e.g. "TP1", "TP1.5")
-    tp_level = fields.get("tplevel")
-    if tp_level:
-        tp_level = tp_level.upper()
-
-    # ExitQtyPct: percentage of position to exit (0-100) set by PineScript.
-    # Convert to 0.0-1.0 fraction. None means full exit (backward compatible).
-    exit_qty_pct: Optional[float] = None
-    raw_pct = fields.get("exitqtypct")
-    if raw_pct is not None:
-        try:
-            pct_val = float(raw_pct)
-            exit_qty_pct = max(0.0, min(1.0, pct_val / 100.0))
-        except (ValueError, TypeError):
-            pass
 
     try:
         return Signal(
@@ -96,13 +50,62 @@ def parse(text: str) -> Optional[Signal]:
             entry=fields["entry"],
             sl=fields["sl"],
             tp=fields["tp"],
-            exchange=exchange,
-            product=product,
+            exchange=_upper_or_none(fields.get("exchange")),
+            product=_upper_or_none(fields.get("product")),
             time=fields.get("time"),
-            tp_level=tp_level,
-            exit_qty_pct=exit_qty_pct,
+            # TP level from TP HIT normalizer (e.g. "TP1", "TP1.5")
+            tp_level=_upper_or_none(fields.get("tplevel")),
+            exit_qty_pct=_parse_exit_qty_pct(fields.get("exitqtypct")),
             raw_message=text,
         )
     except Exception as e:
         logger.debug(f"Failed to create Signal: {e}")
+        return None
+
+
+def _parse_header(first_line: str) -> Optional[tuple]:
+    """Read "STRATEGY DIRECTION" off the first line. None if it is not one."""
+    parts = first_line.strip().split()
+    if len(parts) < 2:
+        return None
+    direction_str = parts[1].upper()
+    if direction_str not in _VALID_DIRECTIONS:
+        return None
+    return parts[0].upper(), direction_str
+
+
+def _parse_fields(body_lines) -> Optional[dict]:
+    """Read the Key: Value body. None if a mandatory or numeric field is unusable."""
+    fields = {}
+    for line in body_lines:
+        match = _KV_PATTERN.match(line.strip())
+        if match:
+            fields[match.group(1).lower()] = match.group(2).strip()
+
+    if not _MANDATORY_FIELDS.issubset(fields.keys()):
+        return None
+
+    for field in _NUMERIC_FIELDS:
+        try:
+            fields[field] = float(fields[field])
+        except (ValueError, TypeError):
+            return None
+    return fields
+
+
+def _upper_or_none(value):
+    """Upper-case an optional string field, leaving None/empty untouched."""
+    return value.upper() if value else value
+
+
+def _parse_exit_qty_pct(raw) -> Optional[float]:
+    """Convert PineScript's ExitQtyPct (0-100) to a 0.0-1.0 fraction.
+
+    None means full exit (backward compatible with alerts that omit the field).
+    """
+    if raw is None:
+        return None
+    try:
+        return max(0.0, min(1.0, float(raw) / 100.0))
+    except (ValueError, TypeError):
         return None

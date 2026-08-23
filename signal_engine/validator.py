@@ -3,7 +3,6 @@
 import time
 from typing import Dict, Tuple
 
-from loguru import logger
 
 from signal_engine.config import settings
 from signal_engine.models import Direction, Signal, ValidationResult, ValidationStatus
@@ -25,58 +24,60 @@ def _cleanup_stale_entries() -> None:
 def validate(signal: Signal) -> ValidationResult:
     """Validate a signal against trading rules.
 
-    Checks (in order):
-    1. Symbol blacklist (non-EXIT only)
-    2. EXIT early return — symbol required, all other checks skipped
-       (TP HIT signals synthesize Entry: 0.0, SL/TP/R:R irrelevant for closes)
-    3. Entry > 0 (non-EXIT only)
-    4. SL > 0
-    5. Target > 0
-    6. SL direction consistency
-    7. Target direction consistency
-    8. Minimum R:R ratio
-    9. Minimum SL distance %
-    10. Duplicate detection
+    Checks run in order; the first failure wins. EXIT signals take a short path —
+    TP HIT alerts synthesize Entry: 0.0, so SL/TP/R:R checks do not apply to them.
     """
-    # Symbol blacklist — check before EXIT early return so EXIT signals can still close positions
-    # EXIT signals skip this check (we must close existing positions even if symbol is now blacklisted)
-    if signal.direction != Direction.EXIT:
-        symbol_upper = signal.symbol.upper()
-        # Check global blacklist
-        global_bl = settings.blacklist.get("_GLOBAL", frozenset())
-        if symbol_upper in global_bl:
-            return ValidationResult(
-                status=ValidationStatus.IGNORED,
-                reason=f"{signal.symbol} is blacklisted (global)",
-            )
-        # Check strategy-specific blacklist
-        strategy_bl = settings.blacklist.get(signal.strategy.upper(), frozenset())
-        if symbol_upper in strategy_bl:
-            return ValidationResult(
-                status=ValidationStatus.IGNORED,
-                reason=f"{signal.symbol} is blacklisted for {signal.strategy}",
-            )
+    for check in _CHECKS:
+        result = check(signal)
+        if result is not None:
+            return result
+    return ValidationResult(status=ValidationStatus.VALID)
 
-    # EXIT signals: minimal validation (closing, not opening)
-    # Skip entry>0, SL/TP/R:R/duplicate checks — TP HIT signals synthesize Entry: 0.0
+
+def _check_blacklist(signal: Signal):
+    """Symbol blacklist — global then strategy-specific.
+
+    Runs before the EXIT short path is taken, but skips EXIT signals: an open
+    position must still be closable even if its symbol was blacklisted since entry.
+    """
     if signal.direction == Direction.EXIT:
-        if not signal.symbol or signal.symbol.strip() == "":
-            return ValidationResult(status=ValidationStatus.INVALID, reason="EXIT: symbol required")
-        return ValidationResult(status=ValidationStatus.VALID)
+        return None
+    symbol_upper = signal.symbol.upper()
+    if symbol_upper in settings.blacklist.get("_GLOBAL", frozenset()):
+        return ValidationResult(
+            status=ValidationStatus.IGNORED,
+            reason=f"{signal.symbol} is blacklisted (global)",
+        )
+    if symbol_upper in settings.blacklist.get(signal.strategy.upper(), frozenset()):
+        return ValidationResult(
+            status=ValidationStatus.IGNORED,
+            reason=f"{signal.symbol} is blacklisted for {signal.strategy}",
+        )
+    return None
 
-    # Entry validity (non-EXIT only — EXIT may carry synthesized 0.0 from TP HIT normalizer)
+
+def _check_exit_shortpath(signal: Signal):
+    """EXIT signals need only a symbol — they close, they do not open."""
+    if signal.direction != Direction.EXIT:
+        return None
+    if not signal.symbol or signal.symbol.strip() == "":
+        return ValidationResult(status=ValidationStatus.INVALID, reason="EXIT: symbol required")
+    return ValidationResult(status=ValidationStatus.VALID)
+
+
+def _check_prices_positive(signal: Signal):
+    """Entry, SL and TP must all be real prices."""
     if signal.entry <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="Entry must be positive")
-
-    # SL validity
     if signal.sl <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="SL must be positive")
-
-    # TP validity
     if signal.tp <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="TP must be positive")
+    return None
 
-    # SL direction check
+
+def _check_price_ordering(signal: Signal):
+    """SL and TP must sit on the correct side of entry for the trade direction."""
     if signal.direction == Direction.LONG and signal.sl >= signal.entry:
         return ValidationResult(
             status=ValidationStatus.INVALID, reason="LONG: SL must be below entry"
@@ -85,8 +86,6 @@ def validate(signal: Signal) -> ValidationResult:
         return ValidationResult(
             status=ValidationStatus.INVALID, reason="SHORT: SL must be above entry"
         )
-
-    # Target direction check
     if signal.direction == Direction.LONG and signal.tp <= signal.entry:
         return ValidationResult(
             status=ValidationStatus.INVALID, reason="LONG: TP must be above entry"
@@ -95,28 +94,41 @@ def validate(signal: Signal) -> ValidationResult:
         return ValidationResult(
             status=ValidationStatus.INVALID, reason="SHORT: TP must be below entry"
         )
+    return None
 
-    # R:R ratio (round to 2dp to avoid floating-point edge cases like 0.54/0.54 = 0.9999)
+
+def _check_reward_risk(signal: Signal):
+    """Reward:risk must clear the configured floor.
+
+    Rounded to 2dp to avoid floating-point edge cases like 0.54/0.54 = 0.9999.
+    """
     risk = abs(signal.entry - signal.sl)
-    reward = abs(signal.tp - signal.entry)
-    if risk > 0:
-        rr_ratio = round(reward / risk, 2)
-        if rr_ratio < settings.min_rr:
-            return ValidationResult(
-                status=ValidationStatus.IGNORED,
-                reason=f"R:R {rr_ratio:.2f} below minimum {settings.min_rr}",
-            )
+    if risk <= 0:
+        return None
+    rr_ratio = round(abs(signal.tp - signal.entry) / risk, 2)
+    if rr_ratio < settings.min_rr:
+        return ValidationResult(
+            status=ValidationStatus.IGNORED,
+            reason=f"R:R {rr_ratio:.2f} below minimum {settings.min_rr}",
+        )
+    return None
 
-    # Minimum SL distance check
-    if settings.min_sl_pct > 0:
-        sl_pct = risk / signal.entry
-        if sl_pct < settings.min_sl_pct:
-            return ValidationResult(
-                status=ValidationStatus.IGNORED,
-                reason=f"SL distance {sl_pct:.4%} below minimum {settings.min_sl_pct:.4%}",
-            )
 
-    # Duplicate detection
+def _check_sl_distance(signal: Signal):
+    """Reject stops so tight that slippage alone would trigger them."""
+    if settings.min_sl_pct <= 0:
+        return None
+    sl_pct = abs(signal.entry - signal.sl) / signal.entry
+    if sl_pct < settings.min_sl_pct:
+        return ValidationResult(
+            status=ValidationStatus.IGNORED,
+            reason=f"SL distance {sl_pct:.4%} below minimum {settings.min_sl_pct:.4%}",
+        )
+    return None
+
+
+def _check_duplicate(signal: Signal):
+    """Suppress a repeat of the same symbol/direction/entry inside the dedup window."""
     _cleanup_stale_entries()
     sig_key = (signal.symbol, signal.direction.value, signal.entry)
     if sig_key in _recent_signals:
@@ -125,5 +137,16 @@ def validate(signal: Signal) -> ValidationResult:
             reason=f"Duplicate signal within {settings.duplicate_window_seconds}s",
         )
     _recent_signals[sig_key] = time.time()
+    return None
 
-    return ValidationResult(status=ValidationStatus.VALID)
+
+# Order matters: blacklist before the EXIT short path, duplicate last (it records state).
+_CHECKS = (
+    _check_blacklist,
+    _check_exit_shortpath,
+    _check_prices_positive,
+    _check_price_ordering,
+    _check_reward_risk,
+    _check_sl_distance,
+    _check_duplicate,
+)
