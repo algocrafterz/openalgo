@@ -171,9 +171,13 @@ def harness(settings=None, tracker=None, **stubs):
     stack.enter_context(patch("signal_engine.main.settings", settings))
     stack.enter_context(patch("signal_engine.main.tracker", tracker))
     stack.enter_context(patch("signal_engine.main.risk_engine", risk_engine))
+    # Close notifications are emitted by PositionTracker.book_close, entry/partial
+    # notifications by main — patch both module references with the same mock so a
+    # test can assert on either without caring which module owns the call.
     h.notifier = stack.enter_context(
         patch("signal_engine.main.notifier", new_callable=AsyncMock)
     )
+    stack.enter_context(patch("signal_engine.tracker.notifier", h.notifier))
     for name, stub in defaults.items():
         setattr(h, name, stack.enter_context(patch(f"signal_engine.main.{name}", stub)))
     return h
@@ -792,3 +796,50 @@ class TestPartialExitDefensiveGuard:
             h.risk.record_close.assert_called_once_with(pnl=400.0, symbol="RELIANCE")
         assert tracker.find_position("RELIANCE", "ORB") is None
         assert tracker._day_trades == 1
+
+
+class TestFullExitDayContext:
+    """The day-context line in a close notification must count the closing trade.
+
+    Before the exit paths were unified, the full-exit path computed this with
+    projected_day_context() because record_exit ran afterwards. book_close now
+    records first and reads day_context_line(). These pin that the resulting
+    notification is unchanged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_winning_full_exit_counts_itself_in_day_context(self):
+        tracker = _real_tracker()
+        tracker.register(_position(quantity=50))
+        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=900.0))
+        with h.stack:
+            await _handle_exit(_exit_signal(tp_level="TP1"))
+            # the day context is built from the counters *after* this trade is recorded
+            ctx_args = h.notifier.format_day_context.call_args.kwargs
+        assert tracker._day_trades == 1
+        assert tracker._day_wins == 1
+        assert ctx_args["day_trades"] == 1
+        assert ctx_args["day_wins"] == 1
+        assert ctx_args["day_losses"] == 0
+
+    @pytest.mark.asyncio
+    async def test_losing_full_exit_counts_itself_as_a_loss(self):
+        tracker = _real_tracker()
+        tracker.register(_position(quantity=50))
+        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=-400.0))
+        with h.stack:
+            await _handle_exit(_exit_signal(tp_level="TP1"))
+        assert tracker._day_trades == 1
+        assert tracker._day_losses == 1
+        assert tracker._day_pnl == -400.0
+
+    @pytest.mark.asyncio
+    async def test_partial_exit_does_not_count_a_trade(self):
+        """Only the final close counts; a partial leg banks P&L only."""
+        tracker = _real_tracker()
+        tracker.register(_position(quantity=100))
+        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=300.0))
+        with h.stack:
+            await _handle_exit(_exit_signal(tp_level="TP1", exit_qty_pct=0.5))
+        assert tracker._day_trades == 0
+        assert tracker._day_pnl == 300.0

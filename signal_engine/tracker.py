@@ -239,6 +239,57 @@ class PositionTracker:
         """Append a completed trade record for EOD summary."""
         self._completed_trades.append(record)
 
+    async def book_close(
+        self,
+        pos,
+        *,
+        pnl_delta: float,
+        exit_price: "float | None",
+        exit_types: list,
+        hold_minutes: int,
+        max_trades: "int | None" = None,
+        new_realised_pnl: "float | None" = None,
+    ) -> TradeRecord:
+        """Book a position that has closed for good, and return its trade record.
+
+        Single home for what every full-close path shares: derive the trade's
+        economics, file the trade record, advance the day counters, and send the
+        close notification. Used by the signal-driven exit, the SL-HIT reconcile and
+        the tracker's own close detection.
+
+        The caller keeps what is specific to its path — cancelling broker orders,
+        unregistering the position, releasing the risk slot, and deciding whether the
+        day summary should now go out.
+
+        Time exit does not use this: it notifies through notify_time_exit and
+        attributes P&L across positions rather than per close.
+        """
+        base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+        total_pnl = pos.realized_pnl + pnl_delta
+        record = TradeRecord(
+            symbol=pos.symbol,
+            direction=pos.direction.value,
+            entry_price=base_price,
+            exit_price=exit_price,
+            original_qty=pos.original_quantity or pos.quantity,
+            total_pnl=total_pnl,
+            r_multiple=_compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl),
+            exit_types=exit_types,
+        )
+        self.add_trade_record(record)
+        self.record_exit(
+            pnl=pnl_delta, is_partial=False, total_pnl=total_pnl,
+            new_realised_pnl=new_realised_pnl,
+        )
+        await notifier.notify_position_closed(
+            pos.symbol, total_pnl, strategy=pos.strategy, exit_price=exit_price,
+            direction=pos.direction.value, r_multiple=record.r_multiple,
+            entry_price=base_price, hold_minutes=hold_minutes,
+            exit_types=exit_types,
+            day_context=self.day_context_line(max_trades),
+        )
+        return record
+
     async def send_day_summary(self) -> None:
         """Send day summary to notify channel. No-op if already sent today or no trades.
 
@@ -451,52 +502,28 @@ class PositionTracker:
     async def _record_closed_trade(
         self, key: str, pos, age: timedelta, pnl_delta: float, _settings
     ) -> None:
-        """Compute the closed trade's economics, update day counters, and notify."""
-        # Compute implied exit fill price from PnL delta.
-        # Use actual entry fill price if available, else fall back to signal entry.
+        """Book a close the broker performed (SL-M fill) via the shared close path."""
+        # Implied exit fill price from the PnL delta — the broker does not report one.
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         if pos.quantity > 0:
             exit_price = base_price + (pnl_delta / pos.quantity) if pos.direction == Direction.LONG \
                 else base_price - (pnl_delta / pos.quantity)
         else:
             exit_price = None
-        exit_str = f"{exit_price:.2f}" if exit_price is not None else "N/A"
 
-        # Total trade P&L = partial exits already counted + this final close leg
-        total_pnl = pos.realized_pnl + pnl_delta
-        r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-        hold_min = int(age.total_seconds() / 60)
-
-        logger.info(
-            f"Position closed: {key}, entry={base_price:.2f}, exit={exit_str}, "
-            f"pnl_delta={pnl_delta:,.2f} total_pnl={total_pnl:,.2f} r={r}"
+        record = await self.book_close(
+            pos,
+            pnl_delta=pnl_delta,
+            exit_price=exit_price,
+            exit_types=pos.exit_types[:] if pos.exit_types else ["SL"],
+            hold_minutes=int(age.total_seconds() / 60),
+            max_trades=_settings.max_trades_per_day,
         )
 
-        exit_types = pos.exit_types[:] if pos.exit_types else ["SL"]
-        self._completed_trades.append(TradeRecord(
-            symbol=pos.symbol,
-            direction=pos.direction.value,
-            entry_price=base_price,
-            exit_price=exit_price,
-            original_qty=pos.original_quantity or pos.quantity,
-            total_pnl=total_pnl,
-            r_multiple=r,
-            exit_types=exit_types,
-        ))
-
-        self._day_trades += 1
-        self._day_pnl += pnl_delta
-        if total_pnl >= 0:
-            self._day_wins += 1
-        else:
-            self._day_losses += 1
-
-        await notifier.notify_position_closed(
-            pos.symbol, total_pnl, strategy=pos.strategy, exit_price=exit_price,
-            direction=pos.direction.value, r_multiple=r,
-            entry_price=base_price, hold_minutes=hold_min,
-            exit_types=exit_types,
-            day_context=self.day_context_line(_settings.max_trades_per_day),
+        exit_str = f"{exit_price:.2f}" if exit_price is not None else "N/A"
+        logger.info(
+            f"Position closed: {key}, entry={base_price:.2f}, exit={exit_str}, "
+            f"pnl_delta={pnl_delta:,.2f} total_pnl={record.total_pnl:,.2f} r={record.r_multiple}"
         )
 
     async def _maybe_send_day_summary(self, closed_keys: list, _settings) -> None:

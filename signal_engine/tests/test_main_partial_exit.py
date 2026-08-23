@@ -11,6 +11,7 @@ from signal_engine.models import (
     ValidationResult,
     ValidationStatus,
 )
+from signal_engine.tests.pipeline_fixtures import tracker_mock
 
 
 class TestPartialExitFlow:
@@ -35,7 +36,7 @@ class TestPartialExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()) as mock_build_exit,
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -93,7 +94,7 @@ class TestPartialExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()) as mock_build_exit,
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -148,7 +149,7 @@ class TestPartialExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()) as mock_build_exit,
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -228,7 +229,7 @@ class TestPartialExitSlReplacement:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -275,7 +276,7 @@ class TestPartialExitSlReplacement:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -313,7 +314,7 @@ class TestPartialExitSlReplacement:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -352,7 +353,7 @@ class TestPartialExitSlReplacement:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -410,7 +411,7 @@ class TestPartialExitSlReplacement:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -471,7 +472,7 @@ class TestPartialExitSlReplacement:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),

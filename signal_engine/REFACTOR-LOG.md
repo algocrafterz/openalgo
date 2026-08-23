@@ -12,6 +12,67 @@ by the test suite.
 
 ---
 
+## 2026-08-23 (c) — Exit paths unified
+
+Closes the item the previous two passes deferred. **Correction to what was written
+then:** the earlier entry costed this as a large test migration. That estimate was for
+a *module split* (moving the pipelines into their own files), which is a different
+change. Unifying the close-booking cost **17 test edits**, none of them assertion
+rewrites of behaviour.
+
+### What changed
+
+`PositionTracker.book_close()` is now the single home for what every full-close path
+shares: derive the trade economics, file the `TradeRecord`, advance the day counters,
+send the close notification.
+
+| | Before | After |
+|---|---|---|
+| `notify_position_closed` call sites | 4 | **1** |
+| `TradeRecord(...)` construction sites | 5 | **2** |
+| Paths booking a close independently | 4 | **1** (+ time exit) |
+
+Routed through it: the signal-driven full exit, the SL-HIT reconcile, the defensive
+invalid-remainder conversion, and the tracker's own broker-close detection. Callers keep
+only what is genuinely theirs — cancelling broker orders, unregistering the position,
+releasing the risk slot, deciding whether the day summary goes out.
+
+**Time exit stays separate by design.** It notifies through `notify_time_exit`, attributes
+P&L across positions rather than per close, and tracks `_day_time_exits`. Forcing it
+through `book_close` would mean parameterising the notifier, which trades one duplication
+for a worse abstraction.
+
+### The subtle part
+
+The full-exit path used `projected_day_context()` because `record_exit()` ran *after* the
+notification was built. `book_close` records first and reads `day_context_line()`. These
+produce the same string — `projected_day_context(trade_pnl, pnl_delta)` computes exactly
+what `day_context_line()` returns after `record_exit(pnl_delta, is_partial=False,
+total_pnl=trade_pnl)`. Rather than trust that reasoning, three tests in
+`TestFullExitDayContext` pin it: a winning close, a losing close, and a partial leg that
+must *not* count as a trade.
+
+### Test impact
+
+- 48 characterization tests passed **unchanged** through the whole refactor.
+- 32 `patch("signal_engine.main.tracker")` sites moved to a shared `tracker_mock()`
+  factory, because a bare `MagicMock` returns non-awaitable attributes and `book_close`
+  is a coroutine.
+- 2 assertions retargeted: with the tracker mocked, `notify_position_closed` now fires
+  inside the mock, so those tests assert the pipeline *booked the close*. Real-tracker
+  coverage of the notification lives in the characterization suite.
+- The characterization harness patches `signal_engine.tracker.notifier` alongside
+  `signal_engine.main.notifier`, since close notifications are now emitted by the tracker.
+
+517 tests green. `main.py` 98%, `tracker.py` 86%, suite 88%.
+
+### What this buys
+
+Changing what a close notification contains, how R is computed at close, or how a closed
+trade is recorded is now a single edit in one function. Before, it was four.
+
+---
+
 ## 2026-08-23 (b) — Dead-code sweep
 
 Follow-up to the maintainability pass. Tooling: `vulture`, `ruff` (F401/F811/F841/ARG/ERA001),

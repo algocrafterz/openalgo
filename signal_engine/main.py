@@ -421,23 +421,14 @@ async def _reconcile_sl_hit(signal, pos) -> None:
     if pos.sl_order_id:
         await cancel_order(pos.sl_order_id, pos.strategy)
     pnl_delta, current_realised = await _book_realised_pnl_delta()
-    total_trade_pnl = pos.realized_pnl + pnl_delta
-    base_price = pos.fill_price or pos.entry_price
-    hold_min = _hold_minutes(pos)
-    r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-    tracker.add_trade_record(TradeRecord(
-        symbol=pos.symbol, direction=pos.direction.value,
-        entry_price=base_price, exit_price=pos.sl,
-        original_qty=pos.original_quantity or pos.quantity,
-        total_pnl=total_trade_pnl, r_multiple=r, exit_types=["SL"],
-    ))
-    tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
-    await notifier.notify_position_closed(
-        pos.symbol, total_trade_pnl, strategy=pos.strategy,
-        exit_price=pos.sl, direction=pos.direction.value,
-        r_multiple=r, entry_price=base_price, hold_minutes=hold_min,
+    await tracker.book_close(
+        pos,
+        pnl_delta=pnl_delta,
+        exit_price=pos.sl,
         exit_types=["SL"],
-        day_context=tracker.day_context_line(settings.max_trades_per_day),
+        hold_minutes=_hold_minutes(pos),
+        max_trades=settings.max_trades_per_day,
+        new_realised_pnl=current_realised,
     )
     tracker.unregister(signal.symbol, signal.strategy)
     risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
@@ -525,74 +516,53 @@ async def _book_exit_result(
     pnl_delta, current_realised = await _book_realised_pnl_delta()
     logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
 
-    # Total trade P&L: partials already in pos.realized_pnl + this leg
-    total_trade_pnl = pos.realized_pnl + pnl_delta
     base_price = pos.fill_price or pos.entry_price
     hold_min = _hold_minutes(pos)
     # Use the signal's TP price as approximate exit price — MARKET order fills at ~TP.
     approx_exit_price = signal.tp if signal.tp and signal.tp > 0 else None
 
     if is_full_exit:
+        # book_close advances the day counters and the realised-P&L snapshot.
         await _finalize_full_exit(
-            signal, pos, tp_level, pnl_delta, total_trade_pnl,
-            base_price, hold_min, approx_exit_price,
+            signal, pos, tp_level, pnl_delta, hold_min,
+            approx_exit_price, current_realised,
         )
-    else:
-        remaining = pos.quantity - exit_qty
-        if remaining <= 0:
-            await _finalize_invalid_partial(
-                signal, pos, tp_level, exit_qty, pnl_delta, current_realised,
-                total_trade_pnl, base_price, hold_min, approx_exit_price,
-            )
-            return False
-        await _finalize_partial_exit(
-            pos, tp_level, exit_qty, remaining, pnl_delta,
-            base_price, hold_min,
-        )
+        if not tracker._positions:
+            await tracker.send_day_summary()
+        return True
 
-    # Update day summary counters + realised PnL snapshot.
-    # is_partial=True: only P&L accumulated, no trade count. is_partial=False: full trade counted.
-    tracker.record_exit(
-        pnl=pnl_delta,
-        is_partial=not is_full_exit,
-        total_pnl=total_trade_pnl if is_full_exit else None,
-        new_realised_pnl=current_realised,
+    remaining = pos.quantity - exit_qty
+    if remaining <= 0:
+        await _finalize_invalid_partial(
+            signal, pos, tp_level, exit_qty, pnl_delta, current_realised,
+            hold_min, approx_exit_price,
+        )
+        return False
+
+    await _finalize_partial_exit(
+        pos, tp_level, exit_qty, remaining, pnl_delta,
+        base_price, hold_min,
     )
-
-    if is_full_exit and not tracker._positions:
-        await tracker.send_day_summary()
+    # Partial exit: accumulate P&L only — the trade is counted at its final close.
+    tracker.record_exit(
+        pnl=pnl_delta, is_partial=True, new_realised_pnl=current_realised,
+    )
     return True
 
 
 async def _finalize_full_exit(
-    signal, pos, tp_level, pnl_delta: float, total_trade_pnl: float,
-    base_price: float, hold_min: int, approx_exit_price,
+    signal, pos, tp_level, pnl_delta: float, hold_min: int,
+    approx_exit_price, current_realised: float,
 ) -> None:
-    """Unregister the position, free the risk slot, notify with total trade P&L + R."""
-    r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-    all_exit_types = pos.exit_types + [tp_level or "EXIT"]
-    tracker.add_trade_record(TradeRecord(
-        symbol=pos.symbol,
-        direction=pos.direction.value,
-        entry_price=base_price,
+    """Book the close, unregister the position, and free the risk slot."""
+    await tracker.book_close(
+        pos,
+        pnl_delta=pnl_delta,
         exit_price=approx_exit_price,
-        original_qty=pos.original_quantity or pos.quantity,
-        total_pnl=total_trade_pnl,
-        r_multiple=r,
-        exit_types=all_exit_types,
-    ))
-    # check_positions will count this trade on the next poll (qty drops to 0),
-    # so project the day context here rather than mutating counters twice.
-    day_ctx = tracker.projected_day_context(
-        trade_pnl=total_trade_pnl, pnl_delta=pnl_delta,
+        exit_types=pos.exit_types + [tp_level or "EXIT"],
+        hold_minutes=hold_min,
         max_trades=settings.max_trades_per_day,
-    )
-    await notifier.notify_position_closed(
-        pos.symbol, total_trade_pnl, strategy=pos.strategy,
-        exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
-        entry_price=base_price, hold_minutes=hold_min,
-        exit_types=all_exit_types,
-        day_context=day_ctx,
+        new_realised_pnl=current_realised,
     )
     tracker.unregister(signal.symbol, signal.strategy)
     risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
@@ -601,35 +571,24 @@ async def _finalize_full_exit(
 
 async def _finalize_invalid_partial(
     signal, pos, tp_level, exit_qty: int, pnl_delta: float, current_realised: float,
-    total_trade_pnl: float, base_price: float, hold_min: int, approx_exit_price,
+    hold_min: int, approx_exit_price,
 ) -> None:
     """Defensive: a partial exit that leaves no shares is booked as a full close."""
     logger.warning(
         f"Partial exit produced invalid remainder {pos.quantity - exit_qty} for {pos.symbol} "
         f"(qty={pos.quantity}, exit_qty={exit_qty}), converting to full exit"
     )
-    r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-    all_exit_types = pos.exit_types + [tp_level or "EXIT"]
-    tracker.add_trade_record(TradeRecord(
-        symbol=pos.symbol,
-        direction=pos.direction.value,
-        entry_price=base_price,
+    await tracker.book_close(
+        pos,
+        pnl_delta=pnl_delta,
         exit_price=approx_exit_price,
-        original_qty=pos.original_quantity or pos.quantity,
-        total_pnl=total_trade_pnl,
-        r_multiple=r,
-        exit_types=all_exit_types,
-    ))
-    tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
+        exit_types=pos.exit_types + [tp_level or "EXIT"],
+        hold_minutes=hold_min,
+        max_trades=settings.max_trades_per_day,
+        new_realised_pnl=current_realised,
+    )
     tracker.unregister(signal.symbol, signal.strategy)
     risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-    await notifier.notify_position_closed(
-        pos.symbol, total_trade_pnl, strategy=pos.strategy,
-        exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
-        entry_price=base_price, hold_minutes=hold_min,
-        exit_types=all_exit_types,
-        day_context=tracker.day_context_line(settings.max_trades_per_day),
-    )
     if not tracker._positions:
         await tracker.send_day_summary()
 

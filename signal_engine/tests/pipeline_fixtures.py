@@ -4,7 +4,7 @@ Split out of the former 1,878-line test_main.py so the entry, exit, partial-exit
 and helper suites can each live in their own file without duplicating setup.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from signal_engine.models import Direction, OrderStatus, TradeResult
 
@@ -28,3 +28,16 @@ def _mock_signal():
     sig.sl = 2485.0
     sig.tp = 2540.0
     return sig
+
+
+def tracker_mock() -> MagicMock:
+    """Stand-in for the module-level PositionTracker.
+
+    A bare MagicMock returns non-awaitable attributes, so the tracker's coroutine
+    methods have to be AsyncMock explicitly. Used via
+    patch("signal_engine.main.tracker", new_callable=tracker_mock).
+    """
+    m = MagicMock()
+    m.book_close = AsyncMock()
+    m.send_day_summary = AsyncMock()
+    return m

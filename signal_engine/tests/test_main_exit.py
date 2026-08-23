@@ -11,6 +11,7 @@ from signal_engine.models import (
     ValidationResult,
     ValidationStatus,
 )
+from signal_engine.tests.pipeline_fixtures import tracker_mock
 
 
 class TestExitPipelineDaySummary:
@@ -34,7 +35,7 @@ class TestExitPipelineDaySummary:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -57,7 +58,10 @@ class TestExitPipelineDaySummary:
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0")
 
-            mock_tracker.record_exit.assert_called_once()
+            # A full exit books through tracker.book_close, which files the trade
+            # record and advances the day counters in one place.
+            mock_tracker.book_close.assert_awaited_once()
+            assert mock_tracker.book_close.await_args.kwargs["pnl_delta"] == 500.0
 
     @pytest.mark.asyncio
     async def test_exit_passes_real_pnl_to_risk_engine(self):
@@ -77,7 +81,7 @@ class TestExitPipelineDaySummary:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -136,7 +140,7 @@ class TestTPHitExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", side_effect=mock_send),
@@ -185,7 +189,7 @@ class TestTPHitExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -216,7 +220,10 @@ class TestTPHitExitFlow:
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
         mock_notifier.notify_exit_signal_received.assert_called_once_with("RELIANCE", "ORB")
-        mock_notifier.notify_position_closed.assert_called_once()
+        # notify_position_closed now fires inside tracker.book_close; with the tracker
+        # mocked, assert the pipeline booked the close rather than the notification
+        # mechanics. Real-tracker coverage lives in test_main_characterization.py.
+        mock_tracker.book_close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_tp_hit_partial_exit_fires_partial_notification(self):
@@ -237,7 +244,7 @@ class TestTPHitExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -290,7 +297,7 @@ class TestTPHitExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -341,7 +348,7 @@ class TestTPHitExitFlow:
         with (
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
@@ -400,7 +407,7 @@ class TestExitPendingGuard:
         send_count = [0]
 
         with (
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result) as mock_send,
@@ -460,7 +467,7 @@ class TestExitPendingGuard:
             return exit_result
 
         with (
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.send_order", side_effect=capture_order),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -536,7 +543,7 @@ class TestConcurrentTPSignals:
         tp1_signal = _make_tp_signal("TP1", 0.5)       # partial exit
 
         with (
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
@@ -618,7 +625,7 @@ class TestConcurrentTPSignals:
         sig_tp1 = _make_exit_signal("TP1", 0.5)
 
         with (
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.risk_engine"),
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", side_effect=counting_send_order),

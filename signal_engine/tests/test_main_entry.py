@@ -15,7 +15,9 @@ from signal_engine.tests.pipeline_fixtures import (
     _bracket_trade_results,
     _mock_signal,
     _valid_message,
+    tracker_mock,
 )
+from signal_engine.tests.pipeline_fixtures import tracker_mock
 
 
 class TestPipelineFlow:
@@ -84,7 +86,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=mock_trade_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_r, tp_r)),
             patch("signal_engine.main.save") as mock_save,
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 200_000.0
@@ -116,7 +118,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
             patch("signal_engine.main.save") as mock_save,
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 50_000.0
@@ -185,7 +187,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result) as mock_send,
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(None, None)),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
@@ -267,7 +269,7 @@ class TestCncBracketSkip:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock) as mock_bracket,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
@@ -309,7 +311,7 @@ class TestCncBracketSkip:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, None)) as mock_bracket,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
@@ -350,7 +352,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, tp_result)) as mock_bracket,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
@@ -386,7 +388,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock) as mock_bracket,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
@@ -420,7 +422,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_entry),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock) as mock_bracket,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker"),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
@@ -458,7 +460,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(sl_result, tp_result)),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
@@ -529,7 +531,7 @@ class TestFillOvershotTP:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock) as mock_cancel,
             patch("signal_engine.main.fetch_order_fill_price", new_callable=AsyncMock,
                   return_value=533.95),  # fill above TP 532.75
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.save"),
             patch("signal_engine.main.settings") as mock_settings,
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
@@ -581,7 +583,7 @@ class TestFillOvershotTP:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock),
             patch("signal_engine.main.fetch_order_fill_price", new_callable=AsyncMock,
                   return_value=407.0),  # fill below TP 408.75 for SHORT
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.save"),
             patch("signal_engine.main.settings") as mock_settings,
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
@@ -626,7 +628,7 @@ class TestFillOvershotTP:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock) as mock_cancel,
             patch("signal_engine.main.fetch_order_fill_price", new_callable=AsyncMock,
                   return_value=529.5),  # fill within TP 532.75 — normal
-            patch("signal_engine.main.tracker") as mock_tracker,
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.save"),
             patch("signal_engine.main.settings") as mock_settings,
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
