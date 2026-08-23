@@ -1,7 +1,8 @@
 """Integration tests for Telegram channel connectivity.
 
-These tests require a valid Telegram session (run test_telegram.py first).
-They connect to the real Telegram API and verify channel access.
+These tests require a valid Telegram session and connect to the real Telegram API.
+The session is created on first engine start (`uv run python -m signal_engine.main`),
+which prompts for the login code and writes signal_engine/data/telegram.session.
 
 Skip with: pytest -m "not integration"
 """
@@ -26,7 +27,10 @@ skip_reason = None
 if not _has_credentials:
     skip_reason = "Telegram credentials not configured in .env"
 elif not _has_session:
-    skip_reason = "No Telegram session file. Run: PYTHONPATH=. uv run python signal_engine/test_telegram.py"
+    skip_reason = (
+        "No Telegram session file. Start the engine once to create it: "
+        "PYTHONPATH=. uv run python -m signal_engine.main"
+    )
 elif not _has_channels:
     skip_reason = "No channels configured in config.yaml"
 
@@ -47,7 +51,8 @@ class TestTelegramConnection:
         client = await _get_client()
         try:
             assert await client.is_user_authorized(), (
-                "Session expired. Re-run: PYTHONPATH=. uv run python signal_engine/test_telegram.py"
+                "Session expired. Delete signal_engine/data/telegram.session and restart the engine "
+                "to re-authenticate."
             )
             me = await client.get_me()
             assert me is not None

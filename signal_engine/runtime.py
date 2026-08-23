@@ -32,7 +32,6 @@ def build_risk_engine(store, trade_mode: str = "live") -> RiskEngine:
         max_sl_pct_for_sizing=settings.max_sl_pct_for_sizing,
         store=store,
         trade_mode=trade_mode,
-        default_product=settings.product,
         max_positions_per_symbol=settings.max_positions_per_symbol,
         max_positions_per_sector=settings.max_positions_per_sector,
         sectors=settings.sectors,

@@ -149,34 +149,6 @@ def build_exit_order(
     )
 
 
-def build_sl_order(signal: Signal, quantity: int) -> Order:
-    """Build a stop-loss leg order for a bracket.
-
-    For LONG entry: SELL SL-M with trigger_price=signal.sl
-    For SHORT entry: BUY SL-M with trigger_price=signal.sl
-    """
-    action = Action.SELL if signal.direction == Direction.LONG else Action.BUY
-    sl_order_type = settings.bracket_sl_order_type
-
-    # Round trigger price to valid tick — conservative direction (trigger earlier = less loss)
-    # LONG SL is below entry: round UP so trigger fires sooner (less price drop needed)
-    # SHORT SL is above entry: round DOWN so trigger fires sooner (less price rise needed)
-    sl_direction = "up" if signal.direction == Direction.LONG else "down"
-    trigger_price = round_to_tick(signal.sl, sl_direction)
-
-    return Order(
-        symbol=signal.symbol,
-        exchange=signal.exchange or settings.exchange,
-        action=action,
-        quantity=quantity,
-        price=0.0,
-        order_type=sl_order_type,
-        product=signal.product or settings.product,
-        strategy_tag=signal.strategy,
-        trigger_price=trigger_price,
-    )
-
-
 async def place_sl_order(
     symbol: str,
     exchange: str,

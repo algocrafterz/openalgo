@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from signal_engine.executor import build_order, build_exit_order, build_sl_order, send_bracket_legs, send_order
-from signal_engine.models import Action, Direction, OrderStatus
+from signal_engine.executor import build_order, build_exit_order, place_sl_order, send_bracket_legs, send_order
+from signal_engine.models import Action, Direction, OrderStatus, TradeResult
 from signal_engine.tests.conftest import make_signal as _make_signal
 
 
@@ -155,57 +155,88 @@ class TestBuildExitOrder:
         assert order.exchange == "NSE"
 
 
-class TestBuildSlOrder:
-    def test_long_entry_produces_sell_slm(self):
-        signal = _make_signal(direction=Direction.LONG, entry=2500.0, sl=2485.0)
-        order = build_sl_order(signal, quantity=10)
+class TestPlaceSlOrder:
+    """SL leg construction — action, order type, and conservative tick rounding.
+
+    Exercises the live place_sl_order path (the previous build_sl_order helper it
+    duplicated had no callers and was removed).
+    """
+
+    @staticmethod
+    async def _capture(direction, sl_price):
+        """Run place_sl_order with send_order stubbed, return the Order it built."""
+        captured = {}
+
+        async def _send(order):
+            captured["order"] = order
+            return TradeResult(order_id="SL1", status=OrderStatus.SUCCESS, message="ok")
+
+        with patch("signal_engine.executor.send_order", side_effect=_send):
+            await place_sl_order(
+                symbol="RELIANCE", exchange="NSE", direction=direction,
+                quantity=10, sl_price=sl_price, product="MIS", strategy_tag="ORB",
+            )
+        return captured["order"]
+
+    @pytest.mark.asyncio
+    async def test_long_entry_produces_sell_slm(self):
+        order = await self._capture(Direction.LONG, 2485.0)
         assert order.action == Action.SELL
 
-    def test_short_entry_produces_buy_slm(self):
-        signal = _make_signal(direction=Direction.SHORT, entry=2500.0, sl=2515.0)
-        order = build_sl_order(signal, quantity=10)
+    @pytest.mark.asyncio
+    async def test_short_entry_produces_buy_slm(self):
+        order = await self._capture(Direction.SHORT, 2515.0)
         assert order.action == Action.BUY
 
-    def test_sl_order_type_is_slm(self):
-        signal = _make_signal(direction=Direction.LONG, sl=2485.0)
-        order = build_sl_order(signal, quantity=10)
+    @pytest.mark.asyncio
+    async def test_sl_order_type_is_slm(self):
+        order = await self._capture(Direction.LONG, 2485.0)
         assert order.order_type == "SL-M"
 
-    def test_trigger_price_set_to_sl(self):
-        signal = _make_signal(direction=Direction.LONG, sl=2485.0)
-        order = build_sl_order(signal, quantity=10)
+    @pytest.mark.asyncio
+    async def test_trigger_price_set_to_sl(self):
+        order = await self._capture(Direction.LONG, 2485.0)
         assert order.trigger_price == 2485.0
 
-    def test_long_sl_rounds_up_for_early_trigger(self):
+    @pytest.mark.asyncio
+    async def test_long_sl_rounds_up_for_early_trigger(self):
         """LONG SL below entry must round UP so trigger fires before stated SL level."""
-        signal = _make_signal(direction=Direction.LONG, entry=319.45, sl=317.08, tp=321.82)
-        order = build_sl_order(signal, quantity=58)
-        # 317.08 rounds UP to 317.10 (next valid tick) — triggers sooner, less loss
-        assert order.trigger_price == 317.10
+        order = await self._capture(Direction.LONG, 2485.023)
+        assert order.trigger_price == 2485.05
 
-    def test_short_sl_rounds_down_for_early_trigger(self):
+    @pytest.mark.asyncio
+    async def test_short_sl_rounds_down_for_early_trigger(self):
         """SHORT SL above entry must round DOWN so trigger fires before stated SL level."""
-        signal = _make_signal(direction=Direction.SHORT, entry=309.9, sl=312.24, tp=307.56)
-        order = build_sl_order(signal, quantity=58)
-        # 312.24 rounds DOWN to 312.20 (prev valid tick) — triggers sooner, less loss
-        assert order.trigger_price == 312.20
+        order = await self._capture(Direction.SHORT, 2515.077)
+        assert order.trigger_price == 2515.05
 
-    def test_quantity_matches(self):
-        signal = _make_signal(direction=Direction.LONG)
-        order = build_sl_order(signal, quantity=42)
-        assert order.quantity == 42
+    @pytest.mark.asyncio
+    async def test_quantity_passed_through(self):
+        captured = {}
 
-    def test_price_is_zero_for_slm(self):
-        signal = _make_signal(direction=Direction.LONG, sl=2485.0)
-        order = build_sl_order(signal, quantity=10)
+        async def _send(order):
+            captured["order"] = order
+            return TradeResult(order_id="SL1", status=OrderStatus.SUCCESS, message="ok")
+
+        with patch("signal_engine.executor.send_order", side_effect=_send):
+            await place_sl_order(
+                symbol="RELIANCE", exchange="NSE", direction=Direction.LONG,
+                quantity=42, sl_price=2485.0, product="MIS", strategy_tag="ORB",
+            )
+        assert captured["order"].quantity == 42
+
+    @pytest.mark.asyncio
+    async def test_price_is_zero_for_slm(self):
+        order = await self._capture(Direction.LONG, 2485.0)
         assert order.price == 0.0
 
-    def test_symbol_and_strategy_captured(self):
-        signal = _make_signal(symbol="TCS", strategy="ORB")
-        order = build_sl_order(signal, quantity=5)
-        assert order.symbol == "TCS"
+    @pytest.mark.asyncio
+    async def test_symbol_exchange_and_strategy_captured(self):
+        order = await self._capture(Direction.LONG, 2485.0)
+        assert order.symbol == "RELIANCE"
+        assert order.exchange == "NSE"
         assert order.strategy_tag == "ORB"
-
+        assert order.product == "MIS"
 
 class TestSendBracketLegs:
     def _success_result(self, order_id="SL001"):

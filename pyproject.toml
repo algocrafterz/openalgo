@@ -210,6 +210,9 @@ pythonpath = ["."]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --timeout=60"
+markers = [
+    "integration: touches a live external service (Telegram). Exclude with -m 'not integration'.",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

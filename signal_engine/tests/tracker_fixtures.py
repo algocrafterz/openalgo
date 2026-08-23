@@ -22,7 +22,6 @@ def _make_engine(**overrides) -> RiskEngine:
         "max_trades_per_day": 5,
         "min_entry_price": 0,
         "max_entry_price": 0,
-        "default_product": "MIS",
     }
     defaults.update(overrides)
     return RiskEngine(**defaults)

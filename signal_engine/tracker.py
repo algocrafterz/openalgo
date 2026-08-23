@@ -783,7 +783,7 @@ class PositionTracker:
         await self.send_day_summary()
         self._reset_day_counters()
 
-    async def _square_off_strategies(self, strategies: "Set[str]") -> None:
+    async def _square_off_strategies(self, strategies: Set[str]) -> None:
         """Cancel pending orders then close all positions, per strategy."""
         self._time_exit_active = True
         try:

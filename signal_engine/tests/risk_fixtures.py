@@ -17,7 +17,6 @@ def _engine(**overrides) -> RiskEngine:
         "min_entry_price": 0,
         "max_entry_price": 0,
         "slippage_factor": 0.0,
-        "default_product": "MIS",
         "max_positions_per_symbol": 1,
         "max_positions_per_sector": 2,
         "sectors": {"BANKING": ["HDFCBANK", "SBIN"], "IT": ["TCS", "INFY"]},

@@ -51,7 +51,6 @@ class RiskEngine:
         max_sl_pct_for_sizing: float = 0.0,
         store=None,
         trade_mode: str = "live",
-        default_product: str = "MIS",
         max_positions_per_symbol: int = 0,
         max_positions_per_sector: int = 0,
         sectors: Dict[str, List[str]] = None,

@@ -9,8 +9,3 @@ redefined independently in five modules.
 from datetime import datetime, timedelta, timezone
 
 IST = timezone(timedelta(hours=5, minutes=30))
-
-
-def now_ist() -> datetime:
-    """Current wall-clock time in IST."""
-    return datetime.now(IST)
