@@ -3,10 +3,9 @@
 import asyncio
 import math
 import os
-import signal
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from loguru import logger
 
@@ -14,18 +13,18 @@ from signal_engine.api_client import cancel_order, fetch_available_capital, fetc
 from signal_engine.config import settings
 from signal_engine.db import fetch_last_entry_trade, save
 from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
-from signal_engine.listener import start_listener
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import Direction, OrderStatus, TradeResult, ValidationStatus
 from signal_engine import notifier
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
-from signal_engine.risk import RiskEngine
+from signal_engine.runtime import build_risk_engine
 from signal_engine.risk_store import RiskStore, RISK_DB_PATH
-from signal_engine.tracker import PositionTracker, TimeExitScheduler, TrackedPosition, TradeRecord, _compute_r
+from signal_engine import startup
+from signal_engine.tracker import PositionTracker, TrackedPosition, TradeRecord, _compute_r
 from signal_engine.validator import validate
+from signal_engine.timeutils import IST
 
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 _OPENALGO_DB = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "db", "openalgo.db")
@@ -59,29 +58,7 @@ def _is_be_series(symbol: str, exchange: str) -> bool:
 _risk_store = RiskStore(RISK_DB_PATH)
 
 # Global risk engine instance (counters restored from store on startup)
-risk_engine = RiskEngine(
-    risk_per_trade=settings.risk_per_trade,
-    sizing_mode=settings.sizing_mode,
-    pct_of_capital=settings.pct_of_capital,
-    daily_loss_limit=settings.daily_loss_limit,
-    weekly_loss_limit=settings.weekly_loss_limit,
-    monthly_loss_limit=settings.monthly_loss_limit,
-    max_open_positions=settings.max_open_positions,
-    max_trades_per_day=settings.max_trades_per_day,
-    min_entry_price=settings.min_entry_price,
-    max_entry_price=settings.max_entry_price,
-    slippage_factor=settings.slippage_factor,
-    max_sl_pct_for_sizing=settings.max_sl_pct_for_sizing,
-    store=_risk_store,
-    trade_mode="live",
-    default_product=settings.product,
-    max_positions_per_symbol=settings.max_positions_per_symbol,
-    max_positions_per_sector=settings.max_positions_per_sector,
-    sectors=settings.sectors,
-    use_day_start_capital=settings.use_day_start_capital,
-    soft_blacklist=settings.soft_blacklist,
-    soft_blacklist_multipliers=settings.soft_blacklist_multipliers,
-)
+risk_engine = build_risk_engine(_risk_store)
 
 # Global position tracker
 tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
@@ -118,27 +95,37 @@ async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> in
     """
     exchange = signal.exchange or settings.exchange
     if exchange in ("NSE", "BSE"):
-        # SpanCalc only supports derivatives — estimate equity MIS margin instead.
-        # Binary reject: if full-risk qty doesn't fit in live capital, skip the trade.
-        # We never scale qty down — a scaled trade risks less than 1% and produces
-        # dwarf positions that are not worth the commission + slippage cost.
-        # Sizing uses day-start capital (equal risk weighting); this check uses live_capital
-        # as a hard floor to prevent broker rejections.
-        estimated_margin = raw_qty * signal.entry * settings.mis_margin_pct
-        if estimated_margin <= live_capital:
-            logger.debug(
-                f"NSE equity margin check passed for {signal.symbol}: "
-                f"est_margin={estimated_margin:,.0f} ({settings.mis_margin_pct:.0%} of {raw_qty}x{signal.entry:.2f}) "
-                f"<= live_capital={live_capital:,.0f}"
-            )
-            return raw_qty
-        logger.info(
-            f"NSE equity margin floor: skipping {signal.symbol} — "
-            f"est_margin={estimated_margin:,.0f} > live_capital={live_capital:,.0f}, "
-            f"full qty {raw_qty} not feasible (won't scale down to preserve 1% risk)"
-        )
-        return 0
+        return _equity_margin_qty(signal, raw_qty, live_capital)
+    return await _derivative_margin_qty(signal, raw_qty, live_capital)
 
+
+def _equity_margin_qty(signal, raw_qty: int, live_capital: float) -> int:
+    """Estimate equity MIS margin and reject outright if the full size does not fit.
+
+    SpanCalc only supports derivatives, so equity margin is estimated. Binary reject:
+    we never scale qty down — a scaled trade risks less than 1% and produces dwarf
+    positions that are not worth the commission + slippage cost. Sizing uses day-start
+    capital (equal risk weighting); this check uses live_capital as a hard floor to
+    prevent broker rejections.
+    """
+    estimated_margin = raw_qty * signal.entry * settings.mis_margin_pct
+    if estimated_margin <= live_capital:
+        logger.debug(
+            f"NSE equity margin check passed for {signal.symbol}: "
+            f"est_margin={estimated_margin:,.0f} ({settings.mis_margin_pct:.0%} of {raw_qty}x{signal.entry:.2f}) "
+            f"<= live_capital={live_capital:,.0f}"
+        )
+        return raw_qty
+    logger.info(
+        f"NSE equity margin floor: skipping {signal.symbol} — "
+        f"est_margin={estimated_margin:,.0f} > live_capital={live_capital:,.0f}, "
+        f"full qty {raw_qty} not feasible (won't scale down to preserve 1% risk)"
+    )
+    return 0
+
+
+async def _derivative_margin_qty(signal, raw_qty: int, live_capital: float) -> int:
+    """Query SpanCalc for the exact margin and scale qty down if it does not fit."""
     actual_margin = await fetch_margin(
         symbol=signal.symbol,
         exchange=signal.exchange or settings.exchange,
@@ -254,164 +241,227 @@ async def _handle_exit(signal) -> None:
 
 
 async def _handle_exit_locked(signal) -> None:
-    """Inner exit handler — must be called with the per-position exit lock held."""
-    # 0. Abort if time_exit_all() is already closing all positions to avoid double-exit.
-    # time_exit cancels all orders then fires close_all_positions — a concurrent TP signal
-    # would try to cancel the same SL (already gone) and place a duplicate exit order.
-    if tracker._time_exit_active:
-        logger.info(
-            f"EXIT skipped for {signal.symbol}: time_exit_all() in progress, positions closing via time exit"
-        )
+    """Inner exit handler — must be called with the per-position exit lock held.
+
+    Stages: abort guards -> position lookup/recovery -> SL-HIT reconcile ->
+    resolve qty -> cancel SL -> send exit -> book P&L -> persist.
+    """
+    if _exit_blocked_by_time_exit(signal):
         return
 
-    # 1. Look up position in tracker
     pos = tracker.find_position(signal.symbol, signal.strategy)
-
-    # Guard against duplicate concurrent processing. asyncio.Lock serializes tasks, but
-    # Telethon can dispatch multiple simultaneous TP alerts as separate tasks before any
-    # acquires the lock. The flag is set/cleared synchronously (no await between check
-    # and set), so it is safe in single-threaded asyncio — it catches the rare case where
-    # the lock re-enters before the previous handler fully clears the position.
-    if pos is not None and getattr(pos, "exit_pending", False) is True:
-        logger.warning(
-            f"EXIT: {signal.symbol} exit already in progress (duplicate TP signal), skipping"
-        )
+    if _exit_already_in_progress(signal, pos):
         return
     if pos is not None:
         pos.exit_pending = True
 
-    # 2. Fallback: if tracker lost state (engine restart), query broker API and trades.db
     if pos is None:
-        logger.warning(
-            f"EXIT: {signal.symbol} not in tracker for strategy={signal.strategy}, "
-            "checking broker API (engine restart fallback)"
-        )
-        exchange = signal.exchange or settings.exchange
-        product = signal.product or settings.product
-        api_qty = await fetch_open_position(signal.symbol, signal.strategy, exchange, product)
-        if api_qty == 0 or api_qty == -1:
-            logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
-            await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
-            return
-        # Negative qty from broker means SHORT position; positive means LONG.
-        # Use the absolute value for quantity and set direction accordingly.
-        fallback_direction = Direction.SHORT if api_qty < 0 else Direction.LONG
-
-        # Recover entry context (entry/sl/tp/order_id) from the audit trail. EXIT signals
-        # synthesize entry=sl=tp=0, so without this lookup the partial-exit SL re-placement
-        # logic computes new_sl=0 and skips bracket → remaining qty runs un-protected.
-        # (RBLBANK incident, 2026-05-04: 18 qty unprotected after engine restart + TP1.)
-        recovered = fetch_last_entry_trade(signal.symbol, signal.strategy)
-        if recovered is not None:
-            entry_price = recovered["entry"]
-            sl_price = recovered["sl"]
-            tp_price = recovered["tp"]
-            entry_order_id = recovered["order_id"]
-            logger.info(
-                f"EXIT recovery [{signal.symbol}]: restored from trades.db "
-                f"entry={entry_price} sl={sl_price} tp={tp_price} order_id={entry_order_id}"
-            )
-        else:
-            entry_price = signal.entry
-            sl_price = signal.sl
-            tp_price = signal.tp
-            entry_order_id = ""
-            logger.warning(
-                f"EXIT recovery [{signal.symbol}]: no entry trade found in trades.db today "
-                "— partial-exit SL re-placement may be skipped"
-            )
-
-        pos = TrackedPosition(
-            symbol=signal.symbol,
-            strategy=signal.strategy,
-            exchange=exchange,
-            product=product,
-            entry_price=entry_price,
-            quantity=abs(api_qty),
-            sl=sl_price,
-            tp=tp_price,
-            direction=fallback_direction,
-            entry_order_id=entry_order_id,
-            sl_order_id="",
-        )
-
-    # 3. Guard against phantom exit — if the entry order was never confirmed as filled,
-    # verify the broker status before placing an exit. A rejected entry leaves no real
-    # position; placing a SELL without one would create an unintended naked short.
-    if pos.entry_order_id and pos.fill_price == 0.0:
-        order_status = await fetch_order_status(pos.entry_order_id, pos.strategy)
-        status_lower = order_status.lower()
-        if status_lower in ("rejected", "cancelled", "cancel"):
-            logger.warning(
-                f"EXIT: {pos.symbol} entry order {pos.entry_order_id} was {status_lower} "
-                "— aborting exit (no real position). Cancelling orphaned SL and releasing slot."
-            )
-            if pos.sl_order_id:
-                await cancel_order(pos.sl_order_id, pos.strategy)
-                logger.info(f"EXIT: cancelled orphaned SL {pos.sl_order_id} for {pos.symbol}")
-            risk_engine.record_rejection(symbol=pos.symbol)
-            tracker.unregister(signal.symbol, signal.strategy)
-            await notifier.notify_orphaned_position(
-                pos.symbol, pos.strategy, pos.direction.value,
-                pos.entry_order_id, f"exit blocked: entry order {status_lower}",
-            )
+        pos = await _recover_position_from_broker(signal)
+        if pos is None:
             return
 
-    # 4. SL HIT reconcile path — broker SL-M already closed this position.
-    # Do NOT place another SELL (would create naked short). Just clean up tracker.
-    tp_level = getattr(signal, "tp_level", None)
-    if tp_level == "SL":
-        logger.info(f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker")
-        if pos.sl_order_id:
-            await cancel_order(pos.sl_order_id, pos.strategy)
-        async with tracker._pnl_lock:
-            current_realised = await fetch_realised_pnl()
-            pnl_delta = current_realised - tracker._last_realised_pnl
-            tracker._last_realised_pnl = current_realised
-        total_trade_pnl = pos.realized_pnl + pnl_delta
-        base_price = pos.fill_price or pos.entry_price
-        hold_min = int((datetime.now(_IST) - pos.entry_time).total_seconds() / 60) if hasattr(pos, 'entry_time') else 0
-        r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-        tracker.add_trade_record(TradeRecord(
-            symbol=pos.symbol, direction=pos.direction.value,
-            entry_price=base_price, exit_price=pos.sl,
-            original_qty=pos.original_quantity or pos.quantity,
-            total_pnl=total_trade_pnl, r_multiple=r, exit_types=["SL"],
-        ))
-        tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
-        await notifier.notify_position_closed(
-            pos.symbol, total_trade_pnl, strategy=pos.strategy,
-            exit_price=pos.sl, direction=pos.direction.value,
-            r_multiple=r, entry_price=base_price, hold_minutes=hold_min,
-            exit_types=["SL"],
-            day_context=tracker.day_context_line(settings.max_trades_per_day),
-        )
-        tracker.unregister(signal.symbol, signal.strategy)
-        risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-        if not tracker._positions:
-            await tracker.send_day_summary()
+    if await _abort_exit_on_rejected_entry(signal, pos):
         return
 
-    # 5. Resolve exit quantity (partial or full based on tp_level config)
+    tp_level = getattr(signal, "tp_level", None)
+    if tp_level == "SL":
+        await _reconcile_sl_hit(signal, pos)
+        return
+
     exit_qty, is_full_exit = _resolve_exit_qty(signal, pos)
     logger.info(
         f"EXIT: {pos.symbol} tp_level={tp_level} exit_qty={exit_qty}/{pos.quantity} "
         f"full_exit={is_full_exit}"
     )
 
-    # 6. ALWAYS cancel SL before placing exit order.
-    # Indian brokers treat any SELL while SL SELL is active as a new SHORT position
-    # (FUND LIMIT INSUFFICIENT). SL must be cancelled first, even for partial exits.
-    if pos.sl_order_id:
-        success = await cancel_order(pos.sl_order_id, pos.strategy)
-        if success:
-            logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
-        else:
-            logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
+    await _cancel_sl_before_exit(pos)
 
-    # 7. Build and send MARKET SELL exit order — retry up to tp_exit_retries on failure.
-    # MARKET orders rarely reject but network timeouts are possible. We retry on any
-    # non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
+    exit_order, trade_result = await _place_exit_order(pos, exit_qty)
+
+    if trade_result.status == OrderStatus.SUCCESS:
+        if not await _book_exit_result(signal, pos, tp_level, exit_qty, is_full_exit, trade_result):
+            return
+    else:
+        await _handle_exit_order_failure(pos, trade_result)
+
+    save(signal, exit_order, trade_result)
+
+
+def _exit_blocked_by_time_exit(signal) -> bool:
+    """True if time_exit_all() owns the close and this exit must stand down.
+
+    time_exit cancels all orders then fires close_all_positions — a concurrent TP signal
+    would try to cancel the same SL (already gone) and place a duplicate exit order.
+    """
+    if not tracker._time_exit_active:
+        return False
+    logger.info(
+        f"EXIT skipped for {signal.symbol}: time_exit_all() in progress, positions closing via time exit"
+    )
+    return True
+
+
+def _exit_already_in_progress(signal, pos) -> bool:
+    """True if another handler is mid-exit on this position.
+
+    asyncio.Lock serializes tasks, but Telethon can dispatch multiple simultaneous TP
+    alerts as separate tasks before any acquires the lock. The flag is set/cleared
+    synchronously (no await between check and set), so it is safe in single-threaded
+    asyncio — it catches the rare case where the lock re-enters before the previous
+    handler fully clears the position.
+    """
+    if pos is not None and getattr(pos, "exit_pending", False) is True:
+        logger.warning(
+            f"EXIT: {signal.symbol} exit already in progress (duplicate TP signal), skipping"
+        )
+        return True
+    return False
+
+
+async def _recover_position_from_broker(signal) -> "TrackedPosition | None":
+    """Rebuild a TrackedPosition after an engine restart lost tracker state.
+
+    Queries the broker for the live quantity and the trades.db audit trail for the
+    entry context. Returns None (after notifying) when there is nothing to exit.
+    """
+    logger.warning(
+        f"EXIT: {signal.symbol} not in tracker for strategy={signal.strategy}, "
+        "checking broker API (engine restart fallback)"
+    )
+    exchange = signal.exchange or settings.exchange
+    product = signal.product or settings.product
+    api_qty = await fetch_open_position(signal.symbol, signal.strategy, exchange, product)
+    if api_qty == 0 or api_qty == -1:
+        logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
+        await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
+        return None
+
+    # Negative qty from broker means SHORT position; positive means LONG.
+    # Use the absolute value for quantity and set direction accordingly.
+    fallback_direction = Direction.SHORT if api_qty < 0 else Direction.LONG
+
+    entry_price, sl_price, tp_price, entry_order_id = _recover_entry_context(signal)
+
+    return TrackedPosition(
+        symbol=signal.symbol,
+        strategy=signal.strategy,
+        exchange=exchange,
+        product=product,
+        entry_price=entry_price,
+        quantity=abs(api_qty),
+        sl=sl_price,
+        tp=tp_price,
+        direction=fallback_direction,
+        entry_order_id=entry_order_id,
+        sl_order_id="",
+    )
+
+
+def _recover_entry_context(signal) -> tuple[float, float, float, str]:
+    """Recover (entry, sl, tp, order_id) for an exit signal from the audit trail.
+
+    EXIT signals synthesize entry=sl=tp=0, so without this lookup the partial-exit
+    SL re-placement logic computes new_sl=0 and skips the bracket, leaving the
+    remaining qty un-protected. (RBLBANK incident, 2026-05-04: 18 qty unprotected
+    after engine restart + TP1.) Falls back to the signal's own values.
+    """
+    recovered = fetch_last_entry_trade(signal.symbol, signal.strategy)
+    if recovered is None:
+        logger.warning(
+            f"EXIT recovery [{signal.symbol}]: no entry trade found in trades.db today "
+            "— partial-exit SL re-placement may be skipped"
+        )
+        return signal.entry, signal.sl, signal.tp, ""
+
+    logger.info(
+        f"EXIT recovery [{signal.symbol}]: restored from trades.db "
+        f"entry={recovered['entry']} sl={recovered['sl']} tp={recovered['tp']} "
+        f"order_id={recovered['order_id']}"
+    )
+    return recovered["entry"], recovered["sl"], recovered["tp"], recovered["order_id"]
+
+
+async def _abort_exit_on_rejected_entry(signal, pos) -> bool:
+    """Guard against phantom exits. True if the exit must be abandoned.
+
+    If the entry order was never confirmed as filled, verify the broker status before
+    placing an exit. A rejected entry leaves no real position; placing a SELL without
+    one would create an unintended naked short.
+    """
+    if not (pos.entry_order_id and pos.fill_price == 0.0):
+        return False
+
+    order_status = await fetch_order_status(pos.entry_order_id, pos.strategy)
+    status_lower = order_status.lower()
+    if status_lower not in ("rejected", "cancelled", "cancel"):
+        return False
+
+    logger.warning(
+        f"EXIT: {pos.symbol} entry order {pos.entry_order_id} was {status_lower} "
+        "— aborting exit (no real position). Cancelling orphaned SL and releasing slot."
+    )
+    if pos.sl_order_id:
+        await cancel_order(pos.sl_order_id, pos.strategy)
+        logger.info(f"EXIT: cancelled orphaned SL {pos.sl_order_id} for {pos.symbol}")
+    risk_engine.record_rejection(symbol=pos.symbol)
+    tracker.unregister(signal.symbol, signal.strategy)
+    await notifier.notify_orphaned_position(
+        pos.symbol, pos.strategy, pos.direction.value,
+        pos.entry_order_id, f"exit blocked: entry order {status_lower}",
+    )
+    return True
+
+
+async def _reconcile_sl_hit(signal, pos) -> None:
+    """Book a close the broker SL-M already executed.
+
+    Do NOT place another SELL (would create naked short). Just clean up tracker.
+    """
+    logger.info(f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker")
+    if pos.sl_order_id:
+        await cancel_order(pos.sl_order_id, pos.strategy)
+    pnl_delta, current_realised = await _book_realised_pnl_delta()
+    total_trade_pnl = pos.realized_pnl + pnl_delta
+    base_price = pos.fill_price or pos.entry_price
+    hold_min = _hold_minutes(pos)
+    r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+    tracker.add_trade_record(TradeRecord(
+        symbol=pos.symbol, direction=pos.direction.value,
+        entry_price=base_price, exit_price=pos.sl,
+        original_qty=pos.original_quantity or pos.quantity,
+        total_pnl=total_trade_pnl, r_multiple=r, exit_types=["SL"],
+    ))
+    tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
+    await notifier.notify_position_closed(
+        pos.symbol, total_trade_pnl, strategy=pos.strategy,
+        exit_price=pos.sl, direction=pos.direction.value,
+        r_multiple=r, entry_price=base_price, hold_minutes=hold_min,
+        exit_types=["SL"],
+        day_context=tracker.day_context_line(settings.max_trades_per_day),
+    )
+    tracker.unregister(signal.symbol, signal.strategy)
+    risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+    if not tracker._positions:
+        await tracker.send_day_summary()
+
+
+async def _cancel_sl_before_exit(pos) -> None:
+    """ALWAYS cancel SL before placing an exit order.
+
+    Indian brokers treat any SELL while SL SELL is active as a new SHORT position
+    (FUND LIMIT INSUFFICIENT). SL must be cancelled first, even for partial exits.
+    """
+    if not pos.sl_order_id:
+        return
+    success = await cancel_order(pos.sl_order_id, pos.strategy)
+    if success:
+        logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
+    else:
+        logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
+
+
+async def _place_exit_order(pos, exit_qty: int):
+    """Build and send the MARKET exit order. Returns (order, result)."""
     exit_order = build_exit_order(
         symbol=pos.symbol,
         exchange=pos.exchange,
@@ -420,6 +470,15 @@ async def _handle_exit_locked(signal) -> None:
         strategy_tag=pos.strategy,
         direction=pos.direction,
     )
+    return exit_order, await _send_exit_with_retries(exit_order, pos)
+
+
+async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
+    """Send the MARKET exit order, retrying up to bracket_tp_exit_retries.
+
+    MARKET orders rarely reject but network timeouts are possible. We retry on any
+    non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
+    """
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
         trade_result = await send_order(exit_order)
@@ -431,239 +490,340 @@ async def _handle_exit_locked(signal) -> None:
         )
         if _attempt < settings.bracket_tp_exit_retries:
             await asyncio.sleep(settings.bracket_retry_delay)
+    return trade_result
 
-    if trade_result.status == OrderStatus.SUCCESS:
-        logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
 
-        # 6. Compute PnL from realised PnL delta (same method as check_positions).
-        # Lock prevents race with check_positions polling concurrently at the same time.
-        async with tracker._pnl_lock:
-            current_realised = await fetch_realised_pnl()
-            pnl_delta = current_realised - tracker._last_realised_pnl
-            tracker._last_realised_pnl = current_realised
-        logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
+async def _book_realised_pnl_delta() -> tuple[float, float]:
+    """Snapshot broker realised P&L and return (delta_since_last, new_total).
 
-        # Compute total trade P&L: partials already in pos.realized_pnl + this leg
-        total_trade_pnl = pos.realized_pnl + pnl_delta
-        base_price = pos.fill_price or pos.entry_price
-        hold_min = int((datetime.now(_IST) - pos.entry_time).total_seconds() / 60) if hasattr(pos, 'entry_time') else 0
+    The lock prevents a race with check_positions polling concurrently.
+    """
+    async with tracker._pnl_lock:
+        current_realised = await fetch_realised_pnl()
+        pnl_delta = current_realised - tracker._last_realised_pnl
+        tracker._last_realised_pnl = current_realised
+    return pnl_delta, current_realised
 
-        # Use the signal's TP price as approximate exit price — MARKET order fills at ~TP.
-        approx_exit_price = signal.tp if signal.tp and signal.tp > 0 else None
 
-        if is_full_exit:
-            # Full exit: unregister position, free risk slot, notify with total trade P&L + R
-            r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-            all_exit_types = pos.exit_types + [tp_level or "EXIT"]
-            tracker.add_trade_record(TradeRecord(
-                symbol=pos.symbol,
-                direction=pos.direction.value,
-                entry_price=base_price,
-                exit_price=approx_exit_price,
-                original_qty=pos.original_quantity or pos.quantity,
-                total_pnl=total_trade_pnl,
-                r_multiple=r,
-                exit_types=all_exit_types,
-            ))
-            # check_positions will count this trade on the next poll (qty drops to 0),
-            # so project the day context here rather than mutating counters twice.
-            day_ctx = tracker.projected_day_context(
-                trade_pnl=total_trade_pnl, pnl_delta=pnl_delta,
-                max_trades=settings.max_trades_per_day,
-            )
-            await notifier.notify_position_closed(
-                pos.symbol, total_trade_pnl, strategy=pos.strategy,
-                exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
-                entry_price=base_price, hold_minutes=hold_min,
-                exit_types=all_exit_types,
-                day_context=day_ctx,
-            )
-            tracker.unregister(signal.symbol, signal.strategy)
-            risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-            # exit_pending does not need clearing — position is unregistered
-        else:
-            # Partial exit: reduce tracked qty, keep position registered
-            remaining = pos.quantity - exit_qty
-            if remaining <= 0:
-                # Defensive: arithmetic produced invalid remainder — treat as full exit
-                logger.warning(
-                    f"Partial exit produced invalid remainder {remaining} for {pos.symbol} "
-                    f"(qty={pos.quantity}, exit_qty={exit_qty}), converting to full exit"
-                )
-                r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-                all_exit_types = pos.exit_types + [tp_level or "EXIT"]
-                tracker.add_trade_record(TradeRecord(
-                    symbol=pos.symbol,
-                    direction=pos.direction.value,
-                    entry_price=base_price,
-                    exit_price=approx_exit_price,
-                    original_qty=pos.original_quantity or pos.quantity,
-                    total_pnl=total_trade_pnl,
-                    r_multiple=r,
-                    exit_types=all_exit_types,
-                ))
-                tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
-                tracker.unregister(signal.symbol, signal.strategy)
-                risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-                await notifier.notify_position_closed(
-                    pos.symbol, total_trade_pnl, strategy=pos.strategy,
-                    exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
-                    entry_price=base_price, hold_minutes=hold_min,
-                    exit_types=all_exit_types,
-                    day_context=tracker.day_context_line(settings.max_trades_per_day),
-                )
-                if not tracker._positions:
-                    await tracker.send_day_summary()
-                return
-            pos.quantity = remaining
-            pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
-            logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
+def _hold_minutes(pos) -> int:
+    """Minutes the position has been open, or 0 if entry time is unknown."""
+    if not hasattr(pos, "entry_time"):
+        return 0
+    return int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
 
-            # Re-place SL at TP1 - 0.1R after partial TP exit (50-50 TP booking strategy).
-            if pos.tp and pos.tp > 0:
-                risk_distance = abs(pos.tp - pos.entry_price)
-                buffer = settings.tp1_runner_sl_buffer * risk_distance
-                if pos.direction == Direction.LONG:
-                    new_sl_price = pos.tp - buffer
-                else:
-                    new_sl_price = pos.tp + buffer
-            else:
-                new_sl_price = pos.entry_price
-            if settings.bracket_enabled and new_sl_price > 0:
-                sl_result = await place_sl_order(
-                    symbol=pos.symbol,
-                    exchange=pos.exchange,
-                    direction=pos.direction,
-                    quantity=remaining,
-                    sl_price=new_sl_price,
-                    product=pos.product,
-                    strategy_tag=pos.strategy,
-                )
-                if sl_result.status == OrderStatus.SUCCESS:
-                    pos.sl = new_sl_price  # update tracked SL so time_exit and check_positions stay consistent
-                    pos.sl_order_id = sl_result.order_id
-                    logger.info(
-                        f"SL moved to TP1-buffer {new_sl_price:.2f} (tp={pos.tp}, buf={settings.tp1_runner_sl_buffer}R) "
-                        f"for {pos.symbol} remaining {remaining} qty: id={sl_result.order_id}"
-                    )
-                else:
-                    logger.error(
-                        f"SL re-placement failed for {pos.symbol} remaining {remaining} qty — "
-                        "position unprotected until TP1.5/time-exit"
-                    )
-                    await notifier.notify_sl_failed(
-                        pos.symbol,
-                        f"SL re-placement failed after partial exit: {sl_result.message}",
-                        strategy=pos.strategy,
-                    )
 
-            # R for this partial leg only (shows how far into the trade we are)
-            r_partial = _compute_r(pnl_delta, exit_qty, base_price, pos.sl)
-            next_tp_info = compute_next_tp(pos, tp_level)
-            next_tp_label = next_tp_info[0] if next_tp_info else None
-            next_tp_price = next_tp_info[1] if next_tp_info else None
-            await notifier.notify_partial_exit(
-                pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta,
-                strategy=pos.strategy, new_sl=pos.sl,
-                next_tp_label=next_tp_label, next_tp_price=next_tp_price,
-                direction=pos.direction.value, r_multiple=r_partial,
-                entry_price=base_price, hold_minutes=hold_min,
-            )
-            # Accumulate partial P&L and record exit label for final TradeRecord
-            pos.realized_pnl += pnl_delta
-            pos.exit_types.append(tp_level or "TP")
-            pos.exit_pending = False  # partial exit done — allow next TP signal
+async def _book_exit_result(
+    signal, pos, tp_level, exit_qty: int, is_full_exit: bool, trade_result
+) -> bool:
+    """Book P&L for a filled exit order.
 
-        # 7. Update day summary counters + realised PnL snapshot
-        # is_partial=True: only P&L accumulated, no trade count. is_partial=False: full trade counted.
-        tracker.record_exit(
-            pnl=pnl_delta,
-            is_partial=not is_full_exit,
-            total_pnl=total_trade_pnl if is_full_exit else None,
-            new_realised_pnl=current_realised,
+    Returns False when the exit has already been fully finalised and the caller must
+    skip the DB save (the defensive invalid-remainder conversion), True otherwise.
+    """
+    logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
+
+    pnl_delta, current_realised = await _book_realised_pnl_delta()
+    logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
+
+    # Total trade P&L: partials already in pos.realized_pnl + this leg
+    total_trade_pnl = pos.realized_pnl + pnl_delta
+    base_price = pos.fill_price or pos.entry_price
+    hold_min = _hold_minutes(pos)
+    # Use the signal's TP price as approximate exit price — MARKET order fills at ~TP.
+    approx_exit_price = signal.tp if signal.tp and signal.tp > 0 else None
+
+    if is_full_exit:
+        await _finalize_full_exit(
+            signal, pos, tp_level, pnl_delta, total_trade_pnl,
+            base_price, hold_min, approx_exit_price,
         )
-
-        # 8. Send day summary if this was the last open position
-        if is_full_exit and not tracker._positions:
-            await tracker.send_day_summary()
     else:
-        logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
-        # Check if broker position is already 0 — SL may have fired in the window between
-        # our SL cancel attempt and this exit order (race condition on fast reversals).
-        # If already flat, clean up tracker silently instead of alarming the user.
-        broker_qty = await fetch_open_position(
-            pos.symbol, pos.strategy,
-            pos.exchange, pos.product,
-        )
-        if broker_qty == 0:
-            logger.info(
-                f"EXIT failed but broker position is already 0 for {pos.symbol} "
-                "— SL likely fired. Cleaning up tracker."
+        remaining = pos.quantity - exit_qty
+        if remaining <= 0:
+            await _finalize_invalid_partial(
+                signal, pos, tp_level, exit_qty, pnl_delta, current_realised,
+                total_trade_pnl, base_price, hold_min, approx_exit_price,
             )
-            tracker.unregister(pos.symbol, pos.strategy)
-            risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
-        else:
-            # Position still open (broker_qty > 0 for LONG, < 0 for SHORT, -1 for API error).
-            # Clear exit_pending so the next TP/EXIT signal can retry.
-            pos.exit_pending = False
-            await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
+            return False
+        await _finalize_partial_exit(
+            pos, tp_level, exit_qty, remaining, pnl_delta,
+            base_price, hold_min,
+        )
 
-    # 8. Persist to DB audit trail
-    save(signal, exit_order, trade_result)
+    # Update day summary counters + realised PnL snapshot.
+    # is_partial=True: only P&L accumulated, no trade count. is_partial=False: full trade counted.
+    tracker.record_exit(
+        pnl=pnl_delta,
+        is_partial=not is_full_exit,
+        total_pnl=total_trade_pnl if is_full_exit else None,
+        new_realised_pnl=current_realised,
+    )
+
+    if is_full_exit and not tracker._positions:
+        await tracker.send_day_summary()
+    return True
+
+
+async def _finalize_full_exit(
+    signal, pos, tp_level, pnl_delta: float, total_trade_pnl: float,
+    base_price: float, hold_min: int, approx_exit_price,
+) -> None:
+    """Unregister the position, free the risk slot, notify with total trade P&L + R."""
+    r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+    all_exit_types = pos.exit_types + [tp_level or "EXIT"]
+    tracker.add_trade_record(TradeRecord(
+        symbol=pos.symbol,
+        direction=pos.direction.value,
+        entry_price=base_price,
+        exit_price=approx_exit_price,
+        original_qty=pos.original_quantity or pos.quantity,
+        total_pnl=total_trade_pnl,
+        r_multiple=r,
+        exit_types=all_exit_types,
+    ))
+    # check_positions will count this trade on the next poll (qty drops to 0),
+    # so project the day context here rather than mutating counters twice.
+    day_ctx = tracker.projected_day_context(
+        trade_pnl=total_trade_pnl, pnl_delta=pnl_delta,
+        max_trades=settings.max_trades_per_day,
+    )
+    await notifier.notify_position_closed(
+        pos.symbol, total_trade_pnl, strategy=pos.strategy,
+        exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
+        entry_price=base_price, hold_minutes=hold_min,
+        exit_types=all_exit_types,
+        day_context=day_ctx,
+    )
+    tracker.unregister(signal.symbol, signal.strategy)
+    risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+    # exit_pending does not need clearing — position is unregistered
+
+
+async def _finalize_invalid_partial(
+    signal, pos, tp_level, exit_qty: int, pnl_delta: float, current_realised: float,
+    total_trade_pnl: float, base_price: float, hold_min: int, approx_exit_price,
+) -> None:
+    """Defensive: a partial exit that leaves no shares is booked as a full close."""
+    logger.warning(
+        f"Partial exit produced invalid remainder {pos.quantity - exit_qty} for {pos.symbol} "
+        f"(qty={pos.quantity}, exit_qty={exit_qty}), converting to full exit"
+    )
+    r = _compute_r(total_trade_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+    all_exit_types = pos.exit_types + [tp_level or "EXIT"]
+    tracker.add_trade_record(TradeRecord(
+        symbol=pos.symbol,
+        direction=pos.direction.value,
+        entry_price=base_price,
+        exit_price=approx_exit_price,
+        original_qty=pos.original_quantity or pos.quantity,
+        total_pnl=total_trade_pnl,
+        r_multiple=r,
+        exit_types=all_exit_types,
+    ))
+    tracker.record_exit(pnl=pnl_delta, is_partial=False, total_pnl=total_trade_pnl, new_realised_pnl=current_realised)
+    tracker.unregister(signal.symbol, signal.strategy)
+    risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+    await notifier.notify_position_closed(
+        pos.symbol, total_trade_pnl, strategy=pos.strategy,
+        exit_price=approx_exit_price, direction=pos.direction.value, r_multiple=r,
+        entry_price=base_price, hold_minutes=hold_min,
+        exit_types=all_exit_types,
+        day_context=tracker.day_context_line(settings.max_trades_per_day),
+    )
+    if not tracker._positions:
+        await tracker.send_day_summary()
+
+
+async def _finalize_partial_exit(
+    pos, tp_level, exit_qty: int, remaining: int, pnl_delta: float,
+    base_price: float, hold_min: int,
+) -> None:
+    """Reduce the tracked qty, re-protect the runner, and notify."""
+    pos.quantity = remaining
+    pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
+    logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
+
+    await _replace_runner_sl(pos, remaining)
+
+    # R for this partial leg only (shows how far into the trade we are)
+    r_partial = _compute_r(pnl_delta, exit_qty, base_price, pos.sl)
+    next_tp_info = compute_next_tp(pos, tp_level)
+    next_tp_label = next_tp_info[0] if next_tp_info else None
+    next_tp_price = next_tp_info[1] if next_tp_info else None
+    await notifier.notify_partial_exit(
+        pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta,
+        strategy=pos.strategy, new_sl=pos.sl,
+        next_tp_label=next_tp_label, next_tp_price=next_tp_price,
+        direction=pos.direction.value, r_multiple=r_partial,
+        entry_price=base_price, hold_minutes=hold_min,
+    )
+    # Accumulate partial P&L and record exit label for final TradeRecord
+    pos.realized_pnl += pnl_delta
+    pos.exit_types.append(tp_level or "TP")
+    pos.exit_pending = False  # partial exit done — allow next TP signal
+
+
+async def _replace_runner_sl(pos, remaining: int) -> None:
+    """Re-place SL at TP1 - 0.1R after a partial TP exit (50-50 TP booking strategy)."""
+    if pos.tp and pos.tp > 0:
+        risk_distance = abs(pos.tp - pos.entry_price)
+        buffer = settings.tp1_runner_sl_buffer * risk_distance
+        if pos.direction == Direction.LONG:
+            new_sl_price = pos.tp - buffer
+        else:
+            new_sl_price = pos.tp + buffer
+    else:
+        new_sl_price = pos.entry_price
+    if not (settings.bracket_enabled and new_sl_price > 0):
+        return
+
+    sl_result = await place_sl_order(
+        symbol=pos.symbol,
+        exchange=pos.exchange,
+        direction=pos.direction,
+        quantity=remaining,
+        sl_price=new_sl_price,
+        product=pos.product,
+        strategy_tag=pos.strategy,
+    )
+    if sl_result.status == OrderStatus.SUCCESS:
+        pos.sl = new_sl_price  # update tracked SL so time_exit and check_positions stay consistent
+        pos.sl_order_id = sl_result.order_id
+        logger.info(
+            f"SL moved to TP1-buffer {new_sl_price:.2f} (tp={pos.tp}, buf={settings.tp1_runner_sl_buffer}R) "
+            f"for {pos.symbol} remaining {remaining} qty: id={sl_result.order_id}"
+        )
+    else:
+        logger.error(
+            f"SL re-placement failed for {pos.symbol} remaining {remaining} qty — "
+            "position unprotected until TP1.5/time-exit"
+        )
+        await notifier.notify_sl_failed(
+            pos.symbol,
+            f"SL re-placement failed after partial exit: {sl_result.message}",
+            strategy=pos.strategy,
+        )
+
+
+async def _handle_exit_order_failure(pos, trade_result) -> None:
+    """Exit order could not be placed — reconcile against the broker before alarming.
+
+    The SL may have fired in the window between our SL cancel attempt and this exit
+    order (race condition on fast reversals). If already flat, clean up silently.
+    """
+    logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
+    broker_qty = await fetch_open_position(
+        pos.symbol, pos.strategy,
+        pos.exchange, pos.product,
+    )
+    if broker_qty == 0:
+        logger.info(
+            f"EXIT failed but broker position is already 0 for {pos.symbol} "
+            "— SL likely fired. Cleaning up tracker."
+        )
+        tracker.unregister(pos.symbol, pos.strategy)
+        risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+    else:
+        # Position still open (broker_qty > 0 for LONG, < 0 for SHORT, -1 for API error).
+        # Clear exit_pending so the next TP/EXIT signal can retry.
+        pos.exit_pending = False
+        await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
 
 
 async def _handle_entry(signal) -> None:
     """Handle a LONG/SHORT entry signal — the existing ORB pipeline.
 
-    Pipeline: check_exposure -> size -> build_order -> send -> bracket -> track -> save
+    Pipeline: symbol rules -> risk gates -> capital -> size -> build_order -> send ->
+    bracket -> fill check -> track -> save
     """
-    # 2. Reject T2T (BE series) symbols for MIS orders — broker will reject immediately.
-    product = signal.product or settings.product
-    if product == "MIS":
-        exchange = signal.exchange or settings.exchange
-        if _is_be_series(signal.symbol, exchange):
-            msg = f"{signal.symbol} is T2T (BE series) — MIS not allowed, add to blacklist to suppress"
-            logger.warning(msg)
-            await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+    if await _entry_rejected_by_symbol_rules(signal):
+        return
+    if not await _entry_passes_risk_gates(signal):
+        return
+
+    capital = await _resolve_entry_capital(signal)
+    if capital is None:
+        return
+
+    # Use day-start capital for equal risk per trade (cached on first fetch of day)
+    sizing_capital = risk_engine.get_sizing_capital(capital)
+    logger.info(f"Capital: live={capital:,.2f} sizing={sizing_capital:,.2f} INR")
+
+    sized = await _resolve_entry_quantity(signal, capital, sizing_capital)
+    if sized is None:
+        return
+    quantity, is_analyze = sized
+
+    rr = _log_entry_sizing(signal, quantity, sizing_capital)
+    order = _build_entry_order(signal, quantity, is_analyze)
+
+    # Send to OpenAlgo (routes to live broker or sandbox automatically)
+    trade_result = await send_order(order)
+    await _notify_entry_outcome(signal, trade_result, rr)
+
+    if trade_result.status == OrderStatus.SUCCESS:
+        if not await _establish_position(signal, quantity, trade_result):
             return
 
-    # 2a. Pre-flight broker reject list — symbols the broker is known to refuse for MIS
+    save(signal, order, trade_result)
+
+
+async def _entry_rejected_by_symbol_rules(signal) -> bool:
+    """True if the symbol itself makes this entry impossible at the broker."""
+    product = signal.product or settings.product
+    if product != "MIS":
+        return False
+
+    # Reject T2T (BE series) symbols for MIS orders — broker will reject immediately.
+    exchange = signal.exchange or settings.exchange
+    if _is_be_series(signal.symbol, exchange):
+        msg = f"{signal.symbol} is T2T (BE series) — MIS not allowed, add to blacklist to suppress"
+        logger.warning(msg)
+        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        return True
+
+    # Pre-flight broker reject list — symbols the broker is known to refuse for MIS
     # (GSM, ASM stage IV, F&O ban list, stock-specific overrides). Avoids a wasted slot
     # and a guaranteed rejection round-trip. Maintained in config.yaml broker_restrictions.
-    if product == "MIS" and signal.symbol.upper() in settings.broker_mis_rejected:
+    if signal.symbol.upper() in settings.broker_mis_rejected:
         msg = (
             f"{signal.symbol} is on broker MIS reject list (broker_restrictions.flattrade.mis_rejected) "
             "— skipping to avoid certain rejection"
         )
         logger.warning(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
-        return
+        return True
 
-    # 3. Check exposure limits
+    return False
+
+
+async def _entry_passes_risk_gates(signal) -> bool:
+    """Exposure, symbol-concentration and sector-concentration limits."""
     if not risk_engine.check_exposure():
         reason = risk_engine.exposure_block_reason()
         logger.warning(f"Risk limit reached, skipping {signal.symbol}: {reason}")
         await notifier.notify_risk_limit_hit(reason)
-        return
+        return False
 
-    # 3a. Symbol concentration check
     if not risk_engine.can_trade_symbol(signal.symbol):
         logger.warning(f"Symbol concentration limit reached for {signal.symbol}")
-        return
+        return False
 
-    # 3b. Sector concentration check
     if not risk_engine.can_trade_sector(signal.symbol):
         logger.warning(f"Sector concentration limit reached for {signal.symbol}")
-        return
+        return False
 
-    # 4. Fetch capital from OpenAlgo funds API
-    #    Returns live broker capital or sandbox capital depending on mode
+    return True
+
+
+async def _resolve_entry_capital(signal) -> float | None:
+    """Fetch live capital from OpenAlgo. Returns None if the entry cannot be funded."""
     capital = await fetch_available_capital()
     if capital <= 0:
         logger.error("Cannot fetch capital from OpenAlgo, skipping trade")
-        return
+        return None
 
-    # 4a. Minimum capital floor — skip entry if live capital is too depleted.
+    # Minimum capital floor — skip entry if live capital is too depleted.
     # When existing positions consume most of the margin, the margin floor scales qty
     # down to tiny sizes (8-12 shares) that get broker-rejected anyway. Blocking here
     # prevents wasted API calls, avoids consuming the trades_per_day counter, and
@@ -675,19 +835,24 @@ async def _handle_entry(signal) -> None:
         )
         logger.warning(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
-        return
+        return None
 
-    # Use day-start capital for equal risk per trade (cached on first fetch of day)
-    sizing_capital = risk_engine.get_sizing_capital(capital)
-    logger.info(f"Capital: live={capital:,.2f} sizing={sizing_capital:,.2f} INR")
+    return capital
 
-    # 5. Calculate position size with sizing capital (day-start if enabled)
+
+async def _resolve_entry_quantity(
+    signal, capital: float, sizing_capital: float
+) -> "tuple[int, bool] | None":
+    """Size the position and fit it to broker margin.
+
+    Returns (quantity, is_analyze) or None if the trade cannot be taken.
+    """
     quantity = risk_engine.calculate_quantity(signal, capital=sizing_capital)
     if quantity <= 0:
         msg = f"Sizing returned 0 for {signal.symbol} — entry price too high for risk budget ({signal.entry:.2f} vs capital={sizing_capital:,.0f})"
         logger.info(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
-        return
+        return None
 
     # Adjust qty to fit actual broker margin (uses live capital, not day-start)
     # Skip in analyze mode: sandbox has fixed virtual capital, broker margin API is not available
@@ -701,18 +866,23 @@ async def _handle_entry(signal) -> None:
             msg = f"Margin API failed: {e}"
             logger.error(f"{signal.symbol}: {msg}, skipping trade")
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
-            return
+            return None
         if quantity <= 0:
             msg = f"Insufficient capital after margin check — {signal.symbol} requires more margin than available (capital={capital:,.0f})"
             logger.warning(msg)
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
-            return
+            return None
 
     # Apply test qty cap if configured (for minimal exposure live testing)
     if settings.test_qty_cap > 0 and quantity > settings.test_qty_cap:
         logger.info(f"Test qty cap: {quantity} -> {settings.test_qty_cap} for {signal.symbol}")
         quantity = settings.test_qty_cap
 
+    return quantity, is_analyze
+
+
+def _log_entry_sizing(signal, quantity: int, sizing_capital: float) -> float:
+    """Emit the one-line sizing audit trail. Returns the reward:risk ratio."""
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
     # Effective SL used for sizing — may be capped if max_sl_pct_for_sizing is set
@@ -738,10 +908,16 @@ async def _handle_entry(signal) -> None:
         f"qty=floor({risk_amount:,.0f}/{adjusted_rps:.2f})={quantity} "
         f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"
     )
+    return rr
 
-    # 6. Build order
-    # In analyze mode with off-hours testing enabled, override MIS→CNC to bypass sandbox
-    # after-hours restriction (sandbox blocks new MIS orders outside 09:00–squareoff window)
+
+def _build_entry_order(signal, quantity: int, is_analyze: bool):
+    """Build the entry order, applying the analyze-mode off-hours product override.
+
+    In analyze mode with off-hours testing enabled, override MIS→CNC to bypass the
+    sandbox after-hours restriction (sandbox blocks new MIS orders outside the
+    09:00–squareoff window).
+    """
     off_hours_product_override = (
         is_analyze
         and settings.allow_off_hours_testing
@@ -749,11 +925,11 @@ async def _handle_entry(signal) -> None:
     )
     if off_hours_product_override:
         logger.info(f"Off-hours testing: overriding product MIS→CNC for {signal.symbol}")
-    order = build_order(signal, quantity, product="CNC" if off_hours_product_override else "")
+    return build_order(signal, quantity, product="CNC" if off_hours_product_override else "")
 
-    # 7. Send to OpenAlgo (routes to live broker or sandbox automatically)
-    trade_result = await send_order(order)
 
+async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
+    """Announce the broker's response to the entry order."""
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
         # +1 because risk_engine.record_trade runs below — this slot is now taken.
@@ -770,100 +946,125 @@ async def _handle_entry(signal) -> None:
         logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
         await notifier.notify_order_rejected(signal.symbol, trade_result.message, strategy=signal.strategy)
 
-    if trade_result.status == OrderStatus.SUCCESS:
-        # 8. Record trade in risk engine
-        risk_engine.record_trade(symbol=signal.symbol)
-        logger.info(f"Capacity: {risk_engine.capacity_status()}")
 
-        # 9. Place SL bracket leg (MIS only)
-        # TP is NOT placed as a broker order — Indian brokers treat a second SELL as a new
-        # short, causing FUND LIMIT INSUFFICIENT. TP exit is driven by TradingView TP HIT
-        # signal -> _handle_exit pipeline. SL-M placed here as broker-side safety net.
-        # CNC: SL-M cancelled at EOD by NSE, no GTT in OpenAlgo — skip bracket entirely.
-        # CNC exits rely on TradingView EXIT alerts (close < 200 SMA, max hold days).
-        sl_order_id = ""
-        product = signal.product or settings.product
-        skip_cnc_bracket = product == "CNC" and not settings.bracket_cnc_sl_enabled
-        if skip_cnc_bracket:
-            logger.info(
-                f"Skipping SL bracket for {signal.symbol}: CNC product, "
-                "SL-M cancelled at EOD by NSE (bracket.cnc_sl_enabled=false)"
-            )
-        if settings.bracket_enabled and not skip_cnc_bracket:
-            sl_result, _ = await send_bracket_legs(signal, quantity, trade_result.order_id)
-            sl_order_id = sl_result.order_id if sl_result else ""
-            if sl_result and sl_result.status == OrderStatus.SUCCESS:
-                await notifier.notify_sl_placed(signal.symbol, sl_order_id, strategy=signal.strategy, sl_price=signal.sl)
-            else:
-                await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
+async def _establish_position(signal, quantity: int, trade_result) -> bool:
+    """Record the trade, protect it with an SL, and register it for tracking.
 
-        # 10. Fetch actual entry fill price (MARKET orders typically fill before bracket completes)
-        entry_fill_price = await fetch_order_fill_price(trade_result.order_id, signal.strategy)
-        if entry_fill_price:
-            slippage = entry_fill_price - signal.entry
-            logger.info(
-                f"Entry fill: {signal.symbol} avg_price={entry_fill_price:.2f} "
-                f"(signal={signal.entry:.2f}, slippage={slippage:+.2f})"
-            )
-        else:
-            logger.warning(f"Entry fill price unavailable for {signal.symbol} id={trade_result.order_id}")
+    Returns False when the fill overshot TP and the position was auto-closed — the
+    caller must then skip the DB save.
+    """
+    risk_engine.record_trade(symbol=signal.symbol)
+    logger.info(f"Capacity: {risk_engine.capacity_status()}")
 
-        # 10a. Post-fill TP overshoot check — high slippage can push fill past the TP target,
-        # leaving the position with negative reward and a disproportionately wide SL.
-        # Detect and auto-close before registering in the tracker.
-        fill_overshot_tp = entry_fill_price and (
-            (signal.direction == Direction.LONG  and entry_fill_price >= signal.tp) or
-            (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
+    sl_order_id = await _place_entry_bracket(signal, quantity, trade_result.order_id)
+    entry_fill_price = await _fetch_entry_fill(signal, trade_result.order_id)
+
+    if await _auto_close_on_tp_overshoot(signal, quantity, entry_fill_price, sl_order_id):
+        return False
+
+    # Always notify LIVE so trader knows position is active and SL is protecting it.
+    # fill_price=0 triggers "fill pending" wording in the message.
+    await notifier.notify_entry_filled(
+        signal.symbol, signal.direction.value, entry_fill_price or 0.0,
+        quantity, signal.entry, strategy=signal.strategy, sl=signal.sl, tp=signal.tp,
+    )
+
+    tracker.register(TrackedPosition(
+        symbol=signal.symbol,
+        strategy=signal.strategy,
+        exchange=signal.exchange or settings.exchange,
+        product=signal.product or settings.product,
+        entry_price=signal.entry,
+        quantity=quantity,
+        sl=signal.sl,
+        tp=signal.tp,
+        direction=signal.direction,
+        entry_order_id=trade_result.order_id,
+        sl_order_id=sl_order_id,
+        fill_price=entry_fill_price or 0.0,
+    ))
+    return True
+
+
+async def _place_entry_bracket(signal, quantity: int, entry_order_id: str) -> str:
+    """Place the SL bracket leg (MIS only). Returns the SL order id, or "" if none.
+
+    TP is NOT placed as a broker order — Indian brokers treat a second SELL as a new
+    short, causing FUND LIMIT INSUFFICIENT. TP exit is driven by TradingView TP HIT
+    signal -> _handle_exit pipeline. SL-M placed here as broker-side safety net.
+    CNC: SL-M cancelled at EOD by NSE, no GTT in OpenAlgo — skip bracket entirely.
+    CNC exits rely on TradingView EXIT alerts (close < 200 SMA, max hold days).
+    """
+    product = signal.product or settings.product
+    skip_cnc_bracket = product == "CNC" and not settings.bracket_cnc_sl_enabled
+    if skip_cnc_bracket:
+        logger.info(
+            f"Skipping SL bracket for {signal.symbol}: CNC product, "
+            "SL-M cancelled at EOD by NSE (bracket.cnc_sl_enabled=false)"
         )
-        if fill_overshot_tp:
-            logger.error(
-                f"Fill overshot TP for {signal.symbol}: fill={entry_fill_price:.2f} "
-                f"tp={signal.tp:.2f} direction={signal.direction.value} — auto-closing position"
-            )
-            if sl_order_id:
-                await cancel_order(sl_order_id, signal.strategy)
-            close_order = build_exit_order(
-                symbol=signal.symbol,
-                exchange=signal.exchange or settings.exchange,
-                quantity=quantity,
-                product=signal.product or settings.product,
-                strategy_tag=signal.strategy,
-                direction=signal.direction,
-            )
-            await send_order(close_order)
-            risk_engine.record_close(0.0, symbol=signal.symbol)
-            await notifier.notify_order_rejected(
-                signal.symbol,
-                f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} — auto-closed",
-                strategy=signal.strategy,
-            )
-            return
+    if not (settings.bracket_enabled and not skip_cnc_bracket):
+        return ""
 
-        # Always notify LIVE so trader knows position is active and SL is protecting it.
-        # fill_price=0 triggers "fill pending" wording in the message.
-        await notifier.notify_entry_filled(
-            signal.symbol, signal.direction.value, entry_fill_price or 0.0,
-            quantity, signal.entry, strategy=signal.strategy, sl=signal.sl, tp=signal.tp,
+    sl_result, _ = await send_bracket_legs(signal, quantity, entry_order_id)
+    sl_order_id = sl_result.order_id if sl_result else ""
+    if sl_result and sl_result.status == OrderStatus.SUCCESS:
+        await notifier.notify_sl_placed(signal.symbol, sl_order_id, strategy=signal.strategy, sl_price=signal.sl)
+    else:
+        await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
+    return sl_order_id
+
+
+async def _fetch_entry_fill(signal, entry_order_id: str) -> float | None:
+    """Fetch the actual entry fill price and log the slippage against the signal."""
+    entry_fill_price = await fetch_order_fill_price(entry_order_id, signal.strategy)
+    if entry_fill_price:
+        slippage = entry_fill_price - signal.entry
+        logger.info(
+            f"Entry fill: {signal.symbol} avg_price={entry_fill_price:.2f} "
+            f"(signal={signal.entry:.2f}, slippage={slippage:+.2f})"
         )
+    else:
+        logger.warning(f"Entry fill price unavailable for {signal.symbol} id={entry_order_id}")
+    return entry_fill_price
 
-        # 11. Register in position tracker for P&L monitoring and SL close-detection
-        tracker.register(TrackedPosition(
-            symbol=signal.symbol,
-            strategy=signal.strategy,
-            exchange=signal.exchange or settings.exchange,
-            product=signal.product or settings.product,
-            entry_price=signal.entry,
-            quantity=quantity,
-            sl=signal.sl,
-            tp=signal.tp,
-            direction=signal.direction,
-            entry_order_id=trade_result.order_id,
-            sl_order_id=sl_order_id,
-            fill_price=entry_fill_price or 0.0,
-        ))
 
-    # 12. Persist to DB
-    save(signal, order, trade_result)
+async def _auto_close_on_tp_overshoot(
+    signal, quantity: int, entry_fill_price, sl_order_id: str
+) -> bool:
+    """Close immediately if the fill landed past TP. True if the position was closed.
+
+    High slippage can push the fill past the TP target, leaving the position with
+    negative reward and a disproportionately wide SL.
+    """
+    fill_overshot_tp = entry_fill_price and (
+        (signal.direction == Direction.LONG  and entry_fill_price >= signal.tp) or
+        (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
+    )
+    if not fill_overshot_tp:
+        return False
+
+    logger.error(
+        f"Fill overshot TP for {signal.symbol}: fill={entry_fill_price:.2f} "
+        f"tp={signal.tp:.2f} direction={signal.direction.value} — auto-closing position"
+    )
+    if sl_order_id:
+        await cancel_order(sl_order_id, signal.strategy)
+    close_order = build_exit_order(
+        symbol=signal.symbol,
+        exchange=signal.exchange or settings.exchange,
+        quantity=quantity,
+        product=signal.product or settings.product,
+        strategy_tag=signal.strategy,
+        direction=signal.direction,
+    )
+    await send_order(close_order)
+    risk_engine.record_close(0.0, symbol=signal.symbol)
+    await notifier.notify_order_rejected(
+        signal.symbol,
+        f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} — auto-closed",
+        strategy=signal.strategy,
+    )
+    return True
 
 
 async def handle_message(text: str) -> None:
@@ -896,273 +1097,17 @@ async def handle_message(text: str) -> None:
         await _handle_entry(signal)
 
 
-async def _test_signal(text: str) -> None:
-    """Process a single test signal through the full pipeline, then exit.
-
-    Used with --test CLI flag for manual live market testing without Telegram.
-    """
-    setup_logger()
-    logger.info("Signal Engine TEST MODE — processing single signal")
-
-    if settings.test_qty_cap > 0:
-        logger.info(f"Test qty cap active: max {settings.test_qty_cap} shares per order")
-    else:
-        logger.warning("test_qty_cap is 0 (disabled) — full position sizing will be used")
-
-    # Detect trading mode for logging
-    mode_str, is_analyze = await fetch_trading_mode()
-    mode_label = "ANALYZE" if is_analyze else "LIVE"
-    logger.info(f"Trading mode: {mode_label}")
-
-    capital = await fetch_available_capital()
-    if capital > 0:
-        logger.info(f"Available capital: {capital:,.2f} INR")
-
-    logger.info(f"Input signal:\n{text}")
-    await handle_message(text)
-    logger.info("Test signal processing complete")
-
-
 def main() -> None:
     """Entry point — start the signal engine with position tracker."""
     setup_logger()
 
-    # --smoke-test: connectivity + pipeline health check, exit with 0/1
-    if "--smoke-test" in sys.argv or "--dry-run" in sys.argv:
-        from signal_engine.smoke_test import run_smoke_test, run_dry_run
-        is_dry = "--dry-run" in sys.argv
-
-        async def _run_checks():
-            report = await run_dry_run() if is_dry else await run_smoke_test()
-            report.print()
-            sys.exit(0 if report.all_passed else 1)
-
-        try:
-            asyncio.run(_run_checks())
-        except KeyboardInterrupt:
-            sys.exit(1)
+    if startup.run_health_check_cli(sys.argv):
+        return
+    if startup.run_test_signal_cli(sys.argv, handle_message):
         return
 
-    # --test mode: read signal from stdin or file, process once, exit
-    if "--test" in sys.argv:
-        # Read signal text from: --test "signal text" OR --test-file path OR stdin
-        idx = sys.argv.index("--test")
-        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--"):
-            signal_text = sys.argv[idx + 1]
-        elif "--test-file" in sys.argv:
-            fidx = sys.argv.index("--test-file")
-            if fidx + 1 < len(sys.argv):
-                with open(sys.argv[fidx + 1]) as f:
-                    signal_text = f.read().strip()
-            else:
-                logger.error("--test-file requires a path argument")
-                sys.exit(1)
-        else:
-            logger.info("Reading signal from stdin (paste signal, then Ctrl+D):")
-            signal_text = sys.stdin.read().strip()
-
-        if not signal_text:
-            logger.error("No signal text provided")
-            sys.exit(1)
-
-        asyncio.run(_test_signal(signal_text))
-        sys.exit(0)
-
-    logger.info("Signal Engine starting")
-    logger.info(f"Sizing mode: {settings.sizing_mode}")
-    if settings.use_day_start_capital:
-        logger.info("Day-start capital: enabled (equal risk per trade)")
-    logger.info(f"Min R:R: {settings.min_rr}")
-    logger.info(f"Position poll interval: {settings.poll_interval}s")
-    for ch in settings.telegram_channels:
-        logger.info(f"Telegram channel: {ch.name} ({ch.id})")
-
-    async def run():
-        loop = asyncio.get_running_loop()
-        shutdown_event = asyncio.Event()
-
-        def _signal_handler():
-            logger.info("Shutdown signal received, stopping gracefully...")
-            shutdown_event.set()
-
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _signal_handler)
-
-        # ── Startup health checks ──────────────────────────────────────────────
-        # Run before accepting any signals. Critical failures abort startup and
-        # notify via Telegram. Warning failures are logged but allow startup.
-        from signal_engine.smoke_test import run_startup_checks, _CRITICAL_CHECKS, _WARNING_CHECKS
-        startup_report = await run_startup_checks()
-        startup_report.print()
-
-        failed_critical = [c for c in startup_report.checks if not c.passed and c.name in _CRITICAL_CHECKS]
-        failed_warnings = [c for c in startup_report.checks if not c.passed and c.name in _WARNING_CHECKS]
-
-        if failed_warnings:
-            warn_lines = "\n".join(f"  WARN {c.name}: {c.message}" for c in failed_warnings)
-            logger.warning(f"Startup warnings (non-fatal):\n{warn_lines}")
-
-        if failed_critical:
-            fail_lines = "\n".join(f"  FAIL {c.name}: {c.message}" for c in failed_critical)
-            logger.critical(f"Startup checks FAILED — aborting:\n{fail_lines}")
-            summary = "\n".join(f"FAIL: {c.name}\n  {c.message}" for c in failed_critical)
-            await notifier.notify_startup_result(all_passed=False, summary=summary)
-            shutdown_event.set()
-            return
-
-        # Notify startup result (pass summary with warnings if any)
-        warn_note = ""
-        if failed_warnings:
-            warn_note = "\nWarnings:\n" + "\n".join(f"  {c.name}" for c in failed_warnings)
-        await notifier.notify_startup_result(all_passed=True, summary=f"All critical checks passed.{warn_note}")
-        # ── End startup checks ─────────────────────────────────────────────────
-
-        # Detect and log trading mode
-        mode_str, is_analyze = await fetch_trading_mode()
-        if is_analyze:
-            logger.info("Trading mode: ANALYZE (sandbox capital)")
-        else:
-            logger.info("Trading mode: LIVE (broker capital)")
-
-        # ── Position reconciliation ────────────────────────────────────────────
-        # Reconcile stored open_positions against actual broker positions on startup
-        # AND restore tracker state for any open positions found at the broker.
-        # Without restoration the in-memory tracker is empty after a restart, so any
-        # subsequent TP HIT alert hits the fallback path with EXIT-signal zeroes
-        # (entry=sl=tp=0) and the partial-exit SL re-placement is skipped, leaving
-        # the runner qty un-protected. RBLBANK incident, 2026-05-04.
-        if risk_engine.open_positions > 0:
-            from signal_engine.api_client import fetch_positionbook
-            positions = await fetch_positionbook()
-            if positions is not None:
-                configured_product = settings.product  # MIS or CNC
-                product_map = {"MIS": "I", "CNC": "C", "NRML": "M"}
-                broker_product = product_map.get(configured_product, configured_product)
-                open_broker_positions = [
-                    p for p in positions
-                    if int(p.get("quantity", 0)) != 0
-                    and p.get("product", "").upper() in (configured_product, broker_product)
-                ]
-                actual_open = len(open_broker_positions)
-                if actual_open != risk_engine.open_positions:
-                    logger.warning(
-                        f"Position mismatch: stored open_positions={risk_engine.open_positions}, "
-                        f"broker reports {actual_open} open — correcting and persisting"
-                    )
-                    risk_engine.open_positions = actual_open
-                    risk_engine._persist()
-                else:
-                    logger.info(f"Position reconciliation: stored={risk_engine.open_positions} matches broker={actual_open}")
-
-                # Restore tracker state from trades.db so partial-exit / time-exit / no-progress
-                # paths see real entry/sl/tp values instead of EXIT-signal zeroes.
-                restored = 0
-                for bp in open_broker_positions:
-                    bsymbol = bp.get("symbol", "")
-                    if not bsymbol:
-                        continue
-                    bqty = abs(int(bp.get("quantity", 0)))
-                    bdir = Direction.LONG if int(bp.get("quantity", 0)) > 0 else Direction.SHORT
-                    bexch = bp.get("exchange", settings.exchange)
-                    bprod = configured_product
-                    # Look up the most recent entry trade today; fall back to a partial
-                    # registration if absent so at least time-exit and no-progress paths
-                    # have something to work with.
-                    found = fetch_last_entry_trade(bsymbol, "ORB")
-                    if found is None:
-                        for sk in settings.strategy_profiles.keys():
-                            found = fetch_last_entry_trade(bsymbol, sk)
-                            if found is not None:
-                                strategy_for_pos = sk
-                                break
-                        else:
-                            strategy_for_pos = "ORB"
-                    else:
-                        strategy_for_pos = "ORB"
-                    if found is None:
-                        logger.warning(
-                            f"Tracker restore [{bsymbol}]: no entry trade in trades.db today "
-                            "— skipping (TP/SL alerts will use fallback path)"
-                        )
-                        continue
-                    if tracker.find_position(bsymbol, strategy_for_pos) is not None:
-                        continue
-                    pos = TrackedPosition(
-                        symbol=bsymbol,
-                        strategy=strategy_for_pos,
-                        exchange=bexch,
-                        product=bprod,
-                        entry_price=found["entry"],
-                        quantity=bqty,
-                        sl=found["sl"],
-                        tp=found["tp"],
-                        direction=bdir,
-                        entry_order_id=found["order_id"],
-                        sl_order_id="",  # unknown after restart; new SL placed only on partial-exit
-                        fill_price=float(bp.get("average_price", 0) or 0),
-                        ever_seen_nonzero_qty=True,
-                    )
-                    tracker.register(pos)
-                    restored += 1
-                    logger.info(
-                        f"Tracker restored [{bsymbol}:{strategy_for_pos}]: qty={bqty} "
-                        f"entry={found['entry']} sl={found['sl']} tp={found['tp']}"
-                    )
-                if restored > 0:
-                    logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
-            else:
-                logger.warning("Position reconciliation: could not fetch positionbook, skipping")
-        # ── End position reconciliation ────────────────────────────────────────
-
-        # Log risk state summary (restored counters + config)
-        startup_capital = await fetch_available_capital()
-        if startup_capital > 0:
-            risk_engine.log_startup_summary(startup_capital)
-            mode_label = "ANALYZE" if is_analyze else "LIVE"
-            await notifier.notify_engine_started(startup_capital, mode_label)
-
-        # Start position tracker in background
-        tracker_task = asyncio.create_task(tracker.start())
-
-        # Start time exit scheduler if enabled
-        time_exit_task = None
-        if settings.time_exit_enabled:
-            time_exit_scheduler = TimeExitScheduler(
-                tracker, settings.time_exit_hour, settings.time_exit_minute
-            )
-            time_exit_task = asyncio.create_task(time_exit_scheduler.start())
-            logger.info(
-                f"Time exit enabled: {settings.time_exit_hour:02d}:{settings.time_exit_minute:02d} IST"
-            )
-
-        try:
-            listener_task = asyncio.create_task(start_listener(handle_message))
-            # Wait for either the listener to finish or a shutdown signal
-            _, pending = await asyncio.wait(
-                [listener_task, asyncio.create_task(shutdown_event.wait())],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            # Send stopped notification while the Telethon client is still alive
-            # (listener_task not yet cancelled — must happen before task.cancel())
-            try:
-                await asyncio.wait_for(notifier.notify_engine_stopped(), timeout=5.0)
-            except Exception:
-                logger.debug("Could not send engine stopped notification")
-            for task in pending:
-                task.cancel()
-        finally:
-            tracker.stop()
-            tracker_task.cancel()
-            if time_exit_task is not None:
-                time_exit_scheduler.stop()
-                time_exit_task.cancel()
-            logger.info("Signal Engine stopped")
-
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        logger.info("Signal Engine interrupted")
-        sys.exit(0)
+    startup.log_startup_banner()
+    startup.start_engine(risk_engine, tracker, handle_message)
 
 
 if __name__ == "__main__":
