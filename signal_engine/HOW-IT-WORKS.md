@@ -229,6 +229,74 @@ That's the full loop.
 
 ---
 
+## Reading the logs
+
+`signal_engine/logs/signal_engine_YYYY-MM-DD.log`, one file per trading day, 30-day
+retention. Every line is pipe-delimited with a fixed set of columns:
+
+```
+2026-08-21 09:47:12 | INFO    | FEDERALBNK   | main    | EXIT: FEDERALBNK tp_level=TP1 exit_qty=45/45 full_exit=True
+     time           level      symbol         module    message
+```
+
+The **symbol column** is the one that matters. Every line emitted while handling a
+signal, polling a tracked position, or force-closing at time exit carries the symbol
+it concerns. Lines with no symbol context — startup, config, day summary — show `-`.
+
+### The four commands that answer most questions
+
+```bash
+cd signal_engine/logs
+L=signal_engine_$(date +%F).log          # today; substitute any date
+
+# 1. Everything that happened to one stock, start to finish
+grep ' FEDERALBNK ' "$L"
+
+# 2. What went wrong today, and for which stocks
+grep -E '\| (WARNING|ERROR) ' "$L"
+
+# 3. Which stocks were touched at all today
+awk -F' [|] ' '{gsub(/ +$/, "", $3); if ($3 != "-") print $3}' "$L" | sort -u
+
+# 4. Just the decisions, no noise — entries, exits, closes, rejections
+grep -E 'Parsed signal|Order placed|EXIT:|Position closed|rejected|Risk limit' "$L"
+```
+
+### Following a single trade
+
+`grep ' SYMBOL ' "$L"` gives the whole life of the position in order: the parsed
+signal, the risk gates, the sizing line (capital, risk/share, R:R, computed qty),
+the order id, the SL bracket, the fill price and slippage, then every exit leg with
+its P&L and R-multiple. If a trade behaved oddly, that single grep is the whole story.
+
+### Across several days
+
+```bash
+grep -h ' FEDERALBNK ' signal_engine_2026-08-*.log        # one stock, whole month
+grep -hc '| ERROR ' signal_engine_2026-08-*.log           # error count per day
+grep -h 'Position closed' signal_engine_2026-08-*.log     # every close, with R
+```
+
+### When INFO is not enough
+
+The file sink is INFO by default to keep a trading day readable. For poll-level
+detail (per-cycle position checks, guard decisions, throttled debug lines):
+
+```bash
+SIGNAL_ENGINE_LOG_LEVEL=DEBUG uv run python -m signal_engine.main
+```
+
+### One caveat
+
+The symbol column was added on 2026-08-23. Logs from before that date have four
+columns (time / level / module / message), so command 3 above will list module names
+rather than symbols when pointed at them. Commands 1, 2 and 4 work on both formats.
+
+### The other log file
+
+`openalgoctl.log` is the shell wrapper's own output (start/stop/scheduling), not the
+engine. It rotates at 5MB to `openalgoctl.log.old.gz` — read it with `zless` / `zgrep`.
+
 ## Known issues & follow-ups (2026-05-05)
 
 These were surfaced from a forensic review of the multi-TP booking flow across 22 sessions (Apr 3 → May 4). The TP1-partial → TP1.5-close path is **logically correct** but only worked end-to-end in **5 of 16 candidate trades (31%)** in the historical sample. Tracking each fix below by priority so we can pick them up later.

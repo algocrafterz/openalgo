@@ -35,10 +35,13 @@ NET_MAX_WAIT=120
 
 log() { echo "[openalgoctl] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
-# --- Log rotation (5MB cap) ---
+# --- Log rotation (5MB cap, one compressed generation kept) ---
 rotate_log() {
     if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 5242880 ]; then
         mv "$LOG_FILE" "$LOG_FILE.old"
+        # Compress the rotated copy: it is ~10x smaller and still readable with zless/zgrep.
+        rm -f "$LOG_FILE.old.gz"
+        gzip -9 "$LOG_FILE.old" 2>/dev/null || true
     fi
 }
 

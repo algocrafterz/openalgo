@@ -284,8 +284,9 @@ class PositionTracker:
         # Snapshot the position list so concurrent _handle_exit_locked unregisters
         # don't mutate the dict mid-iteration (RuntimeError on dict-size-change).
         for key, pos in list(self._positions.items()):
-            if await self._check_one_position(key, pos, book_data, _settings):
-                closed_keys.append(key)
+            with logger.contextualize(symbol=pos.symbol):
+                if await self._check_one_position(key, pos, book_data, _settings):
+                    closed_keys.append(key)
 
         for key in closed_keys:
             del self._positions[key]
@@ -550,7 +551,8 @@ class PositionTracker:
             if fired is None:
                 continue
 
-            await self._apply_no_progress_action(pos, now, fired, _settings)
+            with logger.contextualize(symbol=pos.symbol):
+                await self._apply_no_progress_action(pos, now, fired, _settings)
 
     def _no_progress_gates(self, _settings) -> "List[tuple]":
         """Build the ordered gate list: (age_threshold, progress_threshold, label).
@@ -859,31 +861,36 @@ class PositionTracker:
 
         # Clear only MIS positions and update risk engine
         for key, pos in mis_positions.items():
-            base_price = _break_even_base(pos)
-            total_pnl = pos.realized_pnl + per_pos_pnl
-            r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-            hold_min = int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
-            self._completed_trades.append(TradeRecord(
-                symbol=pos.symbol,
-                direction=pos.direction.value,
-                entry_price=base_price,
-                exit_price=None,
-                original_qty=pos.original_quantity or pos.quantity,
-                total_pnl=total_pnl,
-                r_multiple=r,
-                exit_types=pos.exit_types[:] + ["TIME"],
-            ))
-            self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
-            self._day_trades += 1
-            self._day_time_exits += 1
-            await notifier.notify_time_exit(
-                pos.symbol, strategy=pos.strategy, direction=pos.direction.value,
-                pnl=total_pnl, r_multiple=r,
-                entry_price=base_price, hold_minutes=hold_min,
-                day_context=self.day_context_line(_settings.max_trades_per_day),
-            )
-            logger.info(f"Time exit: cleared tracker entry {key}")
-            del self._positions[key]
+            with logger.contextualize(symbol=pos.symbol):
+                await self._book_one_time_exit(key, pos, per_pos_pnl, _settings)
+
+    async def _book_one_time_exit(self, key: str, pos, per_pos_pnl: float, _settings) -> None:
+        """Record one force-closed MIS position and drop it from the tracker."""
+        base_price = _break_even_base(pos)
+        total_pnl = pos.realized_pnl + per_pos_pnl
+        r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
+        hold_min = int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
+        self._completed_trades.append(TradeRecord(
+            symbol=pos.symbol,
+            direction=pos.direction.value,
+            entry_price=base_price,
+            exit_price=None,
+            original_qty=pos.original_quantity or pos.quantity,
+            total_pnl=total_pnl,
+            r_multiple=r,
+            exit_types=pos.exit_types[:] + ["TIME"],
+        ))
+        self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+        self._day_trades += 1
+        self._day_time_exits += 1
+        await notifier.notify_time_exit(
+            pos.symbol, strategy=pos.strategy, direction=pos.direction.value,
+            pnl=total_pnl, r_multiple=r,
+            entry_price=base_price, hold_minutes=hold_min,
+            day_context=self.day_context_line(_settings.max_trades_per_day),
+        )
+        logger.info(f"Time exit: cleared tracker entry {key}")
+        del self._positions[key]
 
     def _reset_day_counters(self) -> None:
         """Clear day summary state so the next session starts from zero."""

@@ -1079,7 +1079,7 @@ async def handle_message(text: str) -> None:
         logger.debug("Unparseable message, skipping")
         return
 
-    logger.info(
+    logger.bind(symbol=signal.symbol).info(
         f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol} "
         f"entry={signal.entry} sl={signal.sl} tp={signal.tp}"
     )
@@ -1090,11 +1090,14 @@ async def handle_message(text: str) -> None:
         logger.info(f"Signal {result.status.value}: {result.reason}")
         return
 
-    # 3. Dispatch based on direction
-    if signal.direction == Direction.EXIT:
-        await _handle_exit(signal)
-    else:
-        await _handle_entry(signal)
+    # 3. Dispatch based on direction.
+    # contextualize tags every line emitted downstream with the symbol, so a whole
+    # trade can be pulled out of the log with a single grep.
+    with logger.contextualize(symbol=signal.symbol):
+        if signal.direction == Direction.EXIT:
+            await _handle_exit(signal)
+        else:
+            await _handle_entry(signal)
 
 
 def main() -> None:
