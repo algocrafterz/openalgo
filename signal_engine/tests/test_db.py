@@ -1,7 +1,5 @@
 """Tests for trade persistence — RED phase first."""
 
-import os
-import sqlite3
 
 import pytest
 
@@ -9,10 +7,8 @@ from signal_engine.db import save, _get_connection
 from signal_engine.strategies import ORB
 from signal_engine.models import (
     Action,
-    Direction,
     Order,
     OrderStatus,
-    Signal,
     TradeResult,
 )
 from signal_engine.tests.conftest import make_signal as _make_signal

@@ -1,6 +1,5 @@
 """Tests for signal parser — RED phase first."""
 
-import pytest
 
 from signal_engine.parser import parse
 

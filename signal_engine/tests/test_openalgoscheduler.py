@@ -1,7 +1,7 @@
 """Tests for openalgoscheduler — broker-neutral startup/shutdown automation."""
 
 import importlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

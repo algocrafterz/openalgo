@@ -1,11 +1,10 @@
 """Tests for config loader — fail-fast on missing or invalid values."""
 
-import os
 
 import pytest
 import yaml
 
-from signal_engine.config import _build_settings, _load_yaml, ConfigError
+from signal_engine.config import _build_settings, ConfigError
 
 
 class TestConfigFileMissing:

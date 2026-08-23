@@ -1,6 +1,5 @@
 """Tests for persistent risk counter storage."""
 
-import sqlite3
 from datetime import date
 
 import pytest

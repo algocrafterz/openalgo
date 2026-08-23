@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 from signal_engine.executor import build_order, build_exit_order, build_sl_order, send_bracket_legs, send_order
-from signal_engine.models import Action, Direction, OrderStatus, Signal
+from signal_engine.models import Action, Direction, OrderStatus
 from signal_engine.tests.conftest import make_signal as _make_signal
 
 

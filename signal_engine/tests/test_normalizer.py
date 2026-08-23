@@ -1,6 +1,5 @@
 """Tests for signal normalizer — preprocesses noisy messages into canonical format."""
 
-import pytest
 
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
