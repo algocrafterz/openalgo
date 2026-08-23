@@ -2,16 +2,16 @@
 
 import math
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime
 from typing import Dict, List, Optional
 
 # Indian Standard Time — all daily counters use IST so the "day" resets at
 # midnight IST (18:30 UTC), not UTC midnight (05:30 IST next morning).
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 from loguru import logger
 
 from signal_engine.models import Signal
+from signal_engine.timeutils import IST
 
 
 class RiskEngine:
@@ -102,7 +102,7 @@ class RiskEngine:
         self.weekly_realised_loss: float = 0.0
         self.monthly_realised_loss: float = 0.0
         self._last_known_capital: float = 0.0
-        self._current_day: int = datetime.now(_IST).timetuple().tm_yday
+        self._current_day: int = datetime.now(IST).timetuple().tm_yday
 
         # Unrealised drawdown
         self.unrealised_loss: float = 0.0
@@ -120,7 +120,7 @@ class RiskEngine:
 
     def _restore(self) -> None:
         """Load today's counters from the persistent store."""
-        today = datetime.now(_IST).date()
+        today = datetime.now(IST).date()
         row = self._store.load(self._trade_mode, today)
         self.trades_today = row["trades_today"]
         self.daily_realised_loss = row["daily_loss"]
@@ -191,7 +191,7 @@ class RiskEngine:
         """Save current counters to the persistent store."""
         if self._store is None:
             return
-        today = datetime.now(_IST).date()
+        today = datetime.now(IST).date()
         self._store.save(
             self._trade_mode,
             today,
@@ -202,7 +202,7 @@ class RiskEngine:
         )
 
     def _maybe_reset_daily(self) -> None:
-        today = datetime.now(_IST).timetuple().tm_yday
+        today = datetime.now(IST).timetuple().tm_yday
         if today != self._current_day:
             logger.info("New trading day detected, resetting daily counters")
             self._current_day = today

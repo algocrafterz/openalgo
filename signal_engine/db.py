@@ -2,14 +2,14 @@
 
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 from loguru import logger
 
 from signal_engine.models import Direction, Order, Signal, TradeResult
+from signal_engine.timeutils import IST
 
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "data", "trades.db")
 
@@ -88,7 +88,7 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> Optional[dict]:
     Returns a dict with: entry, sl, tp, quantity, order_id, direction, executed_at.
     """
     try:
-        today = datetime.now(_IST).strftime("%Y-%m-%d")
+        today = datetime.now(IST).strftime("%Y-%m-%d")
         conn = _get_connection()
         cur = conn.execute(
             """

@@ -3,6 +3,12 @@
 All endpoints respect OpenAlgo's analyze mode automatically:
 - Live mode: returns real broker data
 - Analyze mode: returns sandbox data (1Cr virtual capital)
+
+Every call goes through one of two transports:
+- `_post_json`  — raises on HTTP >= 400; for endpoints where a failed request means
+                  "no answer" and the caller falls back to a safe default.
+- `_post_tolerant` — never raises on HTTP status; for endpoints where the error body
+                  carries the reason the caller needs to report.
 """
 
 import asyncio
@@ -18,26 +24,63 @@ class MarginAPIError(Exception):
     """Raised when the Margin API fails after all retries."""
 
 
+# ---------------------------------------------------------------------------
+# Transport
+# ---------------------------------------------------------------------------
+
+def _url(path: str) -> str:
+    """Absolute URL for an OpenAlgo v1 endpoint."""
+    return f"{settings.openalgo_base_url}/api/v1/{path}"
+
+
+def _auth(**extra) -> dict:
+    """Request body carrying the API key, plus any endpoint-specific fields."""
+    return {"apikey": settings.openalgo_api_key, **extra}
+
+
+def _json_or_empty(response) -> dict:
+    """Parse a JSON body, tolerating endpoints that answer with a non-JSON error page."""
+    if response.headers.get("content-type", "").startswith("application/json"):
+        return response.json()
+    return {}
+
+
+async def _post_json(path: str, payload: dict) -> dict:
+    """POST and return the parsed body. Raises on connection failure or HTTP >= 400."""
+    async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+        response = await client.post(_url(path), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+async def _post_tolerant(path: str, payload: dict):
+    """POST without raising on HTTP status.
+
+    Returns the raw response so callers can reach `status_code` and, when the body is
+    not JSON, `text` for the failure reason.
+    """
+    async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+        return await client.post(_url(path), json=payload)
+
+
+# ---------------------------------------------------------------------------
+# Account state
+# ---------------------------------------------------------------------------
+
 async def fetch_trading_mode() -> Tuple[str, bool]:
     """Check if OpenAlgo is in live or analyze mode.
 
     Returns (mode_str, is_analyze) e.g. ("analyze", True) or ("live", False).
     Returns ("unknown", False) on failure.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/analyzer"
-    payload = {"apikey": settings.openalgo_api_key}
-
     try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") != "success":
-                return ("unknown", False)
-            mode_data = data.get("data", {})
-            is_analyze = bool(mode_data.get("analyze_mode", False))
-            mode_str = mode_data.get("mode", "unknown")
-            return (mode_str, is_analyze)
+        data = await _post_json("analyzer", _auth())
+        if data.get("status") != "success":
+            return ("unknown", False)
+        mode_data = data.get("data", {})
+        is_analyze = bool(mode_data.get("analyze_mode", False))
+        mode_str = mode_data.get("mode", "unknown")
+        return (mode_str, is_analyze)
     except Exception as e:
         logger.error(f"Failed to fetch trading mode: {e}")
         return ("unknown", False)
@@ -62,28 +105,23 @@ async def fetch_available_capital() -> float:
             logger.info(f"Using sandbox capital override: {settings.sandbox_capital:,.2f} INR")
             return settings.sandbox_capital
 
-    url = f"{settings.openalgo_base_url}/api/v1/funds"
-    payload = {"apikey": settings.openalgo_api_key}
     max_retries = 3
     retry_delay = 2.0
 
     for attempt in range(1, max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                if data.get("status") != "success":
-                    logger.warning(f"Funds API non-success (attempt {attempt}/{max_retries}): {data}")
-                else:
-                    available = float(data.get("data", {}).get("availablecash", 0))
-                    if available > 0:
-                        logger.debug(f"Available capital: {available:,.2f} INR")
-                        return available
-                    logger.warning(
-                        f"Funds API returned 0 capital (attempt {attempt}/{max_retries}) — "
-                        "broker session may be refreshing"
-                    )
+            data = await _post_json("funds", _auth())
+            if data.get("status") != "success":
+                logger.warning(f"Funds API non-success (attempt {attempt}/{max_retries}): {data}")
+            else:
+                available = float(data.get("data", {}).get("availablecash", 0))
+                if available > 0:
+                    logger.debug(f"Available capital: {available:,.2f} INR")
+                    return available
+                logger.warning(
+                    f"Funds API returned 0 capital (attempt {attempt}/{max_retries}) — "
+                    "broker session may be refreshing"
+                )
         except Exception as e:
             logger.warning(f"Funds API error (attempt {attempt}/{max_retries}): {e}")
 
@@ -94,135 +132,39 @@ async def fetch_available_capital() -> float:
     return 0.0
 
 
+async def fetch_realised_pnl() -> float:
+    """Fetch day's realised P&L from funds endpoint.
+
+    Returns m2mrealized value or 0.0 on failure.
+    """
+    try:
+        data = await _post_json("funds", _auth())
+        if data.get("status") != "success":
+            return 0.0
+        return float(data.get("data", {}).get("m2mrealized", 0))
+    except Exception as e:
+        logger.error(f"Failed to fetch realised PnL: {e}")
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Positions
+# ---------------------------------------------------------------------------
+
 async def fetch_open_position(symbol: str, strategy: str, exchange: str, product: str) -> int:
     """Fetch open position quantity for a specific symbol+strategy.
 
     Returns quantity (0 means position closed). Returns -1 on API error.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/openposition"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "strategy": strategy,
-        "symbol": symbol,
-        "exchange": exchange,
-        "product": product,
-    }
-
+    payload = _auth(strategy=strategy, symbol=symbol, exchange=exchange, product=product)
     try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") != "success":
-                return -1
-            return int(data.get("quantity", 0))
+        data = await _post_json("openposition", payload)
+        if data.get("status") != "success":
+            return -1
+        return int(data.get("quantity", 0))
     except Exception as e:
         logger.error(f"Failed to fetch position for {symbol}: {e}")
         return -1
-
-
-async def cancel_order(order_id: str, strategy: str) -> bool:
-    """Cancel a pending order by order ID.
-
-    Returns True on success, False on any failure.
-    """
-    url = f"{settings.openalgo_base_url}/api/v1/cancelorder"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "strategy": strategy,
-        "orderid": order_id,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            if response.status_code >= 400:
-                logger.warning(f"Cancel order {order_id} returned HTTP {response.status_code}")
-                return False
-            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-            if data.get("status") != "success":
-                logger.warning(f"Cancel order {order_id} returned non-success: {data.get('message', 'unknown')}")
-                return False
-            return True
-    except Exception as e:
-        logger.error(f"Failed to cancel order {order_id}: {e}")
-        return False
-
-
-async def fetch_order_status(order_id: str, strategy: str) -> str:
-    """Fetch current status of an order.
-
-    Returns the orderstatus string (e.g. "complete", "pending") or "" on error.
-    """
-    url = f"{settings.openalgo_base_url}/api/v1/orderstatus"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "strategy": strategy,
-        "orderid": order_id,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") != "success":
-                logger.warning(f"Order status {order_id} returned non-success: {data}")
-                return ""
-            d = data.get("data", {})
-            return str(d.get("order_status") or d.get("orderstatus", ""))
-    except Exception as e:
-        logger.error(f"Failed to fetch order status for {order_id}: {e}")
-        return ""
-
-
-async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int = 3) -> float | None:
-    """Fetch average fill price for a completed order.
-
-    Polls up to max_attempts times with 1s delay — MARKET orders fill in < 1s but
-    the broker may take a moment to update order status.
-
-    Returns avg fill price (float) when orderstatus == "complete".
-    Returns None if order is not yet filled, was rejected, or on API error.
-    """
-    url = f"{settings.openalgo_base_url}/api/v1/orderstatus"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "strategy": strategy,
-        "orderid": order_id,
-    }
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                if data.get("status") != "success":
-                    return None
-                order_data = data.get("data", {})
-                status = str(order_data.get("order_status") or order_data.get("orderstatus", "")).lower()
-                if status == "complete":
-                    # Try common broker field names for average fill price
-                    raw = (
-                        order_data.get("avgprice")
-                        or order_data.get("average_price")
-                        or order_data.get("averageprice")
-                        or order_data.get("price")
-                    )
-                    if raw:
-                        return float(raw)
-                    return None
-                if status in ("rejected", "cancelled"):
-                    return None
-                # pending/open — wait and retry
-        except Exception as e:
-            logger.debug(f"Fill price fetch attempt {attempt}/{max_attempts} for {order_id}: {e}")
-
-        if attempt < max_attempts:
-            await asyncio.sleep(1)
-
-    return None
 
 
 async def fetch_positionbook():
@@ -232,21 +174,16 @@ async def fetch_positionbook():
     Each dict has: symbol, exchange, product, quantity, pnl, average_price, ltp.
     Retries up to 3 times with 2s backoff to ride out transient broker disconnects.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/positionbook"
-    payload = {"apikey": settings.openalgo_api_key}
     max_retries = 3
     retry_delay = 2.0
 
     for attempt in range(1, max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                if data.get("status") != "success":
-                    logger.warning(f"Positionbook API returned non-success: {data}")
-                    return None
-                return data.get("data", [])
+            data = await _post_json("positionbook", _auth())
+            if data.get("status") != "success":
+                logger.warning(f"Positionbook API returned non-success: {data}")
+                return None
+            return data.get("data", [])
         except Exception as e:
             logger.warning(f"Positionbook fetch attempt {attempt}/{max_retries}: {e}")
             if attempt < max_retries:
@@ -261,25 +198,43 @@ async def close_all_positions(strategy: str) -> bool:
 
     Returns True on success, False on failure.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/closeposition"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "strategy": strategy,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            if response.status_code >= 400:
-                logger.warning(f"Close positions returned HTTP {response.status_code}")
-                return False
-            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-            if data.get("status") == "error":
-                logger.warning(f"Close positions failed: {data.get('message', 'unknown')}")
-                return False
-            return True
+        response = await _post_tolerant("closeposition", _auth(strategy=strategy))
+        if response.status_code >= 400:
+            logger.warning(f"Close positions returned HTTP {response.status_code}")
+            return False
+        data = _json_or_empty(response)
+        if data.get("status") == "error":
+            logger.warning(f"Close positions failed: {data.get('message', 'unknown')}")
+            return False
+        return True
     except Exception as e:
         logger.error(f"Failed to close all positions: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Orders
+# ---------------------------------------------------------------------------
+
+async def cancel_order(order_id: str, strategy: str) -> bool:
+    """Cancel a pending order by order ID.
+
+    Returns True on success, False on any failure.
+    """
+    payload = _auth(strategy=strategy, orderid=order_id)
+    try:
+        response = await _post_tolerant("cancelorder", payload)
+        if response.status_code >= 400:
+            logger.warning(f"Cancel order {order_id} returned HTTP {response.status_code}")
+            return False
+        data = _json_or_empty(response)
+        if data.get("status") != "success":
+            logger.warning(f"Cancel order {order_id} returned non-success: {data.get('message', 'unknown')}")
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"Failed to cancel order {order_id}: {e}")
         return False
 
 
@@ -288,48 +243,86 @@ async def cancel_all_orders(strategy: str) -> bool:
 
     Returns True on success, False on failure.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/cancelallorder"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "strategy": strategy,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            if response.status_code >= 400:
-                logger.warning(f"Cancel all orders returned HTTP {response.status_code}")
-                return False
-            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-            if data.get("status") == "error":
-                logger.warning(f"Cancel all orders failed: {data.get('message', 'unknown')}")
-                return False
-            return True
+        response = await _post_tolerant("cancelallorder", _auth(strategy=strategy))
+        if response.status_code >= 400:
+            logger.warning(f"Cancel all orders returned HTTP {response.status_code}")
+            return False
+        data = _json_or_empty(response)
+        if data.get("status") == "error":
+            logger.warning(f"Cancel all orders failed: {data.get('message', 'unknown')}")
+            return False
+        return True
     except Exception as e:
         logger.error(f"Failed to cancel all orders: {e}")
         return False
 
 
-async def fetch_realised_pnl() -> float:
-    """Fetch day's realised P&L from funds endpoint.
+async def fetch_order_status(order_id: str, strategy: str) -> str:
+    """Fetch current status of an order.
 
-    Returns m2mrealized value or 0.0 on failure.
+    Returns the orderstatus string (e.g. "complete", "pending") or "" on error.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/funds"
-    payload = {"apikey": settings.openalgo_api_key}
-
+    payload = _auth(strategy=strategy, orderid=order_id)
     try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") != "success":
-                return 0.0
-            return float(data.get("data", {}).get("m2mrealized", 0))
+        data = await _post_json("orderstatus", payload)
+        if data.get("status") != "success":
+            logger.warning(f"Order status {order_id} returned non-success: {data}")
+            return ""
+        d = data.get("data", {})
+        return str(d.get("order_status") or d.get("orderstatus", ""))
     except Exception as e:
-        logger.error(f"Failed to fetch realised PnL: {e}")
-        return 0.0
+        logger.error(f"Failed to fetch order status for {order_id}: {e}")
+        return ""
 
+
+async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int = 3) -> float | None:
+    """Fetch average fill price for a completed order.
+
+    Polls up to max_attempts times with 1s delay — MARKET orders fill in < 1s but
+    the broker may take a moment to update order status.
+
+    Returns avg fill price (float) when orderstatus == "complete".
+    Returns None if order is not yet filled, was rejected, or on API error.
+    """
+    payload = _auth(strategy=strategy, orderid=order_id)
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            data = await _post_json("orderstatus", payload)
+            if data.get("status") != "success":
+                return None
+            order_data = data.get("data", {})
+            status = str(order_data.get("order_status") or order_data.get("orderstatus", "")).lower()
+            if status == "complete":
+                price = _avg_fill_price(order_data)
+                return price
+            if status in ("rejected", "cancelled"):
+                return None
+            # pending/open — wait and retry
+        except Exception as e:
+            logger.debug(f"Fill price fetch attempt {attempt}/{max_attempts} for {order_id}: {e}")
+
+        if attempt < max_attempts:
+            await asyncio.sleep(1)
+
+    return None
+
+
+def _avg_fill_price(order_data: dict) -> float | None:
+    """Read the average fill price, trying the field names different brokers use."""
+    raw = (
+        order_data.get("avgprice")
+        or order_data.get("average_price")
+        or order_data.get("averageprice")
+        or order_data.get("price")
+    )
+    return float(raw) if raw else None
+
+
+# ---------------------------------------------------------------------------
+# Margin
+# ---------------------------------------------------------------------------
 
 async def fetch_margin(
     symbol: str,
@@ -345,27 +338,21 @@ async def fetch_margin(
     Returns total_margin_required in INR.
     Retries on network/timeout failures. Raises MarginAPIError on all failures — no fallback.
     """
-    url = f"{settings.openalgo_base_url}/api/v1/margin"
-    payload = {
-        "apikey": settings.openalgo_api_key,
-        "positions": [{
-            "exchange": exchange,
-            "symbol": symbol,
-            "action": action,
-            "quantity": str(quantity),
-            "product": product,
-            "pricetype": pricetype,
-            "price": str(price),
-            "trigger_price": "0",
-        }],
-    }
+    payload = _auth(positions=[{
+        "exchange": exchange,
+        "symbol": symbol,
+        "action": action,
+        "quantity": str(quantity),
+        "product": product,
+        "pricetype": pricetype,
+        "price": str(price),
+        "trigger_price": "0",
+    }])
 
     for attempt in range(1, settings.margin_api_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-                response = await client.post(url, json=payload)
-
-            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            response = await _post_tolerant("margin", payload)
+            data = _json_or_empty(response)
 
             if response.status_code >= 400:
                 reason = data.get("message", response.text)

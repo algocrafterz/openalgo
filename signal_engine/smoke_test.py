@@ -28,9 +28,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-from loguru import logger
 
 from signal_engine.risk_store import RISK_DB_PATH, RiskStore
 
@@ -206,30 +205,11 @@ def check_signal_pipeline() -> str:
 
 def check_risk_engine_state() -> str:
     """Show current risk engine counters so user can confirm day state is clean."""
-    from signal_engine.risk import RiskEngine
+    from signal_engine.runtime import build_risk_engine
     from signal_engine.config import settings
 
     store = RiskStore(RISK_DB_PATH)
-    engine = RiskEngine(
-        risk_per_trade=settings.risk_per_trade,
-        sizing_mode=settings.sizing_mode,
-        pct_of_capital=settings.pct_of_capital,
-        daily_loss_limit=settings.daily_loss_limit,
-        weekly_loss_limit=settings.weekly_loss_limit,
-        monthly_loss_limit=settings.monthly_loss_limit,
-        max_open_positions=settings.max_open_positions,
-        max_trades_per_day=settings.max_trades_per_day,
-        min_entry_price=settings.min_entry_price,
-        max_entry_price=settings.max_entry_price,
-        slippage_factor=settings.slippage_factor,
-        store=store,
-        trade_mode="live",
-        default_product=settings.product,
-        max_positions_per_symbol=settings.max_positions_per_symbol,
-        max_positions_per_sector=settings.max_positions_per_sector,
-        sectors=settings.sectors,
-        use_day_start_capital=settings.use_day_start_capital,
-    )
+    engine = build_risk_engine(store)
     open_pos = engine.open_positions
     trades_today = engine.trades_today
     realised_loss = engine.daily_realised_loss
@@ -268,11 +248,11 @@ async def dry_run_entry_pipeline() -> str:
     """
     from signal_engine.normalizer import normalize
     from signal_engine.parser import parse
-    from signal_engine.models import Direction, OrderStatus, TradeResult, ValidationStatus
+    from signal_engine.models import OrderStatus, TradeResult, ValidationStatus
     from signal_engine.validator import validate
     from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
     from signal_engine.config import settings
-    from signal_engine.risk import RiskEngine
+    from signal_engine.runtime import build_risk_engine
 
     raw = (
         "ORB LONG\n"
@@ -298,26 +278,7 @@ async def dry_run_entry_pipeline() -> str:
 
     # Real sizing
     store = RiskStore(RISK_DB_PATH)
-    engine = RiskEngine(
-        risk_per_trade=settings.risk_per_trade,
-        sizing_mode=settings.sizing_mode,
-        pct_of_capital=settings.pct_of_capital,
-        daily_loss_limit=settings.daily_loss_limit,
-        weekly_loss_limit=settings.weekly_loss_limit,
-        monthly_loss_limit=settings.monthly_loss_limit,
-        max_open_positions=settings.max_open_positions,
-        max_trades_per_day=settings.max_trades_per_day,
-        min_entry_price=settings.min_entry_price,
-        max_entry_price=settings.max_entry_price,
-        slippage_factor=settings.slippage_factor,
-        store=store,
-        trade_mode="live",
-        default_product=settings.product,
-        max_positions_per_symbol=settings.max_positions_per_symbol,
-        max_positions_per_sector=settings.max_positions_per_sector,
-        sectors=settings.sectors,
-        use_day_start_capital=settings.use_day_start_capital,
-    )
+    engine = build_risk_engine(store)
     sizing_capital = engine.get_sizing_capital(capital)
     quantity = engine.calculate_quantity(signal, capital=sizing_capital)
 
