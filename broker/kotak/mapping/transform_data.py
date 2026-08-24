@@ -1,185 +1,179 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Kotak Neo API Parameters
 
-from broker.kotak.api.data import BrokerData
+import math
+from decimal import Decimal
+
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import get_instrument_type_from_symbol
 
 logger = get_logger(__name__)
 
+# Kotak's published Market Price Protection grid
+# (broker-api-docs/kotak-api-docs/03-static-ip-whitelisting.md:134-144).
+# EQ/FUT matches utils/mpp_slab.py exactly; the OPT grid does not — Kotak adds
+# two extra bands below 5 and an ABSOLUTE 0.10 floor below 1, which a
+# percentage-only table cannot express. Kept local so the shared slabs stay
+# broker-neutral.
+_KOTAK_EQ_FUT_MPP = [(100, 2.0), (500, 1.0), (float("inf"), 0.5)]
+_KOTAK_OPT_MPP = [(5, 10.0), (10, 5.0), (100, 3.0), (500, 2.0), (float("inf"), 1.0)]
 
-def transform_data(data, token, auth_token=None):
+# Below this price Kotak protects options by an absolute rupee amount, not a
+# percentage (a 10% band on a 0.50 option is smaller than one tick).
+_KOTAK_OPT_ABSOLUTE_BELOW = 1.0
+_KOTAK_OPT_ABSOLUTE_OFFSET = 0.10
+
+
+def _mpp_offset(price, instrument_type):
+    """Kotak's protection offset (in rupees) for a price and instrument type."""
+    if instrument_type in ("CE", "PE"):
+        if price < _KOTAK_OPT_ABSOLUTE_BELOW:
+            return _KOTAK_OPT_ABSOLUTE_OFFSET
+        slabs = _KOTAK_OPT_MPP
+    else:
+        slabs = _KOTAK_EQ_FUT_MPP
+
+    for max_price, percentage in slabs:
+        if price < max_price:
+            return price * percentage / 100.0
+    return 0.0
+
+
+def _tick_decimals(tick):
+    """Number of decimal places implied by a tick size (0.05 -> 2, 0.0025 -> 4)."""
+    return max(0, -Decimal(str(tick)).as_tuple().exponent)
+
+
+def _snap_to_tick(value, tick, direction):
+    """Snap to a multiple of ``tick``, away from the trigger.
+
+    Nearest-tick rounding could land the limit back on the trigger, so the
+    direction is forced: "floor" for SELL, "ceil" for BUY.
+    """
+    ratio = round(value / tick, 6)  # tame float noise before the floor/ceil
+    k = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    return round(k * tick, _tick_decimals(tick))
+
+
+def _slm_protected_price(symbol, exchange, action, trigger_price):
+    """
+    Derive the protective limit price that turns an SL-M into a Kotak SL.
+
+    Kotak rejects SL-M from API sessions outright: "Market order with Algo Id
+    not allowed" (observed live 2026-07-28, order 260728000251866). Per SEBI,
+    market orders are not permitted for retail algos, and Kotak's APIs append
+    an exchange-compliant Algo ID to every order automatically
+    (03-static-ip-whitelisting.md:130,154). Plain MKT survives because Kotak
+    substitutes its own protection limit server-side; a stop-market has no LTP
+    to protect against at placement time, so it is refused instead.
+
+    The fix mirrors the Dhan SL-M path (issue #1647): send pt="SL" with a limit
+    offset one MPP band beyond the trigger in the fill direction — BUY above,
+    SELL below — so the stop still rests and stays marketable once triggered.
+
+    The limit is snapped to the instrument's exchange tick away from the
+    trigger and forced at least one tick past it, so it can never round back
+    onto the trigger. Fails closed when the tick size is unresolvable rather
+    than guessing 2 decimals, which Kotak would reject.
+    """
+    instrument_type = get_instrument_type_from_symbol(symbol)
+
+    symbol_info = get_symbol_info(symbol, exchange)
+    try:
+        tick_size = float(getattr(symbol_info, "tick_size", None)) if symbol_info else 0.0
+    except (TypeError, ValueError):
+        tick_size = 0.0
+    if not math.isfinite(tick_size) or tick_size <= 0:
+        raise ValueError(
+            f"Cannot resolve tick size from DB for {symbol}/{exchange}; required to "
+            f"build a valid SL-M protective limit price"
+        )
+
+    offset = _mpp_offset(trigger_price, instrument_type)
+
+    if action.upper() == "SELL":
+        # Strictly BELOW the trigger, at least one tick away, tick-aligned.
+        raw = min(trigger_price - offset, trigger_price - tick_size)
+        limit = _snap_to_tick(raw, tick_size, "floor")
+        if limit <= 0:
+            raise ValueError(
+                f"SL-M SELL trigger {trigger_price} for {symbol}/{exchange} is too low "
+                f"to derive a positive protective limit at tick {tick_size}"
+            )
+    else:
+        # Strictly ABOVE the trigger, at least one tick away, tick-aligned.
+        raw = max(trigger_price + offset, trigger_price + tick_size)
+        limit = _snap_to_tick(raw, tick_size, "ceil")
+
+    return limit
+
+
+def _apply_slm_conversion(transformed, data):
+    """Rewrite an SL-M payload in place as a protective Kotak SL order."""
+    if data.get("pricetype") != "SL-M":
+        return
+
+    trigger_price = float(data.get("trigger_price", 0) or 0)
+    if trigger_price <= 0:
+        raise ValueError("Trigger price is required and must be positive for SL-M orders")
+
+    protected_price = _slm_protected_price(
+        data["symbol"], data["exchange"], data["action"], trigger_price
+    )
+    transformed["pt"] = "SL"
+    transformed["pr"] = _fmt_price(protected_price)
+    logger.debug(
+        f"Kotak SL-M -> SL: Symbol={data['symbol']}, Action={data['action']}, "
+        f"Trigger={trigger_price}, ProtectedLimit={protected_price}"
+    )
+
+
+def _fmt_price(value):
+    """Kotak rejects '0.0' on numeric fields — emit '0' for zero, otherwise stringified value."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value) if value is not None else "0"
+    if f == 0:
+        return "0"
+    return str(value)
+
+
+def transform_data(data, token):
     """
     Transforms the new API request structure to the current expected structure.
     ALL values must be strings for Kotak API.
-
-    For market orders, fetches quotes and adjusts price using MPP (Market Price Protection):
-    - EQ/FUT: Price < 100: 2%, 100-500: 1%, > 500: 0.5%
-    - OPT (CE/PE): Price < 10: 5%, 10-100: 3%, 100-500: 2%, > 500: 1%
-
-    Args:
-        data: Order data dictionary
-        token: Instrument token
-        auth_token: Authentication token for fetching quotes (passed from order_api)
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
 
-    # Default values
-    price = str(data.get("price", "0"))
     order_type = map_order_type(data["pricetype"])
     action = data["action"].upper()
 
-    # Apply Market Price Protection for MARKET orders
-    if data["pricetype"] == "MARKET":
-        logger.info(
-            f"MPP: MARKET order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={action}"
-        )
-        try:
-            if auth_token:
-                # Create BrokerData instance to fetch quotes
-                broker_data = BrokerData(auth_token)
-
-                # Fetch quotes for the symbol
-                quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
-                logger.info(
-                    f"MPP Quote Response: Symbol={data['symbol']}, Exchange={data['exchange']}, "
-                    f"LTP={quote_data.get('ltp') if quote_data else None}"
-                )
-
-                if quote_data:
-                    # Get instrument type from symbol
-                    instrument_type = get_instrument_type_from_symbol(data["symbol"])
-
-                    # Get tick_size from master contract database
-                    tick_size = None
-                    symbol_info = get_symbol_info(data["symbol"], data["exchange"])
-                    if symbol_info and symbol_info.tick_size:
-                        tick_size = symbol_info.tick_size
-                    logger.info(
-                        f"MPP Symbol Info: InstrumentType={instrument_type}, TickSize={tick_size}"
-                    )
-
-                    # Get LTP for price calculation
-                    ltp = float(quote_data.get("ltp", 0))
-
-                    if ltp > 0:
-                        # Calculate protected price using centralized MPP slab with tick size rounding
-                        protected_price = calculate_protected_price(
-                            price=ltp,
-                            action=action,
-                            symbol=data["symbol"],
-                            instrument_type=instrument_type,
-                            tick_size=tick_size,
-                        )
-                        price = str(protected_price)
-
-                        # Convert order type from MARKET to LIMIT
-                        order_type = "L"
-                        logger.info(
-                            f"MPP Conversion Complete: Symbol={data['symbol']}, OrderType=MKT->L, "
-                            f"FinalPrice={protected_price}"
-                        )
-                    else:
-                        logger.warning(
-                            f"MPP Warning: LTP is 0 or invalid for Symbol={data['symbol']}, "
-                            f"Exchange={data['exchange']}. Proceeding with regular market order"
-                        )
-                else:
-                    logger.warning(
-                        f"MPP Warning: No quote data for Symbol={data['symbol']}. "
-                        f"Proceeding with regular market order"
-                    )
-            else:
-                logger.warning(
-                    f"MPP Warning: No auth token available for Symbol={data['symbol']}. "
-                    f"Cannot fetch quotes for MPP adjustment"
-                )
-        except Exception as e:
-            logger.error(
-                f"MPP Error: Failed to apply MPP for Symbol={data['symbol']}, "
-                f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with regular market order."
-            )
-
-    # Apply Market Price Protection for SL-M orders (convert SL-M to SL with protected price)
-    elif data["pricetype"] == "SL-M":
-        try:
-            trigger_price = float(data.get("trigger_price", 0))
-        except (TypeError, ValueError):
-            trigger_price = 0.0
-            logger.warning(
-                f"MPP Warning: Invalid trigger_price for SL-M Symbol={data['symbol']}. "
-                f"Proceeding with SL-M order."
-            )
-        logger.info(
-            f"MPP: SL-M order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, "
-            f"Action={action}, TriggerPrice={trigger_price}"
-        )
-        if trigger_price > 0:
-            try:
-                # Get instrument type and tick_size from master contract
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
-                tick_size = None
-                symbol_info = get_symbol_info(data["symbol"], data["exchange"])
-                if symbol_info and symbol_info.tick_size:
-                    tick_size = symbol_info.tick_size
-                logger.info(
-                    f"MPP Symbol Info: InstrumentType={instrument_type}, TickSize={tick_size}"
-                )
-
-                # Calculate protected price based on trigger price
-                protected_price = calculate_protected_price(
-                    price=trigger_price,
-                    action=action,
-                    symbol=data["symbol"],
-                    instrument_type=instrument_type,
-                    tick_size=tick_size,
-                )
-                price = str(protected_price)
-
-                # Convert SL-M to SL (stop loss limit)
-                order_type = "SL"
-                logger.info(
-                    f"MPP Conversion Complete: Symbol={data['symbol']}, OrderType=SL-M->SL, "
-                    f"TriggerPrice={trigger_price}, LimitPrice={protected_price}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"MPP Error: Failed to apply MPP for SL-M Symbol={data['symbol']}, "
-                    f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with SL-M order."
-                )
-        else:
-            logger.warning(
-                f"MPP Warning: Trigger price is 0 for SL-M Symbol={data['symbol']}. "
-                f"Proceeding with SL-M order."
-            )
-
-    # Basic mapping - ALL values must be strings for Kotak API
     transformed = {
         "am": "NO",
         "dq": str(data.get("disclosed_quantity", "0")),
-        "bc": "1",
         "es": reverse_map_exchange(data["exchange"]),
         "mp": "0",
         "pc": data.get("product", "MIS"),
         "pf": "N",
-        "pr": price,
+        "pr": _fmt_price(data.get("price", 0)),
         "pt": order_type,
         "qt": str(data["quantity"]),
         "rt": "DAY",
-        "tp": str(data.get("trigger_price", "0")),
+        "tp": _fmt_price(data.get("trigger_price", 0)),
         "ts": symbol,
         "tt": "B" if action == "BUY" else ("S" if action == "SELL" else "None"),
     }
 
-    # Log order data
-    logger.info(f"Transformed order data: {transformed}")
+    _apply_slm_conversion(transformed, data)
+
+    logger.debug(f"Transformed order data: {transformed}")
     return transformed
 
 
 def transform_modify_order_data(data, token):
     symbol = get_br_symbol(data["symbol"], data["exchange"])
-    # Basic mapping - ALL values must be strings for Kotak API
     transformed = {
         "tk": str(token),
         "dq": str(data.get("disclosed_quantity", "0")),
@@ -188,14 +182,19 @@ def transform_modify_order_data(data, token):
         "dd": "NA",
         "vd": "DAY",
         "pc": data.get("product", "MIS"),
-        "pr": str(data.get("price", "0")),
+        "pr": _fmt_price(data.get("price", 0)),
         "pt": map_order_type(data["pricetype"]),
         "qt": str(data["quantity"]),
-        "tp": str(data.get("trigger_price", "0")),
+        "tp": _fmt_price(data.get("trigger_price", 0)),
         "ts": symbol,
         "no": str(data["orderid"]),
         "tt": "B" if data["action"] == "BUY" else ("S" if data["action"] == "SELL" else "None"),
     }
+
+    # A modify must carry the same conversion as the placement, or an SL-M
+    # modify would hand Kotak back the pt it already rejected.
+    _apply_slm_conversion(transformed, data)
+
     return transformed
 
 

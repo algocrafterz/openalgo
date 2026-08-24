@@ -19,6 +19,7 @@ const allBrokers = [
   { id: 'fivepaisaxts', name: '5 Paisa (XTS)', authType: 'totp' },
   { id: 'aliceblue', name: 'Alice Blue', authType: 'totp' },
   { id: 'angel', name: 'Angel One', authType: 'totp' },
+  { id: 'arrow', name: 'Arrow', authType: 'oauth' },
   { id: 'compositedge', name: 'CompositEdge', authType: 'oauth' },
   { id: 'dhan', name: 'Dhan', authType: 'oauth' },
   { id: 'deltaexchange', name: 'Delta Exchange', authType: 'totp' },
@@ -30,8 +31,11 @@ const allBrokers = [
   { id: 'motilal', name: 'Motilal Oswal', authType: 'totp' },
   { id: 'fyers', name: 'Fyers', authType: 'oauth' },
   { id: 'groww', name: 'Groww', authType: 'totp' },
+  { id: 'hdfcsecurities', name: 'HDFC Securities', authType: 'oauth' },
+  { id: 'hdfcsky', name: 'HDFC Sky', authType: 'oauth' },
   { id: 'ibulls', name: 'Ibulls', authType: 'totp' },
   { id: 'iifl', name: 'IIFL', authType: 'totp' },
+  { id: 'iiflcapital', name: 'IIFL Capital', authType: 'oauth' },
   { id: 'jainamxts', name: 'JainamXts', authType: 'totp' },
   { id: 'kotak', name: 'Kotak Securities', authType: 'totp' },
   { id: 'mstock', name: 'mStock by Mirae Asset', authType: 'totp' },
@@ -42,6 +46,7 @@ const allBrokers = [
   { id: 'samco', name: 'Samco', authType: 'totp' },
   { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
   { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
+  { id: 'tradesmart', name: 'TradeSmart', authType: 'oauth' },
   { id: 'upstox', name: 'Upstox', authType: 'oauth' },
   { id: 'wisdom', name: 'Wisdom Capital', authType: 'totp' },
   { id: 'zebu', name: 'Zebu', authType: 'totp' },
@@ -147,10 +152,17 @@ export default function BrokerSelect() {
       case 'rmoney':
       case 'shoonya':
       case 'tradejini':
+      case 'tradesmart':
       case 'wisdom':
       case 'zebu':
-        // TOTP brokers - redirect to callback page which shows form
+        // Brokers using callback route (form-based or redirect-based)
         loginUrl = `/${selectedBroker}/callback`
+        break
+
+      case 'iiflcapital':
+        // Route via backend callback endpoint to centralize URL generation and
+        // avoid provider-specific redirect parameter parsing differences.
+        loginUrl = '/iiflcapital/callback'
         break
 
       case 'dhan':
@@ -177,6 +189,24 @@ export default function BrokerSelect() {
 
       case 'zerodha':
         loginUrl = `https://kite.trade/connect/login?api_key=${broker_api_key}`
+        break
+
+      case 'arrow':
+        // Arrow hosted login; redirects back to /arrow/callback with request-token.
+        loginUrl = `https://app.arrow.trade/app/login?appID=${broker_api_key}`
+        break
+
+      case 'hdfcsecurities':
+        // HDFC Securities InvestRight hosted login (credentials + 2FA +
+        // consent); redirects back to the app's registered callback with a
+        // request token.
+        loginUrl = `https://developer.hdfcsec.com/oapi/v1/login?api_key=${broker_api_key}`
+        break
+
+      case 'hdfcsky':
+        // HDFC Sky hosted login (credentials + 2FA + consent); redirects back
+        // to the app's registered callback with a request token.
+        loginUrl = `https://developer.hdfcsky.com/oapi/v1/login?api_key=${broker_api_key}`
         break
 
       case 'paytm':
@@ -261,7 +291,7 @@ export default function BrokerSelect() {
                 {(selectedBroker === 'zerodha' || selectedBroker === 'dhan') && (
                   <Alert className="border-amber-500/50 bg-amber-500/10">
                     <Info className="h-4 w-4 text-amber-500" />
-                    <AlertDescription className="text-amber-200">
+                    <AlertDescription className="text-amber-700 dark:text-amber-400">
                       {selectedBroker === 'zerodha'
                         ? 'Zerodha requires an active Kite Connect data subscription for market data access.'
                         : 'Dhan requires an active Data API subscription for market data access.'}

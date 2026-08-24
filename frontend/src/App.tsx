@@ -1,15 +1,21 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { Providers } from '@/app/providers'
 import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
 import { Layout } from '@/components/layout/Layout'
 import { PageLoader } from '@/components/ui/page-loader'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { useBrokerStore } from '@/stores/brokerStore'
 
 // Lazy load all pages for code splitting
 // Public pages
 const Home = lazy(() => import('@/pages/Home'))
+const PortfolioBacktester = lazy(() => import('@/pages/PortfolioBacktester'))
+const PortfolioBacktesterResults = lazy(() => import('@/pages/PortfolioBacktesterResults'))
+const SipBacktester = lazy(() => import('@/pages/SipBacktester'))
+const SipBacktesterResults = lazy(() => import('@/pages/SipBacktesterResults'))
+const PortfolioAnalyzer = lazy(() => import('@/pages/PortfolioAnalyzer'))
 const Faq = lazy(() => import('@/pages/Faq'))
 const Setup = lazy(() => import('@/pages/Setup'))
 const Login = lazy(() => import('@/pages/Login'))
@@ -48,7 +54,10 @@ const Sandbox = lazy(() => import('@/pages/Sandbox'))
 const SandboxPnL = lazy(() => import('@/pages/SandboxPnL'))
 const Analyzer = lazy(() => import('@/pages/Analyzer'))
 const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
+const WebSocketOrder = lazy(() => import('@/pages/WebSocketOrder'))
+const ChartTest = lazy(() => import('@/pages/ChartTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
+const Trading = lazy(() => import('@/pages/Trading'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
@@ -56,7 +65,10 @@ const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 const Tools = lazy(() => import('@/pages/Tools'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
+const Scalping = lazy(() => import('@/pages/Scalping'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
+const OIRange = lazy(() => import('@/pages/OIRange'))
+const GammaDensity = lazy(() => import('@/pages/GammaDensity'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
 const CustomStraddle = lazy(() => import('@/pages/CustomStraddle'))
@@ -65,6 +77,9 @@ const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
 const IVSmile = lazy(() => import('@/pages/IVSmile'))
 const OIProfile = lazy(() => import('@/pages/OIProfile'))
 const SizingCalculator = lazy(() => import('@/pages/SizingCalculator'))
+const Arbitrage = lazy(() => import('@/pages/Arbitrage'))
+const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
+const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -117,12 +132,17 @@ const AdminIndex = lazy(() => import('@/pages/admin/AdminIndex'))
 const FreezeQty = lazy(() => import('@/pages/admin/FreezeQty'))
 const Holidays = lazy(() => import('@/pages/admin/Holidays'))
 const MarketTimings = lazy(() => import('@/pages/admin/MarketTimings'))
+const Diagnostics = lazy(() => import('@/pages/admin/Diagnostics'))
+const RemoteMcp = lazy(() => import('@/pages/admin/RemoteMcp'))
 
 // Telegram pages
 const TelegramIndex = lazy(() => import('@/pages/telegram/TelegramIndex'))
 const TelegramConfig = lazy(() => import('@/pages/telegram/TelegramConfig'))
 const TelegramUsers = lazy(() => import('@/pages/telegram/TelegramUsers'))
 const TelegramAnalytics = lazy(() => import('@/pages/telegram/TelegramAnalytics'))
+
+// WhatsApp pages
+const WhatsAppIndex = lazy(() => import('@/pages/whatsapp/WhatsAppIndex'))
 
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
@@ -132,10 +152,16 @@ const TrafficDashboard = lazy(() => import('@/pages/monitoring/TrafficDashboard'
 const LatencyDashboard = lazy(() => import('@/pages/monitoring/LatencyDashboard'))
 const HealthMonitor = lazy(() => import('@/pages/HealthMonitor'))
 
+function PageTitleUpdater() {
+  usePageTitle()
+  return null
+}
+
 function App() {
   return (
     <Providers>
       <BrowserRouter>
+        <PageTitleUpdater />
         <AuthSync>
           <Suspense fallback={<PageLoader />}>
             <Routes>
@@ -171,6 +197,23 @@ function App() {
                 {/* Phase 4: Charts & Webhook Configuration */}
                 <Route path="/platforms" element={<Platforms />} />
                 <Route path="/tradingview" element={<TradingView />} />
+                <Route path="/portfolio-backtester" element={<PortfolioBacktester />} />
+                <Route
+                  path="/portfolio-backtester/results"
+                  element={<PortfolioBacktesterResults />}
+                />
+                {/* The page moved: /portfolio was ambiguous next to the
+                    analyzer. Redirect rather than 404 an existing bookmark. */}
+                <Route
+                  path="/portfolio"
+                  element={<Navigate to="/portfolio-backtester" replace />}
+                />
+                <Route path="/sip-backtester" element={<SipBacktester />} />
+                <Route
+                  path="/sip-backtester/results"
+                  element={<SipBacktesterResults />}
+                />
+                <Route path="/portfolio-analyzer" element={<PortfolioAnalyzer />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
                 {/* Phase 4: Sandbox & Analyzer */}
@@ -178,9 +221,12 @@ function App() {
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
+                <Route path="/scalping" element={<Scalping />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
+                <Route path="/oirange" element={<OIRange />} />
+                <Route path="/gammadensity" element={<GammaDensity />} />
                 <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/straddle" element={<StraddleChart />} />
                 <Route path="/straddlepnl" element={<CustomStraddle />} />
@@ -189,7 +235,21 @@ function App() {
                 <Route path="/ivsmile" element={<IVSmile />} />
                 <Route path="/oiprofile" element={<OIProfile />} />
                 <Route path="/sizing" element={<SizingCalculator />} />
+                <Route path="/arbitrage" element={<Arbitrage />} />
+                <Route path="/strategybuilder" element={<StrategyBuilder />} />
+                <Route path="/strategybuilder/portfolio" element={<StrategyPortfolio />} />
+                {/* Legacy /tools/strategy paths — redirect to the new route. */}
+                <Route
+                  path="/tools/strategy"
+                  element={<Navigate to="/strategybuilder" replace />}
+                />
+                <Route
+                  path="/tools/strategy/portfolio"
+                  element={<Navigate to="/strategybuilder/portfolio" replace />}
+                />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
+                <Route path="/websocket/order" element={<WebSocketOrder />} />
+                <Route path="/chart/test" element={<ChartTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
@@ -223,11 +283,14 @@ function App() {
                 <Route path="/admin/freeze" element={<FreezeQty />} />
                 <Route path="/admin/holidays" element={<Holidays />} />
                 <Route path="/admin/timings" element={<MarketTimings />} />
+                <Route path="/admin/diagnostics" element={<Diagnostics />} />
+                <Route path="/admin/remote-mcp" element={<RemoteMcp />} />
                 {/* Phase 7: Telegram */}
                 <Route path="/telegram" element={<TelegramIndex />} />
                 <Route path="/telegram/config" element={<TelegramConfig />} />
                 <Route path="/telegram/users" element={<TelegramUsers />} />
                 <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
+                <Route path="/whatsapp" element={<WhatsAppIndex />} />
                 {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />
@@ -245,6 +308,7 @@ function App() {
               {/* Full-width protected routes */}
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
+                <Route path="/trading" element={<Trading />} />
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />

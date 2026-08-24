@@ -1,14 +1,15 @@
 import { Check, Info, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
+import { useNavigate } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { fetchCSRFToken } from '@/api/client'
 import { cn } from '@/lib/utils'
+import { showToast } from '@/utils/toast'
 
 interface PasswordRequirements {
   length: boolean
@@ -117,10 +118,14 @@ export default function Setup() {
       // If setup was successful (response ok or redirected), go to login
       if (response.ok || response.redirected) {
         showToast.success('Account created successfully')
-        // Clear any existing session by calling logout
+        // Clear any existing session by calling logout. /auth/logout is CSRF
+        // protected, so the token has to be attached explicitly here - this is
+        // a raw fetch, not the axios client that adds it via an interceptor.
         try {
+          const csrfToken = await fetchCSRFToken()
           await fetch('/auth/logout', {
             method: 'POST',
+            headers: { 'X-CSRFToken': csrfToken },
             credentials: 'include',
           })
         } catch {
@@ -130,7 +135,7 @@ export default function Setup() {
       } else {
         setError('Setup failed. Please try again.')
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Setup failed. Please check your connection and try again.')
     } finally {
       setIsLoading(false)
@@ -169,8 +174,9 @@ export default function Setup() {
               <Info className="h-5 w-5" />
               <AlertDescription>
                 <strong className="block mb-1">First Time Setup</strong>
-                This form will create the initial administrator account. You'll receive a TOTP QR
-                code for password resets after setup.
+                This form will create the initial administrator account. After signing in, open your
+                Profile and scan the TOTP QR code there to enable two-factor authentication and
+                TOTP-based password resets.
               </AlertDescription>
             </Alert>
           </div>

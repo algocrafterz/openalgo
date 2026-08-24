@@ -1,5 +1,4 @@
 import json
-import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -8,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import httpx
 import pandas as pd
 
+from broker.tradejini.api.auth_api import API_KEY_MISSING_ERROR, get_api_key
 from broker.tradejini.api.nxtradstream import NxtradStream
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
@@ -27,28 +27,40 @@ class TradejiniWebSocket:
         self.last_quote = None
         self.last_depth = None
         self.nxtrad_host = "api.tradejini.com"
+        # Set by close() so the close callback can tell an intentional shutdown
+        # from a dropped connection. The SDK reports both the same way, and
+        # reconnecting after our own close() strands a socket and its thread
+        # with no owner - one leaked descriptor per quote/depth request.
+        self._closing = False
 
         # L1 cache for storing quote data like in original SDK
         self.L1_dict = {}
         self.L5_dict = {}
 
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def connect(self, auth_token):
         """Connect to Tradejini WebSocket using official SDK"""
         try:
             self.auth_token = auth_token
+            self._closing = False
 
             # Get API key from environment if not provided in token
-            api_key = os.environ.get("BROKER_API_SECRET", "")
+            api_key = get_api_key()
 
             # Format the auth token exactly as per TradeJini requirements
             if ":" not in auth_token and api_key:
                 auth_header = f"{api_key}:{auth_token}"
-                logger.debug("Using API key from BROKER_API_SECRET environment variable")
+                logger.debug("Using API key from environment")
             elif ":" in auth_token:
                 auth_header = auth_token
                 logger.debug("Using provided API key and access token")
             else:
-                error_msg = "Invalid auth token format. Expected 'api_key:access_token' or set BROKER_API_SECRET"
+                error_msg = f"Invalid auth token format. Expected 'api_key:access_token'. {API_KEY_MISSING_ERROR}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
@@ -106,11 +118,16 @@ class TradejiniWebSocket:
                 reason = event.get("reason", "Unknown reason")
                 logger.warning(f"WebSocket closed: {reason}")
 
-                # Auto-reconnect if not unauthorized
-                if reason != "Unauthorized Access":
+                # Auto-reconnect only when the connection dropped on its own.
+                # close() is called from the finally block of every quote/depth
+                # request, and reconnecting there resurrects a socket nothing
+                # will ever close.
+                if self._closing:
+                    logger.debug("Close was requested locally - not reconnecting")
+                elif reason != "Unauthorized Access":
                     logger.info("Attempting to reconnect...")
                     time.sleep(5)
-                    if self.nx_stream:
+                    if self.nx_stream and not self._closing:
                         self.nx_stream.reconnect()
 
         except Exception as e:
@@ -182,7 +199,9 @@ class TradejiniWebSocket:
                 return False
 
             # Format token as per Tradejini requirement
-            formatted_token = f"{token}_{exchange}"
+            # Strip _INDEX suffix: WebSocket expects NSE/BSE, not NSE_INDEX/BSE_INDEX
+            ws_exchange = exchange.replace("_INDEX", "")
+            formatted_token = f"{token}_{ws_exchange}"
 
             logger.info(f"Subscribing to L5 depth for {formatted_token}")
 
@@ -202,6 +221,9 @@ class TradejiniWebSocket:
 
     def close(self):
         """Close WebSocket connection"""
+        # Set before disconnect(): the SDK fires the close callback from its
+        # reader thread, and that callback must see the close as intentional.
+        self._closing = True
         try:
             if self.nx_stream:
                 self.nx_stream.disconnect()
@@ -226,6 +248,19 @@ class BrokerData:
             "30m": "30m",  # 30 minutes
         }
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def connect_websocket(self):
         """Initialize WebSocket connection if not already connected"""
         try:
@@ -234,6 +269,13 @@ class BrokerData:
                 return True
 
             logger.info("Initializing new WebSocket connection...")
+
+            # Close existing WebSocket before creating a new one
+            if hasattr(self, "ws") and self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
 
             # Initialize new WebSocket instance
             self.ws = TradejiniWebSocket()
@@ -336,7 +378,9 @@ class BrokerData:
                 logger.debug("Cleared all cached quote data")
 
             # Subscribe to quotes - format as per Tradejini requirements
-            symbol_key = f"{token}_{exchange}"
+            # Strip _INDEX suffix: WebSocket expects NSE/BSE, not NSE_INDEX/BSE_INDEX
+            ws_exchange = exchange.replace("_INDEX", "")
+            symbol_key = f"{token}_{ws_exchange}"
             logger.debug(f"Subscribing to quotes for: {symbol_key}")
             subscription_success = self.ws.subscribe_quotes([symbol_key])
 
@@ -353,12 +397,12 @@ class BrokerData:
 
             # Possible symbol key formats the data might arrive with
             symbol_keys = [
-                symbol_key,  # token_exchange format
-                f"{token}_NSE",  # Most likely format
-                f"{token}_{exchange}",
+                symbol_key,  # token_ws_exchange format
+                f"{token}_{ws_exchange}",
+                f"{token}_NSE",
+                f"{token}_BSE",
                 str(token),
-                f"{exchange}_{token}",
-                f"NSE_{token}",
+                f"{ws_exchange}_{token}",
             ]
 
             logger.debug(f"Will look for data with these symbol keys: {symbol_keys}")
@@ -432,6 +476,12 @@ class BrokerData:
                 "prev_close": 0.0,
                 "volume": 0,
             }
+        finally:
+            # Always close WebSocket after quotes request to prevent FD leaks
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def get_multiquotes(self, symbols: list) -> list:
         """
@@ -472,6 +522,12 @@ class BrokerData:
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
+        finally:
+            # Always close WebSocket after multiquotes request to prevent FD leaks
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
@@ -514,11 +570,18 @@ class BrokerData:
                 continue
 
             # Format as per Tradejini requirements: token_exchange
-            symbol_key = f"{token}_{exchange}"
+            # Strip _INDEX suffix: WebSocket expects NSE/BSE, not NSE_INDEX/BSE_INDEX
+            ws_exchange = exchange.replace("_INDEX", "")
+            symbol_key = f"{token}_{ws_exchange}"
             symbol_keys.append(symbol_key)
 
             # Store mapping for response processing
-            symbol_map[symbol_key] = {"symbol": symbol, "exchange": exchange, "token": token}
+            symbol_map[symbol_key] = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "ws_exchange": ws_exchange,
+                "token": token,
+            }
 
         if not symbol_keys:
             logger.warning("No valid symbols to fetch quotes for")
@@ -551,12 +614,13 @@ class BrokerData:
         with self.ws.lock:
             for symbol_key, info in symbol_map.items():
                 # Try different key formats that Tradejini WebSocket might use
+                ws_exch = info.get("ws_exchange", info["exchange"].replace("_INDEX", ""))
                 possible_keys = [
-                    symbol_key,  # token_exchange (e.g., "1234_NSE")
-                    f"{info['exchange']}_{info['token']}",  # exchange_token (e.g., "NSE_1234")
-                    f"{info['token']}_NSE",  # token_NSE fallback
-                    f"{info['token']}_{info['exchange']}",  # token_exchange format
-                    f"NSE_{info['token']}",  # NSE_token format
+                    symbol_key,  # token_ws_exchange (e.g., "1234_NSE")
+                    f"{info['token']}_{ws_exch}",
+                    f"{ws_exch}_{info['token']}",
+                    f"{info['token']}_NSE",
+                    f"{info['token']}_BSE",
                     str(info["token"]),  # just token
                 ]
 
@@ -622,7 +686,9 @@ class BrokerData:
 
             # Subscribe to market depth
             logger.debug(f"Subscribing to depth for {symbol} (token: {token})")
-            success = self.ws.subscribe_depth(symbol, exchange, token)
+            # Strip _INDEX suffix for WebSocket subscription
+            ws_exchange = exchange.replace("_INDEX", "")
+            success = self.ws.subscribe_depth(symbol, ws_exchange, token)
 
             if not success:
                 raise ConnectionError("Failed to send depth subscription")
@@ -632,7 +698,7 @@ class BrokerData:
             # Wait for depth data
             max_retries = 20
             retry_count = 0
-            symbol_key = f"{token}_{exchange}"
+            symbol_key = f"{token}_{ws_exchange}"
 
             while retry_count < max_retries:
                 time.sleep(1.0)
@@ -662,6 +728,12 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}", exc_info=True)
             return self._get_default_depth()
+        finally:
+            # Always close WebSocket after depth request to prevent FD leaks
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def _format_depth(self, depth_data: dict, symbol: str, exchange: str) -> dict:
         """Format depth data from Tradejini to OpenAlgo standard format"""
@@ -825,15 +897,17 @@ class BrokerData:
             # Convert to pandas DataFrame
             df = pd.DataFrame(result)
 
-            # Convert timestamps to datetime in IST and create DataFrame
-            if "timestamp" in df.columns and df["timestamp"].max() > 1e12:
-                df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(
+            # Bar times are epoch seconds; tolerate epoch milliseconds too
+            # rather than silently manufacturing a synthetic time axis.
+            if "timestamp" in df.columns:
+                unit = "ms" if df["timestamp"].max() > 1e12 else "s"
+                df["datetime"] = pd.to_datetime(df["timestamp"], unit=unit, utc=True).dt.tz_convert(
                     "Asia/Kolkata"
                 )
             else:
                 # If no timestamp, generate based on interval
                 start_dt = pd.Timestamp(start_ts, unit="s", tz="Asia/Kolkata")
-                freq = interval.replace("m", "T").replace("h", "H").replace("d", "D")
+                freq = interval.replace("m", "min").replace("h", "h").replace("d", "D")
                 df["datetime"] = pd.date_range(start=start_dt, periods=len(df), freq=freq)
 
             # Set datetime as index and sort
@@ -883,11 +957,10 @@ class BrokerData:
             url = f"{base_url}{endpoint}"
 
             # Get API key from environment
-            api_key = os.getenv("BROKER_API_SECRET")
+            api_key = get_api_key()
             if not api_key:
-                error_msg = "BROKER_API_SECRET environment variable not set"
-                logger.error(error_msg)
-                return False, error_msg
+                logger.error(API_KEY_MISSING_ERROR)
+                return False, API_KEY_MISSING_ERROR
 
             # Check if auth_token is available
             if not self.auth_token:
@@ -929,30 +1002,47 @@ class BrokerData:
                 logger.error(f"Failed to parse JSON response: {e}")
                 return False, f"Invalid JSON response: {str(e)}"
 
-            # Check if the response is successful
+            # 'no-data' means the window simply has no candles - not an error
+            if data.get("s") == "no-data":
+                logger.info(f"No chart data for {symbol_id} in the requested window")
+                return True, []
+
+            # Check if the response is successful. Error text is in 'msg'.
             if data.get("s") != "ok":
-                error_msg = f"API Error: Status='{data.get('s')}', Message='{data.get('message', 'No error message')}'"
+                error_msg = (
+                    f"API Error: Status='{data.get('s')}', "
+                    f"Message='{data.get('msg', 'No error message')}'"
+                )
                 logger.error(error_msg)
                 return False, error_msg
 
             # Process the response data
             ohlc_data = []
-            bars = data.get("d", {}).get("bars", [])
+            bars = (data.get("d") or {}).get("bars", []) or []
             logger.debug(f"Processing {len(bars)} bars from response")
 
             for bar in bars:
-                if not isinstance(bar, list) or len(bar) < 5:
-                    logger.warning(f"Skipping invalid bar format: {bar}")
-                    continue
-
                 try:
-                    # Parse the bar data [timestamp, open, high, low, close, volume]
-                    timestamp = int(bar[0])
-                    open_price = float(bar[1])
-                    high = float(bar[2])
-                    low = float(bar[3])
-                    close = float(bar[4])
-                    volume = int(bar[5]) if len(bar) > 5 else 0
+                    # Bars come back either as objects keyed
+                    # time/open/high/low/close/volume, or as positional arrays
+                    # [time, open, high, low, close, volume]. Accept both.
+                    if isinstance(bar, dict):
+                        timestamp = int(bar.get("time", 0))
+                        open_price = float(bar.get("open", 0))
+                        high = float(bar.get("high", 0))
+                        low = float(bar.get("low", 0))
+                        close = float(bar.get("close", 0))
+                        volume = int(bar.get("volume", 0) or 0)
+                    elif isinstance(bar, (list, tuple)) and len(bar) >= 5:
+                        timestamp = int(bar[0])
+                        open_price = float(bar[1])
+                        high = float(bar[2])
+                        low = float(bar[3])
+                        close = float(bar[4])
+                        volume = int(bar[5]) if len(bar) > 5 else 0
+                    else:
+                        logger.warning(f"Skipping invalid bar format: {bar}")
+                        continue
 
                     ohlc_data.append(
                         {
@@ -965,7 +1055,7 @@ class BrokerData:
                         }
                     )
 
-                except (IndexError, ValueError, TypeError) as e:
+                except (IndexError, KeyError, ValueError, TypeError) as e:
                     logger.warning(f"Error parsing bar data: {bar}, error: {str(e)}")
                     continue
 

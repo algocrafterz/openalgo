@@ -42,7 +42,7 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
@@ -113,10 +113,10 @@ done
 # Get broker name
 while true; do
     log "\nValid brokers:" "$BLUE"
-    echo "fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange,"
-    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl,"
+    echo "fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange,"
+    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
-    echo "rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
+    echo "rmoney, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha,"
     echo ""
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
@@ -160,6 +160,19 @@ fi
 read -p "Enter your email for SSL certificate notifications: " ADMIN_EMAIL
 if [ -z "$ADMIN_EMAIL" ]; then
     ADMIN_EMAIL="admin@${DOMAIN#*.}"
+fi
+
+# Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
+# Same-domain mode — /mcp and /oauth/* are served from the same nginx
+# vhost as the dashboard, so the existing reverse-proxy config covers it.
+# Local stdio MCP (Claude Desktop / Cursor / Windsurf) works regardless.
+log "\nRemote MCP lets hosted AI clients (Claude.ai, ChatGPT) connect to OpenAlgo over HTTPS." "$BLUE"
+log "Skip this if you only use the local MCP server with Claude Desktop / Cursor." "$YELLOW"
+read -p "Enable Remote MCP? (y/N): " enable_mcp_input
+ENABLE_REMOTE_MCP="false"
+if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
+    ENABLE_REMOTE_MCP="true"
+    log "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
 fi
 
 # Generate security keys
@@ -258,8 +271,38 @@ $SUDO sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" .env
 $SUDO sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" .env
 $SUDO sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" .env
 $SUDO sed -i "s|<broker>|$BROKER_NAME|g" .env
-$SUDO sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" .env
-$SUDO sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" .env
+$SUDO sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" .env
+$SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" .env
+
+# Capture build-time git info for the diagnostics page (issue #1388).
+# .git/ is dockerignored, so the running container has no .git/HEAD to read —
+# we surface the values via env instead. Both lines are appended only when not
+# already present so re-runs of this script don't accumulate duplicates.
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+if ! grep -qE "^OPENALGO_GIT_BRANCH\s*=" .env 2>/dev/null; then
+    echo "OPENALGO_GIT_BRANCH = '${GIT_BRANCH}'" | $SUDO tee -a .env > /dev/null
+fi
+if ! grep -qE "^OPENALGO_GIT_COMMIT\s*=" .env 2>/dev/null; then
+    echo "OPENALGO_GIT_COMMIT = '${GIT_COMMIT}'" | $SUDO tee -a .env > /dev/null
+fi
+
+# Container is published only on 127.0.0.1:5000 with nginx in front; trust the
+# proxy's X-Forwarded-For / X-Real-IP so IP-based features see the real client.
+$SUDO sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" .env
+
+# .env is bind-mounted read+write into the container at /app/.env so the
+# auto-rotation in utils/env_check.py can replace publicly-known APP_KEY /
+# API_KEY_PEPPER values on first run (see issue #1039 follow-up). The
+# container runs as `appuser` (UID 1000 from the Dockerfile), so chown the
+# file to UID 1000 and tighten to 0600 — only appuser can read or write it
+# from inside the container, and the file is no longer world-readable on
+# the host. Earlier versions used mode 644 because the mount was :ro and
+# 600 + root ownership made it unreadable to UID 1000 (issue #960). With
+# the mount switched to read-write and the file owned by UID 1000, 600 is
+# both safe and necessary.
+$SUDO chown 1000:1000 .env
+$SUDO chmod 600 .env
 
 # Update XTS market data credentials if applicable
 if is_xts_broker "$BROKER_NAME"; then
@@ -269,9 +312,15 @@ fi
 
 # Update WebSocket and host configurations
 $SUDO sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
+# WEBSOCKET_HOST / FLASK_HOST_IP must be 0.0.0.0 *inside* the container so the
+# Docker port mapping (-p host:container) can route traffic. nginx on the host
+# reverse-proxies /ws and / onto these ports over the Docker bridge.
 $SUDO sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
-$SUDO sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" .env
 $SUDO sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
+# ZMQ_HOST is NOT rewritten: ZeroMQ is an internal message bus between broker
+# adapters and the WS proxy, both of which run in the same container. Keeping
+# it on loopback prevents the raw tick feed from being reachable via any port
+# that might be accidentally exposed.
 # CORS: Add domain if not already present (preserves custom domains)
 # NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
 if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then
@@ -287,6 +336,17 @@ fi
 # See: https://github.com/marketcalls/openalgo/issues/938
 $SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
 echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
+
+# Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
+# /oauth/* are served from the same nginx vhost as the dashboard, no
+# extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
+# allowlist) inherit their defaults from .sample.env — flip them later
+# in .env if you want stricter behavior on a shared deployment.
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    $SUDO sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" .env
+    $SUDO sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" .env
+    log "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+fi
 
 check_status "Environment configuration failed"
 
@@ -345,7 +405,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production
@@ -610,8 +670,12 @@ server {
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
 
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        # Plain HTTP only: /ws, /ws/ and /socket.io/ have their own blocks.
+        # Forcing "Connection: upgrade" here sent every ordinary request
+        # upstream with a bogus upgrade header and an empty Upgrade:, which
+        # breaks HTTP/1.1 keep-alive to gunicorn and shows up as intermittent
+        # truncated asset responses and 5xx (GitHub issue #1807).
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -723,25 +787,80 @@ mkdir -p $BACKUP_DIR
 echo "Creating backup..."
 cd /opt/openalgo
 
+# Resolve the REAL volume names before stopping anything.
+#
+# Compose prefixes named volumes with the project name, which comes from the
+# directory: the compose file declares "openalgo_db" but the actual volume in
+# /opt/openalgo is "openalgo_openalgo_db". This script used to pass the
+# declared name, and `docker run -v <unknown-name>:/data` does not fail -- it
+# CREATES an empty volume. The tar then succeeded with nothing in it, so the
+# backup archive looked fine and restored nothing.
+# Ask the container what it is ACTUALLY using, rather than guessing from
+# names. Name matching is unsafe here: the old buggy command created a stray
+# empty "openalgo_db" volume on every run, so a name pattern would happily
+# match that debris and archive nothing all over again.
+CONTAINER=$(sudo docker compose ps -q openalgo 2>/dev/null | head -1)
+[ -z "$CONTAINER" ] && CONTAINER=openalgo-web
+mount_for() {
+    sudo docker inspect "$CONTAINER" \
+        --format "{{range .Mounts}}{{if eq .Destination \"$1\"}}{{.Name}}{{end}}{{end}}" 2>/dev/null
+}
+DB_VOL=$(mount_for /app/db)
+ST_VOL=$(mount_for /app/strategies)
+
+if [ -z "$DB_VOL" ]; then
+    echo "ERROR: could not find the OpenAlgo database volume." >&2
+    echo "       Volumes present:" >&2
+    sudo docker volume ls --format '  {{.Name}}' >&2
+    echo "       Aborting without stopping the stack." >&2
+    exit 1
+fi
+echo "Database volume:   $DB_VOL"
+[ -n "$ST_VOL" ] && echo "Strategies volume: $ST_VOL"
+
 # Backup .env file and Docker volume data
 echo "Backing up configuration and volume data..."
 sudo docker compose stop
 
-# Create temp directory for volume exports
+# Whatever happens from here, bring the stack back up. A failed backup must
+# never leave a trading platform stopped.
 TEMP_DIR=$(mktemp -d)
+restore_stack() {
+    sudo rm -rf "$TEMP_DIR"
+    sudo docker compose start
+}
+trap restore_stack EXIT
 
-# Export data from Docker volumes
-sudo docker run --rm -v openalgo_db:/data -v $TEMP_DIR:/backup alpine tar -czf /backup/db.tar.gz -C /data . 2>/dev/null
-sudo docker run --rm -v openalgo_strategies:/data -v $TEMP_DIR:/backup alpine tar -czf /backup/strategies.tar.gz -C /data . 2>/dev/null
+# Export data from Docker volumes. No 2>/dev/null: if this fails you need to
+# know, because the whole point is having a restorable copy.
+sudo docker run --rm -v "$DB_VOL":/data -v $TEMP_DIR:/backup alpine tar -czf /backup/db.tar.gz -C /data . || {
+    echo "ERROR: failed to archive the database volume." >&2
+    exit 1
+}
+
+BACKUP_MEMBERS="db.tar.gz"
+if [ -n "$ST_VOL" ]; then
+    if sudo docker run --rm -v "$ST_VOL":/data -v $TEMP_DIR:/backup alpine tar -czf /backup/strategies.tar.gz -C /data .; then
+        BACKUP_MEMBERS="$BACKUP_MEMBERS strategies.tar.gz"
+    else
+        echo "WARNING: could not archive strategies; continuing with the database only." >&2
+    fi
+fi
+
+# Verify the database archive actually contains something before declaring
+# success. An empty archive is the failure mode this whole block exists to stop.
+if ! sudo tar -tzf "$TEMP_DIR/db.tar.gz" | grep -q .; then
+    echo "ERROR: the database archive is empty - not writing a misleading backup." >&2
+    exit 1
+fi
 
 # Create final backup
-sudo tar -czf $BACKUP_FILE .env -C $TEMP_DIR db.tar.gz strategies.tar.gz 2>/dev/null
+sudo tar -czf $BACKUP_FILE .env -C $TEMP_DIR $BACKUP_MEMBERS || {
+    echo "ERROR: failed to create $BACKUP_FILE" >&2
+    exit 1
+}
 
-# Cleanup temp directory
-sudo rm -rf $TEMP_DIR
-
-sudo docker compose start
-echo "Backup created: $BACKUP_FILE"
+echo "Backup created: $BACKUP_FILE ($(sudo du -h "$BACKUP_FILE" | cut -f1))"
 
 # Keep only last 7 backups
 cd $BACKUP_DIR
@@ -772,6 +891,11 @@ log "Domain: https://$DOMAIN" "$BLUE"
 log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
 log "Container: openalgo-web" "$BLUE"
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    log "Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
+else
+    log "Remote MCP: Disabled" "$BLUE"
+fi
 
 log "\nNext Steps:" "$YELLOW"
 log "1. Visit https://$DOMAIN to access OpenAlgo" "$GREEN"

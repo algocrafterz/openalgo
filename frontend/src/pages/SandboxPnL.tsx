@@ -1,6 +1,6 @@
 import { Activity, Briefcase, Calendar, Download, Package, Settings } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -77,8 +77,6 @@ interface SandboxData {
   trades: Trade[]
 }
 
-
-
 function getPnLColor(value: number): string {
   if (value > 0) return 'text-green-500'
   if (value < 0) return 'text-red-500'
@@ -92,9 +90,9 @@ export default function SandboxPnL() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('daily')
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time data load on mount; fetchData has no reactive inputs
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchData = async () => {
@@ -108,7 +106,7 @@ export default function SandboxPnL() {
           setData(result.data)
         }
       }
-    } catch (error) {
+    } catch (_error) {
     } finally {
       setIsLoading(false)
     }

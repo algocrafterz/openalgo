@@ -4,7 +4,7 @@ import os
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pandas as pd
@@ -13,18 +13,50 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
+
 # Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
 # asyncio.run() cannot be called under eventlet's monkey-patched event loop
 def _is_eventlet_patched():
     try:
         import eventlet.patcher
+
         return eventlet.patcher.is_monkey_patched("socket")
     except (ImportError, AttributeError):
         return False
 
+
 USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
+
+
+def _encode_jdata(data: dict) -> str:
+    """
+    Serialize a jData payload for Shoonya's form-urlencoded body.
+
+    Shoonya splits the request body on "&" before parsing jData, so a literal
+    ampersand inside the JSON (symbols like M&M-EQ) truncates the payload and
+    the server replies "Invalid Input : jData is not valid json object".
+    Percent-encoding does not help — the body is never URL-decoded, so "%26"
+    reaches the backend verbatim and matches no symbol. Escaping it as the
+    JSON unicode escape \\u0026 keeps the body free of "&" while the server's
+    JSON parser still sees the real character.
+    """
+    return json.dumps(data).replace("&", "\\u0026")
+
+
+# EODChartData resolves the `sym` argument against Shoonya's index names, which
+# are neither the trading symbol ("NIFTY INDEX") nor always the master's Symbol
+# column ("Nifty Fin Services"). Anything not listed here falls back to the
+# broker symbol; BSE indices (SENSEX, BANKEX) have no EOD series at all.
+EOD_INDEX_SYMBOLS = {
+    ("NSE_INDEX", "NIFTY"): "Nifty 50",
+    ("NSE_INDEX", "BANKNIFTY"): "Nifty Bank",
+    ("NSE_INDEX", "FINNIFTY"): "Nifty Financial Services",
+    ("NSE_INDEX", "MIDCPNIFTY"): "Nifty Midcap Select",
+    ("NSE_INDEX", "NIFTYNXT50"): "Nifty Next 50",
+    ("NSE_INDEX", "INDIAVIX"): "India VIX",
+}
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
@@ -44,7 +76,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
         data = payload
         data["uid"] = api_key
 
-    payload_str = "jData=" + json.dumps(data)
+    payload_str = "jData=" + _encode_jdata(data)
 
     # Get the shared httpx client
     client = get_httpx_client()
@@ -71,11 +103,15 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
 def get_chart_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Chart data endpoints (EODChartData, TPSeries) use the legacy NorenWClientTP path
-    with jKey authentication as they haven't migrated to NorenWClientAPI yet.
+    Chart data endpoints (EODChartData, TPSeries) take jKey embedded in the
+    form-urlencoded body (same pattern as Flattrade/Finvasia chart APIs). The
+    legacy /NorenWClientTP/ path is decommissioned post-OAuth and answers 502
+    Bad Gateway, so callers must use the /NorenWClientAPI/ path.
     """
     AUTH_TOKEN = auth
     full_api_key = os.getenv("BROKER_API_KEY")
+    if not full_api_key:
+        raise RuntimeError("BROKER_API_KEY is not configured")
     api_key = full_api_key.split(":::")[0]
 
     if payload is None:
@@ -84,14 +120,13 @@ def get_chart_api_response(endpoint, auth, method="POST", payload=None):
         data = payload
         data["uid"] = api_key
 
-    payload_str = "jData=" + json.dumps(data)
+    # Chart endpoints want jData=<json>&jKey=<token> form-urlencoded, NOT a
+    # Bearer header. This mirrors broker/flattrade/api/data.py:get_api_response.
+    payload_str = "jData=" + _encode_jdata(data) + "&jKey=" + AUTH_TOKEN
 
     client = get_httpx_client()
 
-    headers = {
-        "Content-Type": "text/plain",
-        "Authorization": f"Bearer {AUTH_TOKEN}",
-    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     url = f"https://api.shoonya.com{endpoint}"
 
     response = client.request(method, url, content=payload_str, headers=headers)
@@ -411,7 +446,17 @@ class BrokerData:
         # Step 2: Make concurrent API calls
         start_time = time.time()
 
-        if USE_ASYNC:
+        # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
+        # if called from within an already-running event loop
+        use_async = USE_ASYNC
+        if use_async:
+            try:
+                asyncio.get_running_loop()
+                use_async = False
+            except RuntimeError:
+                pass
+
+        if use_async:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
@@ -517,6 +562,30 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
+    def _get_history_chunk_seconds(self, interval: str) -> int:
+        """
+        Per-request window size for the chart endpoints, in seconds. TPSeries
+        returns 504 Server Timeout when the range produces too many candles in
+        a single call, and EODChartData silently truncates to the newest 1201
+        rows. These values keep each request under both limits.
+        """
+        # 1m bars: ~375 per trading day -> cap at ~5 days
+        # 5m bars: ~75 per day -> ~30 days
+        # daily bars: 1 per day (~250/yr) -> ~2 years, well under the 1201 cap
+        minute_windows = {
+            "1m": 5 * 24 * 3600,
+            "3m": 10 * 24 * 3600,
+            "5m": 20 * 24 * 3600,
+            "10m": 40 * 24 * 3600,
+            "15m": 60 * 24 * 3600,
+            "30m": 90 * 24 * 3600,
+            "1h": 180 * 24 * 3600,
+            "2h": 180 * 24 * 3600,
+            "4h": 365 * 24 * 3600,
+            "D": 2 * 365 * 24 * 3600,
+        }
+        return minute_windows.get(interval, 30 * 24 * 3600)
+
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -546,6 +615,9 @@ class BrokerData:
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
 
+            # EODChartData resolves indices by display name, so keep the
+            # OpenAlgo exchange around after normalising it for the API.
+            oa_exchange = exchange
             if exchange == "NSE_INDEX":
                 exchange = "NSE"
             elif exchange == "BSE_INDEX":
@@ -574,86 +646,158 @@ class BrokerData:
                 datetime.strptime(end_date_str + " 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()
             )
 
-            # For daily data, use EODChartData endpoint
+            # Daily bars come from EODChartData, intraday from TPSeries. Both
+            # live under /NorenWClientAPI/ post-OAuth (the legacy
+            # /NorenWClientTP/ path answers 502) and both want jKey in the
+            # form-urlencoded body rather than a Bearer header.
+            #
+            # TPSeries does NOT accept intrv="D" — the request hangs until the
+            # gateway times it out (504 Server Timeout), which is why daily
+            # history returned nothing but the live quote appended below.
+            #
+            # Both endpoints are bounded per request: TPSeries times out on
+            # long ranges and EODChartData truncates to the newest 1201 rows.
+            # Chunk [start_ts, end_ts] so each request stays inside those
+            # limits; chunk size is interval-dependent.
             if interval == "D":
-                # Format symbol for EOD data
-                sym = f"{exchange}:{br_symbol}"
-
-                payload = {"sym": sym, "from": str(start_ts), "to": str(end_ts)}
-
-                logger.debug(f"EOD Payload: {payload}")  # Debug print
-                try:
-                    response = get_api_response(
-                        "/NorenWClientAPI/EODChartData", self.auth_token, payload=payload
-                    )
-                    logger.debug(f"EOD Response: {response}")  # Debug print
-                except Exception as e:
-                    logger.error(f"Error in EOD request: {e}")
-                    response = []  # Continue with empty response to try quotes
+                endpoint = "/NorenWClientAPI/EODChartData"
+                eod_symbol = EOD_INDEX_SYMBOLS.get((oa_exchange, symbol), br_symbol)
             else:
-                # For intraday data, use TPSeries endpoint
-                payload = {
-                    "exch": exchange,
-                    "token": token,
-                    "st": str(start_ts),
-                    "et": str(end_ts),
-                    "intrv": self.timeframe_map[interval],
-                }
+                endpoint = "/NorenWClientAPI/TPSeries"
+                eod_symbol = None
 
-                logger.debug(f"Intraday Payload: {payload}")  # Debug print
-                response = get_api_response(
-                    "/NorenWClientAPI/TPSeries", self.auth_token, payload=payload
-                )
-                logger.debug(f"Intraday Response: {response}")  # Debug print
+            chunk_seconds = self._get_history_chunk_seconds(interval)
 
-            # Convert response to DataFrame
-            data = []
-            for candle in response:
-                if isinstance(candle, str):
-                    candle = json.loads(candle)
+            response_candles = []
+            chunk_start = start_ts
+            while chunk_start <= end_ts:
+                chunk_end = min(chunk_start + chunk_seconds, end_ts)
+                if interval == "D":
+                    payload = {
+                        "sym": f"{exchange}:{eod_symbol}",
+                        "from": str(chunk_start),
+                        "to": str(chunk_end),
+                    }
+                else:
+                    payload = {
+                        "exch": exchange,
+                        "token": token,
+                        "st": str(chunk_start),
+                        "et": str(chunk_end),
+                        "intrv": self.timeframe_map[interval],
+                    }
+                logger.debug(f"{endpoint} Payload: {payload}")
 
                 try:
-                    if interval == "D":
-                        # EOD data format
-                        timestamp = int(candle.get("ssboe", 0))
-                        data.append(
-                            {
-                                "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),
-                                "high": float(candle.get("inth", 0)),
-                                "low": float(candle.get("intl", 0)),
-                                "close": float(candle.get("intc", 0)),
-                                "volume": float(candle.get("intv", 0)),
-                                "oi": float(candle.get("oi", 0)),
-                            }
-                        )
+                    chunk_response = get_chart_api_response(
+                        endpoint, self.auth_token, payload=payload
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"{endpoint} chunk request failed ({chunk_start}-{chunk_end}): {e}"
+                    )
+                    chunk_start = chunk_end + 1
+                    continue
+
+                # Both endpoints normally return a LIST of candles. On error
+                # they return a DICT like {"stat":"Not_Ok","emsg":"..."} —
+                # detect that before iterating (the old code iterated dict keys
+                # and crashed trying to json.loads("stat")).
+                if isinstance(chunk_response, dict):
+                    emsg = chunk_response.get("emsg") or chunk_response.get("message") or "unknown"
+                    logger.warning(
+                        f"{endpoint} returned error for chunk {chunk_start}-{chunk_end}: "
+                        f"stat={chunk_response.get('stat')} emsg={emsg}"
+                    )
+                    chunk_start = chunk_end + 1
+                    continue
+
+                if not isinstance(chunk_response, list):
+                    logger.warning(
+                        f"Unexpected {endpoint} response type {type(chunk_response).__name__}: "
+                        f"{str(chunk_response)[:200]}"
+                    )
+                    chunk_start = chunk_end + 1
+                    continue
+
+                response_candles.extend(chunk_response)
+                chunk_start = chunk_end + 1
+
+            if interval == "D" and not response_candles:
+                # An unknown index name resolves to an empty list rather than
+                # an error, so say which symbol Shoonya did not recognise.
+                logger.warning(
+                    f"EODChartData returned no daily candles for {exchange}:{eod_symbol} "
+                    f"({symbol}/{oa_exchange}) between {start_ts} and {end_ts}"
+                )
+
+            # Convert candles to rows. Both endpoints carry `ssboe` (epoch)
+            # alongside `time` — DD-MM-YYYY HH:MM:SS for TPSeries, DD-MON-YYYY
+            # for EODChartData. Prefer ssboe: it is already an integer and
+            # avoids both the format split and timezone quirks. EODChartData
+            # rows arrive as JSON strings and carry no `oi`.
+            data = []
+            for candle in response_candles:
+                if isinstance(candle, str):
+                    try:
+                        candle = json.loads(candle)
+                    except json.JSONDecodeError:
+                        logger.error(f"Non-JSON candle entry, skipping: {candle[:200]}")
+                        continue
+
+                if not isinstance(candle, dict):
+                    continue
+
+                try:
+                    # Skip candles with all zero OHLC (stale ticks)
+                    if (
+                        float(candle.get("into", 0)) == 0
+                        and float(candle.get("inth", 0)) == 0
+                        and float(candle.get("intl", 0)) == 0
+                        and float(candle.get("intc", 0)) == 0
+                    ):
+                        continue
+
+                    ssboe = candle.get("ssboe")
+                    if ssboe is not None:
+                        timestamp = int(ssboe)
                     else:
-                        # Skip candles with all zero values
-                        if (
-                            float(candle.get("into", 0)) == 0
-                            and float(candle.get("inth", 0)) == 0
-                            and float(candle.get("intl", 0)) == 0
-                            and float(candle.get("intc", 0)) == 0
+                        # TPSeries `time` is IST wall-clock, so a naive parse
+                        # against the host clock reproduces its ssboe. The
+                        # date-only EODChartData form has no clock at all and
+                        # must be pinned to 00:00 UTC — the convention every
+                        # other daily bar here uses — or it would land 5.5
+                        # hours early and miss the timestamp dedupe.
+                        timestamp = None
+                        for time_format, as_utc in (
+                            ("%d-%m-%Y %H:%M:%S", False),
+                            ("%d-%b-%Y", True),
                         ):
+                            try:
+                                parsed = datetime.strptime(candle["time"], time_format)
+                            except ValueError:
+                                continue
+                            if as_utc:
+                                parsed = parsed.replace(tzinfo=UTC)
+                            timestamp = int(parsed.timestamp())
+                            break
+                        if timestamp is None:
+                            logger.error(f"Unparseable candle time, skipping: {candle}")
                             continue
 
-                        # Intraday format
-                        timestamp = int(
-                            datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S").timestamp()
-                        )
-                        data.append(
-                            {
-                                "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),
-                                "high": float(candle.get("inth", 0)),
-                                "low": float(candle.get("intl", 0)),
-                                "close": float(candle.get("intc", 0)),
-                                "volume": float(candle.get("intv", 0)),
-                                "oi": float(candle.get("oi", 0)),
-                            }
-                        )
-                except (KeyError, ValueError):
-                    logger.error(f"Error parsing candle data: {{e}}, Candle: {candle}")
+                    data.append(
+                        {
+                            "timestamp": timestamp,
+                            "open": float(candle.get("into", 0)),
+                            "high": float(candle.get("inth", 0)),
+                            "low": float(candle.get("intl", 0)),
+                            "close": float(candle.get("intc", 0)),
+                            "volume": float(candle.get("intv", 0)),
+                            "oi": float(candle.get("oi", 0)),
+                        }
+                    )
+                except (KeyError, ValueError) as e:
+                    logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
 
             df = pd.DataFrame(data)
@@ -664,9 +808,12 @@ class BrokerData:
 
             # For daily data, append today's data from quotes if it's missing
             if interval == "D":
-                today_ts = int(
-                    datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-                )
+                # EODChartData stamps each daily bar at 00:00:00 UTC of the
+                # trade date, so today's synthetic bar has to use the same
+                # convention or it lands 5.5 hours before the previous close.
+                # Matches flattrade/tradesmart/zebu.
+                utc_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                today_ts = int((utc_today + timedelta(hours=5, minutes=30)).timestamp())
 
                 # Only get today's data if it's within the requested range
                 if today_ts >= start_ts and today_ts <= end_ts:
@@ -692,19 +839,28 @@ class BrokerData:
                                     "oi": float(quotes_response.get("oi", 0)),
                                 }
                                 logger.debug(f"Today's quote data: {today_data}")
-                                # Append today's data
-                                df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
+                                # Append today's data. Concatenating onto the
+                                # all-NA placeholder frame raises a pandas
+                                # FutureWarning, so replace it outright when
+                                # the broker returned no candles at all.
+                                today_df = pd.DataFrame([today_data])
+                                df = (
+                                    today_df
+                                    if df.empty
+                                    else pd.concat([df, today_df], ignore_index=True)
+                                )
                                 logger.debug("Added today's data from quotes")
                         except Exception as e:
                             logger.info(f"Error fetching today's data from quotes: {e}")
                 else:
                     logger.info(
-                        f"Today ({{today_ts}}) is outside requested range ({{start_ts}} to {end_ts})"
+                        f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})"
                     )
 
-            # Sort by timestamp
-            df = df.sort_values("timestamp")
-            return df
+            # Sort by timestamp. Adjacent chunks are half-open, but a candle
+            # landing exactly on a boundary would otherwise appear twice.
+            df = df.sort_values("timestamp").drop_duplicates(subset="timestamp", keep="last")
+            return df.reset_index(drop=True)
 
         except Exception as e:
             logger.error(f"Error in get_history: {e}")  # Add debug logging

@@ -2,43 +2,50 @@
 // Left sidebar with draggable node items organized by category
 
 import {
-  Clock,
-  ShoppingCart,
-  Zap,
-  TrendingUp,
-  XCircle,
-  Square,
-  Briefcase,
-  Wallet,
-  Send,
+  Activity,
+  BarChart3,
   Bell,
-  Timer,
+  Briefcase,
+  Calculator,
+  Calendar,
+  CalendarClock,
+  CalendarRange,
+  CalendarX,
+  ClipboardList,
+  Clock,
+  FileSearch,
+  FileText,
+  Globe,
+  Grid3X3,
+  Group,
+  History,
   Hourglass,
   Layers,
-  Package,
-  Split,
-  Pencil,
-  FileSearch,
-  BarChart3,
   Layers3,
-  Calendar,
-  Variable,
-  FileText,
-  Group,
-  Webhook,
-  Globe,
-  Tag,
-  Target,
-  ClipboardList,
-  Receipt,
-  Calculator,
-  Grid3X3,
-  CalendarX,
+  MessageCircle,
+  Package,
+  PackageCheck,
+  Pencil,
   Radio,
   RadioTower,
-  WifiOff,
+  Receipt,
+  Send,
   Shield,
+  ShoppingCart,
   Sigma,
+  SlidersHorizontal,
+  Split,
+  Square,
+  Tag,
+  Target,
+  Timer,
+  TrendingUp,
+  Variable,
+  Wallet,
+  Webhook,
+  WifiOff,
+  XCircle,
+  Zap,
 } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -51,25 +58,31 @@ interface NodeItemProps {
   icon: React.ReactNode
   color: string
   onDragStart: (event: React.DragEvent, nodeType: string) => void
+  onAdd: (nodeType: string) => void
 }
 
-function NodeItem({ type, label, description, icon, color, onDragStart }: NodeItemProps) {
+function NodeItem({ type, label, description, icon, color, onDragStart, onAdd }: NodeItemProps) {
+  // Dragging was the only way to place a node: this was a plain div with no
+  // role, no tab stop and no activation handler of any kind - not even a click.
+  // A keyboard user could not add the first node to a graph at all, because the
+  // one alternative (the + button on an edge) only inserts between two nodes
+  // that are already connected.
   return (
-    <div
+    <button
+      type="button"
       draggable
+      aria-label={`Add ${label} node`}
       onDragStart={(e) => onDragStart(e, type)}
+      onClick={() => onAdd(type)}
       className={cn(
-        'group cursor-grab rounded-lg border border-border bg-card p-2.5 transition-all duration-200',
-        'hover:border-primary/50 hover:shadow-md active:cursor-grabbing'
+        'group w-full cursor-grab rounded-lg border border-border bg-card p-2.5 text-left',
+        'transition-all duration-200 hover:border-primary/50 hover:shadow-md',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'active:cursor-grabbing'
       )}
     >
       <div className="flex items-center gap-2.5">
-        <div
-          className={cn(
-            'flex h-7 w-7 items-center justify-center rounded-md',
-            color
-          )}
-        >
+        <div className={cn('flex h-7 w-7 items-center justify-center rounded-md', color)}>
           {icon}
         </div>
         <div className="min-w-0 flex-1">
@@ -77,15 +90,16 @@ function NodeItem({ type, label, description, icon, color, onDragStart }: NodeIt
           <div className="truncate text-[10px] text-muted-foreground">{description}</div>
         </div>
       </div>
-    </div>
+    </button>
   )
 }
 
 interface NodePaletteProps {
   onDragStart: (event: React.DragEvent, nodeType: string) => void
+  onAdd: (nodeType: string) => void
 }
 
-export function NodePalette({ onDragStart }: NodePaletteProps) {
+export function NodePalette({ onDragStart, onAdd }: NodePaletteProps) {
   const triggers = [
     {
       type: 'start',
@@ -106,6 +120,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       label: 'Webhook',
       description: 'External trigger',
       icon: <Webhook className="h-3.5 w-3.5 text-orange-500" />,
+      color: 'bg-orange-500/10',
+    },
+    {
+      type: 'orderUpdateTrigger',
+      label: 'Order Update',
+      description: 'Trigger on fill/reject',
+      icon: <PackageCheck className="h-3.5 w-3.5 text-orange-500" />,
       color: 'bg-orange-500/10',
     },
   ]
@@ -240,6 +261,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       icon: <span className="text-[9px] font-bold text-purple-500">NOT</span>,
       color: 'bg-purple-500/10',
     },
+    {
+      type: 'varCondition',
+      label: 'Var Condition',
+      description: 'Compare any two values',
+      icon: <SlidersHorizontal className="h-3.5 w-3.5 text-purple-500" />,
+      color: 'bg-purple-500/10',
+    },
   ]
 
   const data = [
@@ -272,6 +300,34 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       color: 'bg-cyan-500/10',
     },
     {
+      type: 'indicator',
+      label: 'Indicator',
+      description: 'Any technical indicator',
+      icon: <Activity className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'strategyPnl',
+      label: 'Strategy P&L',
+      description: 'Per-strategy realized/unrealized',
+      icon: <Wallet className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'priorPeriodOhlc',
+      label: 'Prior Period OHLC',
+      description: 'Prev hour/day/week/month',
+      icon: <CalendarClock className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'barOffset',
+      label: 'Bar Offset',
+      description: 'OHLCV N bars back',
+      icon: <History className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
       type: 'openPosition',
       label: 'Open Position',
       description: 'Get position',
@@ -284,6 +340,20 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       description: 'F&O expiry',
       icon: <Calendar className="h-3.5 w-3.5 text-pink-500" />,
       color: 'bg-pink-500/10',
+    },
+    {
+      type: 'intervals',
+      label: 'Intervals',
+      description: 'Broker timeframes',
+      icon: <Clock className="h-3.5 w-3.5 text-pink-500" />,
+      color: 'bg-pink-500/10',
+    },
+    {
+      type: 'calendar',
+      label: 'Calendar',
+      description: 'New day / week / month',
+      icon: <CalendarRange className="h-3.5 w-3.5 text-purple-400" />,
+      color: 'bg-purple-400/10',
     },
     {
       type: 'multiQuotes',
@@ -425,6 +495,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       color: 'bg-[#0088cc]/10',
     },
     {
+      type: 'whatsappAlert',
+      label: 'WhatsApp',
+      description: 'Send alert',
+      icon: <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" />,
+      color: 'bg-[#25D366]/10',
+    },
+    {
       type: 'delay',
       label: 'Delay',
       description: 'Wait duration',
@@ -472,9 +549,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
     <div className="flex h-full flex-col border-r border-border bg-card">
       <div className="shrink-0 border-b border-border p-3">
         <h2 className="text-sm font-semibold">Nodes</h2>
-        <p className="text-[10px] text-muted-foreground">
-          Drag nodes to the canvas
-        </p>
+        <p className="text-[10px] text-muted-foreground">Drag nodes to the canvas</p>
       </div>
       <Tabs defaultValue="triggers" className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0 border-b border-border px-1 py-1.5">
@@ -504,11 +579,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {triggers.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -517,11 +588,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {actions.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -530,11 +597,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {data.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -543,11 +606,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {streaming.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -556,11 +615,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {conditions.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -569,11 +624,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {utilities.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>

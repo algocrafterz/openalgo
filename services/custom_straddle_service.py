@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytz
 
+from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
 from services.option_symbol_service import (
     construct_crypto_option_symbol,
@@ -26,13 +27,18 @@ from services.option_symbol_service import (
 )
 from services.quotes_service import get_quotes
 from services.straddle_chart_service import (
-    NSE_INDEX_SYMBOLS,
     BSE_INDEX_SYMBOLS,
-    _get_quote_exchange,
-    _convert_timestamp_to_ist,
+    NO_SPOT_EXCHANGES,
+    NSE_INDEX_SYMBOLS,
     _calculate_days_to_expiry,
+    _convert_timestamp_to_ist,
+    _get_quote_exchange,
+    resolve_underlying_quote,
 )
-from database.token_db_enhanced import fno_search_symbols
+from services.strategy_chart_service import (
+    _cap_last_n_trading_dates,
+    _resolve_trading_window,
+)
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
@@ -58,29 +64,41 @@ def get_custom_straddle_simulation(
     """
     try:
         ist = pytz.timezone("Asia/Kolkata")
-        today = datetime.now(ist).date()
-        weekday = today.weekday()
-        if weekday == 5:
-            today -= timedelta(days=1)
-        elif weekday == 6:
-            today -= timedelta(days=2)
-
-        end_date_str = today.strftime("%Y-%m-%d")
-        start_date_str = (today - timedelta(days=max(1, days) - 1)).strftime("%Y-%m-%d")
+        # Generous calendar window; pnl_series is post-filtered to the last
+        # N distinct trading dates that actually returned candles.
+        start_date_str, end_date_str = _resolve_trading_window(days, ist)
 
         quantity = lot_size * lots
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
 
-        # Handle crypto perpetual symbol lookup (e.g. BTC → BTCUSDFUT)
+        # One chain, so a later branch cannot overwrite an earlier resolution.
         if exchange.upper() in CRYPTO_EXCHANGES:
+            # Crypto perpetual symbol lookup (e.g. BTC -> BTCUSDFUT)
             _perp = fno_search_symbols(
                 query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
             if not _perp:
                 return False, {"status": "error", "message": f"No perpetual futures found for {base_symbol}"}, 404
             underlying_quote_symbol = _perp[0]["symbol"]
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # MCX and the currency segments have no tradable spot, so the
+            # near-month future is both the quote and the history reference.
+            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if _resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures found for {base_symbol} on "
+                            f"{exchange.upper()}"
+                        ),
+                    },
+                    404,
+                )
+            underlying_quote_symbol, quote_exchange = _resolved
         else:
             underlying_quote_symbol = base_symbol
 
@@ -177,7 +195,14 @@ def get_custom_straddle_simulation(
         pnl_series = []
         trades = []
 
-        for day in sorted(daily_candles.keys()):
+        # Simulate only the last N distinct trading days that actually have
+        # data. At 02:16 IST with today empty, "days=3" correctly yields the
+        # three most recent real trading days instead of 2 days + an empty
+        # today. Keeps cumulative P&L, trade log, and summary consistent
+        # with the chart range.
+        all_trading_days = sorted(daily_candles.keys())
+        trading_days = all_trading_days[-max(1, days):]
+        for day in trading_days:
             candles = daily_candles[day]
 
             entry_strike = None

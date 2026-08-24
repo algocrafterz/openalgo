@@ -1,7 +1,6 @@
 import copy
 import importlib
-import traceback
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
@@ -96,11 +95,11 @@ def validate_smart_order(order_data: dict[str, Any]) -> tuple[bool, str | None]:
             )
 
     # Validate price type if provided
-    if "price_type" in order_data and order_data["price_type"] not in VALID_PRICE_TYPES:
+    if "pricetype" in order_data and order_data["pricetype"] not in VALID_PRICE_TYPES:
         return False, f"Invalid price type. Must be one of: {', '.join(VALID_PRICE_TYPES)}"
 
     # Validate product type if provided
-    if "product_type" in order_data and order_data["product_type"] not in VALID_PRODUCT_TYPES:
+    if "product" in order_data and order_data["product"] not in VALID_PRODUCT_TYPES:
         return False, f"Invalid product type. Must be one of: {', '.join(VALID_PRODUCT_TYPES)}"
 
     return True, None
@@ -146,7 +145,7 @@ def place_smart_order_with_auth(
         ))
         return False, error_response, 400
 
-    # If in analyze mode, route to sandbox for virtual trading
+    # If in analyze mode, route to sandbox for sandbox trading
     if get_analyze_mode():
         from services.sandbox_service import sandbox_place_smart_order
 
@@ -249,8 +248,7 @@ def place_smart_order_with_auth(
             ))
 
     except Exception as e:
-        logger.error(f"Error in broker_module.place_smartorder_api: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.place_smartorder_api: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to place smart order due to internal error",

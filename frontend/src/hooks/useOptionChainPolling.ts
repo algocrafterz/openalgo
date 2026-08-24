@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { OptionChainResponse } from '@/types/option-chain'
+import type { OptionChainDataIdentity, OptionChainResponse } from '@/types/option-chain'
 import { usePageVisibility } from './usePageVisibility'
 
 interface UseOptionChainPollingOptions {
   enabled: boolean
   refreshInterval?: number
   pauseWhenHidden?: boolean
+  derivativeExchange?: string
 }
 
 interface UseOptionChainPollingState {
@@ -15,6 +16,7 @@ interface UseOptionChainPollingState {
   isPaused: boolean
   error: string | null
   lastUpdate: Date | null
+  dataIdentity: OptionChainDataIdentity | null
 }
 
 /**
@@ -34,9 +36,18 @@ export function useOptionChainPolling(
   exchange: string,
   expiryDate: string,
   strikeCount: number,
-  options: UseOptionChainPollingOptions = { enabled: true, refreshInterval: 30000, pauseWhenHidden: true }
+  options: UseOptionChainPollingOptions = {
+    enabled: true,
+    refreshInterval: 30000,
+    pauseWhenHidden: true,
+  }
 ) {
-  const { enabled, refreshInterval = 30000, pauseWhenHidden = true } = options
+  const {
+    enabled,
+    refreshInterval = 30000,
+    pauseWhenHidden = true,
+    derivativeExchange = exchange,
+  } = options
   const { isVisible } = usePageVisibility()
 
   const [state, setState] = useState<UseOptionChainPollingState>({
@@ -46,10 +57,29 @@ export function useOptionChainPolling(
     isPaused: false,
     error: null,
     lastUpdate: null,
+    dataIdentity: null,
   })
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const requestGenerationRef = useRef(0)
+
+  // Drop the previous chain whenever the request identity changes. Without
+  // this, useOptionChainLive briefly pairs the prior chain's option symbols
+  // with the newly-switched optionExchange (e.g. NFO:SENSEX..., BFO:NIFTY...),
+  // which the broker rejects as invalid subscriptions.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these deps are intentional reset triggers — the body only resets state, but it MUST re-fire whenever the request identity (apiKey/underlying/exchange/expiryDate/strikeCount) changes to avoid pairing a stale chain with a newly-switched exchange
+  useEffect(() => {
+    requestGenerationRef.current += 1
+    setState((prev) => ({
+      ...prev,
+      data: null,
+      isLoading: false,
+      error: null,
+      lastUpdate: null,
+      dataIdentity: null,
+    }))
+  }, [apiKey, underlying, exchange, derivativeExchange, expiryDate, strikeCount])
 
   // Determine if polling should be active
   const shouldPoll = enabled && (!pauseWhenHidden || isVisible)
@@ -66,8 +96,14 @@ export function useOptionChainPolling(
 
     setState((prev) => ({ ...prev, isLoading: true }))
 
+    const generation = requestGenerationRef.current
+    const dataIdentity: OptionChainDataIdentity = {
+      exchange: derivativeExchange,
+      underlying,
+      expiry: expiryDate,
+    }
+    const controller = new AbortController()
     try {
-      const controller = new AbortController()
       abortControllerRef.current = controller
 
       const response = await fetch('/api/v1/optionchain', {
@@ -81,6 +117,7 @@ export function useOptionChainPolling(
           exchange,
           expiry_date: expiryDate,
           strike_count: strikeCount,
+          with_greeks: true,
         }),
         signal: controller.signal,
       })
@@ -91,6 +128,8 @@ export function useOptionChainPolling(
 
       const data: OptionChainResponse = await response.json()
 
+      if (generation !== requestGenerationRef.current) return
+
       if (data.status === 'success') {
         setState((prev) => ({
           ...prev,
@@ -99,6 +138,7 @@ export function useOptionChainPolling(
           isConnected: true,
           error: null,
           lastUpdate: new Date(),
+          dataIdentity,
         }))
       } else {
         setState((prev) => ({
@@ -108,6 +148,7 @@ export function useOptionChainPolling(
         }))
       }
     } catch (error) {
+      if (generation !== requestGenerationRef.current) return
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
           if (abortControllerRef.current === null) {
@@ -123,9 +164,9 @@ export function useOptionChainPolling(
         }
       }
     } finally {
-      abortControllerRef.current = null
+      if (abortControllerRef.current === controller) abortControllerRef.current = null
     }
-  }, [apiKey, underlying, exchange, expiryDate, strikeCount])
+  }, [apiKey, underlying, exchange, derivativeExchange, expiryDate, strikeCount])
 
   // Handle polling start/stop based on visibility
   useEffect(() => {
@@ -135,7 +176,7 @@ export function useOptionChainPolling(
         clearInterval(intervalRef.current)
         intervalRef.current = null
       }
-      setState((prev) => ({ ...prev, isPaused: !enabled ? false : true }))
+      setState((prev) => ({ ...prev, isPaused: !!enabled }))
       return
     }
 

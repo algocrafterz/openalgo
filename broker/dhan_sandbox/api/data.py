@@ -600,7 +600,7 @@ class BrokerData:
                                     "oi": raw_oi,
                                 }
                                 
-                                # Inject mathematically sound realism so py_vollib doesn't crash in standard services
+                                # Inject mathematically sound realism so the Greeks engine (opengreeks) doesn't crash in standard services
                                 realistic_quote = self._apply_sandbox_mock_realism(
                                     symbol,
                                     quote,
@@ -824,7 +824,8 @@ class BrokerData:
 
         try:
             from database.token_db_enhanced import fno_search_symbols
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to import fno_search_symbols: {e}")
             return None
 
         candidate_exchanges = ("NFO", "BFO", "MCX", "CDS")
@@ -838,7 +839,8 @@ class BrokerData:
                     instrumenttype="CE",
                     limit=300,
                 )
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error searching FNO symbols for {key} on {ex}: {e}")
                 rows = []
 
             for row in rows:
@@ -1004,7 +1006,7 @@ class BrokerData:
                 "prev_close": 0,
             }
             
-            # Inject mathematically sound realism so py_vollib doesn't crash in standard services
+            # Inject mathematically sound realism so the Greeks engine (opengreeks) doesn't crash in standard services
             quote_seed = str(int(time.time() // 60))
             return self._apply_sandbox_mock_realism(symbol, quote, seed=quote_seed)
 

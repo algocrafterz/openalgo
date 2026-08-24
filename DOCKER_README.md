@@ -1,6 +1,6 @@
 # OpenAlgo - Algorithmic Trading Platform
 
-OpenAlgo is a production-ready algorithmic trading platform providing a unified API layer across 24+ Indian brokers. Seamlessly integrate with TradingView, Amibroker, Excel, Python, and AI agents.
+OpenAlgo is a production-ready algorithmic trading platform providing a unified API layer across 34 Indian brokers. Seamlessly integrate with TradingView, Amibroker, Excel, Python, and AI agents.
 
 ## Quick Start
 
@@ -27,7 +27,7 @@ chmod +x docker-run.sh
 
 ## Supported Brokers
 
-Zerodha, Fyers, Angel One, Dhan, Delta Exchange, Upstox, Shoonya, Flattrade, Kotak, IIFL, 5paisa, AliceBlue, Firstock, Groww, IndMoney, Motilal Oswal, MStock, Nubra, Paytm Money, Pocketful, RMoney, Samco, Tradejini, Zebu, and more.
+Zerodha, Fyers, Angel One, Dhan, Delta Exchange, Upstox, Shoonya, Flattrade, Kotak, IIFL, Iiflcapital, 5paisa, AliceBlue, Firstock, Groww, IndMoney, Motilal Oswal, MStock, Nubra, Paytm Money, Pocketful, RMoney, Samco, Tradejini, Zebu, and more.
 
 ## Management Commands
 

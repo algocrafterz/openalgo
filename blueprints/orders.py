@@ -8,12 +8,12 @@ from flask import Blueprint, Response, jsonify, redirect, render_template, reque
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
 from database.settings_db import get_analyze_mode
 from limiter import limiter
-from services.close_position_service import close_position
 from services.holdings_service import get_holdings
 from services.orderbook_service import get_orderbook
 from services.place_smart_order_service import place_smart_order
 from services.positionbook_service import get_positionbook
 from services.tradebook_service import get_tradebook
+from utils.latency_monitor import track_latency
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -503,6 +503,7 @@ def export_positions():
 @orders_bp.route("/close_position", methods=["POST"])
 @check_session_validity
 @limiter.limit(API_RATE_LIMIT)
+@track_latency("CLOSE")
 def close_position():
     """Close a specific position - uses broker API in live mode, placesmartorder service in analyze mode"""
     try:
@@ -648,6 +649,7 @@ def close_position():
 @orders_bp.route("/close_all_positions", methods=["POST"])
 @check_session_validity
 @limiter.limit(API_RATE_LIMIT)
+@track_latency("CLOSE")
 def close_all_positions():
     """Close all open positions using the broker API"""
     try:
@@ -789,6 +791,101 @@ def cancel_order_ui():
         return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
 
 
+@orders_bp.route("/modify_gtt_order", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def modify_gtt_order_ui():
+    """Modify an active GTT trigger from the UI (session-auth).
+
+    Accepts the flat replacement body — same shape as PlaceGTTOrder plus
+    ``trigger_id``. ``last_price`` is fetched server-side by the broker.
+    """
+    try:
+        login_username = session["user"]
+        auth_token = get_auth_token(login_username)
+        broker_name = session.get("broker")
+
+        if not auth_token or not broker_name:
+            return jsonify({"status": "error", "message": "Authentication error"}), 401
+
+        data = request.get_json() or {}
+        trigger_id = data.get("trigger_id")
+        if not trigger_id:
+            return jsonify({"status": "error", "message": "trigger_id is required"}), 400
+
+        from services.modify_gtt_order_service import modify_gtt_order
+
+        api_key = None
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+
+        order_data = {
+            "trigger_id": str(trigger_id),
+            "strategy": data.get("strategy", "GTT Modify"),
+            "symbol": data.get("symbol"),
+            "exchange": data.get("exchange"),
+            "trigger_type": data.get("trigger_type"),
+            "action": data.get("action"),
+            "product": data.get("product"),
+            "quantity": data.get("quantity"),
+            "pricetype": data.get("pricetype", "LIMIT"),
+            "price": data.get("price"),
+            "triggerprice_sl": data.get("triggerprice_sl"),
+            "triggerprice_tg": data.get("triggerprice_tg"),
+            "stoploss": data.get("stoploss"),
+            "target": data.get("target"),
+        }
+
+        success, response_data, status_code = modify_gtt_order(
+            order_data=order_data,
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker_name,
+        )
+        return jsonify(response_data), status_code
+
+    except Exception as e:
+        logger.exception(f"Error in modify_gtt_order_ui endpoint: {str(e)}")
+        return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
+
+
+@orders_bp.route("/cancel_gtt_order", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def cancel_gtt_order_ui():
+    """Cancel a GTT trigger using the broker API from UI (session-auth)."""
+    try:
+        login_username = session["user"]
+        auth_token = get_auth_token(login_username)
+        broker_name = session.get("broker")
+
+        if not auth_token or not broker_name:
+            return jsonify({"status": "error", "message": "Authentication error"}), 401
+
+        data = request.get_json() or {}
+        trigger_id = data.get("trigger_id")
+        if not trigger_id:
+            return jsonify({"status": "error", "message": "trigger_id is required"}), 400
+
+        from services.cancel_gtt_order_service import cancel_gtt_order
+
+        api_key = None
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+
+        success, response_data, status_code = cancel_gtt_order(
+            trigger_id=str(trigger_id),
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker_name,
+        )
+        return jsonify(response_data), status_code
+
+    except Exception as e:
+        logger.exception(f"Error in cancel_gtt_order_ui endpoint: {str(e)}")
+        return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
+
+
 @orders_bp.route("/modify_order", methods=["POST"])
 @check_session_validity
 @limiter.limit(API_RATE_LIMIT)
@@ -923,7 +1020,9 @@ def approve_pending_order_route(order_id):
                 {
                     "status": "success",
                     "message": "Order approved and executed successfully",
-                    "broker_order_id": response_data.get("orderid"),
+                    "broker_order_id": response_data.get("broker_order_id")
+                    or response_data.get("orderid")
+                    or response_data.get("trigger_id"),
                 }
             )
         else:

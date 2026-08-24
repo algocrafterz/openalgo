@@ -18,7 +18,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
   "strategy": "python",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "28OCT25",
+  "expiry_date": "25AUG26",
   "offset": "ATM",
   "option_type": "CE",
   "action": "BUY",
@@ -27,6 +27,27 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
   "product": "NRML",
   "splitsize": "0"
 }
+```
+
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/optionsorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "python",
+  "underlying": "NIFTY",
+  "exchange": "NSE_INDEX",
+  "expiry_date": "25AUG26",
+  "offset": "ATM",
+  "option_type": "CE",
+  "action": "BUY",
+  "quantity": "65",
+  "pricetype": "MARKET",
+  "product": "NRML",
+  "splitsize": "0"
+}'
 ```
 
 ## Sample API Response (ATM Option)
@@ -38,8 +59,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
   "option_type": "CE",
   "orderid": "25102800000006",
   "status": "success",
-  "symbol": "NIFTY28OCT2525950CE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2625950CE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -52,7 +73,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
   "strategy": "python",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "28OCT25",
+  "expiry_date": "25AUG26",
   "offset": "ITM4",
   "option_type": "PE",
   "action": "BUY",
@@ -72,8 +93,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
   "option_type": "PE",
   "orderid": "25102800000007",
   "status": "success",
-  "symbol": "NIFTY28OCT2526150PE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2626150PE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -86,7 +107,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
   "strategy": "python",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "28OCT25",
+  "expiry_date": "25AUG26",
   "offset": "OTM5",
   "option_type": "CE",
   "action": "BUY",
@@ -117,16 +138,16 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Strategy identifier | Mandatory | - |
 | underlying | Underlying symbol (NIFTY, BANKNIFTY, etc.) | Mandatory | - |
 | exchange | Exchange: NSE_INDEX, BSE_INDEX, NFO, BFO | Mandatory | - |
-| expiry_date | Expiry date in DDMMMYY format (e.g., 28OCT25) | Mandatory | - |
+| expiry_date | Expiry date in DDMMMYY format (e.g., 25AUG26) | Optional | Derived when `underlying` includes expiry |
 | offset | Strike offset: ATM, ITM1-ITM50, OTM1-OTM50 | Mandatory | - |
 | option_type | Option type: CE or PE | Mandatory | - |
 | action | Order action: BUY or SELL | Mandatory | - |
 | quantity | Order quantity | Mandatory | - |
-| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Mandatory | - |
-| product | Product type: MIS or NRML | Mandatory | - |
+| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Optional | MARKET |
+| product | Product type: MIS or NRML | Optional | MIS |
 | splitsize | Split order into chunks (0 = no split) | Optional | 0 |
 | price | Limit price (for LIMIT orders) | Optional | 0 |
 | trigger_price | Trigger price (for SL orders) | Optional | 0 |
@@ -149,9 +170,10 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
 
 - The **underlying** is used to fetch the current price for ATM calculation
 - For **NSE_INDEX** or **BSE_INDEX** exchange, the order is placed on NFO/BFO respectively
-- The **expiry_date** must be in DDMMMYY format (e.g., 28OCT25, 25NOV25)
+- The **expiry_date** must be in DDMMMYY format (e.g., 25AUG26, 29SEP26)
 - Use **splitsize** to break large orders into smaller chunks (max 100 orders per split)
 - The API uses the synthetic futures price or spot price to determine ATM strike
+- Quantity is a positive integer. Offset is validated from `ATM`, `ITM1`-`ITM50`, or `OTM1`-`OTM50`.
 
 ---
 

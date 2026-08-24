@@ -29,6 +29,7 @@ from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
+from database.auth_db import PEPPER
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -54,14 +55,13 @@ TELEGRAM_KEY_SALT = os.getenv("TELEGRAM_KEY_SALT", "telegram-openalgo-salt").enc
 
 def get_encryption_key():
     """Generate a Fernet key for encrypting API keys"""
-    pepper = os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=TELEGRAM_KEY_SALT,
         iterations=100000,
     )
-    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
+    key = base64.urlsafe_b64encode(kdf.derive(PEPPER.encode()))
     return Fernet(key)
 
 
@@ -446,15 +446,29 @@ def get_all_telegram_users(filters: dict | None = None) -> list[dict]:
 # Bot Configuration Functions
 
 
+def _safe_decrypt_telegram(value):
+    """Decrypt a value with the telegram_db Fernet, falling back to the
+    raw value on failure. Used during the transition window where the
+    bot_config.token column may still hold plaintext (pre-rotate_pepper).
+    """
+    if not value:
+        return None
+    try:
+        return fernet.decrypt(value.encode()).decode()
+    except Exception:
+        return value
+
+
 def get_bot_config() -> dict:
-    """Get bot configuration"""
+    """Get bot configuration with the bot token decrypted."""
     try:
         config = db_session.query(BotConfig).filter_by(id=1).first()
 
         if config:
+            decrypted_token = _safe_decrypt_telegram(config.token)
             return {
-                "bot_token": config.token,
-                "token": config.token,  # Alias for backward compatibility
+                "bot_token": decrypted_token,
+                "token": decrypted_token,  # Alias for backward compatibility
                 "is_active": config.is_active,
                 "bot_username": config.bot_username,
                 "max_message_length": config.max_message_length,
@@ -483,21 +497,48 @@ def get_bot_config() -> dict:
 
 
 def update_bot_config(config: dict) -> bool:
-    """Update bot configuration"""
+    """Update bot configuration.
+
+    Writes nothing when every supplied field already matches what is stored.
+    The auto-start path re-submits the exact token it just read out of the same
+    row, and that pointless UPDATE was failing with "database is locked" on
+    startup, when the rest of the boot sequence is hammering openalgo.db (all
+    telegram tables live in the main DB, not a separate file). Skipping the
+    write removes the contention instead of waiting it out. The token is
+    compared as decrypted plaintext — Fernet ciphertext is non-deterministic,
+    so comparing encrypted blobs would never match.
+    """
     try:
         bot_config = db_session.query(BotConfig).filter_by(id=1).first()
 
+        # A row that does not exist yet always has to be written, whatever the
+        # field-level comparison below concludes.
+        changed = bot_config is None
         if not bot_config:
             bot_config = BotConfig(id=1)
             db_session.add(bot_config)
 
-        # Update fields (map bot_token to token for database)
+        # Update fields (map bot_token to token for database).
+        # The token is encrypted at rest with the telegram_db Fernet.
         for key, value in config.items():
             # Handle the bot_token -> token mapping
             if key == "bot_token":
-                bot_config.token = value
+                if _safe_decrypt_telegram(bot_config.token) == value:
+                    continue
+                changed = True
+                if value:
+                    bot_config.token = fernet.encrypt(value.encode()).decode()
+                else:
+                    bot_config.token = None
             elif hasattr(bot_config, key) and key not in ["id", "created_at"]:
+                if getattr(bot_config, key) == value:
+                    continue
+                changed = True
                 setattr(bot_config, key, value)
+
+        if not changed:
+            logger.debug("Bot configuration unchanged, skipping write")
+            return True
 
         db_session.commit()
         logger.debug("Bot configuration updated")

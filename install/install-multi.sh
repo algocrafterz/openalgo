@@ -50,7 +50,7 @@ generate_hex() {
 # Function to validate broker name
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
     if [[ ",$valid_brokers," == *",$broker,"* ]]; then
         return 0
@@ -106,7 +106,7 @@ while true; do
     if [[ "$INSTANCES" =~ ^[0-9]+$ ]] && [ "$INSTANCES" -gt 0 ]; then
         break
     else
-        log_message "❌ Invalid number. Please enter a positive integer." "$RED"
+        log_message "Invalid number. Please enter a positive integer." "$RED"
     fi
 done
 
@@ -127,6 +127,7 @@ declare -a API_SECRETS
 declare -a API_KEYS_MARKET
 declare -a API_SECRETS_MARKET
 declare -a IS_XTS
+declare -a MCP_ENABLED_LIST
 
 # Collect information for all instances
 log_message "\n=== COLLECTING INSTANCE CONFIGURATIONS ===" "$YELLOW"
@@ -152,7 +153,7 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     # Get broker
     while true; do
-        log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
+        log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
         read -p "Enter broker name for instance $i: " broker
         if validate_broker "$broker"; then
             BROKERS+=("$broker")
@@ -198,7 +199,21 @@ for ((i=1; i<=INSTANCES; i++)); do
         API_SECRETS_MARKET+=("")
     fi
 
-    log_message "✅ Instance $i configuration collected" "$GREEN"
+    # Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
+    # Same-domain mode — /mcp and /oauth/* are served from the same nginx
+    # vhost as this instance's dashboard, so no extra config is required.
+    # Local stdio MCP (Claude Desktop / Cursor / Windsurf) works regardless.
+    log_message "\nRemote MCP lets hosted AI clients (Claude.ai, ChatGPT) connect to OpenAlgo over HTTPS." "$BLUE"
+    log_message "Skip this if you only use the local MCP server with Claude Desktop / Cursor." "$YELLOW"
+    read -p "Enable Remote MCP for instance $i? (y/N): " enable_mcp_input
+    if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
+        MCP_ENABLED_LIST+=("true")
+        log_message "Remote MCP will be enabled at https://$domain/mcp" "$GREEN"
+    else
+        MCP_ENABLED_LIST+=("false")
+    fi
+
+    log_message "Instance $i configuration collected" "$GREEN"
 done
 
 # System packages installation (one-time)
@@ -209,6 +224,20 @@ check_status "Failed to update system"
 sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git software-properties-common snapd ufw certbot python3-certbot-nginx \
     libopenblas0 libgomp1 libgfortran5
 check_status "Failed to install packages"
+
+# Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
+# Kaleido 1.x ships no bundled browser; it drives a system Chromium via choreographer.
+# Debian has 'chromium' in main; Ubuntu 19.10+ renamed it to 'chromium-browser' (snap transitional).
+# Non-fatal — if nothing sticks we warn; the rest of openalgo still installs fine.
+log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
+if sudo apt-get install -y chromium fonts-liberation 2>/dev/null; then
+    log_message "Installed chromium (Debian package)" "$GREEN"
+elif sudo apt-get install -y chromium-browser fonts-liberation 2>/dev/null; then
+    log_message "Installed chromium-browser (Ubuntu transitional/snap)" "$GREEN"
+else
+    log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
+    log_message "You can install it manually later: sudo snap install chromium" "$YELLOW"
+fi
 
 # Install uv
 log_message "\nInstalling uv package manager..." "$BLUE"
@@ -239,6 +268,7 @@ for ((i=1; i<=INSTANCES; i++)); do
     API_KEY_MARKET="${API_KEYS_MARKET[$idx]}"
     API_SECRET_MARKET="${API_SECRETS_MARKET[$idx]}"
     IS_XTS_INSTANCE="${IS_XTS[$idx]}"
+    ENABLE_REMOTE_MCP="${MCP_ENABLED_LIST[$idx]}"
 
     log_message "\n--- Installing Instance $i: $DOMAIN ($BROKER) ---" "$BLUE"
 
@@ -256,11 +286,11 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     # Clone or update repository
     if [ ! -d "$INSTANCE_DIR" ]; then
-        log_message "📥 Cloning repository to $INSTANCE_DIR" "$BLUE"
+        log_message "Cloning repository to $INSTANCE_DIR" "$BLUE"
         sudo git clone "$REPO_URL" "$INSTANCE_DIR"
         check_status "Failed to clone repository"
     else
-        log_message "⚠️ Directory exists, skipping clone" "$YELLOW"
+        log_message "Directory exists, skipping clone" "$YELLOW"
     fi
 
     # Create virtual environment
@@ -298,6 +328,7 @@ for ((i=1; i<=INSTANCES; i++)); do
     DB_PATH="sqlite:///db/openalgo${i}.db"
     LATENCY_DB="sqlite:///db/latency${i}.db"
     LOGS_DB="sqlite:///db/logs${i}.db"
+    HEALTH_DB="sqlite:///db/health${i}.db"
     SANDBOX_DB="sqlite:///db/sandbox${i}.db"
     HISTORIFY_DB="db/historify${i}.duckdb"
 
@@ -325,22 +356,27 @@ for ((i=1; i<=INSTANCES; i++)); do
     # 4. Update WebSocket URL for production (secure WebSocket through nginx)
     sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
 
-    # 5. Update host bindings to allow external connections
-    sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
-    sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
+    # 5. Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
+    #    nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, and
+    #    ZMQ is an internal message bus that must never be exposed publicly.
 
     # 6. Update API credentials
     sudo sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
     sudo sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
 
     # 7. Update security keys
-    sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
-    sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" "$ENV_FILE"
+    sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
+    sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" "$ENV_FILE"
 
-    # 8. Update database paths (unique per instance - ALL 5 databases)
+    # Each instance runs gunicorn behind nginx (Unix socket bind). Trust the
+    # proxy's X-Forwarded-For / X-Real-IP for IP-based features.
+    sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
+
+    # 8. Update database paths (unique per instance - ALL 6 databases)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
     sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
     sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
+    sudo sed -i "s|HEALTH_DATABASE_URL = '.*'|HEALTH_DATABASE_URL = '$HEALTH_DB'|g" "$ENV_FILE"
     sudo sed -i "s|SANDBOX_DATABASE_URL = '.*'|SANDBOX_DATABASE_URL = '$SANDBOX_DB'|g" "$ENV_FILE"
     sudo sed -i "s|HISTORIFY_DATABASE_URL = '.*'|HISTORIFY_DATABASE_URL = '$HISTORIFY_DB'|g" "$ENV_FILE"
 
@@ -350,6 +386,16 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     # 10. Update Flask host IP binding (internal only)
     sudo sed -i "s|FLASK_HOST_IP='.*'|FLASK_HOST_IP='127.0.0.1'|g" "$ENV_FILE"
+
+    # 11. Enable Remote MCP if the operator opted in for this instance.
+    # Same-domain mode: /mcp and /oauth/* are served from the same nginx
+    # vhost as the dashboard. Other MCP_* keys (auto-approve, write scope,
+    # CORS allowlist) inherit their defaults from .sample.env — flip them
+    # later in the per-instance .env if you want stricter behavior.
+    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+        sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" "$ENV_FILE"
+        sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" "$ENV_FILE"
+    fi
 
     # XTS broker credentials
     if [ "$IS_XTS_INSTANCE" = "true" ]; then
@@ -371,6 +417,10 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo chmod -R 755 "$INSTANCE_DIR"
     # Set more restrictive permissions for sensitive directories
     sudo chmod 700 "$INSTANCE_DIR/keys"
+    # Restrict .env to the service account only — contains APP_KEY, API_KEY_PEPPER,
+    # broker API credentials. The recursive chmod 755 above would otherwise leave
+    # it world-readable on shared multi-tenant boxes.
+    sudo chmod 600 "$ENV_FILE"
     [ -S "$SOCKET_FILE" ] && sudo rm -f "$SOCKET_FILE"
 
     # Configure Nginx (initial for SSL)
@@ -481,6 +531,21 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    # Socket.IO (Flask-SocketIO real-time events)
+    location /socket.io/ {
+        proxy_pass http://unix:$SOCKET_FILE;
+        proxy_http_version 1.1;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
     # Main app via Unix socket
     location / {
         proxy_pass http://unix:$SOCKET_FILE;
@@ -496,8 +561,12 @@ server {
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
 
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        # Plain HTTP only: /ws, /ws/ and /socket.io/ have their own blocks.
+        # Forcing "Connection: upgrade" here sent every ordinary request
+        # upstream with a bogus upgrade header and an empty Upgrade:, which
+        # breaks HTTP/1.1 keep-alive to gunicorn and shows up as intermittent
+        # truncated asset responses and 5xx (GitHub issue #1807).
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -521,6 +590,10 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=$INSTANCE_DIR
+# Set HOME so Kaleido/choreographer can write temp files for Telegram /chart.
+# Kaleido 1.x creates temp dirs in Path.home() (not TMPDIR); the default
+# www-data home /var/www/ is typically root-owned and not writable.
+Environment="HOME=$INSTANCE_DIR/tmp"
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$INSTANCE_DIR/tmp"
 Environment="NUMBA_CACHE_DIR=$INSTANCE_DIR/tmp/numba_cache"
@@ -555,10 +628,15 @@ EOL
     sudo systemctl start $SERVICE_NAME
     check_status "Failed to start service"
 
-    log_message "✅ Instance $i installed successfully!" "$GREEN"
+    log_message "Instance $i installed successfully!" "$GREEN"
     log_message "   URL: https://$DOMAIN" "$BLUE"
     log_message "   Flask:$FLASK_PORT | WS:$WS_PORT | ZMQ:$ZMQ_PORT" "$BLUE"
     log_message "   Service: $SERVICE_NAME" "$BLUE"
+    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+        log_message "   Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
+    else
+        log_message "   Remote MCP: Disabled" "$BLUE"
+    fi
 done
 
 # Final Nginx reload
@@ -570,7 +648,7 @@ log_message "\n╔════════════════════�
 log_message "║          MULTI-INSTANCE INSTALLATION COMPLETE          ║" "$GREEN"
 log_message "╚════════════════════════════════════════════════════════╝" "$GREEN"
 
-log_message "\n📋 INSTANCE SUMMARY:" "$YELLOW"
+log_message "\n INSTANCE SUMMARY:" "$YELLOW"
 for ((i=1; i<=INSTANCES; i++)); do
     idx=$((i-1))
     log_message "\nInstance $i:" "$BLUE"
@@ -578,13 +656,18 @@ for ((i=1; i<=INSTANCES; i++)); do
     log_message "  Broker: ${BROKERS[$idx]}" "$BLUE"
     log_message "  Service: openalgo$i" "$BLUE"
     log_message "  Directory: $BASE_DIR/openalgo$i" "$BLUE"
+    if [ "${MCP_ENABLED_LIST[$idx]}" = "true" ]; then
+        log_message "  Remote MCP: Enabled at https://${DOMAINS[$idx]}/mcp" "$BLUE"
+    else
+        log_message "  Remote MCP: Disabled" "$BLUE"
+    fi
 done
 
-log_message "\n📚 USEFUL COMMANDS:" "$YELLOW"
+log_message "\n USEFUL COMMANDS:" "$YELLOW"
 log_message "View all services: systemctl list-units 'openalgo*'" "$BLUE"
 log_message "Restart instance: sudo systemctl restart openalgo<N>" "$BLUE"
 log_message "View logs: sudo journalctl -u openalgo<N> -f" "$BLUE"
 log_message "Check status: sudo systemctl status openalgo<N>" "$BLUE"
 
-log_message "\n📝 Installation log saved to: $LOG_FILE" "$BLUE"
-log_message "\n🎉 All instances are ready to use!" "$GREEN"
+log_message "\n Installation log saved to: $LOG_FILE" "$BLUE"
+log_message "\n All instances are ready to use!" "$GREEN"

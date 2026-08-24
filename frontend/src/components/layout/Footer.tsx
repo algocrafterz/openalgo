@@ -1,8 +1,9 @@
-import { Github } from 'lucide-react'
+import { Github, Monitor } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useSessionStore } from '@/stores/sessionStore'
 
 interface FooterProps {
   className?: string
@@ -10,6 +11,7 @@ interface FooterProps {
 
 export function Footer({ className }: FooterProps) {
   const [version, setVersion] = useState<string>('')
+  const activeSessionCount = useSessionStore((s) => s.activeSessionCount)
 
   useEffect(() => {
     const fetchVersion = async () => {
@@ -19,8 +21,7 @@ export function Footer({ className }: FooterProps) {
         if (data.status === 'success') {
           setVersion(data.version)
         }
-      } catch (error) {
-      }
+      } catch (_error) {}
     }
 
     fetchVersion()
@@ -50,6 +51,17 @@ export function Footer({ className }: FooterProps) {
               <span className="opacity-75">v</span>
               <span>{version}</span>
             </Badge>
+          )}
+          {activeSessionCount > 0 && (
+            <>
+              <span className="hidden md:inline">|</span>
+              <Badge variant="outline" className="gap-1">
+                <Monitor className="h-3 w-3" />
+                <span>
+                  {activeSessionCount} {activeSessionCount === 1 ? 'session' : 'sessions'}
+                </span>
+              </Badge>
+            </>
           )}
         </div>
 

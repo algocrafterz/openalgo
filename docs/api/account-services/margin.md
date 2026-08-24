@@ -17,7 +17,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
   "apikey": "<your_app_apikey>",
   "positions": [
     {
-      "symbol": "NIFTY25NOV2525000CE",
+      "symbol": "NIFTY25AUG2625000CE",
       "exchange": "NFO",
       "action": "BUY",
       "product": "NRML",
@@ -25,7 +25,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
       "quantity": "65"
     },
     {
-      "symbol": "NIFTY25NOV2525500CE",
+      "symbol": "NIFTY25AUG2625500CE",
       "exchange": "NFO",
       "action": "SELL",
       "product": "NRML",
@@ -34,6 +34,34 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
     }
   ]
 }
+```
+
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/margin \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "positions": [
+    {
+      "symbol": "NIFTY25AUG2625000CE",
+      "exchange": "NFO",
+      "action": "BUY",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "quantity": "65"
+    },
+    {
+      "symbol": "NIFTY25AUG2625500CE",
+      "exchange": "NFO",
+      "action": "SELL",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "quantity": "65"
+    }
+  ]
+}'
 ```
 
 ## Sample API Response
@@ -104,10 +132,10 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
 {
   "apikey": "<your_app_apikey>",
   "positions": [
-    {"symbol": "NIFTY25NOV2526500CE", "exchange": "NFO", "action": "SELL", "quantity": "65", "product": "NRML", "pricetype": "MARKET"},
-    {"symbol": "NIFTY25NOV2527000CE", "exchange": "NFO", "action": "BUY", "quantity": "65", "product": "NRML", "pricetype": "MARKET"},
-    {"symbol": "NIFTY25NOV2525500PE", "exchange": "NFO", "action": "SELL", "quantity": "65", "product": "NRML", "pricetype": "MARKET"},
-    {"symbol": "NIFTY25NOV2525000PE", "exchange": "NFO", "action": "BUY", "quantity": "65", "product": "NRML", "pricetype": "MARKET"}
+    {"symbol": "NIFTY25AUG2626500CE", "exchange": "NFO", "action": "SELL", "quantity": "65", "product": "NRML", "pricetype": "MARKET"},
+    {"symbol": "NIFTY25AUG2627000CE", "exchange": "NFO", "action": "BUY", "quantity": "65", "product": "NRML", "pricetype": "MARKET"},
+    {"symbol": "NIFTY25AUG2625500PE", "exchange": "NFO", "action": "SELL", "quantity": "65", "product": "NRML", "pricetype": "MARKET"},
+    {"symbol": "NIFTY25AUG2625000PE", "exchange": "NFO", "action": "BUY", "quantity": "65", "product": "NRML", "pricetype": "MARKET"}
   ]
 }
 ```

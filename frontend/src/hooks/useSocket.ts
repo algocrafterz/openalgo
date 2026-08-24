@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { useAlertStore, type AlertCategories } from '@/stores/alertStore'
+import { type AlertCategories, useAlertStore } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useSessionStore } from '@/stores/sessionStore'
 
 // Audio throttling configuration
 const AUDIO_THROTTLE_MS = 1000
@@ -64,8 +66,13 @@ const showCategoryToast = (
 }
 
 export function useSocket() {
+  const navigate = useNavigate()
   const { isAuthenticated } = useAuthStore()
   const socketRef = useRef<Socket | null>(null)
+  // Reactive copy so consumers (SocketProvider -> useOrderEventRefresh) can share
+  // this ONE connection instead of each opening their own (browser per-host
+  // connection limit is shared across tabs; extra polling sockets exhaust it).
+  const [socketInstance, setSocketInstance] = useState<Socket | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lastAudioTimeRef = useRef<number>(0)
   const audioEnabledRef = useRef<boolean>(false)
@@ -151,6 +158,22 @@ export function useSocket() {
     })
 
     const socket = socketRef.current
+    setSocketInstance(socket)
+
+    // Force logout from another device
+    socket.on('force_logout', (data: { message: string }) => {
+      playAlertSound('system')
+      // Clear auth store immediately
+      useAuthStore.getState().logout()
+      useSessionStore.getState().setActiveSessionCount(0)
+      // Show persistent toast and redirect after a short delay so user sees it
+      toast.error(data.message || 'Logged out from another device', {
+        duration: 10000,
+      })
+      setTimeout(() => {
+        navigate('/login', { replace: true })
+      }, 2000)
+    })
 
     // Password change notification
     socket.on('password_change', (data: { message: string }) => {
@@ -179,11 +202,7 @@ export function useSocket() {
     // Close position notification
     socket.on('close_position_event', (data: ClosePositionEventData) => {
       playAlertSound('orders')
-      showCategoryToast(
-        'success',
-        data.message || 'All Open Positions Squared Off',
-        'positions'
-      )
+      showCategoryToast('success', data.message || 'All Open Positions Squared Off', 'positions')
     })
 
     // Order placement notification
@@ -235,6 +254,11 @@ export function useSocket() {
         showCategoryToast(type, message, 'orders')
       }
     )
+
+    // Active sessions update (event-driven, no polling)
+    socket.on('active_sessions_update', (data: { count: number }) => {
+      useSessionStore.getState().setActiveSessionCount(data.count)
+    })
 
     // Analyzer update notification
     socket.on('analyzer_update', (data: AnalyzerUpdateData) => {
@@ -308,14 +332,15 @@ export function useSocket() {
 
     return () => {
       socket.disconnect()
+      setSocketInstance(null)
       ;['click', 'touchstart', 'keydown'].forEach((eventType) => {
         document.removeEventListener(eventType, handleInteraction)
       })
     }
-  }, [isAuthenticated, playAlertSound, enableAudio])
+  }, [isAuthenticated, playAlertSound, enableAudio, navigate])
 
   return {
-    socket: socketRef.current,
+    socket: socketInstance,
     playAlertSound,
   }
 }

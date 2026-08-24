@@ -1,7 +1,6 @@
 import csv
 import io
 import os
-import traceback
 from datetime import datetime
 
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
@@ -86,7 +85,7 @@ def sandbox_config():
 
         return render_template("sandbox.html", configs=organized_configs)
     except Exception as e:
-        logger.exception(f"Error rendering sandbox config: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error rendering sandbox config: {str(e)}")
         flash("Error loading sandbox configuration", "error")
         return redirect(url_for("core_bp.home"))
 
@@ -140,6 +139,14 @@ def api_get_configs():
                 "value": "5",
                 "description": "Interval to update MTM (0-60 sec)",
             },
+            "expiry_settlement_timing": {
+                "value": "expiry_day_close",
+                "description": "When expired F&O contracts settle",
+            },
+            "option_expiry_settlement": {
+                "value": "ltp",
+                "description": "Settlement price for expired options",
+            },
         }
 
         # Helper to get config with fallback to default
@@ -182,11 +189,18 @@ def api_get_configs():
                     "mtm_update_interval": get_config_value("mtm_update_interval"),
                 },
             },
+            "expiry": {
+                "title": "F&O Expiry Settlement",
+                "configs": {
+                    "expiry_settlement_timing": get_config_value("expiry_settlement_timing"),
+                    "option_expiry_settlement": get_config_value("option_expiry_settlement"),
+                },
+            },
         }
 
         return jsonify({"status": "success", "configs": organized_configs})
     except Exception as e:
-        logger.exception(f"Error getting sandbox configs: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting sandbox configs: {str(e)}")
         return jsonify(
             {"status": "error", "message": f"Error loading configuration: {str(e)}"}
         ), 500
@@ -285,7 +299,7 @@ def update_config():
             return jsonify({"status": "error", "message": "Failed to update configuration"}), 500
 
     except Exception as e:
-        logger.exception(f"Error updating sandbox config: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error updating sandbox config: {str(e)}")
         return jsonify(
             {"status": "error", "message": f"Error updating configuration: {str(e)}"}
         ), 500
@@ -388,7 +402,7 @@ def reset_config():
 
         except Exception as e:
             db_session.rollback()
-            logger.exception(f"Error clearing sandbox data: {str(e)}\n{traceback.format_exc()}")
+            logger.exception(f"Error clearing sandbox data: {str(e)}")
             raise
 
         logger.info("Sandbox configuration and data reset to defaults")
@@ -400,7 +414,7 @@ def reset_config():
         )
 
     except Exception as e:
-        logger.exception(f"Error resetting sandbox config: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error resetting sandbox config: {str(e)}")
         return jsonify(
             {"status": "error", "message": f"Error resetting configuration: {str(e)}"}
         ), 500
@@ -422,7 +436,7 @@ def reload_squareoff():
             return jsonify(response), status_code
 
     except Exception as e:
-        logger.exception(f"Error reloading square-off schedule: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error reloading square-off schedule: {str(e)}")
         return jsonify(
             {"status": "error", "message": f"Error reloading square-off schedule: {str(e)}"}
         ), 500
@@ -444,7 +458,7 @@ def squareoff_status():
             return jsonify(response), status_code
 
     except Exception as e:
-        logger.exception(f"Error getting square-off status: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting square-off status: {str(e)}")
         return jsonify(
             {"status": "error", "message": f"Error getting square-off status: {str(e)}"}
         ), 500
@@ -616,7 +630,7 @@ def api_my_pnl_data():
         )
 
     except Exception as e:
-        logger.exception(f"Error getting P&L data: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting P&L data: {str(e)}")
         return jsonify({"status": "error", "message": f"Error loading P&L data: {str(e)}"}), 500
 
 
@@ -786,7 +800,7 @@ def my_pnl():
         )
 
     except Exception as e:
-        logger.exception(f"Error rendering my P&L page: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error rendering my P&L page: {str(e)}")
         flash("Error loading P&L data", "error")
         return redirect(url_for("sandbox_bp.sandbox_config"))
 
@@ -844,7 +858,7 @@ def validate_config(config_key, config_value):
                 hours, minutes = config_value.split(":")
                 if not (0 <= int(hours) <= 23 and 0 <= int(minutes) <= 59):
                     return "Invalid time format"
-            except:
+            except Exception:
                 return "Time must be in HH:MM format"
 
         # Validate day of week
@@ -861,6 +875,15 @@ def validate_config(config_key, config_value):
             ]
             if config_value not in valid_days:
                 return f"Reset day must be one of: {', '.join(valid_days)}"
+
+        # Validate expiry settlement enums
+        if config_key == "expiry_settlement_timing":
+            if config_value not in ("expiry_day_close", "next_day"):
+                return "Expiry settlement timing must be 'expiry_day_close' or 'next_day'"
+
+        if config_key == "option_expiry_settlement":
+            if config_value not in ("ltp", "zero"):
+                return "Option expiry settlement must be 'ltp' or 'zero'"
 
         return None  # No validation error
 
@@ -1072,7 +1095,7 @@ def export_daily_pnl():
         return response
 
     except Exception as e:
-        logger.exception(f"Error exporting daily P&L: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error exporting daily P&L: {str(e)}")
         return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
 
 
@@ -1102,7 +1125,7 @@ def export_positions():
         return response
 
     except Exception as e:
-        logger.exception(f"Error exporting positions: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error exporting positions: {str(e)}")
         return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
 
 
@@ -1132,7 +1155,7 @@ def export_holdings():
         return response
 
     except Exception as e:
-        logger.exception(f"Error exporting holdings: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error exporting holdings: {str(e)}")
         return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
 
 
@@ -1162,5 +1185,5 @@ def export_trades():
         return response
 
     except Exception as e:
-        logger.exception(f"Error exporting trades: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error exporting trades: {str(e)}")
         return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500

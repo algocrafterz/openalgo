@@ -1,4 +1,5 @@
-import type { Node as ReactFlowNode, Edge as ReactFlowEdge } from '@xyflow/react'
+import type { Edge as ReactFlowEdge, Node as ReactFlowNode } from '@xyflow/react'
+import type { nodeTypes } from '@/components/flow/nodes'
 
 // =============================================================================
 // TRIGGER NODE DATA TYPES
@@ -11,9 +12,9 @@ export interface StartNodeData {
   time: string
   days?: number[]
   executeAt?: string
-  intervalMinutes?: number  // Legacy - kept for backward compatibility
-  intervalValue?: number    // New - interval value (e.g., 1, 5, 10)
-  intervalUnit?: 'seconds' | 'minutes' | 'hours'  // New - interval unit
+  intervalMinutes?: number // Legacy - kept for backward compatibility
+  intervalValue?: number // New - interval value (e.g., 1, 5, 10)
+  intervalUnit?: 'seconds' | 'minutes' | 'hours' // New - interval unit
   marketHoursOnly?: boolean
 }
 
@@ -24,28 +25,18 @@ export interface PriceAlertNodeData {
   exchange: string
   condition: 'above' | 'below' | 'crosses_above' | 'crosses_below'
   price: number
-  ltp?: number  // Live LTP from quotes API
+  ltp?: number // Live LTP from quotes API
   enabled?: boolean
 }
 
-/** Webhook Trigger - Start from external webhook */
-export interface WebhookNodeData {
+/** Order Update Trigger - Start when a live/sandbox order changes status */
+export interface OrderUpdateTriggerNodeData {
   label?: string
+  orderId?: string
   symbol?: string
   exchange?: string
-  webhookId?: string
-  webhookUrl?: string
-  webhookUrlWithSymbol?: string
-}
-
-/** Position Trigger - Start when position changes */
-export interface PositionTriggerNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  product: string
-  condition: 'opened' | 'closed' | 'quantity_changed' | 'pnl_above' | 'pnl_below'
-  threshold?: number
+  status: 'any' | 'open' | 'trigger pending' | 'complete' | 'rejected' | 'cancelled'
+  trigger: 'once' | 'every_time'
 }
 
 // =============================================================================
@@ -92,17 +83,24 @@ export interface OptionsOrderNodeData {
   optionType: 'CE' | 'PE'
   action: 'BUY' | 'SELL'
   quantity: number
-  priceType: 'MARKET' | 'LIMIT'
+  priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'NRML'
   splitSize?: number
   price?: number
+  triggerPrice?: number
   ltp?: number
 }
 
 /** Options Multi-Order - Multi-leg strategies */
 export interface OptionsMultiOrderNodeData {
   label?: string
-  strategy: 'iron_condor' | 'straddle' | 'strangle' | 'bull_call_spread' | 'bear_put_spread' | 'custom'
+  strategy:
+    | 'iron_condor'
+    | 'straddle'
+    | 'strangle'
+    | 'bull_call_spread'
+    | 'bear_put_spread'
+    | 'custom'
   underlying: string
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
   expiryDate: string
@@ -111,25 +109,45 @@ export interface OptionsMultiOrderNodeData {
     optionType: 'CE' | 'PE'
     action: 'BUY' | 'SELL'
     quantity: number
-    expiryDate?: string // For calendar spreads
+    product?: 'MIS' | 'NRML'
+    priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+    price?: number
+    triggerPrice?: number
   }>
-  priceType: 'MARKET' | 'LIMIT'
+  priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'NRML'
+  price?: number
+  triggerPrice?: number
+}
+
+export interface BasketOrderItem {
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number | string
+  product?: 'MIS' | 'CNC' | 'NRML'
+  pricetype?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  price?: number | string
+  triggerprice?: number | string
+  triggerPrice?: number | string
 }
 
 /** Basket Order - Multiple orders at once */
 export interface BasketOrderNodeData {
   label?: string
-  strategy?: string
-  orders: Array<{
-    symbol: string
-    exchange: string
-    action: 'BUY' | 'SELL'
-    quantity: number
-    priceType: 'MARKET' | 'LIMIT'
-    product: 'MIS' | 'CNC' | 'NRML'
-    price?: number
-  }>
+  /** Basket label. The node used to render `strategy`, which nothing writes. */
+  basketName?: string
+  /**
+   * Editor-authored baskets use newline-delimited
+   * `SYMBOL,EXCHANGE,ACTION,QTY` rows. Imported workflows may retain a richer
+   * per-order list with product and price overrides.
+   */
+  orders: string | BasketOrderItem[]
+  product?: 'MIS' | 'CNC' | 'NRML'
+  priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  price?: number
+  triggerPrice?: number
 }
 
 /** Split Order - Large order splitting */
@@ -140,9 +158,10 @@ export interface SplitOrderNodeData {
   action: 'BUY' | 'SELL'
   quantity: number
   splitSize: number
-  priceType: 'MARKET' | 'LIMIT'
+  priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'CNC' | 'NRML'
   price?: number
+  triggerPrice?: number
   delayMs?: number
 }
 
@@ -175,24 +194,20 @@ export interface CancelAllOrdersNodeData {
 /** Close Positions - Square off positions */
 export interface ClosePositionsNodeData {
   label?: string
-  exchange?: string // Optional filter
-  product?: string // Optional filter
+  /**
+   * Set a symbol to close just that position; leave it blank to square off
+   * everything. exchange and product only narrow a symbol-scoped close - on
+   * their own they filter nothing, which is what the old "Optional filter"
+   * comments implied and the executor never honoured.
+   */
+  symbol?: string
+  exchange?: string
+  product?: string
 }
 
 // =============================================================================
 // CONDITION NODE DATA TYPES
 // =============================================================================
-
-/** Condition Node - If/Else branching */
-export interface ConditionNodeData {
-  label?: string
-  conditions: Array<{
-    variable: string // e.g., 'ltp', 'position', 'pnl', 'time'
-    operator: '>' | '<' | '==' | '>=' | '<=' | '!='
-    value: string | number
-  }>
-  logic: 'AND' | 'OR'
-}
 
 /** Position Check - Check position before action */
 export interface PositionCheckNodeData {
@@ -200,7 +215,13 @@ export interface PositionCheckNodeData {
   symbol: string
   exchange: string
   product: 'MIS' | 'CNC' | 'NRML'
-  condition: 'exists' | 'not_exists' | 'quantity_above' | 'quantity_below' | 'pnl_above' | 'pnl_below'
+  condition:
+    | 'exists'
+    | 'not_exists'
+    | 'quantity_above'
+    | 'quantity_below'
+    | 'pnl_above'
+    | 'pnl_below'
   threshold?: number
 }
 
@@ -227,14 +248,15 @@ export interface TimeConditionNodeData {
   operator: '==' | '>=' | '<=' | '>' | '<'
 }
 
-/** Greeks Condition - Check option greeks */
-export interface GreeksConditionNodeData {
+/** Var Condition - Compare any two interpolated values (a workflow variable,
+ * an indicator output like {{rsi.latest.value}}, a prior-period level, or a
+ * literal). Generic counterpart to Price Condition, which always re-fetches
+ * a live quote field. */
+export interface VarConditionNodeData {
   label?: string
-  symbol: string
-  exchange: string
-  greek: 'delta' | 'gamma' | 'theta' | 'vega' | 'iv'
+  leftValue: string
   operator: '>' | '<' | '==' | '>=' | '<=' | '!='
-  value: number
+  rightValue: string
 }
 
 /** Price Condition - Check price condition */
@@ -259,54 +281,11 @@ export interface GetQuoteNodeData {
   outputVariable?: string
 }
 
-/** Get Multi-Quotes - Fetch multiple quotes */
-export interface GetMultiQuotesNodeData {
-  label?: string
-  symbols: Array<{
-    symbol: string
-    exchange: string
-  }>
-  outputVariable?: string
-}
-
-/** Get Option Chain - Fetch option chain */
-export interface GetOptionChainNodeData {
-  label?: string
-  underlying: string
-  exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string
-  strikeCount?: number
-  outputVariable?: string
-}
-
-/** Get Positions - Fetch current positions */
-export interface GetPositionsNodeData {
-  label?: string
-  outputVariable?: string
-}
-
-/** Get Holdings - Fetch holdings */
-export interface GetHoldingsNodeData {
-  label?: string
-  outputVariable?: string
-}
-
 /** Get Order Status - Check order status */
 export interface GetOrderStatusNodeData {
   label?: string
   orderId: string
   waitForCompletion?: boolean
-  outputVariable?: string
-}
-
-/** Calculate Greeks - Calculate option greeks */
-export interface CalculateGreeksNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  underlyingSymbol: string
-  underlyingExchange: string
-  interestRate?: number
   outputVariable?: string
 }
 
@@ -328,6 +307,74 @@ export interface HistoryNodeData {
   outputVariable?: string
 }
 
+/** Indicator - Run any openalgo.ta indicator over a symbol's history, or
+ * nest on top of another Indicator node's output series. */
+export interface IndicatorNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  /** Free text, not a fixed enum - any interval the connected broker's
+   * /api/v1/intervals reports (use the Intervals node to discover them),
+   * or a Historify custom interval (2m, 4m, W, M, Q) when source="db". */
+  interval: string
+  source: 'api' | 'db'
+  indicatorName: string
+  /** JSON object literal of extra kwargs, e.g. '{"period": 14}'. */
+  params: string
+  lookbackBars: number
+  /** Length of the returned `series` array (fixed length so
+   * {{ind.series[N]}} can address a specific historical bar - Flow JSON
+   * interpolation only supports positive array indices). */
+  tailBars: number
+  /** Read the value N closed bars back (0 = latest). Exposed as
+   * {{ind.at_offset.value}} / {{ind.at_offset.out0}} - prefer this over
+   * reverse-indexing `series`, whose offsets shift with tailBars. */
+  offsetBars?: number
+  /** Field to pull from each sourceSeries row. Blank = auto (value, then
+   * out0, then close) so a raw History array works directly. */
+  sourceField?: string
+  /** Optional - set to {{otherIndicator.series}} to compute this indicator
+   * over another Indicator node's output instead of fetching fresh
+   * history. Only single-series indicators (SMA, EMA, RSI, WMA, stdev,
+   * highest/lowest, ...) can be nested this way. */
+  sourceSeries?: string
+  outputVariable?: string
+}
+
+/** Strategy P&L - realized / unrealized / total for one strategy, so a
+ * workflow can exit on its own performance instead of the whole account's. */
+export interface StrategyPnlNodeData {
+  label?: string
+  /** Blank = this workflow's own name, which is also the tag its order nodes apply. */
+  strategy?: string
+  outputVariable?: string
+}
+
+/** Prior Period OHLC - last fully-closed hour/day/week/month candle
+ * (e.g. previous day's high/low for a PDH/PDL breakout strategy) without
+ * the workflow author computing a relative date. */
+export interface PriorPeriodOhlcNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  period: 'previous_hour' | 'previous_day' | 'previous_week' | 'previous_month'
+  source: 'api' | 'db'
+  outputVariable?: string
+}
+
+/** Bar Offset - OHLCV of the Nth closed bar back at any interval
+ * (offsetBars=0 is the last CLOSED bar, 1 is one before that, ...). Covers
+ * "N bars/hours/days back" style lookback without a node per unit. */
+export interface BarOffsetNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  interval: string
+  source: 'api' | 'db'
+  offsetBars: number
+  outputVariable?: string
+}
+
 /** Get Open Position - Fetch current position for a symbol */
 export interface OpenPositionNodeData {
   label?: string
@@ -342,6 +389,7 @@ export interface ExpiryNodeData {
   label?: string
   symbol: string
   exchange: string
+  instrumenttype?: 'options' | 'futures'
   outputVariable?: string
 }
 
@@ -354,7 +402,7 @@ export interface IntervalsNodeData {
 /** Symbol Node - Get symbol info (lotsize, tick_size, expiry, etc.) */
 export interface SymbolNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
   outputVariable?: string
 }
@@ -362,10 +410,10 @@ export interface SymbolNodeData {
 /** OptionSymbol Node - Resolve option symbol from underlying */
 export interface OptionSymbolNodeData {
   label?: string
-  underlying: string  // NIFTY, BANKNIFTY, etc. - can use {{variable}}
+  underlying: string // NIFTY, BANKNIFTY, etc. - can use {{variable}}
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string  // Format: 30DEC25 - can use {{variable}}
-  offset: string  // ATM, ITM1-10, OTM1-10 - can use {{variable}}
+  expiryDate: string // Format: 30DEC25 - can use {{variable}}
+  offset: string // ATM, ITM1-10, OTM1-10 - can use {{variable}}
   optionType: 'CE' | 'PE'
   outputVariable?: string
 }
@@ -391,33 +439,39 @@ export interface PositionBookNodeData {
 /** SyntheticFuture Node - Calculate synthetic future price */
 export interface SyntheticFutureNodeData {
   label?: string
-  underlying: string  // NIFTY, BANKNIFTY, etc.
+  underlying: string // NIFTY, BANKNIFTY, etc.
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string  // Format: 25NOV25
+  expiryDate: string // Format: 25NOV25
   outputVariable?: string
 }
 
 /** OptionChain Node - Get option chain data */
 export interface OptionChainNodeData {
   label?: string
-  underlying: string  // NIFTY, BANKNIFTY, etc.
+  underlying: string // NIFTY, BANKNIFTY, etc.
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string  // Format: 30DEC25
-  strikeCount?: number  // Optional: limit strikes around ATM
+  expiryDate: string // Format: 30DEC25
+  strikeCount?: number // Optional: limit strikes around ATM
   outputVariable?: string
 }
 
 /** Holidays Node - Get market holidays */
 export interface HolidaysNodeData {
   label?: string
-  year?: number  // Optional: defaults to current year
+  year?: number // Optional: defaults to current year
   outputVariable?: string
 }
 
 /** Timings Node - Get market timings */
+export interface CalendarNodeData {
+  label?: string
+  date?: string // Optional: YYYY-MM-DD, defaults to the trading session date
+  outputVariable?: string
+}
+
 export interface TimingsNodeData {
   label?: string
-  date?: string  // Optional: YYYY-MM-DD format, defaults to today
+  date?: string // Optional: YYYY-MM-DD format, defaults to today
   outputVariable?: string
 }
 
@@ -428,31 +482,31 @@ export interface TimingsNodeData {
 /** Subscribe LTP Node - Real-time LTP streaming */
 export interface SubscribeLTPNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
-  outputVariable?: string  // Variable to store live LTP
+  outputVariable?: string // Variable to store live LTP
 }
 
 /** Subscribe Quote Node - Real-time Quote streaming (OHLC + volume) */
 export interface SubscribeQuoteNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
-  outputVariable?: string  // Variable to store live quote data
+  outputVariable?: string // Variable to store live quote data
 }
 
 /** Subscribe Depth Node - Real-time Depth streaming (order book) */
 export interface SubscribeDepthNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
-  outputVariable?: string  // Variable to store live depth data
+  outputVariable?: string // Variable to store live depth data
 }
 
 /** Unsubscribe Node - Stop real-time streaming */
 export interface UnsubscribeNodeData {
   label?: string
-  symbol?: string  // Symbol to unsubscribe, or empty for all
+  symbol?: string // Symbol to unsubscribe, or empty for all
   exchange?: string
   streamType: 'ltp' | 'quote' | 'depth' | 'all'
 }
@@ -495,15 +549,23 @@ export interface MarginNodeData {
 export interface TelegramAlertNodeData {
   label?: string
   message: string
-  username?: string
+}
+
+/** WhatsApp Alert - Send a WhatsApp text message via the paired bot device */
+export interface WhatsappAlertNodeData {
+  label?: string
+  /** Phone digits (e.g. "919876543210"); empty sends to the paired device's
+   * own number (self). */
+  to?: string
+  message: string
 }
 
 /** Delay Node - Wait for duration */
 export interface DelayNodeData {
   label?: string
-  delayMs?: number  // Legacy: milliseconds
-  delayValue?: number  // New: value
-  delayUnit?: 'seconds' | 'minutes' | 'hours'  // New: unit
+  delayMs?: number // Legacy: milliseconds
+  delayValue?: number // New: value
+  delayUnit?: 'seconds' | 'minutes' | 'hours' // New: unit
 }
 
 /** Wait Until Node - Pause until specific time */
@@ -524,7 +586,18 @@ export interface LogNodeData {
 export interface VariableNodeData {
   label?: string
   variableName: string
-  operation: 'set' | 'get' | 'add' | 'subtract' | 'multiply' | 'divide' | 'parse_json' | 'stringify' | 'increment' | 'decrement' | 'append'
+  operation:
+    | 'set'
+    | 'get'
+    | 'add'
+    | 'subtract'
+    | 'multiply'
+    | 'divide'
+    | 'parse_json'
+    | 'stringify'
+    | 'increment'
+    | 'decrement'
+    | 'append'
   value: string | number | object
   sourceVariable?: string // For operations that read from another variable
   jsonPath?: string // For accessing nested JSON properties like "data.ltp"
@@ -537,11 +610,43 @@ export interface MathExpressionNodeData {
   outputVariable: string // Variable to store result
 }
 
-/** Loop Node - Iterate over items */
-export interface LoopNodeData {
+/** Webhook Trigger - Start workflow from an inbound HTTP POST */
+export interface WebhookTriggerNodeData {
   label?: string
-  items: string[] | number
-  itemVariable: string
+  symbol?: string
+  exchange?: string
+}
+
+/** Multi Quotes - Quotes for several symbols at once */
+export interface MultiQuotesNodeData {
+  label?: string
+  /** Comma-separated symbols. */
+  symbols: string
+  exchange?: string
+  outputVariable?: string
+}
+
+/** HTTP Request - Call an external endpoint */
+export interface HttpRequestNodeData {
+  label?: string
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  url: string
+  /** JSON string, e.g. '{"Authorization": "Bearer {{token}}"}'. */
+  headers?: string
+  body?: string
+  /** Milliseconds, capped at 60000 by the executor. */
+  timeout?: number
+  outputVariable?: string
+}
+
+/** Logic gates - combine the boolean results of their inputs. No fields. */
+export interface GateNodeData {
+  label?: string
+}
+
+/** Group - visual container. No fields. */
+export interface GroupNodeData {
+  label?: string
 }
 
 // =============================================================================
@@ -552,8 +657,8 @@ export interface LoopNodeData {
 export type TriggerNodeData =
   | StartNodeData
   | PriceAlertNodeData
-  | WebhookNodeData
-  | PositionTriggerNodeData
+  | WebhookTriggerNodeData
+  | OrderUpdateTriggerNodeData
 
 /** All Action Node Data Types */
 export type ActionNodeData =
@@ -570,25 +675,28 @@ export type ActionNodeData =
 
 /** All Condition Node Data Types */
 export type ConditionNodeDataTypes =
-  | ConditionNodeData
   | PositionCheckNodeData
   | FundCheckNodeData
   | TimeWindowNodeData
   | TimeConditionNodeData
-  | GreeksConditionNodeData
   | PriceConditionNodeData
+  | VarConditionNodeData
+  | GateNodeData
 
 /** All Data Node Data Types */
 export type DataNodeData =
   | GetQuoteNodeData
-  | GetMultiQuotesNodeData
-  | GetOptionChainNodeData
-  | GetPositionsNodeData
-  | GetHoldingsNodeData
+  | MultiQuotesNodeData
+  | OptionChainNodeData
+  | PositionBookNodeData
+  | HoldingsNodeData
   | GetOrderStatusNodeData
-  | CalculateGreeksNodeData
   | GetDepthNodeData
   | HistoryNodeData
+  | IndicatorNodeData
+  | PriorPeriodOhlcNodeData
+  | StrategyPnlNodeData
+  | BarOffsetNodeData
   | OpenPositionNodeData
   | ExpiryNodeData
   | IntervalsNodeData
@@ -612,12 +720,14 @@ export type DataNodeData =
 /** All Utility Node Data Types */
 export type UtilityNodeData =
   | TelegramAlertNodeData
+  | WhatsappAlertNodeData
   | DelayNodeData
   | WaitUntilNodeData
   | LogNodeData
   | VariableNodeData
   | MathExpressionNodeData
-  | LoopNodeData
+  | HttpRequestNodeData
+  | GroupNodeData
 
 /** Union of all node data types */
 export type NodeData =
@@ -643,72 +753,16 @@ export type CustomEdge = ReactFlowEdge
 // NODE TYPE CONSTANTS
 // =============================================================================
 
-export const NODE_TYPES = {
-  // Triggers
-  START: 'start',
-  PRICE_ALERT: 'priceAlert',
-  WEBHOOK: 'webhook',
-  POSITION_TRIGGER: 'positionTrigger',
-  // Actions
-  PLACE_ORDER: 'placeOrder',
-  SMART_ORDER: 'smartOrder',
-  OPTIONS_ORDER: 'optionsOrder',
-  OPTIONS_MULTI_ORDER: 'optionsMultiOrder',
-  BASKET_ORDER: 'basketOrder',
-  SPLIT_ORDER: 'splitOrder',
-  MODIFY_ORDER: 'modifyOrder',
-  CANCEL_ORDER: 'cancelOrder',
-  CANCEL_ALL_ORDERS: 'cancelAllOrders',
-  CLOSE_POSITIONS: 'closePositions',
-  // Conditions
-  CONDITION: 'condition',
-  POSITION_CHECK: 'positionCheck',
-  FUND_CHECK: 'fundCheck',
-  TIME_WINDOW: 'timeWindow',
-  TIME_CONDITION: 'timeCondition',
-  GREEKS_CONDITION: 'greeksCondition',
-  PRICE_CONDITION: 'priceCondition',
-  // Data
-  GET_QUOTE: 'getQuote',
-  GET_MULTI_QUOTES: 'getMultiQuotes',
-  GET_OPTION_CHAIN: 'getOptionChain',
-  GET_POSITIONS: 'getPositions',
-  GET_HOLDINGS: 'getHoldings',
-  GET_ORDER_STATUS: 'getOrderStatus',
-  CALCULATE_GREEKS: 'calculateGreeks',
-  GET_DEPTH: 'getDepth',
-  HISTORY: 'history',
-  OPEN_POSITION: 'openPosition',
-  EXPIRY: 'expiry',
-  INTERVALS: 'intervals',
-  SYMBOL: 'symbol',
-  OPTION_SYMBOL: 'optionSymbol',
-  ORDER_BOOK: 'orderBook',
-  TRADE_BOOK: 'tradeBook',
-  POSITION_BOOK: 'positionBook',
-  SYNTHETIC_FUTURE: 'syntheticFuture',
-  OPTION_CHAIN: 'optionChain',
-  HOLIDAYS: 'holidays',
-  TIMINGS: 'timings',
-  // WebSocket (Real-time)
-  SUBSCRIBE_LTP: 'subscribeLtp',
-  SUBSCRIBE_QUOTE: 'subscribeQuote',
-  SUBSCRIBE_DEPTH: 'subscribeDepth',
-  UNSUBSCRIBE: 'unsubscribe',
-  // Risk Management
-  HOLDINGS: 'holdings',
-  FUNDS: 'funds',
-  MARGIN: 'margin',
-  // Utilities
-  TELEGRAM_ALERT: 'telegramAlert',
-  DELAY: 'delay',
-  WAIT_UNTIL: 'waitUntil',
-  LOG: 'log',
-  VARIABLE: 'variable',
-  LOOP: 'loop',
-} as const
-
-export type NodeType = (typeof NODE_TYPES)[keyof typeof NODE_TYPES]
+/**
+ * Every node type the editor can render, derived from the ReactFlow registry.
+ *
+ * This was a hand-maintained NODE_TYPES object, and it had drifted badly: 16 of
+ * the 61 live types were missing (andGate, httpRequest, indicator, varCondition,
+ * webhookTrigger and others) while 10 entries named components that no longer
+ * exist (condition, loop, getOptionChain, webhook, ...). Deriving it from the
+ * registry means the two cannot disagree again.
+ */
+export type NodeType = keyof typeof nodeTypes
 
 // =============================================================================
 // STORE STATE TYPES

@@ -1,7 +1,6 @@
 import copy
 import importlib
 import time
-import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -139,8 +138,16 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # No per-order event emission - a summary event is emitted at the end of all orders
-            return {"symbol": order_data["symbol"], "status": "success", "orderid": order_id}
+            # No per-order event emission - a summary event is emitted at the end of all orders.
+            # exchange/product identify the leg: a basket spans several contracts, so the
+            # summary event cannot supply them and subscribers have only this dict to key on.
+            return {
+                "symbol": order_data["symbol"],
+                "exchange": order_data.get("exchange", ""),
+                "product": order_data.get("product", ""),
+                "status": "success",
+                "orderid": order_id,
+            }
         else:
             message = (
                 response_data.get("message", "Failed to place order")
@@ -198,6 +205,37 @@ def process_basket_order_with_auth(
         ]
         sorted_orders = buy_orders + sell_orders
 
+        # Pre-fetch all quotes in a single multiquotes call instead of
+        # N individual REST calls (one per order). This reduces basket
+        # order latency from N*300-500ms to ~150ms total.
+        quote_cache = {}
+        try:
+            from services.quotes_service import get_multiquotes
+
+            unique_symbols = {
+                (o.get("symbol"), o.get("exchange")) for o in sorted_orders
+                if o.get("symbol") and o.get("exchange")
+            }
+            if unique_symbols:
+                symbols_list = [
+                    {"symbol": s, "exchange": e} for s, e in unique_symbols
+                ]
+                success_mq, mq_response, _ = get_multiquotes(
+                    symbols=symbols_list, api_key=api_key
+                )
+                if success_mq and "results" in mq_response:
+                    for result in mq_response["results"]:
+                        sym = result.get("symbol")
+                        exch = result.get("exchange")
+                        data = result.get("data")
+                        if sym and exch and data:
+                            quote_cache[(sym, exch)] = data
+                    logger.info(
+                        f"Pre-fetched {len(quote_cache)} quotes for sandbox basket order"
+                    )
+        except Exception as e:
+            logger.debug(f"Multiquotes pre-fetch failed, falling back to per-order fetch: {e}")
+
         for i, order in enumerate(sorted_orders):
             # Create order data with common fields from basket order
             order_with_auth = order.copy()
@@ -216,15 +254,23 @@ def process_basket_order_with_auth(
                 )
                 continue
 
-            # Place order in sandbox
+            # Look up pre-fetched quote for this symbol
+            prefetched = quote_cache.get(
+                (order.get("symbol"), order.get("exchange"))
+            )
+
+            # Place order in sandbox with pre-fetched quote
             success, response, status_code = sandbox_place_order(
-                order_with_auth, api_key, {"apikey": api_key, "order_type": "basket"}
+                order_with_auth, api_key, {"apikey": api_key, "order_type": "basket"},
+                prefetched_quote=prefetched,
             )
 
             if success:
                 analyze_results.append(
                     {
                         "symbol": order.get("symbol", "Unknown"),
+                        "exchange": order.get("exchange", ""),
+                        "product": order.get("product", ""),
                         "status": "success",
                         "orderid": response.get("orderid"),
                         "batch_order": True,

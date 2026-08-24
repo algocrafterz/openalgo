@@ -34,10 +34,7 @@ export const ivSmileApi = {
     exchange: string
     expiry_date: string
   }): Promise<IVSmileDataResponse> => {
-    const response = await webClient.post<IVSmileDataResponse>(
-      '/ivsmile/api/iv-smile-data',
-      params
-    )
+    const response = await webClient.post<IVSmileDataResponse>('/ivsmile/api/iv-smile-data', params)
     return response.data
   },
 
@@ -50,7 +47,7 @@ export const ivSmileApi = {
 
   getExpiries: async (exchange: string, underlying: string): Promise<ExpiriesResponse> => {
     const response = await webClient.get<ExpiriesResponse>(
-      `/search/api/expiries?exchange=${exchange}&underlying=${underlying}`
+      `/search/api/expiries?exchange=${exchange}&underlying=${underlying}&instrumenttype=options`
     )
     return response.data
   },

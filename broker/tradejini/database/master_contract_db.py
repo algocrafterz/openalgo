@@ -1,12 +1,13 @@
 import os
 from datetime import datetime
 
-import httpx
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from database.engine_factory import create_db_engine
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -16,12 +17,9 @@ try:
 except ImportError:
     socketio = None
 
-# Create a shared httpx client for connection pooling
-client = httpx.Client(timeout=30.0)
-
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -103,7 +101,8 @@ def get_scrip_groups():
     try:
         # Add version=0 parameter to force fresh data
         params = {"version": "0"}
-        response = client.get(SCRIP_GROUPS_URL, params=params)
+        client = get_httpx_client()
+        response = client.get(SCRIP_GROUPS_URL, params=params, timeout=30.0)
         response.raise_for_status()
         data = response.json()
         logger.info(f"Received scrip groups data: {data}")
@@ -126,7 +125,8 @@ def get_scrip_data(scrip_group):
     try:
         # Add version=0 parameter to force fresh data
         params = {"version": "0"}
-        response = client.get(SCRIP_DATA_URL.format(group=scrip_group), params=params)
+        client = get_httpx_client()
+        response = client.get(SCRIP_DATA_URL.format(group=scrip_group), params=params, timeout=60.0)
         response.raise_for_status()
 
         # Split the response text into lines
@@ -151,43 +151,45 @@ def get_scrip_data(scrip_group):
         return []
 
 
-def format_symbol(row, id_format):
-    """Format symbol based on Tradejini's idFormat patterns"""
-    try:
-        # Handle different idFormat patterns
-        if id_format == "instrument_symbol_series_exchange":
-            # For equity symbols
-            return row.get("symbol", "")
+# Each scrip group declares its own id layout via 'idFormat' in the Scrip Master
+# Groups response (e.g. "instrument_symbol_exchange_expiry_strike_optType"). Split
+# the id on '_' and read the components by name so a change in component order
+# does not silently mis-parse every contract in the group.
+def parse_scrip_id(scrip_id, id_format):
+    """
+    Split a scrip id into its named components using the group's idFormat.
 
-        elif id_format == "instrument_symbol_exchange_expiry":
-            # For futures
-            symbol = row.get("symbol", "")
-            expiry = row.get("expiry", "")
-            return f"{symbol}{expiry}FUT" if expiry else symbol
+    Returns a dict keyed by component name (symbol, exchange, expiry, strike,
+    optType, series, instrument, excToken). Returns an empty dict when the id
+    does not have as many components as the format declares.
+    """
+    parts = str(scrip_id).split("_")
+    names = [name for name in str(id_format or "").split("_") if name]
 
-        elif id_format == "instrument_symbol_exchange_expiry_strike_optType":
-            # For options
-            symbol = row.get("symbol", "")
-            expiry = row.get("expiry", "")
-            strike = row.get("strikePrice")
-            opt_type = row.get("optionType", "CE")
+    if not names or len(parts) < len(names):
+        return {}
 
-            if all([symbol, expiry, strike, opt_type]):
-                strike_fmt = int(float(strike)) if float(strike).is_integer() else float(strike)
-                return f"{symbol}{expiry}{strike_fmt}{opt_type}"
-            return symbol
+    return dict(zip(names, parts, strict=False))
 
-        elif id_format == "instrument_excToken_exchange":
-            # For indices
-            return row.get("symbol", "").replace(" ", "")
 
-        else:
-            # Default to trading symbol if format not recognized
-            return row.get("tradingSymbol", row.get("symbol", ""))
+def parse_expiry(expiry_value):
+    """
+    Parse a scrip expiry into a datetime.
 
-    except Exception as e:
-        logger.error(f"Error formatting symbol with format {id_format}: {e}")
-        return row.get("tradingSymbol", row.get("symbol", ""))
+    Ids carry ISO dates ('2024-04-25'); accept the compact exchange forms too.
+    """
+    if not expiry_value:
+        return None
+
+    value = str(expiry_value).strip()
+    for fmt in ("%Y-%m-%d", "%d%b%Y", "%d%b%y", "%d-%b-%Y", "%d-%b-%y"):
+        try:
+            # strptime matches month names case-insensitively, so 'APR' parses
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+
+    return None
 
 
 def process_scrip_data(scrip_data, group_info):
@@ -212,12 +214,7 @@ def process_scrip_data(scrip_data, group_info):
 
     # Get group name and format
     group_name = group_info.get("name", "")
-
-    # Common index symbol mappings
-    COMMON_INDEX_MAP = {
-        "NSE_INDEX": ["NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX"],
-        "BSE_INDEX": ["SENSEX", "BANKEX", "SENSEX50"],
-    }
+    id_format = group_info.get("idFormat", "")
 
     # Handle index data separately
     if group_name == "Index":
@@ -232,16 +229,9 @@ def process_scrip_data(scrip_data, group_info):
                     # Map exchange for OpenAlgo format
                     exchange_map = {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX"}
 
-                    # Symbol mapping for special cases
-                    symbol_map = {"India VIX": "INDIAVIX", "SNXT50": "SENSEX50"}
-
-                    # Apply symbol mapping if needed
-                    if item["symbol"] in symbol_map:
-                        item["symbol"] = symbol_map[item["symbol"]]
-
                     record = {
-                        "symbol": item["symbol"],  # Use symbol field directly
-                        "brsymbol": item["dispName"],  # Use display name as broker symbol
+                        "symbol": item["symbol"],  # Raw symbol, normalized later via DataFrame
+                        "brsymbol": item["id"],  # Use id as broker symbol for reverse lookup
                         "name": item["dispName"],  # Use display name as full name
                         "exchange": exchange_map.get(raw_exchange, raw_exchange),
                         "brexchange": raw_exchange,
@@ -279,7 +269,8 @@ def process_scrip_data(scrip_data, group_info):
                 if group_name == "Securities":
                     # Format: instrument_symbol_series_exchange
                     if len(parts) >= 4:
-                        exchange = parts[-1]
+                        components = parse_scrip_id(item["id"], id_format)
+                        exchange = components.get("exchange") or parts[-1]
                         record = {
                             "symbol": item["dispName"],
                             "brsymbol": item["id"],
@@ -297,32 +288,47 @@ def process_scrip_data(scrip_data, group_info):
 
                 elif group_name in ["FutureContracts", "CurrencyFuture", "CommodityFuture"]:
                     # Format: instrument_symbol_exchange_expiry
-                    if len(parts) >= 4:
-                        base_symbol = parts[1]
-                        exchange = parts[2]
-                        expiry_date = parts[3]
+                    components = parse_scrip_id(item["id"], id_format)
+                    base_symbol = (
+                        components.get("symbol")
+                        or item.get("symbol")
+                        or (parts[1] if len(parts) > 1 else "")
+                    )
+                    exchange = components.get("exchange") or (parts[2] if len(parts) > 2 else "")
+                    expiry_date = (
+                        components.get("expiry")
+                        or item.get("expiry")
+                        or (parts[3] if len(parts) > 3 else "")
+                    )
 
-                        try:
-                            expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
-                            expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
-                            openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
+                    expiry_dt = parse_expiry(expiry_date)
+                    if not (base_symbol and exchange and expiry_dt):
+                        logger.info(f"Skipping future with unparseable id: {item['id']}")
+                        continue
 
-                            record = {
-                                "symbol": openalgo_symbol,
-                                "brsymbol": item["id"],
-                                "name": item.get("desc", item["dispName"]),
-                                "exchange": exchange,
-                                "brexchange": exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": expiry_date,
-                                "strike": 0,
-                                "lotsize": int(item.get("lot", 1)),
-                                "instrumenttype": "FUT",
-                                "tick_size": float(item.get("tick", 0.05)),
-                            }
-                            records.append(record)
-                        except Exception as e:
-                            logger.info(f"Error processing future {item['id']}: {e}")
+                    try:
+                        expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                        expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
+                        openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
+
+                        record = {
+                            "symbol": openalgo_symbol,
+                            "brsymbol": item["id"],
+                            # 'name' must be the underlying root for derivatives -
+                            # the F&O tools look contracts up by it.
+                            "name": base_symbol,
+                            "exchange": exchange,
+                            "brexchange": exchange,
+                            "token": str(item["excToken"]),
+                            "expiry": expiry_db,
+                            "strike": 0,
+                            "lotsize": int(item.get("lot", 1)),
+                            "instrumenttype": "FUT",
+                            "tick_size": float(item.get("tick", 0.05)),
+                        }
+                        records.append(record)
+                    except Exception as e:
+                        logger.info(f"Error processing future {item['id']}: {e}")
 
                 elif group_name in [
                     "NSEOptions",
@@ -331,148 +337,169 @@ def process_scrip_data(scrip_data, group_info):
                     "CommodityOptions",
                 ]:
                     # Format: instrument_symbol_exchange_expiry_strike_optType
-                    if len(parts) >= 6:
-                        base_symbol = parts[1]
-                        exchange = parts[2]
-                        expiry_date = parts[3]
-                        strike_price = float(parts[4])
-                        option_type = parts[5]
+                    components = parse_scrip_id(item["id"], id_format)
+                    base_symbol = (
+                        components.get("symbol")
+                        or item.get("symbol")
+                        or (parts[1] if len(parts) > 1 else "")
+                    )
+                    exchange = components.get("exchange") or (parts[2] if len(parts) > 2 else "")
+                    expiry_date = (
+                        components.get("expiry")
+                        or item.get("expiry")
+                        or (parts[3] if len(parts) > 3 else "")
+                    )
+                    raw_strike = (
+                        components.get("strike")
+                        or item.get("strike")
+                        or (parts[4] if len(parts) > 4 else "")
+                    )
+                    option_type = (
+                        components.get("optType")
+                        or item.get("optType")
+                        or (parts[5] if len(parts) > 5 else "")
+                    )
 
-                        try:
-                            expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
-                            expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
-                            strike_str = (
-                                str(int(strike_price))
-                                if strike_price.is_integer()
-                                else str(strike_price)
-                            )
-                            openalgo_symbol = (
-                                f"{base_symbol}{expiry_formatted}{strike_str}{option_type}"
-                            )
+                    expiry_dt = parse_expiry(expiry_date)
+                    if not (base_symbol and exchange and expiry_dt and option_type):
+                        logger.info(f"Skipping option with unparseable id: {item['id']}")
+                        continue
 
-                            record = {
-                                "symbol": openalgo_symbol,
-                                "brsymbol": item["id"],
-                                "name": item.get("desc", item["dispName"]),
-                                "exchange": exchange,
-                                "brexchange": exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": expiry_date,
-                                "strike": strike_price,
-                                "lotsize": int(item.get("lot", 1)),
-                                "instrumenttype": option_type,
-                                "tick_size": float(item.get("tick", 0.05)),
-                            }
-                            records.append(record)
-                        except Exception as e:
-                            logger.info(f"Error processing option {item['id']}: {e}")
+                    try:
+                        strike_price = float(raw_strike)
+                        expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                        expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
+                        strike_str = (
+                            str(int(strike_price))
+                            if strike_price.is_integer()
+                            else str(strike_price)
+                        )
+                        openalgo_symbol = (
+                            f"{base_symbol}{expiry_formatted}{strike_str}{option_type}"
+                        )
+
+                        record = {
+                            "symbol": openalgo_symbol,
+                            "brsymbol": item["id"],
+                            # 'name' must be the underlying root for derivatives
+                            "name": base_symbol,
+                            "exchange": exchange,
+                            "brexchange": exchange,
+                            "token": str(item["excToken"]),
+                            "expiry": expiry_db,
+                            "strike": strike_price,
+                            "lotsize": int(item.get("lot", 1)),
+                            "instrumenttype": option_type,
+                            "tick_size": float(item.get("tick", 0.05)),
+                        }
+                        records.append(record)
+                    except Exception as e:
+                        logger.info(f"Error processing option {item['id']}: {e}")
 
                 elif instr_type == "IDX":
-                    # Handle index symbols
-                    raw_exchange = parts[-1]  # Last part is exchange (NSE/BSE)
-
-                    # Map exchange for OpenAlgo format
-                    exchange_map = {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX"}
-
-                    # Get OpenAlgo exchange
-                    openalgo_exchange = exchange_map.get(raw_exchange, raw_exchange)
-
-                    # Check if this is a common index symbol
-                    if openalgo_exchange == "BSE_INDEX":
-                        # Handle BSE indices
-                        if item["symbol"].upper() in COMMON_INDEX_MAP[openalgo_exchange]["common"]:
-                            # Use common symbol format for main indices
-                            record = {
-                                "symbol": item["symbol"].upper(),  # Use uppercase symbol
-                                "brsymbol": item["id"],  # Use dispName as brsymbol
-                                "name": item.get(
-                                    "symbol", item["dispName"]
-                                ),  # Use symbol field if available
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                        elif (
-                            item["symbol"].upper()
-                            in COMMON_INDEX_MAP[openalgo_exchange]["sectoral"]
-                        ):
-                            # Use sectoral index format
-                            record = {
-                                "symbol": item["symbol"].upper(),  # Use uppercase symbol
-                                "brsymbol": COMMON_INDEX_MAP[openalgo_exchange]["sectoral"][
-                                    item["symbol"].upper()
-                                ],  # Use mapped brsymbol
-                                "name": item.get(
-                                    "symbol", item["dispName"]
-                                ),  # Use symbol field if available
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                        else:
-                            # Use regular symbol format
-                            record = {
-                                "symbol": item["dispName"],  # Use dispName for non-common symbols
-                                "brsymbol": item["id"],
-                                "name": item.get("symbol", item["dispName"]),
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                    else:
-                        # Handle NSE indices
-                        if item["symbol"].upper() in COMMON_INDEX_MAP[openalgo_exchange]:
-                            # Use common symbol format
-                            record = {
-                                "symbol": item["symbol"].upper(),  # Use uppercase symbol
-                                "brsymbol": item["id"],  # Use dispName as brsymbol
-                                "name": item.get(
-                                    "symbol", item["dispName"]
-                                ),  # Use symbol field if available
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                        else:
-                            # Use regular symbol format
-                            record = {
-                                "symbol": item["dispName"],  # Use dispName for non-common symbols
-                                "brsymbol": item["id"],
-                                "name": item.get("symbol", item["dispName"]),
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
+                    # Index symbols are handled by the "Index" group above; skip here
+                    continue
             except Exception as e:
                 logger.error(f"Error processing item {item}: {e}")
                 continue
 
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+
+    if df.empty:
+        return df
+
+    # --- NSE Index Symbol Normalization (Tradejini symbol → OpenAlgo format) ---
+    # Listed symbols are mapped explicitly; unlisted symbols get basic cleanup
+    # (uppercase, spaces removed) to preserve them without breaking format.
+    nse_idx_mask = df["exchange"] == "NSE_INDEX"
+    nse_index_map = {
+        # Major NSE Indices
+        "NIFTY": "NIFTY",
+        "NIFTYNXT50": "NIFTYNXT50",
+        "FINNIFTY": "FINNIFTY",
+        "BANKNIFTY": "BANKNIFTY",
+        "MIDCPNIFTY": "MIDCPNIFTY",
+        "India VIX": "INDIAVIX",
+        # Broad Market Indices
+        "Nifty 100": "NIFTY100",
+        "Nifty 200": "NIFTY200",
+        "NIFTY 500": "NIFTY500",
+        # Sectoral Indices
+        "Nifty Auto": "NIFTYAUTO",
+        "Nifty Commodities": "NIFTYCOMMODITIES",
+        "Nifty Consumption": "NIFTYCONSUMPTION",
+        "Nifty Energy": "NIFTYENERGY",
+        "Nifty FMCG": "NIFTYFMCG",
+        "NIFTY HEALTHCARE": "NIFTYHEALTHCARE",
+        "Nifty Infra": "NIFTYINFRA",
+        "Nifty IT": "NIFTYIT",
+        "Nifty Media": "NIFTYMEDIA",
+        "Nifty Metal": "NIFTYMETAL",
+        "Nifty MNC": "NIFTYMNC",
+        "NIFTY OIL AND GAS": "NIFTYOILANDGAS",
+        "Nifty Pharma": "NIFTYPHARMA",
+        "Nifty PSE": "NIFTYPSE",
+        "Nifty PSU Bank": "NIFTYPSUBANK",
+        "Nifty Pvt Bank": "NIFTYPVTBANK",
+        # Market Cap Indices
+        "Nifty Midcap 50": "NIFTYMIDCAP50",
+        "NIFTY MIDCAP 100": "NIFTYMIDCAP100",
+        "NIFTY SMLCAP 50": "NIFTYSMLCAP50",
+        "NIFTY SMLCAP 100": "NIFTYSMLCAP100",
+        # Other Indices
+        "NIFTY INDIA MFG": "NIFTYINDIAMFG",
+        "Nifty MidSml Hlth": "NIFTYMIDSMLHLTH",
+        "Nifty Tata 25 Cap": "NIFTYTATA25CAP",
+    }
+    original_nse = df.loc[nse_idx_mask, "symbol"]
+    mapped_nse = original_nse.map(nse_index_map)
+    # For unmapped symbols, keep raw symbol with basic cleanup (uppercase, no spaces)
+    fallback_nse = original_nse.str.upper().str.replace(" ", "", regex=False)
+    df.loc[nse_idx_mask, "symbol"] = mapped_nse.fillna(fallback_nse)
+
+    # --- BSE Index Symbol Normalization (Tradejini symbol → OpenAlgo format) ---
+    # Applied only to BSE_INDEX rows to avoid conflicts with equity symbols
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    bse_index_map = {
+        # Major BSE Indices
+        "SENSEX": "SENSEX",
+        "BANKEX": "BANKEX",
+        "SNXT50": "BSESENSEXNEXT50",
+        "SENSEX50": "SENSEX50",
+        # Broad Market Indices
+        "BSE100": "BSE100",
+        "BSE200": "BSE200",
+        "BSE500": "BSE500",
+        # Sectoral Indices
+        "AUTO": "BSEAUTO",
+        "BSE HC": "BSEHEALTHCARE",
+        "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "BSEIPO": "BSEIPO",
+        "BSEPSU": "BSEPSU",
+        "ENERGY": "BSEENERGY",
+        "FIN": "BSEFINANCIALSERVICES",
+        "GREENX": "BSEGREENEX",
+        "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MIDCAP": "BSEMIDCAP",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "SMLCAP": "BSESMALLCAP",
+        "TELCOM": "BSETELECOM",
+        # Other BSE Indices
+        "BSEEVI": "BSEEVI",
+        "BSEPBI": "BSEPBI",
+        "MFG": "BSEMFG",
+    }
+    original_bse = df.loc[bse_idx_mask, "symbol"]
+    mapped_bse = original_bse.map(bse_index_map)
+    # For unmapped symbols, keep raw symbol with basic cleanup (uppercase, no spaces)
+    fallback_bse = original_bse.str.upper().str.replace(" ", "", regex=False)
+    df.loc[bse_idx_mask, "symbol"] = mapped_bse.fillna(fallback_bse)
+
+    return df
 
 
 def master_contract_download():
