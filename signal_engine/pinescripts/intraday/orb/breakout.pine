@@ -210,7 +210,7 @@ showTP3 = true
 // 50 = exit 50% of current open position at this TP level.
 // 100 = exit 100% of remaining position (full close).
 tp1ExitQtyPct   = input.int(50,  "TP1 Exit %",   minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of open position to exit at TP1\n\n50 = partial exit (bank half, hold rest for TP1.5)\n100 = full exit at TP1 (original behavior)\n\nData: 72.3% of TP1 trades also reach TP1.5 — 50% partial exit captures both wins.")
-tp1_5ExitQtyPct = input.int(100, "TP1.5 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP1.5\n\n100 = exit remaining position fully\n\nTP2/TP3 also default to 100 (exit whatever remains).")
+tp1_5ExitQtyPct = input.int(0, "TP1.5 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP1.5\n\n0 (default) = DISPLAY ONLY, no exit alert. The runner is held for TP2, which is the next key level out — exiting at a fixed multiple would close it before it reaches the level that justifies the trade.\n\n100 = exit remaining position fully at TP1.5 (the pre-2026-08-25 behaviour).\n\nTP2/TP3 always exit 100% of whatever remains.")
 
 // Adaptive R:R - Auto-switch to TP2 when trending
 enableAdaptiveRR = false
@@ -633,6 +633,7 @@ var int   sessionVWAPBar = -1
 // processor consumes it earlier in source order than the engine sets it.
 var float klArmedSL = na
 var float klArmedT1 = na
+var float klArmedT2 = na
 var string klEntrySource = ""
 var string klPendingSource = ""
 
@@ -658,6 +659,20 @@ var string klSnapConfN    = ""
 var string klSnapDayType  = ""
 var string klSnapOpenType = ""
 var float  klSnapAtr     = na
+// The raw level prices the auction was built on. Latched with the rest of the packet so the
+// trade log records WHERE the levels sat, not just which one triggered — post-hoc you can ask
+// how far the entry was from POC, whether IB was wide, whether PDH capped the move.
+var float klSnapORH = na
+var float klSnapORM = na
+var float klSnapORL = na
+var float klSnapIBH = na
+var float klSnapIBM = na
+var float klSnapIBL = na
+var float klSnapVAH = na
+var float klSnapPOC = na
+var float klSnapVAL = na
+var float klSnapPDH = na
+var float klSnapPDL = na
 
 var bool htfBullish = false
 var bool htfBearish = false
@@ -782,6 +797,11 @@ getChartUrl() =>
 getTimeIST() =>
     str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
 
+// A level price for the alert body, or "-" when that level does not exist today (no previous
+// session loaded, IB still building, ORB disabled).
+klLvlStr(float v) =>
+    na(v) ? "-" : str.tostring(v, format.mintick)
+
 // Build Entry Alert Message (LONG/SHORT) - Telegram JSON format
 // srcTag names which key level triggered the entry ("" = a plain ORB breakout).
 // It is emitted as a separate "Trigger:" line, NOT folded into the first line: the
@@ -834,6 +854,17 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
         msg += "OpenType: " + (klSnapOpenType == "" ? "-" : klSnapOpenType) + "\\n"
         msg += "AtrPct: " + (na(klSnapAtr) or entryPrice <= 0 ? "-" : str.tostring(klSnapAtr / entryPrice * 100, "0.00")) + "\\n"
         msg += "SlAtr: " + (na(klSnapAtr) or klSnapAtr <= 0 ? "-" : str.tostring(riskVal / klSnapAtr, "0.00")) + "\\n"
+        msg += "ORH: " + klLvlStr(klSnapORH) + "\\n"
+        msg += "ORM: " + klLvlStr(klSnapORM) + "\\n"
+        msg += "ORL: " + klLvlStr(klSnapORL) + "\\n"
+        msg += "IBH: " + klLvlStr(klSnapIBH) + "\\n"
+        msg += "IBM: " + klLvlStr(klSnapIBM) + "\\n"
+        msg += "IBL: " + klLvlStr(klSnapIBL) + "\\n"
+        msg += "VAH: " + klLvlStr(klSnapVAH) + "\\n"
+        msg += "POC: " + klLvlStr(klSnapPOC) + "\\n"
+        msg += "VAL: " + klLvlStr(klSnapVAL) + "\\n"
+        msg += "PDH: " + klLvlStr(klSnapPDH) + "\\n"
+        msg += "PDL: " + klLvlStr(klSnapPDL) + "\\n"
     msg += "------------------------\\n"
     msg += getTimeIST() + "\\n"
     msg += getChartUrl()
@@ -1054,10 +1085,22 @@ calculateTargets(entry, sl, isBullish, orbH, orbL) =>
 // meaningless for an IB or value-area trade -- the structure that matters is the next level
 // in the trade's direction. Same 1x/1.5x/2x/3x shape, so the alert and TP tracking downstream
 // need no changes. Falls back to 1.5R when no structural level lies ahead.
-klCalcTargets(float entry, float sl, bool isBullish, float t1) =>
+// TP1 is the nearest key level (floored at 1R); TP2 is the NEXT one out. Entering on levels
+// but exiting on arbitrary R-multiples is two theories bolted together -- if a level is worth
+// entering on, it is worth exiting on. Where the chart offers no second level (price at
+// all-time highs, sparse registry) t2 is na and TP2 falls back to the old 2 x d multiple.
+// TP1.5 sits midway between TP1 and TP2 so it stays a meaningful intermediate either way.
+klCalcTargets(float entry, float sl, bool isBullish, float t1, float t2) =>
     float risk = math.abs(entry - sl)
     float d = na(t1) ? risk * 1.5 : math.max(math.abs(t1 - entry), risk * 1.0)
-    [isBullish ? entry + d : entry - d, isBullish ? entry + d * 1.5 : entry - d * 1.5, isBullish ? entry + d * 2.0 : entry - d * 2.0, isBullish ? entry + d * 3.0 : entry - d * 3.0]
+    float tp1 = isBullish ? entry + d : entry - d
+    // Never let a structural TP2 land at or inside TP1 -- a level can sit only a few ticks
+    // beyond the first one. Floor it half a d further out.
+    float tp2Floor = isBullish ? tp1 + d * 0.5 : tp1 - d * 0.5
+    float tp2Struct = na(t2) ? na : isBullish ? math.max(t2, tp2Floor) : math.min(t2, tp2Floor)
+    float tp2 = na(tp2Struct) ? (isBullish ? entry + d * 2.0 : entry - d * 2.0) : tp2Struct
+    float tp1_5 = (tp1 + tp2) / 2
+    [tp1, tp1_5, tp2, isBullish ? entry + d * 3.0 : entry - d * 3.0]
 
 calculateStopLoss(entry, orbHigh, orbLow, orbRange, atr, mode, isBullish) =>
     float sl = na
@@ -2139,11 +2182,35 @@ if not na(sessionFirstBarTime) and inSession
     if minsFromOpen < 0
         minsFromOpen := 0
 
+// ============================ SERIES PRIMITIVES (must run every bar) ==============================
+// A ta.* function carries internal series state that advances ONLY when the call executes, so
+// invoking one behind a conditional returns a value computed from a broken history. Every one
+// of these used to sit inside a feature gate: ta.atr behind `needATR`, ta.vwap behind
+// `enableKeyLevels`, the ADX chain behind `enableAdaptiveRR`. ATR sets the key-level stop
+// distance (klSlBufferMult x ATR), so a gap there mis-places every stop the strategy sends.
+// Evaluated unconditionally here; the caches below only publish the results.
+float atrGlobal        = ta.atr(atrLength)
+float vwapGlobal       = ta.vwap(close)
+float emaCustomGlobal  = ta.ema(close, customEmaLength)
+
+// ADX is hoisted whole because each ta.rma feeds the next — splitting the chain would leave
+// the later links running on a history the earlier ones never filled.
+float adxTrueRange       = math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
+float adxPlusDMRaw       = high - high[1] > low[1] - low ? math.max(high - high[1], 0) : 0
+float adxMinusDMRaw      = low[1] - low > high - high[1] ? math.max(low[1] - low, 0) : 0
+float adxSmoothedTR      = ta.rma(adxTrueRange, adxLength)
+float adxSmoothedPlusDM  = ta.rma(adxPlusDMRaw, adxLength)
+float adxSmoothedMinusDM = ta.rma(adxMinusDMRaw, adxLength)
+float adxPlusDI          = adxSmoothedTR > 0 ? 100 * adxSmoothedPlusDM / adxSmoothedTR : 0
+float adxMinusDI         = adxSmoothedTR > 0 ? 100 * adxSmoothedMinusDM / adxSmoothedTR : 0
+float adxDX              = (adxPlusDI + adxMinusDI) > 0 ? 100 * math.abs(adxPlusDI - adxMinusDI) / (adxPlusDI + adxMinusDI) : 0
+float adxGlobal          = ta.rma(adxDX, adxLength)
+
 // ===================================== GLOBAL CACHE (PERFORMANCE) ==================================
 if barstate.isconfirmed or barstate.islast
     bool needATR = everHadBreakUp or everHadBreakDown or showDashboard or not na(activeORB)
     if needATR and bar_index != cachedATRBar
-        cachedATR := ta.atr(atrLength)
+        cachedATR := atrGlobal
         cachedATRBar := bar_index
 
     // Time-of-day volume baseline + session volume factor. klVolFactor is STATEFUL, so it
@@ -2156,25 +2223,12 @@ if barstate.isconfirmed or barstate.islast
 
     // Key-level scoring needs VWAP regardless of the trend-filter configuration
     if enableKeyLevels and bar_index != sessionVWAPBar
-        sessionVWAP := ta.vwap(close)
+        sessionVWAP := vwapGlobal
         sessionVWAPBar := bar_index
 
     // ADX calculation for Adaptive R:R
     if enableAdaptiveRR and bar_index != cachedADXBar
-        // Calculate ADX components
-        float trueRange = math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
-        float plusDM = high - high[1] > low[1] - low ? math.max(high - high[1], 0) : 0
-        float minusDM = low[1] - low > high - high[1] ? math.max(low[1] - low, 0) : 0
-
-        float smoothedTR = ta.rma(trueRange, adxLength)
-        float smoothedPlusDM = ta.rma(plusDM, adxLength)
-        float smoothedMinusDM = ta.rma(minusDM, adxLength)
-
-        float plusDI = smoothedTR > 0 ? 100 * smoothedPlusDM / smoothedTR : 0
-        float minusDI = smoothedTR > 0 ? 100 * smoothedMinusDM / smoothedTR : 0
-        float dx = (plusDI + minusDI) > 0 ? 100 * math.abs(plusDI - minusDI) / (plusDI + minusDI) : 0
-
-        cachedADX := ta.rma(dx, adxLength)
+        cachedADX := adxGlobal
         cachedADXBar := bar_index
         isTrendingMarket := cachedADX >= adxThreshold
 
@@ -2482,6 +2536,7 @@ klPendingSource := shouldReset ? "" : klPendingSource
 klEntrySource := shouldReset ? "" : klEntrySource
 klArmedSL := shouldReset ? na : klArmedSL
 klArmedT1 := shouldReset ? na : klArmedT1
+klArmedT2 := shouldReset ? na : klArmedT2
 
 // ======================================= ORB LEVEL BUILDING ========================================
 currentTF_seconds = timeframe.in_seconds()
@@ -2589,7 +2644,7 @@ if enableTrendFilter
         trendEMA12 := ta.ema(close, 12)
 
     if trendMode == "Custom EMA"
-        trendEMACustom := ta.ema(close, customEmaLength)
+        trendEMACustom := emaCustomGlobal
 
     if str.contains(trendMode, "SuperTrend")
         if barstate.isnew or na(trendSTUp)
@@ -2733,7 +2788,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pend
             bool fromKL = klPendingSource != "" and not na(klArmedSL)
             float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
             [tp1, tp1_5, tp2, tp3] = if fromKL
-                klCalcTargets(entry, sl, true, klArmedT1)
+                klCalcTargets(entry, sl, true, klArmedT1, klArmedT2)
             else
                 calculateTargets(entry, sl, true, activeHigh, activeLow)
 
@@ -2777,6 +2832,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pend
             klPendingSource := ""  // consumed — next entry defaults back to plain ORB
             klArmedSL := na
             klArmedT1 := na
+            klArmedT2 := na
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2850,7 +2906,7 @@ if pendingShortEntry and bar_index > pendingShortBar and canFillShort
             bool fromKL = klPendingSource != "" and not na(klArmedSL)
             float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
             [tp1, tp1_5, tp2, tp3] = if fromKL
-                klCalcTargets(entry, sl, false, klArmedT1)
+                klCalcTargets(entry, sl, false, klArmedT1, klArmedT2)
             else
                 calculateTargets(entry, sl, false, activeHigh, activeLow)
 
@@ -2894,6 +2950,7 @@ if pendingShortEntry and bar_index > pendingShortBar and canFillShort
             klPendingSource := ""  // consumed — next entry defaults back to plain ORB
             klArmedSL := na
             klArmedT1 := na
+            klArmedT2 := na
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2947,12 +3004,14 @@ if not canFillLong and pendingLongEntry
     klPendingSource := ""
     klArmedSL := na
     klArmedT1 := na
+    klArmedT2 := na
 if not canFillShort and pendingShortEntry
     pendingShortEntry := false
     pendingShortBar := na
     klPendingSource := ""
     klArmedSL := na
     klArmedT1 := na
+    klArmedT2 := na
 
 // ======================= NEW ARCHITECTURE: BREAKOUT DETECTION WITH activeORB =======================
 if not na(activeORB) and activeORB.isComplete and inSession and enableBreakout and barstate.isconfirmed
@@ -3453,22 +3512,31 @@ klComputeScore(int d, int confCnt, bool isRetest, float vwap, float ema9, float 
 // ─── Level-based execution map ──────────────────────────────────────────────
 // First target = nearest structural level in the trade direction. Structure, not a
 // fixed R multiple, decides where this trade is likely to stall.
-klFindT1(float[] levels, int d, float ref, float pad) =>
-    float t1 = na
+// Nearest level strictly beyond ref, in direction d. Returns the RAW level, unpadded, so a
+// second call can chain off it -- padding first would leave the same level sitting "beyond"
+// the padded result and the chain would return it twice.
+klNextLevel(float[] levels, int d, float ref) =>
+    float lvOut = na
     if d != 0 and array.size(levels) > 0
         for i = 0 to array.size(levels) - 1
             float lv = array.get(levels, i)
             if d == 1 and lv > ref + syminfo.mintick
-                t1 := na(t1) ? lv : math.min(t1, lv)
+                lvOut := na(lvOut) ? lv : math.min(lvOut, lv)
             if d == -1 and lv < ref - syminfo.mintick
-                t1 := na(t1) ? lv : math.max(t1, lv)
-    // Park the target just SHORT of the level, never ON it. The level is where the
-    // crowd's resting limit orders sit, so price routinely stalls a few ticks before
-    // reaching it and rolls over. Stops go BEYOND the crowd; targets go IN FRONT of it.
-    // If the pad would leave the target inside the noise band around entry there is no
-    // workable structural target -- report na rather than one that cannot be filled.
-    float p = na(t1) ? na : d == 1 ? t1 - pad : t1 + pad
+                lvOut := na(lvOut) ? lv : math.max(lvOut, lv)
+    lvOut
+
+// Park the target just SHORT of the level, never ON it. The level is where the crowd's
+// resting limit orders sit, so price routinely stalls a few ticks before reaching it and
+// rolls over. Stops go BEYOND the crowd; targets go IN FRONT of it.
+// If the pad would leave the target inside the noise band around ref there is no workable
+// structural target -- report na rather than one that cannot be filled.
+klPadTarget(float lv, int d, float ref, float pad) =>
+    float p = na(lv) ? na : d == 1 ? lv - pad : lv + pad
     na(p) ? na : d == 1 ? (p > ref + pad ? p : na) : (p < ref - pad ? p : na)
+
+klFindT1(float[] levels, int d, float ref, float pad) =>
+    klPadTarget(klNextLevel(levels, d, ref), d, ref, pad)
 
 klExecMap(int d, float lvl, float atrVal, float slMult, float acct, float rPct) =>
     float ref   = close
@@ -3511,7 +3579,12 @@ float klBand = nz(cachedATR) * klConfAtrMult
 [klConfCnt, klConfNames] = klConfluence(klSetupLevel, klBand, klAllLevels, klLevelNames)
 int klScore = klComputeScore(klDir, klConfCnt, klIsRetest, sessionVWAP, klEMA9, klEMASlope, klIsRetest ? math.max(klRVOL, klWindowRvol) : klRVOL, klBullCandle, klBearCandle, volumeMultiplier, strongVolumeMultiplier, klSessionVF)
 [klEntryRef, klSLLevel, klRiskPts, klQtyEst] = klExecMap(klDir, klSetupLevel, cachedATR, klSlBufferMult, accountSize, riskPct)
-float klT1 = klFindT1(klAllLevels, klDir, klEntryRef, nz(cachedATR) * klT1PadMult)
+float klT1PadPts = nz(cachedATR) * klT1PadMult
+float klT1Raw = klNextLevel(klAllLevels, klDir, klEntryRef)
+float klT1 = klPadTarget(klT1Raw, klDir, klEntryRef, klT1PadPts)
+// The level beyond T1 — the structural TP2. Chained off the RAW T1 so the same level is not
+// returned twice. na when the chart has nothing further out; klCalcTargets falls back then.
+float klT2 = na(klT1Raw) ? float(na) : klPadTarget(klNextLevel(klAllLevels, klDir, klT1Raw), klDir, klEntryRef, klT1PadPts)
 
 // Direction-uniform HTF test: longs need the HTF close ABOVE the level, shorts BELOW it.
 // One expression serves every family -- a VAH rejection short wants the HTF close back
@@ -3622,11 +3695,11 @@ if klFire
 if klFire and enableKeyLevelAlerts
     alert(buildKeyLevelAlert(), alert.freq_once_per_bar_close)
 
-// Optional named-alert hook, mirroring the existing "TEST Alert Triggered" condition at
-// the foot of this file. Lets you create a TradingView alert on the key-level packet
-// alone; the alert() call above still covers the "Any alert() function call" setup that
-// the ORB entry/TP/SL alerts use.
-alertcondition(klFire, title="Key-Level Decision Packet", message="Key-level breakout candidate - check footprint")
+// NOTE: alertcondition() is INERT inside a strategy() script — TradingView compiles it but
+// never fires it, and warns as much. Every alert this file sends goes through alert() on the
+// "Any alert() function call" trigger. The six alertcondition() hooks that used to sit here,
+// at the foot of this file and beside the key-level packet were removed 2026-08-25: they
+// advertised named-alert options that could never actually fire.
 
 // ─── Execution (OFF by default) ─────────────────────────────────────────────
 // Reuses the ORB pendingLong/ShortEntry machinery, so fill, SL/TP, Telegram alert, trade
@@ -3639,12 +3712,14 @@ if klFire and enableKeyLevelExecution and canTakeKeyLevelEntry
         klPendingSource := klSetupCode
         klArmedSL := klSLLevel
         klArmedT1 := klT1
+        klArmedT2 := klT2
     else if klDir == -1 and not pendingShortEntry and not awaitingRetestShort
         pendingShortEntry := true
         pendingShortBar := bar_index
         klPendingSource := klSetupCode
         klArmedSL := klSLLevel
         klArmedT1 := klT1
+        klArmedT2 := klT2
 
 // Latch the decision context alongside the pending. Keyed on klPendingSource CHANGING rather
 // than folded into the branches above, so one block serves both directions -- and so the
@@ -3667,6 +3742,17 @@ if klPendingSource != "" and klPendingSource != klPendingSource[1]
     klSnapDayType  := klDayTypeS
     klSnapOpenType := klOpenTypeS
     klSnapAtr      := cachedATR
+    klSnapORH      := na(activeORB) ? float(na) : activeORB.high
+    klSnapORM      := na(activeORB) ? float(na) : activeORB.mid
+    klSnapORL      := na(activeORB) ? float(na) : activeORB.low
+    klSnapIBH      := klIBH
+    klSnapIBM      := na(klIBH) or na(klIBL) ? float(na) : (klIBH + klIBL) / 2
+    klSnapIBL      := klIBL
+    klSnapVAH      := klVAH
+    klSnapPOC      := klPOC
+    klSnapVAL      := klVAL
+    klSnapPDH      := klPDH
+    klSnapPDL      := klPDL
 
 // ====================================== BARS OUTSIDE TRACKING ======================================
 if not isHTF and barstate.isconfirmed
@@ -3909,9 +3995,10 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and high >= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (LONG)
-            tpFireLevel := "TP1.5"
-            tpFirePrice := orbTP1_5Price
-            tpFireQtyPct := tp1_5ExitQtyPct
+            if tp1_5ExitQtyPct > 0
+                tpFireLevel := "TP1.5"
+                tpFirePrice := orbTP1_5Price
+                tpFireQtyPct := tp1_5ExitQtyPct
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -4016,9 +4103,10 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and low <= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (SHORT)
-            tpFireLevel := "TP1.5"
-            tpFirePrice := orbTP1_5Price
-            tpFireQtyPct := tp1_5ExitQtyPct
+            if tp1_5ExitQtyPct > 0
+                tpFireLevel := "TP1.5"
+                tpFirePrice := orbTP1_5Price
+                tpFireQtyPct := tp1_5ExitQtyPct
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -5029,21 +5117,7 @@ bool klSigLong  = klShowSignals and klFire and klNewSetup and klDir == 1
 bool klSigShort = klShowSignals and klFire and klNewSetup and klDir == -1
 klDrawSignal(klSigLong, klSigShort, klSetupCode, klScore, klScoreThreshold, klRVOL, klConfCnt, klConfNames, klSetupLevel, klSLLevel, klT1, klCLV, cachedATR, klSessionVF, klEntryRef, strongVolumeMultiplier, volumeMultiplier, klHeadroom)
 // ====================================== TRADE ALERTS ==========================================
-alertcondition(alertEntryTriggered and enableAlerts and enableTargets,
-               title="ENTRY Triggered",
-               message="{{ticker}} - ENTRY @ {{close}} | Trade setup activated")
-
-alertcondition(alertSLTriggered and enableAlerts and enableTargets,
-               title="STOP LOSS Hit",
-               message="{{ticker}} - STOP LOSS HIT @ {{close}} | Trade closed with loss")
-
-alertcondition(alertTP1Triggered and enableAlerts and enableTargets and showTP1,
-               title="TP1 Hit (1R)",
-               message="{{ticker}} - TP1 HIT @ {{close}} | 1R profit target reached")
-
-alertcondition(alertTP2Triggered and enableAlerts and enableTargets and showTP2,
-               title="TP2 Hit (2R)",
-               message="{{ticker}} - TP2 HIT @ {{close}} | 2R profit target reached")
+// (see the alertcondition note beside the key-level packet — these were inert and removed)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // TEST ALERTS SECTION
@@ -5056,7 +5130,8 @@ alertcondition(alertTP2Triggered and enableAlerts and enableTargets and showTP2,
 // TO TEST ALERTS:
 // Option 1: Test during market hours (alerts will fire normally)
 // Option 2: Use a 24/7 symbol like BTCUSD (crypto) to test anytime
-// Option 3: Use the alertcondition below with "Once Per Bar Close" trigger
+// Option 3: Enable "Send Test Alert" below, which fires through alert() like every other
+//           message this file sends
 //
 // SETUP:
 // 1. Create TradingView alert: Condition = "Any alert() function call"
@@ -5110,7 +5185,5 @@ if sendTestAlert and barstate.islast
         label.delete(testLabel)
     testLabel := label.new(bar_index, high * 1.001, testStatusText, style=label.style_label_down, color=testStatusColor, textcolor=color.white, size=size.small)
 
-// Alertcondition for test - can be used to create a separate alert
-alertcondition(testAlertTriggered, title="TEST Alert Triggered", message="Test alert triggered - check webhook")
 
 //END 19:45 19/11/2025 - Fixed unmerged STATS row by removing dashDataChanged conditions

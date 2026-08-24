@@ -100,6 +100,9 @@ class TrackedPosition:
     entry_time: datetime = field(default_factory=lambda: datetime.now(IST))
     be_stop_applied: bool = False  # True after no-progress detection moved SL to break-even
     ever_seen_nonzero_qty: bool = False  # True once positionbook confirmed qty > 0 (fill proof)
+    # Entry-criteria context from the signal (Signal.context). Carried so the partial-exit path
+    # can place the runner's stop at the level that triggered the entry.
+    context: dict = field(default_factory=dict)
 
 
 class PositionTracker:

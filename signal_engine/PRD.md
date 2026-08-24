@@ -75,6 +75,61 @@ changes.
 
 ---
 
+## Signal field reference (BREAKOUT entry alerts)
+
+Every line below `R:R` in a BREAKOUT entry alert is captured into `Signal.context` and stored
+as JSON in `trades.db.context`. Measured at **arm time** — one bar before the fill, which is
+the bar the decision was made on.
+
+### Setup quality
+
+| Field | Meaning | How to read it |
+|---|---|---|
+| `Trigger` | Which level fired, and how. `-RT` retest, `-REJ` rejection, `-BRK` break, `-ACC` acceptance | `VAH-RT` = price broke above Value Area High, came back to test it, held |
+| `Score` | Composite setup score, 0–10. Threshold to fire is 7 | Did **not** separate winners on 2026-08-24. Don't over-trust it |
+| `Conf` | Count of other levels within one ATR band, and their names | Confluence — 2+ levels stacked is a stronger wall |
+
+### Participation (the strongest discriminator so far)
+
+| Field | Meaning | How to read it |
+|---|---|---|
+| `RVOL` | This bar's volume ÷ average volume **at the same clock slot** over 14 prior sessions | >1.5 = real participation arriving. All 5 winners on 2026-08-24 had ≥1.5; both losers ≤1.0 |
+| `VF` | Session-cumulative volume vs the same baseline | Whole-day measure. Slower than RVOL and did not separate winners |
+| `CLV` | Close Location Value — where the bar closed in its own range. 1.0 = at the high, 0 = at the low | >0.7 on a long = buyers held the bar |
+| `Delta` | buy / sell / neutral | **Derived from CLV** (>0.55 buy, <0.45 sell). Carries no extra information — not an independent variable |
+
+### Position in the day
+
+| Field | Meaning | How to read it |
+|---|---|---|
+| `Trend` | `vwap±` above/below session VWAP, `ema±` vs the 9-EMA, `slope±` EMA direction | All three aligned = trending with you |
+| `Auction` | Where price sits vs the value area: Above VAH / Inside Value / Below VAL | Outside value = trending; inside = rotational |
+| `OpenPos` | Where the session OPENED relative to value | Open outside value that stays outside is the strongest day type |
+| `DayType` | Trend / Double Distribution / Normal / Neutral | Fading extremes is correct on Normal days, wrong on Trend days |
+| `OpenType` | Open Drive / Open Test Drive / Open Rejection Reverse / Open Auction | Open Drive = one-way conviction from the bell |
+| `AdrUsed` | % of the stock's average daily range already spent | High + continuation entry = late. TATAPOWER lost at 77% used |
+| `Headroom` | R available before the next opposing level | <1.5R means the target is crowded |
+| `Chase` | ATRs already travelled from the level | High = you are buying after the move, not at it |
+
+### Volatility and geometry
+
+| Field | Meaning | How to read it |
+|---|---|---|
+| `AtrPct` | The stock's ATR as % of price | The stock's natural noise. 0.5% is quiet, 3%+ is wild |
+| `SlAtr` | Stop distance in ATRs | Near-constant (~0.5) **by construction** — the stop is defined in ATR terms. Low information |
+
+### Raw level prices
+
+`ORH` / `ORM` / `ORL` opening range high / mid / low · `IBH` / `IBM` / `IBL` initial balance
+(first hour) high / mid / low · `VAH` / `POC` / `VAL` previous session value area high /
+point of control / low · `PDH` / `PDL` previous day high / low.
+
+`-` means the level does not exist today (no prior session loaded, IB still building, ORB
+disabled). These let post-hoc analysis ask questions the categorical fields cannot: how far
+was entry from POC, was IB unusually wide, did PDH cap the move.
+
+---
+
 ## Recent Changes (2026-08-24 → 2026-08-25, current)
 
 Driven by the first live day of `BREAKOUT` alerts (2026-08-24, 7 entries, 5W/2L). Source

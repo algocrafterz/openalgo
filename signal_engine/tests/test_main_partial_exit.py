@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from signal_engine.main import handle_message
+from signal_engine.main import handle_message, structural_runner_sl
 from signal_engine.models import (
     Direction,
     OrderStatus,
@@ -500,3 +500,60 @@ class TestPartialExitSlReplacement:
         # Full exit at TP1.5 — position unregistered, no SL re-placement
         mock_tracker.unregister.assert_called_once_with("RELIANCE", "ORB")
         mock_place_sl.assert_not_called()
+
+
+class TestStructuralRunnerStop:
+    """After TP1 the runner's stop belongs at the level that justified the trade, not at a
+    fixed fraction of R. The thesis is "price accepted beyond VAH"; if price falls back
+    through VAH the thesis is dead. Floored at entry so a booked winner can never turn into
+    a loser."""
+
+    def test_long_uses_trigger_level_when_above_entry(self):
+        # VAH 183.83 sits BELOW entry 184.04, so break-even wins.
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=184.04, tp=184.88,
+            context={"trigger": "VAH-RT", "vah": "183.83"},
+        ) == 184.04
+
+    def test_long_uses_level_when_it_sits_above_entry(self):
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=184.04, tp=184.88,
+            context={"trigger": "VAH-RT", "vah": "184.50"},
+        ) == 184.50
+
+    def test_short_floors_at_entry(self):
+        assert structural_runner_sl(
+            direction=Direction.SHORT, entry_price=275.85, tp=274.30,
+            context={"trigger": "IBL-RT", "ibl": "276.10"},
+        ) == 275.85
+
+    def test_short_uses_level_when_it_sits_below_entry(self):
+        assert structural_runner_sl(
+            direction=Direction.SHORT, entry_price=275.85, tp=274.30,
+            context={"trigger": "IBL-RT", "ibl": "275.00"},
+        ) == 275.00
+
+    def test_falls_back_to_none_without_a_trigger(self):
+        """A plain ORB breakout carries no key level — caller keeps the TP1-buffer rule."""
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=184.04, tp=184.88, context={},
+        ) is None
+
+    def test_falls_back_when_level_price_absent(self):
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=184.04, tp=184.88,
+            context={"trigger": "VAH-RT"},
+        ) is None
+
+    def test_falls_back_on_unparseable_level_price(self):
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=184.04, tp=184.88,
+            context={"trigger": "VAH-RT", "vah": "-"},
+        ) is None
+
+    def test_trigger_family_is_read_before_the_suffix(self):
+        """Trigger is FAMILY-VARIANT, e.g. PDH-BRK; only the family names a level."""
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=100.0, tp=102.0,
+            context={"trigger": "PDH-BRK", "pdh": "101.0"},
+        ) == 101.0

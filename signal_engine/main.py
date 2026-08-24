@@ -622,9 +622,51 @@ async def _finalize_partial_exit(
     pos.exit_pending = False  # partial exit done — allow next TP signal
 
 
+# Trigger tags are FAMILY-VARIANT, e.g. "VAH-RT", "PDH-BRK", "IBL-REJ". Only the family
+# names a level, and the entry alert carries that level's price under the same key.
+_LEVEL_FAMILIES = ("ORH", "ORM", "ORL", "IBH", "IBM", "IBL", "VAH", "POC", "VAL", "PDH", "PDL")
+
+
+def structural_runner_sl(direction, entry_price: float, tp: float, context: dict):
+    """Where the runner's stop belongs after a partial exit, or None to use the R-based rule.
+
+    The trade's thesis is "price accepted beyond <level>". If price falls back through that
+    level the thesis is dead, and that — not a fixed fraction of R — is the honest exit. The
+    result is floored at entry so a position that has already banked half can never come back
+    as a loser.
+
+    Returns None for a plain ORB breakout (no key level behind it) or when the alert did not
+    carry a usable price for the triggering family, leaving the caller on the TP1-buffer rule.
+    """
+    trigger = (context or {}).get("trigger", "")
+    family = trigger.split("-")[0].upper() if trigger else ""
+    if family not in _LEVEL_FAMILIES:
+        return None
+    try:
+        level = float(context[family.lower()])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if level <= 0:
+        return None
+    # Never worse than break-even, in either direction.
+    return max(level, entry_price) if direction == Direction.LONG else min(level, entry_price)
+
+
 async def _replace_runner_sl(pos, remaining: int) -> None:
-    """Re-place SL at TP1 - 0.1R after a partial TP exit (50-50 TP booking strategy)."""
-    if pos.tp and pos.tp > 0:
+    """Re-place the runner's SL after a partial TP exit.
+
+    Prefers the structural stop (the level that triggered the entry, floored at break-even);
+    falls back to TP1 - tp1_runner_sl_buffer x R for signals with no key level behind them.
+    """
+    new_sl_price = structural_runner_sl(
+        pos.direction, pos.entry_price, pos.tp, getattr(pos, "context", None) or {}
+    )
+    if new_sl_price is not None:
+        logger.info(
+            f"Runner SL for {pos.symbol}: structural {new_sl_price:.2f} "
+            f"(entry {pos.entry_price:.2f})"
+        )
+    elif pos.tp and pos.tp > 0:
         risk_distance = abs(pos.tp - pos.entry_price)
         buffer = settings.tp1_runner_sl_buffer * risk_distance
         if pos.direction == Direction.LONG:
@@ -941,6 +983,7 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
         entry_order_id=trade_result.order_id,
         sl_order_id=sl_order_id,
         fill_price=entry_fill_price or 0.0,
+        context=signal.context or {},
     ))
     return True
 
