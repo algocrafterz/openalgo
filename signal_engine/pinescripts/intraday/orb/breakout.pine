@@ -2513,50 +2513,60 @@ if not orbNavigationCached and not isHTF
     orbNavigationCached := true
 
 // ======================================= TREND CALCULATION ========================================
+// Series primitives evaluated unconditionally — see the note above atrGlobal. The branches
+// below only choose which already-computed value to publish.
+float ema12Global = ta.ema(close, 12)
+[stLowerG, stUpperG, stDirG] = calcSuperTrend(supertrendPeriod, supertrendMult)
+
 if enableTrendFilter
     if str.contains(trendMode, "VWAP")
-        trendVWAP := ta.vwap(close)
+        trendVWAP := vwapGlobal
 
     if trendMode == "EMA" or trendMode == "VWAP+EMA"
-        trendEMA12 := ta.ema(close, 12)
+        trendEMA12 := ema12Global
 
     if trendMode == "Custom EMA"
         trendEMACustom := emaCustomGlobal
 
     if str.contains(trendMode, "SuperTrend")
         if barstate.isnew or na(trendSTUp)
-            [stLower, stUpper, stDir] = calcSuperTrend(supertrendPeriod, supertrendMult)
-            trendSTUp := stLower
-            trendSTDown := stUpper
-            trendSTDirection := stDir
+            trendSTUp := stLowerG
+            trendSTDown := stUpperG
+            trendSTDirection := stDirG
 
 // ====================================== HTF BIAS CALCULATION (for blocking) ======================
 // Calculate HTF bias before entry processing to enable counter-trend blocking
+[htfBullG, htfBearG, htfTextG, htfStrengthG] = checkHTFBias()
+[htfTimeChangedG] = request.security(syminfo.tickerid, htfTF, [ta.change(time) != 0], barmerge.gaps_off, barmerge.lookahead_off)
+
 if enableHTF and blockCounterTrend and barstate.isconfirmed
-    [htfBullishCalc, htfBearishCalc, htfBiasTextTemp, htfStrengthTemp] = checkHTFBias()
-    cachedHTFBullish := htfBullishCalc
-    cachedHTFBearish := htfBearishCalc
-    cachedHTFBiasText := htfBiasTextTemp
-    cachedHTFStrength := htfStrengthTemp
+    cachedHTFBullish := htfBullG
+    cachedHTFBearish := htfBearG
+    cachedHTFBiasText := htfTextG
+    cachedHTFStrength := htfStrengthG
 
 // ====================================== INDEX DIRECTION CALCULATION ================================
+// All three index readings are resolved unconditionally. Previously each sat inside its own
+// `else if`, so the series each produced had holes on every bar its branch did not run --
+// and the ORB-Direction branch then read idxSessionHigh[1], i.e. straight into a hole. That
+// is the bug behind the "declared in local scope" warning, not a style nit. Costs 3 of the
+// 40 available security calls instead of 1; the file uses 12 in total.
+[idxCloseG, idxVwapG] = request.security(indexSymbol, timeframe.period, [close, ta.vwap(close)], barmerge.gaps_off, barmerge.lookahead_off)
+[idxEmaCloseG, idxEmaG] = request.security(indexSymbol, timeframe.period, [close, ta.ema(close, indexEMALength)], barmerge.gaps_off, barmerge.lookahead_off)
+[idxOrbCloseG, idxHighG, idxLowG] = request.security(indexSymbol, timeframe.period, [close, ta.highest(high, 3), ta.lowest(low, 3)], barmerge.gaps_off, barmerge.lookahead_off)
+
 if enableIndexFilter and barstate.isconfirmed and bar_index != cachedIndexBar
     if indexFilterMethod == "Price vs VWAP"
-        [idxClose, idxVWAP] = request.security(indexSymbol, timeframe.period, [close, ta.vwap(close)], barmerge.gaps_off, barmerge.lookahead_off)
-        cachedIndexBullish := not na(idxClose) and not na(idxVWAP) and idxClose > idxVWAP
-        cachedIndexBearish := not na(idxClose) and not na(idxVWAP) and idxClose < idxVWAP
-        cachedIndexBiasText := cachedIndexBullish ? "Bullish" : cachedIndexBearish ? "Bearish" : "Neutral"
+        cachedIndexBullish := not na(idxCloseG) and not na(idxVwapG) and idxCloseG > idxVwapG
+        cachedIndexBearish := not na(idxCloseG) and not na(idxVwapG) and idxCloseG < idxVwapG
     else if indexFilterMethod == "Price vs EMA"
-        [idxClose, idxEMA] = request.security(indexSymbol, timeframe.period, [close, ta.ema(close, indexEMALength)], barmerge.gaps_off, barmerge.lookahead_off)
-        cachedIndexBullish := not na(idxClose) and not na(idxEMA) and idxClose > idxEMA
-        cachedIndexBearish := not na(idxClose) and not na(idxEMA) and idxClose < idxEMA
-        cachedIndexBiasText := cachedIndexBullish ? "Bullish" : cachedIndexBearish ? "Bearish" : "Neutral"
+        cachedIndexBullish := not na(idxEmaCloseG) and not na(idxEmaG) and idxEmaCloseG > idxEmaG
+        cachedIndexBearish := not na(idxEmaCloseG) and not na(idxEmaG) and idxEmaCloseG < idxEmaG
     else if indexFilterMethod == "ORB Direction"
-        // Use session high/low as proxy for index ORB
-        [idxClose, idxSessionHigh, idxSessionLow] = request.security(indexSymbol, timeframe.period, [close, ta.highest(high, 3), ta.lowest(low, 3)], barmerge.gaps_off, barmerge.lookahead_off)
-        cachedIndexBullish := not na(idxClose) and not na(idxSessionHigh) and idxClose > idxSessionHigh[1]
-        cachedIndexBearish := not na(idxClose) and not na(idxSessionLow) and idxClose < idxSessionLow[1]
-        cachedIndexBiasText := cachedIndexBullish ? "Bullish" : cachedIndexBearish ? "Bearish" : "Neutral"
+        // Session high/low as a proxy for the index's own opening range.
+        cachedIndexBullish := not na(idxOrbCloseG) and not na(idxHighG) and idxOrbCloseG > idxHighG[1]
+        cachedIndexBearish := not na(idxOrbCloseG) and not na(idxLowG) and idxOrbCloseG < idxLowG[1]
+    cachedIndexBiasText := cachedIndexBullish ? "Bullish" : cachedIndexBearish ? "Bearish" : "Neutral"
     cachedIndexBar := bar_index
 
 // ====================================== NR FILTER CALCULATION ======================================
@@ -2567,11 +2577,12 @@ if enableIndexFilter and barstate.isconfirmed and bar_index != cachedIndexBar
 // `(high - low)[1]` is yesterday's range on the DAILY timeframe (security context).
 // `ta.lowest((high - low)[1], nrLookback)` is the lowest of (yesterday + nrLookback-1 prior days).
 // If yesterday's range == that lowest value, yesterday IS the narrowest of the last N days.
+[nrYesterdayRangeG, nrMinRangeG] = request.security(syminfo.tickerid, "D", [(high - low)[1], ta.lowest((high - low)[1], nrLookback)], barmerge.gaps_off, barmerge.lookahead_off)
+
 if enableNRFilter and barstate.isconfirmed and bar_index != cachedNRBar
-    [nrYesterdayRange, nrMinRange] = request.security(syminfo.tickerid, "D", [(high - low)[1], ta.lowest((high - low)[1], nrLookback)], barmerge.gaps_off, barmerge.lookahead_off)
-    cachedNRYesterdayRange := nrYesterdayRange
-    cachedNRMinPrev := nrMinRange
-    cachedNRPreferHit := not na(nrYesterdayRange) and not na(nrMinRange) and nrYesterdayRange <= nrMinRange
+    cachedNRYesterdayRange := nrYesterdayRangeG
+    cachedNRMinPrev := nrMinRangeG
+    cachedNRPreferHit := not na(nrYesterdayRangeG) and not na(nrMinRangeG) and nrYesterdayRangeG <= nrMinRangeG
     cachedNRBar := bar_index
 
 // In Require mode, an entry is gated unless yesterday was an NR day.
@@ -2663,7 +2674,11 @@ if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pend
             // triggered it -- NOT the ORB geometry. Without this the executed trade would not
             // match the Ref SL / Ref T1 the observation alert reported.
             bool fromKL = klPendingSource != "" and not na(klArmedSL)
-            float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
+            // Evaluated out of the ternary: Pine warns when a function call sits in a branch
+            // that may not run on every bar. calculateStopLoss is pure, so computing it
+            // unconditionally costs nothing and only the selection stays conditional.
+            float slOrb = calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, true)
+            float sl = fromKL ? klArmedSL : slOrb
             [tp1, tp1_5, tp2, tp3] = if fromKL
                 klCalcTargets(entry, sl, true, klArmedT1, klArmedT2)
             else
@@ -2780,7 +2795,11 @@ if pendingShortEntry and bar_index > pendingShortBar and canFillShort
             // triggered it -- NOT the ORB geometry. Without this the executed trade would not
             // match the Ref SL / Ref T1 the observation alert reported.
             bool fromKL = klPendingSource != "" and not na(klArmedSL)
-            float sl = fromKL ? klArmedSL : calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
+            // Evaluated out of the ternary: Pine warns when a function call sits in a branch
+            // that may not run on every bar. calculateStopLoss is pure, so computing it
+            // unconditionally costs nothing and only the selection stays conditional.
+            float slOrb = calculateStopLoss(entry, activeHigh, activeLow, activeHigh - activeLow, atr, stopMode, false)
+            float sl = fromKL ? klArmedSL : slOrb
             [tp1, tp1_5, tp2, tp3] = if fromKL
                 klCalcTargets(entry, sl, false, klArmedT1, klArmedT2)
             else
@@ -4209,14 +4228,11 @@ var bool lastDashTP3Hit = false
 var bool lastDashSLHit = false
 
 if showDashboard and enableHTF
-    [htfTimeChanged] = request.security(syminfo.tickerid, htfTF, [ta.change(time) != 0], barmerge.gaps_off, barmerge.lookahead_off)
-
-    if barstate.islast and (htfTimeChanged or cachedHTFBiasText == "")
-        [htfBullishCalc, htfBearishCalc, htfBiasTextTemp, htfStrengthTemp] = checkHTFBias()
-        cachedHTFBiasText := htfBiasTextTemp
-        cachedHTFBullish := htfBullishCalc
-        cachedHTFBearish := htfBearishCalc
-        cachedHTFStrength := htfStrengthTemp
+    if barstate.islast and (htfTimeChangedG or cachedHTFBiasText == "")
+        cachedHTFBiasText := htfTextG
+        cachedHTFBullish := htfBullG
+        cachedHTFBearish := htfBearG
+        cachedHTFStrength := htfStrengthG
         lastHTFCheckBar := bar_index
 
     htfBullish := cachedHTFBullish
@@ -4333,14 +4349,14 @@ if showDashboard and enableHTF
 
     else if showFullDashboard and not na(dashTable)
 
-        float entry = na
-        float sl = na
-        float tp1 = na
-        float tp1_5 = na
-        float tp2 = na
-        float tp3 = na
-        float atr = na
-        bool isBullish = false
+        float dashEntry = na
+        float dashSl = na
+        float dashTp1 = na
+        float dashTp1_5 = na
+        float dashTp2 = na
+        float dashTp3 = na
+        float dashAtr = na
+        bool dashIsBullish = false
         int shares = na
         float posValue = na
         float maxLossCalc = na
@@ -4592,14 +4608,14 @@ if showDashboard and enableHTF
             table.cell_set_height(dashTable, 1, row, 0.1)
             row += 1
 
-            isBullish := orbTradeDirection == 1
-            entry := orbEntryPrice
-            sl := orbSLPrice
-            tp1 := orbTP1Price
-            tp1_5 := orbTP1_5Price
-            tp2 := orbTP2Price
-            tp3 := orbTP3Price
-            atr := cachedATR
+            dashIsBullish := orbTradeDirection == 1
+            dashEntry := orbEntryPrice
+            dashSl := orbSLPrice
+            dashTp1 := orbTP1Price
+            dashTp1_5 := orbTP1_5Price
+            dashTp2 := orbTP2Price
+            dashTp3 := orbTP3Price
+            dashAtr := cachedATR
 
             if enablePosSizing
                 float displayShares = maxShares
@@ -4613,8 +4629,8 @@ if showDashboard and enableHTF
                     row += 1
                 else
 
-                    string tradeDir = isBullish ? "LONG" : "SHORT"
-                    color tradeDirColor = isBullish ? color.green : color.red
+                    string tradeDir = dashIsBullish ? "LONG" : "SHORT"
+                    color tradeDirColor = dashIsBullish ? color.green : color.red
                     table.cell(dashTable, 0, row, "Position Size:", text_color=txtColor, text_size=txtSize, text_halign=text.align_center, bgcolor=headerColor)
                     table.cell(dashTable, 1, row, tradeDir + (klEntrySource == "" ? "" : " · " + klEntrySource), text_color=tradeDirColor, text_size=txtSize, text_halign=text.align_right, bgcolor=headerColor)
                     row += 1
@@ -4637,9 +4653,9 @@ if showDashboard and enableHTF
                     row += 1
 
                     // Reward amount (based on TP1 = execution target, matches telegram)
-                    float rewardTP = showTP1 ? tp1 : na
-                    if not na(rewardTP) and not na(entry) and displayShares > 0
-                        float rewardPerShare = math.abs(rewardTP - entry)
+                    float rewardTP = showTP1 ? dashTp1 : na
+                    if not na(rewardTP) and not na(dashEntry) and displayShares > 0
+                        float rewardPerShare = math.abs(rewardTP - dashEntry)
                         float rewardAmount = displayShares * rewardPerShare
                         float rewardInAcctCurr = rewardAmount
                         float rewardPctOfAcct = (rewardAmount / accountSize) * 100
@@ -4655,12 +4671,12 @@ if showDashboard and enableHTF
                     row += 1
 
             // Entry - with validation
-            bool validTrade = not na(entry) and not na(sl) and entry > 0 and sl > 0
+            bool validTrade = not na(dashEntry) and not na(dashSl) and dashEntry > 0 and dashSl > 0
 
             if validTrade
                 entryTooltip = "Entry Price\n\nYour suggested entry point for the trade.\n\nFOR LONG: ORB High level (where breakout occurred)\nFOR SHORT: ORB Low level (where breakdown occurred)\n\nThis is where you would buy/sell to enter the position.\n\nNOTE: Market entry may differ slightly due to slippage."
                 table.cell(dashTable, 0, row, "Entry:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=entryTooltip)
-                table.cell(dashTable, 1, row, str.format("{0}", str.tostring(entry, "#.##")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+                table.cell(dashTable, 1, row, str.format("{0}", str.tostring(dashEntry, "#.##")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                 row += 1
             else
                 table.cell(dashTable, 0, row, "⚠️ Trade Data:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left)
@@ -4668,62 +4684,62 @@ if showDashboard and enableHTF
                 row += 1
 
             // Stop Loss
-            slDist = math.abs(entry - sl)
-            slPct = (slDist / entry) * 100
+            slDist = math.abs(dashEntry - dashSl)
+            slPct = (slDist / dashEntry) * 100
             stopTooltip = "Stop Loss\n\nYour exit price if trade goes against you. Limits maximum loss per trade.\n\nCALCULATED BY: " + stopMode + " method\n\nDISTANCE: Shows $ distance and % from entry\n\nIMPORTANT: Always use a stop loss to protect your capital. Never hold a losing position hoping it will recover."
             table.cell(dashTable, 0, row, "Stop:", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=stopTooltip)
-            table.cell(dashTable, 1, row, str.format("{0} ({1}%)", str.tostring(sl, "#.##"), str.tostring(slPct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+            table.cell(dashTable, 1, row, str.format("{0} ({1}%)", str.tostring(dashSl, "#.##"), str.tostring(slPct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
             row += 1
 
             // Targets (only enabled ones)
             if showTP1
-                tp1Dist = math.abs(tp1 - entry)
-                tp1Pct = (tp1Dist / entry) * 100
+                tp1Dist = math.abs(dashTp1 - dashEntry)
+                tp1Pct = (tp1Dist / dashEntry) * 100
                 tp1Label = orbTP1Hit ? "✅ TP1:" : "TP1:"
                 tp1Tooltip = "Take Profit 1 (1R)\n\nFirst profit target at 1× Risk distance.\n\n1R = Risk/Reward ratio of 1:1\n\nIf you risk $100, TP1 gives you $100 profit.\n\nSTRATEGY:\n• Conservative: Exit full position at TP1\n• Balanced: Take 50% profit, hold rest for TP2\n• Aggressive: Hold through for higher targets\n\n✅ = Target hit"
                 table.cell(dashTable, 0, row, tp1Label, text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=tp1Tooltip)
-                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(tp1, "#.##"), str.tostring(tp1Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(dashTp1, "#.##"), str.tostring(tp1Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                 row += 1
 
             if showTP1_5
-                tp1_5Dist = math.abs(tp1_5 - entry)
-                tp1_5Pct = (tp1_5Dist / entry) * 100
+                tp1_5Dist = math.abs(dashTp1_5 - dashEntry)
+                tp1_5Pct = (tp1_5Dist / dashEntry) * 100
                 tp1_5Label = orbTP1_5Hit ? "✅ TP1.5:" : "TP1.5:"
                 tp1_5Tooltip = "Take Profit 1.5 (1.5R)\n\nIntermediate target at 1.5× Risk distance.\n\n1.5R = Risk/Reward ratio of 1:1.5\n\nIf you risk $100, TP1.5 gives you $150 profit.\n\nUSEFUL FOR:\n• Scaling out of positions gradually\n• Capturing middle-ground profits\n• Adjusting to market volatility\n\n✅ = Target hit"
                 table.cell(dashTable, 0, row, tp1_5Label, text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=tp1_5Tooltip)
-                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(tp1_5, "#.##"), str.tostring(tp1_5Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(dashTp1_5, "#.##"), str.tostring(tp1_5Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                 row += 1
 
             if showTP2
-                tp2Dist = math.abs(tp2 - entry)
-                tp2Pct = (tp2Dist / entry) * 100
+                tp2Dist = math.abs(dashTp2 - dashEntry)
+                tp2Pct = (tp2Dist / dashEntry) * 100
                 tp2Label = orbTP2Hit ? "✅ TP2:" : "TP2:"
                 tp2Tooltip = "Take Profit 2 (2R)\n\nMain profit target at 2× Risk distance.\n\n2R = Risk/Reward ratio of 1:2\n\nIf you risk $100, TP2 gives you $200 profit.\n\nThis is the STANDARD target for most ORB traders.\n\nSTRATEGY:\n• Exit remaining position at TP2\n• Move stop to breakeven after TP1 hit\n• Let runners go to TP3 if strong momentum\n\n✅ = Target hit"
                 table.cell(dashTable, 0, row, tp2Label, text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=tp2Tooltip)
-                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(tp2, "#.##"), str.tostring(tp2Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(dashTp2, "#.##"), str.tostring(tp2Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                 row += 1
 
             if showTP3
-                tp3Dist = math.abs(tp3 - entry)
-                tp3Pct = (tp3Dist / entry) * 100
+                tp3Dist = math.abs(dashTp3 - dashEntry)
+                tp3Pct = (tp3Dist / dashEntry) * 100
                 tp3Label = orbTP3Hit ? "✅ TP3:" : "TP3:"
                 tp3Tooltip = "Take Profit 3 (3R)\n\nExtended profit target at 3× Risk distance.\n\n3R = Risk/Reward ratio of 1:3\n\nIf you risk $100, TP3 gives you $300 profit.\n\nONLY FOR:\n• Strong trending days\n• High momentum breakouts\n• Extended runners\n\nMOST TRADES won't reach TP3.\n\nSTRATEGY: Trail stop or use for 'lottery tickets'\n\n✅ = Target hit"
                 table.cell(dashTable, 0, row, tp3Label, text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip=tp3Tooltip)
-                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(tp3, "#.##"), str.tostring(tp3Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
+                table.cell(dashTable, 1, row, str.format("{0} (+{1}%)", str.tostring(dashTp3, "#.##"), str.tostring(tp3Pct, "#.#")), text_color=txtColor, text_size=txtSize, text_halign=text.align_right)
                 row += 1
 
             // Risk/Reward - Smart logic with caching
             if showRisk
-                riskDist = math.abs(entry - sl)
+                riskDist = math.abs(dashEntry - dashSl)
 
                 // Determine if adaptive R:R extends to TP2
                 bool adaptiveExtended = enableAdaptiveRR and isTrendingMarket and showTP1
 
                 // R:R always based on TP1 (execution target) to match telegram signal
-                float rrTarget = tp1
+                float rrTarget = dashTp1
                 bool anyHit = orbTP3Hit or orbTP2Hit or orbTP1_5Hit or orbTP1Hit
 
-                rewardDist = math.abs(rrTarget - entry)
+                rewardDist = math.abs(rrTarget - dashEntry)
                 rrRatio = riskDist > 0 ? rewardDist / riskDist : 0
                 rrStatus = anyHit ? "✅" : rrRatio >= 2.0 ? "⭐" : rrRatio >= 1.5 ? "⚠️" : "❌"
 
@@ -4768,23 +4784,23 @@ if showDashboard and enableHTF
         // panel and the header appears twice.
         table.clear(dashTable, 0, 0, 1, 53)
 
-        bool isDarkTheme = dashTheme == "Dark"
-        color bgColor = isDarkTheme ? color.new(color.black, 0) : color.new(color.white, 10)
-        color txtColor = isDarkTheme ? color.white : color.black
-        color headerColor = isDarkTheme ? color.new(color.aqua, 30) : color.new(color.silver, 30)
+        bool closedIsDark = dashTheme == "Dark"
+        color closedBg = closedIsDark ? color.new(color.black, 0) : color.new(color.white, 10)
+        color closedTxt = closedIsDark ? color.white : color.black
+        color closedHeader = closedIsDark ? color.new(color.aqua, 30) : color.new(color.silver, 30)
 
         string headerTitle = sessionIcon + " DASHBOARD"
         string headerTooltip = "Dashboard\n\n" + sessionStatusText + "\n\nMarket is currently closed.\n\nDisplay hours: 04:00-20:00\nCurrent time is outside this window.\n\nThe indicator will resume when the next session begins."
 
-        table.cell(dashTable, 0, row, headerTitle, text_color=txtColor, text_size=txtSize, text_halign=text.align_center, bgcolor=headerColor, tooltip=headerTooltip)
-        table.cell(dashTable, 1, row, "", bgcolor=headerColor)
+        table.cell(dashTable, 0, row, headerTitle, text_color=closedTxt, text_size=txtSize, text_halign=text.align_center, bgcolor=closedHeader, tooltip=headerTooltip)
+        table.cell(dashTable, 1, row, "", bgcolor=closedHeader)
         table.merge_cells(dashTable, 0, row, 1, row)
         row += 1
 
         // NOT IN SESSION message
         string notInSessionMsg = sessionStatusText
         string notInSessionTooltip = sessionStatusText == "PRE-MARKET - Waiting for ORB" ? "Pre-Market Session\n\n📍 Trading day has started\n⏰ ORB will begin building at 09:30\n\nCurrent status:\n• Pre-market trading active (04:00-09:30)\n• Regular session starts at 09:30\n• ORB periods will track first 5, 15, 30, 60 minutes\n\nThe dashboard will show full data once ORB begins." : "Market Closed\n\nCurrent time is outside display hours (04:00-20:00).\n\nORB tracking will resume at next session open.\n\nTo see data from the last session, scroll back to regular or extended trading hours on the chart."
-        table.cell(dashTable, 0, row, notInSessionMsg, text_color=txtColor, text_size=txtSize, text_halign=text.align_center, bgcolor=color.new(color.gray, 90), tooltip=notInSessionTooltip)
+        table.cell(dashTable, 0, row, notInSessionMsg, text_color=closedTxt, text_size=txtSize, text_halign=text.align_center, bgcolor=color.new(color.gray, 90), tooltip=notInSessionTooltip)
         table.cell(dashTable, 1, row, "", bgcolor=color.new(color.gray, 90))
         table.merge_cells(dashTable, 0, row, 1, row)
         row += 1

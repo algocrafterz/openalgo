@@ -344,13 +344,19 @@ def _day_summary_header(
     # Avg R across all decided trades (wins+losses)
     avg_r = _average_r(trade_records)
     t_str = f"  T: {time_exits}" if time_exits > 0 else ""
-    opening_capital = capital - net_pnl
+    # `capital` is the OPENING balance, not the closing one: sizing runs off
+    # RiskEngine.get_sizing_capital(), which caches the first funds-API fetch of the day when
+    # use_day_start_capital is on, and calculate_quantity stamps that value into
+    # _last_known_capital — which is what send_day_summary passes here. Deriving the opening
+    # as (capital - net_pnl) therefore subtracted the day's P&L from a figure that already
+    # WAS the opening, shifting both ends of the line down by net_pnl.
+    closing_capital = capital + net_pnl
 
     return [
         f"📊 DAY SUMMARY | {today}",
         f"Trades: {trades} | W: {wins}  L: {losses}{t_str} | Win Rate: {win_rate:.0f}%",
         f"Net: {_pnl(net_pnl)} ({pct_str})" + (f" | Avg R: {avg_r:+.1f}R" if avg_r is not None else ""),
-        f"Capital: ₹{opening_capital:,.0f} → ₹{capital:,.0f}",
+        f"Capital: ₹{capital:,.0f} → ₹{closing_capital:,.0f}",
     ]
 
 

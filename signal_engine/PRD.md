@@ -262,6 +262,60 @@ price is on the correct side of the 9-EMA *and* the slope agrees — 2 of the 10
 Not added again. On 2026-08-24 they did not discriminate: JSWENERGY scored both points
 (`vwap+ ema+ slope+`) and was the day's worst loss.
 
+### Compiler warnings, second pass (`breakout.pine`)
+
+The `idxSessionHigh` / `idxSessionLow` "declared in local scope" pair was a **real bug**, not a
+style nit. Both were declared inside `else if indexFilterMethod == "ORB Direction"`, so the
+series each produced had holes on every bar that branch did not run — and the very next line
+read `idxSessionHigh[1]`, straight into a hole. All three index readings, the NR-filter
+lookup, `checkHTFBias()`, `calcSuperTrend()` and `ta.ema(close, 12)` are now resolved at
+global scope; the branches only choose which already-computed value to publish. Security call
+count is unchanged at 13 of the 40 available.
+
+`calculateStopLoss` lifted out of both entry ternaries — pure function, so computing it
+unconditionally costs nothing and only the selection stays conditional.
+
+Shadowed dashboard locals renamed (`entry`→`dashEntry` … `isBullish`→`dashIsBullish`, and the
+closed-market panel's `isDarkTheme`/`bgColor`/`txtColor`/`headerColor`→`closed*`). Done with a
+string- and comment-aware replacer so tooltip text was untouched; 48 lines changed.
+
+Still unfixed, deliberately: the `calc_on_every_tick` notices. Enabling it would change
+backtest semantics, and `barstate.islast` is being used correctly here — see repainting below.
+
+### Repainting audit
+
+Verdict: **low risk, the design is sound.** Checked every `request.security` and every alert
+path.
+
+- `lookahead_on` appears once (PDH/PDL/ADR, daily) and is paired with `[1]`. That is the
+  canonical NON-repainting idiom — `[1]` guarantees a closed day, `lookahead_on` only makes it
+  readable from the session's first bar. Every other security call uses `lookahead_off`.
+- `klHTFClose` uses `close[1]` **and** `lookahead_off` — doubly safe.
+- Entries arm on a confirmed bar (`klFireGate` requires `barstate.isconfirmed`) and fill at the
+  NEXT bar's `open`. Both the arming decision and the fill price are fixed before the bar they
+  act on completes, so neither can repaint.
+- KEYLEVEL packets use `alert.freq_once_per_bar_close`.
+
+The one caveat worth knowing: TP/SL detection runs under
+`(barstate.isconfirmed or barstate.islast)`, so it evaluates on the forming bar and fires the
+moment price trades through a level. That is intentional for live trading — waiting for bar
+close would delay every exit by up to five minutes — but it means **backtest results will not
+match live alert behaviour**, because `strategy.*` only evaluates on confirmed bars. Chart
+labels also move while a bar forms. This is a property of the design, not a defect.
+
+### Day summary capital trajectory was wrong (`notifier.py`)
+
+`send_day_summary` passes `RiskEngine._last_known_capital`, which with
+`use_day_start_capital: true` is the **day-start** capital — `get_sizing_capital()` caches the
+first funds-API fetch of the day and `calculate_quantity()` stamps that into
+`_last_known_capital`. The header treated it as the closing balance and derived the opening as
+`capital - net_pnl`, shifting **both ends** of the trajectory down by the day's P&L: a ₹15,000
+day that made ₹500 printed `₹14,500 → ₹15,000` instead of `₹15,000 → ₹15,500`. The delta
+looked right, which is why it went unnoticed.
+
+Verified correct and left alone: the return percentage (already measured against opening
+capital) and the win rate (time exits deliberately excluded from W/L but shown as `T:`).
+
 ### Open
 
 - `accountSize` in `breakout.pine` is still the 10000 template default; the engine sizes from
