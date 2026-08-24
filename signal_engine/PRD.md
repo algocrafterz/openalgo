@@ -238,6 +238,30 @@ unbooked R, routed to the observation channel. Header carries no LONG/SHORT/EXIT
 `_parse_header` returns None and the pipeline drops it (verified). Toggle
 `enableRunnerObs`, default on.
 
+### Compiled-token ceiling (`breakout.pine`)
+
+Hit 100292 against TradingView's 100256 limit. Trimmed ~150 lines, all of it provably dead:
+
+- `calculateTPSplits` (66 lines), `cleanupBox`, `buildTestAlert` — never called. The test-alert
+  path builds its own JSON inline; `cleanupBox` was the only reader of `orbBoxes` /
+  `MAX_BOXES_TO_KEEP`, so those went too.
+- `alertEntryTriggered` / `alertSLTriggered` / `alertTP1Triggered` / `alertTP2Triggered` —
+  write-only. Their only readers were the inert `alertcondition()` hooks removed earlier.
+- `bodyClosedAbove` / `bodyClosedBelow` / `priceRetestFromAbove` / `priceRetestFromBelow`, and
+  `getBodyHigh` / `getBodyLow` once those four went.
+- `klFindT1`, reduced to a pass-through when `klT1` was rewired onto `klNextLevel` /
+  `klPadTarget`.
+
+The eleven raw level prices moved from eleven scalars to a parallel name/value array pair, so
+the alert emits them in a loop instead of eleven near-identical statements.
+
+### VWAP and 9-EMA are already entry inputs
+
+Confirmed in `klComputeScore`: +1 when price is on the correct side of session VWAP, +1 when
+price is on the correct side of the 9-EMA *and* the slope agrees — 2 of the 10-point score.
+Not added again. On 2026-08-24 they did not discriminate: JSWENERGY scored both points
+(`vwap+ ema+ slope+`) and was the day's worst loss.
+
 ### Open
 
 - `accountSize` in `breakout.pine` is still the 10000 template default; the engine sizes from

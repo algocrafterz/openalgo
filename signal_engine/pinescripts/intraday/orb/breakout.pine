@@ -526,10 +526,6 @@ var int sessionRetestsDown = 0
 
 
 // Trade management alert triggers
-bool alertEntryTriggered = false
-bool alertSLTriggered = false
-bool alertTP1Triggered = false
-bool alertTP2Triggered = false
 
 var int barsOutsideAfterBreakUp = 0
 var int barsOutsideAfterBreakDown = 0
@@ -554,9 +550,7 @@ var int pendingShortBar = na
 var array<label> breakoutLabels = array.new<label>()
 MAX_LABELS_TO_KEEP = 10
 var array<line> tpslLines = array.new<line>()
-var array<box> orbBoxes = array.new<box>()
 MAX_LINES_TO_KEEP = 20
-MAX_BOXES_TO_KEEP = 10
 
 var int lastDashUpdateBar = -1
 
@@ -662,17 +656,10 @@ var float  klSnapAtr     = na
 // The raw level prices the auction was built on. Latched with the rest of the packet so the
 // trade log records WHERE the levels sat, not just which one triggered — post-hoc you can ask
 // how far the entry was from POC, whether IB was wide, whether PDH capped the move.
-var float klSnapORH = na
-var float klSnapORM = na
-var float klSnapORL = na
-var float klSnapIBH = na
-var float klSnapIBM = na
-var float klSnapIBL = na
-var float klSnapVAH = na
-var float klSnapPOC = na
-var float klSnapVAL = na
-var float klSnapPDH = na
-var float klSnapPDL = na
+// Held as a parallel name/value pair of arrays rather than eleven scalars: the alert emits
+// them in a loop, which the compiled-token ceiling makes worth doing.
+var string[] klLvlNames = array.from("ORH", "ORM", "ORL", "IBH", "IBM", "IBL", "VAH", "POC", "VAL", "PDH", "PDL")
+var float[]  klSnapLvls = array.new_float(11, na)
 
 var bool htfBullish = false
 var bool htfBearish = false
@@ -797,11 +784,6 @@ getChartUrl() =>
 getTimeIST() =>
     str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
 
-// A level price for the alert body, or "-" when that level does not exist today (no previous
-// session loaded, IB still building, ORB disabled).
-klLvlStr(float v) =>
-    na(v) ? "-" : str.tostring(v, format.mintick)
-
 // Build Entry Alert Message (LONG/SHORT) - Telegram JSON format
 // srcTag names which key level triggered the entry ("" = a plain ORB breakout).
 // It is emitted as a separate "Trigger:" line, NOT folded into the first line: the
@@ -854,17 +836,9 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
         msg += "OpenType: " + (klSnapOpenType == "" ? "-" : klSnapOpenType) + "\\n"
         msg += "AtrPct: " + (na(klSnapAtr) or entryPrice <= 0 ? "-" : str.tostring(klSnapAtr / entryPrice * 100, "0.00")) + "\\n"
         msg += "SlAtr: " + (na(klSnapAtr) or klSnapAtr <= 0 ? "-" : str.tostring(riskVal / klSnapAtr, "0.00")) + "\\n"
-        msg += "ORH: " + klLvlStr(klSnapORH) + "\\n"
-        msg += "ORM: " + klLvlStr(klSnapORM) + "\\n"
-        msg += "ORL: " + klLvlStr(klSnapORL) + "\\n"
-        msg += "IBH: " + klLvlStr(klSnapIBH) + "\\n"
-        msg += "IBM: " + klLvlStr(klSnapIBM) + "\\n"
-        msg += "IBL: " + klLvlStr(klSnapIBL) + "\\n"
-        msg += "VAH: " + klLvlStr(klSnapVAH) + "\\n"
-        msg += "POC: " + klLvlStr(klSnapPOC) + "\\n"
-        msg += "VAL: " + klLvlStr(klSnapVAL) + "\\n"
-        msg += "PDH: " + klLvlStr(klSnapPDH) + "\\n"
-        msg += "PDL: " + klLvlStr(klSnapPDL) + "\\n"
+        for i = 0 to array.size(klSnapLvls) - 1
+            float lv = array.get(klSnapLvls, i)
+            msg += array.get(klLvlNames, i) + ": " + (na(lv) ? "-" : str.tostring(lv, format.mintick)) + "\\n"
     msg += "------------------------\\n"
     msg += getTimeIST() + "\\n"
     msg += getChartUrl()
@@ -967,20 +941,6 @@ buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, 
     '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
 
 // Build Test Alert Message
-buildTestAlert() =>
-    string msg = "🧪 TEST ALERT - BREAKOUT Strategy\n\n"
-    msg += "✅ Webhook connection successful!\n\n"
-    msg += "Symbol: " + syminfo.ticker + "\n"
-    msg += "Exchange: " + syminfo.prefix + "\n"
-    msg += "Price: " + str.tostring(close, "#.##") + "\n"
-    msg += "Time: " + getTimeIST() + "\n\n"
-    msg += "📊 Alert Types Configured:\n"
-    msg += "• Entry (LONG/SHORT)\n"
-    msg += "• Stop Loss Hit\n"
-    msg += "• Take Profit Hit\n"
-    msg += "• Time Exit\n\n"
-    msg += "🔗 View Chart: " + getChartUrl()
-    msg
 
 // ========================================== VALIDATION FUNCTIONS ===================================
 // ─── Time-of-day volume baseline ────────────────────────────────────────────
@@ -1223,72 +1183,6 @@ calculatePositionSize(entry, sl) =>
 
     [shares, posValue, maxLossCalc, riskAmount]
 
-calculateTPSplits(show1, show1_5, show2, show3) =>
-    int activeCount = 0
-    if show1
-        activeCount += 1
-    if show1_5
-        activeCount += 1
-    if show2
-        activeCount += 1
-    if show3
-        activeCount += 1
-
-    float split1 = 0.0
-    float split1_5 = 0.0
-    float split2 = 0.0
-    float split3 = 0.0
-
-    if activeCount == 1
-        if show1
-            split1 := 1.0
-        else if show1_5
-            split1_5 := 1.0
-        else if show2
-            split2 := 1.0
-        else if show3
-            split3 := 1.0
-    else if activeCount == 2
-        float half = 0.5
-        if show1
-            split1 := half
-            if show1_5
-                split1_5 := half
-            else if show2
-                split2 := half
-            else if show3
-                split3 := half
-        else if show1_5
-            split1_5 := half
-            if show2
-                split2 := half
-            else if show3
-                split3 := half
-        else if show2
-            split2 := half
-            if show3
-                split3 := half
-        else if show3
-            split3 := half
-    else if activeCount >= 3
-        float remaining = 0.5
-        float remainder = remaining / (activeCount - 1)
-
-        bool firstAssigned = false
-        if show1
-            split1 := firstAssigned ? remainder : 0.5
-            firstAssigned := true
-        if show1_5
-            split1_5 := firstAssigned ? remainder : 0.5
-            firstAssigned := true
-        if show2
-            split2 := firstAssigned ? remainder : 0.5
-            firstAssigned := true
-        if show3
-            split3 := firstAssigned ? remainder : 0.5
-            firstAssigned := true
-
-    [split1, split1_5, split2, split3]
 
 checkHTFBias() =>
     bool bullish = false
@@ -1326,20 +1220,12 @@ checkHTFBias() =>
     [bullish, bearish, biasText, strength]
 
 // ============================================== FUNCTIONS ==========================================
-getBodyHigh() => math.max(open, close)
-getBodyLow() => math.min(open, close)
-bodyClosedAbove(level) => getBodyLow() > level
-bodyClosedBelow(level) => getBodyHigh() < level
 
 float currentTF_minutes = timeframe.in_seconds() / 60
 needsConfirmation = currentTF_minutes <= 5
 
 getBuffer(level, pct) =>
     level * (pct / 100)
-priceRetestFromAbove(level, buffer) =>
-    getBodyLow() < level + buffer
-priceRetestFromBelow(level, buffer) =>
-    getBodyHigh() > level - buffer
 getLabelSize(sizeStr) =>
     sizeStr == "Tiny" ? size.tiny : sizeStr == "Small" ? size.small : sizeStr == "Normal" ? size.normal : sizeStr == "Large" ? size.large : size.huge
 calcSuperTrend(atrPeriod, multiplier) =>
@@ -1781,15 +1667,6 @@ cleanupLabel(labelObject) =>
             oldLabel = array.shift(breakoutLabels)
             if not na(oldLabel)
                 label.delete(oldLabel)
-
-// Clean up old boxes to prevent memory issues
-cleanupBox(boxObject) =>
-    if not na(boxObject)
-        array.push(orbBoxes, boxObject)
-        if array.size(orbBoxes) > MAX_BOXES_TO_KEEP
-            oldBox = array.shift(orbBoxes)
-            if not na(oldBox)
-                box.delete(oldBox)
 
 // ===================================== TRADE LINE MANAGEMENT FUNCTIONS =============================
 // Delete all trade lines and labels (Entry, SL, TP1, TP1.5, TP2, TP3)
@@ -2872,7 +2749,6 @@ if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pend
                     orbTP3Label := tp3Label
 
     // Trigger entry alert for long position
-    alertEntryTriggered := true
 
     pendingLongEntry := false
     pendingLongBar := na
@@ -2990,7 +2866,6 @@ if pendingShortEntry and bar_index > pendingShortBar and canFillShort
                     orbTP3Label := tp3Label
 
     // Trigger entry alert for short position
-    alertEntryTriggered := true
 
     pendingShortEntry := false
     pendingShortBar := na
@@ -3295,7 +3170,7 @@ klCandle(float volMA, float clvLong, float clvShort) =>
 // Built imperatively rather than with a loop: Pine counts DOWN when a for-loop's start
 // exceeds its end, so an empty-array loop would silently run backwards.
 klBuildRegistry(bool en, float poc, float vah, float val, float pdh, float pdl, float ibh, float ibl, ORBData orb) =>
-    // Parallel arrays: levels + their names. Built once here so klConfluence and klFindT1
+    // Parallel arrays: levels + their names. Built once here so klConfluence and klNextLevel
     // can both loop instead of repeating a per-level if-chain. Built imperatively because
     // Pine counts DOWN when a for-loop's start exceeds its end.
     var float[]  a = array.new_float()
@@ -3535,8 +3410,7 @@ klPadTarget(float lv, int d, float ref, float pad) =>
     float p = na(lv) ? na : d == 1 ? lv - pad : lv + pad
     na(p) ? na : d == 1 ? (p > ref + pad ? p : na) : (p < ref - pad ? p : na)
 
-klFindT1(float[] levels, int d, float ref, float pad) =>
-    klPadTarget(klNextLevel(levels, d, ref), d, ref, pad)
+
 
 klExecMap(int d, float lvl, float atrVal, float slMult, float acct, float rPct) =>
     float ref   = close
@@ -3742,17 +3616,7 @@ if klPendingSource != "" and klPendingSource != klPendingSource[1]
     klSnapDayType  := klDayTypeS
     klSnapOpenType := klOpenTypeS
     klSnapAtr      := cachedATR
-    klSnapORH      := na(activeORB) ? float(na) : activeORB.high
-    klSnapORM      := na(activeORB) ? float(na) : activeORB.mid
-    klSnapORL      := na(activeORB) ? float(na) : activeORB.low
-    klSnapIBH      := klIBH
-    klSnapIBM      := na(klIBH) or na(klIBL) ? float(na) : (klIBH + klIBL) / 2
-    klSnapIBL      := klIBL
-    klSnapVAH      := klVAH
-    klSnapPOC      := klPOC
-    klSnapVAL      := klVAL
-    klSnapPDH      := klPDH
-    klSnapPDL      := klPDL
+    klSnapLvls     := array.from(na(activeORB) ? float(na) : activeORB.high, na(activeORB) ? float(na) : activeORB.mid, na(activeORB) ? float(na) : activeORB.low, klIBH, na(klIBH) or na(klIBL) ? float(na) : (klIBH + klIBL) / 2, klIBL, klVAH, klPOC, klVAL, klPDH, klPDL)
 
 // ====================================== BARS OUTSIDE TRACKING ======================================
 if not isHTF and barstate.isconfirmed
@@ -3980,7 +3844,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if not orbTP1Hit and not na(orbTP1Price) and showTP1 and bar_index > orbEntryBar and high >= orbTP1Price
             orbTP1Hit := true
-            alertTP1Triggered := true  // Trigger TP1 alert
             // Send TP1 Hit Alert (LONG)
             tpFireLevel := "TP1"
             tpFirePrice := orbTP1Price
@@ -4008,7 +3871,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if not orbTP2Hit and not na(orbTP2Price) and showTP2 and bar_index > orbEntryBar and high >= orbTP2Price
             orbTP2Hit := true
-            alertTP2Triggered := true  // Trigger TP2 alert
             // Send TP2 Hit Alert (LONG)
             tpFireLevel := "TP2"
             tpFirePrice := orbTP2Price
@@ -4060,7 +3922,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         bool anyTPBooked = orbTP1Hit or orbTP1_5Hit or orbTP2Hit or orbTP3Hit
         if not orbSLHit and not anyTPBooked and not na(orbSLPrice) and bar_index > orbEntryBar and low <= orbSLPrice
             orbSLHit := true
-            alertSLTriggered := true  // Trigger SL alert
             orbLinesFrozen := true
 
             // Send SL Hit Alert (LONG) — always reference TP1 for R:R consistency with entry alert
@@ -4088,7 +3949,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if not orbTP1Hit and not na(orbTP1Price) and showTP1 and bar_index > orbEntryBar and low <= orbTP1Price
             orbTP1Hit := true
-            alertTP1Triggered := true  // Trigger TP1 alert for short
             // Send TP1 Hit Alert (SHORT)
             tpFireLevel := "TP1"
             tpFirePrice := orbTP1Price
@@ -4116,7 +3976,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if not orbTP2Hit and not na(orbTP2Price) and showTP2 and bar_index > orbEntryBar and low <= orbTP2Price
             orbTP2Hit := true
-            alertTP2Triggered := true  // Trigger TP2 alert for short
             // Send TP2 Hit Alert (SHORT)
             tpFireLevel := "TP2"
             tpFirePrice := orbTP2Price
@@ -4168,7 +4027,6 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         bool anyTPBooked = orbTP1Hit or orbTP1_5Hit or orbTP2Hit or orbTP3Hit
         if not orbSLHit and not anyTPBooked and not na(orbSLPrice) and bar_index > orbEntryBar and high >= orbSLPrice
             orbSLHit := true
-            alertSLTriggered := true  // Trigger SL alert for short
             orbLinesFrozen := true
 
             // Send SL Hit Alert (SHORT) — always reference TP1 for R:R consistency with entry alert
