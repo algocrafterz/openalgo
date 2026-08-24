@@ -122,8 +122,8 @@ customSession = "0915-1530"
 entryCutoffHour = input.int(11, "Entry Cutoff Hour", minval=9, maxval=15, group=grp_session, inline="cutoff", tooltip="Stop taking new entries after this hour\n\nRECOMMENDED: 11:00 AM for Indian market\n\nWHY:\n• ORB momentum strongest 09:45-10:30\n• 10:30-11:00 still catches valid late breakouts\n• Entries after 11:00 show lower win rates\n• Avoids weak momentum / choppy midday signals\n\nOPTIONS:\n• 11 (+ 0 min): Default - balances signal capture vs quality\n• 10 (+ 30 min): Aggressive filter based on Q1 2026 data\n• 12: Too late (not recommended)")
 entryCutoffMinute = input.int(45, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff", tooltip="Minutes past the hour for cutoff\n\nEXAMPLE: Hour=11, Minute=0 = 11:00 AM cutoff")
 
-timeExitHour = input.int(15, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 15:00 (3 PM) for Indian market\n\nWHY:\n• Gives trades 4.5 hours from 10:30 entry to hit TP\n• Exits before broker auto square-off at 15:10-15:20\n• Avoids auto square-off penalty charges (Rs 20-50/order)\n\nOPTIONS:\n• 14: Conservative (exit early, may cut winners short)\n• 15: Balanced — avoids broker charges\n• 15 (+05 min): Risky — too close to auto square-off")
-timeExitMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\nSet to 0 (15:00) to exit before broker auto square-off at 15:10")
+timeExitHour = input.int(14, "Time Exit Hour", minval=12, maxval=15, group=grp_session, inline="timeexit", tooltip="Force exit open positions at this hour\n\nRECOMMENDED: 14:45 for Indian market — must match signal_engine/config.yaml time_exit\n\nWHY:\n• Gives trades 4.5 hours from 10:30 entry to hit TP\n• Exits before broker auto square-off at 15:10-15:20\n• Avoids auto square-off penalty charges (Rs 20-50/order)\n\nOPTIONS:\n• 14: Conservative (exit early, may cut winners short)\n• 15: Balanced — avoids broker charges\n• 15 (+05 min): Risky — too close to auto square-off")
+timeExitMinute = input.int(45, "Minute", minval=0, maxval=59, group=grp_session, inline="timeexit", tooltip="Minutes past the hour for time exit\n\n14:45 (2026-08-25): wider buffer before the 15:10 broker auto square-off than the old 15:00, and it clears the last-half-hour spread widening.\n\nMust match signal_engine/config.yaml time_exit — the engine runs its own clock.")
 
 
 string tradingSession = "0915-1530:23456"  // Default: NSE/BSE hours, Mon-Fri (India)
@@ -383,6 +383,14 @@ bool enableAlerts = true
 // Telegram Configuration
 grp_telegram = "Telegram Alerts"
 telegram_chat_id = input.string("-1003518225740", "Telegram Chat ID", group=grp_telegram, tooltip="Your Telegram channel/group chat ID\n\nHOW TO GET:\n1. Add @userinfobot to your channel\n2. Forward any message to the bot\n3. Copy the chat ID (starts with -)")
+// KEYLEVEL packets are a human footprint-check prompt, not a trade instruction — parser.py
+// cannot read them by design. Off by default so the engine channel carries BREAKOUT only.
+// Turn back on and point telegram_chat_id_keylevel at a separate channel to watch the engine
+// arm setups without that traffic reaching the signal engine.
+enableKeyLevelAlerts = input.bool(false, "Send KEYLEVEL packets", group=grp_telegram, tooltip="Key-level decision packets — the pre-arm heads-up that fires one bar before an entry.\n\nOFF: only BREAKOUT entry / TP HIT / SL HIT alerts are sent. Simplest, and the entry alert now carries the same context inline.\n\nON: also sends the KEYLEVEL packet. Point 'KEYLEVEL Chat ID' at a SEPARATE channel — the signal engine ignores these, so mixing them into the trade channel is noise.")
+telegram_chat_id_keylevel = input.string("", "KEYLEVEL Chat ID", group=grp_telegram, tooltip="Channel for KEYLEVEL packets when they are enabled.\n\nLeave EMPTY to reuse the main Telegram Chat ID.\n\nSet this to a channel the signal engine does NOT listen on (it is absent from telegram.channels in config.yaml), so observation traffic never reaches the trade pipeline.")
+// Measures what the exit policy gives up, without risking anything: observation only.
+enableRunnerObs = input.bool(true, "Send RUNNER observations", group=grp_telegram, tooltip="When a TP level is reached AFTER the position is already flat, send a non-actionable note recording how far the move actually ran.\n\nThis is the evidence for whether booking 100% by TP1.5 is leaving money on the table. The signal engine cannot parse these, and they go to the KEYLEVEL channel when one is set.\n\nOFF: no record of unbooked runners.")
 sendTestAlert = input.bool(false, "Send Test Alert", group=grp_telegram, tooltip="Enable to send a test alert message.\n\nSTEPS:\n1. Enable this option\n2. Create alert: 'Any alert() function call'\n3. Webhook: https://api.telegram.org/bot<TOKEN>/sendMessage\n4. Alert triggers on last bar\n5. Disable after testing")
 testAlertType = input.string("Entry", "Test Alert Type", options=["Entry", "Exit", "Both"], group=grp_telegram, tooltip="Type of test alert to send")
 
@@ -628,6 +636,29 @@ var float klArmedT1 = na
 var string klEntrySource = ""
 var string klPendingSource = ""
 
+// Key-level context latched at ARM time and replayed into the entry alert, so every executed
+// signal carries the conditions that produced it and post-hoc win/loss attribution needs only
+// the trade log. Latched rather than read live because the key-level engine that computes
+// these sits ~2900 lines BELOW the pending-entry processor that fires the entry alert, and
+// Pine resolves in source order. Arm time is also the correct measurement point: it is the
+// bar the decision was made on, not the bar the fill happened on.
+var int    klSnapScore    = na
+var float  klSnapRvol     = na
+var float  klSnapVF       = na
+var float  klSnapCLV      = na
+var string klSnapDelta    = ""
+var string klSnapTrend    = ""
+var string klSnapAuction  = ""
+var string klSnapOpenPos  = ""
+var float  klSnapAdrUsed  = na
+var float  klSnapHeadroom = na
+var float  klSnapChase    = na
+var int    klSnapConf     = na
+var string klSnapConfN    = ""
+var string klSnapDayType  = ""
+var string klSnapOpenType = ""
+var float  klSnapAtr     = na
+
 var bool htfBullish = false
 var bool htfBearish = false
 var string htfBiasText = ""
@@ -692,6 +723,13 @@ var bool orbTP1_5Hit = false
 var bool orbTP2Hit = false
 var bool orbTP3Hit = false
 var bool orbSLHit = false
+
+// True once an exit alert covering the WHOLE remaining position has gone out (any TP level
+// carrying ExitQtyPct 100, an SL, or a time exit). Every later exit alert on the same trade
+// is a phantom -- the position is already flat, so the engine would query the broker, find
+// qty 0 and notify for nothing. Observed 2026-08-24: RECLTD sent TP3 at 13:35, three hours
+// after TP2 closed it. Chart labels still update; only the alerts stop.
+var bool orbExitAlerted = false
 
 var int session_wins = 0
 var int session_losses = 0
@@ -773,6 +811,29 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
     msg += "------------------------\\n"
     msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
     msg += "R:R 1:" + str.tostring(rrRatio, "#.#") + "\\n"
+    // Entry criteria as measured when the setup ARMED. Every line is "Key: value" with a
+    // single-word key, which is what parser.py's ^(\w+)\s*:\s*(.+)$ needs to sweep them into
+    // Signal.context -- adding a line here lands a new column in the trade log with no
+    // engine change. Plain ORB breakouts (srcTag == "") have no key-level packet behind them,
+    // so the block is omitted rather than filled with placeholder dashes.
+    if srcTag != ""
+        msg += "------------------------\\n"
+        msg += "Score: " + (na(klSnapScore) ? "-" : str.tostring(klSnapScore)) + "\\n"
+        msg += "RVOL: " + (na(klSnapRvol) ? "-" : str.tostring(klSnapRvol, "0.0")) + "\\n"
+        msg += "VF: " + (na(klSnapVF) ? "-" : str.tostring(klSnapVF, "0.00")) + "\\n"
+        msg += "CLV: " + (na(klSnapCLV) ? "-" : str.tostring(klSnapCLV, "0.00")) + "\\n"
+        msg += "Delta: " + (klSnapDelta == "" ? "-" : klSnapDelta) + "\\n"
+        msg += "Trend: " + (klSnapTrend == "" ? "-" : klSnapTrend) + "\\n"
+        msg += "Auction: " + (klSnapAuction == "" ? "-" : klSnapAuction) + "\\n"
+        msg += "OpenPos: " + (klSnapOpenPos == "" ? "-" : klSnapOpenPos) + "\\n"
+        msg += "AdrUsed: " + (na(klSnapAdrUsed) ? "-" : str.tostring(klSnapAdrUsed, "#")) + "\\n"
+        msg += "Headroom: " + (na(klSnapHeadroom) ? "-" : str.tostring(klSnapHeadroom, "0.0")) + "\\n"
+        msg += "Chase: " + (na(klSnapChase) ? "-" : str.tostring(klSnapChase, "0.00")) + "\\n"
+        msg += "Conf: " + (na(klSnapConf) ? "-" : str.tostring(klSnapConf)) + (klSnapConfN == "" ? "" : " " + klSnapConfN) + "\\n"
+        msg += "DayType: " + (klSnapDayType == "" ? "-" : klSnapDayType) + "\\n"
+        msg += "OpenType: " + (klSnapOpenType == "" ? "-" : klSnapOpenType) + "\\n"
+        msg += "AtrPct: " + (na(klSnapAtr) or entryPrice <= 0 ? "-" : str.tostring(klSnapAtr / entryPrice * 100, "0.00")) + "\\n"
+        msg += "SlAtr: " + (na(klSnapAtr) or klSnapAtr <= 0 ? "-" : str.tostring(riskVal / klSnapAtr, "0.00")) + "\\n"
     msg += "------------------------\\n"
     msg += getTimeIST() + "\\n"
     msg += getChartUrl()
@@ -826,6 +887,29 @@ buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
     msg += getTimeIST() + "\\n"
     msg += getChartUrl()
     '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// Build Runner Observation Message - Telegram JSON format
+// Fires when a level is reached AFTER the position is already flat, i.e. the move the current
+// exit policy left on the table. Booking 50% at TP1 and 50% at TP1.5 caps a trade at ~1.25R
+// blended, but RECLTD and FEDERALBNK both went on to TP3 (3R) on 2026-08-24 -- and with
+// post-exit alerts suppressed there was no longer any record of that.
+//
+// DELIBERATELY NOT PARSEABLE: the header is "RUNNER | SYMBOL", which carries no
+// LONG/SHORT/EXIT token, so parser.py's _parse_header returns None and the pipeline drops it.
+// Body keys are "Ref"-prefixed for the same reason the key-level packet uses them. Routed to
+// the observation channel, not the trade channel.
+buildRunnerObsAlert(bool isLong, float entryPrice, float slPrice, float exitPrice, string lvl) =>
+    float riskVal = math.abs(entryPrice - slPrice)
+    float moveVal = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
+    string msg = "📈 RUNNER | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Reached " + lvl + " after the position closed\\n"
+    msg += "Ref Entry " + str.tostring(entryPrice, "#.##") + " | Ref Level " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "Unbooked " + (riskVal > 0 ? str.tostring(moveVal / riskVal, "0.00") + "R" : "-") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    '{"chat_id": "' + (telegram_chat_id_keylevel == "" ? telegram_chat_id : telegram_chat_id_keylevel) + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
 
 // Build Time Exit Alert Message (configurable time exit) - Telegram JSON format
 buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float exitPrice) =>
@@ -2670,6 +2754,7 @@ if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pend
             orbTP2Hit := false
             orbTP3Hit := false
             orbSLHit := false
+            orbExitAlerted := false
             orbTradeDirection := 1
 
             maxShares := shares
@@ -2786,6 +2871,7 @@ if pendingShortEntry and bar_index > pendingShortBar and canFillShort
             orbTP2Hit := false
             orbTP3Hit := false
             orbSLHit := false
+            orbExitAlerted := false
             orbTradeDirection := -1
 
             maxShares := shares
@@ -3480,14 +3566,20 @@ buildKeyLevelAlert() =>
     msg += "Setup: " + klSetupPhrase(klSetupCode) + " | Score " + str.tostring(klScore) + "\\n"
     msg += "Level: " + lvlName + " " + str.tostring(klSetupLevel, format.mintick) + (klConfCnt > 0 ? "  (+" + klConfNames + ")" : "") + "\\n" + sep
     msg += "Ref Entry " + str.tostring(klEntryRef, format.mintick) + " | Ref SL " + str.tostring(klSLLevel, format.mintick) + "\\n"
-    msg += "Ref T1 " + (na(klT1) ? "-" : str.tostring(klT1, format.mintick)) + " | Ref Qty " + (na(klQtyEst) ? "-" : str.tostring(klQtyEst)) + "\\n"
+    // Report the target the EXECUTED trade would actually use, not the raw structural level.
+    // klCalcTargets floors the target distance at 1R, so a structural T1 nearer than the stop
+    // gets pushed out -- FEDERALBNK showed Ref T1 = 0.36R here on 2026-08-24 while the entry
+    // alert that followed carried 1.0R. Two numbers for one level reads as a bug to anyone
+    // checking the packet against the fill.
+    float klRefT1 = na(klSetupLevel) or klDir == 0 ? float(na) : klDir == 1 ? klEntryRef + math.max(na(klT1) ? klRiskPts * 1.5 : math.abs(klT1 - klEntryRef), klRiskPts) : klEntryRef - math.max(na(klT1) ? klRiskPts * 1.5 : math.abs(klT1 - klEntryRef), klRiskPts)
+    msg += "Ref T1 " + (na(klRefT1) ? "-" : str.tostring(klRefT1, format.mintick)) + " | Ref Qty " + (na(klQtyEst) ? "-" : str.tostring(klQtyEst)) + "\\n"
     msg += "Risk " + str.tostring(klRiskPts, format.mintick) + " pts\\n" + sep
     msg += "VF " + (na(klSessionVF) ? "-" : str.tostring(klSessionVF, "0.00") + "x") + " | RVOL " + str.tostring(klRVOL, "0.0") + " | CLV " + str.tostring(klCLV, "0.00") + " | d-proxy " + klDeltaProxy + "\\n"
     msg += "Trend " + (not na(sessionVWAP) and close > sessionVWAP ? "vwap+ " : "vwap- ") + (close > klEMA9 ? "ema+ " : "ema- ") + (klEMASlope > 0 ? "slope+" : "slope-") + "\\n"
     msg += "Auction: " + klAuction + " | Open " + klOpenPos + " | ADR " + (na(klADR) or klADR <= 0 or na(klDayHigh) ? "-" : str.tostring((klDayHigh - klDayLow) / klADR * 100, "#") + "% used") + "\\n" + sep
     msg += "FOOTPRINT: " + klFootprintCue(klDir, klRejectionFamily, lvlName) + "\\n"
     msg += (enableKeyLevelExecution ? "MODE: EXECUTING\\n" : "MODE: OBSERVE ONLY\\n") + sep + getTimeIST() + "\\n" + getChartUrl()
-    '{"chat_id": "' + telegram_chat_id + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+    '{"chat_id": "' + (telegram_chat_id_keylevel == "" ? telegram_chat_id : telegram_chat_id_keylevel) + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
 
 // ─── Fire ───────────────────────────────────────────────────────────────────
 // Cooldown state lives inside the gate, so this must be called unconditionally.
@@ -3527,7 +3619,7 @@ if klFire
     klLastTime  := time
 
 
-if klFire
+if klFire and enableKeyLevelAlerts
     alert(buildKeyLevelAlert(), alert.freq_once_per_bar_close)
 
 // Optional named-alert hook, mirroring the existing "TEST Alert Triggered" condition at
@@ -3553,6 +3645,28 @@ if klFire and enableKeyLevelExecution and canTakeKeyLevelEntry
         klPendingSource := klSetupCode
         klArmedSL := klSLLevel
         klArmedT1 := klT1
+
+// Latch the decision context alongside the pending. Keyed on klPendingSource CHANGING rather
+// than folded into the branches above, so one block serves both directions -- and so the
+// snapshot is taken once, on the arming bar, instead of being overwritten every later bar the
+// same setup code stays live.
+if klPendingSource != "" and klPendingSource != klPendingSource[1]
+    klSnapScore    := klScore
+    klSnapRvol     := klIsRetest ? math.max(klRVOL, klWindowRvol) : klRVOL
+    klSnapVF       := klSessionVF
+    klSnapCLV      := klCLV
+    klSnapDelta    := klDeltaProxy
+    klSnapTrend    := (not na(sessionVWAP) and close > sessionVWAP ? "vwap+ " : "vwap- ") + (close > klEMA9 ? "ema+ " : "ema- ") + (klEMASlope > 0 ? "slope+" : "slope-")
+    klSnapAuction  := klAuction
+    klSnapOpenPos  := klOpenPos
+    klSnapAdrUsed  := na(klADR) or klADR <= 0 or na(klDayHigh) ? float(na) : (klDayHigh - klDayLow) / klADR * 100
+    klSnapHeadroom := klHeadroom
+    klSnapChase    := klChase
+    klSnapConf     := klConfCnt
+    klSnapConfN    := klConfNames
+    klSnapDayType  := klDayTypeS
+    klSnapOpenType := klOpenTypeS
+    klSnapAtr      := cachedATR
 
 // ====================================== BARS OUTSIDE TRACKING ======================================
 if not isHTF and barstate.isconfirmed
@@ -3769,11 +3883,22 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
     if orbTradeDirection == 1  // LONG
 
+        // A single 5-min bar can span TP1..TP3 (RECLTD and VEDL both did on 2026-08-24).
+        // Firing one alert per level sent up to three competing "exit 100%" instructions whose
+        // arrival order at the signal engine decided the realised price -- worth 0.75R on
+        // RECLTD alone. Levels are tested low-to-high, so the last one to stage wins and the
+        // bar emits exactly ONE alert, for the best level actually reached.
+        string tpFireLevel = ""
+        float tpFirePrice = na
+        int tpFireQtyPct = 100
+
         if not orbTP1Hit and not na(orbTP1Price) and showTP1 and bar_index > orbEntryBar and high >= orbTP1Price
             orbTP1Hit := true
             alertTP1Triggered := true  // Trigger TP1 alert
             // Send TP1 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbTP1Price, "TP1", tp1ExitQtyPct), alert.freq_once_per_bar)
+            tpFireLevel := "TP1"
+            tpFirePrice := orbTP1Price
+            tpFireQtyPct := tp1ExitQtyPct
             if not na(orbTP1Label)
                 string tp1Text = labelFormat == "Simple" ? "✅ TP1" : str.format("✅ TP1: {0}", str.tostring(orbTP1Price, "#.##"))
                 label.set_text(orbTP1Label, tp1Text)
@@ -3784,7 +3909,9 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and high >= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5", tp1_5ExitQtyPct), alert.freq_once_per_bar)
+            tpFireLevel := "TP1.5"
+            tpFirePrice := orbTP1_5Price
+            tpFireQtyPct := tp1_5ExitQtyPct
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -3796,7 +3923,9 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP2Hit := true
             alertTP2Triggered := true  // Trigger TP2 alert
             // Send TP2 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2", 100), alert.freq_once_per_bar)
+            tpFireLevel := "TP2"
+            tpFirePrice := orbTP2Price
+            tpFireQtyPct := 100
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -3807,13 +3936,22 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP3Hit and not na(orbTP3Price) and showTP3 and bar_index > orbEntryBar and high >= orbTP3Price
             orbTP3Hit := true
             // Send TP3 Hit Alert (LONG)
-            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3", 100), alert.freq_once_per_bar)
+            tpFireLevel := "TP3"
+            tpFirePrice := orbTP3Price
+            tpFireQtyPct := 100
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
                 label.set_color(orbTP3Label, color.new(color.green, 0))
             if not na(orbTP3Line)
                 line.set_color(orbTP3Line, color.new(color.green, 0))
+
+        if tpFireLevel != "" and not orbExitAlerted
+            alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, tpFirePrice, tpFirePrice, tpFireLevel, tpFireQtyPct), alert.freq_once_per_bar)
+            if tpFireQtyPct >= 100
+                orbExitAlerted := true
+        else if tpFireLevel != "" and orbExitAlerted and enableRunnerObs
+            alert(buildRunnerObsAlert(true, orbEntryPrice, orbSLPrice, tpFirePrice, tpFireLevel), alert.freq_once_per_bar)
 
         lastTPHit = false
         if showTP3 and orbTP3Hit
@@ -3839,7 +3977,9 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbLinesFrozen := true
 
             // Send SL Hit Alert (LONG) — always reference TP1 for R:R consistency with entry alert
-            alert(buildSLAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
+            if not orbExitAlerted
+                alert(buildSLAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
+                orbExitAlerted := true
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -3850,11 +3990,22 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
     else if orbTradeDirection == -1  // SHORT
 
+        // A single 5-min bar can span TP1..TP3 (RECLTD and VEDL both did on 2026-08-24).
+        // Firing one alert per level sent up to three competing "exit 100%" instructions whose
+        // arrival order at the signal engine decided the realised price -- worth 0.75R on
+        // RECLTD alone. Levels are tested low-to-high, so the last one to stage wins and the
+        // bar emits exactly ONE alert, for the best level actually reached.
+        string tpFireLevel = ""
+        float tpFirePrice = na
+        int tpFireQtyPct = 100
+
         if not orbTP1Hit and not na(orbTP1Price) and showTP1 and bar_index > orbEntryBar and low <= orbTP1Price
             orbTP1Hit := true
             alertTP1Triggered := true  // Trigger TP1 alert for short
             // Send TP1 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbTP1Price, "TP1", tp1ExitQtyPct), alert.freq_once_per_bar)
+            tpFireLevel := "TP1"
+            tpFirePrice := orbTP1Price
+            tpFireQtyPct := tp1ExitQtyPct
             if not na(orbTP1Label)
                 string tp1Text = labelFormat == "Simple" ? "✅ TP1" : str.format("✅ TP1: {0}", str.tostring(orbTP1Price, "#.##"))
                 label.set_text(orbTP1Label, tp1Text)
@@ -3865,7 +4016,9 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and low <= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5", tp1_5ExitQtyPct), alert.freq_once_per_bar)
+            tpFireLevel := "TP1.5"
+            tpFirePrice := orbTP1_5Price
+            tpFireQtyPct := tp1_5ExitQtyPct
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -3877,7 +4030,9 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP2Hit := true
             alertTP2Triggered := true  // Trigger TP2 alert for short
             // Send TP2 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2", 100), alert.freq_once_per_bar)
+            tpFireLevel := "TP2"
+            tpFirePrice := orbTP2Price
+            tpFireQtyPct := 100
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -3888,13 +4043,22 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP3Hit and not na(orbTP3Price) and showTP3 and bar_index > orbEntryBar and low <= orbTP3Price
             orbTP3Hit := true
             // Send TP3 Hit Alert (SHORT)
-            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3", 100), alert.freq_once_per_bar)
+            tpFireLevel := "TP3"
+            tpFirePrice := orbTP3Price
+            tpFireQtyPct := 100
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
                 label.set_color(orbTP3Label, color.new(color.green, 0))
             if not na(orbTP3Line)
                 line.set_color(orbTP3Line, color.new(color.green, 0))
+
+        if tpFireLevel != "" and not orbExitAlerted
+            alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, tpFirePrice, tpFirePrice, tpFireLevel, tpFireQtyPct), alert.freq_once_per_bar)
+            if tpFireQtyPct >= 100
+                orbExitAlerted := true
+        else if tpFireLevel != "" and orbExitAlerted and enableRunnerObs
+            alert(buildRunnerObsAlert(false, orbEntryPrice, orbSLPrice, tpFirePrice, tpFireLevel), alert.freq_once_per_bar)
 
         lastTPHit = false
         if showTP3 and orbTP3Hit
@@ -3920,7 +4084,9 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbLinesFrozen := true
 
             // Send SL Hit Alert (SHORT) — always reference TP1 for R:R consistency with entry alert
-            alert(buildSLAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
+            if not orbExitAlerted
+                alert(buildSLAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
+                orbExitAlerted := true
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -3948,7 +4114,9 @@ if inSession and not inSession[1]
 if isPastTimeExit and not timeExitTriggered and strategy.position_size != 0
     bool isLongPos = strategy.position_size > 0
     // Send Time Exit Alert — always reference TP1 for R:R consistency with entry alert
-    alert(buildTimeExitAlert(isLongPos, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
+    if not orbExitAlerted
+        alert(buildTimeExitAlert(isLongPos, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
+        orbExitAlerted := true
 
     strategy.close_all(comment="Time Exit")
     timeExitTriggered := true
