@@ -382,7 +382,7 @@ bool enableAlerts = true
 
 // Telegram Configuration
 grp_telegram = "Telegram Alerts"
-telegram_chat_id = input.string("-1003518225740", "Telegram Chat ID", group=grp_telegram, tooltip="Your Telegram channel/group chat ID\n\nHOW TO GET:\n1. Add @userinfobot to your channel\n2. Forward any message to the bot\n3. Copy the chat ID (starts with -)")
+telegram_chat_id = input.string("-1004450500772", "Telegram Chat ID", group=grp_telegram, tooltip="Your Telegram channel/group chat ID\n\nHOW TO GET:\n1. Add @userinfobot to your channel\n2. Forward any message to the bot\n3. Copy the chat ID (starts with -)")
 // KEYLEVEL packets are a human footprint-check prompt, not a trade instruction — parser.py
 // cannot read them by design. Off by default so the engine channel carries BREAKOUT only.
 // Turn back on and point telegram_chat_id_keylevel at a separate channel to watch the engine
