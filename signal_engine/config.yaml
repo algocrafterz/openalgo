@@ -35,7 +35,7 @@ sizing:
   # [tune] Entry price filter — reject signals outside this range. 0 = no filter.
   # Current range ₹150–₹800 targets liquid mid-caps with manageable qty sizes at ₹15K capital.
   min_entry_price: 150
-  max_entry_price: 800
+  max_entry_price: 5000
 
   # CRITICAL: calibrated to MARKET entry + MARKET TP exit (both legs slip).
   # 0.10 = 10% slippage buffer on risk_per_share. Do not reduce unless switching to LIMIT TP exits.
@@ -100,7 +100,27 @@ risk:
   stale_signal_seconds: 60
 
   # [tune] Reject SL tighter than this fraction of entry price (0 = disabled).
-  # 0.5% filters noise — avoids trades where SL is within normal bid-ask spread.
+  # Override per strategy under strategy_profiles.<TAG>.min_sl_pct.
+  #
+  # THIS IS A LEVERAGE CAP, not a noise filter. Under fixed_fractional sizing the notional
+  # exposure is  risk_per_trade / (sl_pct x (1 + slippage_factor))  — entry PRICE cancels out
+  # entirely, so one value serves the whole 150–5000 band. Verified 2026-08-25 across
+  # Rs 150 / 300 / 800 / 2000 / 5000: exposure is flat to within floor() rounding.
+  #
+  #   sl_pct   leverage at risk_per_trade 1%
+  #   0.10%    9.09x   — beyond any MIS allowance; margin scaling will cut the order
+  #   0.20%    4.55x   — BREAKOUT (key-level stops, 0.35 x ATR beyond the level)
+  #   0.30%    3.03x
+  #   0.50%    1.82x   — global default, matches ORB stop geometry
+  #   1.00%    0.91x
+  #
+  # What it does NOT capture is how tight the stop is for THAT STOCK's volatility — 0.20% is
+  # 0.4 ATR on a quiet name and 0.07 ATR on a volatile one. That dimension is enforced
+  # upstream in breakout.pine (klSlBufferMult x ATR) and is now recorded per trade as
+  # AtrPct / SlAtr in the alert context, for an evidence-based floor after ~30 days.
+  #
+  # Tick granularity does not bind inside the current band: 0.20% of Rs 150 is Rs 0.30, six
+  # NSE ticks. It would only bite below Rs 125.
   min_sl_pct: 0.005
 
   # [tune] Max concurrent positions in the same symbol (0 = no limit).
@@ -135,8 +155,11 @@ blacklist:
 # Penalty for broker-forced square-off is Rs 20-50/order.
 time_exit:
   enabled: true
-  hour: 15                       # IST hour (24h format)
-  minute: 0                      # 15:00 gives 10-min buffer before 15:10 broker auto square-off
+  hour: 14                       # IST hour (24h format)
+  minute: 45                     # 14:45 — moved earlier from 15:00 (2026-08-25). Wider buffer
+                                 # before the 15:10 broker auto square-off, and it clears the
+                                 # last-half-hour spread widening. Keep breakout.pine's
+                                 # timeExitHour/Minute inputs in step with this.
 
 # ── No-progress Detection ────────────────────────────────
 # [tune] Move SL to break-even (or exit at market) when a trade hasn't progressed toward TP1.
@@ -307,15 +330,28 @@ bracket:
   tp1_runner_sl_buffer: 0.3
 
 # ── Strategy Profiles ───────────────────────────────────────
-# [tune] Per-strategy TP exit fractions and product type.
-# tp_levels: TP label -> fraction of position to exit at that level (e.g. TP1: 0.5 = exit 50%).
-# product: overrides broker.product for this strategy (MIS or CNC).
+# [tune] Per-strategy TP exit fractions, product type and stop-distance floor.
+# tp_levels:  TP label -> fraction of position to exit at that level (e.g. TP1: 0.5 = exit 50%).
+# product:    overrides broker.product for this strategy (MIS or CNC).
+# min_sl_pct: overrides risk.min_sl_pct for this strategy. Omit to inherit the global floor;
+#             0.0 disables the check for this strategy only.
 # If a strategy is absent here, every TP HIT exits 100% of position.
 strategy_profiles:
   ORB:
     product: MIS
     # tp_levels absent — ORB PineScript sends ExitQtyPct in each TP HIT alert.
     # Engine reads ExitQtyPct directly; strategy owns exit fractions, not this config.
+  BREAKOUT:
+    product: MIS
+    # tp_levels absent — breakout.pine sends ExitQtyPct in each TP HIT alert.
+    #
+    # [tune] 0.20% vs the global 0.50%. Key-level stops sit klSlBufferMult (0.35) x ATR beyond
+    # the triggering level, several times tighter than ORB stops, so the ORB-calibrated floor
+    # rejected ALL SEVEN signals on 2026-08-24 (stops 0.247%-0.342%).
+    # 0.20% sits ~19% below the tightest observed stop, which keeps the headroom without
+    # admitting noise: on a Rs 300 stock it is Rs 0.60, still several ticks wide.
+    # Do NOT raise to 0.25% — that rejects VEDL at 0.2465%, the best trade of the day (+4.57R).
+    min_sl_pct: 0.002
   RSI-TP-MR:
     product: MIS
     tp_levels:

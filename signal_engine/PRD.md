@@ -75,7 +75,123 @@ changes.
 
 ---
 
-## Recent Changes (2026-08-22, current)
+## Recent Changes (2026-08-24 → 2026-08-25, current)
+
+Driven by the first live day of `BREAKOUT` alerts (2026-08-24, 7 entries, 5W/2L). Source
+export: `pinescripts/intraday/orb/result.json`.
+
+### One exit alert per bar (`breakout.pine`)
+
+TP1/TP1.5/TP2/TP3 each fired their own `alert()`. A single 5-min bar that spans several
+levels therefore sent several competing exit instructions — RECLTD and VEDL both sent three
+at once, and since TP1.5/TP2/TP3 all carry `ExitQtyPct: 100`, whichever reached the engine
+first decided the realised price. Arrival order is not guaranteed: RECLTD's TP2 landed
+before its TP1, worth 0.75R on that trade alone.
+
+The four level checks now *stage* the level into `tpFireLevel`/`tpFirePrice`/`tpFireQtyPct`
+and the bar emits one alert, for the highest level reached. Chart labels still update per
+level. Deterministic, and it books the better price.
+
+### Exit alerts stop once the position is flat (`breakout.pine`)
+
+New `orbExitAlerted` latch, set by any exit alert covering the whole remaining position (a
+TP at `ExitQtyPct` 100, an SL, or the time exit). Later exit alerts on the same trade are
+suppressed — RECLTD sent TP3 at 13:35, three hours after TP2 closed it, which drove the
+engine into `_recover_position_from_broker` for a position that no longer existed. Reset
+on every new entry.
+
+### Levelled exits are deduplicated (`validator.py`)
+
+`_check_exit_shortpath` returned VALID before `_check_duplicate` ran, so repeated TP/SL HIT
+alerts all reached `_handle_exit` and relied on the per-symbol lock and `exit_pending` flag
+to absorb them. An exit carrying a `tp_level` now goes through dedup, keyed on
+`(symbol, direction, tp_level)` — PineScript emits each level once per trade, so a repeat is
+a delivery artefact. `signal.entry` is the synthesized 0.0 for exits, hence the level
+standing in as discriminator. A **bare** EXIT (no level) stays un-deduplicated: a manual or
+safety close must remain retryable after a failed attempt.
+
+### Entry criteria travel with the signal (`breakout.pine`, `parser.py`, `models.py`, `db.py`)
+
+The KEYLEVEL packet held the reasoning (Score, RVOL, VF, CLV, auction state, ADR used,
+headroom, chase, confluence, day type) but is deliberately unparseable, so none of it
+reached the trade log — attribution over a large sample had nothing to group by.
+
+- `breakout.pine` latches the key-level context at **arm** time into `klSnap*` vars and
+  replays it into the entry alert as single-word `Key: value` lines. Arm time is the
+  decision point; the fill is one bar later. Latched rather than read live because the
+  key-level engine sits ~2900 lines below the pending-entry processor that fires the alert,
+  and Pine resolves in source order.
+- `parser.py` sweeps every unconsumed `Key: value` line into `Signal.context`, skipping the
+  two lines that match the shape by accident (the `09:50 IST` footer, the chart URL).
+  Adding a field to the alert now needs no engine change.
+- `db.py` gains `raw_message` and `context` columns, filled in on an existing `trades.db`
+  via `PRAGMA table_info` + `ALTER TABLE` — no manual migration.
+
+### `Ref T1` matches the executed target (`breakout.pine`)
+
+`klCalcTargets` floors the target distance at 1R, but the KEYLEVEL packet printed the raw
+structural T1 — FEDERALBNK showed 0.36R there while the entry alert that followed carried
+1.0R. The packet now applies the same floor.
+
+### Per-strategy `min_sl_pct` (`config.py`, `config.yaml`, `validator.py`)
+
+All 7 entries on 2026-08-24 carried stops of 0.247%–0.342% against `risk.min_sl_pct: 0.005`,
+so **every one validated as IGNORED**. The floor was calibrated for ORB geometry; key-level
+stops sit `klSlBufferMult` (0.35) × ATR beyond the level, several times tighter.
+
+`strategy_profiles.<TAG>.min_sl_pct` now overrides the global floor. Absent inherits the
+global; `0.0` disables the check for that strategy alone. Set `BREAKOUT: 0.002`.
+
+0.20% sits ~19% below the tightest observed stop and is still several ticks wide on a ₹300
+stock. **Do not raise to 0.25%** — that rejects VEDL at 0.2465%, the day's best trade (+4.57R).
+All 7 now validate VALID.
+
+### Time exit 15:00 → 14:45 (`config.yaml`, `breakout.pine`)
+
+Wider buffer before the 15:10 broker auto square-off, and it clears the last-half-hour spread
+widening. The engine and the PineScript each run their own clock, so both were moved.
+
+### KEYLEVEL packets off by default, own channel when enabled (`breakout.pine`)
+
+`enableKeyLevelAlerts` (default **false**) gates the KEYLEVEL `alert()`, and
+`telegram_chat_id_keylevel` (empty = reuse the main ID) addresses the packet to a channel the
+engine does not listen on. The trade channel now carries BREAKOUT only; the packet's context
+is no longer needed there because the entry alert carries it inline.
+
+### `min_sl_pct` is a leverage cap (`config.yaml` docs, `breakout.pine`)
+
+Challenged 2026-08-25: does a fixed 0.20% make sense across a ₹150–5000 band? Verified — it
+does, because under `fixed_fractional` sizing the notional exposure is
+`risk_per_trade / (sl_pct × (1 + slippage_factor))`, in which **entry price cancels out**.
+Measured across ₹150/300/800/2000/5000: exposure flat to within `floor()` rounding.
+0.20% = 4.55x, 0.50% = 1.82x. The config comment now carries the derivation and a table.
+
+Tick granularity does not bind inside the band either — 0.20% of ₹150 is ₹0.30, six ticks.
+
+What a price-relative floor genuinely cannot express is **stop tightness relative to that
+stock's volatility** (0.20% is 0.4 ATR on a quiet name, 0.07 ATR on a volatile one). That is
+already enforced upstream by `klSlBufferMult × ATR`, and is now recorded per trade as
+`AtrPct` / `SlAtr` in the entry-alert context so an ATR-relative floor can be set from
+evidence rather than guessed.
+
+### RUNNER observations (`breakout.pine`)
+
+Suppressing post-exit TP alerts removed the only record of how far a trade ran after the
+policy closed it — the evidence needed to judge whether booking 100% by TP1.5 is too early.
+A level reached while flat now emits a non-actionable `RUNNER | SYMBOL` note carrying the
+unbooked R, routed to the observation channel. Header carries no LONG/SHORT/EXIT token, so
+`_parse_header` returns None and the pipeline drops it (verified). Toggle
+`enableRunnerObs`, default on.
+
+### Open
+
+- `accountSize` in `breakout.pine` is still the 10000 template default; the engine sizes from
+  the live funds API, so this only skews the `Ref Qty` shown in the KEYLEVEL packet.
+- RVOL ≥ 1.5 as an entry gate is unvalidated beyond n=7. Test against the Q1 export first.
+
+---
+
+## Recent Changes (2026-08-22, config snapshot)
 
 <!-- AUTO-GENERATED: breakout.pine input defaults. Regenerate from source, do not hand-edit. -->
 ### `breakout.pine` — current configuration
