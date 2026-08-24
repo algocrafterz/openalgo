@@ -8,7 +8,7 @@ from signal_engine.config import settings
 from signal_engine.models import Direction, Signal, ValidationResult, ValidationStatus
 
 # In-memory duplicate tracker: (symbol, direction, entry) -> timestamp
-_recent_signals: Dict[Tuple[str, str, float], float] = {}
+_recent_signals: Dict[Tuple[str, str, object], float] = {}
 
 
 def _cleanup_stale_entries() -> None:
@@ -57,11 +57,19 @@ def _check_blacklist(signal: Signal):
 
 
 def _check_exit_shortpath(signal: Signal):
-    """EXIT signals need only a symbol — they close, they do not open."""
+    """EXIT signals need only a symbol — they close, they do not open.
+
+    Levelled exits (TP1/TP1.5/SL) still go through dedup on the way out: PineScript emits
+    each level exactly once per trade, so a repeat is a delivery artefact rather than a
+    second instruction. A bare EXIT carries no level and stays retryable — a manual or
+    safety close must always be able to fire again after a failed attempt.
+    """
     if signal.direction != Direction.EXIT:
         return None
     if not signal.symbol or signal.symbol.strip() == "":
         return ValidationResult(status=ValidationStatus.INVALID, reason="EXIT: symbol required")
+    if signal.tp_level:
+        return _check_duplicate(signal) or ValidationResult(status=ValidationStatus.VALID)
     return ValidationResult(status=ValidationStatus.VALID)
 
 
@@ -116,21 +124,39 @@ def _check_reward_risk(signal: Signal):
 
 def _check_sl_distance(signal: Signal):
     """Reject stops so tight that slippage alone would trigger them."""
-    if settings.min_sl_pct <= 0:
+    floor = _min_sl_pct_for(signal.strategy)
+    if floor <= 0:
         return None
     sl_pct = abs(signal.entry - signal.sl) / signal.entry
-    if sl_pct < settings.min_sl_pct:
+    if sl_pct < floor:
         return ValidationResult(
             status=ValidationStatus.IGNORED,
-            reason=f"SL distance {sl_pct:.4%} below minimum {settings.min_sl_pct:.4%}",
+            reason=f"SL distance {sl_pct:.4%} below minimum {floor:.4%}",
         )
     return None
 
 
+def _min_sl_pct_for(strategy: str) -> float:
+    """The stop-distance floor for this strategy, falling back to the global one.
+
+    Stop geometry is a property of the strategy, not of the account: an ORB stop sits at a
+    fraction of the opening range while a key-level stop sits 0.35 ATR beyond the level,
+    which is several times tighter. One global floor cannot serve both — the ORB-calibrated
+    0.5% rejected all 7 BREAKOUT signals on 2026-08-24.
+    """
+    profile = settings.strategy_profiles.get(strategy.upper(), {})
+    override = profile.get("min_sl_pct")
+    return settings.min_sl_pct if override is None else float(override)
+
+
 def _check_duplicate(signal: Signal):
-    """Suppress a repeat of the same symbol/direction/entry inside the dedup window."""
+    """Suppress a repeat of the same symbol/direction/entry inside the dedup window.
+
+    For EXIT signals entry is always the synthesized 0.0, so the TP level stands in as the
+    discriminator — otherwise TP1 and the TP1.5 that follows it would collide.
+    """
     _cleanup_stale_entries()
-    sig_key = (signal.symbol, signal.direction.value, signal.entry)
+    sig_key = (signal.symbol, signal.direction.value, signal.tp_level or signal.entry)
     if sig_key in _recent_signals:
         return ValidationResult(
             status=ValidationStatus.IGNORED,

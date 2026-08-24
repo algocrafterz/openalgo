@@ -1,5 +1,6 @@
 """SQLite persistence for trade audit trail."""
 
+import json
 import os
 import sqlite3
 from datetime import datetime
@@ -28,16 +29,24 @@ CREATE TABLE IF NOT EXISTS trades (
     message TEXT,
     signal_time TEXT,
     received_at TEXT,
-    executed_at TEXT
+    executed_at TEXT,
+    raw_message TEXT,
+    context TEXT
 )
 """
+
+# Columns added after the table shipped. SQLite has no "ADD COLUMN IF NOT EXISTS", so the
+# existing set is read once per connection and only the gaps are filled — cheap, and it keeps
+# a live trades.db working across an upgrade without a manual migration step.
+_ADDED_COLUMNS = (("raw_message", "TEXT"), ("context", "TEXT"))
 
 _INSERT = """
 INSERT INTO trades (
     strategy, direction, symbol, entry, sl, tp,
     quantity, order_id, status, message,
-    signal_time, received_at, executed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    signal_time, received_at, executed_at,
+    raw_message, context
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -46,8 +55,17 @@ def _get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(_CREATE_TABLE)
+    _add_missing_columns(conn)
     conn.commit()
     return conn
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """Bring a pre-existing trades table up to the current column set."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+    for name, coltype in _ADDED_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {name} {coltype}")
 
 
 def save(signal: Signal, order: Order, result: TradeResult) -> None:
@@ -70,6 +88,8 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
                 signal.time or "",
                 signal.received_at.isoformat(),
                 result.timestamp.isoformat(),
+                signal.raw_message,
+                json.dumps(signal.context or {}),
             ),
         )
         conn.commit()

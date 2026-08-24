@@ -1,11 +1,20 @@
 """Tests for signal validator — RED phase first."""
 
+import dataclasses
+
 import pytest
 
 from signal_engine.models import Direction, ValidationStatus
 from signal_engine.strategies import ORB, RSI_TP_MR
+from signal_engine.config import settings
 from signal_engine.validator import validate, _recent_signals
 from signal_engine.tests.conftest import make_signal as _make_signal
+
+
+def _with(monkeypatch, **overrides):
+    """Swap in a Settings copy — the real one is a frozen dataclass."""
+    monkeypatch.setattr("signal_engine.validator.settings",
+                        dataclasses.replace(settings, **overrides))
 
 
 @pytest.fixture(autouse=True)
@@ -146,12 +155,41 @@ class TestExitValidation:
         ))
         assert result.status == ValidationStatus.VALID
 
-    def test_exit_skips_duplicate_check(self):
-        """Two EXIT signals for same symbol should both pass (e.g. retry)."""
+    def test_bare_exit_skips_duplicate_check(self):
+        """A safety EXIT carries no tp_level and must stay retryable."""
         sig1 = _make_signal(direction=Direction.EXIT)
         sig2 = _make_signal(direction=Direction.EXIT)
         assert validate(sig1).status == ValidationStatus.VALID
         assert validate(sig2).status == ValidationStatus.VALID
+
+
+class TestExitDeduplication:
+    """TP/SL HIT alerts are machine-generated and idempotent, so a repeat is a delivery
+    artefact, not a second instruction. Observed 2026-08-24: every alert arrived twice."""
+
+    def test_repeat_tp_hit_ignored(self):
+        first = _make_signal(direction=Direction.EXIT, tp_level="TP1")
+        second = _make_signal(direction=Direction.EXIT, tp_level="TP1")
+        assert validate(first).status == ValidationStatus.VALID
+        assert validate(second).status == ValidationStatus.IGNORED
+
+    def test_different_tp_level_not_duplicate(self):
+        """TP1 then TP1.5 on the same position are two real, distinct exits."""
+        assert validate(_make_signal(direction=Direction.EXIT, tp_level="TP1")).status == ValidationStatus.VALID
+        assert validate(_make_signal(direction=Direction.EXIT, tp_level="TP1.5")).status == ValidationStatus.VALID
+
+    def test_different_symbol_same_level_not_duplicate(self):
+        assert validate(_make_signal(direction=Direction.EXIT, symbol="VEDL", tp_level="TP1")).status == ValidationStatus.VALID
+        assert validate(_make_signal(direction=Direction.EXIT, symbol="PFC", tp_level="TP1")).status == ValidationStatus.VALID
+
+    def test_repeat_sl_hit_ignored(self):
+        assert validate(_make_signal(direction=Direction.EXIT, tp_level="SL")).status == ValidationStatus.VALID
+        assert validate(_make_signal(direction=Direction.EXIT, tp_level="SL")).status == ValidationStatus.IGNORED
+
+    def test_tp_hit_dedup_does_not_block_a_later_bare_exit(self):
+        """A TP1 partial must not swallow the safety EXIT that closes the runner."""
+        assert validate(_make_signal(direction=Direction.EXIT, tp_level="TP1")).status == ValidationStatus.VALID
+        assert validate(_make_signal(direction=Direction.EXIT)).status == ValidationStatus.VALID
 
     def test_exit_with_synthesized_zero_entry_valid(self):
         """TP HIT signals synthesize Entry: 0.0 — EXIT must accept it."""
@@ -223,3 +261,41 @@ class TestValidSignals:
             _make_signal(direction=Direction.SHORT, entry=2500, sl=2515, tp=2460)
         )
         assert result.status == ValidationStatus.VALID
+
+
+class TestPerStrategyMinSlDistance:
+    """Key-level stops (0.35 x ATR beyond the level) sit far tighter than ORB stops, so the
+    global floor calibrated for ORB rejected every BREAKOUT signal on 2026-08-24."""
+
+    def test_strategy_override_admits_tighter_stop(self, monkeypatch):
+        _with(monkeypatch, min_sl_pct=0.005,
+              strategy_profiles={"BREAKOUT": {"min_sl_pct": 0.002}})
+        # 0.34% — below the global 0.5% floor, above the BREAKOUT 0.2% floor.
+        result = validate(_make_signal(strategy="BREAKOUT", entry=184.04, sl=183.41, tp=184.88))
+        assert result.status == ValidationStatus.VALID
+
+    def test_strategy_override_still_rejects_below_its_own_floor(self, monkeypatch):
+        _with(monkeypatch, min_sl_pct=0.005,
+              strategy_profiles={"BREAKOUT": {"min_sl_pct": 0.002}})
+        # 0.11% — inside the noise even for a key-level stop.
+        result = validate(_make_signal(strategy="BREAKOUT", entry=184.04, sl=183.84, tp=184.88))
+        assert result.status == ValidationStatus.IGNORED
+        assert "0.2000%" in result.reason
+
+    def test_strategy_without_override_uses_global_floor(self, monkeypatch):
+        _with(monkeypatch, min_sl_pct=0.005,
+              strategy_profiles={"BREAKOUT": {"min_sl_pct": 0.002}})
+        result = validate(_make_signal(strategy=ORB, entry=184.04, sl=183.41, tp=184.88))
+        assert result.status == ValidationStatus.IGNORED
+
+    def test_strategy_override_of_zero_disables_the_check(self, monkeypatch):
+        _with(monkeypatch, min_sl_pct=0.005,
+              strategy_profiles={"BREAKOUT": {"min_sl_pct": 0.0}})
+        result = validate(_make_signal(strategy="BREAKOUT", entry=184.04, sl=184.00, tp=184.88))
+        assert result.status == ValidationStatus.VALID
+
+    def test_profile_without_min_sl_pct_falls_back_to_global(self, monkeypatch):
+        _with(monkeypatch, min_sl_pct=0.005,
+              strategy_profiles={"BREAKOUT": {"product": "MIS"}})
+        result = validate(_make_signal(strategy="BREAKOUT", entry=184.04, sl=183.41, tp=184.88))
+        assert result.status == ValidationStatus.IGNORED

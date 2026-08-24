@@ -11,6 +11,9 @@ _KV_PATTERN = re.compile(r"^(\w+)\s*:\s*(.+)$", re.IGNORECASE)
 _VALID_DIRECTIONS = {d.value for d in Direction}
 _MANDATORY_FIELDS = {"symbol", "entry", "sl", "tp"}
 _NUMERIC_FIELDS = {"entry", "sl", "tp"}
+# Keys the Signal model has a home for. Anything else is entry-criteria context and is kept
+# verbatim rather than dropped — see Signal.context.
+_CONSUMED_FIELDS = _MANDATORY_FIELDS | {"exchange", "product", "time", "tplevel", "exitqtypct"}
 
 
 def parse(text: str) -> Optional[Signal]:
@@ -56,6 +59,7 @@ def parse(text: str) -> Optional[Signal]:
             # TP level from TP HIT normalizer (e.g. "TP1", "TP1.5")
             tp_level=_upper_or_none(fields.get("tplevel")),
             exit_qty_pct=_parse_exit_qty_pct(fields.get("exitqtypct")),
+            context=_context_fields(fields),
             raw_message=text,
         )
     except Exception as e:
@@ -91,6 +95,20 @@ def _parse_fields(body_lines) -> Optional[dict]:
         except (ValueError, TypeError):
             return None
     return fields
+
+
+def _context_fields(fields: dict) -> dict:
+    """Keep the entry-criteria leftovers, drop what only LOOKS like a field.
+
+    Two lines in every alert match the Key: Value shape by accident — the "09:50 IST"
+    footer (all-digit key) and the chart URL ("https" -> "//..."). Left in, each becomes a
+    permanent junk column in the trade log.
+    """
+    return {
+        k: v
+        for k, v in fields.items()
+        if k not in _CONSUMED_FIELDS and not k.isdigit() and not v.startswith("//")
+    }
 
 
 def _upper_or_none(value):

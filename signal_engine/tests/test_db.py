@@ -1,6 +1,9 @@
 """Tests for trade persistence — RED phase first."""
 
 
+import json
+import sqlite3
+
 import pytest
 
 from signal_engine.db import save, _get_connection
@@ -102,3 +105,51 @@ class TestDatabaseOperations:
         monkeypatch.setattr("signal_engine.db._DB_PATH", "/invalid/path/db.db")
         # Should log error but not raise
         save(_make_signal(), _make_order(), _make_result())
+
+
+class TestContextPersistence:
+    """The trade log is the only durable record of why a signal fired. Entry criteria must
+    survive to it or a 30-day attribution study has nothing to group by."""
+
+    def test_raw_message_and_context_persisted(self):
+        save(
+            _make_signal(
+                raw_message="BREAKOUT LONG\nSymbol: TATASTEEL\nScore: 9",
+                context={"score": "9", "rvol": "1.5", "trigger": "VAH-RT"},
+            ),
+            _make_order(),
+            _make_result(),
+        )
+        conn = _get_connection()
+        raw, ctx = conn.execute("SELECT raw_message, context FROM trades").fetchone()
+        conn.close()
+        assert "Score: 9" in raw
+        assert json.loads(ctx) == {"score": "9", "rvol": "1.5", "trigger": "VAH-RT"}
+
+    def test_empty_context_stored_as_empty_object(self):
+        save(_make_signal(), _make_order(), _make_result())
+        conn = _get_connection()
+        (ctx,) = conn.execute("SELECT context FROM trades").fetchone()
+        conn.close()
+        assert json.loads(ctx) == {}
+
+    def test_legacy_table_gains_new_columns(self, tmp_path, monkeypatch):
+        """An existing trades.db predates these columns and must not need a manual migration."""
+        path = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, strategy TEXT, "
+            "direction TEXT, symbol TEXT, entry REAL, sl REAL, tp REAL, quantity INTEGER, "
+            "order_id TEXT, status TEXT, message TEXT, signal_time TEXT, received_at TEXT, "
+            "executed_at TEXT)"
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("signal_engine.db._DB_PATH", path)
+        save(_make_signal(context={"score": "7"}), _make_order(), _make_result())
+
+        conn = sqlite3.connect(path)
+        (ctx,) = conn.execute("SELECT context FROM trades").fetchone()
+        conn.close()
+        assert json.loads(ctx) == {"score": "7"}

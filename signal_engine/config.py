@@ -174,7 +174,8 @@ class Settings:
 
     # Strategy profiles (from yaml) — per-strategy TP levels and product defaults
     # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR")
-    # Values: dict with "tp_levels" (e.g. {"TP1": 0.5, "TP2": 1.0}) and "product" (e.g. "CNC")
+    # Values: dict with "tp_levels" (e.g. {"TP1": 0.5, "TP2": 1.0}), "product" (e.g. "CNC")
+    # and an optional "min_sl_pct" overriding the global stop-distance floor.
     strategy_profiles: Dict[str, dict]
 
     # Symbol blacklist (from yaml) — per-strategy + _global
@@ -359,10 +360,16 @@ def _parse_strategy_profiles(yml: dict) -> Dict[str, dict]:
             tp_levels = {k.upper(): float(v) for k, v in tp_levels.items()}
         else:
             tp_levels = {}
-        profiles[strategy_key.upper()] = {
+        entry = {
             "tp_levels": tp_levels,
             "product": str(profile.get("product", "")),
         }
+        # Optional per-strategy stop-distance floor. Absent means "use the global one", which
+        # is not the same as 0.0 (0.0 disables the check for this strategy), so the key is
+        # only added when it is actually present.
+        if profile.get("min_sl_pct") is not None:
+            entry["min_sl_pct"] = float(profile["min_sl_pct"])
+        profiles[strategy_key.upper()] = entry
     return profiles
 
 

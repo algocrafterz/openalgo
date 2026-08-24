@@ -43,6 +43,10 @@ class Signal(BaseModel):
     time: Optional[str] = None
     tp_level: Optional[str] = None          # e.g. "TP1", "TP1.5" — set by TP HIT normalizer
     exit_qty_pct: Optional[float] = None    # 0.0-1.0 fraction of position to exit; from PineScript ExitQtyPct field
+    # Every "Key: value" line the pipeline does not consume, lower-cased key -> raw string.
+    # Carries the PineScript's entry criteria (Score/RVOL/VF/Auction/AdrUsed/...) through to
+    # the trade log untouched, so adding a field to the alert needs no change here.
+    context: dict = Field(default_factory=dict)
     raw_message: str = ""
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

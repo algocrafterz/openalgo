@@ -149,3 +149,48 @@ class TestParseInvalidSignals:
     def test_non_numeric_entry(self):
         text = "ORB LONG\nSymbol: RELIANCE\nEntry: abc\nSL: 2480\nTP: 2540"
         assert parse(text) is None
+
+
+class TestSignalContext:
+    """Unrecognised Key: Value lines are kept verbatim so the PineScript can add entry-criteria
+    fields without a matching engine change, and so win/loss attribution over a large sample
+    reads from the trade log alone."""
+
+    def _entry(self, extra: str = "") -> str:
+        return (
+            "BREAKOUT LONG\n"
+            "Symbol: TATASTEEL\n"
+            "Entry: 184.04\n"
+            "SL: 183.41\n"
+            "TP: 184.88\n" + extra
+        )
+
+    def test_unknown_fields_captured_in_context(self):
+        sig = parse(self._entry("Score: 9\nRVOL: 1.5\nAdrUsed: 54\n"))
+        assert sig.context == {"score": "9", "rvol": "1.5", "adrused": "54"}
+
+    def test_context_empty_when_no_extra_fields(self):
+        assert parse(self._entry()).context == {}
+
+    def test_known_fields_not_duplicated_into_context(self):
+        sig = parse(self._entry("Exchange: NSE\nProduct: MIS\nTime: 09:50\n"))
+        assert sig.context == {}
+        assert sig.exchange == "NSE"
+
+    def test_context_preserves_multi_word_values(self):
+        sig = parse(self._entry("Auction: Above VAH\nTrend: vwap- ema+ slope+\n"))
+        assert sig.context["auction"] == "Above VAH"
+        assert sig.context["trend"] == "vwap- ema+ slope+"
+
+    def test_trigger_is_captured(self):
+        """Trigger names the key level that fired the entry — the primary grouping key."""
+        assert parse(self._entry("Trigger: VAH-RT\n")).context["trigger"] == "VAH-RT"
+
+    def test_timestamp_line_not_captured(self):
+        """"09:50 IST" matches the Key: Value shape but is a clock, not a field."""
+        assert "09" not in parse(self._entry("09:50 IST\n")).context
+
+    def test_chart_url_not_captured(self):
+        """Every alert ends with a URL whose scheme would otherwise become a column."""
+        ctx = parse(self._entry("https://www.tradingview.com/chart/?symbol=NSE:X&interval=5\n")).context
+        assert "https" not in ctx
