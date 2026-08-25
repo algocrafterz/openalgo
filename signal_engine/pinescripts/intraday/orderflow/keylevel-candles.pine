@@ -17,7 +17,10 @@ indicator("Key-Level Candles (breakout companion)", overlay=true, max_labels_cou
 // from 15 chart-wide patterns to 3 level-relative verdicts.
 //
 // Levels mirror breakout.pine:661
-//   array.from("ORH","ORM","ORL","IBH","IBM","IBL","VAH","POC","VAL","PDH","PDL")
+//   array.from("ORH","ORM","ORL","IBH","IBM","IBL","PVAH","PPOC","PVAL","PDH","PDL")
+// The P prefix marks previous-session levels. Without it PVAH/PPOC/PVAL read
+// identically to TradingView's Session Volume Profile, which plots TODAY's
+// VAH/POC/VAL -- two sets of lines, same three names, different prices.
 // ORB / IB / PD are computed here; VAH/POC/VAL are manual inputs, the same
 // option breakout.pine offers.
 //
@@ -48,11 +51,11 @@ useOR      = input.bool(true,  "Opening Range H/L", group=grpLvl)
 useIB      = input.bool(true,  "Initial Balance H/L", group=grpLvl)
 useMids    = input.bool(false, "Include ORM / IBM midpoints", group=grpLvl,
      tooltip="Off by default. Midpoints roughly double the level count, and with eleven levels on a 5-min chart price is within touching distance of something almost permanently, which is what buried the useful marks in noise.")
-useVP      = input.bool(false, "Volume Profile (manual)", group=grpLvl,
+useVP      = input.bool(false, "Prev-day Volume Profile (manual)", group=grpLvl,
      tooltip="Read VAH/POC/VAL off TradingView's Session Volume Profile for the PREVIOUS day, the same way breakout.pine's manual mode expects them.")
-vahIn      = input.float(0.0, "VAH", group=grpLvl)
-pocIn      = input.float(0.0, "POC", group=grpLvl)
-valIn      = input.float(0.0, "VAL", group=grpLvl)
+vahIn      = input.float(0.0, "PVAH (prev VAH)", group=grpLvl)
+pocIn      = input.float(0.0, "PPOC (prev POC)", group=grpLvl)
+valIn      = input.float(0.0, "PVAL (prev VAL)", group=grpLvl)
 
 grpShape = "Candle Thresholds"
 volLen     = input.int(20, "Volume Average Length", minval=1, group=grpShape)
@@ -62,10 +65,10 @@ bodyMinPct = input.float(55.0, "BREAK min body %", minval=1, maxval=100, step=5,
 oppWickMax = input.float(30.0, "BREAK max wick into level %", minval=1, maxval=100, step=5, group=grpShape,
      tooltip="A genuine breach does not leave a long wick on the side it broke through. That wick is the level pushing back.")
 wickMinPct = input.float(45.0, "FAKE min rejection wick %", minval=1, maxval=100, step=5, group=grpShape)
-accMarginAtr = input.float(0.15, "Acceptance margin (x ATR)", minval=0.0, step=0.05, group=grpShape,
-     tooltip="How far beyond a level the PREVIOUS bar had to close before a close back inside counts as a failed break. Without it, price oscillating a tick either side of a level scores a fakeout on every crossing — VAL alone produced 15 in one session.")
-lvlCooldown = input.int(3, "Bars between verdicts on the same level", minval=0, group=grpShape,
-     tooltip="Suppresses repeat verdicts while price grinds along a level.")
+accMarginAtr = input.float(0.0, "Acceptance margin (x ATR)", minval=0.0, step=0.05, group=grpShape,
+     tooltip="How far beyond a level the PREVIOUS bar must have closed before a close back inside counts as a failed break. 0 = every crossing is judged, which is the point: each interaction with a level is evidence, and a run of F-down marks along one level IS the conviction signal. Raise it only if repeated grinding along a level is drowning the chart.")
+lvlCooldown = input.int(0, "Bars between verdicts on the same level", minval=0, group=grpShape,
+     tooltip="0 = judge every interacting candle. Raise to thin out repeats while price grinds along a level.")
 dojiMaxPct = input.float(25.0, "WEAK max body %", minval=1, maxval=60, step=5, group=grpShape)
 
 grpVis = "Display"
@@ -81,8 +84,14 @@ showLvlTable = input.bool(true, "Show Level Coverage Table", group=grpVis,
      tooltip="Every level currently in play, its price, and how many BREAK / FAKE verdicts it produced today. Use it to confirm a level is actually being tested rather than assuming it is.")
 rowOffAtr  = input.float(2.0, "Label Row Offset (x ATR)", minval=0.5, step=0.5, group=grpVis,
      tooltip="All marks sit on one horizontal row this far below the session low, so they line up and stay clear of the candles instead of scattering across the price pane.")
-breakCol   = input.color(#2962FF, "BREAK", group=grpVis)
-fakeCol    = input.color(#E040FB, "FAKE",  group=grpVis)
+// One colour for BREAK and one for FAKE made the arrow the only thing carrying
+// direction, which is unreadable at tiny size. Four verdicts, four colours.
+brkUpCol   = input.color(#00E676, "BREAK up  (B up)",   group=grpVis)
+brkDnCol   = input.color(#FF1744, "BREAK down (B dn)",  group=grpVis)
+fakeUpCol  = input.color(#FF9100, "FAKE up   (F up)",   group=grpVis,
+     tooltip="Amber: an upside break that failed. Bearish implication — the level held as resistance.")
+fakeDnCol  = input.color(#00B0FF, "FAKE down (F dn)",   group=grpVis,
+     tooltip="Blue: a downside break that failed. Bullish implication — the level held as support.")
 weakCol    = input.color(#78909C, "WEAK",  group=grpVis)
 
 // ── Session-anchored levels ──────────────────────────────────────────────
@@ -164,9 +173,9 @@ f_add("ORM", orM, useOR and useMids)
 f_add("IBH", ibReady ? ibH : na, useIB)
 f_add("IBL", ibReady ? ibL : na, useIB)
 f_add("IBM", ibM, useIB and useMids)
-f_add("VAH", vahIn, useVP)
-f_add("POC", pocIn, useVP)
-f_add("VAL", valIn, useVP)
+f_add("PVAH", vahIn, useVP)
+f_add("PPOC", pocIn, useVP)
+f_add("PVAL", valIn, useVP)
 f_add("PDH", pdh, usePD)
 f_add("PDL", pdl, usePD)
 
@@ -253,7 +262,7 @@ if barstate.isconfirmed and showBreak and (breakUp or breakDn)
     map.put(brkCnt, testName, nz(map.get(brkCnt, testName), 0) + 1)
     map.put(lastAt, testName, bar_index)
     label.new(bar_index, rowY, text=up ? "B▲" : "B▼", style=label.style_label_up, yloc=yloc.price,
-         color=breakCol, textcolor=color.white, size=lblSize,
+         color=up ? brkUpCol : brkDnCol, textcolor=color.black, size=lblSize,
          tooltip=f_tip("BREAK", did, means))
 
 if barstate.isconfirmed and showFake and (fakeUp or fakeDn)
@@ -263,7 +272,7 @@ if barstate.isconfirmed and showFake and (fakeUp or fakeDn)
     map.put(fkCnt, testName, nz(map.get(fkCnt, testName), 0) + 1)
     map.put(lastAt, testName, bar_index)
     label.new(bar_index, rowY, text=up ? "F▲" : "F▼", style=label.style_label_up, yloc=yloc.price,
-         color=fakeCol, textcolor=color.white, size=lblSize,
+         color=up ? fakeUpCol : fakeDnCol, textcolor=color.black, size=lblSize,
          tooltip=f_tip("FAKE", did, means))
 
 if barstate.isconfirmed and showWeak and weak
@@ -295,10 +304,10 @@ if showLvlTable and barstate.islast
             int    fc = nz(map.get(fkCnt, nm), 0)
             table.cell(lt, 0, r, nm, text_color=color.gray, text_size=size.tiny)
             table.cell(lt, 1, r, str.tostring(vv, format.mintick), text_color=color.gray, text_size=size.tiny)
-            table.cell(lt, 2, r, bc > 0 ? str.tostring(bc) : "-", text_color = bc > 0 ? breakCol : color.gray, text_size=size.tiny)
-            table.cell(lt, 3, r, fc > 0 ? str.tostring(fc) : "-", text_color = fc > 0 ? fakeCol : color.gray, text_size=size.tiny)
+            table.cell(lt, 2, r, bc > 0 ? str.tostring(bc) : "-", text_color = bc > 0 ? brkUpCol : color.gray, text_size=size.tiny)
+            table.cell(lt, 3, r, fc > 0 ? str.tostring(fc) : "-", text_color = fc > 0 ? fakeUpCol : color.gray, text_size=size.tiny)
         else if r == n + 1 and not useVP
-            table.cell(lt, 0, r, "VAH/POC/VAL", text_color=color.orange, text_size=size.tiny)
+            table.cell(lt, 0, r, "PVAH/PPOC/PVAL", text_color=color.orange, text_size=size.tiny)
             table.cell(lt, 1, r, "off", text_color=color.orange, text_size=size.tiny)
             table.cell(lt, 2, r, "", text_color=color.gray, text_size=size.tiny)
             table.cell(lt, 3, r, "", text_color=color.gray, text_size=size.tiny)

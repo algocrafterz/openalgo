@@ -374,7 +374,12 @@ klConfirmTF       = input.timeframe("15", "| timeframe", group=grp_score, inline
 klShowVA        = true
 klShowSecondary = true
 klShowTags      = true
-klTagMaxATR     = 6.0
+// 0 = no distance limit: every level is drawn AND tagged. Was 6.0, which
+// dropped the tag on far levels and left anonymous lines; making suppression
+// symmetric then hid PDH entirely on a mid-range day, which is worse — PDH is
+// exactly the level a trend day is running at. The collision stagger in
+// klDrawLevel already keeps stacked tags readable.
+klTagMaxATR     = 0.0
 klShowSignals   = input.bool(true,  "Show key-level signal arrows",  group=grp_keylevel, tooltip="Green up / red down triangle when a key-level setup fires, with a compact\n'CODE score RVOL' tag offset from the candle.\n\nORB breakouts keep their own labels from the BREAKOUT DETECTION group.")
 
 // ============================================= ALERTS ==============================================
@@ -658,7 +663,11 @@ var float  klSnapAtr     = na
 // how far the entry was from POC, whether IB was wide, whether PDH capped the move.
 // Held as a parallel name/value pair of arrays rather than eleven scalars: the alert emits
 // them in a loop, which the compiled-token ceiling makes worth doing.
-var string[] klLvlNames = array.from("ORH", "ORM", "ORL", "IBH", "IBM", "IBL", "VAH", "POC", "VAL", "PDH", "PDL")
+// P-prefix = previous session (PVAH/PPOC/PVAL/PDH/PDL); bare names are today's
+// (ORH/ORM/ORL/IBH/IBM/IBL). Without it these read identically to TradingView's
+// Session Volume Profile, which plots the CURRENT day's VAH/POC/VAL — two sets
+// of lines with the same three names and different prices.
+var string[] klLvlNames = array.from("ORH", "ORM", "ORL", "IBH", "IBM", "IBL", "PVAH", "PPOC", "PVAL", "PDH", "PDL")
 var float[]  klSnapLvls = array.new_float(11, na)
 
 var bool htfBullish = false
@@ -1511,7 +1520,7 @@ renderKeyLevels(table dashTable, int startRow, string txtSize, color txtColor, f
     row += 1
 
     if full
-        table.cell(dashTable, 0, row, "VAH/POC/VAL ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous session's value area.\n\nVAH = upper edge of the 70% volume zone\nPOC = most-traded price (acts as a magnet)\nVAL = lower edge\n\nPrice above VAH or below VAL means today is auctioning outside yesterday's accepted value — the precondition for a trend day.")
+        table.cell(dashTable, 0, row, "PVAH/PPOC/PVAL ·", text_color=txtColor, text_size=txtSize, text_halign=text.align_left, tooltip="Previous session's value area.\n\nVAH = upper edge of the 70% volume zone\nPOC = most-traded price (acts as a magnet)\nVAL = lower edge\n\nPrice above VAH or below VAL means today is auctioning outside yesterday's accepted value — the precondition for a trend day.")
         table.cell(dashTable, 1, row, na(vah) ? "-" : str.tostring(vah, "#.##") + " / " + str.tostring(poc, "#.##") + " / " + str.tostring(val, "#.##"), text_color=na(vah) ? noC : txtColor, text_size=txtSize, text_halign=text.align_right)
         row += 1
 
@@ -3199,13 +3208,13 @@ klBuildRegistry(bool en, float poc, float vah, float val, float pdh, float pdl, 
     if en
         if not na(poc)
             array.push(a, poc)
-            array.push(n, "POC")
+            array.push(n, "PPOC")
         if not na(vah)
             array.push(a, vah)
-            array.push(n, "VAH")
+            array.push(n, "PVAH")
         if not na(val)
             array.push(a, val)
-            array.push(n, "VAL")
+            array.push(n, "PVAL")
         if not na(pdh)
             array.push(a, pdh)
             array.push(n, "PDH")
@@ -4950,9 +4959,9 @@ klDrawLevels(bool en, bool showVA, bool showSec, bool tags, float vah, float poc
         if showVA
             if not na(vah) and not na(val)
                 array.push(vaBoxes, box.new(x1, vah, bar_index + 2, val, xloc=xloc.bar_index, border_width=0, bgcolor=color.new(#90EE90, 94)))
-            klDrawLevel(lvlLines, lvlTags, taken, poc, "POC", cPOC, x1, xBase, 2, true, tags, band, maxDist)
-            klDrawLevel(lvlLines, lvlTags, taken, vah, "VAH", cVAH, x1, xBase, 1, true, tags, band, maxDist)
-            klDrawLevel(lvlLines, lvlTags, taken, val, "VAL", cVAL, x1, xBase, 1, true, tags, band, maxDist)
+            klDrawLevel(lvlLines, lvlTags, taken, poc, "PPOC", cPOC, x1, xBase, 2, true, tags, band, maxDist)
+            klDrawLevel(lvlLines, lvlTags, taken, vah, "PVAH", cVAH, x1, xBase, 1, true, tags, band, maxDist)
+            klDrawLevel(lvlLines, lvlTags, taken, val, "PVAL", cVAL, x1, xBase, 1, true, tags, band, maxDist)
         if showSec
             klDrawLevel(lvlLines, lvlTags, taken, ibh, "IB-H", cIB, x1, xBase, 1, true, tags, band, maxDist)
             // IB mid derived here rather than carried through the tuple — it is display-only.

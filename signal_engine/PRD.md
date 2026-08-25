@@ -400,6 +400,16 @@ Also dampened its FAKE spam: `VAL` alone produced 15 verdicts in one session bec
 
 **Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
 
+### Every level drawn and tagged; previous-day VP levels get a P prefix
+
+Making tag suppression symmetric fixed anonymous lines but created a worse problem: PDH, 33 points from close on a mid-range day, was hidden entirely — and PDH is exactly the level a trend day runs at. `klTagMaxATR` is now 0 (no distance limit): every level is drawn AND tagged, and the existing collision stagger keeps stacked tags readable.
+
+`VAH/POC/VAL` renamed to `PVAH/PPOC/PVAL`. These are the PREVIOUS session's value area, but TradingView's Session Volume Profile plots the CURRENT day's VAH/POC/VAL — two sets of lines carrying the same three names at different prices, both on the chart at once. The P prefix also makes the naming self-consistent: `PVAH/PPOC/PVAL/PDH/PDL` are previous-session, bare `ORH/ORM/ORL/IBH/IBM/IBL` are today's. Display only — `klLvlNames` feeds a human-readable KEYLEVEL packet that goes to a channel the signal engine does not listen on, and `parser.py` never reads level names, so nothing in the trade pipeline is affected.
+
+`keylevel-candles.pine`: acceptance margin and per-level cooldown both back to 0, so every candle interacting with a level is judged again — a run of F-down marks along one level *is* the conviction signal, and thinning it out removed the evidence. Each of the four verdicts now has its own colour (B up green, B down red, F up amber, F down blue) because at tiny label size the arrow alone was not readable.
+
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.
