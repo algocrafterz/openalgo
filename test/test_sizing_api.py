@@ -109,6 +109,9 @@ def _stub_auth_db():
         auth_mock.get_auth_token_broker = MagicMock(return_value=(None, None))
         auth_mock.get_username_by_apikey = MagicMock(return_value=None)
         auth_mock.verify_api_key = MagicMock(return_value=None)
+        # database.settings_db does `from database.auth_db import PEPPER` and builds a
+        # Fernet at import time, so the stub must expose a real string, not a MagicMock.
+        auth_mock.PEPPER = "a" * 64
         sys.modules["database.auth_db"] = auth_mock
 
     if "database.apilog_db" not in sys.modules:
