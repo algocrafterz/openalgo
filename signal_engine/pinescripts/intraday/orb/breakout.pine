@@ -4897,20 +4897,25 @@ klClearBoxes(box[] arr) =>
 // drawLine=false tags a level whose line is already drawn elsewhere (the ORB plots).
 klDrawLevel(line[] larr, label[] tarr, float[] taken, float price, string name, color c, int x1, int xBase, int w, bool drawLine, bool tagsIn, float band, float maxDist) =>
     if not na(price)
-        // Distant levels keep their line but drop their tag — they are context, not a
-        // decision, and nine tags stacked at the right edge is unreadable.
-        bool tags = tagsIn and (maxDist <= 0 or math.abs(price - close) <= maxDist)
-        int slot = 0
-        if tags and array.size(taken) > 0
-            for i = 0 to array.size(taken) - 1
-                if math.abs(price - array.get(taken, i)) <= band
-                    slot += 1
-        int xTag = xBase + slot * KL_TAG_STEP_BARS
-        if drawLine
-            array.push(larr, line.new(x1, price, tags ? xTag : xBase, price, xloc=xloc.bar_index, color=c, style=line.style_dotted, width=w))
-        if tags
-            array.push(tarr, label.new(xTag, price, name + " " + str.tostring(price, format.mintick), style=label.style_none, textcolor=c, size=size.small))
-            array.push(taken, price)
+        // A line the trader cannot name is worse than no line: it reads as a level
+        // without saying which. So suppression is symmetric — a distant level we draw
+        // ourselves is dropped entirely rather than left as an anonymous line. Levels
+        // whose line comes from elsewhere (drawLine=false, the ORB plots) are always
+        // tagged, because we cannot remove that line and must not orphan it.
+        bool near = maxDist <= 0 or math.abs(price - close) <= maxDist
+        bool tags = tagsIn and (near or not drawLine)
+        if near or not drawLine
+            int slot = 0
+            if tags and array.size(taken) > 0
+                for i = 0 to array.size(taken) - 1
+                    if math.abs(price - array.get(taken, i)) <= band
+                        slot += 1
+            int xTag = xBase + slot * KL_TAG_STEP_BARS
+            if drawLine
+                array.push(larr, line.new(x1, price, tags ? xTag : xBase, price, xloc=xloc.bar_index, color=c, style=line.style_dotted, width=w))
+            if tags
+                array.push(tarr, label.new(xTag, price, name + " " + str.tostring(price, format.mintick), style=label.style_none, textcolor=c, size=size.small))
+                array.push(taken, price)
 
 // Redrawn on the last bar only, clearing first — keeps line/label usage flat so the
 // existing 500/500/300 caps still hold.

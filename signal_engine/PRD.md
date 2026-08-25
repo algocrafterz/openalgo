@@ -388,6 +388,18 @@ Added a coverage table (bottom-right): every level in play, its price, and today
 
 **Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
 
+### No unlabelled key-level lines
+
+`klDrawLevel` dropped the TAG for any level further than `klTagMaxATR` (6) x ATR from close but kept its LINE, so the chart carried horizontal lines the trader could not name. A line you cannot identify is worse than no line — it reads as a level without saying which.
+
+Suppression is now symmetric: a distant level whose line we draw ourselves is dropped entirely instead of being left anonymous. Levels whose line comes from elsewhere (`drawLine=false`, the ORB plots) are always tagged, because that line cannot be removed and must not be orphaned.
+
+`keylevel-candles.pine` was compounding this — it re-plotted ORH/ORL/IBH/IBL/PDH/PDL with `plot()`, which carries no on-chart tag, duplicating lines breakout.pine already draws AND labels. `Plot Levels` now defaults off.
+
+Also dampened its FAKE spam: `VAL` alone produced 15 verdicts in one session because a close one tick beyond a level counted as a break, making every oscillation a failed break. Added an acceptance margin (prior close must clear the level by 0.15 x ATR) and a per-level cooldown (3 bars).
+
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.

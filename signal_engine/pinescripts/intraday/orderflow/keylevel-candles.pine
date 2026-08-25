@@ -62,6 +62,10 @@ bodyMinPct = input.float(55.0, "BREAK min body %", minval=1, maxval=100, step=5,
 oppWickMax = input.float(30.0, "BREAK max wick into level %", minval=1, maxval=100, step=5, group=grpShape,
      tooltip="A genuine breach does not leave a long wick on the side it broke through. That wick is the level pushing back.")
 wickMinPct = input.float(45.0, "FAKE min rejection wick %", minval=1, maxval=100, step=5, group=grpShape)
+accMarginAtr = input.float(0.15, "Acceptance margin (x ATR)", minval=0.0, step=0.05, group=grpShape,
+     tooltip="How far beyond a level the PREVIOUS bar had to close before a close back inside counts as a failed break. Without it, price oscillating a tick either side of a level scores a fakeout on every crossing — VAL alone produced 15 in one session.")
+lvlCooldown = input.int(3, "Bars between verdicts on the same level", minval=0, group=grpShape,
+     tooltip="Suppresses repeat verdicts while price grinds along a level.")
 dojiMaxPct = input.float(25.0, "WEAK max body %", minval=1, maxval=60, step=5, group=grpShape)
 
 grpVis = "Display"
@@ -69,7 +73,8 @@ showBreak  = input.bool(true, "Show BREAK", group=grpVis)
 showFake   = input.bool(true, "Show FAKE", group=grpVis)
 showWeak   = input.bool(false, "Show WEAK", group=grpVis,
      tooltip="Off by default — inconclusive tests are the most common outcome and swamp the chart.")
-showLevels = input.bool(true, "Plot Levels", group=grpVis)
+showLevels = input.bool(false, "Plot Levels", group=grpVis,
+     tooltip="Off by default. breakout.pine already draws AND tags these levels; plotting them here a second time adds a set of lines with no tag on them, which is exactly the 'what level is that line' problem. Turn on only when running this script without breakout.pine.")
 lblSize    = input.string(size.tiny, "Label Size", options=[size.tiny, size.small, size.normal], group=grpVis,
      tooltip="Labels accept a series size, unlike plotshape whose size must be a compile-time constant.")
 showLvlTable = input.bool(true, "Show Level Coverage Table", group=grpVis,
@@ -101,6 +106,7 @@ var float rowY = na
 // Per-level verdict counts for the coverage table, reset each session.
 var map<string, int> brkCnt = map.new<string, int>()
 var map<string, int> fkCnt  = map.new<string, int>()
+var map<string, int> lastAt = map.new<string, int>()
 
 if newSess
     sessStart := time
@@ -111,6 +117,7 @@ if newSess
     rowY := low - nz(atr14, high - low) * rowOffAtr
     map.clear(brkCnt)
     map.clear(fkCnt)
+    map.clear(lastAt)
 
 if not na(rowY)
     rowY := math.min(rowY, low - nz(atr14, high - low) * rowOffAtr)
@@ -205,8 +212,11 @@ bool bearEngulf = bearBar and close[1] > open[1] and close <= open[1] and open >
 // nearest on THIS bar, which was frequently a different level entirely.
 bool closedAbove = atLevel and close > testLvl
 bool closedBelow = atLevel and close < testLvl
-bool prevAbove   = atLevel and close[1] > testLvl
-bool prevBelow   = atLevel and close[1] < testLvl
+// A close one tick beyond a level was never a break, so coming back inside is
+// not a failed break. Require the prior close to have cleared it by a margin.
+float accMargin = nz(atr14) * accMarginAtr
+bool prevAbove   = atLevel and close[1] > testLvl + accMargin
+bool prevBelow   = atLevel and close[1] < testLvl - accMargin
 
 // ── Verdicts ─────────────────────────────────────────────────────────────
 // BREAK: closes through the level with conviction and volume, and without
@@ -223,6 +233,14 @@ bool fakeDn = atLevel and not breakUp and not breakDn and closedAbove and ((low 
 // WEAK: inconclusive test — no force behind it either way.
 bool weak = atLevel and not breakUp and not breakDn and not fakeUp and not fakeDn and (bodyP <= dojiMaxPct or not volOK)
 
+// Suppress repeat verdicts while price grinds along the same level.
+bool lvlReady = not atLevel ? false : (na(map.get(lastAt, testName)) or bar_index - nz(map.get(lastAt, testName), 0) >= lvlCooldown)
+breakUp := breakUp and lvlReady
+breakDn := breakDn and lvlReady
+fakeUp  := fakeUp  and lvlReady
+fakeDn  := fakeDn  and lvlReady
+weak    := weak    and lvlReady
+
 // ── Rendering ────────────────────────────────────────────────────────────
 // Three short lines: what the candle did, then what it means. No jargon.
 f_tip(string _head, string _did, string _means) =>
@@ -233,6 +251,7 @@ if barstate.isconfirmed and showBreak and (breakUp or breakDn)
     string did = "Big body closed " + (up ? "above" : "below") + " it on " + str.tostring(rvol, "#.#") + "x volume."
     string means = "Level gave way. Expect follow-through " + (up ? "up" : "down") + "."
     map.put(brkCnt, testName, nz(map.get(brkCnt, testName), 0) + 1)
+    map.put(lastAt, testName, bar_index)
     label.new(bar_index, rowY, text=up ? "B▲" : "B▼", style=label.style_label_up, yloc=yloc.price,
          color=breakCol, textcolor=color.white, size=lblSize,
          tooltip=f_tip("BREAK", did, means))
@@ -242,6 +261,7 @@ if barstate.isconfirmed and showFake and (fakeUp or fakeDn)
     string did = up ? "Price poked above it and got sold back." : "Price poked below it and got bought back."
     string means = "Level held. Do not chase the " + (up ? "break up" : "break down") + "."
     map.put(fkCnt, testName, nz(map.get(fkCnt, testName), 0) + 1)
+    map.put(lastAt, testName, bar_index)
     label.new(bar_index, rowY, text=up ? "F▲" : "F▼", style=label.style_label_up, yloc=yloc.price,
          color=fakeCol, textcolor=color.white, size=lblSize,
          tooltip=f_tip("FAKE", did, means))
