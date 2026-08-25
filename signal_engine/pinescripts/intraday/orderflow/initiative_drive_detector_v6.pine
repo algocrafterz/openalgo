@@ -3,87 +3,84 @@ indicator("Initiative Drive Detector v6", overlay=true, max_labels_count=500, ma
 
 // ============================================================================
 // PURPOSE
-// Flags expansion candles that show INITIATIVE participation — an aggressor
-// lifting offers / hitting bids hard enough to move price away from value —
-// as opposed to RESPONSIVE activity that fades an extreme.
+// Marks INITIATIVE DRIVE candles: an aggressor lifting offers / hitting bids
+// hard enough to move price away from value, as opposed to RESPONSIVE activity
+// that fades an extreme.
 //
-// This script does NOT confirm order flow. Treat every flag as a prompt to
-// open the footprint chart and check for:
-//   - Stacked imbalances in the direction of the flag
-//   - Absorption at the opposite extreme (would invalidate the candidate)
-//   - Delta agreeing with price direction
-// Convention: BID = left = sellers, ASK = right = buyers (fixed, regardless
-// of candle colour).
+// This script does NOT confirm order flow. Every mark is a prompt to open the
+// footprint and check for stacked imbalances in the direction of the flag,
+// absorption at the opposite extreme (which invalidates it), and delta
+// agreeing with price.
 //
-// Designed for trending instruments on any timeframe. In a balanced/rotational
-// regime an "expansion" candle is usually just noise, which is what the ADX
-// regime gate exists to suppress.
+// GATES vs SCORE  (this split is the whole design)
+// A previous build scored eight criteria and fired at 5/8, with expansion as
+// just one of the eight. That let a SMALL candle qualify on
+// rvol + body% + close + ema + vwap, because body% is measured against the
+// bar's own range -- a doji-sized bar with a 90% body passed it. Small bars
+// were being marked as drives, which is the opposite of what the term means.
+//
+// So the four properties that DEFINE an initiative drive are now hard gates,
+// all of which must pass:
+//   1. Body expansion  - body beats the median body of recent bars. This is
+//                        the "visibly large candle" test, in absolute terms.
+//   2. Range expansion - range beats the median range. Median, not ATR: ATR is
+//                        a mean, so one gap-open drive lifts it for the whole
+//                        window and locks out every expansion behind it.
+//   3. Directional body- closes in the signal's direction, body a majority of
+//                        the range.
+//   4. Close at extreme- little or no wick against the direction. A drive that
+//                        gets pushed back off its extreme was not a drive.
+//
+// The remaining five criteria only RANK the context; they never create a
+// signal on their own.
 // ============================================================================
 
 // ── Inputs ───────────────────────────────────────────────────────────────
-grpRange   = "Range & Volatility"
-atrLen     = input.int(14, "Range Baseline Length", minval=1, group=grpRange)
-atrMult    = input.float(1.15, "Expansion Multiplier", step=0.05, minval=0.1, group=grpRange,
-     tooltip="Bar range must beat the MEDIAN range of the last N bars by this multiple. Median, not ATR: one outlier bar (a gap-open drive) lifts ATR for the whole averaging window and then suppresses every genuine expansion behind it.")
+grpDrive   = "Drive Definition (hard gates)"
+lenBase    = input.int(20, "Baseline Length", minval=2, group=grpDrive,
+     tooltip="How many bars form the median body / median range the candle is measured against.")
+bodyExpMult = input.float(1.5, "Body > median body x", step=0.1, minval=0.5, group=grpDrive,
+     tooltip="The absolute size test. Body % alone is relative to the bar's own range, so a tiny bar with a 90% body passes it -- this is the gate that stops small candles being called drives.")
+rangeExpMult = input.float(1.15, "Range > median range x", step=0.05, minval=0.5, group=grpDrive)
+bodyMinPct = input.float(60.0, "Body % of range", step=5, minval=1, maxval=100, group=grpDrive)
+closeZonePct = input.float(30.0, "Close within % of extreme", step=5, minval=1, maxval=100, group=grpDrive,
+     tooltip="Doubles as the opposing-wick cap: closing in the top 30% means the upper wick is at most 30% of range.")
 
-grpVol     = "Volume"
-volLen     = input.int(20, "Volume SMA Length", minval=1, group=grpVol)
-rvolMin    = input.float(1.50, "Minimum RVOL", step=0.1, minval=0.1, group=grpVol)
+grpCtx     = "Context Score"
+volLen     = input.int(20, "Volume SMA Length", minval=1, group=grpCtx)
+rvolMin    = input.float(1.30, "Minimum RVOL", step=0.1, minval=0.1, group=grpCtx)
+emaLen     = input.int(9, "EMA Length", minval=1, group=grpCtx)
+adxLen     = input.int(14, "ADX / DI Length", minval=1, group=grpCtx)
+adxMin     = input.float(20.0, "Minimum ADX", step=1, minval=0, group=grpCtx)
+lookback   = input.int(3, "Breakout Lookback", minval=1, group=grpCtx)
+scoreMin   = input.int(3, "Minimum Score (of 5)", minval=0, maxval=5, group=grpCtx,
+     tooltip="Applied AFTER the four gates. Gates decide whether the candle is a drive at all; the score only ranks how favourable the context is.")
 
-grpBody    = "Body / Close Location"
-bodyMinPct = input.float(65.0, "Minimum Body %", step=5, minval=1, maxval=100, group=grpBody)
-closeZonePct = input.float(25.0, "Close-Within-Extreme Zone %", step=5, minval=1, maxval=100, group=grpBody,
-     tooltip="Bull candidate requires close within this % of the high; bear candidate within this % of the low. This doubles as the opposing-wick cap: closing in the top 25% means the upper wick is at most 25% of range.")
-
-grpTrend   = "Trend Regime"
-emaLen     = input.int(9, "EMA Length", minval=1, group=grpTrend)
-adxLen     = input.int(14, "ADX / DI Length", minval=1, group=grpTrend)
-adxMin     = input.float(20.0, "Minimum ADX", step=1, minval=0, group=grpTrend,
-     tooltip="Trend-regime filter. Initiative drives are only meaningful when the instrument is actually trending; in balance, an expansion bar is usually rotation that mean-reverts.")
-
-grpBreak   = "Breakout"
-lookback   = input.int(3, "Breakout Lookback", minval=1, group=grpBreak)
-
-grpFilter  = "Signal Filtering"
-scoreMin      = input.int(5, "Minimum Score (of 8)", minval=1, maxval=8, group=grpFilter)
+grpFilter  = "Filtering"
 cooldownBars  = input.int(0, "Minimum Bars Between Signals", minval=0, group=grpFilter)
-firstOnly     = input.bool(false, "First Bar of a Run Only", group=grpFilter,
-     tooltip="This is a chart-reading detector, so by default every eligible candle is marked. Turn on to collapse a consecutive run down to its first bar (useful when driving alerts rather than reading the chart).")
-requireGate   = input.bool(true, "Require Directional Close (recommended)", group=grpFilter,
-     tooltip="Candle must close in the signal direction AND near that extreme. Without this, the direction-neutral criteria (ATR, RVOL, body size) let an upthrust or a bear-trap bar score a signal for the wrong side.")
-requireTrend  = input.bool(false, "Require Trend Regime (ADX)", group=grpFilter,
-     tooltip="Off by default: ADX still contributes a score point, but as a hard gate it stacked with the direction gate and the score floor and left almost nothing on the chart.")
-skipOpenBars  = input.int(0, "Skip First N Bars of Session", minval=0, group=grpFilter,
-     tooltip="Opening bars carry an auction-driven volume spike that inflates RVOL. Left at 0 by default: on NSE 5-min the opening drive is very often the single most genuine initiative candle of the day, so skipping it threw away the best signal on the chart.")
+firstOnly     = input.bool(false, "First Bar of a Run Only", group=grpFilter)
+requireTrend  = input.bool(false, "Require Trend Regime (ADX)", group=grpFilter)
+skipOpenBars  = input.int(0, "Skip First N Bars of Session", minval=0, group=grpFilter)
 useSession    = input.bool(true, "Restrict to NSE Cash Session (09:15-15:30 IST)", group=grpFilter)
 sessionString = input.session("0915-1530", "Session", group=grpFilter)
 
 grpVis     = "Display"
-showMarkers = input.bool(true, "Show Markers", group=grpVis)
-// NOTE: plotshape's `size` argument is a *const string*. An input.string is
-// "input string", one step weaker, and the compiler rejects it:
-//   Cannot call "plotshape" with argument "size"="markerSize"
-// Label size has to be fixed at compile time; change size.small below to
-// size.tiny / size.normal directly if you want it different.
+showMarkers = input.bool(true, "Show ID Labels", group=grpVis)
+showBg      = input.bool(true, "Tint Signal Bar Background", group=grpVis)
+showBarCol  = input.bool(false, "Recolour Signal Candle", group=grpVis)
+showTable   = input.bool(true, "Show Score Table", group=grpVis)
+// NOTE: plotshape's `size` is a *const string*. An input.string is "input
+// string" and the compiler rejects it, so marker size is fixed here.
 bullMarkCol = input.color(color.new(color.lime, 0), "Bull ID Label", group=grpVis)
 bearMarkCol = input.color(color.new(color.red, 0), "Bear ID Label", group=grpVis)
-showLabels  = input.bool(false, "Show Score Labels", group=grpVis,
-     tooltip="Off by default — the triangle marker carries the signal without covering price action. Turn on when you want the score inline.")
-showBg      = input.bool(true, "Tint Signal Bar Background", group=grpVis)
-showBarCol  = input.bool(false, "Recolour Signal Candle", group=grpVis,
-     tooltip="Off by default. Recolouring overwrites the real candle colour, which you still need when reading the bar against the footprint.")
-showTable   = input.bool(true, "Show Score Table", group=grpVis)
 
 // ── Calculations ─────────────────────────────────────────────────────────
-// Median rather than ATR. ATR is a mean of true range, so the 09:20 gap-open
-// drive on a 5-min chart lifts it for the next `atrLen` bars and locks out every
-// expansion behind it -- observed on TCS 2026-08-25, where the one obvious
-// initiative candle on the chart raised the bar for everything that followed.
-float medRange = ta.median(high - low, atrLen)
-
 float barRange = high - low
-float body     = math.abs(close - open)
-float bodyPct  = barRange > 0 ? body / barRange * 100 : 0.0
+float bodyV    = math.abs(close - open)
+float bodyPct  = barRange > 0 ? bodyV / barRange * 100 : 0.0
+
+float medRange = ta.median(barRange, lenBase)
+float medBody  = ta.median(bodyV, lenBase)
 
 float volMA = ta.sma(volume, volLen)
 float rvol  = volMA > 0 ? volume / volMA : 0.0
@@ -95,28 +92,29 @@ float vwapVal = ta.vwap(close)
 
 bool inSession = not useSession or not na(time(timeframe.period, sessionString, "Asia/Kolkata"))
 
-// Bars elapsed in the current session, used to skip the opening auction.
 var int barsIntoSession = 0
 barsIntoSession := session.isfirstbar ? 1 : barsIntoSession + 1
 bool pastOpen = barsIntoSession > skipOpenBars
 
-// ── Core Conditions ──────────────────────────────────────────────────────
-// Expansion. A second `range > avgRange` criterion used to sit alongside this
-// measuring the same property, so volatility scored twice while participation
-// and structure scored once each. Dropped.
-bool atrPass  = barRange >= medRange * atrMult
-bool rvolPass = rvol >= rvolMin
+// ── GATE 1+2: expansion (absolute size, not relative to self) ────────────
+bool bodyExp  = not na(medBody)  and medBody  > 0 and bodyV    >= medBody  * bodyExpMult
+bool rangeExp = not na(medRange) and medRange > 0 and barRange >= medRange * rangeExpMult
 
+// ── GATE 3: directional body ─────────────────────────────────────────────
 bool bodyPass = bodyPct >= bodyMinPct
-// Direction-aware body: an expansion candle only counts toward a side if it
-// actually closed in that direction. bodyPct alone is |close-open|, so a large
-// DOWN candle would otherwise score a bull body point.
 bool bullBody = bodyPass and close > open
 bool bearBody = bodyPass and close < open
 
-// Close location doubles as the opposing-wick cap.
+// ── GATE 4: close at the extreme (opposing-wick cap) ─────────────────────
 bool bullClose = close >= high - barRange * (closeZonePct / 100)
 bool bearClose = close <= low  + barRange * (closeZonePct / 100)
+
+// A candle is a drive only if all four hold.
+bool bullDrive = bodyExp and rangeExp and bullBody and bullClose
+bool bearDrive = bodyExp and rangeExp and bearBody and bearClose
+
+// ── Context score (ranking only, never creates a signal) ─────────────────
+bool rvolPass = rvol >= rvolMin
 
 bool bullTrend = close > ema and ema > ema[1]
 bool bearTrend = close < ema and ema < ema[1]
@@ -124,62 +122,41 @@ bool bearTrend = close < ema and ema < ema[1]
 bool bullVWAP = close > vwapVal
 bool bearVWAP = close < vwapVal
 
-// Breakout is measured on the CLOSE, not the intrabar extreme. `high > highest`
-// is satisfied by an upthrust that pokes through the level and then gets sold
-// back — the textbook responsive/absorption bar this script exists to filter
-// out. Requiring the close beyond the level means the auction actually held
-// the new territory into the bar close.
+// Breakout on the CLOSE, not the intrabar extreme: `high > highest` is
+// satisfied by an upthrust that pokes through and gets sold back, which is the
+// absorption bar this script exists to filter out.
 bool bullBreak = close > ta.highest(high[1], lookback)
 bool bearBreak = close < ta.lowest(low[1], lookback)
 
-// Trend regime. An expansion bar inside balance is rotation, not initiative.
-// ADX measures trend STRENGTH only, so on its own it was another free point for
-// both sides. +DI/-DI supplies the direction, which makes this criterion agree
-// with the signal instead of subsidising it.
+// ADX measures trend STRENGTH only, so on its own it was a free point for both
+// sides. +DI/-DI supplies the direction.
 bool trendStrong = adxVal >= adxMin
 bool bullRegime  = trendStrong and diPlus > diMinus
 bool bearRegime  = trendStrong and diMinus > diPlus
 
-// ── Score ────────────────────────────────────────────────────────────────
-int bullScore = (atrPass ? 1 : 0) + (rvolPass ? 1 : 0) + (bullBody ? 1 : 0) + (bullClose ? 1 : 0) +
-     (bullBreak ? 1 : 0) + (bullTrend ? 1 : 0) + (bullVWAP ? 1 : 0) + (bullRegime ? 1 : 0)
+int bullScore = (rvolPass ? 1 : 0) + (bullBreak ? 1 : 0) + (bullTrend ? 1 : 0) + (bullVWAP ? 1 : 0) + (bullRegime ? 1 : 0)
+int bearScore = (rvolPass ? 1 : 0) + (bearBreak ? 1 : 0) + (bearTrend ? 1 : 0) + (bearVWAP ? 1 : 0) + (bearRegime ? 1 : 0)
 
-int bearScore = (atrPass ? 1 : 0) + (rvolPass ? 1 : 0) + (bearBody ? 1 : 0) + (bearClose ? 1 : 0) +
-     (bearBreak ? 1 : 0) + (bearTrend ? 1 : 0) + (bearVWAP ? 1 : 0) + (bearRegime ? 1 : 0)
-
-// ── Gates ────────────────────────────────────────────────────────────────
-// Several criteria (ATR, RVOL, body size, ADX) are direction-neutral, so they
-// were free points for BOTH sides. An upthrust -- spikes up, takes out the
-// 3-bar high, closes on its low inside an uptrend -- collected enough of them
-// to fire a BULL signal. That bar is the opposite of initiative buying: it is
-// exactly the absorption the header tells you to go check the footprint for.
-// Direction is therefore a prerequisite, not a score component.
-bool bullGate = not requireGate or (bullBody and bullClose)
-bool bearGate = not requireGate or (bearBody and bearClose)
-
+// ── Qualification ────────────────────────────────────────────────────────
 bool bullRegimeGate = not requireTrend or bullRegime
 bool bearRegimeGate = not requireTrend or bearRegime
 
-// ATR/RVOL are unreliable until their lookbacks are filled.
-bool warmedUp = bar_index >= math.max(atrLen, volLen, adxLen, lookback)
+bool warmedUp = bar_index >= math.max(lenBase, volLen, adxLen, lookback)
+bool context  = inSession and warmedUp and pastOpen
 
-bool context = inSession and warmedUp and pastOpen
+bool bullQualifies = bullDrive and bullScore >= scoreMin and bullRegimeGate and context
+bool bearQualifies = bearDrive and bearScore >= scoreMin and bearRegimeGate and context
 
-bool bullQualifies = bullScore >= scoreMin and bullGate and bullRegimeGate and context
-bool bearQualifies = bearScore >= scoreMin and bearGate and bearRegimeGate and context
-
-// A single bar cannot be both initiative buying and initiative selling. If both
-// sides qualify the bar is ambiguous, so emit neither rather than firing two
-// contradictory alerts off the same candle.
+// The gates are mutually exclusive (close > open vs close < open), so this can
+// only fire if the gates are disabled in a future edit. Kept as a guard.
 bool bothQualify   = bullQualifies and bearQualifies
 bool bullCandidate = bullQualifies and not bothQualify
 bool bearCandidate = bearQualifies and not bothQualify
 
-// ── First Expansion Only, Confirmed Bar ─────────────────────────────────
 bool bullRaw = bullCandidate and (not firstOnly or not bullCandidate[1]) and barstate.isconfirmed
 bool bearRaw = bearCandidate and (not firstOnly or not bearCandidate[1]) and barstate.isconfirmed
 
-// ── Cooldown Filter ──────────────────────────────────────────────────────
+// ── Cooldown ─────────────────────────────────────────────────────────────
 var int lastBullBar = na
 var int lastBearBar = na
 
@@ -197,9 +174,6 @@ if bearRaw
         lastBearBar := bar_index
 
 // ── Visuals ──────────────────────────────────────────────────────────────
-// Small "ID" labels: green below a bullish initiative drive, red above a
-// bearish one. The label shape still reads differently from a bare entry/exit
-// triangle, and nothing is drawn over the candle body or wicks.
 plotshape(showMarkers and bullSignal, title="Bull Initiative Drive", style=shape.labelup,
      location=location.belowbar, color=bullMarkCol, text="ID", textcolor=color.black, size=size.small)
 plotshape(showMarkers and bearSignal, title="Bear Initiative Drive", style=shape.labeldown,
@@ -208,61 +182,46 @@ plotshape(showMarkers and bearSignal, title="Bear Initiative Drive", style=shape
 barcolor(showBarCol and bullSignal ? color.lime : showBarCol and bearSignal ? color.red : na)
 bgcolor(showBg and bullSignal ? color.new(bullMarkCol, 88) : showBg and bearSignal ? color.new(bearMarkCol, 88) : na)
 
-// Optional compact score label. `location=` is not a label.new parameter --
-// labels position with yloc -- and the style constants are label.style_label_up
-// / label.style_label_down. Both were wrong, so the script did not compile.
-if showLabels and bullSignal
-    label.new(bar_index, low, text=str.tostring(bullScore), style=label.style_label_up,
-         yloc=yloc.belowbar, color=color.new(bullMarkCol, 20), textcolor=color.black, size=size.tiny,
-         tooltip="Bull initiative candidate " + str.tostring(bullScore) +
-         "/8\nVerify on footprint: ask-side stacking, no absorption at the high")
-
-if showLabels and bearSignal
-    label.new(bar_index, high, text=str.tostring(bearScore), style=label.style_label_down,
-         yloc=yloc.abovebar, color=color.new(bearMarkCol, 20), textcolor=color.black, size=size.tiny,
-         tooltip="Bear initiative candidate " + str.tostring(bearScore) +
-         "/8\nVerify on footprint: bid-side stacking, no absorption at the low")
-
-// ── Score Breakdown Table (last bar) ────────────────────────────────────
-var table scoreTable = table.new(position.top_right, 2, 10,
+// ── Score Table ──────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 12,
      bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
 
 f_head(_row, _a, _b) =>
-    table.cell(scoreTable, 0, _row, _a, text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
-    table.cell(scoreTable, 1, _row, _b, text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
+    table.cell(t, 0, _row, _a, text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
+    table.cell(t, 1, _row, _b, text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 60))
 
 f_neutral(_row, _label, _pass) =>
-    table.cell(scoreTable, 0, _row, _label, text_color=color.gray, text_size=size.small)
-    table.cell(scoreTable, 1, _row, _pass ? "PASS" : "-",
-         text_color = _pass ? color.lime : color.gray, text_size=size.small)
+    table.cell(t, 0, _row, _label, text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, _row, _pass ? "PASS" : "-", text_color = _pass ? color.lime : color.gray, text_size=size.small)
 
 f_dir(_row, _label, _bull, _bear) =>
-    table.cell(scoreTable, 0, _row, _label, text_color=color.gray, text_size=size.small)
-    table.cell(scoreTable, 1, _row, _bull ? "BULL" : _bear ? "BEAR" : "-",
+    table.cell(t, 0, _row, _label, text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, _row, _bull ? "BULL" : _bear ? "BEAR" : "-",
          text_color = _bull ? color.lime : _bear ? color.red : color.gray, text_size=size.small)
 
 if showTable and barstate.islast
-    f_head(0, "Criteria", "Side")
-    f_neutral(1, "Range >= median x mult", atrPass)
-    f_neutral(2, "RVOL >= min", rvolPass)
-    f_dir(3, "Body % (directional)", bullBody, bearBody)
-    f_dir(4, "Close in extreme zone", bullClose, bearClose)
-    f_dir(5, "Close beyond N-bar level", bullBreak, bearBreak)
-    f_dir(6, "EMA trend align", bullTrend, bearTrend)
-    f_dir(7, "VWAP side", bullVWAP, bearVWAP)
-    f_dir(8, "ADX >= min (+DI/-DI)", bullRegime, bearRegime)
-    f_head(9, "Score  Bull / Bear", str.tostring(bullScore) + " / " + str.tostring(bearScore))
+    f_head(0, "GATES (all required)", "Side")
+    f_neutral(1, "Body > median body x",  bodyExp)
+    f_neutral(2, "Range > median range x", rangeExp)
+    f_dir(3, "Body % of range", bullBody, bearBody)
+    f_dir(4, "Close at extreme", bullClose, bearClose)
+    f_head(5, "CONTEXT (ranking)", "Side")
+    f_neutral(6, "RVOL >= min", rvolPass)
+    f_dir(7, "Close beyond N-bar level", bullBreak, bearBreak)
+    f_dir(8, "EMA trend align", bullTrend, bearTrend)
+    f_dir(9, "VWAP side", bullVWAP, bearVWAP)
+    f_dir(10, "ADX >= min (+DI/-DI)", bullRegime, bearRegime)
+    f_head(11, "Drive?  Score", (bullDrive ? "BULL " : bearDrive ? "BEAR " : "no ") + str.tostring(bullDrive ? bullScore : bearDrive ? bearScore : 0) + "/5")
 
 // ── Alerts ───────────────────────────────────────────────────────────────
-alertcondition(bullSignal, "Bull Initiative Drive", "Bullish Initiative Drive candidate - verify on footprint (ask-side stacking, no absorption)")
-alertcondition(bearSignal, "Bear Initiative Drive", "Bearish Initiative Drive candidate - verify on footprint (bid-side stacking, no absorption)")
+alertcondition(bullSignal, "Bull Initiative Drive", "Bullish Initiative Drive - verify on footprint (ask-side stacking, no absorption)")
+alertcondition(bearSignal, "Bear Initiative Drive", "Bearish Initiative Drive - verify on footprint (bid-side stacking, no absorption)")
 
-if bullSignal
-    alert('{"symbol":"' + syminfo.tickerid + '","direction":"bull","score":' + str.tostring(bullScore) +
-         ',"adx":' + str.tostring(nz(adxVal), "#.##") + ',"rvol":' + str.tostring(nz(rvol), "#.##") +
-         ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", "Asia/Kolkata") + '"}', alert.freq_once_per_bar_close)
-
-if bearSignal
-    alert('{"symbol":"' + syminfo.tickerid + '","direction":"bear","score":' + str.tostring(bearScore) +
-         ',"adx":' + str.tostring(nz(adxVal), "#.##") + ',"rvol":' + str.tostring(nz(rvol), "#.##") +
+if bullSignal or bearSignal
+    string dir = bullSignal ? "bull" : "bear"
+    int sc = bullSignal ? bullScore : bearScore
+    alert('{"symbol":"' + syminfo.tickerid + '","direction":"' + dir + '","score":' + str.tostring(sc) +
+         ',"bodyX":' + str.tostring(medBody > 0 ? bodyV / medBody : 0, "#.##") +
+         ',"rvol":' + str.tostring(nz(rvol), "#.##") +
+         ',"adx":' + str.tostring(nz(adxVal), "#.##") +
          ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", "Asia/Kolkata") + '"}', alert.freq_once_per_bar_close)

@@ -359,6 +359,25 @@ The output is one of three verdicts rather than five pattern names, each carryin
 
 **Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`, `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`, `pinescripts/README.md`.
 
+### Initiative drive: expansion is a gate, not a score point
+
+Live TCS 5-min was marking visibly small candles as drives. Cause: expansion was one of eight score criteria firing at 5/8, and `bodyPct` is measured against the bar's OWN range -- a doji-sized bar with a 90% body passed it. A small candle could reach 5/8 on rvol + body% + close + ema + vwap without ever being an expansion candle, which is the opposite of what "initiative drive" means.
+
+Restructured into gates and ranking. The four properties that *define* a drive are now hard gates, all required:
+
+1. **Body expansion** -- `body >= median(body, N) x 1.5`. The absolute-size test, and the one that actually stops small candles qualifying.
+2. **Range expansion** -- `range >= median(range, N) x 1.15`.
+3. **Directional body** -- closes in the signal direction, body a majority of range.
+4. **Close at the extreme** -- little or no wick against the direction.
+
+The remaining five (RVOL, close beyond the N-bar level, EMA, VWAP, ADX with +DI/-DI) only rank context and can no longer create a signal. Score floor is 3/5, applied after the gates. Since entries are mapped off these candles, a drive must be a drive before context is even consulted.
+
+### Key-level marks: one horizontal row, plain-English tooltips
+
+Marks were scattered across the price pane at each event's own price and the tooltips read like a manual. All marks now sit on a single row anchored below the session low (`rowY`, offset in ATRs, only ever pushed lower), with short text (`BRK U` / `FAKE D`) and a three-line tooltip: what the level was, what the candle did, what it means. No jargon.
+
+**Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.

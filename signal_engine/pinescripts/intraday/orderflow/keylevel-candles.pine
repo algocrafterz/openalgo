@@ -72,6 +72,8 @@ showWeak   = input.bool(false, "Show WEAK", group=grpVis,
 showLevels = input.bool(true, "Plot Levels", group=grpVis)
 lblSize    = input.string(size.small, "Label Size", options=[size.tiny, size.small, size.normal], group=grpVis,
      tooltip="Labels accept a series size, unlike plotshape whose size must be a compile-time constant.")
+rowOffAtr  = input.float(2.0, "Label Row Offset (x ATR)", minval=0.5, step=0.5, group=grpVis,
+     tooltip="All marks sit on one horizontal row this far below the session low, so they line up and stay clear of the candles instead of scattering across the price pane.")
 breakCol   = input.color(#2962FF, "BREAK", group=grpVis)
 fakeCol    = input.color(#E040FB, "FAKE",  group=grpVis)
 weakCol    = input.color(#78909C, "WEAK",  group=grpVis)
@@ -79,6 +81,7 @@ weakCol    = input.color(#78909C, "WEAK",  group=grpVis)
 // ── Session-anchored levels ──────────────────────────────────────────────
 float volMA = ta.sma(volume, volLen)
 float rvol  = volMA > 0 ? volume / volMA : 0.0
+float atr14 = ta.atr(14)
 
 var int   sessStart = na
 var float orH = na
@@ -88,12 +91,21 @@ var float ibL = na
 
 bool newSess = session.isfirstbar_regular
 
+// One horizontal row for every mark. Anchored under the session low and only
+// ever pushed lower, so the marks line up instead of scattering over the
+// candles at each event's own price.
+var float rowY = na
+
 if newSess
     sessStart := time
     orH := high
     orL := low
     ibH := high
     ibL := low
+    rowY := low - nz(atr14, high - low) * rowOffAtr
+
+if not na(rowY)
+    rowY := math.min(rowY, low - nz(atr14, high - low) * rowOffAtr)
 
 float minsIn = na(sessStart) ? na : (time - sessStart) / 60000.0
 
@@ -204,38 +216,32 @@ bool fakeDn = atLevel and not breakUp and not breakDn and closedAbove and ((low 
 bool weak = atLevel and not breakUp and not breakDn and not fakeUp and not fakeDn and (bodyP <= dojiMaxPct or not volOK)
 
 // ── Rendering ────────────────────────────────────────────────────────────
-f_candleType(bool _isBreak, bool _up) =>
-    string t = "indecision (small body / no volume)"
-    if _isBreak
-        t := _up ? (bullEngulf and bodyP < bodyMinPct ? "bullish engulfing" : "bullish conviction close") : (bearEngulf and bodyP < bodyMinPct ? "bearish engulfing" : "bearish conviction close")
-    else
-        t := _up ? (upWkP >= wickMinPct ? "upper-wick rejection (shooting star / pin)" : "close back inside the level") : (dnWkP >= wickMinPct ? "lower-wick rejection (hammer / pin)" : "close back inside the level")
-    t
-
-f_tip(string _verdict, string _reading, string _candle, bool _up) =>
-    _verdict + " - " + (_up ? "upside" : "downside") + " test of " + testName + " " + str.tostring(testLvl, format.mintick) +
-     "\nCandle : " + _candle +
-     "\nShape  : body " + str.tostring(bodyP, "#") + "% of range, wick into level " + str.tostring(_up ? upWkP : dnWkP, "#") + "%" +
-     "\nVolume : " + str.tostring(rvol, "#.##") + "x average" +
-     "\n\n" + _reading
+// Three short lines: what the candle did, then what it means. No jargon.
+f_tip(string _head, string _did, string _means) =>
+    _head + " " + testName + " " + str.tostring(testLvl, format.mintick) + "\n" + _did + "\n" + _means
 
 if barstate.isconfirmed and showBreak and (breakUp or breakDn)
     bool up = breakUp
-    string reading = up ? "Sellers defending the level were absorbed and price closed away from it on real volume. Acceptance above is the expected continuation; a retest that holds is the higher-quality entry." : "Buyers defending the level were absorbed and price closed away from it on real volume. Acceptance below is the expected continuation; a retest that holds is the higher-quality entry."
-    string tip = f_tip("VALID BREAKOUT", reading, f_candleType(true, up), up)
-    label.new(bar_index, up ? low : high, text="BREAK", style=up ? label.style_label_up : label.style_label_down, yloc=up ? yloc.belowbar : yloc.abovebar, color=breakCol, textcolor=color.white, size=lblSize, tooltip=tip)
+    string did = "Big body closed " + (up ? "above" : "below") + " it on " + str.tostring(rvol, "#.#") + "x volume."
+    string means = "Level gave way. Expect follow-through " + (up ? "up" : "down") + "."
+    label.new(bar_index, rowY, text=up ? "BRK U" : "BRK D", style=label.style_label_up, yloc=yloc.price,
+         color=breakCol, textcolor=color.white, size=lblSize,
+         tooltip=f_tip("BREAK", did, means))
 
 if barstate.isconfirmed and showFake and (fakeUp or fakeDn)
     bool up = fakeUp
-    string reading = up ? "Price traded above the level and was sold back inside it. The breach was not accepted, so treat long continuation here as a trap; the level is still resistance." : "Price traded below the level and was bought back inside it. The breach was not accepted, so treat short continuation here as a trap; the level is still support."
-    string tip = f_tip("POSSIBLE FAKEOUT", reading, f_candleType(false, up), up)
-    label.new(bar_index, up ? high : low, text="FAKE", style=up ? label.style_label_down : label.style_label_up, yloc=up ? yloc.abovebar : yloc.belowbar, color=fakeCol, textcolor=color.white, size=lblSize, tooltip=tip)
+    string did = up ? "Price poked above it and got sold back." : "Price poked below it and got bought back."
+    string means = "Level held. Do not chase the " + (up ? "break up" : "break down") + "."
+    label.new(bar_index, rowY, text=up ? "FAKE U" : "FAKE D", style=label.style_label_up, yloc=yloc.price,
+         color=fakeCol, textcolor=color.white, size=lblSize,
+         tooltip=f_tip("FAKE", did, means))
 
 if barstate.isconfirmed and showWeak and weak
-    bool up = close > testLvl
-    string reading = "Not enough force to breach and not yet a rejection. Wait for the next bar to resolve it - this is the state the retest and acceptance rules in breakout.pine exist to sit through."
-    string tip = f_tip("INCONCLUSIVE TEST", reading, f_candleType(false, up), up)
-    label.new(bar_index, high, text="WEAK", style=label.style_label_down, yloc=yloc.abovebar, color=weakCol, textcolor=color.white, size=lblSize, tooltip=tip)
+    string did = "Small body / low volume at the level."
+    string means = "Not decided yet. Wait for the next bar."
+    label.new(bar_index, rowY, text="WEAK", style=label.style_label_up, yloc=yloc.price,
+         color=weakCol, textcolor=color.white, size=lblSize,
+         tooltip=f_tip("WEAK", did, means))
 
 plot(showLevels and useOR and orReady ? orH : na, "ORH", color=color.new(color.gray, 40), style=plot.style_linebr)
 plot(showLevels and useOR and orReady ? orL : na, "ORL", color=color.new(color.gray, 40), style=plot.style_linebr)
