@@ -70,8 +70,10 @@ showFake   = input.bool(true, "Show FAKE", group=grpVis)
 showWeak   = input.bool(false, "Show WEAK", group=grpVis,
      tooltip="Off by default — inconclusive tests are the most common outcome and swamp the chart.")
 showLevels = input.bool(true, "Plot Levels", group=grpVis)
-lblSize    = input.string(size.small, "Label Size", options=[size.tiny, size.small, size.normal], group=grpVis,
+lblSize    = input.string(size.tiny, "Label Size", options=[size.tiny, size.small, size.normal], group=grpVis,
      tooltip="Labels accept a series size, unlike plotshape whose size must be a compile-time constant.")
+showLvlTable = input.bool(true, "Show Level Coverage Table", group=grpVis,
+     tooltip="Every level currently in play, its price, and how many BREAK / FAKE verdicts it produced today. Use it to confirm a level is actually being tested rather than assuming it is.")
 rowOffAtr  = input.float(2.0, "Label Row Offset (x ATR)", minval=0.5, step=0.5, group=grpVis,
      tooltip="All marks sit on one horizontal row this far below the session low, so they line up and stay clear of the candles instead of scattering across the price pane.")
 breakCol   = input.color(#2962FF, "BREAK", group=grpVis)
@@ -96,6 +98,10 @@ bool newSess = session.isfirstbar_regular
 // candles at each event's own price.
 var float rowY = na
 
+// Per-level verdict counts for the coverage table, reset each session.
+var map<string, int> brkCnt = map.new<string, int>()
+var map<string, int> fkCnt  = map.new<string, int>()
+
 if newSess
     sessStart := time
     orH := high
@@ -103,6 +109,8 @@ if newSess
     ibH := high
     ibL := low
     rowY := low - nz(atr14, high - low) * rowOffAtr
+    map.clear(brkCnt)
+    map.clear(fkCnt)
 
 if not na(rowY)
     rowY := math.min(rowY, low - nz(atr14, high - low) * rowOffAtr)
@@ -224,7 +232,8 @@ if barstate.isconfirmed and showBreak and (breakUp or breakDn)
     bool up = breakUp
     string did = "Big body closed " + (up ? "above" : "below") + " it on " + str.tostring(rvol, "#.#") + "x volume."
     string means = "Level gave way. Expect follow-through " + (up ? "up" : "down") + "."
-    label.new(bar_index, rowY, text=up ? "BRK U" : "BRK D", style=label.style_label_up, yloc=yloc.price,
+    map.put(brkCnt, testName, nz(map.get(brkCnt, testName), 0) + 1)
+    label.new(bar_index, rowY, text=up ? "B▲" : "B▼", style=label.style_label_up, yloc=yloc.price,
          color=breakCol, textcolor=color.white, size=lblSize,
          tooltip=f_tip("BREAK", did, means))
 
@@ -232,16 +241,52 @@ if barstate.isconfirmed and showFake and (fakeUp or fakeDn)
     bool up = fakeUp
     string did = up ? "Price poked above it and got sold back." : "Price poked below it and got bought back."
     string means = "Level held. Do not chase the " + (up ? "break up" : "break down") + "."
-    label.new(bar_index, rowY, text=up ? "FAKE U" : "FAKE D", style=label.style_label_up, yloc=yloc.price,
+    map.put(fkCnt, testName, nz(map.get(fkCnt, testName), 0) + 1)
+    label.new(bar_index, rowY, text=up ? "F▲" : "F▼", style=label.style_label_up, yloc=yloc.price,
          color=fakeCol, textcolor=color.white, size=lblSize,
          tooltip=f_tip("FAKE", did, means))
 
 if barstate.isconfirmed and showWeak and weak
     string did = "Small body / low volume at the level."
     string means = "Not decided yet. Wait for the next bar."
-    label.new(bar_index, rowY, text="WEAK", style=label.style_label_up, yloc=yloc.price,
+    label.new(bar_index, rowY, text="W", style=label.style_label_up, yloc=yloc.price,
          color=weakCol, textcolor=color.white, size=lblSize,
          tooltip=f_tip("WEAK", did, means))
+
+// Coverage table: which levels are actually in play and what they produced.
+// The logic tests all eleven identically, but a level that is toggled off, or
+// a VP level left at its 0.0 default, is silently never tested -- which reads
+// on the chart exactly like "it does not work for that level".
+var table lt = table.new(position.bottom_right, 4, 13,
+     bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+
+if showLvlTable and barstate.islast
+    table.cell(lt, 0, 0, "Level", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 60))
+    table.cell(lt, 1, 0, "Price", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 60))
+    table.cell(lt, 2, 0, "B",     text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 60))
+    table.cell(lt, 3, 0, "F",     text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 60))
+
+    int n = array.size(lvlVal)
+    for r = 1 to 12
+        if r <= n
+            string nm = array.get(lvlName, r - 1)
+            float  vv = array.get(lvlVal, r - 1)
+            int    bc = nz(map.get(brkCnt, nm), 0)
+            int    fc = nz(map.get(fkCnt, nm), 0)
+            table.cell(lt, 0, r, nm, text_color=color.gray, text_size=size.tiny)
+            table.cell(lt, 1, r, str.tostring(vv, format.mintick), text_color=color.gray, text_size=size.tiny)
+            table.cell(lt, 2, r, bc > 0 ? str.tostring(bc) : "-", text_color = bc > 0 ? breakCol : color.gray, text_size=size.tiny)
+            table.cell(lt, 3, r, fc > 0 ? str.tostring(fc) : "-", text_color = fc > 0 ? fakeCol : color.gray, text_size=size.tiny)
+        else if r == n + 1 and not useVP
+            table.cell(lt, 0, r, "VAH/POC/VAL", text_color=color.orange, text_size=size.tiny)
+            table.cell(lt, 1, r, "off", text_color=color.orange, text_size=size.tiny)
+            table.cell(lt, 2, r, "", text_color=color.gray, text_size=size.tiny)
+            table.cell(lt, 3, r, "", text_color=color.gray, text_size=size.tiny)
+        else
+            table.cell(lt, 0, r, "", text_size=size.tiny)
+            table.cell(lt, 1, r, "", text_size=size.tiny)
+            table.cell(lt, 2, r, "", text_size=size.tiny)
+            table.cell(lt, 3, r, "", text_size=size.tiny)
 
 plot(showLevels and useOR and orReady ? orH : na, "ORH", color=color.new(color.gray, 40), style=plot.style_linebr)
 plot(showLevels and useOR and orReady ? orL : na, "ORL", color=color.new(color.gray, 40), style=plot.style_linebr)

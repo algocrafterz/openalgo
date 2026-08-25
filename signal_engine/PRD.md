@@ -378,6 +378,16 @@ Marks were scattered across the price pane at each event's own price and the too
 
 **Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
 
+### Key-level marks: shorter, and level coverage made visible
+
+Marks read `BRK U` / `FAKE D`, which collided with each other whenever two events landed on adjacent bars. Now two characters (`B▲` `B▼` `F▲` `F▼` `W`), tiny by default.
+
+Separately: on a live chart only PDL and ORL appeared to produce verdicts. The selection loop tests all eleven levels identically, so that was not a bias — TCS on 2026-08-25 traded 2262-2313 and spent the session between PDL 2279.5 and ORL 2268.9, while PDH 2321.6 was never reached. But it exposed a genuine trap: **VAH/POC/VAL are off by default and default to 0.0**, so they are silently never tested, which on the chart is indistinguishable from "the script does not handle those levels".
+
+Added a coverage table (bottom-right): every level in play, its price, and today's BREAK / FAKE counts, with an explicit `VAH/POC/VAL — off` row when the volume-profile levels are disabled. A level producing nothing is now visibly distinct from a level that was never armed.
+
+**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.
