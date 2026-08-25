@@ -410,6 +410,27 @@ Making tag suppression symmetric fixed anonymous lines but created a worse probl
 
 **Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
 
+### Every level interaction gets a verdict
+
+Marks thinned out because quality was GATING the verdict: an interacting candle without conviction produced no mark at all, so the level test simply vanished from the chart. Quality is now an attribute, not an entry condition.
+
+The taxonomy is positional and therefore exhaustive — where the previous close sat versus where this one closed:
+
+| from | to | verdict | reading |
+| --- | --- | --- | --- |
+| below | above | `B▲` | broke up |
+| above | below | `B▼` | broke down |
+| above | above | `F▼` | dipped below intrabar, level held as support |
+| below | below | `F▲` | poked above intrabar, level held as resistance |
+
+The last two necessarily involve an intrabar probe, since the bar had to pierce the level to be considered at all. Conviction (volume, body, wick) now shows as label opacity and is named in the tooltip; it never suppresses a mark. `WEAK` is gone — with an exhaustive taxonomy there is nothing left for it to catch.
+
+Note the other half of the drop was configuration, not code: the 01:46 chart had the volume-profile levels armed (VAL 2272.8 sat in the middle of the day's range and produced 15 marks by itself), and the 02:18 chart had them off. The coverage table's `PVAH/PPOC/PVAL — off` row is there to make exactly that visible.
+
+Default label size raised from tiny to normal.
+
+**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.
