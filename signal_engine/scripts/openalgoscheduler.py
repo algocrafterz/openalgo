@@ -567,6 +567,55 @@ async def send_telegram_notification(message: str, _client=None) -> bool:
         return False
 
 
+def notify_failure(stage: str, detail: str, _send=None) -> bool:
+    """Announce a startup failure to Telegram.
+
+    Startup used to exit(1) before ever reaching the notification step, so a
+    failed auto-login was invisible: on 2026-08-24 a single 09:03 failure wrote
+    a 24h cooldown that blocked 80 further start attempts for the whole trading
+    day with nothing sent anywhere. Alerting has to happen on the failure path
+    itself, and it must never raise -- a dead Telegram must not mask the real
+    error underneath it.
+
+    Args:
+        stage: Which step failed (e.g. "auto-login", "broker-auth").
+        detail: The underlying error message.
+        _send: Override sender for testing (DI). Takes the message, returns bool.
+
+    Returns:
+        True if the alert was delivered to at least one channel.
+    """
+    from utils.logging import get_logger
+
+    logger = get_logger(__name__)
+
+    try:
+        host = os.uname().nodename
+    except Exception:
+        host = "unknown"
+
+    message = (
+        "OpenAlgo Startup FAILED\n"
+        "\n"
+        f"Stage : {stage}\n"
+        f"Error : {detail}\n"
+        f"Host  : {host}\n"
+        f"Time  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        "\n"
+        "The signal engine is NOT running. No trades will be taken."
+    )
+
+    try:
+        sender = _send
+        if sender is None:
+            def sender(msg):
+                return asyncio.run(send_telegram_notification(msg))
+        return bool(sender(message))
+    except Exception:
+        logger.exception("Failed to send startup-failure alert (non-fatal)")
+        return False
+
+
 def _run_startup():
     """Full startup flow: login, verify, summarise, notify."""
     from utils.logging import get_logger
@@ -577,10 +626,12 @@ def _run_startup():
         login_result = auto_login()
     except EnvironmentError as e:
         logger.error("Configuration error: %s", e)
+        notify_failure("configuration", str(e))
         sys.exit(1)
 
     if not login_result[0]:
         logger.error("Auto-login failed: %s", login_result[1])
+        notify_failure("auto-login", str(login_result[1]))
         sys.exit(1)
 
     # Unpack: (success, message, auth_token)
@@ -593,6 +644,10 @@ def _run_startup():
     fund_data = verify_broker_auth(auth_token)
     if not fund_data:
         logger.error("Broker auth token verification FAILED")
+        notify_failure(
+            "broker-auth",
+            "token returned by login did not work against the broker funds API",
+        )
         sys.exit(1)
 
     logger.info("Broker auth token verified - ready to trade")
@@ -710,6 +765,13 @@ if __name__ == "__main__":
         _run_shutdown(reason=reason)
     elif command == "squareoff":
         _run_squareoff()
+    elif command == "notify":
+        # Lets openalgoctl.sh raise an alert from shell without duplicating
+        # Telegram wiring. Arg 2 is the stage, the rest is the detail.
+        stage = sys.argv[2] if len(sys.argv) > 2 else "supervisor"
+        detail = " ".join(sys.argv[3:]) if len(sys.argv) > 3 else "(no detail)"
+        sys.exit(0 if notify_failure(stage, detail) else 1)
     else:
-        print(f"Usage: python -m signal_engine.scripts.openalgoscheduler [startup|shutdown|squareoff] [reason]")
+        print("Usage: python -m signal_engine.scripts.openalgoscheduler "
+              "[startup|shutdown|squareoff|notify] [reason|stage] [detail...]")
         sys.exit(1)

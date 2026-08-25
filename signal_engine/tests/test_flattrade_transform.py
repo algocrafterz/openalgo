@@ -179,24 +179,33 @@ class TestLimitPassthrough:
 
 
 class TestMppFallback:
-    """When MPP fails (no auth token, quote error), SL-M should NOT silently pass through."""
+    """When MPP fails (no auth token, quote error), SL-M must NOT pass through as SL-MKT.
+
+    Updated for OpenAlgo 2.0.2.1. These tests previously asserted the SL-MKT
+    fall-through, which the class docstring itself called out as wrong: the
+    Noren OMS rejects SL-MKT for API orders, so such an order is dead on
+    arrival. 2.0.2.1 always converts to SL-LMT, deriving the protective limit
+    from the trigger price when no quote is available.
+    """
 
     def test_sl_m_without_auth_token(self, mock_get_br_symbol):
-        """Without auth_token, can't fetch quotes — SL-MKT passes through (broker will reject)."""
+        """No auth_token means no quote - the limit is derived from the trigger."""
         from broker.flattrade.mapping.transform_data import transform_data
 
         data = _make_order_data(pricetype="SL-M", action="SELL", trigger_price=200.9)
         result = transform_data(data, token="3787", auth_token=None)
 
-        # Without auth_token, MPP can't fetch quotes — falls through as SL-MKT
-        assert result["prctyp"] == "SL-MKT"
+        assert result["prctyp"] == "SL-LMT"
+        # Caller trigger is preserved; SELL limit sits below it so it can fill.
+        assert result["trgprc"] == "200.9"
+        assert float(result["prc"]) < 200.9
 
     def test_sl_m_with_zero_trigger_price(self, mock_broker_data, mock_get_br_symbol):
-        """Zero trigger price means MPP has no base price — falls through as SL-MKT."""
+        """A zero trigger is malformed input, but the price type must still be valid."""
         from broker.flattrade.mapping.transform_data import transform_data
 
         data = _make_order_data(pricetype="SL-M", action="SELL", trigger_price=0)
         result = transform_data(data, token="3787", auth_token="test_token")
 
-        # trigger=0 means ltp=0 for SL-M path, MPP skips
-        assert result["prctyp"] == "SL-MKT"
+        # Rejected by the broker on price, not on an unsupported price type.
+        assert result["prctyp"] == "SL-LMT"

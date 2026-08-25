@@ -555,3 +555,101 @@ class TestGenerateTotp:
         from signal_engine.scripts.openalgoscheduler import generate_totp
         with pytest.raises(ValueError):
             generate_totp(None)
+
+
+class TestNotifyFailure:
+    """A failed startup must be announced, not swallowed.
+
+    Regression guard for 2026-08-24: one auth failure at 09:03 wrote a 24h
+    cooldown that silently blocked 80 further start attempts across the whole
+    trading day. Nothing reached Telegram because _run_startup exited before
+    the notification step.
+    """
+
+    def test_message_contains_stage_and_detail(self):
+        from signal_engine.scripts.openalgoscheduler import notify_failure
+        sent = {}
+
+        def _send(msg):
+            sent["msg"] = msg
+            return True
+
+        assert notify_failure("broker-auth", "Invalid credentials", _send=_send) is True
+        assert "broker-auth" in sent["msg"]
+        assert "Invalid credentials" in sent["msg"]
+
+    def test_message_is_clearly_a_failure(self):
+        from signal_engine.scripts.openalgoscheduler import notify_failure
+        sent = {}
+        notify_failure("login", "boom", _send=lambda m: sent.setdefault("msg", m) or True)
+        assert "FAILED" in sent["msg"].upper()
+
+    def test_message_is_ascii_only(self):
+        """Logs and alerts stay ASCII - no unicode."""
+        from signal_engine.scripts.openalgoscheduler import notify_failure
+        sent = {}
+        notify_failure("login", "boom", _send=lambda m: sent.setdefault("msg", m) or True)
+        sent["msg"].encode("ascii")
+
+    def test_returns_false_when_send_fails(self):
+        from signal_engine.scripts.openalgoscheduler import notify_failure
+        assert notify_failure("login", "x", _send=lambda m: False) is False
+
+    def test_never_raises_when_sender_explodes(self):
+        """An alert failure must not mask the original startup failure."""
+        from signal_engine.scripts.openalgoscheduler import notify_failure
+
+        def _boom(msg):
+            raise RuntimeError("telegram down")
+
+        assert notify_failure("login", "x", _send=_boom) is False
+
+
+class TestStartupAlertsOnFailure:
+    """_run_startup must alert before exiting on every failure path."""
+
+    def _patch(self, monkeypatch, **attrs):
+        import signal_engine.scripts.openalgoscheduler as sched
+        for k, v in attrs.items():
+            monkeypatch.setattr(sched, k, v)
+        return sched
+
+    def test_alerts_when_auto_login_fails(self, monkeypatch):
+        calls = []
+        sched = self._patch(
+            monkeypatch,
+            auto_login=lambda: (False, "Invalid credentials", None),
+            notify_failure=lambda stage, detail: calls.append((stage, detail)),
+        )
+        with pytest.raises(SystemExit):
+            sched._run_startup()
+        assert calls, "no alert was sent on auto-login failure"
+        assert "Invalid credentials" in calls[0][1]
+
+    def test_alerts_when_token_verification_fails(self, monkeypatch):
+        calls = []
+        sched = self._patch(
+            monkeypatch,
+            auto_login=lambda: (True, "ok", "tok"),
+            verify_broker_auth=lambda tok: None,
+            notify_failure=lambda stage, detail: calls.append((stage, detail)),
+        )
+        with pytest.raises(SystemExit):
+            sched._run_startup()
+        assert calls, "no alert was sent on token verification failure"
+
+    def test_alerts_on_configuration_error(self, monkeypatch):
+        calls = []
+
+        def _boom():
+            raise EnvironmentError("BROKER_NAME missing")
+
+        sched = self._patch(
+            monkeypatch,
+            auto_login=_boom,
+            notify_failure=lambda stage, detail: calls.append((stage, detail)),
+        )
+        with pytest.raises(SystemExit):
+            sched._run_startup()
+        assert calls, "no alert was sent on configuration error"
+        assert "BROKER_NAME missing" in calls[0][1]

@@ -171,18 +171,58 @@ wait_for_health() {
 #     Writes PID file as soon as each process starts.
 
 AUTH_COOLDOWN_FILE="$LOG_DIR/auth_cooldown.txt"
-AUTH_COOLDOWN_SECS=86400  # 24 hours between auth failure retries — token expires at midnight per SEBI
+
+# Escalating cooldown after a failed broker auth.
+#
+# This was a flat 86400s. That is too blunt: on 2026-08-24 a single failure at
+# 09:03 blocked 80 subsequent start attempts and cost the entire trading day.
+# The point of a cooldown is to avoid hammering the broker's auth API, and a
+# few minutes achieves that. Escalate only if failures keep repeating, and cap
+# well short of a full session so a morning blip cannot eat the afternoon.
+AUTH_COOLDOWN_STEPS=(300 900 3600 10800)  # 5m, 15m, 1h, 3h
+
+# Cooldown state file holds two lines: "<epoch-of-last-failure>" and "<failure-count>".
+_cooldown_stamp() { sed -n '1p' "$AUTH_COOLDOWN_FILE" 2>/dev/null || echo 0; }
+_cooldown_count() { sed -n '2p' "$AUTH_COOLDOWN_FILE" 2>/dev/null || echo 1; }
+
+# Cooldown length for the Nth consecutive failure (1-based), capped at the last step.
+cooldown_secs_for() {
+    local n="${1:-1}" last=$(( ${#AUTH_COOLDOWN_STEPS[@]} - 1 ))
+    (( n < 1 )) && n=1
+    (( n - 1 > last )) && n=$(( last + 1 ))
+    echo "${AUTH_COOLDOWN_STEPS[$(( n - 1 ))]}"
+}
+
+# Record a failure, escalating the counter, and alert once per failure.
+record_auth_failure() {
+    local count=1
+    if [ -f "$AUTH_COOLDOWN_FILE" ]; then
+        count=$(( $(_cooldown_count) + 1 ))
+    fi
+    local secs; secs=$(cooldown_secs_for "$count")
+    {
+        date +%s
+        echo "$count"
+    } > "$AUTH_COOLDOWN_FILE"
+    log "Auth failure #${count} — cooling down ${secs}s before the next attempt."
+    # Alert out-of-band: a failed startup is otherwise completely silent.
+    timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
+        notify "startup" "Startup failed (attempt ${count}). Retrying after ${secs}s. Signal engine is DOWN." \
+        >/dev/null 2>&1 || log "Failure alert could not be sent (non-fatal)"
+}
 
 # Check if we're in auth cooldown (too many recent broker auth failures).
 # Returns 0 (in cooldown) or 1 (ok to proceed).
 check_auth_cooldown() {
     [ -f "$AUTH_COOLDOWN_FILE" ] || return 1
-    local stamp elapsed
-    stamp=$(cat "$AUTH_COOLDOWN_FILE" 2>/dev/null || echo 0)
+    local stamp elapsed count secs
+    stamp=$(_cooldown_stamp)
+    count=$(_cooldown_count)
+    secs=$(cooldown_secs_for "$count")
     elapsed=$(( $(date +%s) - stamp ))
-    if [ "$elapsed" -lt "$AUTH_COOLDOWN_SECS" ]; then
-        local remaining=$(( AUTH_COOLDOWN_SECS - elapsed ))
-        log "AUTH COOLDOWN: broker auth failed recently. Waiting ${remaining}s before retry to avoid API lockout."
+    if [ "$elapsed" -lt "$secs" ]; then
+        local remaining=$(( secs - elapsed ))
+        log "AUTH COOLDOWN: auth failure #${count}. Waiting ${remaining}s before retry to avoid API lockout."
         log "To force a retry now: rm $AUTH_COOLDOWN_FILE && openalgoctl.sh run"
         return 0
     fi
@@ -236,7 +276,7 @@ bootstrap() {
         rm -f "$AUTH_COOLDOWN_FILE"
     else
         log "ERROR: Startup failed — writing auth cooldown to prevent API lockout"
-        date +%s > "$AUTH_COOLDOWN_FILE"
+        record_auth_failure
         kill "$APP_PID" 2>/dev/null || true
         rm -f "$PID_FILE"
         return 1
@@ -310,6 +350,16 @@ cmd_run() {
     local _RESTART_WINDOW=300   # seconds: restart budget resets if stable this long
     local _last_start=$SECONDS
 
+    # Readiness probing. kill -0 only proves the PID exists; a wedged app.py
+    # holds its PID forever while serving nothing, which the old loop reported
+    # as healthy indefinitely. Probe the health URL periodically and require
+    # _HEALTH_MAX_FAIL consecutive failures so one slow response is tolerated.
+    local _HEALTH_EVERY=60      # seconds between HTTP probes
+    local _HEALTH_MAX_FAIL=3    # consecutive failures before declaring it wedged
+    local _health_fails=0
+    local _last_probe=$SECONDS
+    local _app_wedged=false
+
     while true; do
         # Wait while both processes are alive
         while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$SIGNAL_PID" 2>/dev/null; do
@@ -318,11 +368,42 @@ cmd_run() {
             if (( SECONDS - _last_start >= _RESTART_WINDOW )); then
                 _RESTART_COUNT=0
             fi
+
+            # Periodic readiness probe
+            if (( SECONDS - _last_probe >= _HEALTH_EVERY )); then
+                _last_probe=$SECONDS
+                if curl -fs --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
+                    if (( _health_fails > 0 )); then
+                        log "Health probe recovered after ${_health_fails} failure(s)."
+                    fi
+                    _health_fails=0
+                else
+                    _health_fails=$(( _health_fails + 1 ))
+                    log "Health probe FAILED (${_health_fails}/${_HEALTH_MAX_FAIL}) at $HEALTH_URL"
+                    if (( _health_fails >= _HEALTH_MAX_FAIL )); then
+                        _app_wedged=true
+                        break
+                    fi
+                fi
+            fi
         done
+
+        # app.py alive but not serving — the case liveness checks cannot see
+        if [ "$_app_wedged" = true ]; then
+            log "app.py is alive (PID $APP_PID) but failed ${_health_fails} consecutive health probes — treating as wedged."
+            timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
+                notify "supervisor" "app.py stopped responding on $HEALTH_URL after ${_health_fails} probes. Stack is DOWN." \
+                >/dev/null 2>&1 || log "Wedge alert could not be sent (non-fatal)"
+            _STOP_REASON="app_unresponsive"
+            break
+        fi
 
         # app.py died — fatal, can't recover without it
         if ! kill -0 "$APP_PID" 2>/dev/null; then
             log "app.py exited unexpectedly — cannot recover."
+            timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
+                notify "supervisor" "app.py exited unexpectedly. Stack is DOWN." \
+                >/dev/null 2>&1 || log "Crash alert could not be sent (non-fatal)"
             _STOP_REASON="app_crash"
             break
         fi
@@ -333,6 +414,9 @@ cmd_run() {
 
         if (( _RESTART_COUNT > _MAX_RESTARTS )); then
             log "Signal engine crashed $_RESTART_COUNT times — giving up."
+            timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
+                notify "supervisor" "Signal engine crashed ${_RESTART_COUNT} times and will not be restarted. No trades will be taken." \
+                >/dev/null 2>&1 || log "Crash-loop alert could not be sent (non-fatal)"
             _STOP_REASON="signal_engine_crash_loop"
             break
         fi
@@ -408,6 +492,11 @@ cmd_squareoff() {
     "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler squareoff 2>&1 | tee -a "$LOG_FILE"
     log "Squareoff: done"
 }
+
+# Guard so the file can be sourced by tests without dispatching a command.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return 0 2>/dev/null || true
+fi
 
 case "${1:-}" in
     start)     cmd_start ;;
