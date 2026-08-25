@@ -111,6 +111,9 @@ signal_engine/*.session
 # every `git status` as permanent untracked noise.
 signal_engine/pinescripts/**/result.json
 signal_engine/pinescripts/**/charts/
+# Chart screenshots dropped in for review. The one tracked image is a .jpeg
+# reference diagram, so this only catches the transient captures.
+signal_engine/pinescripts/**/*.png
 
 # Backtest results (timestamped run outputs)
 backtest/results/*/

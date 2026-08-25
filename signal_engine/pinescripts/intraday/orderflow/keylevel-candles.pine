@@ -1,0 +1,233 @@
+//@version=6
+indicator("Key-Level Candles (breakout companion)", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// PURPOSE
+// Companion to `intraday/orb/breakout.pine`. That script decides WHERE the
+// levels are and whether a setup scores; this one answers the separate
+// question a discretionary check needs: *did the candle at the level actually
+// validate the break, or reject it?*
+//
+// Derived from repo32's "Candlestick Patterns Identified" (MPL-2.0), reduced
+// from 15 patterns to 5 events. The original fires everywhere on the chart,
+// which is the problem: a Harami in the middle of a range says nothing about
+// a breakout. Everything here is gated on proximity to a key level, using the
+// same level set and the same ATR confluence band as breakout.pine.
+//
+// Levels mirror breakout.pine:661
+//   array.from("ORH","ORM","ORL","IBH","IBM","IBL","VAH","POC","VAL","PDH","PDL")
+// ORB / IB / PD levels are computed here. VAH/POC/VAL are manual inputs --
+// breakout.pine offers the same manual option, and reconstructing a volume
+// profile would duplicate a large part of that script for no extra accuracy.
+//
+// WHAT WAS DROPPED AND WHY
+//   Harami (bull/bear)  - contraction after a move; ambiguous at a level
+//   Piercing Line       - strictly weaker than Engulfing, same information
+//   Kicker              - needs a gap; intraday that only ever means the open
+//   Morning/Evening Star- 3-bar confirmation arrives after breakout.pine has
+//                         already triggered or stood down
+//   Belt Hold           - folded into the Conviction Break geometry
+//   Hammer / Shooting Star / Hanging Man / Inverted Hammer
+//                       - identical geometry, four names. Collapsed into one
+//                         Rejection event whose direction is decided by which
+//                         side of the LEVEL the wick pokes, which is the part
+//                         that actually matters here.
+// ============================================================================
+
+// ── Inputs ───────────────────────────────────────────────────────────────
+grpLvl = "Key Levels"
+orMinutes  = input.int(15, "Opening Range (minutes)", minval=1, group=grpLvl)
+ibMinutes  = input.int(60, "Initial Balance (minutes)", minval=1, group=grpLvl)
+usePD      = input.bool(true, "Previous Day H/L", group=grpLvl)
+useOR      = input.bool(true, "Opening Range H/M/L", group=grpLvl)
+useIB      = input.bool(true, "Initial Balance H/M/L", group=grpLvl)
+useVP      = input.bool(false, "Volume Profile (manual)", group=grpLvl,
+     tooltip="Read VAH/POC/VAL off TradingView's Session Volume Profile for the PREVIOUS day, the same way breakout.pine's manual mode expects them.")
+vahIn      = input.float(0.0, "VAH", group=grpLvl)
+pocIn      = input.float(0.0, "POC", group=grpLvl)
+valIn      = input.float(0.0, "VAL", group=grpLvl)
+
+grpBand = "Proximity & Strength"
+atrLen     = input.int(14, "ATR Length", minval=1, group=grpBand)
+bandAtr    = input.float(0.25, "Level Band (x ATR)", minval=0.01, step=0.05, group=grpBand,
+     tooltip="A candle counts as 'at' a level when it comes within this many ATRs. Mirrors breakout.pine's klConfAtrMult, which defaults to 0.25.")
+minRvol    = input.float(1.5, "Min RVOL for Confirmation", minval=0, step=0.1, group=grpBand,
+     tooltip="Confirmation events only. Mirrors breakout.pine's klBreakMinRvol: below roughly 1.5x average volume a break bar is a stop hunt, above it order flow is actually arriving. Rejection events are NOT volume-gated -- a fakeout on thin volume is still a fakeout.")
+volLen     = input.int(20, "Volume Average Length", minval=1, group=grpBand)
+bodyMinPct = input.float(60.0, "Conviction Body %", minval=1, maxval=100, step=5, group=grpBand)
+wickMinPct = input.float(55.0, "Rejection Wick %", minval=1, maxval=100, step=5, group=grpBand)
+dojiMaxPct = input.float(10.0, "Doji Body %", minval=1, maxval=50, step=1, group=grpBand)
+
+grpVis = "Display"
+showConfirm = input.bool(true, "Show Confirmation (BRK / ENG)", group=grpVis)
+showReject  = input.bool(true, "Show Rejection (REJ / FAIL)", group=grpVis)
+showDoji    = input.bool(true, "Show Indecision (DOJI)", group=grpVis)
+showLevels  = input.bool(true, "Plot Levels", group=grpVis)
+markSize    = input.string(size.small, "Marker Size", options=[size.tiny, size.small, size.normal], group=grpVis)
+// Deliberately not green/red (entry/exit signals) and not cyan/amber
+// (initiative-drive detector). Blue = the break held, magenta = it did not.
+confirmCol  = input.color(#2962FF, "Confirmation", group=grpVis)
+rejectCol   = input.color(#E040FB, "Rejection", group=grpVis)
+dojiCol     = input.color(#B0BEC5, "Indecision", group=grpVis)
+
+// ── Session-anchored levels ──────────────────────────────────────────────
+float atrVal = ta.atr(atrLen)
+float volMA  = ta.sma(volume, volLen)
+float rvol   = volMA > 0 ? volume / volMA : 0.0
+
+var int   sessStart = na
+var float orH = na
+var float orL = na
+var float ibH = na
+var float ibL = na
+
+bool newSess = session.isfirstbar_regular
+
+if newSess
+    sessStart := time
+    orH := high
+    orL := low
+    ibH := high
+    ibL := low
+
+float minsIn = na(sessStart) ? na : (time - sessStart) / 60000.0
+
+if not newSess and not na(minsIn)
+    if minsIn < orMinutes
+        orH := math.max(nz(orH, high), high)
+        orL := math.min(nz(orL, low), low)
+    if minsIn < ibMinutes
+        ibH := math.max(nz(ibH, high), high)
+        ibL := math.min(nz(ibL, low), low)
+
+float orM = na(orH) or na(orL) ? na : (orH + orL) / 2
+float ibM = na(ibH) or na(ibL) ? na : (ibH + ibL) / 2
+
+// Previous-day levels. lookahead_on against an already-closed daily bar is the
+// standard non-repainting idiom: [1] is yesterday, which is final.
+float pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+float pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+// ── Nearest level ────────────────────────────────────────────────────────
+var array<string> lvlName = array.new<string>()
+var array<float>  lvlVal  = array.new<float>()
+
+array.clear(lvlName)
+array.clear(lvlVal)
+
+f_add(string _n, float _v, bool _on) =>
+    if _on and not na(_v) and _v > 0
+        array.push(lvlName, _n)
+        array.push(lvlVal, _v)
+
+f_add("ORH", orH, useOR)
+f_add("ORM", orM, useOR)
+f_add("ORL", orL, useOR)
+f_add("IBH", ibH, useIB)
+f_add("IBM", ibM, useIB)
+f_add("IBL", ibL, useIB)
+f_add("VAH", vahIn, useVP)
+f_add("POC", pocIn, useVP)
+f_add("VAL", valIn, useVP)
+f_add("PDH", pdh, usePD)
+f_add("PDL", pdl, usePD)
+
+float band = atrVal * bandAtr
+
+// Nearest level to THIS bar's range, not just its close: a rejection pokes the
+// level with its wick while closing well away from it.
+string nearName = ""
+float  nearVal  = na
+float  nearDist = na
+
+if array.size(lvlVal) > 0 and not na(band)
+    for i = 0 to array.size(lvlVal) - 1
+        float v = array.get(lvlVal, i)
+        // distance from the bar's range to the level (0 when the bar spans it)
+        float d = high >= v and low <= v ? 0.0 : math.min(math.abs(high - v), math.abs(low - v))
+        if na(nearDist) or d < nearDist
+            nearDist := d
+            nearVal  := v
+            nearName := array.get(lvlName, i)
+
+bool atLevel = not na(nearDist) and nearDist <= band
+
+// ── Candle geometry ──────────────────────────────────────────────────────
+float rng   = high - low
+float bodyV = math.abs(close - open)
+float bodyP = rng > 0 ? bodyV / rng * 100 : 0.0
+float upWick = high - math.max(open, close)
+float dnWick = math.min(open, close) - low
+float upWickP = rng > 0 ? upWick / rng * 100 : 0.0
+float dnWickP = rng > 0 ? dnWick / rng * 100 : 0.0
+
+bool bullBar = close > open
+bool bearBar = close < open
+bool volOK   = rvol >= minRvol
+
+// ── 1. Conviction Break ──────────────────────────────────────────────────
+// Wide body closing decisively THROUGH the level, on volume. This is the
+// "the break is real" candle, and the original script had no equivalent --
+// its closest relative, Belt Hold, ignored levels entirely.
+bool brkUp = atLevel and bullBar and bodyP >= bodyMinPct and volOK and close > nearVal and open <= nearVal + band
+bool brkDn = atLevel and bearBar and bodyP >= bodyMinPct and volOK and close < nearVal and open >= nearVal - band
+
+// ── 2. Engulfing at the level ────────────────────────────────────────────
+// Kept from the original, but only when it happens at a level and closes
+// beyond it. Elsewhere on the chart it says nothing about a breakout.
+bool engUp = atLevel and volOK and close > open and open[1] > close[1] and close >= open[1] and open <= close[1] and bodyV > math.abs(close[1] - open[1]) and close > nearVal
+bool engDn = atLevel and volOK and close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and bodyV > math.abs(close[1] - open[1]) and close < nearVal
+
+// ── 3. Rejection ─────────────────────────────────────────────────────────
+// Hammer / Shooting Star / Hanging Man / Inverted Hammer are one geometry.
+// What decides the meaning is which side of the LEVEL the wick probed, so the
+// four names collapse into two level-relative events. Not volume-gated: a
+// fakeout on thin volume is still a fakeout.
+bool rejUp = atLevel and upWickP >= wickMinPct and high > nearVal and close < nearVal
+bool rejDn = atLevel and dnWickP >= wickMinPct and low  < nearVal and close > nearVal
+
+// ── 4. Failed Break ──────────────────────────────────────────────────────
+// The prior bar closed beyond the level, this one closes back inside. The
+// definitive fakeout, and no classical pattern names it.
+bool failUp = atLevel and close[1] > nearVal and close < nearVal
+bool failDn = atLevel and close[1] < nearVal and close > nearVal
+
+// ── 5. Indecision ────────────────────────────────────────────────────────
+// Doji sitting on the level: no acceptance in either direction yet.
+bool dojiAt = atLevel and bodyP <= dojiMaxPct and high >= nearVal - band and low <= nearVal + band
+
+// ── Plots ────────────────────────────────────────────────────────────────
+plot(showLevels and useOR ? orH : na, "ORH", color=color.new(color.gray, 40), style=plot.style_linebr)
+plot(showLevels and useOR ? orL : na, "ORL", color=color.new(color.gray, 40), style=plot.style_linebr)
+plot(showLevels and useIB ? ibH : na, "IBH", color=color.new(#FFEB3B, 55), style=plot.style_linebr)
+plot(showLevels and useIB ? ibL : na, "IBL", color=color.new(#FFEB3B, 55), style=plot.style_linebr)
+plot(showLevels and usePD ? pdh : na, "PDH", color=color.new(#90A4AE, 40), style=plot.style_linebr)
+plot(showLevels and usePD ? pdl : na, "PDL", color=color.new(#90A4AE, 40), style=plot.style_linebr)
+
+plotshape(showConfirm and brkUp,  "Conviction Break Up",   shape.labelup,   location.belowbar, confirmCol, text="BRK", textcolor=color.white, size=markSize)
+plotshape(showConfirm and brkDn,  "Conviction Break Down", shape.labeldown, location.abovebar, confirmCol, text="BRK", textcolor=color.white, size=markSize)
+plotshape(showConfirm and engUp,  "Engulfing Up",          shape.labelup,   location.belowbar, confirmCol, text="ENG", textcolor=color.white, size=markSize)
+plotshape(showConfirm and engDn,  "Engulfing Down",        shape.labeldown, location.abovebar, confirmCol, text="ENG", textcolor=color.white, size=markSize)
+
+plotshape(showReject and rejUp,   "Rejection at Level",    shape.labeldown, location.abovebar, rejectCol, text="REJ", textcolor=color.white, size=markSize)
+plotshape(showReject and rejDn,   "Rejection below Level", shape.labelup,   location.belowbar, rejectCol, text="REJ", textcolor=color.white, size=markSize)
+plotshape(showReject and failUp,  "Failed Break Up",       shape.labeldown, location.abovebar, rejectCol, text="FAIL", textcolor=color.white, size=markSize)
+plotshape(showReject and failDn,  "Failed Break Down",     shape.labelup,   location.belowbar, rejectCol, text="FAIL", textcolor=color.white, size=markSize)
+
+plotshape(showDoji and dojiAt,    "Indecision at Level",   shape.xcross,    location.abovebar, dojiCol, size=markSize)
+
+// ── Alerts ───────────────────────────────────────────────────────────────
+alertcondition(brkUp or engUp, "Break Confirmed Up", "Key level break CONFIRMED up - conviction close through the level on volume")
+alertcondition(brkDn or engDn, "Break Confirmed Down", "Key level break CONFIRMED down - conviction close through the level on volume")
+alertcondition(rejUp or failUp, "Break Rejected Up", "Key level break REJECTED at the highs - fakeout risk")
+alertcondition(rejDn or failDn, "Break Rejected Down", "Key level break REJECTED at the lows - fakeout risk")
+
+if (brkUp or engUp or brkDn or engDn or rejUp or rejDn or failUp or failDn) and barstate.isconfirmed
+    string ev = brkUp or brkDn ? "BRK" : engUp or engDn ? "ENG" : failUp or failDn ? "FAIL" : "REJ"
+    string dir = brkUp or engUp or rejDn or failDn ? "up" : "down"
+    string kind = brkUp or brkDn or engUp or engDn ? "confirm" : "reject"
+    alert('{"symbol":"' + syminfo.tickerid + '","event":"' + ev + '","kind":"' + kind +
+         '","direction":"' + dir + '","level":"' + nearName + '","levelPrice":' + str.tostring(nz(nearVal), "#.##") +
+         ',"rvol":' + str.tostring(nz(rvol), "#.##") +
+         ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm", "Asia/Kolkata") + '"}',
+         alert.freq_once_per_bar_close)

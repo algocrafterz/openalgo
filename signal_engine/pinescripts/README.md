@@ -43,6 +43,8 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 | File | Pine title | Role |
 | --- | --- | --- |
 | `initiative_drive_detector_v6.pine` | `Initiative Drive Detector v6` | Flags expansion candles as *candidates*. Does not confirm order flow — every flag is a prompt to check the footprint. |
+| `keylevel-candles.pine` | `Key-Level Candles (breakout companion)` | Companion to `breakout.pine`. Marks whether the candle **at a key level** confirmed the break (BRK/ENG) or rejected it (REJ/FAIL). Level set and ATR band mirror `breakout.pine`. |
+| `candlestick-patterns.pine` | third-party (repo32, MPL-2.0) | Untracked source material that `keylevel-candles.pine` was reduced from. Not wired to anything. |
 
 ### intraday/volume-profile
 | File | Pine title | Role |

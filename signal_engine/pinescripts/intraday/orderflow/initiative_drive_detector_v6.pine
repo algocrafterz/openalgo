@@ -22,8 +22,9 @@ indicator("Initiative Drive Detector v6", overlay=true, max_labels_count=500, ma
 
 // ── Inputs ───────────────────────────────────────────────────────────────
 grpRange   = "Range & Volatility"
-atrLen     = input.int(14, "ATR Length", minval=1, group=grpRange)
-atrMult    = input.float(1.15, "ATR Multiplier", step=0.05, minval=0.1, group=grpRange)
+atrLen     = input.int(14, "Range Baseline Length", minval=1, group=grpRange)
+atrMult    = input.float(1.15, "Expansion Multiplier", step=0.05, minval=0.1, group=grpRange,
+     tooltip="Bar range must beat the MEDIAN range of the last N bars by this multiple. Median, not ATR: one outlier bar (a gap-open drive) lifts ATR for the whole averaging window and then suppresses every genuine expansion behind it.")
 
 grpVol     = "Volume"
 volLen     = input.int(20, "Volume SMA Length", minval=1, group=grpVol)
@@ -44,18 +45,24 @@ grpBreak   = "Breakout"
 lookback   = input.int(3, "Breakout Lookback", minval=1, group=grpBreak)
 
 grpFilter  = "Signal Filtering"
-scoreMin      = input.int(6, "Minimum Score (of 8)", minval=1, maxval=8, group=grpFilter)
-cooldownBars  = input.int(4, "Minimum Bars Between Signals", minval=0, group=grpFilter)
+scoreMin      = input.int(5, "Minimum Score (of 8)", minval=1, maxval=8, group=grpFilter)
+cooldownBars  = input.int(0, "Minimum Bars Between Signals", minval=0, group=grpFilter)
+firstOnly     = input.bool(false, "First Bar of a Run Only", group=grpFilter,
+     tooltip="This is a chart-reading detector, so by default every eligible candle is marked. Turn on to collapse a consecutive run down to its first bar (useful when driving alerts rather than reading the chart).")
 requireGate   = input.bool(true, "Require Directional Close (recommended)", group=grpFilter,
      tooltip="Candle must close in the signal direction AND near that extreme. Without this, the direction-neutral criteria (ATR, RVOL, body size) let an upthrust or a bear-trap bar score a signal for the wrong side.")
-requireTrend  = input.bool(true, "Require Trend Regime (ADX)", group=grpFilter)
-skipOpenBars  = input.int(2, "Skip First N Bars of Session", minval=0, group=grpFilter,
-     tooltip="The opening bars carry an auction-driven volume spike, so RVOL is inflated and nearly every open looks like an initiative drive.")
+requireTrend  = input.bool(false, "Require Trend Regime (ADX)", group=grpFilter,
+     tooltip="Off by default: ADX still contributes a score point, but as a hard gate it stacked with the direction gate and the score floor and left almost nothing on the chart.")
+skipOpenBars  = input.int(0, "Skip First N Bars of Session", minval=0, group=grpFilter,
+     tooltip="Opening bars carry an auction-driven volume spike that inflates RVOL. Left at 0 by default: on NSE 5-min the opening drive is very often the single most genuine initiative candle of the day, so skipping it threw away the best signal on the chart.")
 useSession    = input.bool(true, "Restrict to NSE Cash Session (09:15-15:30 IST)", group=grpFilter)
 sessionString = input.session("0915-1530", "Session", group=grpFilter)
 
 grpVis     = "Display"
-showMarkers = input.bool(true, "Show Markers (sleek triangles)", group=grpVis)
+showMarkers = input.bool(true, "Show Markers", group=grpVis)
+markerSize  = input.string(size.small, "Marker Size", options=[size.tiny, size.small, size.normal, size.large], group=grpVis)
+bullMarkCol = input.color(color.new(#00E5FF, 0), "Bull Marker", group=grpVis)
+bearMarkCol = input.color(color.new(#FF9100, 0), "Bear Marker", group=grpVis)
 showLabels  = input.bool(false, "Show Score Labels", group=grpVis,
      tooltip="Off by default — the triangle marker carries the signal without covering price action. Turn on when you want the score inline.")
 showBg      = input.bool(true, "Tint Signal Bar Background", group=grpVis)
@@ -64,7 +71,11 @@ showBarCol  = input.bool(false, "Recolour Signal Candle", group=grpVis,
 showTable   = input.bool(true, "Show Score Table", group=grpVis)
 
 // ── Calculations ─────────────────────────────────────────────────────────
-float atr = ta.atr(atrLen)
+// Median rather than ATR. ATR is a mean of true range, so the 09:20 gap-open
+// drive on a 5-min chart lifts it for the next `atrLen` bars and locks out every
+// expansion behind it -- observed on TCS 2026-08-25, where the one obvious
+// initiative candle on the chart raised the bar for everything that followed.
+float medRange = ta.median(high - low, atrLen)
 
 float barRange = high - low
 float body     = math.abs(close - open)
@@ -86,11 +97,10 @@ barsIntoSession := session.isfirstbar ? 1 : barsIntoSession + 1
 bool pastOpen = barsIntoSession > skipOpenBars
 
 // ── Core Conditions ──────────────────────────────────────────────────────
-// Expansion. `range > avgRange` used to sit alongside this as a separate
-// criterion, but "range beats its own 5-bar average" and "range beats
-// ATR x 1.15" measure the same property, so volatility was scoring twice
-// while participation and structure scored once each.
-bool atrPass  = barRange >= atr * atrMult
+// Expansion. A second `range > avgRange` criterion used to sit alongside this
+// measuring the same property, so volatility scored twice while participation
+// and structure scored once each. Dropped.
+bool atrPass  = barRange >= medRange * atrMult
 bool rvolPass = rvol >= rvolMin
 
 bool bodyPass = bodyPct >= bodyMinPct
@@ -162,8 +172,8 @@ bool bullCandidate = bullQualifies and not bothQualify
 bool bearCandidate = bearQualifies and not bothQualify
 
 // ── First Expansion Only, Confirmed Bar ─────────────────────────────────
-bool bullRaw = bullCandidate and not bullCandidate[1] and barstate.isconfirmed
-bool bearRaw = bearCandidate and not bearCandidate[1] and barstate.isconfirmed
+bool bullRaw = bullCandidate and (not firstOnly or not bullCandidate[1]) and barstate.isconfirmed
+bool bearRaw = bearCandidate and (not firstOnly or not bearCandidate[1]) and barstate.isconfirmed
 
 // ── Cooldown Filter ──────────────────────────────────────────────────────
 var int lastBullBar = na
@@ -183,31 +193,30 @@ if bearRaw
         lastBearBar := bar_index
 
 // ── Visuals ──────────────────────────────────────────────────────────────
-// Sleek by default: a tiny triangle off the bar, and an optional faint tint.
-// Nothing is drawn over the candle body or wicks.
-color bullCol = color.new(color.teal, 0)
-color bearCol = color.new(color.red, 0)
-
-plotshape(showMarkers and bullSignal, title="Bull Initiative Drive", style=shape.triangleup,
-     location=location.belowbar, color=bullCol, size=size.tiny)
-plotshape(showMarkers and bearSignal, title="Bear Initiative Drive", style=shape.triangledown,
-     location=location.abovebar, color=bearCol, size=size.tiny)
+// Diamonds in cyan/amber, deliberately NOT green/red triangles: those are
+// already spoken for by entry/exit signal markers, and two different meanings
+// sharing one glyph and one colour is unreadable on a live chart. Nothing is
+// drawn over the candle body or wicks.
+plotshape(showMarkers and bullSignal, title="Bull Initiative Drive", style=shape.diamond,
+     location=location.belowbar, color=bullMarkCol, size=markerSize)
+plotshape(showMarkers and bearSignal, title="Bear Initiative Drive", style=shape.diamond,
+     location=location.abovebar, color=bearMarkCol, size=markerSize)
 
 barcolor(showBarCol and bullSignal ? color.lime : showBarCol and bearSignal ? color.red : na)
-bgcolor(showBg and bullSignal ? color.new(color.teal, 92) : showBg and bearSignal ? color.new(color.red, 92) : na)
+bgcolor(showBg and bullSignal ? color.new(bullMarkCol, 88) : showBg and bearSignal ? color.new(bearMarkCol, 88) : na)
 
 // Optional compact score label. `location=` is not a label.new parameter --
 // labels position with yloc -- and the style constants are label.style_label_up
 // / label.style_label_down. Both were wrong, so the script did not compile.
 if showLabels and bullSignal
     label.new(bar_index, low, text=str.tostring(bullScore), style=label.style_label_up,
-         yloc=yloc.belowbar, color=color.new(color.teal, 20), textcolor=color.white, size=size.tiny,
+         yloc=yloc.belowbar, color=color.new(bullMarkCol, 20), textcolor=color.black, size=size.tiny,
          tooltip="Bull initiative candidate " + str.tostring(bullScore) +
          "/8\nVerify on footprint: ask-side stacking, no absorption at the high")
 
 if showLabels and bearSignal
     label.new(bar_index, high, text=str.tostring(bearScore), style=label.style_label_down,
-         yloc=yloc.abovebar, color=color.new(color.red, 20), textcolor=color.white, size=size.tiny,
+         yloc=yloc.abovebar, color=color.new(bearMarkCol, 20), textcolor=color.black, size=size.tiny,
          tooltip="Bear initiative candidate " + str.tostring(bearScore) +
          "/8\nVerify on footprint: bid-side stacking, no absorption at the low")
 
@@ -231,7 +240,7 @@ f_dir(_row, _label, _bull, _bear) =>
 
 if showTable and barstate.islast
     f_head(0, "Criteria", "Side")
-    f_neutral(1, "Range >= ATR x mult", atrPass)
+    f_neutral(1, "Range >= median x mult", atrPass)
     f_neutral(2, "RVOL >= min", rvolPass)
     f_dir(3, "Body % (directional)", bullBody, bearBody)
     f_dir(4, "Close in extreme zone", bullClose, bearClose)
