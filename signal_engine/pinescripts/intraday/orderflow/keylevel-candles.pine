@@ -73,7 +73,7 @@ showBreak  = input.bool(true, "Show BREAK", group=grpVis)
 showFake   = input.bool(true, "Show FAKE", group=grpVis)
 showLevels = input.bool(false, "Plot Levels", group=grpVis,
      tooltip="Off by default. breakout.pine already draws AND tags these levels; plotting them here a second time adds a set of lines with no tag on them, which is exactly the 'what level is that line' problem. Turn on only when running this script without breakout.pine.")
-lblSize    = input.string(size.normal, "Label Size", options=[size.tiny, size.small, size.normal], group=grpVis,
+lblSize    = input.string(size.tiny, "Label Size", options=[size.tiny, size.small, size.normal], group=grpVis,
      tooltip="Labels accept a series size, unlike plotshape whose size must be a compile-time constant.")
 showLvlTable = input.bool(true, "Show Level Coverage Table", group=grpVis,
      tooltip="Every level currently in play, its price, and how many BREAK / FAKE verdicts it produced today. Use it to confirm a level is actually being tested rather than assuming it is.")
@@ -106,6 +106,13 @@ bool newSess = session.isfirstbar_regular
 // candles at each event's own price.
 var float rowY = na
 
+// Cluster fan-out. Price grinding along one level puts a verdict on several
+// consecutive bars — PDL produced 18 in a session — and at one fixed y they
+// overlap into an unreadable clump. Marks on adjacent bars step down through a
+// few slots instead; isolated marks stay on the line.
+var int lastMarkBar = na
+var int stagger     = 0
+
 // Per-level verdict counts for the coverage table, reset each session.
 var map<string, int> brkCnt = map.new<string, int>()
 var map<string, int> fkCnt  = map.new<string, int>()
@@ -121,6 +128,8 @@ if newSess
     map.clear(brkCnt)
     map.clear(fkCnt)
     map.clear(lastAt)
+    lastMarkBar := na
+    stagger := 0
 
 if not na(rowY)
     rowY := math.min(rowY, low - nz(atr14, high - low) * rowOffAtr)
@@ -255,6 +264,15 @@ fakeDn  := fakeDn  and lvlReady
 f_tip(string _head, string _did, string _means) =>
     _head + " " + testName + " " + str.tostring(testLvl, format.mintick) + "\n" + _did + "\n" + _means
 
+// Slot resolution must live at global scope — Pine rejects assignment to a
+// global from inside a user function. The verdicts are mutually exclusive, so
+// a bar carries at most one mark and one slot is enough.
+bool anyMark = (breakUp or breakDn or fakeUp or fakeDn) and barstate.isconfirmed
+if anyMark
+    stagger := (not na(lastMarkBar) and bar_index - lastMarkBar <= 2) ? (stagger + 1) % 4 : 0
+    lastMarkBar := bar_index
+float markY = rowY - stagger * nz(atr14, 1.0) * 0.7
+
 if barstate.isconfirmed and showBreak and (breakUp or breakDn)
     bool up = breakUp
     string did = (strongBrk ? "Big body closed " : "Closed ") + (up ? "above" : "below") + " it on " + str.tostring(rvol, "#.#") + "x volume."
@@ -262,7 +280,7 @@ if barstate.isconfirmed and showBreak and (breakUp or breakDn)
     map.put(brkCnt, testName, nz(map.get(brkCnt, testName), 0) + 1)
     map.put(lastAt, testName, bar_index)
     color bc = color.new(up ? brkUpCol : brkDnCol, strongBrk ? 0 : 55)
-    label.new(bar_index, rowY, text=up ? "B▲" : "B▼", style=label.style_label_up, yloc=yloc.price,
+    label.new(bar_index, markY, text=up ? "B▲" : "B▼", style=label.style_label_up, yloc=yloc.price,
          color=bc, textcolor=color.black, size=lblSize,
          tooltip=f_tip("BREAK", did, means))
 
@@ -273,7 +291,7 @@ if barstate.isconfirmed and showFake and (fakeUp or fakeDn)
     map.put(fkCnt, testName, nz(map.get(fkCnt, testName), 0) + 1)
     map.put(lastAt, testName, bar_index)
     color fc2 = color.new(up ? fakeUpCol : fakeDnCol, strongFake ? 0 : 55)
-    label.new(bar_index, rowY, text=up ? "F▲" : "F▼", style=label.style_label_up, yloc=yloc.price,
+    label.new(bar_index, markY, text=up ? "F▲" : "F▼", style=label.style_label_up, yloc=yloc.price,
          color=fc2, textcolor=color.black, size=lblSize,
          tooltip=f_tip("FAKE", did, means))
 

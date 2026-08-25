@@ -431,6 +431,14 @@ Default label size raised from tiny to normal.
 
 **Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
 
+### Cluster fan-out for key-level marks
+
+With every interaction now judged, a level being ground along puts a verdict on consecutive bars — `PDL 2279.5` produced 18 in one session — and at one fixed y they overlapped into an unreadable clump. Label size is back to tiny, and marks landing within two bars of the previous one step down through four slots; isolated marks stay on the line, clusters fan out.
+
+The first attempt put slot resolution in a helper function, which would not have compiled: **Pine rejects assignment to a global variable from inside a user function.** It is resolved at global scope instead, which is legal, and the verdicts being mutually exclusive means one slot per bar is sufficient. A scan of both orderflow scripts confirms no other function assigns to a global.
+
+**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.
