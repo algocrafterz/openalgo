@@ -1,5 +1,5 @@
 //@version=6
-indicator("Initiative Drive Detector v6", overlay=true, max_labels_count=500, max_bars_back=500)
+indicator("id-candle-detector", overlay=true, max_labels_count=500, max_bars_back=500)
 
 // ============================================================================
 // PURPOSE

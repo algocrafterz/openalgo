@@ -1,5 +1,5 @@
 //@version=6
-indicator("Key-Level Candles (breakout companion)", overlay=true, max_labels_count=500)
+indicator("keylevel-candles", overlay=true, max_labels_count=500)
 
 // ============================================================================
 // PURPOSE
