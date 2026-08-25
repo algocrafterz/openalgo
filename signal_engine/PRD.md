@@ -326,13 +326,19 @@ A broker-auth failure was silent and open-ended. On 2026-08-24 a single failure 
 
 **Files**: `scripts/openalgoscheduler.py`, `scripts/openalgoctl.sh`, `tests/test_openalgoscheduler.py`, `tests/test_openalgoctl.sh` (new).
 
-### Initiative Drive Detector v6 -- direction gate
+### Initiative Drive Detector v6 -- rewrite
 
-`initiative_drive_detector_v6.pine` had a corrupted `ta.atr()` call and would not compile. Beyond that, four of its eight score criteria (ATR, range, RVOL, body size) are direction-neutral, so they were free points for *both* sides: an upthrust that spiked up, took out the 3-bar high, then closed on its low inside an uptrend scored 6/8 and fired a BULL signal -- the exact absorption bar the script's own header tells you to go disqualify on the footprint.
+The script had never compiled. Three separate faults: a corrupted `ta.atr(` call, `label.style_labelup` / `label.style_labeldown` (the v6 constants carry underscores), and `location=` passed to `label.new`, which has no such parameter -- labels position with `yloc`.
 
-- Body is now direction-aware (`bullBody` requires `close > open`).
-- Direction is a prerequisite, not a score component: the candle must close in the signal direction *and* near that extreme (`requireGate`, on by default, toggleable for comparison).
-- Bull and bear can no longer fire on the same bar; warm-up guard added so ATR/RVOL are not read before their lookbacks fill; cooldown `>` corrected to `>=` to match its own label.
+Detection was also too loose to mean "initiative". Fixes, in order of impact:
+
+- **Breakout is measured on the close, not the intrabar extreme.** `high > highest(high[1], N)` is satisfied by an upthrust that pokes through a level and gets sold back -- the textbook responsive/absorption bar this indicator exists to filter out. `close > highest(high[1], N)` requires the auction to hold the new territory into the close.
+- **Direction is a prerequisite, not a score component.** Direction-neutral criteria were free points for both sides, so an upthrust inside an uptrend could score 6/8 as a BULL signal.
+- **ADX regime gate, made directional.** An expansion bar inside balance is rotation, not initiative. ADX alone measures strength only, so it was another free point for both sides; +DI/-DI supplies direction. Neutral criteria are now down to two (ATR expansion, RVOL).
+- **Dropped `range > avgRange`.** It measured the same property as `range >= ATR x mult`, so volatility scored twice while participation and structure scored once each.
+- Body is direction-aware; bull and bear can no longer fire on the same bar; opening N bars are skipped (the auction volume spike inflates RVOL, so nearly every open looked like an initiative drive); warm-up guard; cooldown `>` corrected to `>=`; stopped shadowing the built-in `vwap`; `nz()` around alert interpolations so DMI warm-up cannot emit `NaN` into the JSON.
+
+Marking is now unobtrusive: tiny `plotshape` triangles off the bar plus a faint background tint. Candle recolouring and score labels are **off** by default -- recolouring overwrites the real candle colour, which is still needed when reading the bar against the footprint.
 
 **Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`.
 
