@@ -38,6 +38,8 @@ lookback   = input.int(3, "Breakout Lookback", group=grpBreak)
 grpFilter  = "Signal Filtering"
 scoreMin      = input.int(6, "Minimum Score (of 8)", minval=1, maxval=8, group=grpFilter)
 cooldownBars  = input.int(4, "Minimum Bars Between Signals", group=grpFilter)
+requireGate   = input.bool(true, "Require Directional Close (recommended)", group=grpFilter,
+     tooltip="Candle must close in the signal direction AND near that extreme. Without this, the four direction-neutral criteria (ATR, range, RVOL, body size) let an upthrust or a bear-trap bar score a signal for the wrong side.")
 useSession    = input.bool(true, "Restrict to NSE Cash Session (09:15–15:30 IST)", group=grpFilter)
 sessionString = input.session("0915-1530", "Session", group=grpFilter)
 
@@ -56,7 +58,7 @@ float volMA = ta.sma(volume, volLen)
 float rvol  = volMA > 0 ? volume / volMA : 0.0
 
 float ema  = ta.ema(close, emaLen)
-float vwap = ta.vwap(close)
+float vwapVal = ta.vwap(close)
 
 float avgRange = ta.sma(barRange, rangeSmaLen)
 
@@ -67,6 +69,11 @@ bool atrPass   = barRange >= atr * atrMult
 bool rangePass = barRange > avgRange
 bool rvolPass  = rvol >= rvolMin
 bool bodyPass  = bodyPct >= bodyMinPct
+// Direction-aware body: an expansion candle only counts toward a side if it
+// actually closed in that direction. bodyPct alone is |close-open|, so a large
+// DOWN candle previously scored a bull body point.
+bool bullBody  = bodyPass and close > open
+bool bearBody  = bodyPass and close < open
 
 bool bullClose = close >= high - barRange * (closeZonePct / 100)
 bool bearClose = close <= low  + barRange * (closeZonePct / 100)
@@ -74,21 +81,44 @@ bool bearClose = close <= low  + barRange * (closeZonePct / 100)
 bool bullTrend = close > ema and ema > ema[1]
 bool bearTrend = close < ema and ema < ema[1]
 
-bool bullVWAP = close > vwap
-bool bearVWAP = close < vwap
+bool bullVWAP = close > vwapVal
+bool bearVWAP = close < vwapVal
 
 bool bullBreak = high > ta.highest(high[1], lookback)
 bool bearBreak = low  < ta.lowest(low[1], lookback)
 
 // ── Score ────────────────────────────────────────────────────────────────
-int bullScore = (atrPass ? 1 : 0) + (rangePass ? 1 : 0) + (rvolPass ? 1 : 0) + (bodyPass ? 1 : 0) +
+int bullScore = (atrPass ? 1 : 0) + (rangePass ? 1 : 0) + (rvolPass ? 1 : 0) + (bullBody ? 1 : 0) +
      (bullClose ? 1 : 0) + (bullTrend ? 1 : 0) + (bullVWAP ? 1 : 0) + (bullBreak ? 1 : 0)
 
-int bearScore = (atrPass ? 1 : 0) + (rangePass ? 1 : 0) + (rvolPass ? 1 : 0) + (bodyPass ? 1 : 0) +
+int bearScore = (atrPass ? 1 : 0) + (rangePass ? 1 : 0) + (rvolPass ? 1 : 0) + (bearBody ? 1 : 0) +
      (bearClose ? 1 : 0) + (bearTrend ? 1 : 0) + (bearVWAP ? 1 : 0) + (bearBreak ? 1 : 0)
 
-bool bullCandidate = bullScore >= scoreMin and inSession
-bool bearCandidate = bearScore >= scoreMin and inSession
+// ── Directional Gate ─────────────────────────────────────────────────────
+// Four of the eight criteria (ATR, range, RVOL, body size) are direction-
+// neutral, so they were free points for BOTH sides. An upthrust -- a bar that
+// spikes up, takes out the 3-bar high, then closes on its low inside an uptrend
+// -- collected atr+range+rvol+trend+vwap+break = 6/8 and fired a BULL signal.
+// That bar is the opposite of initiative buying: it is exactly the absorption
+// the header tells you to go check the footprint for.
+//
+// The fix is to make direction a prerequisite rather than a score component:
+// the candle must close in the signal's direction AND close near that extreme.
+bool bullGate = not requireGate or (bullBody and bullClose)
+bool bearGate = not requireGate or (bearBody and bearClose)
+
+// Warm-up: ATR/RVOL are unreliable until their lookbacks are filled.
+bool warmedUp = bar_index >= math.max(atrLen, volLen, rangeSmaLen, lookback)
+
+bool bullQualifies = bullScore >= scoreMin and bullGate and inSession and warmedUp
+bool bearQualifies = bearScore >= scoreMin and bearGate and inSession and warmedUp
+
+// A single bar cannot be both initiative buying and initiative selling. If both
+// sides qualify the bar is ambiguous, so emit neither rather than firing two
+// contradictory alerts off the same candle.
+bool bothQualify   = bullQualifies and bearQualifies
+bool bullCandidate = bullQualifies and not bothQualify
+bool bearCandidate = bearQualifies and not bothQualify
 
 // ── First Expansion Only, Confirmed Bar ─────────────────────────────────
 bool bullRaw = bullCandidate and not bullCandidate[1] and barstate.isconfirmed
@@ -102,12 +132,12 @@ bool bullSignal = false
 bool bearSignal = false
 
 if bullRaw
-    if na(lastBullBar) or (bar_index - lastBullBar > cooldownBars)
+    if na(lastBullBar) or (bar_index - lastBullBar >= cooldownBars)
         bullSignal := true
         lastBullBar := bar_index
 
 if bearRaw
-    if na(lastBearBar) or (bar_index - lastBearBar > cooldownBars)
+    if na(lastBearBar) or (bar_index - lastBearBar >= cooldownBars)
         bearSignal := true
         lastBearBar := bar_index
 
@@ -143,8 +173,9 @@ if showTable and barstate.islast
     table.cell(scoreTable, 1, 2, (rangePass ? "✓" : "✗"), text_color= rangePass ? color.lime : color.red, text_size=size.small)
     table.cell(scoreTable, 0, 3, "RVOL ≥ min", text_color=color.gray, text_size=size.small)
     table.cell(scoreTable, 1, 3, (rvolPass ? "✓" : "✗"), text_color= rvolPass ? color.lime : color.red, text_size=size.small)
-    table.cell(scoreTable, 0, 4, "Body % ≥ min", text_color=color.gray, text_size=size.small)
-    table.cell(scoreTable, 1, 4, (bodyPass ? "✓" : "✗"), text_color= bodyPass ? color.lime : color.red, text_size=size.small)
+    table.cell(scoreTable, 0, 4, "Body % ≥ min (directional)", text_color=color.gray, text_size=size.small)
+    table.cell(scoreTable, 1, 4, (bullBody ? "▲" : bearBody ? "▼" : "✗"),
+         text_color = bullBody ? color.lime : bearBody ? color.red : color.gray, text_size=size.small)
     table.cell(scoreTable, 0, 5, "Close in extreme zone", text_color=color.gray, text_size=size.small)
     table.cell(scoreTable, 1, 5, (bullClose ? "▲" : bearClose ? "▼" : "✗"),
          text_color = bullClose ? color.lime : bearClose ? color.red : color.gray, text_size=size.small)

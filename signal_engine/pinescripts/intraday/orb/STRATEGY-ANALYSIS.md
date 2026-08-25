@@ -515,7 +515,7 @@ Entry blocked when **2 or more** of these filters oppose the direction.
 
 ## Signal Performance Summary (Q1 2026)
 
-See [SIGNAL-PERFORMANCE-2026-Q1.md](SIGNAL-PERFORMANCE-2026-Q1.md) for full analysis.
+See [SIGNAL-PERFORMANCE-2026-Q1.md](trade-analysis/SIGNAL-PERFORMANCE-2026-Q1.md) for full analysis.
 
 **Key metrics (31 trading days, 196 trades):**
 - Win Rate: 67.3% | Expectancy: +0.28%/trade | Cumulative PnL: +54.89%

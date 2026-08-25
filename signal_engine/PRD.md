@@ -316,6 +316,36 @@ looked right, which is why it went unnoticed.
 Verified correct and left alone: the return percentage (already measured against opening
 capital) and the win rate (time exits deliberately excluded from W/L but shown as `T:`).
 
+### Startup failures now alert; auth cooldown bounded; readiness probed
+
+A broker-auth failure was silent and open-ended. On 2026-08-24 a single failure at 09:03 wrote a flat 24h cooldown that then blocked 80 start attempts through 15:27 -- the whole trading day -- with nothing sent anywhere, because `_run_startup()` called `sys.exit(1)` before reaching its notification step.
+
+- `notify_failure()` alerts Telegram on every `_run_startup` failure path (configuration, auto-login, broker-auth) and never raises, so a dead notifier cannot mask the underlying error. New `openalgoscheduler notify` CLI lets `openalgoctl.sh` alert without duplicating Telegram wiring.
+- Auth cooldown escalates 5m/15m/1h/3h (capped, counter resets on success) instead of a flat 24h. Worst case now stays inside one trading session.
+- The supervisor loop re-probes the health URL every 60s and declares `app.py` wedged after 3 consecutive failures. `kill -0` only proved the PID existed, so an alive-but-unresponsive server read as healthy indefinitely.
+
+**Files**: `scripts/openalgoscheduler.py`, `scripts/openalgoctl.sh`, `tests/test_openalgoscheduler.py`, `tests/test_openalgoctl.sh` (new).
+
+### Initiative Drive Detector v6 -- direction gate
+
+`initiative_drive_detector_v6.pine` had a corrupted `ta.atr()` call and would not compile. Beyond that, four of its eight score criteria (ATR, range, RVOL, body size) are direction-neutral, so they were free points for *both* sides: an upthrust that spiked up, took out the 3-bar high, then closed on its low inside an uptrend scored 6/8 and fired a BULL signal -- the exact absorption bar the script's own header tells you to go disqualify on the footprint.
+
+- Body is now direction-aware (`bullBody` requires `close > open`).
+- Direction is a prerequisite, not a score component: the candle must close in the signal direction *and* near that extreme (`requireGate`, on by default, toggleable for comparison).
+- Bull and bear can no longer fire on the same bar; warm-up guard added so ATR/RVOL are not read before their lookbacks fill; cooldown `>` corrected to `>=` to match its own label.
+
+**Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`.
+
+### pinescripts/ structure
+
+- Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.
+- Removed three vestigial `__init__.py` files. Nothing imports `signal_engine.pinescripts`, and `trade-analysis` cannot be a module anyway (hyphen).
+- `STRATEGY-ANALYSIS.md` is now the single spelling; it previously existed in three casings, which made it ungreppable.
+- Performance reports consolidated under `orb/trade-analysis/`.
+- Strategy-Tester exports (`result.json`) and `charts/` are gitignored -- regenerated per run, not source.
+
+**Files**: `pinescripts/README.md` (new), `.gitignore`, `PRD.md`.
+
 ### Open
 
 - `accountSize` in `breakout.pine` is still the 10000 template default; the engine sizes from
@@ -683,7 +713,7 @@ Guard 2 relied solely on `orderstatus` API to determine fill status. When the br
 
 **ORB-STRATEGY-ANALYSIS.md scanners updated.** Setup Scanner widened `{nifty200}`→`{nifty500}`. Two new scanners added: pre-market gap scanner (Scanner 3, 09:10 AM) and NR7 end-of-day pre-filter (Scanner 4, 15:25). Workflow table updated. Sector-rotation overlay documented (Chartink has no native sector filter — manual sector-index check).
 
-**Files**: `config.yaml`, `config.py`, `tracker.py`, `tests/test_config.py`, `pinescripts/intraday/orb/ORB-STRATEGY-ANALYSIS.md`.
+**Files**: `config.yaml`, `config.py`, `tracker.py`, `tests/test_config.py`, `pinescripts/intraday/orb/STRATEGY-ANALYSIS.md`.
 **Next phases**: Phase 2 (risk.py soft-blacklist sizing) and Phase 3 (PineScript NR filter input). Tracking via `pre-orb-improvements-2026-04-25` git tag.
 
 ### ORB strategy improvements — Phase 2 (risk engine soft sizing)

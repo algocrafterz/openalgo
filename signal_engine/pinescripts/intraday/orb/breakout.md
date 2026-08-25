@@ -271,7 +271,7 @@ rather than via another security call. Dashboard table grown 48 → 54 rows.
 ### Input review
 
 Checked every input against the documented strategy (`config.yaml`, `PRD.md`,
-`SIGNAL-PERFORMANCE-2026-Q1.md`).
+`trade-analysis/SIGNAL-PERFORMANCE-2026-Q1.md`).
 
 **Changed:** `riskPct` 2.0 → **1.0**, to match `config.yaml: risk_per_trade: 0.01`. The
 panel was showing position sizes at double the real risk budget. Display-only — the
@@ -713,7 +713,7 @@ while the numerator was an opening bar running 5-10x normal. The 1.2x test was t
 
 Two artefacts in the code were compensating for it rather than fixing it:
 - `max(volume, volume[1], volume[2])` in `hasVolumeConfirmation()`
-- the earlier 20 -> 50 MA change, recorded in `SIGNAL-PERFORMANCE-2026-Q1.md:183`
+- the earlier 20 -> 50 MA change, recorded in `trade-analysis/SIGNAL-PERFORMANCE-2026-Q1.md:183`
 
 Both are now gone.
 
