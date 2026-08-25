@@ -24,6 +24,9 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 - `strategy("<name>", ...)` — the Pine title is the alert identity the engine
   matches on (`intraday-orb`, `intraday-breakout`, `swing-dividend-growth`),
   so it must stay in sync with `config.yaml` `strategy_profiles`.
+- `plotshape`'s `size` is a **const string**: an `input.string` is rejected with
+  *Cannot call "plotshape" with argument "size"*. `label.new` accepts a series
+  size, so anything user-resizable has to be drawn as a label.
 - Run artifacts (`result.json`, `charts/`) are gitignored — they are
   Strategy-Tester exports and screenshots, regenerated per run, not source.
 
@@ -43,7 +46,7 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 | File | Pine title | Role |
 | --- | --- | --- |
 | `initiative_drive_detector_v6.pine` | `Initiative Drive Detector v6` | Flags expansion candles as *candidates*. Does not confirm order flow — every flag is a prompt to check the footprint. |
-| `keylevel-candles.pine` | `Key-Level Candles (breakout companion)` | Companion to `breakout.pine`. Marks whether the candle **at a key level** confirmed the break (BRK/ENG) or rejected it (REJ/FAIL). Level set and ATR band mirror `breakout.pine`. |
+| `keylevel-candles.pine` | `Key-Level Candles (breakout companion)` | Companion to `breakout.pine`. On a candle that trades **through** a key level, gives one verdict — `BREAK` (level gives way), `FAKE` (level holds), `WEAK` (inconclusive) — each with a tooltip naming the candle type, level, volume and reading. Level set mirrors `breakout.pine:661`. |
 | `candlestick-patterns.pine` | third-party (repo32, MPL-2.0) | Untracked source material that `keylevel-candles.pine` was reduced from. Not wired to anything. |
 
 ### intraday/volume-profile

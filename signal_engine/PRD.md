@@ -342,6 +342,23 @@ Marking is now unobtrusive: tiny `plotshape` triangles off the bar plus a faint 
 
 **Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`.
 
+### Key-level candle verdicts, and two Pine compile faults
+
+`plotshape`'s `size` argument is a const string, so the `input.string` marker-size control was rejected outright: *Cannot call "plotshape" with argument "size"*. Sizes driven by an input have to be drawn with `label.new`, whose properties accept series values. Both orderflow scripts hit this.
+
+`keylevel-candles.pine` was firing almost nothing but FAIL on a live TCS 5-min chart. Two causes:
+
+- **Proximity was the wrong trigger.** "Within 0.25 x ATR of the nearest level" is true on nearly every bar once eleven levels are on the chart. The bar now has to actually trade *through* a level, and of the levels it pierced, the one its close settles nearest is the one under test.
+- **The level reference was unstable.** `close[1]` was compared against whichever level was nearest on *this* bar, frequently a different level from the one the previous bar closed against. Every level in the table is fixed once formed, so the comparison is now made against that one level.
+
+Also: OR/IB levels were live during their own formation window, so every bar inside the first 15 / 60 minutes "touched" them. They are now published only once the window closes.
+
+The output is one of three verdicts rather than five pattern names, each carrying a tooltip with the candle type, level, body/wick geometry, volume and the reading -- `BREAK` (conviction close through, on volume, no wick into the level), `FAKE` (rejection wick, or a close back inside after the previous bar closed beyond), `WEAK` (inconclusive, off by default).
+
+`initiative_drive_detector_v6.pine` markers are now small green/red `ID` labels instead of cyan/amber diamonds.
+
+**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`, `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`, `pinescripts/README.md`.
+
 ### pinescripts/ structure
 
 - Added `pinescripts/README.md` -- there was no map of the 10 `.pine` files, their Pine titles, or which are live vs third-party reference.

@@ -60,9 +60,13 @@ sessionString = input.session("0915-1530", "Session", group=grpFilter)
 
 grpVis     = "Display"
 showMarkers = input.bool(true, "Show Markers", group=grpVis)
-markerSize  = input.string(size.small, "Marker Size", options=[size.tiny, size.small, size.normal, size.large], group=grpVis)
-bullMarkCol = input.color(color.new(#00E5FF, 0), "Bull Marker", group=grpVis)
-bearMarkCol = input.color(color.new(#FF9100, 0), "Bear Marker", group=grpVis)
+// NOTE: plotshape's `size` argument is a *const string*. An input.string is
+// "input string", one step weaker, and the compiler rejects it:
+//   Cannot call "plotshape" with argument "size"="markerSize"
+// Label size has to be fixed at compile time; change size.small below to
+// size.tiny / size.normal directly if you want it different.
+bullMarkCol = input.color(color.new(color.lime, 0), "Bull ID Label", group=grpVis)
+bearMarkCol = input.color(color.new(color.red, 0), "Bear ID Label", group=grpVis)
 showLabels  = input.bool(false, "Show Score Labels", group=grpVis,
      tooltip="Off by default — the triangle marker carries the signal without covering price action. Turn on when you want the score inline.")
 showBg      = input.bool(true, "Tint Signal Bar Background", group=grpVis)
@@ -193,14 +197,13 @@ if bearRaw
         lastBearBar := bar_index
 
 // ── Visuals ──────────────────────────────────────────────────────────────
-// Diamonds in cyan/amber, deliberately NOT green/red triangles: those are
-// already spoken for by entry/exit signal markers, and two different meanings
-// sharing one glyph and one colour is unreadable on a live chart. Nothing is
-// drawn over the candle body or wicks.
-plotshape(showMarkers and bullSignal, title="Bull Initiative Drive", style=shape.diamond,
-     location=location.belowbar, color=bullMarkCol, size=markerSize)
-plotshape(showMarkers and bearSignal, title="Bear Initiative Drive", style=shape.diamond,
-     location=location.abovebar, color=bearMarkCol, size=markerSize)
+// Small "ID" labels: green below a bullish initiative drive, red above a
+// bearish one. The label shape still reads differently from a bare entry/exit
+// triangle, and nothing is drawn over the candle body or wicks.
+plotshape(showMarkers and bullSignal, title="Bull Initiative Drive", style=shape.labelup,
+     location=location.belowbar, color=bullMarkCol, text="ID", textcolor=color.black, size=size.small)
+plotshape(showMarkers and bearSignal, title="Bear Initiative Drive", style=shape.labeldown,
+     location=location.abovebar, color=bearMarkCol, text="ID", textcolor=color.white, size=size.small)
 
 barcolor(showBarCol and bullSignal ? color.lime : showBarCol and bearSignal ? color.red : na)
 bgcolor(showBg and bullSignal ? color.new(bullMarkCol, 88) : showBg and bearSignal ? color.new(bearMarkCol, 88) : na)
