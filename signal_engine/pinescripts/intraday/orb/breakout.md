@@ -1855,3 +1855,54 @@ versus 1.5 over a period containing genuine trend days.
 - ABCAPITAL TP1 = exactly 1.0R: no structural level sat far enough above entry, so `klCalcTargets`
   fell back to the risk multiple, as designed
 - Both TP labels carry ✅ and neither SL label carries ❌ — the SL-after-TP gate holding
+
+## 2026-08-26 — Every level named; previous-day VP levels get a P prefix
+
+Two chart-review findings, both about identification rather than logic.
+
+### Unlabelled lines
+
+`klDrawLevel` dropped the TAG for any level further than `klTagMaxATR` (6) x ATR from close
+but kept its LINE, so the chart carried horizontal lines the trader could not name. A line you
+cannot identify is worse than no line — it reads as a level without saying which.
+
+First attempt made suppression symmetric: a distant level we draw ourselves is dropped entirely
+rather than left anonymous, and levels whose line comes from elsewhere (`drawLine=false`, the ORB
+plots) are always tagged because that line cannot be removed. That fixed the anonymous lines but
+created a worse problem — **PDH, 33 points from close on a mid-range day, disappeared**, and PDH
+is exactly the level a trend day runs at.
+
+Settled on `klTagMaxATR = 0.0`: every level is drawn AND tagged. The collision stagger already in
+`klDrawLevel` (tags pushed right in `KL_TAG_STEP_BARS` increments until clear) was always the
+real answer to stacked tags; the distance cutoff was solving a problem that was already solved.
+The symmetric-suppression code is kept, so if a distance limit is ever re-enabled it hides rather
+than orphans.
+
+### PVAH / PPOC / PVAL
+
+`VAH`/`POC`/`VAL` renamed to `PVAH`/`PPOC`/`PVAL`. These are the **previous** session's value
+area, but TradingView's Session Volume Profile plots the **current** day's VAH/POC/VAL — two sets
+of lines carrying the same three names at different prices, both on the chart at once.
+
+The prefix also makes the scheme self-consistent, which it was not:
+
+| Previous session | Today |
+| --- | --- |
+| `PVAH` `PPOC` `PVAL` `PDH` `PDL` | `ORH` `ORM` `ORL` `IBH` `IBM` `IBL` |
+
+`PDH`/`PDL` already carried the P. Now P always means previous-session, with no exceptions.
+
+Display only — three call sites in `klDrawLevel`, the `klLvlNames` array, the confluence-name
+pushes and one dashboard row label. `klLvlNames` feeds a human-readable KEYLEVEL packet that goes
+to a channel the signal engine does not listen on, and `parser.py` never reads level names, so the
+trade pipeline is untouched. Setup codes (`VAH-ACC`, `VAL-REJ`) were deliberately left alone —
+different namespace, real blast radius.
+
+### Not a finding: the auto profile is fine
+
+An earlier review claimed `klAutoProfile` was ~12 points off TradingView's SVP. That was wrong:
+it compared breakout's **previous-day** levels against SVP's **current-day** levels. Two different
+sessions. On a like-for-like read PPOC and PVAL match and PVAH is off by ~2 points, which is the
+expected signature of a small `ticksPerRow` mismatch — POC is the modal bin and stable, while
+VAH/VAL are the 70% boundary edges and land mid-bin. Tune ticks-per-row if exactness matters;
+switching to manual VP is not warranted.

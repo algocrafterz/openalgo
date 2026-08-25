@@ -12,6 +12,45 @@ by the test suite.
 
 ---
 
+## 2026-08-25 — `pinescripts/` structure
+
+Structural only. No Pine logic changed in this pass.
+
+**What moved**
+- `ORB-STRATEGY-ANALYSIS.md` -> `orb/STRATEGY-ANALYSIS.md`
+- `volume-profile/strategy-analysis.md` -> `volume-profile/STRATEGY-ANALYSIS.md`
+- `orb/SIGNAL-PERFORMANCE-2026-Q1.md` -> `orb/trade-analysis/SIGNAL-PERFORMANCE-2026-Q1.md`
+
+`STRATEGY-ANALYSIS.md` existed in three different casings, which made it ungreppable. One
+spelling now, every folder. Performance reports were split across two directories; they are all
+under `trade-analysis/` with `analyze_orb.py`, which globs its inputs relative to `__file__` and
+is unaffected by the move.
+
+**What was removed**
+- Three `__init__.py` files (`pinescripts/`, `intraday/`, `intraday/orb/`). Nothing imports
+  `signal_engine.pinescripts`, and `trade-analysis` cannot be a module anyway — hyphen in the
+  name. They made the tree look like a package it never was.
+
+**What was added**
+- `pinescripts/README.md`. There was no map of the ten `.pine` files, their Pine titles, or
+  which are live versus third-party reference. It also carries the Pine gotchas this work
+  turned up, so they are not rediscovered.
+- `.gitignore` entries for `result.json`, `charts/` and `*.png` under `pinescripts/` —
+  Strategy-Tester exports and chart screenshots, regenerated per run, and previously permanent
+  `git status` noise.
+
+**Deliberately not done**
+- No wholesale re-taxonomy. The `intraday|swing/<strategy>/` layout is sound, and renaming
+  further would have invalidated ~13 documented paths in `PRD.md` and `HOW-IT-WORKS.md` for
+  cosmetic gain. Every reference the moves above *did* break was updated.
+- `candlestick-patterns.pine` (third-party, MPL-2.0) left in place untracked rather than deleted;
+  it is the source `keylevel-candles.pine` was reduced from.
+
+**Behaviour changes**
+- None.
+
+---
+
 ## 2026-08-23 (c) — Exit paths unified
 
 Closes the item the previous two passes deferred. **Correction to what was written

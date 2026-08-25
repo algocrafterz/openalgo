@@ -24,6 +24,10 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 - `strategy("<name>", ...)` — the Pine title is the alert identity the engine
   matches on (`intraday-orb`, `intraday-breakout`, `swing-dividend-growth`),
   so it must stay in sync with `config.yaml` `strategy_profiles`.
+- Pine **cannot assign to a global variable from inside a user function**. State that
+  advances per bar (counters, last-fired markers) has to be updated in a global `if`
+  block. Mutating an array or table *through* a reference is fine.
+- Pine string literals do **not** support `\uXXXX` escapes — write the character.
 - `plotshape`'s `size` is a **const string**: an `input.string` is rejected with
   *Cannot call "plotshape" with argument "size"*. `label.new` accepts a series
   size, so anything user-resizable has to be drawn as a label.
@@ -45,8 +49,8 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 ### intraday/orderflow
 | File | Pine title | Role |
 | --- | --- | --- |
-| `initiative_drive_detector_v6.pine` | `Initiative Drive Detector v6` | Flags expansion candles as *candidates*. Does not confirm order flow — every flag is a prompt to check the footprint. |
-| `keylevel-candles.pine` | `Key-Level Candles (breakout companion)` | Companion to `breakout.pine`. On a candle that trades **through** a key level, gives one verdict — `BREAK` (level gives way), `FAKE` (level holds), `WEAK` (inconclusive) — each with a tooltip naming the candle type, level, volume and reading. Level set mirrors `breakout.pine:661`. |
+| `initiative_drive_detector_v6.pine` | `id-candle-detector` | Marks initiative-drive candles with a green/red `ID` label. **Four hard gates define a drive** — body > median body x1.5, range > median range x1.15, directional body, close at the extreme — and five context criteria (RVOL, close beyond the N-bar level, EMA, VWAP, ADX with +DI/-DI) only *rank* it. Does not confirm order flow: every flag is a prompt to check the footprint. |
+| `keylevel-candles.pine` | `keylevel-candles` | Companion to `breakout.pine`. Every candle that trades **through** a key level gets exactly one verdict, decided positionally from where the previous close sat versus this one: `B▲` broke up, `B▼` broke down, `F▲` poked above and closed back below (level held as resistance), `F▼` dipped below and closed back above (level held as support). Conviction shows as label opacity, never as a filter. Level set mirrors `breakout.pine:661`; a coverage table reports which levels are armed and what each produced. |
 | `candlestick-patterns.pine` | third-party (repo32, MPL-2.0) | Untracked source material that `keylevel-candles.pine` was reduced from. Not wired to anything. |
 
 ### intraday/volume-profile

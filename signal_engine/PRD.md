@@ -121,12 +121,38 @@ the bar the decision was made on.
 ### Raw level prices
 
 `ORH` / `ORM` / `ORL` opening range high / mid / low · `IBH` / `IBM` / `IBL` initial balance
-(first hour) high / mid / low · `VAH` / `POC` / `VAL` previous session value area high /
+(first hour) high / mid / low · `PVAH` / `PPOC` / `PVAL` previous session value area high /
 point of control / low · `PDH` / `PDL` previous day high / low.
+
+The `P` prefix marks previous-session levels; bare names are today's. It exists because
+TradingView's Session Volume Profile plots the *current* day's VAH/POC/VAL, so without it two
+sets of lines carry the same three names at different prices. Setup codes are a separate
+namespace and keep their original spelling (`VAH-ACC`, `VAL-REJ`).
 
 `-` means the level does not exist today (no prior session loaded, IB still building, ORB
 disabled). These let post-hoc analysis ask questions the categorical fields cannot: how far
-was entry from POC, was IB unusually wide, did PDH cap the move.
+was entry from PPOC, was IB unusually wide, did PDH cap the move.
+
+---
+
+## Platform upgrade — OpenAlgo 2.0.0.2 -> 2.0.2.1 (2026-08-25)
+
+Merged 1146 upstream commits onto a branch off `feature/optimize-signal-engine`. Twelve conflicts; the ones that mattered:
+
+- **`broker/flattrade/mapping/transform_data.py`** — upstream had independently implemented the same MPP fix, plus a fallback this branch lacked: a missing auth token, zero LTP or quote exception must never leave an SL-M going out as SL-MKT, which the Noren OMS rejects for API orders (order dead on arrival). Took upstream's fallback, kept this branch's trigger-based MPP base and zero-price normalisation. **This changes live SL-M behaviour on flattrade** — the price type is now always SL-LMT, derived from the trigger when no quote is available.
+- **`broker/flattrade/mapping/order_data.py`** — upstream's `normalize_order_status()` plus this branch's `rejection_reason` field.
+- **`blueprints/brlogin.py`** — union of the external-auth broker list (`iiflcapital` upstream + `flattrade` here).
+- **`app.py`** — upstream's startup banner, keeping `allow_unsafe_werkzeug=True`.
+- **`pyproject.toml`** — both dependency sets merged; the auto-merge had duplicated a `pythonpath` key, which made the file unparseable. `uv.lock` regenerated.
+
+Operational notes:
+
+- 23/23 migrations applied. `flow_workflows.api_key` verified present.
+- 19 new keys merged into `.env` additively. **`FERNET_SALT` was deliberately not copied** — the sample value is a placeholder, and changing the salt would break decryption of stored broker tokens and the API key.
+- `vectorbt` 0.28.4 -> 1.0.0 (major). Nothing currently imports it.
+- Two stale tests corrected: `test_flattrade_transform.py::TestMppFallback` asserted the SL-MKT fall-through the release deliberately fixed, and `test_sizing_api.py` stubbed `database.auth_db` as a MagicMock while upstream's `settings_db` now does `from database.auth_db import PEPPER` at import time.
+
+Pre-existing conditions confirmed *not* caused by the upgrade: `test_auto_login.py` unpacks 2 values from `auto_login()`, which returns 3; fourteen `test_backtest_*.py` files import a `backtest` package that does not exist on this branch; `eventlet` is absent from `uv.lock` although production runs `gunicorn --worker-class eventlet`.
 
 ---
 
@@ -1442,6 +1468,18 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 | 3:30 PM | `openAlgoAutoStop` | Calls `openalgoctl.ps1 stop` -- sends Telegram notification, kills both services |
 
 The watchdog uses `start` (idempotent): polls `http://127.0.0.1:5000/`, skips if healthy, restarts the full stack if dead. Maximum recovery time after a crash: **5 minutes**.
+
+### Failure alerting and cooldown (2026-08-25)
+
+A failed startup used to be silent and open-ended. `_run_startup()` called `sys.exit(1)` on every failure path *before* reaching its notification step, and `openalgoctl.sh` then wrote a flat 24-hour cooldown. On 2026-08-24 a single 09:03 failure blocked 80 start attempts through 15:27 — the whole trading day — with nothing sent anywhere.
+
+- `notify_failure()` alerts Telegram on each `_run_startup` failure (configuration, auto-login, broker-auth). It never raises, so a dead notifier cannot mask the underlying error.
+- `openalgoscheduler notify <stage> <detail>` lets `openalgoctl.sh` raise an alert without duplicating Telegram wiring.
+- The auth cooldown escalates **5m / 15m / 1h / 3h**, capped, with the counter reset on success. Worst case now stays inside one trading session.
+- The supervisor loop re-probes the health URL every 60s and declares `app.py` wedged after 3 consecutive failures. `kill -0` only proved the PID existed, so an alive-but-unresponsive server read as healthy indefinitely.
+- Alerts also fire on `app.py` crash and on signal-engine crash-loop giveup.
+
+Covered by `tests/test_openalgoscheduler.py` and `tests/test_openalgoctl.sh` (13 shell assertions on the cooldown state machine).
 
 ### WSL Stability -- ~/.wslconfig (Windows user home)
 

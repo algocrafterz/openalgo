@@ -2,7 +2,7 @@
 
 **Source diagram:** [`volume-profile-scenarios.jpeg`](volume-profile-scenarios.jpeg) ("Volume Profile Entry Zone")
 **Implementation:** [`volume-profile-decision-assist.pine`](volume-profile-decision-assist.pine)
-**Analysis:** [`strategy-analysis.md`](strategy-analysis.md)
+**Analysis:** [`strategy-analysis.md`](STRATEGY-ANALYSIS.md)
 
 This is the authoritative reference for the model in the hand-drawn diagram: the levels, the 8 numbered entry scenarios, and the exact long/short entry conditions the indicator enforces.
 
