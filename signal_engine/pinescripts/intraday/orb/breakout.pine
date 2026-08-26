@@ -936,10 +936,21 @@ buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, 
     float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
     string pnlSign = pnlAmt >= 0 ? "+" : ""
 
-    string msg = "⏰ TIME EXIT | " + syminfo.ticker + "\\n"
+    // Header carries the BREAKOUT tag and the EXIT token, and Side/Entry/SL/TP each get
+    // their own line. The previous shape -- "TIME EXIT | SYM" over "LONG | Entry: x" --
+    // was silently DROPPED by the pipeline: parser.py matches ^(\\w+)\\s*:\\s*(.+)$, so
+    // "LONG | Entry: 440" yields no entry field, and unlike TP/SL HIT this message has no
+    // rewrite rule to synthesise the mandatory fields. It now reconciles tracker state the
+    // same way an SL HIT does, which is harmless when the engine's own 14:45 clock has
+    // already closed the position (it finds qty 0 and no-ops).
+    string msg = "⏰ BREAKOUT EXIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Reason: TIME_EXIT\\n"
+    msg += "Side: " + emoji + " " + direction + "\\n"
+    msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "SL: " + str.tostring(slPrice, "#.##") + "\\n"
+    msg += "TP: " + str.tostring(tpPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
     msg += "P&L: " + pnlSign + str.tostring(pnlAmt, "#.##") + " (" + pnlSign + str.tostring(pnlPct, "#.#") + "%)\\n"
     msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"

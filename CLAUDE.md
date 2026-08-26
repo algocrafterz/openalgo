@@ -44,6 +44,8 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 - **`fd-audit`** — run after any change touching DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
+- **`pinescript-strategy`** — writing or debugging a tradeable `.pine` strategy: the alert/Telegram/`signal_engine` contract, strategy registration, backtesting before it goes live, and Pine v6 pitfalls
+- **`strategy-from-video`** — turning a strategy described in a YouTube video or article into a tested PineScript: transcript and comment extraction, converting vague rules into testable ones, and reporting the result honestly
 
 ## Security and Deployment Model
 

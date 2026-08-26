@@ -1,0 +1,2 @@
+# Cached bar data. Re-downloadable; never commit.
+.cache/

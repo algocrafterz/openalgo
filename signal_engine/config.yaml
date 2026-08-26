@@ -149,6 +149,10 @@ blacklist:
       - BHEL             # 0% WR across Q1+Q2 2026; false breakout 2026-05-12 (-0.8R)
     soft: []
     soft_multiplier: 0.5 # 50% qty for soft-listed symbols. 0 = effectively hard-block.
+  EMA9:
+    hard: []             # No history yet. Review monthly from the trade log, same as ORB.
+    soft: []
+    soft_multiplier: 0.5
 
 # ── Time Exit ────────────────────────────────────────────
 # [tune] Close all open positions before broker auto square-off (typically 15:10-15:20 IST).
@@ -351,6 +355,16 @@ strategy_profiles:
     # 0.20% sits ~19% below the tightest observed stop, which keeps the headroom without
     # admitting noise: on a Rs 300 stock it is Rs 0.60, still several ticks wide.
     # Do NOT raise to 0.25% — that rejects VEDL at 0.2465%, the best trade of the day (+4.57R).
+    min_sl_pct: 0.002
+  EMA9:
+    product: MIS
+    # tp_levels absent — ema9-intraday.pine sends ExitQtyPct (100) in its TP1 HIT alert.
+    # The strategy owns its exit fractions, not this config.
+    #
+    # min_sl_pct 0.20%, same as BREAKOUT rather than the 0.50% global. The 9 EMA stop is
+    # anchored on the pullback swing plus a 0.35 x ATR buffer and is forced past the 9 EMA
+    # itself, so it lands in the same tight band as the key-level stops — the ORB-calibrated
+    # 0.50% floor would reject most valid signals outright.
     min_sl_pct: 0.002
   RSI-TP-MR:
     product: MIS

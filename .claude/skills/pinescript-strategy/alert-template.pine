@@ -1,0 +1,107 @@
+// ============================================================================
+// ALERT BUILDERS - copy into a new strategy and change STRAT_TAG
+// ============================================================================
+// Every line in a body is "Key: value" with a SINGLE-WORD key, which is what
+// parser.py's ^(\w+)\s*:\s*(.+)$ sweeps into Signal.context. Adding a line here
+// lands a new column in the trade log with no engine change.
+//
+// Wiring: ONE TradingView alert, condition "Any alert() function call",
+// webhook https://api.telegram.org/bot<TOKEN>/sendMessage
+
+STRAT_TAG = "MYSTRAT"   // must match strategies.py and config.yaml strategy_profiles
+
+telegramChatId    = input.string("", "Telegram Chat ID", group="Telegram")
+telegramChatIdObs = input.string("", "Observation Chat ID", group="Telegram",
+     tooltip="Channel for observation notes. Point this at a channel the engine does NOT listen on, so observation traffic can never reach the trade pipeline.")
+
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker +
+      "&interval=" + timeframe.period
+
+getTimeIST() => str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
+
+wrapTelegram(string msg, bool observation) =>
+    string cid = observation and telegramChatIdObs != "" ? telegramChatIdObs : telegramChatId
+    '{"chat_id": "' + cid + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// ---- ENTRY -----------------------------------------------------------------
+buildEntryAlert(bool isLong, float entryPx, float slPx, float tpPx, string setup) =>
+    float riskVal = math.abs(entryPx - slPx)
+    float rr = riskVal > 0 ? math.abs(tpPx - entryPx) / riskVal : 0.0
+    string msg = STRAT_TAG + " " + (isLong ? "LONG" : "SHORT") + " | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Setup: " + (setup == "" ? "-" : setup) + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Target: " + str.tostring(tpPx, format.mintick) + "\\n"   // aliased to TP
+    msg += "SL: " + str.tostring(slPx, format.mintick) + "\\n"
+    msg += "RR: 1:" + str.tostring(rr, "0.0") + "\\n"
+    // Add one line per entry-criterion you want in the trade log. Single-word keys.
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// ---- TARGET HIT ------------------------------------------------------------
+// ExitQtyPct (0-100) is the fraction of the OPEN position to close. Sending it means
+// the strategy owns its exit fractions and config.yaml needs no tp_levels entry.
+buildTPAlert(bool isLong, float entryPx, float exitPx, string lvl, int qtyPct) =>
+    string msg = STRAT_TAG + " " + lvl + " HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "ExitQtyPct: " + str.tostring(qtyPct) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// ---- STOP HIT --------------------------------------------------------------
+buildSLAlert(bool isLong, float entryPx, float exitPx) =>
+    string msg = STRAT_TAG + " SL HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// ---- ANY OTHER EXIT (time exit, signal exit, ...) --------------------------
+// CRITICAL: Side and Entry on SEPARATE lines. The compact "LONG | Entry: 123" form
+// used elsewhere yields NO entry field, and unlike TP/SL HIT this message has no
+// rewrite rule to synthesise the mandatory fields - the signal would be dropped whole.
+// CRITICAL: lead with STRAT_TAG. A header like "TIME EXIT | SYM" parses as a strategy
+// literally named "TIME", because the pipe regex reads the word before EXIT as the tag.
+buildExitAlert(bool isLong, float entryPx, float slPx, float tpPx, float exitPx, string reason) =>
+    string msg = STRAT_TAG + " EXIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Reason: " + reason + "\\n"
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "SL: " + str.tostring(slPx, format.mintick) + "\\n"
+    msg += "TP: " + str.tostring(tpPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// ---- OBSERVATION (must never reach the trade pipeline) ---------------------
+// DELIBERATELY NOT PARSEABLE: the header carries no LONG/SHORT/EXIT token, so
+// parser.py's _parse_header returns None and the pipeline drops it. Body keys are
+// prefixed so they cannot collide with real fields either.
+buildObservationAlert(string note) =>
+    string msg = "RUNNER | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += note + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, true)
+
+// ---- firing ----------------------------------------------------------------
+// Always on a CONFIRMED bar, always once per bar.
+// if longSignal
+//     alert(buildEntryAlert(true, entry, sl, tp, setupTag), alert.freq_once_per_bar)

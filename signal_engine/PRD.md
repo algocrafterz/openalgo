@@ -68,6 +68,7 @@ main.py (_handle_entry / _handle_exit)
 |---|---|---|
 | `pinescripts/intraday/orb/orb.pine` | `ORB` | **Frozen and live.** Unchanged. Documented in `HOW-IT-WORKS.md` |
 | `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **In development.** Key-level engine. Changelog in `pinescripts/intraday/orb/breakout.md` |
+| `pinescripts/intraday/ema9/ema9-intraday.pine` | `EMA9` | **Reference only — do not trade.** Backtest found no edge before costs (6577 trades, t = -9.90). Verdict block is in the file header |
 
 `BREAKOUT` has never traded. `signal_engine` does not yet know the tag — see the required work
 logged in `breakout.md` (2026-08-22r). Both strategies must be supported; nothing about `ORB`
@@ -156,7 +157,83 @@ Pre-existing conditions confirmed *not* caused by the upgrade: `test_auto_login.
 
 ---
 
-## Recent Changes (2026-08-24 → 2026-08-25, current)
+## Recent Changes (2026-08-26 → 2026-08-27, current)
+
+### Backtest framework (`backtest/`)
+
+`signal_engine/backtest/` is now the core for testing any PineScript strategy, so a script
+is measured before it is wired to a broker. Strategy-agnostic: an adapter answers only
+"would this bar produce an entry, and with what stop and target", and the engine owns
+sessions, trade caps, next-bar fills, stop/target resolution, costs and bookkeeping.
+
+Pine execution semantics are reproduced deliberately — signals evaluated on a closed bar and
+filled at the NEXT bar's open, the STOP taken when one bar spans both levels, and a bar that
+opens past the stop filled at the open. Each is pinned by a test in
+`tests/test_backtest_engine.py`.
+
+Three anti-overfit rules are in the API rather than left to discipline: `confirm()` always
+prints in-sample / out-of-sample / full, `ablation()` labels every filter BOTH / IS only /
+neither, and every row carries a t-statistic.
+
+    uv run --group analysis python -m signal_engine.backtest ema9 --full
+
+The universe is the NSE F&O list (`backtest/data.NSE_FNO`, 209 names) read from this
+instance's own symbol master via `refresh_fno()` — not a hand-picked basket. That choice
+turned out to decide the answer; see below.
+
+### A NaN stop could destroy a setup silently (found by the framework)
+
+`risk <= 0` and `risk / price < min_sl_pct` are BOTH False when `risk` is NaN. During
+indicator warmup a rolling `swing_hi` is NaN, so an unguarded engine armed a pending order
+with a NaN stop, let the strategy consume its setup, then dropped the fill because
+`NaN > 0` is also False. Real signals vanished with no error anywhere. Guarded explicitly
+with `np.isnan`; regression test pins it. The same class of bug is possible in Pine — use
+`na()`, never a bare comparison.
+
+### Time exit alerts were being dropped (`breakout.pine`)
+
+The alert header was `TIME EXIT | SYM` over `LONG | Entry: 440.00`. `parser.py` matches
+`^(\w+)\s*:\s*(.+)$`, so the compact direction+entry line yields no `entry` field, and
+unlike TP HIT / SL HIT there is no rewrite rule to synthesise the mandatory fields — every
+one of these parsed to `None` and never reached the engine. Now `BREAKOUT EXIT | SYM` with
+`Reason:`, `Side:`, `Entry:`, `SL:` and `TP:` each on their own line; it reconciles the way
+an SL HIT does. Pinned by `tests/test_breakout_alerts.py`, including a test that the old
+shape still fails so it cannot return.
+
+Note the second trap in the old header: `TIME EXIT | SYM` also parses as a strategy named
+`TIME`, because the pipe regex reads the word before `EXIT` as the tag. Always lead with the
+real strategy tag.
+
+### EMA9 strategy added, tested, and marked not tradeable (`pinescripts/intraday/ema9/`)
+
+Implements the three variants from a HowToTrade 9 EMA video plus the filters its 257
+comments suggested. Registered as `EMA9` (`strategies.py`, `strategy_profiles`, blacklist)
+and alert-tested end to end, so the pipeline wiring is proven.
+
+The strategy itself is not tradeable. Over 208 F&O names and 59 sessions it measures
+**-0.122R per trade across 6577 trades (t = -9.90)**, with a gross edge of -0.12 bps against
+a 10 bps cost line — no edge even before costs. All three modes lose in both windows; no
+target between 0.5R and 3.0R changes it. At a 2R target the exits split 55% time-exit, 34%
+stop, 10% target: the signal fires constantly and goes nowhere. Kept as a reference
+implementation of the alert contract and of a properly measured negative result.
+
+**The universe lesson is the durable part.** An earlier run over 29 hand-picked liquid large
+caps showed +8.71 bps gross and read as "borderline, paper trade it". Testing the real F&O
+universe removed the edge entirely and reversed the ranking of the video's three modes.
+Define the population from a rule before looking at results, or the basket picks the answer.
+
+### Skills
+
+- `.claude/skills/pinescript-strategy/` — the alert/Telegram/engine contract, strategy
+  registration, backtest-before-live, and Pine v6 pitfalls, with `alert-template.pine` and
+  `adapter-template.py` to copy from.
+- `.claude/skills/strategy-from-video/` — turning a video or article into a tested strategy:
+  transcript and comment extraction, converting vague rules into testable ones, choosing
+  timeframe and universe on evidence.
+
+---
+
+## Recent Changes (2026-08-24 → 2026-08-25)
 
 Driven by the first live day of `BREAKOUT` alerts (2026-08-24, 7 entries, 5W/2L). Source
 export: `pinescripts/intraday/orb/result.json`.

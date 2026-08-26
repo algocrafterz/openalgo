@@ -1,0 +1,1138 @@
+//@version=6
+// ============================================================================
+// EMA9 INTRADAY - NSE/BSE India Equity
+// ============================================================================
+//
+// SOURCE
+//   "Learn The 9 EMA Intraday Trading Strategy In Under 10 Minutes! (Live Examples!)"
+//   HowToTrade, 2024-09-27, 9m58s, https://www.youtube.com/watch?v=PdJ5X0exfdU
+//
+// The video teaches three ways to trade the 9 EMA. All three are implemented here
+// as selectable modes, kept faithful to the rules as stated:
+//
+//   MODE A - CONVENTIONAL
+//     Buy when a candle CLOSES above the 9 EMA, sell when one CLOSES below it.
+//     SL beneath the current swing low (above the swing high when short).
+//     TP either a fixed R multiple (1:1 / 1:2 / 1:3) or exit on the close back
+//     across the 9 EMA. Demonstrated on a 5-minute chart.
+//
+//   MODE B - 9/20 CROSSOVER
+//     Buy when the 9 EMA crosses over the 20 EMA, sell when it crosses under,
+//     confirmed by a candle close in the direction of the cross. Exit on a fixed
+//     R multiple or on the next opposing crossover. Demonstrated on 5-minute.
+//     Fast/slow lengths are inputs, so the 9/21, 9/30 and 8/20 variants the
+//     video and its comments mention are the same code path.
+//
+//   MODE C - BREAKOUT PULLBACK  (default)
+//     1. Identify support/resistance (the video uses the previous day's low).
+//     2. Wait for price to break it.
+//     3. Enter on the RETRACEMENT back to the 9 EMA, in the break direction.
+//     SL beyond the pullback swing, and explicitly beyond the 9 EMA - the video
+//     is emphatic that wherever the stop goes it must sit past the 9 EMA.
+//     TP a fixed R multiple, or hold until price re-establishes on the far side
+//     of the 9 EMA. Demonstrated on a 1-minute chart.
+//
+// The video also name-checks, without teaching, the 9/30, the 9-VWAP crossover
+// and the 9/21/55. The VWAP and slow-EMA filters below cover the first two.
+//
+// ----------------------------------------------------------------------------
+// WHAT THE 257 COMMENTS ADD
+// ----------------------------------------------------------------------------
+// The comment section is where this strategy's real risk is documented. The
+// single loudest theme, across dozens of comments, is that a bare 9 EMA cross
+// is destroyed by chop. Every filter below traces to a specific comment:
+//
+//   - Two-candle confirmation (elwoodpalmer7622, 75 likes; the top strategy
+//     suggestion on the video). One close over the EMA is not enough. Wait for a
+//     SECOND candle that OPENS above the EMA, CLOSES above it, AND is green. A
+//     second candle that opens and closes above but prints RED signals a ranging
+//     market - skip it. Inverted for shorts. -> confirmBars / requireBodyColour
+//   - Trend filter, 200 EMA, never counter-trend (gnr2396, Traderforgod,
+//     StarzCinemaBeats). -> useTrendEma
+//   - ADX rising, trade only when it is (willyw9732). -> useAdx
+//   - VWAP side (Kennethbriann 37 likes, DaliakaBayaCash, krel4115, alhavana9426;
+//     9 EMA + VWAP on 5-minute is the most-cited working variant). -> useVwap
+//   - RSI, so the break does not just snap back (rockymanakee). -> useRsi
+//   - Higher-timeframe bias, take the break only in the daily/HTF direction
+//     (ninfxglobalacademy). -> useHtfBias
+//   - Trade only the first hours of the session (skyxtrades: first 1-2h of the
+//     NY open; elwoodpalmer7622: first 3h). -> entry cutoff, mapped to IST
+//   - Costs eat small timeframes (PAMBOSC1); too many trades on 5-min
+//     (Damon0321). -> minAtrPct, maxTradesPerDay, one-trade-per-direction
+//   - The 9 EMA is best used to TRAIL a stop on a trend day (pitrades,
+//     aliinthebay7419). -> useEmaTrail
+//   - Ranging/whipsaw guard, the near-universal criticism (robertcarey3383,
+//     SteveWeber-gx7tx, finance8078, sidharthmohanty6434, JoeC5050,
+//     Speakthetruth4ever, pitrades). -> chop guard: EMA slope + ATR separation
+//
+//   gulee (14 likes) reports the breakout setup runs above a 60% win rate while
+//   the other two are "subpar - either too many whipsaws or too late to enter".
+//   That is why MODE C is the default here.
+//
+// ----------------------------------------------------------------------------
+// BACKTEST VERDICT - DO NOT TRADE THIS AUTOMATED
+// ----------------------------------------------------------------------------
+// Tested with signal_engine/backtest: 208 NSE F&O stocks (the whole tradeable
+// intraday universe, read from this instance's own symbol master), 5-minute bars,
+// 59 sessions (2026-06-04 .. 2026-08-26), 10 bps round-trip cost. First 35 sessions
+// chose the settings; the last 24 were used only to check them.
+//
+//   THERE IS NO EDGE HERE - NOT EVEN BEFORE COSTS.
+//     shipped defaults, in-sample   4114 trades  -0.093R   t = -5.86
+//     shipped defaults, out-sample  2463 trades  -0.169R   t = -8.83
+//     shipped defaults, full        6577 trades  -0.122R   t = -9.90
+//   Gross edge over the full period is -0.12 bps against a 10 bps cost line. Not
+//   "small", not "marginal" - zero. Extrapolating the cost sweep to zero brokerage
+//   and zero slippage still lands near -0.004R. With 6577 trades this is far past
+//   the sample needed to settle it (t = 2 on a 0.05R edge needs ~1600).
+//
+//   NOTHING RESCUES IT.
+//     - All three of the video's modes lose in BOTH windows (t = -12 to -16).
+//     - Every target from 0.5R to 3.0R lands between -0.12R and -0.14R.
+//     - Every filter the comment section suggested was tested; see the notes below.
+//
+//   WHY, MECHANICALLY. At a 2R target the exits split 55% time-exit, 34% stop, and
+//   only 10% target. The signal fires constantly and then goes nowhere before the
+//   14:45 close. Pulling the target in does not help: at 1R the strike rate rises to
+//   32% but the payoff falls to 0.83, so winners stay smaller than losers. That is
+//   the "chop" every sceptical comment on the video described, measured.
+//
+//   A LESSON ABOUT THE UNIVERSE, worth more than the strategy. An earlier run of this
+//   same script over 29 hand-picked liquid large caps showed +8.71 bps gross and read
+//   as "borderline, paper trade it". The only thing that changed was testing the real
+//   F&O universe instead of a list chosen by hand before seeing any data - and the
+//   edge vanished. It also reversed the mode ranking: mode C looked best on the small
+//   basket and mode A edges it out-of-sample on the full one. Pick the population
+//   first, from a rule, or the basket picks the answer.
+//
+//   WHAT IS STILL WORTH KEEPING. The 9 EMA is a good trade-MANAGEMENT tool and a poor
+//   entry signal - which is exactly what commenter pitrades said: "9EMA is only used
+//   to trail your stop on a trend day." Use it inside a strategy that has its own
+//   entry edge (see breakout.pine), not as the entry itself. This file stays as a
+//   reference implementation of the video, of the alert contract, and of what a
+//   negative result looks like when it is measured properly.
+//
+//   Reproduce:  uv run --group analysis python -m signal_engine.backtest ema9 --full
+//
+// ----------------------------------------------------------------------------
+// TIMEFRAME: 5-MINUTE
+// ----------------------------------------------------------------------------
+// The video never states a timeframe (many comments ask); its demos run 5-minute
+// for modes A and B and 1-minute for mode C. For NSE equity intraday, 5-minute
+// is the efficient choice:
+//
+//   1-min   75 bars/session. The 9 EMA turns over constantly, and at roughly
+//           0.19R round-trip cost (0.094R brokerage+STT+impact, 0.10R slippage,
+//           measured on this repo's ORB flow) the signal does not clear the fee.
+//           This is PAMBOSC1's objection, and it is correct for Indian equities.
+//   5-min   75 bars/session. Long enough that a 9 EMA spans 45 minutes of tape,
+//           short enough to catch the 09:15-11:00 momentum window where NSE
+//           intraday edge concentrates. Matches the 5-min basis this repo's ORB
+//           work is calibrated on.
+//   15-min  25 bars/session. A 9 EMA spans 2h15m - by the time it turns, the
+//           intraday move is over. Too slow for a fast-indicator strategy.
+//
+// Default 5-minute. The script runs on any timeframe; a warning shows on the
+// dashboard when the chart is outside 3-15 minutes.
+//
+// ----------------------------------------------------------------------------
+// SIGNAL ENGINE CONTRACT
+// ----------------------------------------------------------------------------
+// Alerts are Telegram sendMessage JSON, consumed by signal_engine. The strategy
+// tag is EMA9 and it MUST match, in all of:
+//     signal_engine/strategies.py         EMA9 = "EMA9"
+//     signal_engine/config.yaml           strategy_profiles.EMA9, blacklist.EMA9
+//     this file                           STRAT_TAG below
+// Entry, TP HIT, SL HIT and EXIT alerts all carry the tag. An untagged exit
+// routes to the default strategy and the engine reconciles the wrong position.
+//
+// Alert wiring: create ONE TradingView alert, condition "Any alert() function
+// call", webhook https://api.telegram.org/bot<TOKEN>/sendMessage
+//
+// DISCLAIMER: Educational use. Not financial advice. Trading carries risk of loss.
+// ============================================================================
+
+strategy("intraday-ema9", shorttitle="EMA9", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     initial_capital=100000, currency=currency.INR,
+     commission_type=strategy.commission.percent, commission_value=0.06,
+     slippage=2, calc_on_every_tick=false, process_orders_on_close=false,
+     pyramiding=0, max_labels_count=500, max_lines_count=500, max_boxes_count=200)
+
+// Strategy tag. Changing this requires matching changes in strategies.py and
+// config.yaml or the engine will reject or mis-route every signal.
+STRAT_TAG = "EMA9"
+
+// ================================== GROUPS ==================================
+grp_mode     = "1. Strategy Mode"
+grp_ema      = "2. Moving Averages"
+grp_session  = "3. Session and Timing"
+grp_setup    = "4. Setup Detection"
+grp_levels   = "5. Support / Resistance (Mode C)"
+grp_filters  = "6. Filters (from video comments)"
+grp_chop     = "7. Chop / Range Guard"
+grp_risk     = "8. Stops, Targets and Risk"
+grp_visual   = "9. Display"
+grp_telegram = "10. Telegram Alerts"
+
+// ================================== INPUTS ==================================
+
+// ---- 1. Mode ----
+tradeMode = input.string("C: Breakout Pullback", "Strategy Mode",
+     options=["A: Conventional Cross", "B: 9/20 Crossover", "C: Breakout Pullback", "Any (A+B+C)"],
+     group=grp_mode,
+     tooltip="Which of the video's three strategies to trade.\n\nA: Conventional Cross - buy a close above the 9 EMA, sell a close below.\n\nB: 9/20 Crossover - buy the 9-over-20 cross, sell the 9-under-20 cross.\n\nC: Breakout Pullback (DEFAULT) - break a level, then buy/sell the retracement to the 9 EMA.\n\nAny - take whichever setup fires first; the alert's Setup: field records which one.\n\nWHY C IS DEFAULT: commenter gulee reports the breakout setup above 60% win rate while calling A and B subpar (whipsaws / late entries). A and B are the ones the comment section repeatedly warns get destroyed by chop.")
+
+allowLongs  = input.bool(true,  "Allow Longs",  group=grp_mode, inline="side")
+allowShorts = input.bool(true,  "Allow Shorts", group=grp_mode, inline="side",
+     tooltip="Intraday shorts on NSE equity require the position to be squared off same-day (MIS). Delivery shorts are not permitted. Turn shorts off if your broker or product type cannot support them.")
+
+// ---- 2. Moving averages ----
+fastLen = input.int(9, "Fast EMA (the 9)", minval=2, maxval=50, group=grp_ema,
+     tooltip="The 9-period EMA the whole strategy is built on. The video's argument for 9: it weights recent price heavily, so it reports what is happening rather than what happened.\n\nCommenters run 7 and 8 with success (ThePower2change uses 8; aliinthebay7419 uses 7). Leave at 9 unless you are deliberately testing.")
+slowLen = input.int(20, "Slow EMA (Mode B)", minval=3, maxval=200, group=grp_ema,
+     tooltip="Second EMA for the crossover mode.\n\n20 = the video's 9/20 strategy.\n21 = the 9/21 variant several commenters prefer (terrywilliams2349, DaliakaBayaCash, enigmaspectator).\n30 = the 9/30 the video name-checks but does not teach.\n\nAlso used as an optional trend filter in modes A and C.")
+
+// ---- 3. Session and timing ----
+entryCutoffHour = input.int(11, "Entry Cutoff Hour (IST)", minval=9, maxval=15, group=grp_session, inline="cutoff",
+     tooltip="Stop taking NEW entries after this time. Open positions are unaffected.\n\nDEFAULT 11:00 IST.\n\nWHY: the video's presenter starts his session at the London/NY overlap, the highest-participation window of his day. The NSE equivalent is the 09:15-11:00 opening drive. Commenter skyxtrades traded only the first 1-2 hours of the NY open; elwoodpalmer7622 the first 3 hours of his sessions.\n\nAfter roughly 11:00 IST, NSE intraday volume thins into the lunch lull and moving-average signals degrade into exactly the chop the comment section warns about.")
+entryCutoffMinute = input.int(0, "Minute", minval=0, maxval=59, group=grp_session, inline="cutoff")
+
+skipOpenMinutes = input.int(15, "Skip First N Minutes", minval=0, maxval=120, group=grp_session,
+     tooltip="No entries in the first N minutes after the 09:15 open.\n\nDEFAULT 15. The opening auction and the first few minutes gap around violently; a 9 EMA computed across that has no meaningful slope yet, and the widest spreads of the day sit here.\n\nIn Mode C this window is also what builds the opening range used as a breakout level.")
+
+timeExitHour = input.int(14, "Time Exit Hour (IST)", minval=12, maxval=15, group=grp_session, inline="texit",
+     tooltip="Force-close any open position at this time.\n\nDEFAULT 14:45 IST. This must match signal_engine/config.yaml time_exit - the engine runs its own clock and will act on whichever fires first.\n\nWHY 14:45: it clears the broker's 15:10-15:20 auto square-off (Rs 20-50/order penalty) and the last-half-hour spread widening.")
+timeExitMinute = input.int(45, "Minute", minval=0, maxval=59, group=grp_session, inline="texit")
+
+maxTradesPerDay = input.int(2, "Max Trades Per Day", minval=1, maxval=10, group=grp_session,
+     tooltip="Hard cap on entries per session.\n\nDEFAULT 2. Commenter Damon0321's objection to the video was that a 5-minute cross strategy asks you to 'make a trade every 5 minutes' - and PAMBOSC1's, that costs then eat the account. This cap is the answer to both: at roughly 0.19R round-trip cost on NSE equity, trade count is the dominant cost lever.\n\nAlso keeps the script in step with signal_engine's max_open_positions budget.")
+
+oneTradePerDirection = input.bool(true, "One Trade Per Direction Per Day", group=grp_session,
+     tooltip="After a long is closed, no further longs that session (shorts still allowed), and vice versa.\n\nStops the classic moving-average failure the comments describe: price straddles the EMA, and the strategy re-enters the same losing direction three or four times as it saws back and forth.")
+
+// ---- 4. Setup detection ----
+confirmBars = input.int(1, "Confirmation Candles", minval=1, maxval=3, group=grp_setup,
+     tooltip="How many consecutive candles must hold the correct side of the 9 EMA before entry.\n\n1 = the video as taught: one close above the EMA and you are in.\n1 = DEFAULT, the video as taught. MEASURED: the two-candle rule scored LOWER gross edge than this single close in BOTH test windows (9.58 vs 10.86 bps in-sample, 0.91 vs 3.98 out-of-sample), so the video's own rule is the default and the refinement is opt-in.\n\n2 = elwoodpalmer7622's refinement, the most-liked strategy suggestion on the video (75 likes): 'a simple cross is not enough. We need to avoid ranging periods and whipsaws. So once a first candle has closed over the 9 EMA, we will wait for a second candle to close over the EMA before we enter.'\n3 = very strict; few signals, late entries.\n\nCosts you the first candle's move in exchange for filtering the fake break the video itself shows at 2:35 ('a pump fake above our EMA').")
+
+requireOpenBeyond = input.bool(false, "Confirm Candle Must OPEN Beyond EMA", group=grp_setup,
+     tooltip="The confirmation candle must open on the signal side of the 9 EMA, not merely close there.\n\nFrom elwoodpalmer7622: 'The candle has opened above the 9 EMA, it has also closed above the 9 EMA.'\n\nA candle that opens below and closes above has straddled the EMA - price is still deciding. One that opens and closes above has spent its whole life on the right side.")
+
+requireBodyColour = input.bool(false, "Confirm Candle Must Be Green (Long) / Red (Short)", group=grp_setup,
+     tooltip="The confirmation candle's BODY must agree with the trade direction.\n\nelwoodpalmer7622's key rule: 'it is very important that the second candle is also green. If the candle opened and closed above the 9 EMA, but it is red, do not enter the trade, as it is a good sign that you may get stuck in a ranging market.'\n\nA red candle wholly above a rising EMA means sellers are already pressing into the move. That is distribution, not continuation.")
+
+requireCloseBeyondPrev = input.bool(false, "Confirm Candle Must Break Previous Bar High/Low", group=grp_setup,
+     tooltip="Additionally require the confirmation candle to close beyond the previous candle's high (long) or low (short).\n\nStricter momentum test. Cuts signal count materially. Off by default - stacked on top of the two-candle rule it tends to push entries past the good fill.")
+
+// ---- 5. Support / resistance for Mode C ----
+useLevelPDH  = input.bool(true, "Previous Day High / Low", group=grp_levels,
+     tooltip="PDH and PDL as the breakout levels.\n\nThis is the video's own worked example: 'we are going to go with the previous day's lows being our support zone and we are going to show you how to sell into a bearish breakout.'\n\nThe most reliable intraday level on NSE equity - every participant sees the same two prices.")
+useLevelOR   = input.bool(true, "Opening Range High / Low", group=grp_levels,
+     tooltip="High and low of the first N minutes (see Opening Range Minutes) as breakout levels.\n\nNot in the video, but it is the level set this repo's ORB work is built on and it is the dominant NSE intraday reference. Commenter ComanderWins reports trading exactly this combination: 'I'm doing the same way but using the ORB.'")
+orMinutes    = input.int(15, "Opening Range Minutes", minval=5, maxval=60, step=5, group=grp_levels,
+     tooltip="Length of the opening range, from 09:15 IST.\n\n15 minutes is the NSE intraday standard and matches this repo's ORB15 calibration.")
+useLevelPivot = input.bool(true, "Swing Pivot High / Low", group=grp_levels,
+     tooltip="Recent confirmed swing pivots as breakout levels.\n\nCovers the video's third option: 'that is going to be support, resistance, or a chart pattern.' A pivot high is the peak of a rally that has since been rejected - the launch point the video asks for.")
+pivotLen     = input.int(5, "Pivot Strength (bars each side)", minval=2, maxval=20, group=grp_levels,
+     tooltip="A pivot high needs N higher-than-it bars on each side to confirm. Larger = fewer, more significant levels.\n\nNOTE: a pivot is only confirmed N bars AFTER it prints, so the level becomes tradeable with that lag. This is inherent, not a bug.")
+
+breakBufferAtr = input.float(0.05, "Break Buffer (x ATR)", minval=0.0, maxval=0.5, step=0.01, group=grp_levels,
+     tooltip="Price must close this far BEYOND a level to count as broken.\n\nDEFAULT 0.05 x ATR. Commenter ianmackinlay8925's criticism of the video's live example was 'It didn't break out on that last one.. it wicked out.. very risky entry.' This buffer is the answer: a wick through the level is not a break, a close 0.05 ATR past it is.\n\nRaise toward 0.15 on gappy small-caps, lower to 0 to take every close beyond the level.")
+
+pullbackMaxBars = input.int(10, "Max Bars From Break to Entry", minval=2, maxval=40, group=grp_levels,
+     tooltip="The pullback to the 9 EMA must complete within this many bars of the break, or the setup is discarded.\n\nDEFAULT 10 (50 minutes on a 5-min chart). Beyond that the break is stale - the move has already played out and the 'pullback' is really a reversal.")
+
+requirePullbackTouch = input.bool(true, "Require an Actual Touch of the 9 EMA", group=grp_levels,
+     tooltip="Price must genuinely trade to the 9 EMA (low <= EMA for a long) before the entry trigger arms.\n\nThis is the whole point of Mode C - the video's step 3 is 'buy or sell on a retracement of price to the 9 EMA.' Off, the mode degenerates into a plain breakout entry with no pullback, which is a different (and worse-filled) strategy.")
+
+// ---- 6. Filters from the comments ----
+useTrendEma = input.bool(false, "200 EMA Trend Filter", group=grp_filters, inline="trend",
+     tooltip="Longs only above the 200 EMA, shorts only below it.\n\nThe most-repeated addition in the comments. gnr2396: 'I use a 200 ema for trend and don't go against trend.' Traderforgod: 'Trading solely off the 9ema is a call for disaster.. I'd add the 200ema to know the trend first off.' StarzCinemaBeats: 'I would add a 200 ema just to see the overall trend.'\n\nThe 9 EMA tells you the moment; the 200 tells you whether the moment is worth trading.")
+trendLen    = input.int(200, "Length", minval=20, maxval=400, group=grp_filters, inline="trend")
+
+useHtfBias  = input.bool(false, "Higher-Timeframe Bias", group=grp_filters, inline="htf",
+     tooltip="Take a setup only when the higher timeframe agrees (its close is on the correct side of its own fast EMA).\n\nCommenter ninfxglobalacademy's advice: 'use it to identify the trend on the daily and only take the breakout in the direction of the daily TF on 15mins or 30mins or 1hr.'\n\nUses the previous CONFIRMED higher-TF bar, so it cannot repaint.")
+htfTf       = input.timeframe("15", "Timeframe", group=grp_filters, inline="htf",
+     tooltip="15 on a 5-min chart is the natural 3:1 step. Use 60 or D for a slower, stricter bias.")
+
+useVwap     = input.bool(true, "VWAP Side Filter", group=grp_filters,
+     tooltip="Longs only above session VWAP, shorts only below.\n\nThe single most-cited working variant in the comments. Kennethbriann (37 likes): 'I trade the trend on the 5 minute chart using 9 EMA and VWAP.' DaliakaBayaCash: '9 & 21 EMA crossover above or beneath the VWAP... win ratio 58%.' alhavana9426 prefers VWAP outright. krel4115 asked for a 9-EMA-and-VWAP video; the presenter replied it was an interesting idea.\n\nThe video itself lists 'the 9 vwap crossover' among the strategies it did not have time to teach.\n\nOn NSE equity VWAP is also where institutional execution benchmarks sit, which is why it holds as intraday support/resistance.")
+
+useAdx      = input.bool(false, "ADX Rising Filter", group=grp_filters, inline="adx",
+     tooltip="Enter only when ADX is above its floor AND rising.\n\nCommenter willyw9732: 'I think the best filter (less number of trades though) is to use the ADX main line and place the trade only when the ADX is rising.'\n\nADX measures trend STRENGTH regardless of direction. Rising ADX is the direct, quantified opposite of the ranging condition that every negative comment on this video describes.")
+adxLen      = input.int(14, "Length", minval=5, maxval=50, group=grp_filters, inline="adx")
+adxMin      = input.float(20.0, "Min ADX", minval=0.0, maxval=50.0, step=1.0, group=grp_filters, inline="adx",
+     tooltip="Below 20 is conventionally a non-trending market. Raise to 25 for far fewer, stronger signals.")
+
+useRsi      = input.bool(false, "RSI Confirmation", group=grp_filters, inline="rsi",
+     tooltip="Longs need RSI above the midline, shorts below it.\n\nCommenter rockymanakee: 'I add the RSI to make sure the break of the moving average just doesn't snap back.' The video's presenter also recommends RSI and stochastics as confirmation devices in his comment replies.\n\nOff by default - it overlaps heavily with the ADX and trend filters, and stacking all three leaves very few signals.")
+rsiLen      = input.int(14, "Length", minval=2, maxval=50, group=grp_filters, inline="rsi")
+rsiMid      = input.float(50.0, "Midline", minval=30.0, maxval=70.0, step=1.0, group=grp_filters, inline="rsi")
+
+useVolume   = input.bool(false, "Relative Volume Filter", group=grp_filters, inline="vol",
+     tooltip="The signal candle must carry at least this multiple of normal volume FOR THAT TIME OF DAY.\n\nNot from the video, which never mentions volume - commenter jaybrown4444's complaint that 'you need to use it in conjunction with other tools such as a volume indicator' is well founded.\n\nIMPORTANT: the baseline is time-of-day aware. A flat average of the last N bars is time-blind - at 09:20 it is mostly the previous session's dead closing bars while the current bar runs 5-10x normal, so the test is near-inert in exactly the window this strategy trades most. This compares each bar against the SAME slot of the session on prior days.")
+rvolMult    = input.float(1.2, "Min RVOL", minval=0.5, maxval=5.0, step=0.1, group=grp_filters, inline="vol")
+rvolDays    = input.int(14, "Baseline Days", minval=3, maxval=30, group=grp_filters,
+     tooltip="How many prior sessions build the time-of-day volume baseline. 14 follows Zarattini/Barbon/Aziz (2024), who found across 7,000+ US stocks that selection by opening relative volume did most of the work in intraday breakout returns.")
+
+// ---- 7. Chop / range guard ----
+// The comment section's dominant criticism. robertcarey3383: "all the bars above or
+// below the 9 ema suggests a trending market, at least as often the bars will be
+// straddling the ema and you will lose your ass on entries that don't follow through."
+// SteveWeber-gx7tx: "Way too often those crosses end up being the start of chop. Chop
+// destroys every crossover strategy." pitrades: "in a choppy market EMA will kill your
+// account." These three inputs are the quantified defence.
+useSlopeFilter = input.bool(false, "Require 9 EMA Slope", group=grp_chop, inline="slope",
+     tooltip="The 9 EMA must itself be moving in the trade direction, by at least the minimum below.\n\nA flat 9 EMA with price crossing it repeatedly IS the chop condition. Measuring the EMA's own slope, normalised by ATR so it works across price levels, rejects it directly.")
+minSlopeAtr    = input.float(0.03, "Min Slope (x ATR/bar)", minval=0.0, maxval=0.5, step=0.01, group=grp_chop, inline="slope",
+     tooltip="Minimum 9 EMA change per bar, as a fraction of ATR. 0.03 rejects a genuinely flat EMA while still admitting early trend. Raise to 0.08 for strong-trend-only entries.")
+
+useSeparation  = input.bool(false, "Require Price/EMA Separation", group=grp_chop, inline="sep",
+     tooltip="The signal candle must close at least this far from the 9 EMA.\n\nA close that lands right on the EMA has not resolved anything - it is the straddle condition, and it is the single most common way this strategy gives back money.")
+minSepAtr      = input.float(0.10, "Min Separation (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=grp_chop, inline="sep")
+
+maxCrossCount  = input.int(0, "Max 9 EMA Crosses in Lookback", minval=0, maxval=30, group=grp_chop, inline="xcnt",
+     tooltip="If price has crossed the 9 EMA more than this many times in the lookback window, the market is ranging - block entries.\n\nThis is the most direct possible reading of the comment section's warning. A trending market crosses its 9 EMA rarely; a chopping one crosses it constantly. Set 0 to disable.")
+crossLookback  = input.int(20, "Lookback Bars", minval=5, maxval=100, group=grp_chop, inline="xcnt")
+
+minAtrPct      = input.float(0.20, "Min ATR as % of Price", minval=0.0, maxval=5.0, step=0.05, group=grp_chop,
+     tooltip="Skip symbols too quiet to pay for their own costs.\n\nAt roughly 0.19R round-trip cost on NSE equity intraday (brokerage + STT + impact, plus slippage on market entry and exit), a stock whose whole 5-min ATR is a few ticks cannot produce a trade worth taking. PAMBOSC1's comment - 'trading charges, commissions etc will eat up a massive chunk of this if u trade small TF' - is the reason this input exists.\n\n0.25% of price is a reasonable NSE large/mid-cap floor.")
+
+// ---- 8. Stops, targets, risk ----
+slMode = input.string("Swing + ATR buffer", "Stop Loss Method",
+     options=["Swing + ATR buffer", "ATR multiple", "9 EMA + ATR buffer"], group=grp_risk,
+     tooltip="Swing + ATR buffer (DEFAULT) - the video's rule. 'My stop loss needs to be right beneath that current swing low, that demand zone, that area of support.' The ATR buffer keeps it clear of the wick that made the swing.\n\nATR multiple - a fixed volatility distance from entry. Predictable position sizing, ignores structure.\n\n9 EMA + ATR buffer - stop just past the 9 EMA itself. Tightest of the three; the video allows it for mode C: 'you could also play this extremely tight.'\n\nAll three are additionally forced past the 9 EMA, per the video's explicit instruction.")
+swingLookback = input.int(8, "Swing Lookback Bars", minval=3, maxval=30, group=grp_risk,
+     tooltip="How far back to find the swing low (long) or high (short) that anchors the stop.")
+slAtrMult     = input.float(1.0, "SL ATR Buffer / Multiple", minval=0.05, maxval=5.0, step=0.05, group=grp_risk,
+     tooltip="For Swing and 9 EMA modes this is the buffer BEYOND the anchor. For ATR-multiple mode it is the full stop distance from entry.\n\nDEFAULT 1.0. The single most reliable improvement found in testing, and the reason is arithmetic rather than fitted: cost-in-R = cost_pct x price / risk, so widening the stop cuts the cost drag proportionally. At 0.35 the stop sits ~0.72% of price; at 1.0 it sits ~0.88% and measured better in BOTH test windows. For ATR-multiple mode you want something nearer 1.5.")
+
+forceSlPastEma = input.bool(true, "Force Stop Beyond the 9 EMA", group=grp_risk,
+     tooltip="Guarantees the stop sits past the 9 EMA regardless of which method produced it.\n\nDirectly from the video: 'I don't care where you put your stop loss. What I would recommend is no matter where you do put it, it needs to be above that 9 EMA.'\n\nThe logic: if price closes back through the 9 EMA the setup is void, so a stop on the near side would be hit by noise before the thesis is actually invalidated.")
+
+tp1R = input.float(2.0, "TP1 (R multiple)", minval=0.5, maxval=10.0, step=0.5, group=grp_risk,
+     tooltip="The executed target. The engine exits 100% here.\n\nThe video offers 1:1, 1:2 or 1:3 and demonstrates 1:1. DEFAULT 1.5 is the compromise: at roughly 0.19R round-trip cost a 1:1 target keeps only about 80% of its gross R, so the strategy needs a materially better than 50% strike rate just to break even. 1.5R restores headroom without reaching for the 3R that intraday NSE moves rarely deliver before the 14:45 exit.\n\nDaliakaBayaCash reports 1:2.5 at a 58% win rate on the 9/21+VWAP variant.")
+tp2R = input.float(3.0, "TP2 (observation only)", minval=0.5, maxval=20.0, step=0.5, group=grp_risk,
+     tooltip="Not executed. If price reaches this AFTER the position closed, a RUNNER note goes to the observation channel so you can measure what the TP1 exit left on the table.")
+tp3R = input.float(4.0, "TP3 (observation only)", minval=0.5, maxval=30.0, step=0.5, group=grp_risk)
+
+exitOnEmaCross = input.bool(false, "Exit on Close Back Across the 9 EMA", group=grp_risk,
+     tooltip="The video's alternative exit: hold until price re-establishes on the far side of the 9 EMA. 'You can stay in this position until price gets reestablished above the 9 EMA.'\n\nCaptures trend days that run far past TP1; gives back open profit on every reversal. Fires an EXIT alert the engine acts on.\n\nOff by default: this repo's own execution study found a fixed first target materially outperformed letting winners run with a trail on this class of intraday signal.")
+
+useEmaTrail = input.bool(false, "Trail Stop Along the 9 EMA", group=grp_risk,
+     tooltip="Once price has moved 1R in favour, ratchet the stop to the 9 EMA (plus buffer) and never loosen it.\n\nCommenter pitrades, who was otherwise scathing about the video: '9EMA is only used to trail your stop on a trend day.' aliinthebay7419 agrees: 'if it's riding the 7 on the 1 I let her go.'\n\nOff by default; it competes with the fixed TP1 exit. Turn on together with a higher TP1 if you want to trade trend days.")
+
+exitOnOppositeCross = input.bool(true, "Mode B: Exit on Opposing Crossover", group=grp_risk,
+     tooltip="In 9/20 crossover mode, close the position when the EMAs cross back the other way.\n\nThe video's stated alternative: 'a lot of traders like to stay in the market until the next crossover and that's where they exit.'")
+
+riskPerTrade = input.float(1.0, "Risk Per Trade (% of capital)", minval=0.1, maxval=5.0, step=0.1, group=grp_risk,
+     tooltip="Used for the R and share-count figures shown on the dashboard and carried in the alert. The signal engine does the real position sizing from its own capital and margin data - this is for reference only.")
+
+// ---- 9. Display ----
+showEmas      = input.bool(true,  "Plot Moving Averages", group=grp_visual)
+showVwapLine  = input.bool(true,  "Plot VWAP", group=grp_visual)
+showLevels    = input.bool(true,  "Plot S/R Levels", group=grp_visual)
+showSignals   = input.bool(true,  "Show Entry Markers", group=grp_visual)
+showTradeLines = input.bool(true, "Show Entry / SL / TP Lines", group=grp_visual)
+showDashboard = input.bool(true,  "Show Dashboard", group=grp_visual)
+dashPos       = input.string("Top Right", "Dashboard Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=grp_visual)
+
+// ---- 10. Telegram ----
+telegramChatId = input.string("-1003675466694", "Telegram Chat ID", group=grp_telegram,
+     tooltip="Channel or group chat ID the trade alerts go to.\n\nHOW TO GET: add @userinfobot to your channel, forward any message to it, copy the ID (starts with -).\n\nThis must be a channel signal_engine listens on (telegram.channels in config.yaml).")
+telegramChatIdObs = input.string("-1003675466694", "Observation Chat ID", group=grp_telegram,
+     tooltip="Channel for RUNNER notes - levels reached after the position already closed.\n\nLeave EMPTY to reuse the main chat ID. Better practice is a channel the engine does NOT listen on, so observation traffic can never reach the trade pipeline.")
+sendTestAlert = input.bool(false, "Send Test Alert", group=grp_telegram,
+     tooltip="Fires one alert on the last bar to prove the webhook works.\n\n1. Enable this\n2. Create the alert with condition 'Any alert() function call'\n3. Webhook: https://api.telegram.org/bot<TOKEN>/sendMessage\n4. Disable afterwards.")
+
+// ============================== CORE INDICATORS =============================
+
+float ema9   = ta.ema(close, fastLen)
+float emaSlow = ta.ema(close, slowLen)
+float emaTrend = ta.ema(close, trendLen)
+float atr    = ta.atr(14)
+float vwapVal = ta.vwap(hlc3)
+float rsiVal  = ta.rsi(close, rsiLen)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+
+// Body/position primitives used by the confirmation rules
+bool barGreen = close > open
+bool barRed   = close < open
+
+// ============================== SESSION STATE ===============================
+
+bool newSession = timeframe.change("D")
+
+var int   sessStartTime = na
+var int   barsToday     = 0
+var int   tradesToday   = 0
+var bool  longTakenToday  = false
+var bool  shortTakenToday = false
+
+if newSession
+    sessStartTime   := time
+    barsToday       := 0
+    tradesToday     := 0
+    longTakenToday  := false
+    shortTakenToday := false
+else
+    barsToday += 1
+
+float minsFromOpen = na(sessStartTime) ? na : (time - sessStartTime) / 60000.0
+
+int istHour = hour(time, "Asia/Kolkata")
+int istMin  = minute(time, "Asia/Kolkata")
+int nowMins = istHour * 60 + istMin
+
+bool pastOpenSkip  = na(minsFromOpen) or minsFromOpen >= skipOpenMinutes
+bool beforeCutoff  = nowMins < (entryCutoffHour * 60 + entryCutoffMinute)
+bool atTimeExit    = nowMins >= (timeExitHour * 60 + timeExitMinute)
+
+// ======================= TIME-OF-DAY VOLUME BASELINE ========================
+// Compares each bar with the SAME slot of the session on prior days, rather than
+// with a flat N-bar average. A flat average is time-blind: at 09:20 it is mostly
+// the previous session's dead closing bars while the current bar runs several
+// times normal, which makes the test near-inert in exactly the window this
+// strategy trades most, and over-strict around the lunch lull.
+//
+// STATEFUL: holds its own state, so it must be called unconditionally.
+rvolBaseline(bool isNewSess, bool confirmed, int days) =>
+    // Allocated at the input maximum. Pine can reject a series int as a matrix
+    // dimension, and 30 x 400 floats is cheap enough not to take that risk.
+    var matrix<float> hist = matrix.new<float>(30, 400, na)
+    var int dIdx = 0
+    var int sIdx = 0
+    if isNewSess
+        dIdx := (dIdx + 1) % days
+        sIdx := 0
+    else
+        sIdx := math.min(sIdx + 1, 399)
+    float sum = 0.0
+    int   cnt = 0
+    for d = 0 to days - 1
+        if d != dIdx
+            float v = matrix.get(hist, d, sIdx)
+            if not na(v) and v > 0
+                sum += v
+                cnt += 1
+    // Accumulate on CONFIRMED bars only, so a forming realtime bar can never
+    // freeze a partial volume into history.
+    if confirmed
+        matrix.set(hist, dIdx, sIdx, volume)
+    cnt > 0 ? sum / cnt : na
+
+float volBase = rvolBaseline(newSession, barstate.isconfirmed, rvolDays)
+float rvol    = na(volBase) or volBase <= 0 ? na : volume / volBase
+
+// ============================ HIGHER-TIMEFRAME BIAS =========================
+// [1] with lookahead_on is the canonical non-repainting MTF idiom: it returns the
+// PREVIOUS, fully closed higher-timeframe bar, which cannot change under us.
+float htfClose = request.security(syminfo.tickerid, htfTf, close[1], lookahead=barmerge.lookahead_on)
+float htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, fastLen)[1], lookahead=barmerge.lookahead_on)
+bool  htfBull  = not na(htfClose) and not na(htfEma) and htfClose > htfEma
+bool  htfBear  = not na(htfClose) and not na(htfEma) and htfClose < htfEma
+
+// ================================ CHOP GUARD ================================
+// The quantified answer to the comment section's dominant criticism.
+
+float emaSlope   = (ema9 - ema9[1]) / (atr > 0 ? atr : 1.0)
+bool  slopeUpOk  = not useSlopeFilter or emaSlope >=  minSlopeAtr
+bool  slopeDnOk  = not useSlopeFilter or emaSlope <= -minSlopeAtr
+
+float sepAtr     = atr > 0 ? math.abs(close - ema9) / atr : 0.0
+bool  sepOk      = not useSeparation or sepAtr >= minSepAtr
+
+float crossCount = math.sum(ta.cross(close, ema9) ? 1.0 : 0.0, crossLookback)
+bool  notChoppy  = maxCrossCount == 0 or crossCount <= maxCrossCount
+
+float atrPct     = close > 0 ? atr / close * 100.0 : 0.0
+bool  liquidEnough = atrPct >= minAtrPct
+
+// =============================== FILTER STACK ===============================
+// Each block cites the comment it implements. All are individually toggleable so
+// the video's unfiltered version can be reproduced by turning every one off.
+
+bool trendOkLong  = not useTrendEma or close > emaTrend
+bool trendOkShort = not useTrendEma or close < emaTrend
+
+bool htfOkLong    = not useHtfBias or htfBull
+bool htfOkShort   = not useHtfBias or htfBear
+
+bool vwapOkLong   = not useVwap or (not na(vwapVal) and close > vwapVal)
+bool vwapOkShort  = not useVwap or (not na(vwapVal) and close < vwapVal)
+
+bool adxOk        = not useAdx or (adxVal >= adxMin and adxVal > adxVal[1])
+
+bool rsiOkLong    = not useRsi or rsiVal > rsiMid
+bool rsiOkShort   = not useRsi or rsiVal < rsiMid
+
+// A missing baseline (early bars of a fresh chart) passes rather than blocking
+// every signal until history accumulates.
+bool volOk        = not useVolume or na(rvol) or rvol >= rvolMult
+
+bool commonOk     = pastOpenSkip and beforeCutoff and not atTimeExit and adxOk and volOk
+                     and sepOk and notChoppy and liquidEnough and tradesToday < maxTradesPerDay
+
+bool filtersLong  = commonOk and allowLongs and trendOkLong and htfOkLong and vwapOkLong
+                     and rsiOkLong and slopeUpOk and not (oneTradePerDirection and longTakenToday)
+bool filtersShort = commonOk and allowShorts and trendOkShort and htfOkShort and vwapOkShort
+                     and rsiOkShort and slopeDnOk and not (oneTradePerDirection and shortTakenToday)
+
+// ========================= SUPPORT / RESISTANCE LEVELS ======================
+// Mode C step 1: "identify areas of support and resistance ... that's going to be
+// support, resistance, or a chart pattern. We have to have a launch point, a place
+// where the break begins."
+
+// Previous day high/low. The video's own worked example uses "the previous day's
+// lows being our support zone". lookahead_on with [1] is the non-repainting idiom
+// for a completed higher-timeframe bar.
+float pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+float pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+// Opening range, built over the first orMinutes of the session.
+var float orHigh = na
+var float orLow  = na
+if newSession
+    orHigh := na
+    orLow  := na
+bool inORWindow = not na(minsFromOpen) and minsFromOpen < orMinutes
+bool orDone     = not na(minsFromOpen) and minsFromOpen >= orMinutes
+if inORWindow
+    orHigh := na(orHigh) ? high : math.max(orHigh, high)
+    orLow  := na(orLow)  ? low  : math.min(orLow, low)
+
+// Confirmed swing pivots. A pivot only confirms pivotLen bars after it prints, so
+// the level becomes tradeable with that lag - inherent to pivots, not a defect.
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+float pl = ta.pivotlow(low,  pivotLen, pivotLen)
+var float lastPH = na
+var float lastPL = na
+if not na(ph)
+    lastPH := ph
+if not na(pl)
+    lastPL := pl
+
+float brkBuf = breakBufferAtr * atr
+
+// A close BEYOND the level by the buffer, where the prior bar was not. The buffer
+// is what separates a break from a wick-through.
+brokeUp(float lvl, float buf) => not na(lvl) and close > lvl + buf and close[1] <= lvl + buf
+brokeDn(float lvl, float buf) => not na(lvl) and close < lvl - buf and close[1] >= lvl - buf
+
+// ============================ SETUP CONFIRMATION ============================
+// elwoodpalmer7622's two-candle rule, the top strategy suggestion on the video.
+
+// Every one of the last n candles must have CLOSED on the signal side of the 9 EMA.
+closesBeyond(bool isLong, int n) =>
+    bool ok = true
+    for i = 0 to n - 1
+        bool barOk = isLong ? close[i] > ema9[i] : close[i] < ema9[i]
+        if not barOk
+            ok := false
+    ok
+
+bool confirmLong = closesBeyond(true, confirmBars)
+     and (not requireOpenBeyond or open > ema9)
+     and (not requireBodyColour or barGreen)
+     and (not requireCloseBeyondPrev or close > high[1])
+
+bool confirmShort = closesBeyond(false, confirmBars)
+     and (not requireOpenBeyond or open < ema9)
+     and (not requireBodyColour or barRed)
+     and (not requireCloseBeyondPrev or close < low[1])
+
+// ============================== MODE A: CONVENTIONAL ========================
+// "We buy when price breaks above the 9 EMA, we sell when price breaks below the
+// 9 EMA, and we're waiting for price confirmation."
+// freshLong/freshShort make this a CROSS event rather than a condition that is
+// true on every bar of an established trend.
+bool freshLong  = close[confirmBars] <= ema9[confirmBars]
+bool freshShort = close[confirmBars] >= ema9[confirmBars]
+
+bool setupA_L = confirmLong  and freshLong
+bool setupA_S = confirmShort and freshShort
+
+// ============================== MODE B: 9/20 CROSSOVER ======================
+// "When the 9 EMA crosses over the 20 EMA we buy the market, when the 9 EMA
+// crosses under the 20 EMA we sell the market ... waiting for price confirmation,
+// a bullish candle close on a buy and a bearish candle close on a sell."
+var int barsSinceXUp = 9999
+var int barsSinceXDn = 9999
+if ta.crossover(ema9, emaSlow)
+    barsSinceXUp := 0
+else
+    barsSinceXUp += 1
+if ta.crossunder(ema9, emaSlow)
+    barsSinceXDn := 0
+else
+    barsSinceXDn += 1
+
+bool setupB_L = barsSinceXUp <= confirmBars and ema9 > emaSlow and confirmLong
+bool setupB_S = barsSinceXDn <= confirmBars and ema9 < emaSlow and confirmShort
+
+// ========================= MODE C: BREAKOUT PULLBACK ========================
+// "Number one, identify areas of support and resistance. Number two, wait for price
+// to break out above resistance or below support. And number three, buy or sell on
+// a retracement of price to the 9 EMA."
+
+var int    brkDir     = 0    // 1 = broken up awaiting pullback, -1 = broken down
+var float  brkLevel   = na
+var int    brkBar     = na
+var string brkSrc     = ""
+var bool   brkTouched = false
+var float  pbExtreme  = na   // pullback low (long) / high (short)
+
+if newSession
+    brkDir     := 0
+    brkLevel   := na
+    brkBar     := na
+    brkSrc     := ""
+    brkTouched := false
+    pbExtreme  := na
+
+// Detect a fresh break. Priority: opening range, then previous day, then pivot -
+// the OR is the level the most NSE intraday participants are watching.
+if brkDir == 0
+    if useLevelOR and orDone and brokeUp(orHigh, brkBuf)
+        brkDir := 1
+        brkLevel := orHigh
+        brkSrc := "ORH"
+    else if useLevelOR and orDone and brokeDn(orLow, brkBuf)
+        brkDir := -1
+        brkLevel := orLow
+        brkSrc := "ORL"
+    else if useLevelPDH and brokeUp(pdh, brkBuf)
+        brkDir := 1
+        brkLevel := pdh
+        brkSrc := "PDH"
+    else if useLevelPDH and brokeDn(pdl, brkBuf)
+        brkDir := -1
+        brkLevel := pdl
+        brkSrc := "PDL"
+    else if useLevelPivot and brokeUp(lastPH, brkBuf)
+        brkDir := 1
+        brkLevel := lastPH
+        brkSrc := "PIVH"
+    else if useLevelPivot and brokeDn(lastPL, brkBuf)
+        brkDir := -1
+        brkLevel := lastPL
+        brkSrc := "PIVL"
+    if brkDir != 0
+        brkBar := bar_index
+        brkTouched := false
+        pbExtreme := na
+
+// Track the retracement back to the 9 EMA, and expire the setup if it never comes.
+// The touch is only counted on bars STRICTLY AFTER the break bar. A breakout candle
+// very often has its own low sitting on the 9 EMA, and counting that would mark the
+// pullback complete before any pullback happened - collapsing the video's three-step
+// sequence (break, THEN retrace, THEN enter) back into a plain breakout entry.
+if brkDir != 0 and not na(brkBar)
+    if bar_index - brkBar > pullbackMaxBars
+        brkDir := 0
+        brkLevel := na
+        brkSrc := ""
+        brkTouched := false
+        pbExtreme := na
+    else if bar_index > brkBar
+        if brkDir == 1
+            if low <= ema9
+                brkTouched := true
+            if brkTouched
+                pbExtreme := na(pbExtreme) ? low : math.min(pbExtreme, low)
+        else
+            if high >= ema9
+                brkTouched := true
+            if brkTouched
+                pbExtreme := na(pbExtreme) ? high : math.max(pbExtreme, high)
+
+bool pullbackReadyL = brkDir == 1  and (brkTouched or not requirePullbackTouch)
+bool pullbackReadyS = brkDir == -1 and (brkTouched or not requirePullbackTouch)
+
+bool setupC_L = pullbackReadyL and confirmLong
+bool setupC_S = pullbackReadyS and confirmShort
+
+// ============================== MODE SELECTION ==============================
+bool modeA = tradeMode == "A: Conventional Cross" or tradeMode == "Any (A+B+C)"
+bool modeB = tradeMode == "B: 9/20 Crossover"     or tradeMode == "Any (A+B+C)"
+bool modeC = tradeMode == "C: Breakout Pullback"  or tradeMode == "Any (A+B+C)"
+
+bool rawLong  = (modeA and setupA_L) or (modeB and setupB_L) or (modeC and setupC_L)
+bool rawShort = (modeA and setupA_S) or (modeB and setupB_S) or (modeC and setupC_S)
+
+// Which setup produced the signal. Carried in the alert as Setup: so per-variant
+// performance can be split out of the trade log with no engine change.
+string setupTag = modeC and (setupC_L or setupC_S) ? "C-PULLBACK-" + brkSrc :
+                  modeB and (setupB_L or setupB_S) ? "B-CROSS" + str.tostring(fastLen) + "x" + str.tostring(slowLen) :
+                  modeA and (setupA_L or setupA_S) ? "A-CONVENTIONAL" : ""
+
+bool longSignal  = rawLong  and filtersLong  and barstate.isconfirmed and strategy.position_size == 0
+bool shortSignal = rawShort and filtersShort and barstate.isconfirmed and strategy.position_size == 0
+
+// ============================ STOPS AND TARGETS =============================
+// ta.* calls live at global scope so they evaluate on every bar; the sizing
+// helpers below are pure functions of their arguments.
+
+float swingLo = ta.lowest(low,  swingLookback)
+float swingHi = ta.highest(high, swingLookback)
+
+// In Mode C the stop belongs beneath the PULLBACK swing, which is usually tighter
+// and more relevant than a fixed-lookback swing. Falls back when unavailable.
+float anchorLo = brkDir == 1  and not na(pbExtreme) ? math.min(swingLo, pbExtreme) : swingLo
+float anchorHi = brkDir == -1 and not na(pbExtreme) ? math.max(swingHi, pbExtreme) : swingHi
+
+calcSL(bool isLong, float entryPx, float aLo, float aHi, float atrV, float emaV) =>
+    float sl = slMode == "ATR multiple"       ? (isLong ? entryPx - atrV * slAtrMult : entryPx + atrV * slAtrMult) :
+               slMode == "9 EMA + ATR buffer" ? (isLong ? emaV   - atrV * slAtrMult : emaV   + atrV * slAtrMult) :
+                                                 (isLong ? aLo    - atrV * slAtrMult : aHi    + atrV * slAtrMult)
+    // "No matter where you do put it, it needs to be above that 9 EMA." If price
+    // closes back through the 9 EMA the setup is void, so a stop on the near side
+    // would be taken out by noise before the thesis is actually invalidated.
+    if forceSlPastEma
+        float pad = atrV * 0.05
+        sl := isLong ? math.min(sl, emaV - pad) : math.max(sl, emaV + pad)
+    sl
+
+calcTargets(bool isLong, float entryPx, float slPx) =>
+    float r = math.abs(entryPx - slPx)
+    float t1 = isLong ? entryPx + r * tp1R : entryPx - r * tp1R
+    float t2 = isLong ? entryPx + r * tp2R : entryPx - r * tp2R
+    float t3 = isLong ? entryPx + r * tp3R : entryPx - r * tp3R
+    [t1, t2, t3]
+
+// ============================== ALERT BUILDERS ==============================
+// Telegram sendMessage JSON. Plain text throughout - the engine's normalizer
+// strips decoration anyway, and this repo's convention is no icons in source.
+//
+// Every line in the body is "Key: value" with a single-word key, which is exactly
+// what parser.py's ^(\w+)\s*:\s*(.+)$ sweeps into Signal.context. Adding a line
+// here lands a new column in the trade log with no engine change.
+
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker +
+      "&interval=" + timeframe.period
+
+getTimeIST() => str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
+
+wrapTelegram(string msg, bool observation) =>
+    string cid = observation and telegramChatIdObs != "" ? telegramChatIdObs : telegramChatId
+    '{"chat_id": "' + cid + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+// Context packet measured AT THE MOMENT THE SETUP FIRED. These are the columns you
+// will later use to work out which filter is actually carrying the strategy.
+contextBlock(float entryPx, float slPx) =>
+    float riskVal = math.abs(entryPx - slPx)
+    string s = "Mode: " + tradeMode + "\\n"
+    s += "Tf: " + timeframe.period + "\\n"
+    s += "Rvol: " + (na(rvol) ? "-" : str.tostring(rvol, "0.00")) + "\\n"
+    s += "Adx: " + (na(adxVal) ? "-" : str.tostring(adxVal, "0.0")) + "\\n"
+    s += "Rsi: " + (na(rsiVal) ? "-" : str.tostring(rsiVal, "0.0")) + "\\n"
+    s += "AtrPct: " + str.tostring(atrPct, "0.00") + "\\n"
+    s += "SlAtr: " + (atr > 0 ? str.tostring(riskVal / atr, "0.00") : "-") + "\\n"
+    s += "EmaSlope: " + str.tostring(emaSlope, "0.000") + "\\n"
+    s += "SepAtr: " + str.tostring(sepAtr, "0.00") + "\\n"
+    s += "Crosses: " + str.tostring(crossCount, "0") + "\\n"
+    s += "Vwap: " + (na(vwapVal) ? "-" : str.tostring(vwapVal, format.mintick)) + "\\n"
+    s += "Ema9: " + str.tostring(ema9, format.mintick) + "\\n"
+    s += "Htf: " + (htfBull ? "BULL" : htfBear ? "BEAR" : "FLAT") + "\\n"
+    s += "Level: " + (na(brkLevel) ? "-" : str.tostring(brkLevel, format.mintick)) + "\\n"
+    s
+
+buildEntryAlert(bool isLong, float entryPx, float slPx, float t1, float t2, float t3, string setup) =>
+    float riskVal   = math.abs(entryPx - slPx)
+    float rewardVal = math.abs(t1 - entryPx)
+    float rr        = riskVal > 0 ? rewardVal / riskVal : 0.0
+    float riskAmt   = strategy.equity * riskPerTrade / 100.0
+    int   shares    = riskVal > 0 ? int(math.floor(riskAmt / riskVal)) : 0
+
+    string msg = STRAT_TAG + " " + (isLong ? "LONG" : "SHORT") + " | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Setup: " + (setup == "" ? "-" : setup) + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Target: " + str.tostring(t1, format.mintick) + "\\n"
+    msg += "SL: " + str.tostring(slPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += "TP2: " + str.tostring(t2, format.mintick) + "\\n"
+    msg += "TP3: " + str.tostring(t3, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += "Risk: " + str.tostring(riskVal, format.mintick) + "\\n"
+    msg += "Reward: " + str.tostring(rewardVal, format.mintick) + "\\n"
+    msg += "RR: 1:" + str.tostring(rr, "0.0") + "\\n"
+    msg += "RefQty: " + str.tostring(shares) + "\\n"
+    msg += "------------------------\\n"
+    msg += contextBlock(entryPx, slPx)
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+buildTPAlert(bool isLong, float entryPx, float slPx, float tpPx, float exitPx, string lvl, int qtyPct) =>
+    float pnl = isLong ? exitPx - entryPx : entryPx - exitPx
+    float pnlPct = entryPx > 0 ? pnl / entryPx * 100.0 : 0.0
+    float riskVal = math.abs(entryPx - slPx)
+
+    string msg = STRAT_TAG + " " + lvl + " HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += (isLong ? "LONG" : "SHORT") + " | Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += "Profit: " + str.tostring(pnl, format.mintick) + " (" + str.tostring(pnlPct, "0.0") + "%)\\n"
+    msg += "Rmult: " + (riskVal > 0 ? str.tostring(pnl / riskVal, "0.00") : "-") + "\\n"
+    msg += "ExitQtyPct: " + str.tostring(qtyPct) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+buildSLAlert(bool isLong, float entryPx, float slPx, float exitPx) =>
+    float pnl = isLong ? exitPx - entryPx : entryPx - exitPx
+    float pnlPct = entryPx > 0 ? pnl / entryPx * 100.0 : 0.0
+
+    string msg = STRAT_TAG + " SL HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += (isLong ? "LONG" : "SHORT") + " | Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += "Loss: " + str.tostring(pnl, format.mintick) + " (" + str.tostring(pnlPct, "0.0") + "%)\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// Generic EXIT. Header is "EMA9 EXIT | SYMBOL", which the normalizer's pipe rule
+// expands with the STRATEGY TAG INTACT. Note this deliberately does NOT use a
+// "TIME EXIT | SYMBOL" header: that shape parses as strategy "TIME", not EMA9, and
+// the engine would reconcile against a strategy that does not exist.
+buildExitAlert(bool isLong, float entryPx, float slPx, float tpPx, float exitPx, string reason) =>
+    float pnl = isLong ? exitPx - entryPx : entryPx - exitPx
+    float pnlPct = entryPx > 0 ? pnl / entryPx * 100.0 : 0.0
+    float riskVal = math.abs(entryPx - slPx)
+
+    string msg = STRAT_TAG + " EXIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Reason: " + reason + "\\n"
+    // Side and Entry go on SEPARATE lines. parser.py matches ^(\\w+)\\s*:\\s*(.+)$, so the
+    // compact "LONG | Entry: 123" form used by the TP/SL alerts yields NO entry field -
+    // and unlike those, this message has no dedicated rewrite rule to synthesise one,
+    // so the whole signal would be dropped for missing a mandatory field.
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "SL: " + str.tostring(slPx, format.mintick) + "\\n"
+    msg += "TP: " + str.tostring(tpPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += "Pnl: " + str.tostring(pnl, format.mintick) + " (" + str.tostring(pnlPct, "0.0") + "%)\\n"
+    msg += "Rmult: " + (riskVal > 0 ? str.tostring(pnl / riskVal, "0.00") : "-") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// Deliberately NOT parseable: the header carries no LONG/SHORT/EXIT token, so
+// parser.py's _parse_header returns None and the pipeline drops it. This records
+// what the TP1 exit left on the table without ever reaching the trade pipeline.
+buildRunnerAlert(bool isLong, float entryPx, float slPx, float lvlPx, string lvl) =>
+    float riskVal = math.abs(entryPx - slPx)
+    float move = isLong ? lvlPx - entryPx : entryPx - lvlPx
+    string msg = "RUNNER | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Reached " + lvl + " after the position closed\\n"
+    msg += "Ref Entry " + str.tostring(entryPx, format.mintick) + " | Ref Level " + str.tostring(lvlPx, format.mintick) + "\\n"
+    msg += "Unbooked " + (riskVal > 0 ? str.tostring(move / riskVal, "0.00") + "R" : "-") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, true)
+
+// ============================== TRADE STATE =================================
+
+var float  tEntry     = na
+var float  tSL        = na   // stop as placed at entry (the R denominator)
+var float  tSLeff     = na   // effective stop, which the 9 EMA trail may ratchet
+var float  tTP1       = na
+var float  tTP2       = na
+var float  tTP3       = na
+var int    tDir       = 0
+var int    tEntryBar  = na
+var string tSetup     = ""
+var bool   tOpen      = false
+var bool   tp2Done    = false
+var bool   tp3Done    = false
+var bool   exitAlerted = false
+
+// Session result counters for the dashboard
+var int   sessWins   = 0
+var int   sessLosses = 0
+var float sessR      = 0.0
+
+if newSession
+    tDir       := 0
+    tOpen      := false
+    tp2Done    := false
+    tp3Done    := false
+    exitAlerted := false
+    sessWins   := 0
+    sessLosses := 0
+    sessR      := 0.0
+
+// A crossover THIS bar, read from the counters hoisted above so the ta.* calls stay
+// unconditional.
+bool xUpNow = barsSinceXUp == 0
+bool xDnNow = barsSinceXDn == 0
+
+// =========================== TRADE MANAGEMENT ===============================
+// Runs before the entry block so a position opened this bar is not also managed
+// on the same bar.
+
+if tOpen and tDir != 0
+    bool isL = tDir == 1
+    float rDist = math.abs(tEntry - tSL)
+
+    // 9 EMA trailing stop. pitrades, who was otherwise scathing about the video:
+    // "9EMA is only used to trail your stop on a trend day." Armed only after the
+    // trade is 1R in favour, and it ratchets - it never loosens.
+    if useEmaTrail and rDist > 0
+        bool moved1R = isL ? (high - tEntry) >= rDist : (tEntry - low) >= rDist
+        if moved1R
+            float cand = isL ? ema9 - atr * slAtrMult : ema9 + atr * slAtrMult
+            tSLeff := isL ? math.max(tSLeff, cand) : math.min(tSLeff, cand)
+
+    // Re-issue with the current stop so a trailed level actually reaches the broker
+    // simulation. Same order ID, so this amends rather than stacks.
+    strategy.exit(isL ? "X_L" : "X_S", isL ? "Long" : "Short", limit=tTP1, stop=tSLeff)
+
+    bool slTouched  = isL ? low  <= tSLeff : high >= tSLeff
+    bool tp1Touched = isL ? high >= tTP1   : low  <= tTP1
+
+    // SL is checked FIRST. When a single bar's range spans both levels the true
+    // sequence is unknowable at this resolution, so the pessimistic read is taken
+    // rather than one that would flatter the backtest.
+    if slTouched and not exitAlerted
+        alert(buildSLAlert(isL, tEntry, tSLeff, tSLeff), alert.freq_once_per_bar)
+        float rr = rDist > 0 ? (isL ? tSLeff - tEntry : tEntry - tSLeff) / rDist : 0.0
+        sessR += rr
+        if rr >= 0
+            sessWins += 1
+        else
+            sessLosses += 1
+        exitAlerted := true
+        tOpen := false
+    else if tp1Touched and not exitAlerted
+        // The engine exits 100% here. TP2/TP3 are observation only - this repo's own
+        // execution study found a single first target beat running a trail on this
+        // class of intraday signal by a wide margin.
+        alert(buildTPAlert(isL, tEntry, tSL, tTP1, tTP1, "TP1", 100), alert.freq_once_per_bar)
+        sessR += tp1R
+        sessWins += 1
+        exitAlerted := true
+        tOpen := false
+    else
+        bool emaExit = exitOnEmaCross and barstate.isconfirmed and (isL ? close < ema9 : close > ema9)
+        bool oppExit = exitOnOppositeCross and modeB and (isL ? xDnNow : xUpNow)
+        string reason = atTimeExit ? "TIME_EXIT" : emaExit ? "EMA_CROSS" : oppExit ? "OPPOSITE_CROSS" : ""
+        if reason != ""
+            strategy.close(isL ? "Long" : "Short", comment=reason)
+            alert(buildExitAlert(isL, tEntry, tSL, tTP1, close, reason), alert.freq_once_per_bar)
+            float rr = rDist > 0 ? (isL ? close - tEntry : tEntry - close) / rDist : 0.0
+            sessR += rr
+            if rr >= 0
+                sessWins += 1
+            else
+                sessLosses += 1
+            exitAlerted := true
+            tOpen := false
+
+// Safety net: if the broker simulation closed the position by some path the manual
+// detection above did not cover, do not leave the state machine believing it is live.
+if tOpen and strategy.position_size == 0 and not na(tEntryBar) and bar_index > tEntryBar
+    tOpen := false
+
+// ============================ RUNNER OBSERVATION ============================
+// What the TP1 exit left on the table. Routed to the observation channel and shaped
+// so the trade pipeline cannot parse it.
+if not tOpen and tDir != 0 and not na(tEntry)
+    bool isL = tDir == 1
+    if not tp2Done and (isL ? high >= tTP2 : low <= tTP2)
+        alert(buildRunnerAlert(isL, tEntry, tSL, tTP2, "TP2"), alert.freq_once_per_bar)
+        tp2Done := true
+    if not tp3Done and (isL ? high >= tTP3 : low <= tTP3)
+        alert(buildRunnerAlert(isL, tEntry, tSL, tTP3, "TP3"), alert.freq_once_per_bar)
+        tp3Done := true
+
+// =============================== ENTRY BLOCK ================================
+// Signals arm on a CONFIRMED bar and fill at the next bar's open
+// (process_orders_on_close=false), which is what the live engine does with a
+// market order on the alert.
+
+bool canEnterLong  = longSignal  and not tOpen and strategy.position_size == 0
+bool canEnterShort = shortSignal and not tOpen and strategy.position_size == 0
+
+if canEnterLong
+    float e  = close
+    float sl = calcSL(true, e, anchorLo, anchorHi, atr, ema9)
+    if not na(sl) and sl < e
+        [t1, t2, t3] = calcTargets(true, e, sl)
+        strategy.entry("Long", strategy.long)
+        strategy.exit("X_L", "Long", limit=t1, stop=sl)
+        tEntry := e
+        tSL    := sl
+        tSLeff := sl
+        tTP1   := t1
+        tTP2   := t2
+        tTP3   := t3
+        tDir   := 1
+        tEntryBar := bar_index
+        tSetup := setupTag
+        tOpen  := true
+        tp2Done := false
+        tp3Done := false
+        exitAlerted := false
+        tradesToday += 1
+        longTakenToday := true
+        // The Mode C setup is consumed - it must not arm a second entry.
+        brkDir := 0
+        alert(buildEntryAlert(true, e, sl, t1, t2, t3, setupTag), alert.freq_once_per_bar)
+
+if canEnterShort
+    float e  = close
+    float sl = calcSL(false, e, anchorLo, anchorHi, atr, ema9)
+    if not na(sl) and sl > e
+        [t1, t2, t3] = calcTargets(false, e, sl)
+        strategy.entry("Short", strategy.short)
+        strategy.exit("X_S", "Short", limit=t1, stop=sl)
+        tEntry := e
+        tSL    := sl
+        tSLeff := sl
+        tTP1   := t1
+        tTP2   := t2
+        tTP3   := t3
+        tDir   := -1
+        tEntryBar := bar_index
+        tSetup := setupTag
+        tOpen  := true
+        tp2Done := false
+        tp3Done := false
+        exitAlerted := false
+        tradesToday += 1
+        shortTakenToday := true
+        brkDir := 0
+        alert(buildEntryAlert(false, e, sl, t1, t2, t3, setupTag), alert.freq_once_per_bar)
+
+// Belt-and-braces flat before the broker's auto square-off, whatever the state
+// machine believes.
+if atTimeExit and strategy.position_size != 0
+    strategy.close_all(comment="Time Exit")
+
+// ================================= VISUALS ==================================
+
+plot(showEmas ? ema9 : na, "9 EMA", color=color.new(color.orange, 0), linewidth=2)
+plot(showEmas ? emaSlow : na, "Slow EMA", color=color.new(color.blue, 20), linewidth=1)
+plot(showEmas and useTrendEma ? emaTrend : na, "Trend EMA", color=color.new(color.purple, 30), linewidth=2)
+plot(showVwapLine ? vwapVal : na, "VWAP", color=color.new(color.fuchsia, 20), linewidth=1)
+
+plot(showLevels and useLevelPDH ? pdh : na, "PDH", color=color.new(color.gray, 20), style=plot.style_linebr)
+plot(showLevels and useLevelPDH ? pdl : na, "PDL", color=color.new(color.gray, 20), style=plot.style_linebr)
+plot(showLevels and useLevelOR and orDone ? orHigh : na, "ORH", color=color.new(color.teal, 10), style=plot.style_linebr)
+plot(showLevels and useLevelOR and orDone ? orLow  : na, "ORL", color=color.new(color.teal, 10), style=plot.style_linebr)
+plot(showLevels and useLevelPivot ? lastPH : na, "Pivot High", color=color.new(color.maroon, 40), style=plot.style_linebr)
+plot(showLevels and useLevelPivot ? lastPL : na, "Pivot Low",  color=color.new(color.maroon, 40), style=plot.style_linebr)
+
+// Live trade levels. Drawn as plots rather than line objects so there is nothing to
+// allocate, track or clean up, and no drawing-object ceiling to hit.
+plot(showTradeLines and tOpen ? tEntry : na, "Entry", color=color.new(color.aqua, 0), style=plot.style_linebr, linewidth=1)
+plot(showTradeLines and tOpen ? tSLeff : na, "SL",    color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=1)
+plot(showTradeLines and tOpen ? tTP1   : na, "TP1",   color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+
+bool enteredLongBar  = tDir == 1  and not na(tEntryBar) and tEntryBar == bar_index
+bool enteredShortBar = tDir == -1 and not na(tEntryBar) and tEntryBar == bar_index
+
+plotshape(showSignals and enteredLongBar,  "Long Entry",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(showSignals and enteredShortBar, "Short Entry", shape.triangledown, location.abovebar, color.new(color.red, 0),   size=size.small)
+
+// Marks a break that is waiting for its pullback - the state between the video's
+// step 2 and step 3.
+plotshape(showSignals and modeC and brkDir == 1  and not na(brkBar) and brkBar == bar_index, "Break Up",   shape.diamond, location.belowbar, color.new(color.lime, 40), size=size.tiny)
+plotshape(showSignals and modeC and brkDir == -1 and not na(brkBar) and brkBar == bar_index, "Break Down", shape.diamond, location.abovebar, color.new(color.orange, 40), size=size.tiny)
+
+barcolor(tOpen ? (tDir == 1 ? color.new(color.green, 70) : color.new(color.red, 70)) : na)
+
+// ================================ DASHBOARD =================================
+// Table and its row helper are built at GLOBAL scope. Pine rejects a function
+// declared inside a conditional block, and a table rebuilt with new/delete on every
+// realtime tick churns for no reason - so it is allocated once and refilled.
+
+// Resolved inline rather than in a helper: table.new's `position` wants a simple
+// string, and a user function's return type degrades to series, which it rejects.
+tablePos = dashPos == "Top Left"      ? position.top_left :
+             dashPos == "Bottom Right" ? position.bottom_right :
+             dashPos == "Bottom Left"  ? position.bottom_left :
+             dashPos == "Middle Right" ? position.middle_right : position.top_right
+
+var table dash = na
+
+dashRow(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color=color.new(color.silver, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, r, v, text_color=c, text_size=size.small, text_halign=text.align_right)
+
+if showDashboard and barstate.islast
+    if na(dash)
+        dash := table.new(tablePos, 2, 16, bgcolor=color.new(color.black, 20),
+             border_width=1, border_color=color.new(color.gray, 60))
+
+    int  tfMins = int(timeframe.in_seconds(timeframe.period) / 60)
+    bool tfOk   = tfMins >= 3 and tfMins <= 15
+    color okCol  = color.new(color.lime, 0)
+    color noCol  = color.new(color.red, 0)
+    color txtCol = color.new(color.silver, 0)
+    color warnCol = color.new(color.orange, 0)
+
+    dashRow(0, "EMA9 " + syminfo.ticker, timeframe.period + (tfOk ? "" : " (prefer 5m)"), tfOk ? okCol : warnCol)
+
+    string modeTxt = tradeMode == "Any (A+B+C)"       ? "Any" :
+                      tradeMode == "C: Breakout Pullback" ? "C Pullback" :
+                      tradeMode == "B: 9/20 Crossover"    ? "B " + str.tostring(fastLen) + "/" + str.tostring(slowLen) : "A Cross"
+    dashRow(1, "Mode", modeTxt, txtCol)
+
+    string setupState = not modeC ? "-" :
+                         brkDir == 0     ? "waiting for break" :
+                         not brkTouched  ? "broke " + brkSrc + ", await pullback" :
+                                           "pullback in, await trigger"
+    dashRow(2, "Setup", setupState, brkDir == 0 ? txtCol : color.new(color.yellow, 0))
+
+    dashRow(3, "Trend " + str.tostring(trendLen), not useTrendEma ? "off" : close > emaTrend ? "UP" : "DOWN",
+             not useTrendEma ? txtCol : close > emaTrend ? okCol : noCol)
+    dashRow(4, "HTF " + htfTf, not useHtfBias ? "off" : htfBull ? "BULL" : htfBear ? "BEAR" : "FLAT",
+             not useHtfBias ? txtCol : (htfBull or htfBear) ? okCol : noCol)
+    dashRow(5, "VWAP", not useVwap ? "off" : na(vwapVal) ? "-" : close > vwapVal ? "above" : "below", txtCol)
+    dashRow(6, "ADX", not useAdx ? "off" : str.tostring(adxVal, "0.0") + (adxVal > adxVal[1] ? " rising" : " falling"),
+             adxOk ? okCol : noCol)
+    dashRow(7, "RVOL", not useVolume ? "off" : na(rvol) ? "building" : str.tostring(rvol, "0.00"), volOk ? okCol : noCol)
+    dashRow(8, "ATR %", str.tostring(atrPct, "0.00") + "%", liquidEnough ? okCol : noCol)
+    dashRow(9, "EMA slope", str.tostring(emaSlope, "0.000"), (slopeUpOk or slopeDnOk) ? okCol : noCol)
+    dashRow(10, "Crosses/" + str.tostring(crossLookback), str.tostring(crossCount, "0") + " max " + str.tostring(maxCrossCount),
+             notChoppy ? okCol : noCol)
+
+    string winState = not pastOpenSkip ? "open skip" : atTimeExit ? "time exit" : not beforeCutoff ? "past cutoff" : "open"
+    dashRow(11, "Window", winState, winState == "open" ? okCol : warnCol)
+    dashRow(12, "Trades", str.tostring(tradesToday) + " / " + str.tostring(maxTradesPerDay),
+             tradesToday < maxTradesPerDay ? okCol : noCol)
+
+    if tOpen
+        dashRow(13, "Position", (tDir == 1 ? "LONG " : "SHORT ") + str.tostring(tEntry, format.mintick), tDir == 1 ? okCol : noCol)
+        dashRow(14, "SL / TP1", str.tostring(tSLeff, format.mintick) + " / " + str.tostring(tTP1, format.mintick), txtCol)
+    else
+        dashRow(13, "Position", "flat", txtCol)
+        dashRow(14, "Last setup", tSetup == "" ? "-" : tSetup, txtCol)
+
+    dashRow(15, "Session", str.tostring(sessWins) + "W " + str.tostring(sessLosses) + "L  " + str.tostring(sessR, "0.0") + "R",
+             sessR > 0 ? okCol : sessR < 0 ? noCol : txtCol)
+
+// =============================== TEST ALERT =================================
+// Proves the webhook end to end. Create the alert with condition "Any alert()
+// function call", then turn this off.
+if sendTestAlert and barstate.islast
+    string t = "EMA9 TEST | " + syminfo.ticker + "\\n"
+    t += "Webhook is wired correctly.\\n"
+    t += "Tf: " + timeframe.period + " | " + getTimeIST() + "\\n"
+    t += getChartUrl()
+    alert(wrapTelegram(t, true), alert.freq_once_per_bar)
