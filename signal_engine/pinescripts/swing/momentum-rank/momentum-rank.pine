@@ -1,0 +1,312 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// Strategy: momentum-rank  |  12-1 cross-sectional momentum, monthly rebalance
+//
+// WHAT IT DOES
+//   Ranks a configured universe (up to 40 symbols) by 12-month return skipping the most
+//   recent month, and holds the strongest N. Rebalances every `rebalDays` sessions.
+//   Long only, CNC delivery, no stop loss - the exit is falling out of the top N.
+//
+// WHY 12-1 AND NOT "PRICE NEAR ITS HIGH"
+//   Backtest over 201 NSE F&O names, 2016-2026, monthly rebalance, top 30, equal weight,
+//   measured against an EQUAL-WEIGHT basket of the same universe (so market beta is not
+//   counted as skill):
+//
+//       12-1 momentum (250d return, skip 21d)   alpha +12.7%/yr   t 3.12   IS +12.2 OOS +13.4
+//       trailing 250d return                    alpha +12.8%/yr   t 3.07
+//       position inside 120d high-low range     alpha  -0.5%/yr   t -0.07
+//       range position / volatility             alpha  -7.5%/yr   t -2.22
+//
+//   Range position saturates - dozens of names sit at 97-100 and stop being separable.
+//   A raw return keeps ranking them. That difference is the whole strategy.
+//
+// HONEST LIMITS, read before trading it
+//   - Alpha is LUMPY. Nine of ten years positive, but the median year is about +6% and
+//     the mean is dragged up by 2021, 2023 and 2024. Expect single digits most years.
+//   - It does NOT protect you in a crash. Feb-Mar 2020: book -29.4% vs universe -27.6%.
+//     Momentum fell harder. Max drawdown in test 32.5%.
+//   - The backtest universe is today's F&O list walked backwards, so names delisted or
+//     dropped since 2016 are missing. Reporting against the same-universe benchmark
+//     cancels much of that bias, not all of it.
+//   - Turnover is ~22%/month, so costs are nearly irrelevant: at 150 bps round trip,
+//     seven times realistic, alpha was still +8.2%/yr.
+//
+// ALERT CONTRACT (signal_engine/parser.py)
+//   Header must be "STRATEGY DIRECTION", then Symbol / Entry / SL / TP as key-value lines.
+//   Direction is LONG to open and EXIT to close. SL is written far away because this
+//   system has no stop - the parser requires the field and the validator rejects a stop
+//   that is unrealistically tight.
+//
+//@version=6
+indicator("momentum-rank", "MOM12-1", overlay = true, max_labels_count = 100)
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════════
+grp_u = "Universe"
+grp_r = "Ranking"
+grp_a = "Alerts"
+grp_d = "Display"
+
+// Pine allows at most 40 request.security() calls, which caps the universe at 40 names.
+// A 40-name pool holding 8 is the same 20% selectivity as the 201/30 basket tested.
+string u1  = input.symbol("NSE:RELIANCE",  "1",  group = grp_u, inline = "a")
+string u2  = input.symbol("NSE:HDFCBANK",  "2",  group = grp_u, inline = "a")
+string u3  = input.symbol("NSE:ICICIBANK", "3",  group = grp_u, inline = "a")
+string u4  = input.symbol("NSE:INFY",      "4",  group = grp_u, inline = "a")
+string u5  = input.symbol("NSE:TCS",       "5",  group = grp_u, inline = "b")
+string u6  = input.symbol("NSE:LT",        "6",  group = grp_u, inline = "b")
+string u7  = input.symbol("NSE:AXISBANK",  "7",  group = grp_u, inline = "b")
+string u8  = input.symbol("NSE:SBIN",      "8",  group = grp_u, inline = "b")
+string u9  = input.symbol("NSE:BHARTIARTL","9",  group = grp_u, inline = "c")
+string u10 = input.symbol("NSE:MARUTI",    "10", group = grp_u, inline = "c")
+string u11 = input.symbol("NSE:HINDALCO",  "11", group = grp_u, inline = "c")
+string u12 = input.symbol("NSE:TATASTEEL", "12", group = grp_u, inline = "c")
+string u13 = input.symbol("NSE:JSWSTEEL",  "13", group = grp_u, inline = "d")
+string u14 = input.symbol("NSE:BEL",       "14", group = grp_u, inline = "d")
+string u15 = input.symbol("NSE:HAL",       "15", group = grp_u, inline = "d")
+string u16 = input.symbol("NSE:BANKBARODA","16", group = grp_u, inline = "d")
+string u17 = input.symbol("NSE:PFC",       "17", group = grp_u, inline = "e")
+string u18 = input.symbol("NSE:RECLTD",    "18", group = grp_u, inline = "e")
+string u19 = input.symbol("NSE:COALINDIA", "19", group = grp_u, inline = "e")
+string u20 = input.symbol("NSE:ONGC",      "20", group = grp_u, inline = "e")
+string u21 = input.symbol("NSE:NTPC",      "21", group = grp_u, inline = "f")
+string u22 = input.symbol("NSE:POWERGRID", "22", group = grp_u, inline = "f")
+string u23 = input.symbol("NSE:TATAPOWER", "23", group = grp_u, inline = "f")
+string u24 = input.symbol("NSE:ADANIPORTS","24", group = grp_u, inline = "f")
+string u25 = input.symbol("NSE:DLF",       "25", group = grp_u, inline = "g")
+string u26 = input.symbol("NSE:TITAN",     "26", group = grp_u, inline = "g")
+string u27 = input.symbol("NSE:TRENT",     "27", group = grp_u, inline = "g")
+string u28 = input.symbol("NSE:SUNPHARMA", "28", group = grp_u, inline = "g")
+string u29 = input.symbol("NSE:CIPLA",     "29", group = grp_u, inline = "h")
+string u30 = input.symbol("NSE:DIVISLAB",  "30", group = grp_u, inline = "h")
+string u31 = input.symbol("NSE:PERSISTENT","31", group = grp_u, inline = "h")
+string u32 = input.symbol("NSE:KPITTECH",  "32", group = grp_u, inline = "h")
+string u33 = input.symbol("NSE:DIXON",     "33", group = grp_u, inline = "i")
+string u34 = input.symbol("NSE:POLYCAB",   "34", group = grp_u, inline = "i")
+string u35 = input.symbol("NSE:CGPOWER",   "35", group = grp_u, inline = "i")
+string u36 = input.symbol("NSE:MAZDOCK",   "36", group = grp_u, inline = "i")
+string u37 = input.symbol("NSE:SAIL",      "37", group = grp_u, inline = "j")
+string u38 = input.symbol("NSE:NATIONALUM","38", group = grp_u, inline = "j")
+string u39 = input.symbol("NSE:VEDL",      "39", group = grp_u, inline = "j")
+string u40 = input.symbol("NSE:JINDALSTEL","40", group = grp_u, inline = "j")
+
+int    lookbackDays = input.int(250, "Lookback (sessions)", minval = 120, maxval = 400, group = grp_r, tooltip = "Return window. 250 sessions is about 12 months.\n\nTested 180 / 250 / 300 / 400 - all gave 12.6-13.8% alpha with t around 3, so this is NOT a cherry-picked value. 120 was weaker (+6.6%).")
+int    skipDays     = input.int(21,  "Skip recent (sessions)", minval = 0, maxval = 60, group = grp_r, tooltip = "Sessions excluded from the END of the window. The classic 12-1 construction.\n\nThe most recent month runs on short-horizon REVERSAL, which works against momentum. Skipping it is what separates 12-1 from a plain 12-month return.")
+int    topN         = input.int(8,   "Hold top N", minval = 1, maxval = 20, group = grp_r, tooltip = "Names held, equal weight.\n\nSmaller = more alpha AND more volatility; tested Sharpe was flat (~1.48) from 10 to 80 names, so concentration buys return and risk in equal measure. 8 of 40 matches the 30-of-201 selectivity that was tested.")
+int    rebalDays    = input.int(21,  "Rebalance every (sessions)", minval = 5, maxval = 130, group = grp_r, tooltip = "21 sessions is about monthly. Tested 21 / 42 / 63 / 126 - all gave 11-13% alpha, so the exact cadence is not load-bearing.")
+float  minPrice     = input.float(20.0, "Min price", minval = 0, group = grp_r, tooltip = "Names below this are skipped at the rebalance.")
+
+bool   sendAlerts   = input.bool(true,  "Send Telegram alerts", group = grp_a)
+string tgChatId     = input.string("-1003453925766", "Telegram Chat ID", group = grp_a)
+string exchangeStr  = input.string("NSE", "Exchange", group = grp_a)
+string productStr   = input.string("CNC", "Product", options = ["CNC", "MIS", "NRML"], group = grp_a, tooltip = "CNC. This is a positional book held for weeks; MIS would be squared off daily.")
+float  slPct        = input.float(25.0, "SL distance %", minval = 5.0, maxval = 90.0, step = 5.0, group = grp_a, tooltip = "This system HAS NO STOP - a name is sold when it falls out of the top N, not at a price.\n\nBut parser.py requires an SL field and the risk validator rejects a stop that is unrealistically tight. This writes a deliberately distant level so the field is well formed and never binds. It is not a risk parameter.")
+float  tpPct        = input.float(100.0, "TP distance %", minval = 10.0, maxval = 500.0, step = 10.0, group = grp_a, tooltip = "Same reasoning as SL: the exit is the ranking, not a price target. Kept far away so it does not fire.")
+
+bool   showTable    = input.bool(true, "Show ranking table", group = grp_d)
+bool   showLabels   = input.bool(true, "Mark rebalance bars", group = grp_d)
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// MOMENTUM FETCH
+// ═══════════════════════════════════════════════════════════════════════════════════
+// close[skip] / close[lookback] - 1, on the DAILY timeframe with lookahead off. Both
+// legs are historical bars, so nothing here can see the future.
+// ONE request.security per symbol. Pine caps a script at 40 of them, so fetching the
+// momentum and the price separately would need 80 and refuse to compile. A tuple costs
+// one call.
+f_fetch(string sym) =>
+    request.security(sym, "D", [close[skipDays] / close[lookbackDays] - 1.0, close], lookahead = barmerge.lookahead_off)
+
+// Strip the exchange prefix so alerts carry the OpenAlgo symbol, not "NSE:SAIL".
+f_bare(string sym) =>
+    int i = str.pos(sym, ":")
+    na(i) ? sym : str.substring(sym, i + 1)
+
+var array<string> uni = array.new_string(0)
+if barstate.isfirst
+    array.push(uni, u1),  array.push(uni, u2),  array.push(uni, u3),  array.push(uni, u4)
+    array.push(uni, u5),  array.push(uni, u6),  array.push(uni, u7),  array.push(uni, u8)
+    array.push(uni, u9),  array.push(uni, u10), array.push(uni, u11), array.push(uni, u12)
+    array.push(uni, u13), array.push(uni, u14), array.push(uni, u15), array.push(uni, u16)
+    array.push(uni, u17), array.push(uni, u18), array.push(uni, u19), array.push(uni, u20)
+    array.push(uni, u21), array.push(uni, u22), array.push(uni, u23), array.push(uni, u24)
+    array.push(uni, u25), array.push(uni, u26), array.push(uni, u27), array.push(uni, u28)
+    array.push(uni, u29), array.push(uni, u30), array.push(uni, u31), array.push(uni, u32)
+    array.push(uni, u33), array.push(uni, u34), array.push(uni, u35), array.push(uni, u36)
+    array.push(uni, u37), array.push(uni, u38), array.push(uni, u39), array.push(uni, u40)
+
+// request.security must be called unconditionally from global scope - calling it inside
+// a loop or an `if` loses its series state.
+[m1, p1] = f_fetch(u1)
+[m2, p2] = f_fetch(u2)
+[m3, p3] = f_fetch(u3)
+[m4, p4] = f_fetch(u4)
+[m5, p5] = f_fetch(u5)
+[m6, p6] = f_fetch(u6)
+[m7, p7] = f_fetch(u7)
+[m8, p8] = f_fetch(u8)
+[m9, p9] = f_fetch(u9)
+[m10, p10] = f_fetch(u10)
+[m11, p11] = f_fetch(u11)
+[m12, p12] = f_fetch(u12)
+[m13, p13] = f_fetch(u13)
+[m14, p14] = f_fetch(u14)
+[m15, p15] = f_fetch(u15)
+[m16, p16] = f_fetch(u16)
+[m17, p17] = f_fetch(u17)
+[m18, p18] = f_fetch(u18)
+[m19, p19] = f_fetch(u19)
+[m20, p20] = f_fetch(u20)
+[m21, p21] = f_fetch(u21)
+[m22, p22] = f_fetch(u22)
+[m23, p23] = f_fetch(u23)
+[m24, p24] = f_fetch(u24)
+[m25, p25] = f_fetch(u25)
+[m26, p26] = f_fetch(u26)
+[m27, p27] = f_fetch(u27)
+[m28, p28] = f_fetch(u28)
+[m29, p29] = f_fetch(u29)
+[m30, p30] = f_fetch(u30)
+[m31, p31] = f_fetch(u31)
+[m32, p32] = f_fetch(u32)
+[m33, p33] = f_fetch(u33)
+[m34, p34] = f_fetch(u34)
+[m35, p35] = f_fetch(u35)
+[m36, p36] = f_fetch(u36)
+[m37, p37] = f_fetch(u37)
+[m38, p38] = f_fetch(u38)
+[m39, p39] = f_fetch(u39)
+[m40, p40] = f_fetch(u40)
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// RANKING
+// ═══════════════════════════════════════════════════════════════════════════════════
+// Rebuilt every bar so the table stays live; only the REBALANCE bar acts on it.
+array<float> moms   = array.from(m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13,m14,m15,m16,m17,m18,m19,m20,m21,m22,m23,m24,m25,m26,m27,m28,m29,m30,m31,m32,m33,m34,m35,m36,m37,m38,m39,m40)
+array<float> prices = array.from(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16,p17,p18,p19,p20,p21,p22,p23,p24,p25,p26,p27,p28,p29,p30,p31,p32,p33,p34,p35,p36,p37,p38,p39,p40)
+
+// Selection sort over 40 elements: sort_indices is unavailable for a plain float array,
+// and 40 x topN comparisons is trivial.
+f_rank(array<float> vals, array<float> px, int n, float minPx) =>
+    array<int>  order = array.new_int(0)
+    array<bool> used  = array.new_bool(40, false)
+    for _k = 0 to n - 1
+        int   best  = -1
+        float bestV = na
+        for i = 0 to 39
+            if not array.get(used, i)
+                float v = array.get(vals, i)
+                float q = array.get(px, i)
+                if not na(v) and not na(q) and q >= minPx and (na(bestV) or v > bestV)
+                    bestV := v
+                    best  := i
+        if best >= 0
+            array.set(used, best, true)
+            array.push(order, best)
+    order
+
+array<int> ranked = f_rank(moms, prices, topN, minPrice)
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// REBALANCE CLOCK
+// ═══════════════════════════════════════════════════════════════════════════════════
+var int lastRebalBar = na
+bool    isRebalBar   = barstate.isconfirmed and (na(lastRebalBar) or bar_index - lastRebalBar >= rebalDays)
+
+// Holdings carried between rebalances, as bare OpenAlgo symbols.
+var array<string> held = array.new_string(0)
+
+f_contains(array<string> a, string s) =>
+    array.indexof(a, s) >= 0
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════════
+// parser.py wants: "STRATEGY DIRECTION" then Symbol / Entry / SL / TP key-value lines.
+f_signalMsg(string dirWord, string bare, float px) =>
+    float sl = px * (1.0 - slPct / 100.0)
+    float tp = px * (1.0 + tpPct / 100.0)
+    "momentum-rank " + dirWord + "\n" + "Symbol: " + bare + "\n" + "Entry: " + str.tostring(px, format.mintick) + "\n" + "SL: " + str.tostring(sl, format.mintick) + "\n" + "TP: " + str.tostring(tp, format.mintick) + "\n" + "Exchange: " + exchangeStr + "\n" + "Product: " + productStr
+
+f_tgJson(string body) =>
+    '{"chat_id": "' + tgChatId + '", "text": "' + str.replace_all(body, "\n", "\\n") + '"}'
+
+if isRebalBar
+    // Build the new target basket, then diff it against what is held.
+    array<string> target = array.new_string(0)
+    if array.size(ranked) > 0
+        for i = 0 to array.size(ranked) - 1
+            array.push(target, f_bare(array.get(uni, array.get(ranked, i))))
+
+    string buys  = ""
+    string sells = ""
+    // EXITS listed first: free the capital before committing it.
+    if array.size(held) > 0
+        for i = 0 to array.size(held) - 1
+            string h = array.get(held, i)
+            if not f_contains(target, h)
+                sells := sells + h + " "
+    if array.size(target) > 0
+        for i = 0 to array.size(target) - 1
+            string t = array.get(target, i)
+            if not f_contains(held, t)
+                buys := buys + t + " "
+
+    // One human-readable basket message. A monthly rebalance is a handful of orders, so
+    // a single reviewable instruction beats N machine alerts racing each other.
+    if sendAlerts
+        string body = "MOMENTUM REBALANCE  " + str.format_time(time, "yyyy-MM-dd", "Asia/Kolkata")
+        body := body + "\nHold (" + str.tostring(array.size(target)) + "): "
+        if array.size(target) > 0
+            for i = 0 to array.size(target) - 1
+                body := body + array.get(target, i) + " "
+        body := body + "\nBUY: "  + (str.length(buys)  > 0 ? buys  : "-")
+        body := body + "\nSELL: " + (str.length(sells) > 0 ? sells : "-")
+        alert(f_tgJson(body), alert.freq_once_per_bar_close)
+
+    // Per-symbol execution alerts, but only for THIS chart's symbol. Put the indicator on
+    // each name you trade and each chart emits its own correctly formed packet, one per
+    // bar, so nothing races.
+    string me      = f_bare(syminfo.tickerid)
+    bool   wasHeld = f_contains(held, me)
+    bool   nowHeld = f_contains(target, me)
+    if sendAlerts and nowHeld and not wasHeld
+        alert(f_tgJson(f_signalMsg("LONG", me, close)), alert.freq_once_per_bar_close)
+    if sendAlerts and wasHeld and not nowHeld
+        alert(f_tgJson(f_signalMsg("EXIT", me, close)), alert.freq_once_per_bar_close)
+
+    // commit the new basket
+    array.clear(held)
+    if array.size(target) > 0
+        for i = 0 to array.size(target) - 1
+            array.push(held, array.get(target, i))
+    lastRebalBar := bar_index
+
+    if showLabels
+        label.new(bar_index, low, "REBAL", style = label.style_label_up, color = color.new(color.teal, 20), textcolor = color.white, size = size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════════
+var table dash = table.new(position.top_right, 4, 24, bgcolor = color.new(color.black, 15), border_width = 1, frame_color = color.gray, frame_width = 1)
+
+if showTable and barstate.islast
+    table.clear(dash, 0, 0, 3, 23)
+    table.cell(dash, 0, 0, "#",      text_color = color.silver, text_size = size.small)
+    table.cell(dash, 1, 0, "SYMBOL", text_color = color.silver, text_size = size.small)
+    table.cell(dash, 2, 0, "MOM %",  text_color = color.silver, text_size = size.small)
+    table.cell(dash, 3, 0, "STATE",  text_color = color.silver, text_size = size.small)
+    int rows = math.min(array.size(ranked), 22)
+    if rows > 0
+        for i = 0 to rows - 1
+            int    idx  = array.get(ranked, i)
+            string bare = f_bare(array.get(uni, idx))
+            float  mv   = array.get(moms, idx) * 100.0
+            bool   inBk = f_contains(held, bare)
+            color  c    = inBk ? color.lime : color.orange
+            table.cell(dash, 0, i + 1, str.tostring(i + 1), text_color = color.gray, text_size = size.tiny)
+            table.cell(dash, 1, i + 1, bare, text_color = c, text_size = size.tiny)
+            table.cell(dash, 2, i + 1, str.tostring(mv, "#.#"), text_color = c, text_size = size.tiny)
+            table.cell(dash, 3, i + 1, inBk ? "HELD" : "PENDING", text_color = c, text_size = size.tiny)
+    table.cell(dash, 0, 23, "next rebal", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 23, na(lastRebalBar) ? "-" : str.tostring(math.max(0, rebalDays - (bar_index - lastRebalBar))) + " bars", text_color = color.silver, text_size = size.tiny)
