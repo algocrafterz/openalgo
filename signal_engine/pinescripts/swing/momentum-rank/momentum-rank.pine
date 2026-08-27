@@ -210,8 +210,16 @@ array<int> ranked = f_rank(moms, prices, topN, minPrice)
 // ═══════════════════════════════════════════════════════════════════════════════════
 // REBALANCE CLOCK
 // ═══════════════════════════════════════════════════════════════════════════════════
+// `rebalDays` is counted in CHART bars, and bar_index advances once per chart bar - so on
+// a 5-minute chart "21" would mean 21 five-minute bars, about 1.7 hours, not 21 sessions.
+// The momentum itself is immune (it is evaluated inside request.security(..., "D", ...)),
+// but the rebalance clock is not. Rather than silently rebalance 75x too often, refuse to
+// run anywhere the two are not the same thing.
+if barstate.islast and not timeframe.isdaily
+    runtime.error("momentum-rank must run on a DAILY chart. rebalDays, lookbackDays and skipDays are counted in sessions, and on a " + timeframe.period + " chart the rebalance clock would fire far too often.")
+
 var int lastRebalBar = na
-bool    isRebalBar   = barstate.isconfirmed and (na(lastRebalBar) or bar_index - lastRebalBar >= rebalDays)
+bool    isRebalBar   = barstate.isconfirmed and timeframe.isdaily and (na(lastRebalBar) or bar_index - lastRebalBar >= rebalDays)
 
 // Holdings carried between rebalances, as bare OpenAlgo symbols.
 var array<string> held = array.new_string(0)
