@@ -69,6 +69,9 @@ main.py (_handle_entry / _handle_exit)
 | `pinescripts/intraday/orb/orb.pine` | `ORB` | **Frozen and live.** Unchanged. Documented in `HOW-IT-WORKS.md` |
 | `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **In development.** Key-level engine. Changelog in `pinescripts/intraday/orb/breakout.md` |
 | `pinescripts/intraday/ema9/ema9-intraday.pine` | `EMA9` | **Reference only — do not trade.** Backtest found no edge before costs (6577 trades, t = -9.90). Verdict block is in the file header |
+| `pinescripts/swing/momentum-rank/momentum-rank.pine` | `momentum-rank` | **Candidate, paper only.** 12-1 cross-sectional momentum, monthly rebalance. The only strategy tested so far with a positive out-of-sample edge that survives costs. Never traded |
+| `pinescripts/swing/dividend-growth/dividend-growth.pine` | `swing-dividend-growth` | **Do not trade.** Entry has negative forward-return edge on the broad F&O universe; the Pine strategy block cannot book a loss. See its `STRATEGY-ANALYSIS.md` |
+| `pinescripts/intraday/ib-extension/ib-extension.pine` | — | **Do not trade.** Zero gross expectancy at best (t = -0.71 at zero cost). See its `STRATEGY-ANALYSIS.md` |
 
 `BREAKOUT` has never traded. `signal_engine` does not yet know the tag — see the required work
 logged in `breakout.md` (2026-08-22r). Both strategies must be supported; nothing about `ORB`
@@ -157,7 +160,133 @@ Pre-existing conditions confirmed *not* caused by the upgrade: `test_auto_login.
 
 ---
 
-## Recent Changes (2026-08-26 → 2026-08-27, current)
+## Recent Changes (2026-08-28, current)
+
+### Every live and candidate PineScript now has a backtest adapter
+
+`backtest/strategies/` gained four adapters, so the strategies that were reasoned about on
+charts are now measured on bars: `orb` (the live ORB path, shared by `orb.pine` and
+`breakout.pine`), `key_level` (breakout.pine's PD and IB families), `value_zone`
+(dividend-growth) and `ib_extension`. Registered in `__main__.py`:
+
+    uv run --group analysis python -m signal_engine.backtest orb --full
+
+### `backtest/portfolio.py` — cross-sectional engine
+
+`harness.Backtest` runs one symbol at a time and cannot express "buy the strongest 30 names
+this month". `portfolio.py` holds a price panel instead. Every result is reported against an
+EQUAL-WEIGHT basket of the same universe over the same dates, because a long-only book in
+NSE large/mid caps 2016-2026 makes money from the market rising — `alpha_pa` is the only
+column attributable to the ranking, `cagr` on its own means almost nothing.
+
+### The R:R regression in `orb.pine` and `breakout.pine`
+
+`calculateTargets` floored TP1 at `risk * 0.8`. A floor below 1.0 can only push reward
+BELOW risk, so the break-even win rate had risen to 55.6% while the strategy realised 43.8%.
+The floor bound on 60% of trades, so it was not a safety net — it was the strategy's actual
+reward-to-risk setting. Compounding it, `calculateStopLoss` forced the stop past the ORB edge
+while entry already sat `breakoutBuffer` beyond it, making `risk >= buffer + ORB width + wick`
+on every trade.
+
+Fixed: `tp1MinRR` input (default 1.5, `minval=1.0`), ORB stop floor gated behind
+`useOrbStopFloor` (default off), `atrMultiplier` 2.0 -> 3.0. Median R:R 0.80 -> 1.56, median
+stop 1.76% -> 0.72%, gross expectancy -8.38 -> +7.51 bps, improving in BOTH windows.
+
+`orb.pine` also gained `volBaselineMode` (default Time-of-Day): a flat 50-bar volume SMA at
+10:20 has a denominator made mostly of the prior session's dead closing bars, so the filter
+was near-inert in the window ORB trades. `breakout.pine` already had this via `klVolFactor`.
+Default ORB stage moved to ORB60.
+
+### ORB is break-even at realistic position limits — do not scale it
+
+The +7.51 bps figure is the average across all 619 signals, which is ~11 concurrent positions
+and unreachable: at a 0.73% stop and 1% risk, ONE position is 1.37x capital. Simulating real
+slot limits (take signals as they fire, release a slot when a trade exits):
+
+| slots | trades | win | profit factor | Rs/month on 1L at 1% risk |
+|---|---|---|---|---|
+| 1 | 73 | 45.2% | 1.35 | +5,130 |
+| 2 | 142 | 42.3% | 1.09 | +2,757 |
+| 3 | 202 | 41.1% | 0.93 | -3,159 |
+| 5 | 322 | 42.9% | 1.01 | +686 |
+
+Profit factor swings 0.86-1.35 on how many slots you run, and IS/OOS carry opposite signs
+(IS PF 0.84, OOS PF 1.08). That instability IS the finding: expectancy is indistinguishable
+from zero. The live Q1-2026 record remains the better evidence that a small edge exists; it
+is thin enough that execution quality decides the sign.
+
+### Higher win rate at lower R:R does not work
+
+Tested directly (`tp_mode="r"`, fixed R multiples, 619 signals):
+
+| target | win rate | break-even WR needed | verdict |
+|---|---|---|---|
+| 1:0.75 | 55.1% | 57.1% | below water |
+| 1:1.0 | 50.6% | 50.0% | dead even |
+| 1:1.25 | 46.8% | 44.4% | marginal |
+| 1:1.5 | 45.7% | 40.0% | positive |
+| 1:2.0 | 42.6% | 33.3% | best gross |
+| 1:2.5 | 41.5% | 28.6% | best net |
+
+Win rate DOES rise as the target comes in — but never fast enough. Going 2.5 -> 0.75 buys
+13.6 points of win rate and costs 28.5 points of break-even threshold. Nearer targets get hit
+more often, not proportionally more often. The gradient points at HIGHER R:R, not lower.
+
+### The live Q1-2026 performance numbers were overstated 2.1x
+
+`analyze_orb.py` sums every exit EVENT. But `orb.pine` executes TP1 only, full position
+(`strategy.exit(... limit=tp1)`), and its own comment calls TP1.5/TP2/TP3 "display-only".
+Those observation alerts were being summed as if each were a separate booked trade.
+
+| | doc method | one exit per trade |
+|---|---|---|
+| cumulative | +101.5% / 270 events | **+33.3% / 186 trades** |
+| per trade | +0.376% | **+0.179%** |
+| win rate | 67.3% | **62.7%** |
+
+Still positive. At the median 0.647% live stop it nets +0.079%/trade at 10 bps and turns
+negative around 19 bps. Every optimisation decision taken against the old number was taken
+against an inflated one.
+
+### Costs, measured for Flattrade (zero brokerage)
+
+| line | rate | bps round trip |
+|---|---|---|
+| STT (sell side) | 0.025% | 2.50 |
+| Stamp duty (buy side) | 0.003% | 3.00 |
+| NSE txn + SEBI + IPFT + GST | — | 0.75 |
+| **total** | | **6.25** |
+
+A Rs 20/order broker adds ~4.7 bps on a Rs 1L position. Worth having, but 5.5 of the
+remaining 6.25 bps is statutory and unavoidable — brokerage was never the binding cost.
+Slippage sits on top and is the term that decides ORB.
+
+### `momentum-rank.pine` — the one strategy with a surviving edge
+
+12-month return skipping the last month, top N of a 40-name universe, monthly rebalance,
+long-only CNC, no stop (a name is sold when it leaves the top N). Over 201 F&O names,
+2016-2026, vs an equal-weight basket of the same universe: **alpha +12.7%/yr, t 3.12,
+IS +12.2 / OOS +13.4**. Robust to lookback (180-400d), rebalance cadence (21-126d) and
+portfolio size, and still +8.2% at 150 bps — seven times realistic cost.
+
+Why it survives where ORB does not: 21% monthly turnover means costs are paid roughly once
+a quarter per name instead of twice a day. Per position — 54% win rate, average win +61.5%,
+average loss -9.5%, profit factor 7.75, median hold 62 days.
+
+Verified against `portfolio.py` by replaying the Pine's control flow: 105 of 105 rebalances
+selected identical baskets, signal dates identical, per-period returns matching to 0.0000%.
+That check found one defect — `rebalDays` counted CHART bars, so on a 5-minute chart it
+would rebalance every 21 five-minute bars. Now guarded to daily charts.
+
+Honest limits: alpha is lumpy (median year ~+6%, mean pulled up by 2021/2023/2024), it fell
+HARDER than the market in Mar 2020 (-29.4% vs -27.6%), max drawdown 32.5%, and the universe
+is today's F&O list walked backwards so survivorship bias is present.
+
+**Neither Pine file has been compiled on TradingView.** Paper first.
+
+---
+
+## Recent Changes (2026-08-26 → 2026-08-27)
 
 ### Backtest framework (`backtest/`)
 

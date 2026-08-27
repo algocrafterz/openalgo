@@ -9,6 +9,59 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-08-28 — Key-level families backtested: gross zero, killed by the stop floor
+
+Measured with `signal_engine/backtest/strategies/key_level.py` over 208 F&O names, 59
+sessions of 5-minute bars. PD and IB families only — the VA family needs previous-session
+volume-profile reconstruction from 1-minute bars and yfinance caps 1-minute history at 7
+days, so `PVAH`/`PPOC`/`PVAL` remain untested.
+
+| | n | win | gross_bps | net_R | t |
+|---|---|---|---|---|---|
+| shipped [IS] | 1008 | 38.2% | -1.89 | -0.366 | -8.85 |
+| shipped [OOS] | 488 | 37.5% | -2.30 | -0.399 | -6.91 |
+| at **0 bps cost** | 1496 | 38.2% | -2.02 | -0.059 | -1.77 |
+
+Gross is indistinguishable from zero. What kills it is the stop: **median stop distance is
+0.30% of price**, which is exactly the `minDist = math.max(atrVal * 0.5, ref * 0.003)` floor
+in `klExecMap` binding on nearly every trade. At a 0.30% stop a 10 bps round trip costs
+**0.33R per trade**; the ORB path at 0.72% pays 0.14R. The `klMaxChaseATR` cap keeps entry
+within 1.0 ATR of the level, so the level-based stop is almost always tighter than the floor
+— the floor governs, not the level, inverting the stated intent ("the level still governs
+whenever it is already wide enough"). 44 of 207 symbols profitable.
+
+### Found: the `-BRK` branch is unreachable
+
+Zero of 1496 shipped trades were breaks. All four families fired only `-RT`.
+
+`klTrackBreaks` sets `pdhBB := bar_index` on the break bar and runs at line 3494 — *before*
+`klResolveSetup` at 3496. So on the break bar `bar_index - pdhBB == 0 <= klRetestMaxBars`,
+and because the retest branch is checked first in the ladder, a bar crossing up through a
+level satisfies `low <= pdh + band and close > pdh and bull` and is labelled `PDH-RT`.
+
+Two consequences: `PDH-BRK` / `PDL-BRK` / `IBH-BRK` / `IBL-BRK` are dead code, and every
+signal collects the `+2` "break-and-hold structure" retest bonus on a bar that has held
+nothing — 2 points of a 7-point threshold.
+
+Forcing one bar of separation makes breaks appear (529 of 1024 trades) and lifts gross from
+-2.02 to -0.54 bps, but that is IS-only (IS +0.52, OOS -2.75), so it is not claimed as an
+improvement. The bug is real regardless. **Not patched** — it changes which setups fire.
+
+### Doc corrections
+
+- The design table at the top still said "Alert-only by default". `enableKeyLevelExecution`
+  has defaulted to **true** since 2026-08-22; annotated in place.
+- Both blockers the changelog flagged as "must be fixed before execution is enabled" WERE
+  fixed: `canTakeKeyLevelEntry` (line 2651) no longer consumes `orbRangeFilterPassed`, and
+  `klArmedSL`/`klArmedT1` are latched (3626) and consumed (2701, 2822).
+- `breakout.pine`'s ORB path already used the time-of-day volume baseline via `klVolFactor`;
+  `orb.pine` did not, and has now been given `volBaselineMode`.
+- The R:R fix (`tp1MinRR`, `useOrbStopFloor`) landed in both files. `breakout.pine` hardcodes
+  `enableORB15Signals = true` after the compile-budget freeze, so the ORB60 default flip
+  applied to `orb.pine` only.
+
+---
+
 ## 2026-08-20 — Key-level merge (VP / PDH-PDL / IB)
 
 Merged the volume-profile decision-assist logic into the ORB strategy. The premise: ORB
@@ -20,7 +73,7 @@ They share entry mechanics, so they should share one script.
 | Decision | Choice | Why |
 |---|---|---|
 | Merge mode | ORB **plus** new VA/PDH/IB triggers, each toggleable | The full key-level reading of the strategy; ORB logic untouched |
-| Execution posture | **Alert-only by default** (`enableKeyLevelExecution = false`) | Observe and validate before risking capital on unproven setups |
+| Execution posture | ~~**Alert-only by default** (`enableKeyLevelExecution = false`)~~ **Superseded — now defaults to `true`, see 2026-08-22** | Observe and validate before risking capital on unproven setups |
 | Session cap | Unchanged — **1 trade per session** | Preserves the existing risk profile and the signal_engine position budget |
 | Trigger priority | ORB outranks all new families; within key levels retest > rejection > break | Never let an unvalidated setup pre-empt the proven signal |
 | Level source | Auto-reconstruction ON, manual VAH/POC/VAL retained as escape hatch | Self-contained, with an exact fallback when accuracy matters |

@@ -196,3 +196,64 @@ Score: 58
 Time: 10:15 | TF: D
 View Chart
 ```
+
+
+---
+
+# Backtest verdict — 2026-08-28: DO NOT TRADE
+
+Measured with `signal_engine/backtest/strategies/value_zone.py`, 201 F&O names, daily bars
+2016-2026, split/bonus adjusted.
+
+## The Pine strategy block cannot book a loss
+
+No stop, and both exits require being in profit:
+
+```pine
+if sell_tradeable and is_profitable                      -> close
+if in_position and current_profit_pct >= target          -> close
+```
+
+A losing position is never closed. It is carried to the end of the data and reported as an
+"open trade" — outside the win rate and outside the P&L. The "Why Losses Appeared Previously"
+section above records removing the forced close as a FIX. It was not a fix; it removed the
+only mechanism reporting the truth.
+
+## Run honestly, random entry beats it
+
+Same symbol, same holding period, random entry day:
+
+| | trades | win | mean % | median % | hold |
+|---|---|---|---|---|---|
+| shipped signal | 3161 | 76.4% | 3.08 | 10.00 | 49.8d |
+| bare value-zone, no score | 3195 | 76.2% | 3.08 | 10.00 | 49.8d |
+| **RANDOM ENTRY, matched hold** | 124920 | 56.6% | **4.79** | 1.54 | 49.8d |
+
+The 76% win rate is manufactured by capping winners at +10% while letting losses run to -75%.
+It is a payoff-shape transformation on market beta, not alpha.
+
+## The entry has negative predictive power
+
+Forward returns on signal days vs all days, same symbols and period:
+
+| horizon | signal | all days | edge | t |
+|---|---|---|---|---|
+| 10d | 0.82% | 0.97% | -0.16% | -5.15 |
+| 20d | 1.77% | 1.97% | -0.20% | -4.63 |
+| 120d | 11.32% | 12.56% | -1.24% | -7.28 |
+
+It picks measurably worse-than-average days to buy. The five-component, ~20-threshold score
+contributes nothing: 3.08% with it, 3.08% without; forward return 0.83% vs 0.82%.
+
+## The factor is inverted
+
+| horizon | bottom 30% of range (this strategy BUYS) | top 30% (it SELLS) |
+|---|---|---|
+| 60d | -0.02% (t -0.17) | **+0.67% (t +10.66)** |
+| 120d | -1.25% (t -7.29) | **+2.07% (t +20.23)** |
+
+170k observations. NSE F&O names trend; they do not mean-revert at these horizons. The
+tradeable version of this insight is `pinescripts/swing/momentum-rank/`.
+
+Also note the universe here is post-hoc selected — BIOCON, INDUSINDBK and ETERNAL were removed
+*after* they lost, which is the purest form of overfitting.

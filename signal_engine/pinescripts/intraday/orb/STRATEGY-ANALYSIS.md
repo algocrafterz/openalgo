@@ -789,3 +789,92 @@ or
 | 9:45 AM | Scanner 2 (Live Breakout) | First run after 2nd 15-min candle closes |
 | 10:00, 10:15, 10:30 AM | Scanner 2 (Live Breakout) | Repeat each candle — spot missed symbols for future watchlist |
 | After entry cutoff (11:00 AM) | — | Stop scanning, no new entries valid |
+
+
+---
+
+# Backtest verdict — 2026-08-28
+
+Measured with `signal_engine/backtest/strategies/orb.py` over 208 F&O names, 59 sessions of
+5-minute bars (2026-06-04 to 2026-08-26). Read this alongside the LIVE Q1-2026 record, which
+is stronger evidence on "does it make money" and covers a different, longer window.
+
+## The live record was overstated 2.1x
+
+`analyze_orb.py` sums every exit EVENT. But this file executes TP1 only, full position, and
+its own comment calls TP1.5/TP2/TP3 "display-only on chart for observation". Those alerts
+were summed as separate booked trades.
+
+| | doc method (all events) | honest (one exit per trade) |
+|---|---|---|
+| cumulative | +101.5% over 270 events | **+33.3% over 186 trades** |
+| per trade | +0.376% | **+0.179%** |
+| win rate | 67.3% | **62.7%** |
+
+Median live stop was 0.647% of price, so at 10 bps the edge nets +0.079%/trade and flips
+negative around 19 bps. Real, but thin enough that slippage decides the sign.
+
+## Two defects the backtest found, both now fixed
+
+**R:R had collapsed to 0.80.** `tp1_dist = math.max(orbWidth, risk * 0.8)` — a floor below
+1.0 can only push reward BELOW risk. It bound on 60% of trades, so it was not a safety net,
+it was the reward-to-risk setting. Break-even win rate had risen to 55.6% against a realised
+43.8%. Compounding it, `calculateStopLoss` pushed the stop past the ORB edge while entry
+already sat `breakoutBuffer` beyond it, forcing `risk >= buffer + ORB width + wick`.
+
+**The volume filter was near-inert.** A flat 50-bar SMA at 10:20 on a 5-minute chart has a
+denominator made mostly of the previous session's dead closing bars.
+
+| | before | after |
+|---|---|---|
+| median R:R | 0.80 | **1.56** |
+| median stop | 1.76% | **0.72%** |
+| break-even WR needed | 55.6% | **39.1%** |
+| gross expectancy [IS] | -8.01 bps | **-2.79 bps** |
+| gross expectancy [OOS] | -9.01 bps | **-4.59 bps** |
+| with ORB60 + time-of-day volume | | **+9.47 / +3.65 bps** |
+
+Changes shipped: `tp1MinRR` (default 1.5, `minval=1.0`), `useOrbStopFloor` (default off),
+`atrMultiplier` 2.0 -> 3.0, `volBaselineMode` (default Time-of-Day), default stage ORB60.
+
+## It is break-even at position limits you can actually run
+
+The +7.51 bps optimised figure is the mean across all 619 signals — about 11 concurrent
+positions. At a 0.73% stop and 1% risk, ONE position is 1.37x capital, so 11 is 15x leverage.
+Simulating real slots (signals taken as they fire, slot released when a trade exits):
+
+| slots | trades | win | profit factor | Rs/month on 1L at 1% risk |
+|---|---|---|---|---|
+| 1 | 73 | 45.2% | 1.35 | +5,130 |
+| 2 | 142 | 42.3% | 1.09 | +2,757 |
+| 3 | 202 | 41.1% | 0.93 | -3,159 |
+| 5 | 322 | 42.9% | 1.01 | +686 |
+
+Profit factor swings 0.86-1.35 on slot count alone, and IS/OOS carry opposite signs (IS 0.84,
+OOS 1.08). The instability is the finding.
+
+## Trading a tighter target for a higher win rate does not work
+
+| target | win rate | break-even WR needed | verdict |
+|---|---|---|---|
+| 1:0.75 | 55.1% | 57.1% | below water |
+| 1:1.0 | 50.6% | 50.0% | dead even |
+| 1:1.25 | 46.8% | 44.4% | marginal |
+| 1:1.5 | 45.7% | 40.0% | positive |
+| 1:2.0 | 42.6% | 33.3% | best gross |
+| 1:2.5 | 41.5% | 28.6% | best net |
+
+Win rate rises as the target comes in, but never fast enough: 2.5 -> 0.75 buys 13.6 points of
+win rate and costs 28.5 points of break-even. The gradient points at HIGHER R:R.
+
+## Costs (Flattrade, zero brokerage)
+
+STT 2.50 + stamp 3.00 + txn/SEBI/IPFT/GST 0.75 = **6.25 bps** round trip. A Rs 20/order broker
+adds ~4.7 bps on a Rs 1L position. 5.5 of the 6.25 is statutory. Break-even is ~11 bps, so
+under 5 bps of slippage budget remains — which market orders on mid-cap breakouts will not
+respect. **Slippage, not the strategy, is the thing left to fix.**
+
+## Verdict
+
+Keep running small to accumulate forward data. Do not scale, do not expect monthly income.
+The Pine edits have NOT been compiled on TradingView.

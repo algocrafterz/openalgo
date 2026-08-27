@@ -99,6 +99,11 @@ class OrbParams:
     pct_stop: float = 1.0             # "pct" mode
 
     # ---- target --------------------------------------------------------
+    #: "orb" is the Pine: TP1 = max(ORB width, risk * tp_risk_floor), so the ORB measured
+    #: move sets the target and R:R varies trade to trade. "r" pins the target to a fixed
+    #: multiple of risk instead, which is the only way to actually CHOOSE an R:R.
+    tp_mode: str = "orb"              # orb | r
+    tp_r: float = 1.5                 # target in R, used when tp_mode="r"
     tp_mult: float = 1.0              # TP1. 1.5 / 2.0 / 3.0 are the other shipped rungs
     #: TP1 distance = max(ORB width, risk * tp_risk_floor). Must be >= 1.0: below that
     #: the "floor" caps reward under risk. Was 0.8 in the Pine until the R:R fix.
@@ -240,7 +245,10 @@ class Orb(Strategy):
         # is carried as real slippage - the same treatment every other adapter gets.
         sl = self._stop(px, hi, lo, rng, atr, p, direction)
         risk = abs(px - sl)
-        tp_dist = max(rng, risk * p.tp_risk_floor)
+        if p.tp_mode == "r":
+            tp_dist = risk * p.tp_r
+        else:
+            tp_dist = max(rng, risk * p.tp_risk_floor)
         tp = px + direction * tp_dist * p.tp_mult
         return EntrySignal(direction=direction, sl=float(sl), tp=float(tp),
                            tag="ORB_UP" if direction == 1 else "ORB_DN")

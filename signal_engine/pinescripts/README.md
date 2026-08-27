@@ -64,9 +64,14 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 ### intraday/ib-extension — Initial Balance extension
 | File | Pine title | Role |
 | --- | --- | --- |
-| `ib-extension.pine` | strategy | IB extension strategy. |
+| `ib-extension.pine` | strategy | **Do not trade.** IB extension strategy. Backtest found zero gross expectancy (t = -0.71 at zero cost, 66/200 symbols profitable). Verdict in its `STRATEGY-ANALYSIS.md`. |
 
 ### swing/dividend-growth
 | File | Pine title | Role |
 | --- | --- | --- |
-| `dividend-growth.pine` | `swing-dividend-growth` | Swing strategy on dividend growers. |
+| `dividend-growth.pine` | `swing-dividend-growth` | **Do not trade.** Swing strategy on dividend growers. Its entry has negative forward-return edge on the broad F&O universe and the Pine strategy block cannot book a loss. Verdict in its `STRATEGY-ANALYSIS.md`. |
+
+### swing/momentum-rank — 12-1 cross-sectional momentum
+| File | Pine title | Role |
+| --- | --- | --- |
+| `momentum-rank.pine` | `momentum-rank` | **Candidate, paper only.** Ranks a 40-symbol universe by 12-month return skipping the last month, holds the top N, rebalances monthly. Long-only CNC, no stop. The only strategy tested so far whose edge survives costs (+12.7%/yr alpha vs an equal-weight basket of the same universe, t 3.12, positive in both windows). Daily charts only. |

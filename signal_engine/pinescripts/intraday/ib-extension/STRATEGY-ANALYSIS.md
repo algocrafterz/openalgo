@@ -285,3 +285,42 @@ If `dailyIBRange / weeklyIBRange > 0.8`, the morning range consumed almost the e
 5. **Weekly IB requires a valid Mon+Tue.** If both Monday and Tuesday are NSE holidays, there is no Weekly IB for that week and no signals can fire (weeklyValidDay = false). This is correct behaviour — not a bug.
 
 6. **Strategy report trust level:** Win rate and relative comparisons are trustworthy. Absolute P&L is aspirational — real fills at bar close require sub-15 second execution, and SL/TP fills assume no gap-through.
+
+
+---
+
+# Backtest verdict — 2026-08-28: DO NOT TRADE
+
+Measured with `signal_engine/backtest/strategies/ib_extension.py`, 208 F&O names, 59 sessions
+of 5-minute bars. 769 trades on shipped defaults.
+
+| | n | win | gross_bps | net_R | t |
+|---|---|---|---|---|---|
+| shipped [IS] | 452 | 45.6% | -6.50 | -0.101 | **-4.24** |
+| shipped [OOS] | 317 | 48.3% | +0.17 | -0.051 | -1.81 |
+| at **0 bps cost** | 769 | 50.7% | -3.75 | -0.017 | -0.91 |
+
+Only **66 of 200 symbols profitable**, median -0.083R. A broad loss, not a few bad names.
+
+## The geometry was always the problem
+
+Entry is the breakout close (at or above D-High); the stop is D-Low - 0.5 ATR, i.e. the FULL
+IB range plus a buffer. Reward is 1x range. Even at a perfect entry the payoff is below 1:1 —
+realised 0.76 against a 53.8% break-even win rate. **52.9% of trades ended in TIME_EXIT at
+-0.163R**: the 1x extension target is not reachable intraday.
+
+Section 4.2 above records that the R:R filter was switched off because it "appears poor". The
+filter was reporting this correctly.
+
+## The weekly IB — the strategy's central claim — is a drag
+
+Dropping it improved results in BOTH windows. Combining every change that helped in both
+windows (drop weekly IB, skip breakouts already >0.5 ATR extended, target 2x):
+
+```
+BEST COMBO at 0 bps:  n=1324  gross_bps -0.15  t -0.71   <- exactly noise
+BEST COMBO at 10 bps: n=1324  net_R -0.089    t -4.77
+69 of 207 symbols profitable
+```
+
+There is no edge for costs to eat into. Retire it.
