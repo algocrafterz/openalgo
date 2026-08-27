@@ -102,20 +102,30 @@ def refresh_fno(db_path: str = "db/openalgo.db") -> list[str]:
 
 
 def load(symbols=None, period: str = "60d", interval: str = "5m",
-         refresh: bool = False, min_bars: int = 500) -> dict[str, pd.DataFrame]:
-    """Download and cache OHLCV. Symbols that return too little data are skipped."""
+         refresh: bool = False, min_bars: int = 500,
+         auto_adjust: bool = False) -> dict[str, pd.DataFrame]:
+    """Download and cache OHLCV. Symbols that return too little data are skipped.
+
+    `auto_adjust` is False for intraday work, where the window is short enough that a
+    corporate action is unlikely and raw prices match what was actually tradeable. Set
+    it True for multi-year DAILY history: unadjusted prices carry every split and bonus
+    as a price jump, and a 1:5 split reads as a -80% gap. Any strategy keying on gaps or
+    on percentage returns will otherwise trade dozens of corporate actions that never
+    happened.
+    """
     import yfinance as yf
 
     symbols = symbols or NSE_LIQUID
     CACHE.mkdir(parents=True, exist_ok=True)
     out: dict[str, pd.DataFrame] = {}
     for s in symbols:
-        f = CACHE / f"{s.replace('.', '_')}_{interval}_{period}.parquet"
+        adj = "_adj" if auto_adjust else ""
+        f = CACHE / f"{s.replace('.', '_')}_{interval}_{period}{adj}.parquet"
         if f.exists() and not refresh:
             df = pd.read_parquet(f)
         else:
             df = yf.download(s, period=period, interval=interval,
-                             progress=False, auto_adjust=False)
+                             progress=False, auto_adjust=auto_adjust)
             if df is None or df.empty:
                 continue
             if isinstance(df.columns, pd.MultiIndex):

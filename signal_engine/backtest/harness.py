@@ -29,9 +29,14 @@ class Backtest:
     """Binds one strategy to one set of symbol frames."""
 
     def __init__(self, strategy, frames: dict[str, pd.DataFrame],
-                 run: RunConfig | None = None, is_fraction: float = 0.60):
+                 run: RunConfig | None = None, is_fraction: float = 0.60,
+                 engine=simulate):
+        # `engine` swaps the simulator without touching the reporting. The intraday
+        # `engine.simulate` forces an EOD exit, so a multi-day strategy passes
+        # `swing_engine.simulate_swing` here and reuses every report below unchanged.
         self.strategy = strategy
         self.frames = frames
+        self.engine = engine
         self.run = run or RunConfig()
         self.days = sessions(frames)
         self.cut = self.days[int(len(self.days) * is_fraction)]
@@ -62,7 +67,7 @@ class Backtest:
             key = (sym, self.strategy.prepare_key(p))
             if key not in self._prep:
                 self._prep[key] = Ctx(self.strategy.prepare(df, p), symbol=sym)
-            out += [t for t in simulate(self._prep[key], self.strategy, p, run) if keep(t.day)]
+            out += [t for t in self.engine(self._prep[key], self.strategy, p, run) if keep(t.day)]
         return out
 
     # ---- reports --------------------------------------------------------
