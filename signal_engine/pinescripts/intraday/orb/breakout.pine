@@ -317,10 +317,18 @@ godChopGuard = true
 // and the Initial Balance (09:15-10:15) — as ADDITIONAL, independently toggleable
 // breakout triggers that run through the same entry/SL/TP/alert pipeline as ORB.
 //
-// SAFETY POSTURE: alert-only by default. `enableKeyLevelExecution` is OFF, so these
-// setups draw arrows, score, and fire a decision-packet alert but never call
-// strategy.entry. With every toggle at its default, backtest results are identical
-// to orb.pine — that inertness is the regression gate for this whole feature.
+// EXECUTION POSTURE (changed 2026-08-30; this block used to claim alert-only and was
+// stale): `enableKeyLevelExecution` now defaults ON and `enableBreakout` defaults OFF, so
+// the KEY-LEVEL ENGINE IS THE ONLY THING THAT TRADES in this file. ORB is demoted to a
+// drawn level that still counts toward confluence but fires nothing of its own.
+//
+// The original inertness guarantee — every toggle at default reproducing orb.pine exactly
+// — no longer holds and is not the regression gate any more. To recover it, set
+// enableKeyLevelExecution OFF.
+//
+// Evidence standing behind this posture is NEGATIVE: 49,677 PDH/PDL/IBH/IBL breaks measure
+// 30.9% follow-through against a 33.3% random-walk baseline (t = -9.87). See breakout.md
+// 2026-08-30. It is deployed as forward-data collection, not as a proven edge.
 //
 // Merged from pinescripts/intraday/volume-profile/volume-profile-decision-assist.pine
 
@@ -338,21 +346,33 @@ klManualVAL    = 0.0
 
 // ─── Trigger families ───────────────────────────────────────────────────────
 enableKeyLevels    = input.bool(true, "Enable Key-Level Engine", group=grp_keylevel, tooltip="Master switch for the whole key-level layer\n\nOFF: no levels resolved, no profile accumulation, no scoring,\nno drawing, no key-level alerts. The script behaves exactly\nlike the original ORB strategy.\n\nON: levels are computed, drawn and scored. Whether they can\nOPEN A TRADE is controlled separately by 'Execute key-level\nsetups' below (default OFF).")
-enableVAAcceptance = input.bool(true, "| incl. VA acceptance", group=grp_keylevel, inline="fam1b", tooltip="Allow plain VALUE-AREA ACCEPTANCE (VAH-ACC / VAL-ACC) to fire.\n\nOFF by default, and recommended OFF for live trading. Acceptance is the weakest family in the model: no retest, no rejection structure, just two closes beyond the level. It was the family firing at exactly 7/7 before the confluence double-count was fixed.\n\nVA REJECTION and VA RETEST are unaffected — they keep firing whenever Value-Area triggers are on.")
+enableVAAcceptance = input.bool(false, "| incl. VA acceptance", group=grp_keylevel, inline="fam1b", tooltip="Allow plain VALUE-AREA ACCEPTANCE (VAH-ACC / VAL-ACC) to fire.\n\nOFF by default, and recommended OFF for live trading. Acceptance is the weakest family in the model: no retest, no rejection structure, just two closes beyond the level. It was the family firing at exactly 7/7 before the confluence double-count was fixed.\n\nIt is also the least evidenced: the whole value-area family is absent from the backtest (the previous session's profile needs 1-minute history, and only 7 days of that is available against 60 days of 5-minute bars), and acceptance is the weakest member of the untested family.\n\nVA REJECTION and VA RETEST are unaffected — they keep firing whenever Value-Area triggers are on, so the value area is still represented.")
 enableVATriggers   = input.bool(true, "| VAH / VAL setups", group=grp_keylevel, inline="fam1", tooltip="Value-Area setups from the volume-profile model\n\n• VAH rejection      — poke above VAH, close back inside → SHORT\n• VAL rejection      — poke below VAL, close back inside → LONG\n• VAH acceptance     — two consecutive closes above VAH   → LONG\n• VAL breakdown      — two consecutive closes below VAL   → SHORT\n• VAH/VAL retest     — break, pull back, hold the level")
 enablePDTriggers   = input.bool(true, "| PDH / PDL setups", group=grp_keylevel, inline="fam1", tooltip="Previous Day High / Low breakout + retest\n\nPDH/PDL are the most widely watched intraday levels.\nA clean break with volume tends to run; a failed break\nreverses hard.")
 enableIBTriggers   = input.bool(true, "| IBH / IBL setups", group=grp_keylevel, inline="fam2", tooltip="Initial Balance (09:15-10:15) High / Low breakout + retest\n\nIB extension is the classic Market Profile trend-day tell.\nBreaking IB after 10:15 on expanding volume is a strong\ncontinuation signal.")
 klIBSession        = input.session("0915-1015", "| IB window", group=grp_keylevel, inline="fam2", tooltip="Initial Balance window (IST)\n\nMarket Profile defines IB as the first hour of trade.\nFor NSE that is 09:15-10:15.")
 klRetestMaxBars    = input.int(6, "Retest window (bars)", minval=1, maxval=30, group=grp_keylevel, inline="tune", tooltip="How many bars after a level break a pullback still counts as a retest\n\nSHORTER = only immediate retests qualify\nLONGER  = late pullbacks still count, more signals\n\nRECOMMENDED: 6 bars")
 klCooldownBars     = input.int(3, "| Cooldown", minval=0, maxval=50, group=grp_keylevel, inline="tune", tooltip="Minimum bars between two key-level alerts\n\nPrevents a single level from spamming alerts while price\nchops around it.\n\n0 = no cooldown")
-enableKeyLevelExecution = input.bool(true, "⚠ Execute key-level setups", group=grp_keylevel, tooltip="Let key-level setups OPEN REAL TRADES\n\nOFF (default) ⭐:\n• Setups draw arrows, score, and fire alerts\n• strategy.entry is NEVER called for them\n• Backtest is identical to the plain ORB strategy\n• Use this to observe and validate first\n\nON:\n• A qualifying key-level setup enters through the SAME\n  pipeline as an ORB breakout (next-bar fill, same SL/TP,\n  same Telegram entry alert)\n• Still bound by the one-trade-per-session cap and the\n  entry cutoff time\n\nTurn this on only after the Strategy Tester and live alert\nlog confirm the setups are worth trading.")
+enableKeyLevelExecution = input.bool(true, "⚠ Execute key-level setups", group=grp_keylevel, tooltip="Let key-level setups OPEN REAL TRADES\n\nDEFAULT IS ON. Together with 'ORB breakout entries' being OFF, that makes the key-level engine the ONLY thing that trades in this file — ORB is demoted to a drawn level that still counts toward confluence.\n\nOFF:\n• Setups draw arrows, score, and fire alerts\n• strategy.entry is NEVER called for them\n• Nothing in this file opens a trade unless ORB entries are switched on\n• Use this to observe and validate first\n\nON (default):\n• A qualifying key-level setup enters through the SAME\n  pipeline as an ORB breakout (next-bar fill, same SL/TP,\n  same Telegram entry alert)\n• Still bound by the one-trade-per-session cap and the\n  entry cutoff time\n\nTurn this on only after the Strategy Tester and live alert\nlog confirm the setups are worth trading.")
 
 // ─── Scoring ────────────────────────────────────────────────────────────────
 klScoreThreshold = input.int(7, "Alert score threshold", minval=1, maxval=20, group=grp_score, tooltip="Minimum weighted score for a key-level setup to fire\n\nSCORE COMPONENTS:\n+2  major level interaction\n+1  per confluent structural level (max +3)\n+2  two or more confluent levels\n+2  breakout-and-retest structure\n+1  VWAP aligned with direction\n+1  EMA9 aligned + sloping with direction\n+1/+2 RVOL at min / strong threshold\n+1  strong candle close (CLV)\n+1  session volume factor at or above Min Volume ×\n\nLOWER = more signals, more noise\nHIGHER = rare, high-conviction only\n\nRECOMMENDED: 7")
 // RVOL tiers reuse volumeMultiplier / strongVolumeMultiplier from the VOLUME FILTER
 // group — one definition of "strong volume" for the whole script, not two.
-klClvLongMin     = 0.65
-klClvShortMax    = 0.35
+// Close Location Value gate: where in the bar's range the close sat. 0.5 = midpoint.
+//
+// Was 0.65 / 0.35, which demanded a decisive break candle. Measured across 49,677 key-level
+// breaks (breakout.md, 2026-08-30) that setting picks the WORSE half: unconditional breaks
+// follow through 30.9% of the time, CLV >= 0.65 drops to 30.3%, marubozu (CLV >= 0.8) to
+// 29.6% — the more decisive the candle, the more of the move happened before the entry.
+//
+// Set to the neutral midpoint rather than removed. A long trigger should still close in the
+// upper half of its own bar, or the word "break" means nothing; what is dropped is the
+// selection FOR exhaustion. It also restores variance to the CLV field carried in every
+// entry alert: at 0.65 every logged long had CLV >= 0.65, so the live trade log could never
+// test the gate. At 0.50 the log spans 0.50-1.00 and the question becomes answerable.
+klClvLongMin     = 0.50
+klClvShortMax    = 0.50
 klOpenTypeBars   = input.int(6, "Open-type window (bars)", minval=1, maxval=24, group=grp_score, tooltip="Bars from the open used to classify the opening type, after which it LATCHES.\n\n6 bars = 30 minutes on a 5-min chart — Market Profile's period A, and the textbook window.\n\nA SINGLE opening candle cannot separate the four types, because they differ in what happens AFTER the first move: Open Drive and Open Rejection Reverse both begin with a directional push and only diverge once you see whether it held. One bar gives you direction, not type.\n\nSet 1 for first-candle direction only, accepting that Drive / Test Drive / Rejection Reverse become indistinguishable.")
 klAccMinRvol     = input.float(1.5, "Acceptance min RVOL", minval=0, maxval=10, step=0.1, group=grp_score, tooltip="Extra volume bar that ACCEPTANCE setups (VAH-ACC / VAL-ACC) must clear, on top of the normal volume filter.\n\nThe model doc requires RVOL >= 1.5 for every entry, and acceptance is the family that most needs it: its whole thesis is that price is HOLDING beyond value with participation behind it. Two closes past a level on thin volume is drift, not acceptance.\n\nRejection and retest setups are unaffected — their thesis is absorption, which does not require expansion.\n\n0 = no extra requirement.")
 klConfAtrMult    = input.float(0.25, "Confluence band (× ATR)", minval=0.01, maxval=2, step=0.05, group=grp_score, tooltip="Two levels within this many ATRs are treated as confluent\n\nAlso used as the retest tolerance band.\n\nTIGHTER = fewer confluence hits, stricter retests\nWIDER   = more confluence hits, looser retests\n\nRECOMMENDED: 0.25 × ATR")

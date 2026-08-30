@@ -66,16 +66,30 @@ main.py (_handle_entry / _handle_exit)
 
 | Script | Alert tag | Status |
 |---|---|---|
-| `pinescripts/intraday/orb/orb.pine` | `ORB` | **Frozen and live.** Unchanged. Documented in `HOW-IT-WORKS.md` |
-| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **Do not trade.** Key-level engine. The premise is negative: key-level breaks follow through 30.9% against a 33.3% random-walk baseline (t = -9.87, 49,677 events). No target, stop, bias or candle filter reverses it. Changelog in `pinescripts/intraday/orb/breakout.md` (2026-08-30) |
+| `pinescripts/intraday/orb/orb.pine` | `ORB` | **Live.** No longer frozen: the time-exit alert was rebuilt 2026-08-29 (see that section). The channel is still running an older build — the R:R fix has not been redeployed. Documented in `HOW-IT-WORKS.md` |
+| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **Live as forward-data collection from 2026-08-30 — not as a proven edge.** Key-level engine (VA / PDH-PDL / IB); ORB entries off. The backtest premise is negative: key-level breaks follow through 30.9% against a 33.3% random-walk baseline (t = -9.87, 49,677 events), and no target, stop, bias or candle filter reverses it. Deployed deliberately to gather live trades for a first-week review. Changelog in `pinescripts/intraday/orb/breakout.md` (2026-08-30) |
 | `pinescripts/intraday/ema9/ema9-intraday.pine` | `EMA9` | **Reference only — do not trade.** Backtest found no edge before costs (6577 trades, t = -9.90). Verdict block is in the file header. The source PDF's own six methods were tested separately and are all negative at zero cost — see its `STRATEGY-ANALYSIS.md` |
 | `pinescripts/swing/momentum-rank/momentum-rank.pine` | `momentum-rank` | **Candidate, paper only.** 12-1 cross-sectional momentum, monthly rebalance. The only strategy tested so far with a positive out-of-sample edge that survives costs. Never traded |
 | `pinescripts/swing/dividend-growth/dividend-growth.pine` | `swing-dividend-growth` | **Do not trade.** Entry has negative forward-return edge on the broad F&O universe; the Pine strategy block cannot book a loss. See its `STRATEGY-ANALYSIS.md` |
 | `pinescripts/intraday/ib-extension/ib-extension.pine` | — | **Do not trade.** Zero gross expectancy at best (t = -0.71 at zero cost). See its `STRATEGY-ANALYSIS.md` |
 
-`BREAKOUT` has never traded. `signal_engine` does not yet know the tag — see the required work
-logged in `breakout.md` (2026-08-22r). Both strategies must be supported; nothing about `ORB`
-changes.
+`signal_engine` fully supports the `BREAKOUT` tag: `strategy_profiles.BREAKOUT` (product MIS,
+`min_sl_pct` 0.002) and `blacklist.BREAKOUT` both exist, and the normalizer's strategy prefix
+is generic, so no per-tag code path is needed. Both strategies are supported side by side;
+nothing about `ORB` changes.
+
+**Deployment posture set 2026-08-30.** `enableBreakout` OFF, `enableKeyLevelExecution` ON —
+the key-level engine is the only thing in `breakout.pine` that trades. Three changes shipped
+with it, all recorded in `breakout.md`:
+
+- `structural_runner_sl` read `context["vah"]` while the alert emits `PVAH`, so every
+  value-area runner silently fell back to the TP1-buffer stop. `_LEVEL_CONTEXT_KEYS` now maps
+  family to wire key.
+- `blacklist.BREAKOUT` added — the validator keys strictly on the tag, so `ORB`'s BHEL block
+  was never applying.
+- CLV gate relaxed 0.65/0.35 to 0.50/0.50. The 49,677-event study found the strict setting
+  selects the worse half, and it also flattened the `CLV` column in the trade log to a
+  constant, which made the gate untestable from live data.
 
 ---
 
@@ -228,6 +242,225 @@ Four additions, all defaulting to previously shipped behaviour so the baseline r
 trade: `tp_mode` (`level` | `r` | `level_min_r`) with `tp_r`; `sl_mode` (`level` | `drive` |
 `wider`); `pattern` (`""` | `engulf` | `engulf_or_clv` | `pin`); and `use_daily_bias` /
 `daily_bias_len`.
+
+## Recent Changes (2026-08-29)
+
+### Candlestick patterns measured, and mostly switched off
+
+`pinescripts/intraday/orderflow/candlestick-patterns.pine` (repo32) retuned. All 14
+directional patterns were transcribed to numpy and measured over 764,573 five-minute bars:
+mean forward return over 12 bars in ATR units, signed by the pattern's direction, **minus the
+unconditional forward return of the same bars**.
+
+That subtraction is the finding. Before it, the result looked decisive - every bearish
+pattern positive, every bullish one negative. The baseline turned out to be -0.0393 ATR: the
+sample window drifted down and the "edge" was the drift. After subtracting it, at a key level:
+
+| pattern | n | excess ATR | t |
+|---|---|---|---|
+| bearHarami | 8,819 | +0.0345 | +1.43 |
+| invHammer | 16,377 | +0.0232 | +1.32 |
+| bullKick | 1,342 | +0.0192 | +0.30 |
+| bearKick | 1,318 | +0.0184 | +0.31 |
+| bullHarami | 9,458 | +0.0078 | +0.35 |
+| hammer | 16,931 | -0.0420 | **-2.37** |
+| bullEngulfing | 7,579 | -0.0525 | **-2.03** |
+| bullBelt | 213 | -0.1414 | -0.70 |
+
+**No pattern reaches |t| > 2 positive.** Two are significantly backwards - hammer and bullish
+engulfing are followed by price falling relative to baseline, on 17,000 and 7,600 samples.
+Neither is inverted into a short signal: with 14 patterns swept, one or two crossing |t| = 2
+by chance is expected, and building a rule on the unluckiest of a swept set is how backtests
+lie. Both are simply off.
+
+The script now gates every pattern to a key level (ORB/IB/PDH/PDL/prior-day value/prior
+week), requires above-average volume, skips the opening bars, and enables only the five with
+non-negative measured behaviour. This is consistent with the DHB result, where a required
+confirmation candle was completely inert.
+
+### `market-structure.pine` retuned for NSE
+
+Flux Charts' Market Structure Dashboard carried three FX defaults that are wrong on an Indian
+equity: ICT sessions and killzones on a New York clock (so an NSE session reported "NY LUNCH"
+or "OFF HOURS" all day - replaced with the six real NSE phases, OPEN AUCTION / IB BUILD /
+MORNING / MIDDAY LULL / AFTERNOON / SQUARE-OFF); a timeframe ladder spanning 1-minute noise
+and a 4-hour bar that does not divide a 6h15m session, now 5/15/60/D with Daily weighted
+highest; and FVG as a bias input, which on a gapping equity fires on the overnight gap every
+morning, now off by default.
+
+---
+
+### `signal_engine/analysis/` — signal-to-fill reconciliation
+
+A Telegram channel cannot measure trade quality, and the ORB audit showed why: it never sees
+the fill price, it cannot weight a partial exit correctly, and a signal that died in the
+pipeline looks identical to one that traded fine. The new package joins three sources into a
+round-trip ledger:
+
+    trades.db          every order the engine placed, with order_id, quantity, status
+    broker tradebook   the actual fills, joined on order_id
+    (Telegram export)  optional, to find signals that never reached the engine at all
+
+Each leg keeps all three layers separate — `signal_price` (what the alert advertised),
+`order_qty` (what the risk engine sized), `fill_price` (what the broker did) — because each
+gap has a different owner. `order_id` is the only join key used; symbol-and-time matching
+would silently mis-pair two trades in the same name on the same day.
+
+    PYTHONPATH=. uv run python -m signal_engine.analysis --snapshot   # every evening
+    PYTHONPATH=. uv run python -m signal_engine.analysis --positions
+
+**The broker tradebook is wiped daily and cannot be re-queried for a past session**, so
+`--snapshot` must run after every close or that day's fills are gone permanently. As a
+durable fallback, `TradeResult.fill_price` now carries the entry fill that
+`_fetch_entry_fill` was already fetching and only logging, and `db.save` persists it to a new
+`fill_price` column. Entry slippage is therefore measurable from `trades.db` alone from now on.
+
+Reconciliation flags are the output that matters: `NO_FILL`, `QTY_MISMATCH`,
+`UNMATCHED_FILL` (a broker fill the engine never sent — manual intervention or auto
+square-off), `OPEN_AT_EOD`, `OVER_EXITED`, `NO_ENTRY`. Run against the current live
+`trades.db` (221 events, 186 positions) it immediately reports **157 positions, 84%, where
+the engine never sent an exit event at all** — the same leak the Telegram audit found,
+confirmed independently on the engine's own records.
+
+The package deliberately computes no strategy verdict. Live samples are self-selected — you
+only ran the strategies you believed in — so treating this ledger as a backtest would be
+survivorship analysis. It is for finding leaks, which are real at n=20. 15 tests in
+`tests/test_analysis_ledger.py`, one per failure mode.
+
+---
+
+### ORB60 beats ORB15, but "beats" means less negative
+
+Swept the opening-range window on the same 208 names x 59 sessions, everything else at the
+current repo defaults (`tp1MinRR=1.5`, `useOrbStopFloor=false`). Gross expectancy improves
+monotonically as the window lengthens, in both windows:
+
+| ORB window | trades | gross bps | net R | median entry | median R:R |
+|---|---|---|---|---|---|
+| ORB5  | 2511 | -2.54 | -0.169 | - | - |
+| ORB15 | 2422 | -3.21 | -0.177 | 10:10 | 1.50 |
+| ORB30 | 1844 | -1.99 | -0.157 | - | - |
+| ORB60 | 709  | -0.38 | -0.131 | 10:45 | 1.88 |
+
+With the entry cutoff moved to 13:30 so ORB60 is not amputated by an 11:00 gate (it cannot
+arm before 10:15), ORB60 is the only configuration with positive gross expectancy in BOTH
+windows: IS +0.10 bps, OOS +2.08 bps, ALL +0.85 bps, against ORB15's -1.45.
+
+So the switch to ORB60 was right, and the mechanism is not subtle: it takes 71% fewer trades
+(709 vs 2422) at a better R:R (1.88 vs 1.50), because a 60-minute range is wide enough that
+clearing it means something. But **net R is still negative at every window** (-0.131 at
+ORB60). The stop is ~0.72% of price, so 10 bps of cost is ~0.15 R per trade, and gross
+expectancy of roughly zero minus 0.15 R is the whole result. Longer windows do not fix that;
+they only stop making it worse.
+
+Two things follow that matter operationally:
+
+- **ORB60 and `breakout.pine`'s IB key level are the same level.** The initial balance is
+  the first 60 minutes. Running both scripts on the same symbol takes the same trade twice
+  from two sources, doubling size on one idea while the risk engine counts two positions.
+- **IBH is the most-faded level in the whole level study** (38.9% continuation, break edge
+  -0.222 - the worst of the 18 measured). ORB60 breakouts are, by construction, trading the
+  level with the strongest measured tendency to reject. That is consistent with gross
+  expectancy sitting at zero however the window is tuned.
+
+---
+
+### The live ORB channel was audited against its own Telegram log
+
+`pinescripts/telegram/intraday-orb-channel-result-from-oldest-till-28082026.json` —
+588 entry signals, 2026-01-28 to 2026-08-28, 138 sessions. Reconstructed into trades
+(one entry owns every exit message until the next entry on the same symbol/day) and then
+re-resolved against real 5-minute bars for the window yfinance still covers.
+
+**47% of entries never received an exit alert of any kind**, and the rate climbs with time:
+
+| Month | Entries | No exit alert | Median stop, % of price | Median R:R |
+|---|---|---|---|---|
+| 2026-02 | 101 | 5% | 0.58 | 1.5 |
+| 2026-03 | 73 | 5% | 0.71 | 1.5 |
+| 2026-04 | 89 | 45% | 1.98 | 0.64 |
+| 2026-05 | 121 | 72% | 2.13 | 1.0 |
+| 2026-06 | 66 | 61% | 2.21 | 0.8 |
+| 2026-07 | 78 | 72% | 1.88 | 0.8 |
+| 2026-08 | 50 | 86% | 1.72 | 0.8 |
+
+Two independent faults, both now understood:
+
+1. **The deployed build predates the R:R fix.** It carries the newer TP1.5/TP2/TP3 and
+   `ExitQtyPct` features but still runs `tp1MinRR = 0.8` and the ORB stop floor ON. That is
+   the geometry the 2026-08-28 section already diagnosed, now confirmed in production data:
+   a 3x wider stop paired with reward BELOW risk. Trades in that geometry rarely reach
+   either level inside a session, which is *why* the exit alerts went quiet.
+2. **The time exit that should have closed them was unreachable.** See below.
+
+Resolving the 176 signals that fall inside the 5-minute bar window against actual prices —
+counting the silent ones, and taking the stop when a bar spans both levels — the channel's
+true record is **54.0% win rate, -0.004 R per trade gross, -0.057 R at 10 bps**. The
++0.747 R per trade the alert stream appears to show is survivorship: TP and SL announce
+themselves, a trade that quietly drifts to the close does not.
+
+### The ORB time-exit alert could never fire, and would not have parsed if it had (`orb.pine`)
+
+The same defect `breakout.pine` was fixed for on 2026-08-27 was still live in `orb.pine`,
+plus a second one on top:
+
+- **It was gated on the wrong position.** `if isPastTimeExit and ... and strategy.position_size != 0`.
+  `strategy.exit()` closes 100% at TP1 while the alert advertises `ExitQtyPct: 50` and the
+  engine keeps holding half. The moment TP1 is touched the strategy is flat, so the residual
+  position — the one that actually needs a time exit — can never be alerted on. Now gated on
+  a dedicated `alertPosOpen` / `alertPosLong` pair, set by the entry alert and cleared only by
+  an alert that exits the whole remainder (SL, TP1.5 at 100%, TP2, TP3) or by a new session.
+- **The message was structurally unparseable.** `TIME EXIT | SYM` over `LONG | Entry: x` —
+  the tag resolves to `TIME` and the compact line yields no `entry` field. Now
+  `ORB EXIT | SYM` with `Reason:`, `Side:`, `Entry:`, `Exit:`, `SL:`, `TP:` each on their own
+  line, matching `breakout.pine`.
+
+Pinned by `tests/test_orb_alerts.py` — entry, TP (including that `ExitQtyPct` survives as
+`exit_qty_pct`), SL, the new time exit, and a test that the old shape still fails.
+
+### Which intraday level matters — measured, not asserted
+
+208 NSE F&O names x 58 sessions of 5-minute bars, 229,697 level-touch events. For every
+reference level, the first touch after 09:45 and what the next hour did.
+
+**Every level has a negative break edge.** Continuation rate on first touch ranges 38.9%
+(IBH) to 45.6% (day POC) — all below a coin flip — and median adverse excursion (1.5-1.9 ATR)
+exceeds median favourable excursion (0.8-1.2 ATR) at every single level. On first contact
+these are fade levels, not breakout levels.
+
+Ranked by reaction size (median |1-hour move| in ATR): PMH 1.45, PWH 1.45, IBH 1.42,
+PDH 1.40, ORH 1.38, PWL 1.36, PML 1.34, PVAH 1.33, PDL 1.32, PVAL 1.32, IBL 1.30,
+DVAH 1.29, PPOC 1.27, ORM 1.24, ORL 1.24, IBM 1.20, DPOC 1.18, DVAL 1.17.
+
+Two findings that contradict the usual playbook:
+
+- **Confluence does not help.** Grouping by how many other levels sit within 0.25%:
+  MFE/MAE is 0.56 / 0.58 / 0.54 / 0.57 for 0 / 1 / 2 / 3+ overlapping levels. Flat.
+- **The retest is worse than the first touch.** Continuation 42.8% -> 39.5% -> 38.1% and
+  MFE/MAE 0.57 -> 0.42 -> 0.39 across the 1st, 2nd and 3rd test of the same level.
+  Repeated tests mean price is oscillating around the level, which is chop, not coiling.
+
+### `backtest/strategies/dhb.py` — the TradeXPavan gainer-pullback setup
+
+Adapter for `pinescripts/intraday/intraday-dhb.txt`. Result: a plausible but unproven edge.
+Best honest configuration (top-5 cross-sectional gainers, 20-70% pullback of the leg, volume
+gate, 2.5R target) gives 55 trades over 59 sessions at +0.202 R, consistent across both
+windows — but the 95% bootstrap CI is [-0.076, +0.495] and dropping the three best trades
+takes total R from +11.1 to +3.8. Ablation shows the pullback requirement and the volume
+gate carry it; the confirmation candle is inert (identical results with it off) and the bare
+"break the first day high" version loses money (-0.012 R). Not tradeable on this evidence.
+
+### `support-resistance.pine` retuned (`pinescripts/intraday/orb/`)
+
+LonesomeTheBlue's SRv2, ported to v6 and retuned for 5-minute NSE work: zone width is now
+ATR-relative rather than 10% of a 300-bar range (which made zones 1.5-2.5% of price and
+swallowed every level into one), strength is weighted by recency and volume, pivots inside
+the opening gap are discarded, alerts fire on the zone EDGE and gate on `barstate.isconfirmed`,
+and the nearest level is exported as a plot. `alertMode` defaults to Reject rather than Break,
+on the level-study evidence above. Repaint status is documented in the header: values never
+change once drawn, but the level SET updates `prd` bars late, so it must not be backtested naively.
+
+---
 
 ## Recent Changes (2026-08-28)
 

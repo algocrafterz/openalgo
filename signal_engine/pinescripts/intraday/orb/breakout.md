@@ -9,6 +9,80 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-08-30b — Deployed live as forward-data collection; two bugs fixed, CLV gate relaxed
+
+Deployed deliberately against the negative backtest below. The decision is the operator's and
+is recorded as such: the entry immediately after this one says key-level breaks follow through
+less often than chance, and nothing here contradicts it. The purpose is a live sample to review
+after the first week, not a claim that the edge exists.
+
+**Baseline for that review — the configuration these trades were produced by:**
+
+| | Setting |
+|---|---|
+| Trading families | VA rejection + retest, PDH/PDL, IBH/IBL. VA **acceptance off** |
+| ORB entries | off (ORB remains a drawn confluence level) |
+| Score threshold | 7 |
+| CLV gate | 0.50 / 0.50 (was 0.65 / 0.35) |
+| Entry window | 09:45-11:45, one entry per symbol per session, PM window off |
+| Stop | level -/+ 0.35 ATR, floored at max(0.5 ATR, 0.3% of price) |
+| Targets | TP1 = nearest level less 0.15 ATR, floored 1R; TP2 = next level out; 50% booked at TP1 |
+| Engine | 1% risk, 4 concurrent, 10 trades/day, `min_sl_pct` 0.002, time exit 14:45 |
+
+### Bug — value-area runners never got their structural stop
+
+`structural_runner_sl` in `main.py` resolved the triggering level by lower-casing the family
+out of the trigger tag: `VAH-RT` to `context["vah"]`. But `klLvlNames` emits the previous
+session's value area **P-prefixed** — `PVAH` / `PPOC` / `PVAL` — a rename made on 2026-08-26
+(`c4ce9d47e`) one day after the lookup was written (`77c172a85`). The key never matched, the
+`KeyError` was caught, and every `VAH-*` / `VAL-*` runner fell through to the `TP1 - 0.3R`
+fallback instead of stopping at the level whose defence was the trade's thesis.
+
+Six of the fourteen setup codes were affected. PD and IB were not — their names match.
+
+`_LEVEL_FAMILIES` (tuple) became `_LEVEL_CONTEXT_KEYS` (family to wire key). The bare name is
+still accepted as a fallback so alerts predating the rename resolve. The existing tests passed
+throughout because they asserted against `{"trigger": "VAH-RT", "vah": ...}`, which is not what
+goes over the wire; a test using the real eleven-level alert context was added.
+
+### Bug — the BREAKOUT blacklist did not exist
+
+`validator._check_blacklist` looks up `settings.blacklist[signal.strategy.upper()]`. Only
+`_global`, `ORB` and `EMA9` were defined, so BHEL — hard-blocked for `ORB` on 0% WR across
+Q1+Q2 2026 — was fully tradeable the moment the same setup arrived under the `BREAKOUT` tag.
+`blacklist.BREAKOUT` added with the same entry.
+
+### Change — CLV gate 0.65/0.35 to 0.50/0.50
+
+Two reasons, the second the more important for a data-collection week.
+
+The 49,677-event study in the entry below ranks the strict setting in the worse half:
+unconditional breaks follow through 30.9%, `CLV >= 0.65` gives 30.3%, marubozu 29.6%. Demanding
+a decisive break candle selects bars whose move has already happened.
+
+And the gate was censoring its own evidence. `CLV` is carried in every entry alert and stored
+in `trades.db.context`, but with the gate at 0.65 every logged long had `CLV >= 0.65` by
+construction — zero variance, so no amount of live data could ever test it. At 0.50 the log
+spans 0.50-1.00 and the first-week review can regress outcome on it.
+
+Set to the midpoint rather than removed: a long trigger should still close in the upper half of
+its own bar. Expect roughly 20-40% more signals; `max_trades_per_day` 10 and 4 concurrent slots
+still bound the exposure.
+
+### Not fixed, known, accept for now
+
+The alert's `Entry:` is the confirming bar's **open**, but `calc_on_every_tick=false` means the
+alert does not fire until that bar **closes** — so the engine sizes on a price one bar stale
+while filling at market. `slippage_factor` 0.10 pads it and `_auto_close_on_tp_overshoot`
+catches the extreme. Measurable after the fact: `trades.fill_price` versus `Entry`.
+
+`strategy.exit(limit=tp1)` still closes 100% at TP1, so the TradingView Strategy Tester does not
+model the 50% runner and its numbers are not this strategy's. Live P&L is the only valid read.
+
+The Pine edits have **not** been compiled on TradingView.
+
+---
+
 ## 2026-08-30 — The premise itself is negative: breaks follow through less than a coin flip
 
 The 2026-08-28 entry below concluded that gross was "indistinguishable from zero" and blamed
