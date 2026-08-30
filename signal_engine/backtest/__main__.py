@@ -24,6 +24,7 @@ REGISTRY: dict = {}
 
 def _register():
     from signal_engine.backtest.strategies.ema9 import Ema9, Ema9Params
+    from signal_engine.backtest.strategies.ema9_pdf import Ema9Pdf, Ema9PdfParams
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
@@ -31,6 +32,7 @@ def _register():
     from signal_engine.backtest.strategies.phoenix import Phoenix, PhoenixParams
     from signal_engine.backtest.strategies.value_zone import ValueZone, ValueZoneParams
     REGISTRY["ema9"] = (Ema9, Ema9Params, "intraday")
+    REGISTRY["ema9_pdf"] = (Ema9Pdf, Ema9PdfParams, "intraday")
     REGISTRY["gap_rsi"] = (GapRsi, GapRsiParams, "swing")
     REGISTRY["ib_extension"] = (IbExtension, IbExtParams, "intraday")
     REGISTRY["key_level"] = (KeyLevel, KeyLevelParams, "intraday")

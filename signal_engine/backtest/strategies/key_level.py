@@ -106,6 +106,38 @@ class KeyLevelParams:
     t1_pad_mult: float = 0.15         # klT1PadMult, ATR short of the target level
     adr_days: int = 14
 
+    # ---- target selection ------------------------------------------------
+    #: "level" is the shipped Pine behaviour: nearest structural level beyond entry,
+    #: padded, floored at 1.0R. "r" ignores structure and takes a fixed reward-to-risk,
+    #: which is the "1:1 / 1:2" half of the trader's stated rule. "level_min_r" keeps
+    #: the structural target but floors it at `tp_r` instead of at 1.0R.
+    tp_mode: str = "level"            # level | r | level_min_r
+    tp_r: float = 2.0                 # used by tp_mode "r" and "level_min_r"
+
+    # ---- stop selection --------------------------------------------------
+    #: "level" is the shipped behaviour: stop sits `sl_buffer_mult` ATR beyond the key
+    #: level. "drive" is the trader's alternative: stop beyond the extreme of the
+    #: initiative drive candle - the signal bar itself, which by construction is the
+    #: directional break/retest bar. "wider" is "level" with the floor raised, to test
+    #: whether the shipped 0.3%-of-price stop is simply too tight to survive costs.
+    sl_mode: str = "level"            # level | drive | wider
+    drive_buffer_mult: float = 0.15   # ATR beyond the drive candle's extreme
+    min_sl_atr: float = 0.5           # floor in ATR, raised by sl_mode="wider"
+    min_sl_pct_price: float = 0.003   # floor as a fraction of price
+
+    # ---- candlestick confirmation ---------------------------------------
+    #: "" keeps the shipped CLV gate only. "engulf" additionally demands a classic
+    #: engulfing bar in the trade direction; "engulf_or_clv" accepts either, which is
+    #: a looser reading of "candlestick confirmation".
+    pattern: str = ""                 # "" | engulf | engulf_or_clv | pin
+
+    # ---- higher-timeframe bias ------------------------------------------
+    #: The trader's first rule - only trade with the daily direction. Built from the
+    #: previous COMPLETED session's close against an EMA of daily closes, so nothing
+    #: from the current session leaks in.
+    use_daily_bias: bool = False
+    daily_bias_len: int = 5
+
 
 class KeyLevel(Strategy):
     name = "breakout.pine key levels (PDH/PDL + IBH/IBL, break and retest)"
@@ -173,6 +205,7 @@ class KeyLevel(Strategy):
         # ---- HTF confirmation close (klConfirmTF, close[1], lookahead off)
         d["htf_close"] = c.shift(p.htf_bars)
 
+
         # ---- bars since each level last broke (klTrackBreaks) ----------
         idx = pd.Series(np.arange(len(d)), index=d.index)
         for name, up in (("pdh", True), ("pdl", False), ("ibh", True), ("ibl", False)):
@@ -182,11 +215,35 @@ class KeyLevel(Strategy):
             # reset per session: a break is only relevant within its own day
             last = idx.where(crossed).groupby(day).ffill()
             d[f"{name}_since"] = (idx - last).fillna(9999)
+        # ---- candlestick patterns (classic definitions, on the signal bar) ------
+        o = d["Open"]
+        body = (c - o).abs()
+        prev_body = body.shift(1)
+        bull_body, bear_body = c > o, c < o
+        # Engulfing: this bar's body fully covers the prior body, opposite colour.
+        d["engulf_bull"] = (bull_body & bear_body.shift(1)
+                            & (c >= o.shift(1)) & (o <= c.shift(1))
+                            & (body > prev_body)).astype(float)
+        d["engulf_bear"] = (bear_body & bull_body.shift(1)
+                            & (c <= o.shift(1)) & (o >= c.shift(1))
+                            & (body > prev_body)).astype(float)
+        # Pin bar / hammer: small body at one end, long wick from the other.
+        upper = h - c.where(bull_body, o)
+        lower = c.where(bear_body, o) - low_
+        d["pin_bull"] = ((lower >= 2 * body) & (upper <= body)).astype(float)
+        d["pin_bear"] = ((upper >= 2 * body) & (lower <= body)).astype(float)
+
+        # ---- daily (HTF) bias from COMPLETED sessions only ---------------------
+        dc = c.groupby(day).last()
+        dbias = dc.ewm(span=p.daily_bias_len, adjust=False).mean()
+        up = (dc > dbias).shift(1)
+        d["bias_up"] = day.map(up).astype(float)
+        d["bias_dn"] = day.map((~up.astype(bool)) & up.notna()).astype(float)
         return d
 
     def prepare_key(self, p: KeyLevelParams) -> tuple:
         return (p.ib_minutes, p.orb_minutes, p.clv_long_min, p.clv_short_max,
-                p.vol_ma_len, p.atr_len, p.adr_days, p.htf_bars)
+                p.vol_ma_len, p.atr_len, p.adr_days, p.htf_bars, p.daily_bias_len)
 
     # ---- state ---------------------------------------------------------
 
@@ -299,6 +356,24 @@ class KeyLevel(Strategy):
         is_rt = code.endswith("-RT")
         is_brk = code.endswith("-BRK")
 
+        # ---- rule 1: trade only with the higher-timeframe bias ---------
+        if p.use_daily_bias:
+            b = c["bias_up"][i] if dirn == 1 else c["bias_dn"][i]
+            if not (np.isfinite(b) and b > 0):
+                return None
+
+        # ---- candlestick confirmation ----------------------------------
+        if p.pattern:
+            eng = c["engulf_bull"][i] if dirn == 1 else c["engulf_bear"][i]
+            pin = c["pin_bull"][i] if dirn == 1 else c["pin_bear"][i]
+            clv_ok = (c["bull"][i] if dirn == 1 else c["bear"][i]) > 0
+            if p.pattern == "engulf" and not eng > 0:
+                return None
+            if p.pattern == "pin" and not pin > 0:
+                return None
+            if p.pattern == "engulf_or_clv" and not (eng > 0 or clv_ok):
+                return None
+
         # a retest is scored on the best bar of its window, not the quiet confirming
         # bar (klWindowRvol)
         rvol = c["rvol"][i]
@@ -327,12 +402,17 @@ class KeyLevel(Strategy):
         if self._score(c, i, p, dirn, conf, is_rt, rvol) < p.score_threshold:
             return None
 
-        # ---- klExecMap: stop from the level, floored from entry --------
-        raw = lvl - dirn * atr * p.sl_buffer_mult
-        min_dist = max(atr * 0.5, px * 0.003)
+        # ---- stop: klExecMap by default, floored from entry ------------
+        if p.sl_mode == "drive":
+            # beyond the extreme of the initiative drive candle (this signal bar)
+            ext = c["Low"][i] if dirn == 1 else c["High"][i]
+            raw = ext - dirn * atr * p.drive_buffer_mult
+        else:
+            raw = lvl - dirn * atr * p.sl_buffer_mult
+        min_dist = max(atr * p.min_sl_atr, px * p.min_sl_pct_price)
         sl = min(raw, px - min_dist) if dirn == 1 else max(raw, px + min_dist)
         risk = abs(px - sl)
-        if risk <= 0:
+        if risk <= 0 or not np.isfinite(risk):
             return None
 
         # ---- headroom against the ADR projection (klHeadroomR) ---------
@@ -343,14 +423,20 @@ class KeyLevel(Strategy):
             if room < p.min_headroom_r:
                 return None
 
-        # ---- klCalcTargets: nearest structural level, padded, floored 1R
-        pad = atr * p.t1_pad_mult
-        beyond = [x for x in self._levels(c, i)
-                  if ((x > px + pad) if dirn == 1 else (x < px - pad))]
-        t1 = (min(beyond) if dirn == 1 else max(beyond)) if beyond else np.nan
-        if np.isfinite(t1):
-            dist = max(abs(t1 - dirn * pad - px), risk)
+        # ---- target ----------------------------------------------------
+        if p.tp_mode == "r":
+            dist = risk * p.tp_r
         else:
-            dist = risk * 1.5
+            # klCalcTargets: nearest structural level beyond entry, padded.
+            # "level" floors it at 1.0R (the Pine); "level_min_r" at tp_r.
+            floor_r = 1.0 if p.tp_mode == "level" else p.tp_r
+            pad = atr * p.t1_pad_mult
+            beyond = [x for x in self._levels(c, i)
+                      if ((x > px + pad) if dirn == 1 else (x < px - pad))]
+            t1 = (min(beyond) if dirn == 1 else max(beyond)) if beyond else np.nan
+            if np.isfinite(t1):
+                dist = max(abs(t1 - dirn * pad - px), risk * floor_r)
+            else:
+                dist = risk * max(1.5, floor_r)
         tp = px + dirn * dist
         return EntrySignal(direction=dirn, sl=float(sl), tp=float(tp), tag=code)

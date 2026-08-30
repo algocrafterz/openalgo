@@ -67,8 +67,8 @@ main.py (_handle_entry / _handle_exit)
 | Script | Alert tag | Status |
 |---|---|---|
 | `pinescripts/intraday/orb/orb.pine` | `ORB` | **Frozen and live.** Unchanged. Documented in `HOW-IT-WORKS.md` |
-| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **In development.** Key-level engine. Changelog in `pinescripts/intraday/orb/breakout.md` |
-| `pinescripts/intraday/ema9/ema9-intraday.pine` | `EMA9` | **Reference only — do not trade.** Backtest found no edge before costs (6577 trades, t = -9.90). Verdict block is in the file header |
+| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **Do not trade.** Key-level engine. The premise is negative: key-level breaks follow through 30.9% against a 33.3% random-walk baseline (t = -9.87, 49,677 events). No target, stop, bias or candle filter reverses it. Changelog in `pinescripts/intraday/orb/breakout.md` (2026-08-30) |
+| `pinescripts/intraday/ema9/ema9-intraday.pine` | `EMA9` | **Reference only — do not trade.** Backtest found no edge before costs (6577 trades, t = -9.90). Verdict block is in the file header. The source PDF's own six methods were tested separately and are all negative at zero cost — see its `STRATEGY-ANALYSIS.md` |
 | `pinescripts/swing/momentum-rank/momentum-rank.pine` | `momentum-rank` | **Candidate, paper only.** 12-1 cross-sectional momentum, monthly rebalance. The only strategy tested so far with a positive out-of-sample edge that survives costs. Never traded |
 | `pinescripts/swing/dividend-growth/dividend-growth.pine` | `swing-dividend-growth` | **Do not trade.** Entry has negative forward-return edge on the broad F&O universe; the Pine strategy block cannot book a loss. See its `STRATEGY-ANALYSIS.md` |
 | `pinescripts/intraday/ib-extension/ib-extension.pine` | — | **Do not trade.** Zero gross expectancy at best (t = -0.71 at zero cost). See its `STRATEGY-ANALYSIS.md` |
@@ -160,7 +160,76 @@ Pre-existing conditions confirmed *not* caused by the upgrade: `test_auto_login.
 
 ---
 
-## Recent Changes (2026-08-28, current)
+## Recent Changes (2026-08-30)
+
+### The key-level premise measured against a random walk, and it loses
+
+`breakout.pine`'s key-level engine had been recorded on 2026-08-28 as "gross indistinguishable
+from zero, killed by the stop floor". That was too generous, and the stop was the wrong culprit.
+
+Every PDH/PDL/IBH/IBL break in the universe was collected — **49,677 events** over 208 F&O names
+and 59 sessions — and walked forward to see whether it reached +1.0 ATR before giving back
+0.5 ATR. For a driftless random walk that probability is exactly `b/(a+b)` = **33.3%**; observed
+is **30.9%**, t = **-9.87**. Only **1 of 208** symbols sits significantly above the baseline where
+5 are expected by chance, and 35 sit below. Key-level breaks follow through *less* often than a
+coin flip.
+
+That is upstream of every exit-side knob, which is why none of them helped: fixed 1:1, 1:2, 1:3,
+a stop at the initiative drive candle, a wider stop floor and a daily HTF bias gate were all
+tested and all remain negative. Full tables in `pinescripts/intraday/orb/breakout.md`.
+
+### The CLV gate selects the worse half of breaks
+
+`klClvLongMin = 0.65` demands a decisive break candle. Measured across the same events, candle
+strength is *inversely* related to follow-through: marubozu 29.6% < strong close 30.3% <
+unconditional 30.9%, and engulfing is 29.3% on 8,731 events. Nothing clears 33.3%. A wide,
+full-bodied close through a level is closer to exhaustion than confirmation — the move already
+happened inside that bar. This extends the 2026-08-29 candlestick finding to the key-level
+trigger specifically: there is no confirming candle to wait for.
+
+An intermediate ablation on the filtered trade set (n = 384) had shown engulfing helping in BOTH
+windows and was nearly recorded as a finding. At zero cost it nets +0.050R at t = 0.76, and the
+8,731-event measurement contradicts it. Small-sample noise; the large sample governs. Logged
+because that is precisely the kind of number that ships by mistake.
+
+### Per-symbol selection is not possible on this metric
+
+Split-half correlation of per-symbol follow-through is **r = +0.095** (p = 0.17); 2 of the first
+half's top 20 stay top 20 against 4 by chance. Observed cross-symbol sd is 3.3 points against a
+typical per-symbol standard error of 3.0 — almost all visible spread is noise. TCS reads 38.8%
+then 29.6%, M&M 40.0% then 28.0%: statistically identical, and M&M's first half beats TCS's
+second. A per-symbol whitelist cannot be built this way; select on movement and liquidity, which
+do persist, and not on edge.
+
+### The reversion is real and still untradeable
+
+Fading the break (risk 1.0 ATR to make 0.5 ATR, fair value zero) wins 69.1% of the time,
+t = **+11.50**, worth **+0.83 bps**; on strong-close breaks 69.7%, t = +13.25, **+1.05 bps**.
+Against an 8-10 bps round trip it is an order of magnitude short. Statistical significance and
+economic significance are different tests, and this passes the first and fails the second.
+
+### `backtest/strategies/ema9_pdf.py` — the 9-EMA article, all six methods
+
+`791187576-9-EMA-Trading-Strategy.pdf` is an 11-page HowToTrade.com explainer describing five
+crossover variants plus one worked method. All six were implemented as a **separate** adapter
+from `ema9.py` — that one mirrors `ema9-intraday.pine`, the production artefact, and the two must
+be able to disagree visibly.
+
+Every variant is negative gross **at zero cost**, on 902 to 9,140 trades each, and no target
+sweep lifts any above zero. Two defects in the source are worth recording: five of the six
+methods specify no stop and no target at all, and the worked example on p9 ends by referencing
+FVGs and a fixed 10-11 AM window that contradict the engulfing rule two paragraphs earlier — it
+is spliced from another article. Verdict and tables in
+`pinescripts/intraday/ema9/STRATEGY-ANALYSIS.md`.
+
+### `key_level.py` adapter knobs
+
+Four additions, all defaulting to previously shipped behaviour so the baseline reproduces to the
+trade: `tp_mode` (`level` | `r` | `level_min_r`) with `tp_r`; `sl_mode` (`level` | `drive` |
+`wider`); `pattern` (`""` | `engulf` | `engulf_or_clv` | `pin`); and `use_daily_bias` /
+`daily_bias_len`.
+
+## Recent Changes (2026-08-28)
 
 ### Every live and candidate PineScript now has a backtest adapter
 

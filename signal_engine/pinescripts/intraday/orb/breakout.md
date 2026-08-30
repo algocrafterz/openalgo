@@ -9,6 +9,139 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-08-30 — The premise itself is negative: breaks follow through less than a coin flip
+
+The 2026-08-28 entry below concluded that gross was "indistinguishable from zero" and blamed
+the stop floor. That was too generous. Widening the stop and changing the target were both
+tested and neither helps, because the problem is upstream of risk management: **the event the
+whole engine trades does not happen often enough.**
+
+### The measurement
+
+Rather than tune a losing configuration, every PDH/PDL/IBH/IBL break in the universe was
+collected — **49,677 events**, 208 F&O names, 59 sessions — and walked forward up to 12 bars
+to see whether it reached **+1.0 ATR** in the break direction before giving back **0.5 ATR**.
+
+The benchmark is the part that matters. For a driftless random walk the probability of
+reaching `+a` before `-b` is `b / (a + b)` = **33.3%**. That is the number a breakout has to
+beat to carry any information at all.
+
+| | Value |
+|---|---|
+| Random-walk baseline | 33.3% |
+| Observed follow-through | **30.9%** |
+| t vs baseline | **-9.87** |
+| Symbols significantly ABOVE baseline | **1 of 208** (5 expected by chance) |
+| Symbols significantly BELOW baseline | 35 of 208 |
+
+Key-level breaks on the NSE F&O universe follow through *less* often than chance. They are
+mildly mean-reverting. That single fact explains the negative gross expectancy, and it
+explains why every exit-side fix fails.
+
+### Corollary 1 — the CLV gate is inverted
+
+`klClvLongMin = 0.65` is meant to demand a decisive break candle. Measured on the same events,
+it selects the **worse** half:
+
+| Break-bar pattern | n | Follow % | t vs baseline |
+|---|---|---|---|
+| Doji | 1,214 | 34.3 | +0.69 |
+| Big range (>1.5 ATR) | 16,818 | 31.3 | -5.70 |
+| Close beyond prior high/low | 37,218 | 30.7 | -11.00 |
+| Strong close, CLV >= 0.65 | 40,613 | 30.3 | -13.25 |
+| Inside bar | 5,199 | 30.1 | -5.14 |
+| Harami | 3,653 | 30.0 | -4.39 |
+| Marubozu, CLV >= 0.8 | 30,321 | 29.6 | -14.25 |
+| Engulfing | 8,731 | 29.3 | -8.21 |
+| Hammer / shooting star | 1,163 | 28.2 | -3.89 |
+
+Ranked by candle strength: marubozu (29.6) < strong close (30.3) < unconditional (30.9). **The
+more decisive the break candle, the worse the follow-through** — the move already happened
+inside that bar, so the entry buys its high. No pattern clears the 33.3% baseline. The only one
+above it is the doji, at t = 0.69, which is not significant and is itself the absence of
+conviction.
+
+This extends the 2026-08-29 "Candlestick patterns measured, and mostly switched off" finding in
+`PRD.md` to the key-level trigger specifically: there is no confirming candle to wait for.
+
+### Corollary 2 — per-symbol selection does not work
+
+The obvious response is "then trade only the names that do respect levels". Tested by splitting
+the window in half and measuring each symbol twice, independently:
+
+- Split-half correlation **r = +0.095** (p = 0.17), Spearman +0.096
+- Of the top 20 in the first half, **2** remain top 20 in the second (4 expected by chance)
+- Observed cross-symbol sd is 3.3 points; typical per-symbol standard error is 3.0 of those
+
+The ranking is almost entirely sampling noise, so a per-symbol whitelist cannot be built from
+this metric. Worked example: TCS reads 38.8% in the first half and 29.6% in the second (full
+34.0%, t = +0.2 vs baseline); M&M reads 40.0% then 28.0% (full 33.5%, t = 0.0). They are
+statistically identical, and M&M's first half beats TCS's second half. `BANKINDIA` is the one
+symbol above baseline at t = +3.1 and stable across halves (45.3 / 42.3) — treat as a lead, not
+a result: across 208 tests one such reading is roughly what multiple testing produces.
+
+### Corollary 3 — the reversion is real but too small to trade
+
+Fading the break (risk 1.0 ATR to make 0.5 ATR, fair value exactly zero):
+
+| Event set | n | Fade win % | Edge (ATR) | t | Edge (bps) |
+|---|---|---|---|---|---|
+| All breaks | 49,677 | 69.1 | +0.036 | +11.50 | **+0.83** |
+| Strong-close breaks | 40,613 | 69.7 | +0.045 | +13.25 | **+1.05** |
+| Weak-close breaks | 9,064 | 66.2 | -0.007 | -0.95 | -0.16 |
+
+t = 13.25 is about as certain as this kind of measurement gets, and it is worth **1.05 bps**
+against a **8-10 bps** round trip. Statistically overwhelming, economically an order of
+magnitude short. Do not build a fade strategy on it either.
+
+### What was tested and did not help
+
+All at 10 bps, full period, against the -0.376R / -2.04 bps shipped baseline (n = 1,522):
+
+| Variant | net_R | gross_bps |
+|---|---|---|
+| Next key level, floored 1R (shipped) | -0.376 | -2.04 |
+| Fixed 1:1 | -0.384 | -2.29 |
+| Fixed 1:2 | -0.421 | -3.32 |
+| Fixed 1:3 | -0.383 | -2.28 |
+| Stop at initiative drive candle | -0.383 | -4.09 |
+| Wider stop floor (1.0 ATR / 0.6%) | -0.274 | -6.45 |
+| Daily HTF bias gate | — | worse in both windows |
+| Engulfing required | — | see note |
+
+The wider stop floor looks like an improvement in R and is not one: net_R rises only because a
+bigger stop makes each R worth more, shrinking the fixed cost as a fraction of it, while
+gross_bps — the cost-free measure — gets three times worse. This corrects the 2026-08-28 entry's
+implication that the stop floor was the root cause.
+
+**Note on the engulfing filter.** A first ablation on the filtered trade set (n = 384) showed
+engulfing improving gross in BOTH windows (+0.94 IS, +2.73 OOS), which looked like a genuine
+finding. At zero cost that variant nets +0.050R at **t = 0.76** — not significant — and the
+sign flips below 4 bps. The 8,731-event measurement above then contradicted it outright. It was
+small-sample noise; the large-sample result governs. Recorded because the intermediate number
+is exactly the kind that gets shipped by mistake.
+
+### Adapter changes
+
+`key_level.py` gains four knobs, all defaulting to the previously shipped behaviour so the
+baseline reproduces to the trade:
+
+- `tp_mode` — `level` (shipped) | `r` | `level_min_r`, with `tp_r`
+- `sl_mode` — `level` (shipped) | `drive` (beyond the initiative drive candle) | `wider`,
+  with `drive_buffer_mult`, `min_sl_atr`, `min_sl_pct_price`
+- `pattern` — `""` (shipped) | `engulf` | `engulf_or_clv` | `pin`
+- `use_daily_bias` / `daily_bias_len` — HTF bias gate from completed sessions only
+
+### What this does NOT cover
+
+Orderflow of any kind. The VA family (`PVAH`/`PPOC`/`PVAL`) is still untested for the
+1-minute-history reason given below. The opening-type / day-type classifier behind
+`klBlockCounterBias` is still not implemented. A discretionary trader reading orderflow at the
+level may have an edge these bars cannot see — this measures what the *rules* are worth without
+that read, which is a floor, not a ceiling.
+
+---
+
 ## 2026-08-28 — Key-level families backtested: gross zero, killed by the stop floor
 
 Measured with `signal_engine/backtest/strategies/key_level.py` over 208 F&O names, 59
