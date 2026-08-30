@@ -149,6 +149,15 @@ blacklist:
       - BHEL             # 0% WR across Q1+Q2 2026; false breakout 2026-05-12 (-0.8R)
     soft: []
     soft_multiplier: 0.5 # 50% qty for soft-listed symbols. 0 = effectively hard-block.
+  BREAKOUT:
+    # The validator keys strictly on the strategy tag, so ORB's list does NOT carry over.
+    # BHEL is repeated here for the reason it is blocked for ORB: 0% WR across Q1+Q2 2026.
+    # Both tags trade the same NSE universe on the same 5-min bars, so a symbol that cannot
+    # hold a break for one will not hold it for the other.
+    hard:
+      - BHEL
+    soft: []
+    soft_multiplier: 0.5
   EMA9:
     hard: []             # No history yet. Review monthly from the trade log, same as ORB.
     soft: []

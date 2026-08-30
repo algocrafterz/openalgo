@@ -509,17 +509,51 @@ class TestStructuralRunnerStop:
     a loser."""
 
     def test_long_uses_trigger_level_when_above_entry(self):
-        # VAH 183.83 sits BELOW entry 184.04, so break-even wins.
+        # PVAH 183.83 sits BELOW entry 184.04, so break-even wins.
         assert structural_runner_sl(
             direction=Direction.LONG, entry_price=184.04, tp=184.88,
-            context={"trigger": "VAH-RT", "vah": "183.83"},
+            context={"trigger": "VAH-RT", "pvah": "183.83"},
         ) == 184.04
 
     def test_long_uses_level_when_it_sits_above_entry(self):
         assert structural_runner_sl(
             direction=Direction.LONG, entry_price=184.04, tp=184.88,
-            context={"trigger": "VAH-RT", "vah": "184.50"},
+            context={"trigger": "VAH-RT", "pvah": "184.50"},
         ) == 184.50
+
+    def test_value_area_families_read_the_p_prefixed_key(self):
+        """breakout.pine emits PVAH/PPOC/PVAL while the trigger tag stays bare VAH/POC/VAL.
+
+        Regression for the silent fallback: context["vah"] does not exist on the wire, so
+        looking it up dropped every value-area runner onto the TP1-buffer rule.
+        """
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=100.0, tp=102.0,
+            context={"trigger": "VAH-ACC", "pvah": "101.0"},
+        ) == 101.0
+        assert structural_runner_sl(
+            direction=Direction.SHORT, entry_price=100.0, tp=98.0,
+            context={"trigger": "VAL-REJ", "pval": "99.0"},
+        ) == 99.0
+
+    def test_bare_family_key_still_resolves_for_pre_rename_alerts(self):
+        assert structural_runner_sl(
+            direction=Direction.LONG, entry_price=100.0, tp=102.0,
+            context={"trigger": "VAH-RT", "vah": "101.0"},
+        ) == 101.0
+
+    def test_full_alert_context_resolves_the_triggering_family_only(self):
+        """The real alert carries all eleven levels; only the trigger's own level is used."""
+        ctx = {
+            "trigger": "VAL-RT", "score": "8", "rvol": "1.7",
+            "orh": "184.20", "orm": "182.75", "orl": "181.30",
+            "ibh": "184.60", "ibm": "182.95", "ibl": "181.30",
+            "pvah": "183.83", "ppoc": "182.10", "pval": "180.44",
+            "pdh": "185.00", "pdl": "179.20",
+        }
+        assert structural_runner_sl(
+            direction=Direction.SHORT, entry_price=181.00, tp=179.50, context=ctx,
+        ) == 180.44
 
     def test_short_floors_at_entry(self):
         assert structural_runner_sl(

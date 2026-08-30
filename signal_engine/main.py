@@ -623,8 +623,20 @@ async def _finalize_partial_exit(
 
 
 # Trigger tags are FAMILY-VARIANT, e.g. "VAH-RT", "PDH-BRK", "IBL-REJ". Only the family
-# names a level, and the entry alert carries that level's price under the same key.
-_LEVEL_FAMILIES = ("ORH", "ORM", "ORL", "IBH", "IBM", "IBL", "VAH", "POC", "VAL", "PDH", "PDL")
+# names a level, and the entry alert carries that level's price under one of these keys.
+#
+# The value-area families are why this is a MAP and not a tuple. breakout.pine emits the
+# previous session's value area P-prefixed -- PVAH / PPOC / PVAL -- so its lines cannot be
+# confused with TradingView's native Session Volume Profile, which plots the CURRENT day's
+# VAH/POC/VAL. The trigger tag stayed bare ("VAH-RT"), so family and context key differ for
+# exactly those three. Looking up context["vah"] silently missed every value-area runner and
+# dropped it onto the TP1-buffer fallback.
+_LEVEL_CONTEXT_KEYS = {
+    "ORH": "orh", "ORM": "orm", "ORL": "orl",
+    "IBH": "ibh", "IBM": "ibm", "IBL": "ibl",
+    "VAH": "pvah", "POC": "ppoc", "VAL": "pval",
+    "PDH": "pdh", "PDL": "pdl",
+}
 
 
 def structural_runner_sl(direction, entry_price: float, tp: float, context: dict):
@@ -640,11 +652,15 @@ def structural_runner_sl(direction, entry_price: float, tp: float, context: dict
     """
     trigger = (context or {}).get("trigger", "")
     family = trigger.split("-")[0].upper() if trigger else ""
-    if family not in _LEVEL_FAMILIES:
+    key = _LEVEL_CONTEXT_KEYS.get(family)
+    if key is None:
         return None
+    # The bare family name is accepted as a fallback so an alert predating the P-prefix
+    # rename still resolves. Never the other way round: the prefixed key is authoritative.
+    raw = context.get(key, context.get(family.lower()))
     try:
-        level = float(context[family.lower()])
-    except (KeyError, TypeError, ValueError):
+        level = float(raw)
+    except (TypeError, ValueError):
         return None
     if level <= 0:
         return None
@@ -959,6 +975,10 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
 
     sl_order_id = await _place_entry_bracket(signal, quantity, trade_result.order_id)
     entry_fill_price = await _fetch_entry_fill(signal, trade_result.order_id)
+    # Attach it to the result so db.save persists it. This is the only moment the fill
+    # price is cheaply knowable: the broker tradebook is wiped daily, so a number not
+    # captured here is gone for good and slippage becomes unmeasurable after the fact.
+    trade_result.fill_price = entry_fill_price
 
     if await _auto_close_on_tp_overshoot(signal, quantity, entry_fill_price, sl_order_id):
         return False
