@@ -697,6 +697,11 @@ async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -
     With `use_extended_runner_tiers` enabled, the buffer anchors to whichever TP level was
     just hit (TP1 -> TP1.5 -> TP2) instead of always TP1, and the result never loosens the SL
     already in place — each further partial exit only ever tightens the runner's stop.
+
+    The buffer itself scales with the anchor's own R-multiple (1.0 at TP1, 2.0 at TP2, ...)
+    so the stop keeps the same proportional headroom below whichever level it is guarding —
+    a flat TP1-sized buffer would sit proportionally tighter, and more exposed to a stop-hunt
+    wick, against a level further out (e.g. only 15% of TP2's own distance vs 30% of TP1's).
     """
     new_sl_price = structural_runner_sl(
         pos.direction, pos.entry_price, pos.tp, getattr(pos, "context", None) or {}
@@ -710,12 +715,15 @@ async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -
         risk_distance = abs(pos.tp - pos.entry_price)
         anchor_level = "TP1"
         anchor_price = pos.tp
+        anchor_multiplier = 1.0
         if settings.use_extended_runner_tiers and tp_level:
             ratcheted_anchor = _tp_level_price(pos, tp_level)
-            if ratcheted_anchor is not None:
+            ratcheted_multiplier = _TP_LEVEL_R_MULTIPLIERS.get((tp_level or "").upper())
+            if ratcheted_anchor is not None and ratcheted_multiplier is not None:
                 anchor_price = ratcheted_anchor
                 anchor_level = tp_level.upper()
-        buffer = settings.tp1_runner_sl_buffer * risk_distance
+                anchor_multiplier = ratcheted_multiplier
+        buffer = settings.tp1_runner_sl_buffer * risk_distance * anchor_multiplier
         if pos.direction == Direction.LONG:
             candidate_sl = anchor_price - buffer
             new_sl_price = (

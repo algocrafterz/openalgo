@@ -710,16 +710,86 @@ class TestExtendedRunnerTierRatchet:
         mock_signal, mock_pos = self._make_tp2_partial_context(sl_price=2522.5)
         mock_place_sl = await self._run(mock_signal, mock_pos, use_extended_runner_tiers=True)
 
-        # TP2 = entry + 2R = 2500 + 50 = 2550, buffer=2.5 -> candidate = 2547.5, which
-        # tightens versus the existing 2522.5 SL.
+        # TP2 = entry + 2R = 2500 + 50 = 2550, buffer = 0.1 * 25 * 2.0 (TP2's own multiplier)
+        # = 5.0 -> candidate = 2545.0, which tightens versus the existing 2522.5 SL. The
+        # buffer scales with the anchor's multiplier so it keeps the same 30%-of-leg headroom
+        # at TP2 that it has at TP1, instead of sitting proportionally closer to TP2.
         mock_place_sl.assert_called_once()
-        assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2547.5)
+        assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2545.0)
 
     @pytest.mark.asyncio
     async def test_flag_on_never_loosens_existing_sl(self):
         """A tighter SL already in place must never be loosened by the TP2 ratchet."""
-        mock_signal, mock_pos = self._make_tp2_partial_context(sl_price=2560.0)  # tighter than 2547.5
+        mock_signal, mock_pos = self._make_tp2_partial_context(sl_price=2560.0)  # tighter than 2545.0
         mock_place_sl = await self._run(mock_signal, mock_pos, use_extended_runner_tiers=True)
 
         mock_place_sl.assert_called_once()
         assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2560.0)
+
+    @pytest.mark.asyncio
+    async def test_buffer_scales_with_anchor_multiplier_at_tp1_5(self):
+        """The buffer must scale with the ratcheted level's own R-multiple (1.5 at TP1.5),
+        not the flat TP1-sized buffer — otherwise the stop sits proportionally tighter (more
+        stop-hunt-prone) the further out the ratchet goes."""
+        from signal_engine.models import Direction as _Direction
+
+        mock_signal = MagicMock()
+        mock_signal.strategy = "BREAKOUT"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP1.5"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+
+        mock_pos = MagicMock()
+        mock_pos.symbol = "RELIANCE"
+        mock_pos.strategy = "BREAKOUT"
+        mock_pos.exchange = "NSE"
+        mock_pos.product = "MIS"
+        mock_pos.quantity = 66
+        mock_pos.entry_price = 2500.0
+        mock_pos.tp = 2525.0  # TP1 price, R = 25
+        mock_pos.sl = 2522.5  # from an earlier TP1 ratchet
+        mock_pos.direction = _Direction.LONG
+        mock_pos.sl_order_id = "SL002"
+        mock_pos.context = {}
+
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT002", status=OrderStatus.SUCCESS, message="ok")
+        new_sl_result = TradeResult(order_id="SL003", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
+            mock_tracker._last_realised_pnl = 1500.0
+            mock_settings.strategy_profiles = {
+                "BREAKOUT": {"tp_levels": {"TP1": 0.4, "TP1.5": 0.3}, "product": "MIS"},
+            }
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_settings.tp1_runner_sl_buffer = 0.1
+            mock_settings.use_extended_runner_tiers = True
+
+            await handle_message("BREAKOUT EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1.5")
+
+        # TP1.5 = entry + 1.5R = 2500 + 37.5 = 2537.5, buffer = 0.1 * 25 * 1.5 = 3.75
+        # -> candidate = 2533.75.
+        mock_place_sl.assert_called_once()
+        assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2533.75)

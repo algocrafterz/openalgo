@@ -64,6 +64,29 @@ ratchet on/off (off byte-identical to the pre-existing TP1-buffer-only behaviour
 never loosens an existing SL. Two pre-existing characterization tests that asserted
 `compute_next_tp(pos, "TP2") is None` were updated to the new TP2→TP3 contract.
 
+### Follow-up, same day: the ratchet buffer needed to scale with the anchor's R-multiple
+
+The ratchet above used a flat buffer — `tp1_runner_sl_buffer` (0.3R) subtracted from
+whichever level the stop had just moved to. That is unchanged and correct at TP1: this SL was
+never at breakeven, it sits at TP1 minus the buffer (~70% of the TP1 leg locked in), and that
+predates this feature. It stops being correct once the ratchet reaches further out — a flat
+0.3R buffer is 30% of TP1's own distance from entry but only 15% of TP2's, so the stop sits
+proportionally closer to TP2, itself a level likely to draw other participants' stops, than
+it ever sat relative to TP1. That is real stop-hunt exposure the flat version did not price
+in.
+
+Fixed: `buffer = tp1_runner_sl_buffer x risk_distance x anchor_multiplier`, where
+`anchor_multiplier` is the R-multiple of whichever level the ratchet just moved to (1.0 at
+TP1, 1.5 at TP1.5, 2.0 at TP2). Same 30%-of-leg headroom at every level instead of a fixed
+absolute amount that shrinks in relative terms the further the ratchet extends. TP1 itself is
+unaffected (multiplier 1.0 either way). New test covers the TP1.5 case (1.5x) directly, on
+top of the TP2 case already covered.
+
+Whether TP1's own long-standing ~70%-of-leg lock-in is itself worth moving closer to
+breakeven is a separate question — it predates extended runner tiers, applies to every
+strategy using the runner SL, and deserves its own deliberate review rather than being folded
+into this feature.
+
 ---
 
 ## 2026-08-30b — Deployed live as forward-data collection; two bugs fixed, CLV gate relaxed

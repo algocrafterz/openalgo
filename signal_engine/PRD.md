@@ -226,6 +226,31 @@ never loosens an existing SL), plus two pre-existing tests in `test_main_charact
 and `test_main_helpers.py` updated from asserting `compute_next_tp(pos, "TP2") is None` to
 the new TP2→TP3 contract.
 
+### Runner-SL ratchet: buffer now scales with the anchor's own R-multiple
+
+Follow-up correction, same day. The ratchet above was first written with a flat buffer —
+`tp1_runner_sl_buffer` (0.3R) subtracted from whichever level the stop had just moved to,
+unchanged regardless of which level that was. That is fine at TP1, where it was already the
+long-standing behaviour (this SL was never at breakeven — it sits at TP1 minus the buffer,
+i.e. ~70% of the TP1 leg's profit locked in, and that predates this feature). It is a problem
+once the anchor ratchets further out: a flat 0.3R buffer is 30% of TP1's own distance from
+entry but only 15% of TP2's, so the stop sits proportionally closer to TP2 — a level that is
+itself likely to draw other participants' stops and targets — than it ever did to TP1. That
+is a real stop-hunt exposure the flat buffer did not account for.
+
+Fixed by scaling the buffer by the anchor's own R-multiple (1.0 at TP1, 1.5 at TP1.5, 2.0 at
+TP2): `buffer = tp1_runner_sl_buffer x risk_distance x anchor_multiplier`. This keeps the
+same proportional headroom — 30% of that leg's own distance — at every level the ratchet
+reaches, instead of a fixed absolute amount that shrinks in relative terms the further out it
+goes. TP1's own behaviour is unaffected (multiplier 1.0, same result as always); only the
+TP1.5/TP2 ratchet introduced by extended runner tiers changes. Test coverage extended with a
+TP1.5 case verifying the 1.5x scaling directly.
+
+Whether TP1's own long-standing ~70%-of-leg lock-in (as opposed to a stop nearer breakeven)
+is itself worth revisiting is a separate, larger question — it is the default for every
+strategy using the runner SL, not something introduced by extended runner tiers, and changing
+it needs its own deliberate review rather than folding into this feature's scope.
+
 ## Recent Changes (2026-08-30)
 
 ### The key-level premise measured against a random walk, and it loses
