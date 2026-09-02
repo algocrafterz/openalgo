@@ -1,9 +1,10 @@
 """Partial exits: quantity resolution and runner SL re-placement."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from signal_engine.main import handle_message, structural_runner_sl
+import pytest
+
+from signal_engine.main import compute_next_tp, handle_message, structural_runner_sl
 from signal_engine.models import (
     Direction,
     OrderStatus,
@@ -12,6 +13,7 @@ from signal_engine.models import (
     ValidationStatus,
 )
 from signal_engine.tests.pipeline_fixtures import tracker_mock
+from signal_engine.tracker import TrackedPosition
 
 
 class TestPartialExitFlow:
@@ -591,3 +593,133 @@ class TestStructuralRunnerStop:
             direction=Direction.LONG, entry_price=100.0, tp=102.0,
             context={"trigger": "PDH-BRK", "pdh": "101.0"},
         ) == 101.0
+
+
+class TestComputeNextTpExtended:
+    """TP2 -> TP3 at 3R. Only reachable once TP2 becomes a partial exit under extended
+    runner tiers — previously TP2 always closed the position, so this branch was dead."""
+
+    def _pos(self, **overrides):
+        defaults = {
+            "symbol": "RELIANCE", "strategy": "BREAKOUT", "exchange": "NSE", "product": "MIS",
+            "entry_price": 2500.0, "quantity": 34, "sl": 2485.0, "tp": 2525.0,
+            "direction": Direction.LONG,
+        }
+        defaults.update(overrides)
+        return TrackedPosition(**defaults)
+
+    def test_tp2_hit_returns_tp3_at_3r(self):
+        pos = self._pos()
+        assert compute_next_tp(pos, "TP2") == ("TP3", 2500.0 + 3.0 * 25.0)
+
+    def test_tp1_and_tp1_5_chain_unchanged(self):
+        pos = self._pos()
+        assert compute_next_tp(pos, "TP1") == ("TP1.5", 2500.0 + 1.5 * 25.0)
+        assert compute_next_tp(pos, "TP1.5") == ("TP2", 2500.0 + 2.0 * 25.0)
+
+    def test_tp3_has_no_further_level(self):
+        pos = self._pos()
+        assert compute_next_tp(pos, "TP3") is None
+
+    def test_short_direction_tp2_to_tp3(self):
+        pos = self._pos(entry_price=1100.0, tp=1075.0, direction=Direction.SHORT)
+        assert compute_next_tp(pos, "TP2") == ("TP3", 1100.0 - 3.0 * 25.0)
+
+
+class TestExtendedRunnerTierRatchet:
+    """With use_extended_runner_tiers on, the runner SL after a TP2 partial ratchets to the
+    TP2 price (not always TP1), and never loosens versus the SL already in place. Off must
+    remain byte-identical to the pre-existing TP1-buffer-only behaviour."""
+
+    def _make_tp2_partial_context(self, sl_price):
+        from signal_engine.models import Direction as _Direction
+
+        mock_signal = MagicMock()
+        mock_signal.strategy = "BREAKOUT"
+        mock_signal.direction = Direction.EXIT
+        mock_signal.symbol = "RELIANCE"
+        mock_signal.entry = 0.0
+        mock_signal.sl = 0.0
+        mock_signal.tp = 0.0
+        mock_signal.tp_level = "TP2"
+        mock_signal.exchange = ""
+        mock_signal.product = ""
+
+        mock_pos = MagicMock()
+        mock_pos.symbol = "RELIANCE"
+        mock_pos.strategy = "BREAKOUT"
+        mock_pos.exchange = "NSE"
+        mock_pos.product = "MIS"
+        mock_pos.quantity = 66  # remaining after a TP1 partial
+        mock_pos.entry_price = 2500.0
+        mock_pos.tp = 2525.0  # TP1 price, R = 25
+        mock_pos.sl = sl_price
+        mock_pos.direction = _Direction.LONG
+        mock_pos.sl_order_id = "SL002"
+        mock_pos.context = {}  # no key-level thesis -> structural_runner_sl falls through
+        return mock_signal, mock_pos
+
+    async def _run(self, mock_signal, mock_pos, use_extended_runner_tiers):
+        valid_result = ValidationResult(status=ValidationStatus.VALID)
+        exit_result = TradeResult(order_id="EXIT002", status=OrderStatus.SUCCESS, message="ok")
+        new_sl_result = TradeResult(order_id="SL003", status=OrderStatus.SUCCESS, message="ok")
+
+        with (
+            patch("signal_engine.main.parse", return_value=mock_signal),
+            patch("signal_engine.main.validate", return_value=valid_result),
+            patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
+            patch("signal_engine.main.risk_engine"),
+            patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
+            patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
+            patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
+            patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
+            patch("signal_engine.main.save"),
+            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings,
+        ):
+            mock_tracker.find_position.return_value = mock_pos
+            mock_tracker._time_exit_active = False
+            mock_tracker._last_realised_pnl = 1500.0
+            mock_settings.strategy_profiles = {
+                "BREAKOUT": {"tp_levels": {"TP1": 0.4, "TP2": 0.5}, "product": "MIS"},
+            }
+            mock_settings.bracket_enabled = True
+            mock_settings.bracket_tp_exit_retries = 1
+            mock_settings.bracket_retry_delay = 0.0
+            mock_settings.tp1_runner_sl_buffer = 0.1
+            mock_settings.use_extended_runner_tiers = use_extended_runner_tiers
+
+            await handle_message("BREAKOUT EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP2")
+
+        return mock_place_sl
+
+    @pytest.mark.asyncio
+    async def test_flag_off_anchors_to_tp1_same_as_before(self):
+        """use_extended_runner_tiers=False: TP2 partial still anchors the buffer to TP1."""
+        mock_signal, mock_pos = self._make_tp2_partial_context(sl_price=2522.5)
+        mock_place_sl = await self._run(mock_signal, mock_pos, use_extended_runner_tiers=False)
+
+        # TP1=2525, R=25, buffer=0.1*25=2.5 -> SL = 2525 - 2.5 = 2522.5 (unchanged behavior)
+        mock_place_sl.assert_called_once()
+        assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2522.5)
+
+    @pytest.mark.asyncio
+    async def test_flag_on_ratchets_to_tp2(self):
+        """use_extended_runner_tiers=True: TP2 partial ratchets the buffer to TP2, not TP1."""
+        mock_signal, mock_pos = self._make_tp2_partial_context(sl_price=2522.5)
+        mock_place_sl = await self._run(mock_signal, mock_pos, use_extended_runner_tiers=True)
+
+        # TP2 = entry + 2R = 2500 + 50 = 2550, buffer=2.5 -> candidate = 2547.5, which
+        # tightens versus the existing 2522.5 SL.
+        mock_place_sl.assert_called_once()
+        assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2547.5)
+
+    @pytest.mark.asyncio
+    async def test_flag_on_never_loosens_existing_sl(self):
+        """A tighter SL already in place must never be loosened by the TP2 ratchet."""
+        mock_signal, mock_pos = self._make_tp2_partial_context(sl_price=2560.0)  # tighter than 2547.5
+        mock_place_sl = await self._run(mock_signal, mock_pos, use_extended_runner_tiers=True)
+
+        mock_place_sl.assert_called_once()
+        assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2560.0)

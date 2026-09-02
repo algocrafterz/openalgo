@@ -44,6 +44,7 @@ def _settings_stub(**overrides):
         bracket_cnc_sl_enabled=False,
         max_trades_per_day=8,
         tp1_runner_sl_buffer=0.1,
+        use_extended_runner_tiers=False,
         broker_mis_rejected=set(),
         min_capital_for_entry=0.0,
         risk_per_trade=0.01,
@@ -742,10 +743,18 @@ class TestComputeNextTpEdges:
         pos = _position(entry_price=2500.0, tp=2500.0)
         assert compute_next_tp(pos, "TP1") is None
 
+    def test_tp2_returns_tp3(self):
+        """TP2 -> TP3 at 3R: only reachable once TP2 becomes a partial exit under extended
+        runner tiers (previously TP2 always closed the position outright)."""
+        from signal_engine.main import compute_next_tp
+
+        pos = _position()  # entry=2500.0, tp=2540.0 -> R=40
+        assert compute_next_tp(pos, "TP2") == ("TP3", 2620.0)
+
     def test_terminal_level_returns_none(self):
         from signal_engine.main import compute_next_tp
 
-        assert compute_next_tp(_position(), "TP2") is None
+        assert compute_next_tp(_position(), "TP3") is None
 
     def test_short_next_tp_is_below_entry(self):
         from signal_engine.main import compute_next_tp

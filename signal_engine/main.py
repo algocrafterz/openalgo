@@ -194,7 +194,10 @@ def compute_next_tp(pos: TrackedPosition, tp_level: str | None) -> tuple[str, fl
     Uses pos.tp (TP1 price) and pos.entry_price to derive R-multiples:
     - TP1 hit → next is TP1.5 at entry + 1.5R
     - TP1.5 hit → next is TP2 at entry + 2.0R
-    - TP2 or unknown → None (no further standard TP level)
+    - TP2 hit → next is TP3 at entry + 3.0R (only reachable with extended runner tiers, where
+      TP2 becomes a partial exit instead of always closing the position — see breakout.pine's
+      useExtendedRunnerTiers)
+    - TP3 or unknown → None (no further standard TP level)
 
     Returns (next_label, next_price) or None if the next level cannot be computed.
     """
@@ -206,6 +209,7 @@ def compute_next_tp(pos: TrackedPosition, tp_level: str | None) -> tuple[str, fl
     next_levels: dict[str, tuple[str, float]] = {
         "TP1": ("TP1.5", 1.5),
         "TP1.5": ("TP2", 2.0),
+        "TP2": ("TP3", 3.0),
     }
     next_info = next_levels.get(tp_level.upper())
     if next_info is None:
@@ -602,7 +606,7 @@ async def _finalize_partial_exit(
     pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
     logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
-    await _replace_runner_sl(pos, remaining)
+    await _replace_runner_sl(pos, remaining, tp_level)
 
     # R for this partial leg only (shows how far into the trade we are)
     r_partial = _compute_r(pnl_delta, exit_qty, base_price, pos.sl)
@@ -668,11 +672,31 @@ def structural_runner_sl(direction, entry_price: float, tp: float, context: dict
     return max(level, entry_price) if direction == Direction.LONG else min(level, entry_price)
 
 
-async def _replace_runner_sl(pos, remaining: int) -> None:
+_TP_LEVEL_R_MULTIPLIERS = {"TP1": 1.0, "TP1.5": 1.5, "TP2": 2.0, "TP3": 3.0}
+
+
+def _tp_level_price(pos, tp_level: str) -> float | None:
+    """Price of a named TP level, derived from TP1's R-distance. None if not computable."""
+    multiplier = _TP_LEVEL_R_MULTIPLIERS.get((tp_level or "").upper())
+    if multiplier is None or pos.tp <= 0 or pos.entry_price <= 0:
+        return None
+    r_distance = abs(pos.tp - pos.entry_price)
+    if r_distance <= 0:
+        return None
+    if pos.direction == Direction.LONG:
+        return pos.entry_price + multiplier * r_distance
+    return pos.entry_price - multiplier * r_distance
+
+
+async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -> None:
     """Re-place the runner's SL after a partial TP exit.
 
     Prefers the structural stop (the level that triggered the entry, floored at break-even);
     falls back to TP1 - tp1_runner_sl_buffer x R for signals with no key level behind them.
+
+    With `use_extended_runner_tiers` enabled, the buffer anchors to whichever TP level was
+    just hit (TP1 -> TP1.5 -> TP2) instead of always TP1, and the result never loosens the SL
+    already in place — each further partial exit only ever tightens the runner's stop.
     """
     new_sl_price = structural_runner_sl(
         pos.direction, pos.entry_price, pos.tp, getattr(pos, "context", None) or {}
@@ -684,12 +708,30 @@ async def _replace_runner_sl(pos, remaining: int) -> None:
         )
     elif pos.tp and pos.tp > 0:
         risk_distance = abs(pos.tp - pos.entry_price)
+        anchor_level = "TP1"
+        anchor_price = pos.tp
+        if settings.use_extended_runner_tiers and tp_level:
+            ratcheted_anchor = _tp_level_price(pos, tp_level)
+            if ratcheted_anchor is not None:
+                anchor_price = ratcheted_anchor
+                anchor_level = tp_level.upper()
         buffer = settings.tp1_runner_sl_buffer * risk_distance
         if pos.direction == Direction.LONG:
-            new_sl_price = pos.tp - buffer
+            candidate_sl = anchor_price - buffer
+            new_sl_price = (
+                max(candidate_sl, pos.sl)
+                if settings.use_extended_runner_tiers and pos.sl
+                else candidate_sl
+            )
         else:
-            new_sl_price = pos.tp + buffer
+            candidate_sl = anchor_price + buffer
+            new_sl_price = (
+                min(candidate_sl, pos.sl)
+                if settings.use_extended_runner_tiers and pos.sl
+                else candidate_sl
+            )
     else:
+        anchor_level = "entry"
         new_sl_price = pos.entry_price
     if not (settings.bracket_enabled and new_sl_price > 0):
         return
@@ -707,7 +749,7 @@ async def _replace_runner_sl(pos, remaining: int) -> None:
         pos.sl = new_sl_price  # update tracked SL so time_exit and check_positions stay consistent
         pos.sl_order_id = sl_result.order_id
         logger.info(
-            f"SL moved to TP1-buffer {new_sl_price:.2f} (tp={pos.tp}, buf={settings.tp1_runner_sl_buffer}R) "
+            f"SL moved to {anchor_level}-buffer {new_sl_price:.2f} (tp={pos.tp}, buf={settings.tp1_runner_sl_buffer}R) "
             f"for {pos.symbol} remaining {remaining} qty: id={sl_result.order_id}"
         )
     else:

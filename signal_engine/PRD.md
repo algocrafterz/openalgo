@@ -55,9 +55,10 @@ main.py (_handle_entry / _handle_exit)
 8. Partial exit: reduce tracked qty, clear `sl_order_id`, re-place SL at TP1 − 0.3R (runner SL)
    - `tp1_runner_sl_buffer: 0.3` — 30% of R below TP1. Gives price room to wick-back and test TP1 before continuing to TP1.5. Old value 0.1R was too tight (TMPV 2026-04-13: ₹0.80 gap triggered by normal TP1 test wick). 0.3R scales correctly across ₹150–₹800 filter (9–72 ticks depending on SL%).
    - Runner SL is the **only automated protection** when TP1.5 signal is delayed or missing.
-   - `compute_next_tp()` derives next TP level (TP1→TP1.5, TP1.5→TP2) for notification
+   - `compute_next_tp()` derives next TP level (TP1→TP1.5, TP1.5→TP2, TP2→TP3) for notification
    - Telegram notification includes: booked qty, remaining qty, new SL, next TP price
    - **TP1.5 exit fires only on TradingView TP1.5 HIT alert** — engine has no autonomous LTP monitoring for TP exits. If the alert is delayed/missing, runner holds until runner SL fires or time exit at 15:00.
+   - `bracket.use_extended_runner_tiers` (default off, see 2026-09-02 changelog entry): when on, the runner SL ratchets to whichever TP level was just hit instead of always TP1, and never loosens — each further partial exit only tightens the stop.
 9. Full exit: `tracker.unregister()` + `risk_engine.record_close()`
 
 ---
@@ -67,7 +68,7 @@ main.py (_handle_entry / _handle_exit)
 | Script | Alert tag | Status |
 |---|---|---|
 | `pinescripts/intraday/orb/orb.pine` | `ORB` | **Live.** No longer frozen: the time-exit alert was rebuilt 2026-08-29 (see that section). The channel is still running an older build — the R:R fix has not been redeployed. Documented in `HOW-IT-WORKS.md` |
-| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **Live as forward-data collection from 2026-08-30 — not as a proven edge.** Key-level engine (VA / PDH-PDL / IB); ORB entries off. The backtest premise is negative: key-level breaks follow through 30.9% against a 33.3% random-walk baseline (t = -9.87, 49,677 events), and no target, stop, bias or candle filter reverses it. Deployed deliberately to gather live trades for a first-week review. Changelog in `pinescripts/intraday/orb/breakout.md` (2026-08-30) |
+| `pinescripts/intraday/orb/breakout.pine` | `BREAKOUT` | **Live as forward-data collection from 2026-08-30 — not as a proven edge.** Key-level engine (VA / PDH-PDL / IB); ORB entries off. The backtest premise is negative: key-level breaks follow through 30.9% against a 33.3% random-walk baseline (t = -9.87, 49,677 events), and no target, stop, bias or candle filter reverses it. Deployed deliberately to gather live trades for a first-week review. Changelog in `pinescripts/intraday/orb/breakout.md` (2026-09-02) |
 | `pinescripts/intraday/ema9/ema9-intraday.pine` | `EMA9` | **Reference only — do not trade.** Backtest found no edge before costs (6577 trades, t = -9.90). Verdict block is in the file header. The source PDF's own six methods were tested separately and are all negative at zero cost — see its `STRATEGY-ANALYSIS.md` |
 | `pinescripts/swing/momentum-rank/momentum-rank.pine` | `momentum-rank` | **Candidate, paper only.** 12-1 cross-sectional momentum, monthly rebalance. The only strategy tested so far with a positive out-of-sample edge that survives costs. Never traded |
 | `pinescripts/swing/dividend-growth/dividend-growth.pine` | `swing-dividend-growth` | **Do not trade.** Entry has negative forward-return edge on the broad F&O universe; the Pine strategy block cannot book a loss. See its `STRATEGY-ANALYSIS.md` |
@@ -173,6 +174,57 @@ Operational notes:
 Pre-existing conditions confirmed *not* caused by the upgrade: `test_auto_login.py` unpacks 2 values from `auto_login()`, which returns 3; fourteen `test_backtest_*.py` files import a `backtest` package that does not exist on this branch; `eventlet` is absent from `uv.lock` although production runs `gunicorn --worker-class eventlet`.
 
 ---
+
+## Recent Changes (2026-09-02)
+
+### Extended runner tiers for BREAKOUT: TP1/TP2/TP3 profit booking, gated and revertible
+
+`breakout.pine` previously offered only a 2-tier exit: `tp1ExitQtyPct` (default 50%) at TP1,
+then either `tp1_5ExitQtyPct` (default 0%, display-only, held for TP2) or 100% at TP2 —
+TP2 always closed whatever remained, so a trend day that ran to TP3 (RECLTD, FEDERALBNK,
+2026-08-24) had nothing left to book there. `buildRunnerObsAlert` recorded that as an
+unbooked move after the fact; it never captured any of it.
+
+Added a new `useExtendedRunnerTiers` boolean input (default off) that, when on, overrides
+the effective exit fractions to TP1=30%, TP1.5=0% (unchanged, still held for TP2), TP2=50%
+of whatever remains, TP3=100% of whatever remains — a net 30/35/35 split. Off reproduces the
+prior behavior exactly; this is the full revert path. A matching `config.yaml` boolean,
+`bracket.use_extended_runner_tiers`, gates a companion change on the python side: the
+runner-SL ratchet in `main.py`'s `_replace_runner_sl()` now anchors the post-partial-exit
+stop to whichever TP level was just hit (TP1 → TP1.5 → TP2) instead of always TP1, and never
+loosens the stop already in place. `compute_next_tp()` gained a TP2 → TP3 entry so partial-
+exit notifications show the right next target once TP2 becomes a partial exit.
+
+**Why 30/35/35 and not 40/30/30 or 50/25/25.** The split has to balance two things: not
+missing the runner on a trend day, and still banking whatever the move gave even if TP2/TP3
+never arrive. BREAKOUT's key-level engine has no TP2/TP3 hit-rate data of its own — it has
+only been live since 2026-08-30 as forward-data collection against a *negative* backtest
+(above: unconditional key-level breaks follow through 30.9% against a 33.3% random-walk
+baseline). An initial 40/30/30 default leaned on ORB's own number instead (72.3% of TP1
+trades also reach TP1.5 — `pinescripts/intraday/orb/STRATEGY-ANALYSIS.md`) as the closest
+available evidence, which made it a conservative placeholder rather than a measured optimum
+for this strategy.
+
+The stock universe feeding BREAKOUT has since narrowed to trend-qualified names only, which
+raises confidence in continuation without producing a BREAKOUT-specific number to calibrate
+against. 30/35/35 shifts weight from the TP1 bucket into the TP2/TP3 buckets while holding
+TP2's share of the remainder fixed at 50% (TP2 and TP3 land equal by construction, so the
+only real knob is TP1's own percentage). 50/25/25 was rejected — it banks more at TP1 but
+shrinks the TP3 runner leg, working against not missing the runner. 20/40/40 or lower was
+also rejected — it leaves too little booked at TP1, the easiest target (R=1.0), for a
+strategy with no proven edge yet, working against banking whatever the move gave.
+
+The runner-SL ratchet is what makes 30% (rather than something higher) defensible for the
+second goal: the 70% held past TP1 is not exposed and hoping for TP2 — its stop moves up to
+near TP1's price the instant TP1 fires, so it is either taken out at a still-profitable
+level or continues toward TP2/TP3. The fixed exit fractions decide how much becomes cash at
+each checkpoint; the ratchet decides how much of the rest is protected regardless of whether
+a further checkpoint is ever reached.
+
+Tests: `test_main_partial_exit.py` (TP2→TP3 in `compute_next_tp`, ratchet on/off, ratchet
+never loosens an existing SL), plus two pre-existing tests in `test_main_characterization.py`
+and `test_main_helpers.py` updated from asserting `compute_next_tp(pos, "TP2") is None` to
+the new TP2→TP3 contract.
 
 ## Recent Changes (2026-08-30)
 

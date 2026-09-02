@@ -210,7 +210,58 @@ showTP3 = true
 // 50 = exit 50% of current open position at this TP level.
 // 100 = exit 100% of remaining position (full close).
 tp1ExitQtyPct   = input.int(50,  "TP1 Exit %",   minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of open position to exit at TP1\n\n50 = partial exit (bank half, hold rest for TP1.5)\n100 = full exit at TP1 (original behavior)\n\nData: 72.3% of TP1 trades also reach TP1.5 — 50% partial exit captures both wins.")
-tp1_5ExitQtyPct = input.int(0, "TP1.5 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP1.5\n\n0 (default) = DISPLAY ONLY, no exit alert. The runner is held for TP2, which is the next key level out — exiting at a fixed multiple would close it before it reaches the level that justifies the trade.\n\n100 = exit remaining position fully at TP1.5 (the pre-2026-08-25 behaviour).\n\nTP2/TP3 always exit 100% of whatever remains.")
+tp1_5ExitQtyPct = input.int(0, "TP1.5 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP1.5\n\n0 (default) = DISPLAY ONLY, no exit alert. The runner is held for TP2, which is the next key level out — exiting at a fixed multiple would close it before it reaches the level that justifies the trade.\n\n100 = exit remaining position fully at TP1.5 (the pre-2026-08-25 behaviour).\n\nTP2/TP3 always exit 100% of whatever remains, unless overridden below.")
+tp2ExitQtyPct   = input.int(100, "TP2 Exit %", minval=0, maxval=100, group=grp_targets, inline="exitpct", tooltip="% of remaining open position to exit at TP2\n\n100 (default) = exit remaining position fully at TP2, same as always. TP3 never fires because nothing is left open.\n\nBelow 100 = bank part of the remainder at TP2 and hold the rest for TP3. Only takes effect when 'Use extended runner tiers' below is OFF — with it ON, TP2's exit % is fixed at 50 regardless of this input.")
+
+// Master toggle: 3-tier profit booking (TP1 / TP2 / TP3) instead of the 2-tier scheme above.
+// REASON: 2026-08-24 RECLTD and FEDERALBNK both ran to TP3 (3R) after TP2 fully closed the
+// position at 2R — that upside was never booked, only logged as a RUNNER observation after
+// the fact (see buildRunnerObsAlert below). A fixed TP1/TP2 close cannot capture a trend day.
+//
+// OFF (default): tp1ExitQtyPct / tp1_5ExitQtyPct / tp2ExitQtyPct above are used as configured
+// — identical to pre-existing behavior. This is the full revert path: flip this OFF (and
+// flip signal_engine's config.yaml `bracket.use_extended_runner_tiers` back to false) to
+// undo the whole feature instantly.
+//
+// ON: overrides the effective exit fractions to TP1=30%, TP1.5=0% (still display-only, held
+// for TP2), TP2=50% of whatever remains, TP3=100% of whatever remains (unchanged either way).
+// Net split is 30/35/35 across TP1/TP2/TP3.
+//
+// Revised 2026-09-02 from an initial 40/30/30 (TP1=40%). 40/30/30 leaned on the same
+// reasoning general trend-following literature uses for a conservative scale-out and on
+// ORB's own numbers (72.3% of TP1 trades also reach TP1.5 — pinescripts/intraday/orb/
+// STRATEGY-ANALYSIS.md), but BREAKOUT's key-level engine has no equivalent TP2/TP3 hit-rate
+// data of its own — it has been live only since 2026-08-30 as forward-data collection
+// against a NEGATIVE backtest (breakout.md: unconditional key-level breaks follow through
+// 30.9% against a 33.3% random-walk baseline). 40/30/30 was therefore a conservative
+// placeholder, not a measured optimum.
+//
+// The stock selection feeding this strategy has since tightened to trend-qualified names
+// only, which raises confidence in continuation without producing new BREAKOUT-specific hit
+// rates to calibrate against. 30/35/35 answers that by shifting weight from the TP1 bucket
+// to the TP2/TP3 buckets while holding TP2's share of the remainder fixed at 50% — TP2 and
+// TP3 end up equal by construction ((100-TP1)/2 each), so lowering TP1 from 40 to 30 is the
+// only knob this changes. Considered and rejected: 50/25/25 banks more at TP1 but shrinks
+// the TP3 runner leg further, working against "don't miss the runner"; 20/40/40 or lower
+// leaves too little booked at the easiest target (TP1, R=1.0) for a strategy with no proven
+// edge yet, working against "book whatever move we achieved so far" if TP2/TP3 never come.
+//
+// That second goal — protecting profit already made even when TP2/TP3 never arrive — is not
+// carried by the 30% alone. The runner-SL ratchet in main.py's _replace_runner_sl() (gated by
+// config.yaml's `bracket.use_extended_runner_tiers`) moves the stop up to whichever TP level
+// was just hit minus a buffer the instant that level fires, and never loosens it again. So
+// the 70% held past TP1 is already locked in near TP1's level before TP2 is ever reached —
+// the fixed exit fractions only decide how much is banked as cash at each checkpoint, not
+// whether the rest is protected.
+useExtendedRunnerTiers = input.bool(false, "Use extended runner tiers (TP1/TP2/TP3 thirds)", group=grp_targets, tooltip="OFF (default): use the TP1/TP1.5/TP2 Exit % inputs above exactly as configured — today's behavior.\n\nON: TP1=30%, TP1.5=0% (display-only, held for TP2), TP2=50% of remainder, TP3=100% of remainder. Net 30/35/35 split, so a real runner leg survives to TP3 instead of the position being fully closed at TP2. Revised 2026-09-02 from an initial 40/30/30 — see the comment above this input for why.\n\nKeep signal_engine's config.yaml `bracket.use_extended_runner_tiers` in lockstep with this — it governs the runner-SL ratchet on the python side, which locks in profit at each level hit even when the exit fraction itself is small. Flip both together; flip both back to revert.")
+
+// Effective exit fractions actually used at the TP1/TP1.5/TP2 alert sites below. Computed
+// once so the ON/OFF branch lives in one place instead of being repeated at all 4 call sites
+// (LONG + SHORT, TP1/TP1.5/TP2 each). TP3 is never overridden — it is always 100% (final
+// exit of whatever remains) regardless of this toggle.
+effTp1ExitQtyPct   = useExtendedRunnerTiers ? 30  : tp1ExitQtyPct
+effTp1_5ExitQtyPct = useExtendedRunnerTiers ? 0   : tp1_5ExitQtyPct
+effTp2ExitQtyPct   = useExtendedRunnerTiers ? 50  : tp2ExitQtyPct
 
 // Adaptive R:R - Auto-switch to TP2 when trending
 enableAdaptiveRR = false
@@ -3911,7 +3962,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             // Send TP1 Hit Alert (LONG)
             tpFireLevel := "TP1"
             tpFirePrice := orbTP1Price
-            tpFireQtyPct := tp1ExitQtyPct
+            tpFireQtyPct := effTp1ExitQtyPct
             if not na(orbTP1Label)
                 string tp1Text = labelFormat == "Simple" ? "✅ TP1" : str.format("✅ TP1: {0}", str.tostring(orbTP1Price, "#.##"))
                 label.set_text(orbTP1Label, tp1Text)
@@ -3922,10 +3973,10 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and high >= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (LONG)
-            if tp1_5ExitQtyPct > 0
+            if effTp1_5ExitQtyPct > 0
                 tpFireLevel := "TP1.5"
                 tpFirePrice := orbTP1_5Price
-                tpFireQtyPct := tp1_5ExitQtyPct
+                tpFireQtyPct := effTp1_5ExitQtyPct
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -3938,7 +3989,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             // Send TP2 Hit Alert (LONG)
             tpFireLevel := "TP2"
             tpFirePrice := orbTP2Price
-            tpFireQtyPct := 100
+            tpFireQtyPct := effTp2ExitQtyPct
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -4016,7 +4067,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             // Send TP1 Hit Alert (SHORT)
             tpFireLevel := "TP1"
             tpFirePrice := orbTP1Price
-            tpFireQtyPct := tp1ExitQtyPct
+            tpFireQtyPct := effTp1ExitQtyPct
             if not na(orbTP1Label)
                 string tp1Text = labelFormat == "Simple" ? "✅ TP1" : str.format("✅ TP1: {0}", str.tostring(orbTP1Price, "#.##"))
                 label.set_text(orbTP1Label, tp1Text)
@@ -4027,10 +4078,10 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
         if not orbTP1_5Hit and not na(orbTP1_5Price) and showTP1_5 and bar_index > orbEntryBar and low <= orbTP1_5Price
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (SHORT)
-            if tp1_5ExitQtyPct > 0
+            if effTp1_5ExitQtyPct > 0
                 tpFireLevel := "TP1.5"
                 tpFirePrice := orbTP1_5Price
-                tpFireQtyPct := tp1_5ExitQtyPct
+                tpFireQtyPct := effTp1_5ExitQtyPct
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -4043,7 +4094,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             // Send TP2 Hit Alert (SHORT)
             tpFireLevel := "TP2"
             tpFirePrice := orbTP2Price
-            tpFireQtyPct := 100
+            tpFireQtyPct := effTp2ExitQtyPct
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)

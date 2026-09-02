@@ -35,9 +35,14 @@ class TestComputeNextTp:
         assert label == "TP2"
         assert abs(price - 170.03) < 0.01
 
-    def test_tp2_returns_none(self):
+    def test_tp2_returns_tp3(self):
+        # TMPV: entry=339.8, TP1=344.65 → R=4.85 → TP3=entry+3.0R=354.35
         pos = self._make_pos(entry=339.8, tp=344.65)
-        assert compute_next_tp(pos, "TP2") is None
+        result = compute_next_tp(pos, "TP2")
+        assert result is not None
+        label, price = result
+        assert label == "TP3"
+        assert abs(price - 354.35) < 0.001
 
     def test_unknown_level_returns_none(self):
         pos = self._make_pos(entry=339.8, tp=344.65)

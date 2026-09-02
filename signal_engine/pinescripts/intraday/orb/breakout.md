@@ -9,6 +9,63 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-09-02 — Extended runner tiers: TP1/TP2/TP3 profit booking, revertible via one input
+
+The 2-tier exit (`tp1ExitQtyPct` at TP1, then either `tp1_5ExitQtyPct` or a hardcoded 100% at
+TP2) meant TP2 always closed whatever remained — so RECLTD and FEDERALBNK running to TP3 on
+2026-08-24 had nothing left to book there. `buildRunnerObsAlert` only logged that as an
+unbooked move after the fact.
+
+### The mechanism
+
+New `useExtendedRunnerTiers` bool (default off — full revert path). On: TP1=30%, TP1.5=0%
+(unchanged, still display-only, held for TP2), TP2=50% of whatever remains, TP3=100% of
+whatever remains. A new `tp2ExitQtyPct` input (default 100) keeps TP2's old behaviour exactly
+reproducible when the master toggle is off.
+
+Companion python-side change, gated by `config.yaml`'s `bracket.use_extended_runner_tiers`:
+`main.py`'s `_replace_runner_sl()` now anchors the post-partial-exit stop to whichever TP
+level was just hit (TP1 → TP1.5 → TP2), not always TP1, and never loosens a stop already in
+place. `compute_next_tp()` gained TP2 → TP3 so the partial-exit notification's "next target"
+is correct once TP2 becomes a partial exit rather than always the final one.
+
+### Why 30/35/35, considered against 40/30/30 and 50/25/25
+
+The split has to answer two pulls at once: don't miss the runner on a trend day, and still
+book whatever the move gave if TP2/TP3 never come. Neither pull has BREAKOUT-specific
+evidence to lean on — the key-level engine has been live only since 2026-08-30 as forward-
+data collection against the negative backtest two entries below (30.9% follow-through vs a
+33.3% random-walk baseline), so there is no measured TP2/TP3 hit rate for this strategy yet.
+
+An initial 40/30/30 default borrowed ORB's own number instead — 72.3% of TP1 trades also
+reach TP1.5 (`STRATEGY-ANALYSIS.md`) — as the nearest available evidence, which made it a
+conservative placeholder rather than an optimum for BREAKOUT specifically.
+
+Since then the stock universe feeding BREAKOUT narrowed to trend-qualified names only. That
+raises confidence in continuation without creating a new BREAKOUT number to calibrate
+against, so the split was revised by hand: TP2 keeps exactly 50% of whatever remains after
+TP1 (so TP2 and TP3 land equal by construction — (100-TP1)/2 each), which leaves TP1's own
+percentage as the only knob. Lowering it from 40 to 30 gives 30/35/35.
+
+50/25/25 was rejected: it books more at TP1 but shrinks the TP3 leg further, working against
+not missing the runner. 20/40/40 or lower was rejected too: it leaves too little booked at
+TP1 — the easiest target, R=1.0 — for a strategy with no proven edge yet, working against
+banking whatever the move gave if it stops there.
+
+The runner-SL ratchet is why 30% is defensible rather than reaching for a bigger TP1 bucket
+out of caution: the 70% held past TP1 is not sitting exposed hoping for TP2 to arrive. Its
+stop moves up to near TP1's price the moment TP1 fires and only ever tightens from there, so
+it is either stopped out at a still-profitable level or continues. The exit fractions decide
+what becomes cash at each checkpoint; the ratchet decides how much of the rest stays
+protected regardless of whether a further checkpoint is ever reached.
+
+Tests: `signal_engine/tests/test_main_partial_exit.py` — TP2→TP3 in `compute_next_tp`,
+ratchet on/off (off byte-identical to the pre-existing TP1-buffer-only behaviour), ratchet
+never loosens an existing SL. Two pre-existing characterization tests that asserted
+`compute_next_tp(pos, "TP2") is None` were updated to the new TP2→TP3 contract.
+
+---
+
 ## 2026-08-30b — Deployed live as forward-data collection; two bugs fixed, CLV gate relaxed
 
 Deployed deliberately against the negative backtest below. The decision is the operator's and

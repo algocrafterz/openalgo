@@ -342,6 +342,15 @@ bracket:
   # Set to 0.0 to place SL exactly at TP1.
   tp1_runner_sl_buffer: 0.3
 
+  # [tune] Extended runner tiers: gates the runner-SL ratchet in main.py's
+  # _replace_runner_sl(). When a strategy's TP2 becomes a partial exit (see breakout.pine's
+  # useExtendedRunnerTiers input — keep this in lockstep with that), the runner SL anchors
+  # to whichever TP level was just hit (TP1 -> TP1.5 -> TP2) instead of always TP1, and
+  # only ever tightens, never loosens, versus the SL already in place.
+  # false (default) = exact current behavior: runner SL always anchors to TP1 - buffer x R.
+  # Flip both this and breakout.pine's useExtendedRunnerTiers together to opt in or revert.
+  use_extended_runner_tiers: false
+
 # ── Strategy Profiles ───────────────────────────────────────
 # [tune] Per-strategy TP exit fractions, product type and stop-distance floor.
 # tp_levels:  TP label -> fraction of position to exit at that level (e.g. TP1: 0.5 = exit 50%).
