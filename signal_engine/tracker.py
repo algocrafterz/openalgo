@@ -144,23 +144,6 @@ class PositionTracker:
             max_trades=max_trades,
         )
 
-    def projected_day_context(
-        self, trade_pnl: float, pnl_delta: float, max_trades: int | None = None,
-    ) -> str:
-        """Day context as if a trade with this total_pnl/pnl_delta were already counted.
-
-        Used by full-exit paths in main.py where tracker.record_exit is not called
-        (close happens via risk_engine.record_close + unregister, and day counters
-        are incremented later by check_positions on the next poll).
-        """
-        return notifier.format_day_context(
-            day_trades=self._day_trades + 1,
-            day_wins=self._day_wins + (1 if trade_pnl >= 0 else 0),
-            day_losses=self._day_losses + (0 if trade_pnl >= 0 else 1),
-            day_pnl=self._day_pnl + pnl_delta,
-            max_trades=max_trades,
-        )
-
     def _should_log_debug(self, key: str, kind: str, interval_sec: int = 60) -> bool:
         """Return True if enough time has elapsed since the last debug log for this key/kind."""
         now = datetime.now(IST)
@@ -298,6 +281,11 @@ class PositionTracker:
 
         Called when the last open position closes (SL hit or TP exit), and again at
         time_exit if any positions remain. Deduped via _day_summary_sent flag.
+
+        Unconditional — does not check whether positions remain or what time it is.
+        Callers that fire this the moment a position book empties should go through
+        maybe_send_day_summary() instead; this is the low-level primitive time_exit_all()
+        itself uses once the day is genuinely over.
         """
         if self._day_summary_sent:
             return
@@ -312,6 +300,39 @@ class PositionTracker:
             trade_records=self._completed_trades,
         )
         self._day_summary_sent = True
+
+    async def maybe_send_day_summary(self) -> None:
+        """Send the day summary now, unless positions remain open or the day could
+        plausibly still have trading left in it.
+
+        "No open positions right now" is not the same as "done trading for the day":
+        a genuine SL/TP exit can empty the book mid-morning while the entry window and
+        max_trades_per_day still have room. send_day_summary() is one-shot (guarded by
+        _day_summary_sent), so calling it the instant positions hit zero would
+        permanently lock in an incomplete tally for the rest of the session — every
+        later trade would still update the in-memory counters but never reach
+        Telegram. Deferred to within 30 minutes of the scheduled time exit, or sent
+        immediately if time_exit is disabled entirely (nothing to defer to).
+
+        Every full-close path should call this rather than send_day_summary()
+        directly: the signal-driven paths in main.py (SL-HIT reconcile, full TP exit,
+        the invalid-partial-remainder conversion) and the tracker's own broker-close
+        polling (_maybe_send_day_summary) all share this one gate.
+        """
+        if self._positions:
+            return
+        from signal_engine.config import settings as _settings
+
+        if not _settings.time_exit_enabled:
+            await self.send_day_summary()
+            return
+        now = datetime.now(IST)
+        time_exit_today = now.replace(
+            hour=_settings.time_exit_hour, minute=_settings.time_exit_minute,
+            second=0, microsecond=0,
+        )
+        if (time_exit_today - now).total_seconds() / 60 <= 30:
+            await self.send_day_summary()
 
     async def check_positions(self) -> None:
         """Poll all tracked positions with a single positionbook call.
@@ -345,7 +366,7 @@ class PositionTracker:
         for key in closed_keys:
             del self._positions[key]
 
-        await self._maybe_send_day_summary(closed_keys, _settings)
+        await self._maybe_send_day_summary(closed_keys)
 
         # No-progress check: move SL to entry for stuck positions
         # ab_test_disable short-circuits the entire check without changing thresholds —
@@ -529,27 +550,16 @@ class PositionTracker:
             f"pnl_delta={pnl_delta:,.2f} total_pnl={record.total_pnl:,.2f} r={record.r_multiple}"
         )
 
-    async def _maybe_send_day_summary(self, closed_keys: list, _settings) -> None:
-        """Send day summary only if all positions are now closed AND we are within
-        30 min of time_exit (or past it).
+    async def _maybe_send_day_summary(self, closed_keys: list) -> None:
+        """Send day summary only if this poll cycle closed something.
 
-        Ghost-closes mid-morning can empty _positions prematurely; deferring to the
-        time-exit scheduler prevents a premature summary being sent with stale /
-        incorrect data.
+        Ghost-closes mid-morning can empty _positions prematurely; the time-of-day
+        gate that prevents a premature summary lives in maybe_send_day_summary(),
+        shared with the signal-driven close paths in main.py.
         """
-        if not (closed_keys and not self._positions):
+        if not closed_keys:
             return
-        if not _settings.time_exit_enabled:
-            await self.send_day_summary()
-            return
-        now = datetime.now(IST)
-        time_exit_today = now.replace(
-            hour=_settings.time_exit_hour,
-            minute=_settings.time_exit_minute,
-            second=0, microsecond=0,
-        )
-        if (time_exit_today - now).total_seconds() / 60 <= 30:
-            await self.send_day_summary()
+        await self.maybe_send_day_summary()
 
     async def _check_no_progress(self, book_data: dict) -> None:
         """Move SL to entry fill price (or market-exit) for positions that haven't progressed toward TP1.
@@ -750,6 +760,7 @@ class PositionTracker:
 
     async def _no_progress_break_even(self, pos, age, ltp, base_entry, be_price, progress) -> None:
         """Move the stop to break-even (or the profit-lock price) on a stalled position."""
+        original_sl = pos.sl  # captured before the assignment below overwrites it
         sl_result = await place_sl_order(
             symbol=pos.symbol,
             exchange=pos.exchange,
@@ -768,11 +779,7 @@ class PositionTracker:
                 strategy=pos.strategy, direction=pos.direction.value,
                 age_minutes=int(age.total_seconds() / 60),
                 entry_price=base_entry,
-                # NOTE: pos.sl was just set to be_price above, so this always evaluates
-                # to None. Preserved as-is by the 2026-08-23 refactor (behaviour-
-                # preserving); capturing the prior SL before the assignment would change
-                # the notification payload. See PRD "known defects".
-                original_sl=pos.sl if pos.sl != be_price else None,
+                original_sl=original_sl if original_sl != be_price else None,
             )
         else:
             logger.error(f"No-progress: break-even SL failed for {pos.symbol}: {sl_result.message}")
@@ -910,7 +917,7 @@ class PositionTracker:
             r_multiple=r,
             exit_types=pos.exit_types[:] + ["TIME"],
         ))
-        self._risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+        self._risk_engine.record_close(pnl=total_pnl, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
         await notifier.notify_time_exit(

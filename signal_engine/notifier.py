@@ -126,6 +126,12 @@ async def notify_entry_filled(
 ) -> None:
     slip = fill_price - signal_price if fill_price > 0 else 0.0
     logger.info(f"LIVE | {symbol} [{strategy}] fill={fill_price:.2f} slip={slip:+.2f} qty={qty} sl={sl}")
+    sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
+    tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
+    await notify(
+        f"💰 LIVE | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
+        f"Fill: {fill_price:.2f} (slip {slip:+.2f}) | Qty: {qty}{sl_str}{tp_str}"
+    )
 
 
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
@@ -139,9 +145,13 @@ async def notify_sl_placed(
     symbol: str, order_id: str,
     strategy: str = "", sl_price: float | None = None,
 ) -> None:
-    """Log only — SL placement confirmation is embedded in the LIVE message."""
     price_str = f" sl={sl_price:.2f}" if sl_price is not None else ""
     logger.info(f"SL confirmed | {symbol} [{strategy}]{price_str} id={order_id}")
+    sl_line = f"SL: {sl_price:.2f}" if sl_price is not None else "SL: —"
+    await notify(
+        f"🛡️ SL PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
+        f"{sl_line} | Order: {order_id}"
+    )
 
 
 async def notify_sl_failed(symbol: str, reason: str, strategy: str = "") -> None:
@@ -178,6 +188,19 @@ async def notify_partial_exit(
         f"{tp_level} HIT | {symbol} [{strategy}] exit={exit_qty} remaining={remaining_qty} "
         f"pnl={_pnl(pnl)}{_r(r_multiple)} new_sl={new_sl}"
     )
+    dir_str = f" {_dir(direction)}" if direction else ""
+    dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
+    sl_str = f" | New SL: {new_sl:.2f}" if new_sl is not None else ""
+    next_str = (
+        f"\nNext: {next_tp_label} @ {next_tp_price:.2f}"
+        if next_tp_label and next_tp_price is not None
+        else ""
+    )
+    await notify(
+        f"✅ {tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
+        f"Booked: {exit_qty} | Remaining: {remaining_qty}\n"
+        f"{_pnl(pnl)}{_r(r_multiple)}{sl_str}{next_str}"
+    )
 
 
 async def notify_exit_no_position(symbol: str, strategy: str) -> None:
@@ -210,6 +233,16 @@ async def notify_position_closed(
         f"CLOSED | {symbol} [{strategy}] {last_exit} entry={entry_price} exit={exit_price} "
         f"pnl={_pnl(pnl)}{_r(r_multiple)} held={hold_minutes}min"
     )
+    icon = "✅" if pnl >= 0 else "❌"
+    dir_str = f" {_dir(direction)}" if direction else ""
+    dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
+    entry_str = f"{entry_price:.2f}" if entry_price is not None else "—"
+    exit_str = f"{exit_price:.2f}" if exit_price is not None else "—"
+    ctx_str = f"\n{day_context}" if day_context else ""
+    await notify(
+        f"{icon} CLOSED [{last_exit}] | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
+        f"{entry_str} → {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
+    )
 
 
 async def notify_be_stop_applied(
@@ -227,6 +260,12 @@ async def notify_be_stop_applied(
         f"BE stop | {symbol} [{strategy}] sl_moved={original_sl}->{be_price:.2f} ltp={ltp:.2f} "
         f"progress={progress:.0%} age={age_minutes}min"
     )
+    dir_str = f" {_dir(direction)}" if direction else ""
+    sl_move = f"{original_sl:.2f} → {be_price:.2f}" if original_sl is not None else f"→ {be_price:.2f}"
+    await notify(
+        f"⚠️ STOP → BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
+        f"SL: {sl_move} | LTP: {ltp:.2f} | Progress: {progress:.0%} | Age: {age_minutes}min"
+    )
 
 
 async def notify_no_progress_exit(
@@ -242,6 +281,11 @@ async def notify_no_progress_exit(
     logger.info(
         f"No-progress exit | {symbol} [{strategy}] ltp={ltp:.2f} entry={entry:.2f} "
         f"diff={diff:+.2f} progress={progress:.0%} age={age_minutes}min"
+    )
+    dir_str = f" {_dir(direction)}" if direction else ""
+    await notify(
+        f"🚪 NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
+        f"{entry:.2f} → {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
 
 

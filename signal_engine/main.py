@@ -436,8 +436,7 @@ async def _reconcile_sl_hit(signal, pos) -> None:
     )
     tracker.unregister(signal.symbol, signal.strategy)
     risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-    if not tracker._positions:
-        await tracker.send_day_summary()
+    await tracker.maybe_send_day_summary()
 
 
 async def _cancel_sl_before_exit(pos) -> None:
@@ -531,8 +530,7 @@ async def _book_exit_result(
             signal, pos, tp_level, pnl_delta, hold_min,
             approx_exit_price, current_realised,
         )
-        if not tracker._positions:
-            await tracker.send_day_summary()
+        await tracker.maybe_send_day_summary()
         return True
 
     remaining = pos.quantity - exit_qty
@@ -593,8 +591,7 @@ async def _finalize_invalid_partial(
     )
     tracker.unregister(signal.symbol, signal.strategy)
     risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
-    if not tracker._positions:
-        await tracker.send_day_summary()
+    await tracker.maybe_send_day_summary()
 
 
 async def _finalize_partial_exit(

@@ -40,4 +40,5 @@ def tracker_mock() -> MagicMock:
     m = MagicMock()
     m.book_close = AsyncMock()
     m.send_day_summary = AsyncMock()
+    m.maybe_send_day_summary = AsyncMock()
     return m

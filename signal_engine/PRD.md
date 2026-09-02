@@ -251,6 +251,68 @@ is itself worth revisiting is a separate, larger question — it is the default 
 strategy using the runner SL, not something introduced by extended runner tiers, and changing
 it needs its own deliberate review rather than folding into this feature's scope.
 
+### Telegram alert audit: exit notifications restored, two day-summary bugs fixed
+
+Prompted by a direct question: does the channel actually receive alerts for entry, SL, and
+multi-TP exits? Audited every `notify_*` function against its live body (not the docs, which
+had drifted) and found the 2026-04-22 "Notification Reduction" entry below still describes
+the current code exactly — `notify_entry_filled`, `notify_sl_placed`, `notify_partial_exit`,
+`notify_position_closed`, `notify_be_stop_applied`, and `notify_no_progress_exit` are all
+still log-only. Concretely: **no Telegram alert fires for a multi-TP partial exit, or for a
+position closing via SL or final TP** — only entry placement, failures, time exits, risk
+halts, and the day summary reach the channel. Given the point of the last two sessions' work
+was fine-grained TP1/TP2/TP3 and runner-SL behaviour, that is a real visibility gap, not a
+documentation gap.
+
+Restored all six to real Telegram sends (kept the existing log line in each; added a
+`notify()` call using the same emoji-header format as every other message in this file), and
+fixed a defect that restoring `notify_be_stop_applied` to a *live* channel made worth fixing
+rather than leaving as documented-but-broken: `original_sl` was always `None`, because
+`_no_progress_break_even` read `pos.sl` for the notification *after* already overwriting it
+with `be_price`. Now captured before the overwrite. New test file
+`test_notifier_restored_alerts.py` pins all six functions calling `notify()`, and the
+`original_sl` fix specifically.
+
+Two independent bugs found while re-reading the day-summary path for accuracy, both fixed:
+
+- **Time-exit P&L never reached the risk engine's loss counters.**
+  `tracker.py`'s `_book_one_time_exit` called `risk_engine.record_close(pnl=0.0, ...)`
+  unconditionally — a leftover from the function's original form (commit `157ae0f02`), before
+  per-position P&L was computed at all, never updated when it was added. The Telegram
+  day-summary total was already correct (`_day_pnl` is accumulated separately from the same
+  broker delta); `daily_realised_loss` / `weekly_realised_loss` / `monthly_realised_loss` were
+  not, so a real loss on a time-exited position was invisible to the loss-limit circuit
+  breaker. Fixed to pass the real `total_pnl`.
+- **A mid-session close could permanently truncate the day summary.** The three signal-driven
+  full-close paths in `main.py` (`_reconcile_sl_hit`, the full-exit branch of
+  `_book_exit_result`, `_finalize_invalid_partial`) sent the day summary the instant
+  `tracker._positions` went empty, with no time-of-day check. `check_positions`' own
+  `_maybe_send_day_summary` already had this guard (deferred to within 30 min of the
+  scheduled time exit, to avoid a poll-detected ghost-close sending a premature summary) but
+  the signal-driven paths never used it. Since `send_day_summary()` is one-shot
+  (`_day_summary_sent`), a genuine SL/TP exit that happened to empty the book at, say, 10:30
+  AM — while the entry window and `max_trades_per_day` still had room — would send an
+  incomplete tally and then never send the real one, even though later trades kept updating
+  the in-memory counters correctly. Unified behind one new `PositionTracker.maybe_send_day_summary()`,
+  used by all four close paths; `_maybe_send_day_summary` (the polling one) now delegates to
+  it. New tests in `test_tracker_close_detection.py`
+  (`TestMaybeSendDaySummarySharedGate`) exercise the shared gate directly: still-open
+  no-op, mid-morning skip, near-EOD send.
+- Removed `PositionTracker.projected_day_context()` — zero callers repo-wide, dead since the
+  close-path unification documented in `REFACTOR-LOG.md`.
+
+Confirmed, not changed: P&L is sourced from real broker data throughout (not estimated);
+win/loss/time-exit classification is deliberate and clearly labelled (`W: x L: y T: z`, win
+rate computed over decided trades only). Known, accepted limitation left as-is: when multiple
+MIS positions time-exit in the same batch, P&L is split equally across them
+(`_book_time_exit_trades`) — the aggregate day total is exact, individual per-symbol
+R-multiples in that scenario are approximate. Making it exact needs serial per-position broker
+closes instead of the current bulk `close_all_positions`, a larger change than this pass.
+
+Tests: `test_notifier_restored_alerts.py` (new), `test_tracker_close_detection.py`
+(`TestMaybeSendDaySummarySharedGate`, new), `test_tracker_time_exit.py`
+(`test_time_exit_loss_is_recorded_on_risk_engine`, new). 653 tests green.
+
 ## Recent Changes (2026-08-30)
 
 ### The key-level premise measured against a random walk, and it loses
@@ -1540,12 +1602,6 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 | `logger_setup.py` | Loguru daily rotation; file sink defaults to INFO (set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` for verbose mode) |
 | `smoke_test.py` | Pre-session health checks + dry run |
 
-### Known defects (documented, not fixed)
-
-| Defect | Location | Notes |
-|---|---|---|
-| `notify_be_stop_applied(original_sl=...)` is always `None` | `tracker.py` `_no_progress_break_even` | `pos.sl` is assigned `be_price` immediately before the notification is built, so the `pos.sl != be_price` guard can never be true. The break-even alert therefore never shows the stop it replaced. Preserved as-is by the 2026-08-23 refactor (behaviour-preserving); fixing it changes the notification payload. |
-
 ### Key Functions & Methods (2026-04-17 additions)
 
 | Function | Module | Purpose |
@@ -1553,11 +1609,11 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 | `record_rejection()` | `risk.py` | Release position slot AND un-count `trades_today` for rejected/phantom orders (position never existed at broker) |
 | `_is_be_series()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
 | `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
-| `notify_be_stop_applied()` | `notifier.py` | Log-only: SL moved to break-even (no Telegram) |
-| `notify_partial_exit()` | `notifier.py` | Log-only: partial TP exit (no Telegram) |
-| `notify_position_closed()` | `notifier.py` | Log-only: full position close (no Telegram) |
-| `notify_no_progress_exit()` | `notifier.py` | Log-only: no-progress market exit fired (no Telegram) |
-| `notify_entry_filled()` | `notifier.py` | Log-only: entry fill confirmed (no Telegram) |
+| `notify_be_stop_applied()` | `notifier.py` | Telegram: SL moved to break-even. Log-only 2026-04-22 to 2026-09-01; restored, see 2026-09-02 changelog |
+| `notify_partial_exit()` | `notifier.py` | Telegram: partial TP exit (TP1/TP1.5/TP2). Log-only 2026-04-22 to 2026-09-01; restored |
+| `notify_position_closed()` | `notifier.py` | Telegram: full position close (TP or SL). Log-only 2026-04-22 to 2026-09-01; restored |
+| `notify_no_progress_exit()` | `notifier.py` | Telegram: no-progress market exit fired. Log-only 2026-04-22 to 2026-09-01; restored |
+| `notify_entry_filled()` | `notifier.py` | Telegram: entry fill confirmed. Log-only 2026-04-22 to 2026-09-01; restored |
 | `notify_day_summary()` | `notifier.py` | EOD Telegram summary: trades, win rate, per-trade table, capital trajectory |
 | `_poll_positions()` | `tracker.py` | Detects closed positions with min_position_age_seconds guard |
 | `_check_no_progress()` | `tracker.py` | Detects stuck trades and moves SL to break-even |

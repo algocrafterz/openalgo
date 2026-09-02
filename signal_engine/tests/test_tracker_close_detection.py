@@ -126,6 +126,61 @@ class TestTrackerCheckPositions:
         tracker.send_day_summary.assert_called_once()
 
 
+class TestMaybeSendDaySummarySharedGate:
+    """maybe_send_day_summary() is the one gate every full-close path now shares —
+    the polling path via _maybe_send_day_summary, and the signal-driven SL-HIT
+    reconcile / full TP exit / invalid-partial-conversion paths in main.py directly.
+
+    Regression: those main.py paths used to call send_day_summary() unconditionally
+    whenever the position book emptied, with no time-of-day check. Since
+    send_day_summary() is one-shot (guarded by _day_summary_sent), a genuine SL/TP
+    exit that happened to empty the book mid-morning — while the entry window and
+    max_trades_per_day still had room — would send an incomplete summary and then
+    permanently suppress the real end-of-day one, even though every later trade kept
+    updating the in-memory counters correctly.
+    """
+
+    @pytest.mark.asyncio
+    async def test_open_positions_skip_entirely(self):
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position())
+        tracker.send_day_summary = AsyncMock()
+
+        await tracker.maybe_send_day_summary()
+
+        tracker.send_day_summary.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mid_morning_close_does_not_send_yet(self):
+        """A signal-driven full exit at 10:46 with the book now empty must NOT send —
+        trading could still continue for the rest of the session."""
+        fake_now = datetime.now(_IST).replace(hour=10, minute=46, second=0, microsecond=0)
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.send_day_summary = AsyncMock()
+
+        with patch("signal_engine.tracker.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            await tracker.maybe_send_day_summary()
+
+        tracker.send_day_summary.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_near_eod_sends(self):
+        """The same empty-book condition at 14:45 (within 30 min of 15:00) does send."""
+        fake_now = datetime.now(_IST).replace(hour=14, minute=45, second=0, microsecond=0)
+        engine = _make_engine()
+        tracker = PositionTracker(engine)
+        tracker.send_day_summary = AsyncMock()
+
+        with patch("signal_engine.tracker.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            await tracker.maybe_send_day_summary()
+
+        tracker.send_day_summary.assert_called_once()
+
+
 class TestOCOCancellation:
     def _make_bracket_position(self, **overrides) -> TrackedPosition:
         defaults = {

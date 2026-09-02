@@ -58,6 +58,33 @@ class TestTimeExitCncAwareness:
 
         assert tracker.tracked_count == 0
 
+    @pytest.mark.asyncio
+    async def test_time_exit_loss_is_recorded_on_risk_engine(self):
+        """A losing time-exit must count toward the risk engine's daily loss counter.
+
+        Regression: _book_one_time_exit previously called record_close(pnl=0.0, ...)
+        unconditionally, a leftover from before per-position P&L was computed at all —
+        so a real time-exit loss never reached daily_realised_loss and the daily loss
+        limit circuit breaker could not see it.
+        """
+        engine = _make_engine()
+        engine.open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
+
+        with (
+            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.tracker.close_all_positions", new_callable=AsyncMock),
+            patch("signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-500.0),
+            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            await tracker.time_exit_all()
+
+        assert engine.daily_realised_loss == pytest.approx(500.0)
+        assert engine.open_positions == 0
+
 
 class TestTimeExitVerification:
     """time_exit_all() should verify broker closure and retry if positions remain."""
