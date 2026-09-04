@@ -421,7 +421,32 @@ class ScannerSession:
             frame = _pick_scanner_table(self._page.evaluate(_EXTRACT_TABLES_JS))
             yield normalize_table(frame, captured_at=captured_at)
 
-    def fetch(self, scanner: str = "market_profile", days_back: int = 0) -> Snapshot:
+    def fetch(
+        self, scanner: str = "market_profile", days_back: int = 0, attempts: int = 3
+    ) -> Snapshot:
+        """Fetch with retries. A scraped page fails transiently far more often than it fails
+        permanently - a slow render, a redraw mid-read, a stale SPA - and a poll lost to one of
+        those is a data point that cannot be recovered, because the scanner keeps no history of
+        intraday state.
+
+        Backoff is deliberately generous rather than tight. At ~27 polls a day there is no need
+        to hurry, and hammering a subscription site after a failure is exactly the pattern that
+        gets an account rate-limited or blocked. Three tries spaced 5s and 15s costs at most 20
+        extra seconds against a 15-minute poll interval.
+        """
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                return self._fetch_once(scanner, days_back)
+            except LoginRequired:
+                raise  # credentials will not fix themselves by trying again
+            except FetchError as exc:
+                last_error = exc
+                if attempt < attempts - 1:
+                    self._page.wait_for_timeout(5000 * (1 + 2 * attempt))
+        raise last_error
+
+    def _fetch_once(self, scanner: str = "market_profile", days_back: int = 0) -> Snapshot:
         """Render one scanner route and return its table as a normalized Snapshot.
 
         days_back > 0 walks the scanner's own day navigation backwards first, which is what

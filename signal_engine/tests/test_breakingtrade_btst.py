@@ -104,7 +104,9 @@ def _pair(**overrides):
     volume = {"symbol": "TESTCO", "delivery_pct": 0.8, "change_pct": 2.0}
     for letter in volume_shapes.SESSION_LETTERS:
         volume[f"vol_{letter}"] = float("nan")
-    volume.update({"vol_k": 1.0, "vol_l": 1.3, "vol_m": 1.6})
+    # K is what the executable BTST read uses - it is complete at 14:45, in time to place a
+    # delivery order before the 15:15 continuous-trading cutoff for F&O stocks.
+    volume.update({"vol_k": 1.4, "vol_l": 1.3, "vol_m": 1.6})
     volume.update(overrides.get("volume", {}))
 
     return pd.DataFrame([profile]), pd.DataFrame([volume])
@@ -134,7 +136,9 @@ def test_weak_closing_structure_is_rejected():
 
 
 def test_ghost_rally_is_excluded_even_with_high_delivery():
-    market_profile, volume = _pair(volume={"vol_k": 0.1, "vol_l": 0.2, "vol_m": 0.3, "vol_a": 0.4})
+    market_profile, volume = _pair(
+        volume={"vol_k": 0.1, "vol_l": 0.2, "vol_m": 0.3, "vol_a": 0.4}
+    )  # dead volume everywhere
     assert btst.candidates(market_profile, volume).empty
 
 

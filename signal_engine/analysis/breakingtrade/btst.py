@@ -98,6 +98,7 @@ def candidates(
     market_profile: pd.DataFrame,
     volume: pd.DataFrame,
     min_delivery_pct: float = None,
+    executable: bool = True,
 ) -> pd.DataFrame:
     """Rank tomorrow's carry candidates from a closing-hour snapshot pair.
 
@@ -111,14 +112,28 @@ def candidates(
     merged = market_profile.merge(volume.drop(columns=duplicated), on="symbol", how="inner")
     shaped = volume_shapes.label_shapes(merged)
 
-    # Only judge names that carry the data the judgement needs. The vendor leaves L/M blank for
-    # roughly a quarter of the universe (159 of 214 on 03-Sep), and those names are the quiet
-    # ones - median Surge x 0.52 against 2.35 for names that do report L/M, on near-identical
-    # 7-day average volume. Scoring a name whose closing sessions are simply absent is scoring
-    # missing data, and benchmarking against a universe that includes them is not like-for-like.
-    shaped = shaped[
-        shaped["delivery_pct"].notna() & (shaped["vol_l"].notna() | shaped["vol_m"].notna())
-    ]
+    # WHICH SESSIONS THE "BUSY INTO THE CLOSE" READ IS ALLOWED TO USE.
+    #
+    # executable=True keeps to what can be READ IN TIME TO ACT. Since 2026-08-03 the NSE runs a
+    # Closing Auction Session, and for F&O stocks - this entire universe - continuous trading
+    # ends at 15:15. The L session only completes AT 15:15 and M IS the auction, so any rule
+    # needing them yields a decision that cannot be acted on in the continuous market. That was
+    # a look-ahead bug in the first version of this list, not a detail.
+    #
+    # It also costs nothing measurable and gains coverage. Over the 11 day-pairs available:
+    #   K+L+M (look-ahead)          excess +0.188%, t=+1.08
+    #   K only (actionable at 14:45) excess +0.134%, t=+0.65
+    # and L/M are reported for only 74% of names against 100% for K - the old rule silently
+    # discarded about 53 names every session.
+    ramp_column = "closing_ramp_executable" if executable else "closing_ramp"
+    ramp_letters = volume_shapes.EXECUTABLE_LETTERS if executable else volume_shapes.LATE_LETTERS
+    required = [f"vol_{letter}" for letter in ramp_letters if f"vol_{letter}" in shaped.columns]
+
+    # Only judge names carrying the data the judgement needs - scoring a name whose sessions are
+    # simply absent is scoring missing data, and benchmarking a filtered subset against a
+    # universe that still includes those names is not a like-for-like comparison.
+    if required:
+        shaped = shaped[shaped["delivery_pct"].notna() & shaped[required].notna().any(axis=1)]
     if shaped.empty:
         return shaped.head(0)
 
@@ -131,7 +146,7 @@ def candidates(
         # >= not >: the threshold is a percentile of this same column, so on a small universe
         # the 75th percentile can equal the highest value and a strict > would exclude every row.
         & (shaped["delivery_pct"] >= min_delivery_pct)
-        & shaped["closing_ramp"]
+        & shaped[ramp_column]
         & ~shaped["ghost_rally"]  # price up on no participation - the guide says do not chase
         & shaped.apply(_closed_strong, axis=1)
     ].copy()
@@ -152,6 +167,7 @@ def candidates(
             "delivery_pct",
             "day_type",
             "tpo_pos",
+            "vol_j",
             "vol_k",
             "vol_l",
             "vol_m",

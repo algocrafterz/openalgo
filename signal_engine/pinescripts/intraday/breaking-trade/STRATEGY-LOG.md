@@ -96,6 +96,41 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-04 13:15 — BTST was not executable; rebuilt around the 15:15 cutoff
+**The most important correction so far.** The list needed the L (14:45–15:15) and M (15:15–15:30)
+volume sessions, which only exist at or after the close — so the decision could never be acted
+on. The backtest bought at the close using data that only existed at the close: look-ahead bias.
+
+Worse than assumed, because of a rule change we had not accounted for. **From 2026-08-03 the NSE
+runs a Closing Auction Session, and for F&O stocks — our whole universe — continuous trading
+ends at 15:15.** M *is* the auction. Sources:
+[Zerodha bulletin](https://zerodha.com/marketintel/bulletin/249809/latest-intraday-leverages-mis-bo-co),
+[CAS explainer](https://www.sahi.com/blogs/closing-auction-session-cas-explained-nse-bse-closing-price-rules-2026).
+
+Rebuilt on the **K session (14:15–14:45)**, complete at 14:45, leaving ~25 minutes to place a
+CNC order before 15:15. Measured cost of becoming executable — almost nothing:
+
+| Version | Excess vs market | t | Tradeable? |
+|---|---|---|---|
+| K+L+M | +0.188% | +1.08 | **No** — look-ahead |
+| K+L | +0.144% | +0.67 | Marginal, needs 15:15 exactly |
+| **K only** | **+0.134%** | **+0.65** | **Yes, decide by 14:45** |
+| K only, no delivery filter | +0.033% | +0.28 | Yes, but edge mostly gone |
+
+Two side findings: dropping the delivery filter collapses the edge (+0.134% to +0.033%) while
+quadrupling trades, so delivery is doing real work; and K is reported for **100%** of names
+against **74%** for L/M, so the old rule silently discarded about **53 names per session**.
+Poll schedule moved from 15:05/15:20 to **14:50/15:05** — the 15:20 poll produced a list that
+could no longer be traded that day.
+
+Still not statistically significant (t = 0.65). Executable and honest, not proven.
+
+### 2026-09-04 13:10 — Poller made resilient
+Each fetch now retries up to 3 times with 5s then 15s backoff, and refuses to retry a login
+failure (credentials do not fix themselves). Backoff is deliberately slow: at ~27 polls a day
+there is no need to hurry, and hammering a subscription site after a failure is how accounts get
+blocked. A lost intraday poll cannot be recovered — the scanner keeps no intraday history.
+
 ### 2026-09-04 12:45 — Swing holding (1–15 days) tested: the signal does not survive the first day
 Held the BTST selection for 1, 2, 3 and 5 sessions. Excess return over the market **decays and
 then reverses**: +0.17% at one day, +0.15% at two, −0.24% at three, −0.42% at five (no result

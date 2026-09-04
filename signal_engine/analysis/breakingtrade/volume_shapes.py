@@ -39,7 +39,14 @@ from signal_engine.analysis.breakingtrade.scans import (
 SESSION_LETTERS = ("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m")
 LUNCH_LETTERS = ("g", "h", "i")  # 12:15-13:45
 CLOSING_LETTERS = ("k", "l", "m")  # 14:15-15:30
-LATE_LETTERS = ("l", "m")  # 14:45-15:30 - the two sessions a closing ramp actually lives in
+LATE_LETTERS = ("l", "m")  # 14:45-15:30 - where a closing ramp lives if you can wait for it
+
+# What is actually READABLE in time to place a delivery order. From 2026-08-03 NSE runs a
+# Closing Auction Session, and for F&O stocks - our entire universe - continuous trading ends
+# at 15:15. L only completes AT 15:15 and M is the auction itself, so a decision needing either
+# cannot be acted on in the continuous market. K (14:15-14:45) is complete at 14:45, leaving
+# 25 minutes to act. It is also reported for 100% of names, against 74% for L and M.
+EXECUTABLE_LETTERS = ("k",)
 
 GHOST_RALLY_MIN_CHANGE_PCT = 1.5  # "price up 1.5%+, every session red"
 STAIRCASE_MIN_RUN = 3  # "several consecutive elevated sessions"
@@ -90,7 +97,7 @@ def is_lunch_anomaly(row) -> bool:
     return bool(lunch) and any(factor >= VOLUME_ELEVATED for _, factor in lunch)
 
 
-def is_closing_ramp(row) -> bool:
+def is_closing_ramp(row, letters=LATE_LETTERS) -> bool:
     """Volume building into the close while price holds - someone wants it overnight.
 
     "Building" is read as the closing block being BUSY, not as a monotonically rising
@@ -101,7 +108,7 @@ def is_closing_ramp(row) -> bool:
 
     So: at least one of the last two sessions is elevated, and the pair is not thin overall.
     """
-    late = [factor for _, factor in session_factors(row, LATE_LETTERS)]
+    late = [factor for _, factor in session_factors(row, letters)]
     if not late:
         return False
 
@@ -127,6 +134,7 @@ SHAPES = {
     "spike": is_spike,
     "lunch_anomaly": is_lunch_anomaly,
     "closing_ramp": is_closing_ramp,
+    "closing_ramp_executable": lambda row: is_closing_ramp(row, EXECUTABLE_LETTERS),
     "ghost_rally": is_ghost_rally,
 }
 

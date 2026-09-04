@@ -55,18 +55,21 @@ from signal_engine.analysis.breakingtrade.scorer import rank
 #                all live here. This is where the confirmed trend entries actually appear.
 #   13:00-15:00  Off. Lunch trap, and the guide warns against chasing a breakout once the
 #                day's range is already spent.
-#   15:05/15:20  Two polls only, and NOT for entries: the K/L/M periods are where a closing
-#                ramp and the Del% accumulation read show up, which the guide frames as a
-#                "watchlist for tomorrow's open more than a same-day trade".
+#   14:50/15:05  The BTST decision window. Since 2026-08-03 the NSE runs a Closing Auction
+#                Session and continuous trading in F&O stocks ENDS AT 15:15, so a delivery
+#                order has to be placed before then. The K session (14:15-14:45) is complete at
+#                14:45 and is reported for 100% of names, which leaves roughly 25 minutes to
+#                act. Polling at 15:20 - as this schedule first did - produces a list that
+#                can no longer be traded that day.
 # The volume scanner's columns are half-hour buckets plus a cumulative Surge x, so polling it
 # every five minutes re-reads numbers that have not changed. These marks straddle each bucket
 # close, and 15:05/15:20 carry the K/L/M accumulation read the BTST list needs.
-VOLUME_FETCH_MINUTES = (5, 16, 20, 46)
+VOLUME_FETCH_MINUTES = (5, 16, 46, 50)
 
 POLL_WINDOWS = (
     (time(9, 20), time(10, 30), (0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)),
     (time(10, 30), time(13, 0), (1, 16, 31, 46)),
-    (time(15, 0), time(15, 25), (5, 20)),
+    (time(14, 50), time(15, 10), (50, 5)),
 )
 
 
