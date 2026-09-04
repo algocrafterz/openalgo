@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- Open Drive -->
+  <g transform="translate(50, 60)">
+    <rect width="260" height="510" rx="16" fill="#1e293b" opacity="0.5" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="130" y="35" fill="#22D3EE" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">Open Drive</text>
+    <text x="130" y="55" fill="#64748b" font-family="system-ui" font-size="11" text-anchor="middle">Most aggressive</text>
+    <!-- Straight up from open -->
+    <g transform="translate(40, 80)">
+      <circle cx="90" cy="350" r="8" fill="#22D3EE" opacity="0.5"/><text x="90" y="380" fill="#64748b" font-family="system-ui" font-size="10" text-anchor="middle">OPEN</text>
+      <path d="M90,340 L90,60" fill="none" stroke="#22D3EE" stroke-width="3" filter="url(#glow)"/>
+      <polygon points="82,70 90,40 98,70" fill="#22D3EE"/>
+      <!-- Energy trail -->
+      <circle cx="90" cy="300" r="3" fill="#22D3EE" opacity="0.3"/><circle cx="85" cy="250" r="2" fill="#22D3EE" opacity="0.3"/>
+      <circle cx="95" cy="200" r="2.5" fill="#22D3EE" opacity="0.4"/><circle cx="88" cy="150" r="2" fill="#22D3EE" opacity="0.5"/>
+    </g>
+    <rect x="30" y="455" width="200" height="35" rx="8" fill="#22D3EE" opacity="0.1"/>
+    <text x="130" y="477" fill="#22D3EE" font-family="system-ui" font-size="11" text-anchor="middle">No pullback. Pure conviction.</text>
+  </g>
+  <!-- Open Test Drive -->
+  <g transform="translate(340, 60)">
+    <rect width="260" height="510" rx="16" fill="#1e293b" opacity="0.5" stroke="#818CF8" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="130" y="35" fill="#818CF8" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">Open Test Drive</text>
+    <text x="130" y="55" fill="#64748b" font-family="system-ui" font-size="11" text-anchor="middle">Test then go</text>
+    <!-- Dip then up -->
+    <g transform="translate(40, 80)">
+      <circle cx="90" cy="250" r="8" fill="#818CF8" opacity="0.5"/><text x="90" y="280" fill="#64748b" font-family="system-ui" font-size="10" text-anchor="middle">OPEN</text>
+      <path d="M90,245 Q70,320 60,350 Q55,365 80,340 Q100,310 90,80" fill="none" stroke="#818CF8" stroke-width="3" filter="url(#glow)"/>
+      <polygon points="82,90 90,60 98,90" fill="#818CF8"/>
+      <!-- Test zone -->
+      <circle cx="60" cy="350" r="6" fill="#f59e0b" opacity="0.4"/><text x="40" y="390" fill="#f59e0b" font-family="system-ui" font-size="9" opacity="0.7">test</text>
+    </g>
+    <rect x="30" y="455" width="200" height="35" rx="8" fill="#818CF8" opacity="0.1"/>
+    <text x="130" y="477" fill="#818CF8" font-family="system-ui" font-size="11" text-anchor="middle">Dips to test, then drives.</text>
+  </g>
+  <!-- Open Test -->
+  <g transform="translate(630, 60)">
+    <rect width="260" height="510" rx="16" fill="#1e293b" opacity="0.5" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="130" y="35" fill="#f59e0b" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">Open Test</text>
+    <text x="130" y="55" fill="#64748b" font-family="system-ui" font-size="11" text-anchor="middle">Test and rotate</text>
+    <!-- Tests both sides then settles -->
+    <g transform="translate(40, 80)">
+      <circle cx="90" cy="200" r="8" fill="#f59e0b" opacity="0.5"/><text x="90" y="230" fill="#64748b" font-family="system-ui" font-size="10" text-anchor="middle">OPEN</text>
+      <path d="M90,195 Q120,140 100,120 Q80,105 90,150 Q100,180 70,280 Q60,310 80,290 Q100,260 90,195" fill="none" stroke="#f59e0b" stroke-width="2.5" filter="url(#glow)"/>
+      <circle cx="100" cy="120" r="5" fill="#f59e0b" opacity="0.3"/>
+      <circle cx="70" cy="280" r="5" fill="#f59e0b" opacity="0.3"/>
+    </g>
+    <rect x="30" y="455" width="200" height="35" rx="8" fill="#f59e0b" opacity="0.1"/>
+    <text x="130" y="477" fill="#f59e0b" font-family="system-ui" font-size="11" text-anchor="middle">Tests extremes, then rotates.</text>
+  </g>
+  <!-- Open Rejection Reverse -->
+  <g transform="translate(920, 60)">
+    <rect width="260" height="510" rx="16" fill="#1e293b" opacity="0.5" stroke="#f87171" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="130" y="35" fill="#f87171" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">Open Rejection</text>
+    <text x="130" y="55" fill="#64748b" font-family="system-ui" font-size="11" text-anchor="middle">Reverse</text>
+    <!-- Up then sharp reversal -->
+    <g transform="translate(40, 80)">
+      <circle cx="90" cy="200" r="8" fill="#22D3EE" opacity="0.5"/><text x="90" y="230" fill="#64748b" font-family="system-ui" font-size="10" text-anchor="middle">OPEN</text>
+      <path d="M90,195 L85,100" fill="none" stroke="#22D3EE" stroke-width="2.5" opacity="0.6"/>
+      <!-- Rejection wall -->
+      <line x1="40" y1="90" x2="140" y2="90" stroke="#f87171" stroke-width="3" opacity="0.6" stroke-dasharray="6,3"/>
+      <rect x="60" y="82" width="60" height="16" rx="4" fill="#f87171" opacity="0.15"/>
+      <!-- Explosion at rejection -->
+      <circle cx="85" cy="90" r="12" fill="#f87171" opacity="0.15" filter="url(#glow)"/>
+      <!-- Sharp reversal down -->
+      <path d="M85,100 Q80,130 95,200 Q110,300 90,370" fill="none" stroke="#f87171" stroke-width="3" filter="url(#glow)"/>
+      <polygon points="82,360 90,385 98,360" fill="#f87171"/>
+    </g>
+    <rect x="30" y="455" width="200" height="35" rx="8" fill="#f87171" opacity="0.1"/>
+    <text x="130" y="477" fill="#f87171" font-family="system-ui" font-size="11" text-anchor="middle">Tries, fails, reverses hard.</text>
+  </g>
+</svg>

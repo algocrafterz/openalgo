@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <line x1="150" y1="60" x2="150" y2="740" stroke="#475569" stroke-width="1.5"/>
+  <!-- Thin edge top — REJECTION -->
+  <g filter="url(#glow)">
+    <rect x="170" y="80" width="35" height="16" rx="3" fill="#f87171" opacity="0.6"/>
+    <rect x="170" y="102" width="50" height="16" rx="3" fill="#f87171" opacity="0.55"/>
+  </g>
+  <g transform="translate(720, 75)">
+    <rect width="400" height="80" rx="12" fill="#f87171" opacity="0.08" stroke="#f87171" stroke-width="1" stroke-opacity="0.3"/>
+    <text x="200" y="30" fill="#f87171" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">THIN EDGE = Rejection</text>
+    <text x="200" y="55" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">Price visited briefly and was rejected. Sellers won here.</text>
+    <text x="200" y="72" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">Single prints mark aggressive rejection zones.</text>
+  </g>
+  <line x1="225" y1="95" x2="715" y2="115" stroke="#f87171" stroke-width="1" opacity="0.3" stroke-dasharray="4,3"/>
+  <!-- Transition -->
+  <g filter="url(#glow)">
+    <rect x="170" y="135" width="100" height="16" rx="3" fill="#818CF8" opacity="0.5"/>
+    <rect x="170" y="157" width="160" height="16" rx="3" fill="#818CF8" opacity="0.55"/>
+    <rect x="170" y="179" width="240" height="16" rx="3" fill="#818CF8" opacity="0.6"/>
+  </g>
+  <!-- FAT MIDDLE — VALUE / ACCEPTANCE -->
+  <g filter="url(#glow)">
+    <rect x="170" y="210" width="340" height="16" rx="3" fill="#22D3EE" opacity="0.7"/>
+    <rect x="170" y="232" width="420" height="16" rx="3" fill="#22D3EE" opacity="0.8"/>
+    <rect x="170" y="254" width="480" height="16" rx="3" fill="#22D3EE" opacity="0.85"/>
+    <rect x="170" y="276" width="520" height="16" rx="3" fill="#22D3EE" opacity="0.9"/>
+    <rect x="170" y="298" width="560" height="16" rx="3" fill="#22D3EE" opacity="0.95"/>
+    <rect x="170" y="320" width="580" height="16" rx="3" fill="#38ef7d"/>
+    <rect x="170" y="342" width="560" height="16" rx="3" fill="#22D3EE" opacity="0.95"/>
+    <rect x="170" y="364" width="520" height="16" rx="3" fill="#22D3EE" opacity="0.9"/>
+    <rect x="170" y="386" width="480" height="16" rx="3" fill="#22D3EE" opacity="0.85"/>
+    <rect x="170" y="408" width="420" height="16" rx="3" fill="#22D3EE" opacity="0.8"/>
+    <rect x="170" y="430" width="340" height="16" rx="3" fill="#22D3EE" opacity="0.7"/>
+  </g>
+  <g transform="translate(720, 280)">
+    <rect width="420" height="120" rx="12" fill="#22D3EE" opacity="0.06" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="210" y="30" fill="#22D3EE" font-family="system-ui" font-size="18" font-weight="800" text-anchor="middle">FAT MIDDLE = Value</text>
+    <text x="210" y="55" fill="#94a3b8" font-family="system-ui" font-size="13" text-anchor="middle">Maximum time spent here → Price ACCEPTED</text>
+    <text x="210" y="78" fill="#94a3b8" font-family="system-ui" font-size="13" text-anchor="middle">70% of all trading activity happens here</text>
+    <text x="210" y="100" fill="#38ef7d" font-family="system-ui" font-size="13" text-anchor="middle" font-weight="600">This is the VALUE AREA</text>
+  </g>
+  <line x1="690" y1="330" x2="715" y2="340" stroke="#22D3EE" stroke-width="1" opacity="0.3" stroke-dasharray="4,3"/>
+  <!-- Transition bottom -->
+  <g filter="url(#glow)">
+    <rect x="170" y="462" width="240" height="16" rx="3" fill="#818CF8" opacity="0.6"/>
+    <rect x="170" y="484" width="160" height="16" rx="3" fill="#818CF8" opacity="0.55"/>
+    <rect x="170" y="506" width="100" height="16" rx="3" fill="#818CF8" opacity="0.5"/>
+  </g>
+  <!-- Thin edge bottom — REJECTION -->
+  <g filter="url(#glow)">
+    <rect x="170" y="540" width="50" height="16" rx="3" fill="#f87171" opacity="0.55"/>
+    <rect x="170" y="562" width="35" height="16" rx="3" fill="#f87171" opacity="0.6"/>
+  </g>
+  <g transform="translate(720, 530)">
+    <rect width="400" height="80" rx="12" fill="#f87171" opacity="0.08" stroke="#f87171" stroke-width="1" stroke-opacity="0.3"/>
+    <text x="200" y="30" fill="#f87171" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">THIN EDGE = Rejection</text>
+    <text x="200" y="55" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">Buyers stepped in here. Price bounced quickly.</text>
+    <text x="200" y="72" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">These levels act as support in the future.</text>
+  </g>
+  <line x1="225" y1="555" x2="715" y2="570" stroke="#f87171" stroke-width="1" opacity="0.3" stroke-dasharray="4,3"/>
+  <!-- Key insight -->
+  <rect x="150" y="640" width="900" height="110" rx="14" fill="#1e293b" opacity="0.5" stroke="#334155" stroke-width="1"/>
+  <text x="600" y="675" fill="#f1f5f9" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">The Power Move</text>
+  <text x="600" y="705" fill="#94a3b8" font-family="system-ui" font-size="13" text-anchor="middle">When price returns to a thin edge (rejection zone), it usually bounces AGAIN.</text>
+  <text x="600" y="730" fill="#38ef7d" font-family="system-ui" font-size="13" text-anchor="middle" font-weight="600">Trade the edges. Avoid the middle. That's Market Profile in one sentence.</text>
+</svg>

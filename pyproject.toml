@@ -158,6 +158,8 @@ dependencies = [
   "quantstats>=0.0.81",
   "opengreeks>=0.2.0",
   "openstatz==0.4.1",
+  "openpyxl>=3.1.5",
+  "playwright>=1.62.0",
 ]
 
 [build-system]

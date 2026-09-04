@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="scanGlow"><feGaussianBlur stdDeviation="8"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <!-- Before: Regular candlestick view -->
+  <g transform="translate(50, 80)">
+    <text x="250" y="0" fill="#64748b" font-family="system-ui" font-size="18" font-weight="700" text-anchor="middle">What You See</text>
+    <rect width="500" height="350" rx="14" fill="#1e293b" opacity="0.4" stroke="#475569" stroke-width="1"/>
+    <g transform="translate(40, 40)">
+      <line x1="60" y1="40" x2="60" y2="200" stroke="#475569" stroke-width="1"/><rect x="45" y="70" width="30" height="100" fill="#ef4444" opacity="0.5" rx="2"/>
+      <line x1="140" y1="50" x2="140" y2="220" stroke="#475569" stroke-width="1"/><rect x="125" y="80" width="30" height="90" fill="#22c55e" opacity="0.5" rx="2"/>
+      <line x1="220" y1="30" x2="220" y2="210" stroke="#475569" stroke-width="1"/><rect x="205" y="60" width="30" height="110" fill="#22c55e" opacity="0.5" rx="2"/>
+      <line x1="300" y1="60" x2="300" y2="230" stroke="#475569" stroke-width="1"/><rect x="285" y="90" width="30" height="80" fill="#ef4444" opacity="0.5" rx="2"/>
+      <line x1="380" y1="45" x2="380" y2="200" stroke="#475569" stroke-width="1"/><rect x="365" y="75" width="30" height="90" fill="#22c55e" opacity="0.5" rx="2"/>
+    </g>
+    <text x="250" y="330" fill="#64748b" font-family="system-ui" font-size="12" text-anchor="middle">Open · High · Low · Close — that's it</text>
+  </g>
+  <!-- Arrow / Transformation -->
+  <g transform="translate(560, 200)">
+    <rect width="80" height="80" rx="40" fill="#818CF8" opacity="0.15"/>
+    <path d="M25,40 L55,40 M45,30 L55,40 L45,50" fill="none" stroke="#818CF8" stroke-width="3"/>
+    <text x="40" y="70" fill="#818CF8" font-family="system-ui" font-size="10" text-anchor="middle">X-RAY</text>
+  </g>
+  <!-- After: Market Profile view -->
+  <g transform="translate(650, 80)">
+    <text x="250" y="0" fill="#22D3EE" font-family="system-ui" font-size="18" font-weight="700" text-anchor="middle">What Market Profile Shows</text>
+    <rect width="500" height="350" rx="14" fill="#1e293b" opacity="0.4" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.3"/>
+    <!-- Scan line effect -->
+    <rect x="0" y="0" width="500" height="350" rx="14" fill="#22D3EE" opacity="0.02"/>
+    <line x1="0" y1="175" x2="500" y2="175" stroke="#22D3EE" stroke-width="1" opacity="0.1" filter="url(#scanGlow)">
+      <animate attributeName="y1" values="20;330;20" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="y2" values="20;330;20" dur="4s" repeatCount="indefinite"/>
+    </line>
+    <g transform="translate(30, 20)" filter="url(#glow)">
+      <rect x="0" y="15" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.5"/>
+      <rect x="0" y="35" width="80" height="14" rx="3" fill="#818CF8" opacity="0.6"/>
+      <rect x="0" y="55" width="160" height="14" rx="3" fill="#818CF8" opacity="0.7"/>
+      <rect x="0" y="75" width="260" height="14" rx="3" fill="#22D3EE" opacity="0.8"/>
+      <rect x="0" y="95" width="340" height="14" rx="3" fill="#22D3EE" opacity="0.85"/>
+      <rect x="0" y="115" width="400" height="14" rx="3" fill="#22D3EE" opacity="0.9"/>
+      <rect x="0" y="135" width="430" height="14" rx="3" fill="#38ef7d"/>
+      <rect x="0" y="155" width="400" height="14" rx="3" fill="#22D3EE" opacity="0.9"/>
+      <rect x="0" y="175" width="340" height="14" rx="3" fill="#22D3EE" opacity="0.85"/>
+      <rect x="0" y="195" width="260" height="14" rx="3" fill="#22D3EE" opacity="0.8"/>
+      <rect x="0" y="215" width="160" height="14" rx="3" fill="#818CF8" opacity="0.7"/>
+      <rect x="0" y="235" width="80" height="14" rx="3" fill="#818CF8" opacity="0.6"/>
+      <rect x="0" y="255" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.5"/>
+    </g>
+    <g fill="#94a3b8" font-family="system-ui" font-size="11" transform="translate(30, 20)">
+      <text x="445" y="148" fill="#38ef7d">← POC</text>
+      <text x="445" y="90" fill="#22D3EE">← VA</text>
+      <text x="445" y="208" fill="#22D3EE">← VA</text>
+      <text x="50" y="28" fill="#f59e0b">Rejection ↗</text>
+      <text x="50" y="268" fill="#f59e0b">Rejection ↗</text>
+    </g>
+    <text x="250" y="330" fill="#22D3EE" font-family="system-ui" font-size="12" text-anchor="middle">Fair value · Rejection · Time · Participants · Structure</text>
+  </g>
+  <!-- Bottom comparison cards -->
+  <g transform="translate(50, 500)">
+    <rect width="1100" height="250" rx="16" fill="#1e293b" opacity="0.4" stroke="#334155" stroke-width="1"/>
+    <text x="550" y="40" fill="#f1f5f9" font-family="system-ui" font-size="18" font-weight="700" text-anchor="middle">Candlestick vs Market Profile — What You Get</text>
+    <g transform="translate(50, 70)" font-family="system-ui" font-size="13">
+      <text x="0" y="0" fill="#64748b" font-weight="600">Question</text>
+      <text x="400" y="0" fill="#ef4444" font-weight="600">Candlestick</text>
+      <text x="700" y="0" fill="#22D3EE" font-weight="600">Market Profile</text>
+      <line x1="0" y1="10" x2="1000" y2="10" stroke="#334155" stroke-width="1"/>
+      <text x="0" y="35" fill="#94a3b8">Where is fair value?</text><text x="400" y="35" fill="#ef4444" opacity="0.6">❌ Unknown</text><text x="700" y="35" fill="#22D3EE">✓ POC shows exact level</text>
+      <text x="0" y="65" fill="#94a3b8">Where was price rejected?</text><text x="400" y="65" fill="#ef4444" opacity="0.6">❌ Wick only</text><text x="700" y="65" fill="#22D3EE">✓ Single prints + tails</text>
+      <text x="0" y="95" fill="#94a3b8">Who is in control?</text><text x="400" y="95" fill="#ef4444" opacity="0.6">❌ Can't tell</text><text x="700" y="95" fill="#22D3EE">✓ IB extension reveals</text>
+      <text x="0" y="125" fill="#94a3b8">What type of day is it?</text><text x="400" y="125" fill="#ef4444" opacity="0.6">❌ No concept</text><text x="700" y="125" fill="#22D3EE">✓ 6 day types identifiable</text>
+      <text x="0" y="155" fill="#94a3b8">Where is 70% of activity?</text><text x="400" y="155" fill="#ef4444" opacity="0.6">❌ Invisible</text><text x="700" y="155" fill="#22D3EE">✓ Value Area = 70% zone</text>
+    </g>
+  </g>
+</svg>

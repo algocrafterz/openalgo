@@ -1,0 +1,919 @@
+{
+ "name": "intraday-breakout",
+ "type": "private_channel",
+ "id": 4450500772,
+ "messages": [
+  {
+   "id": 1,
+   "type": "service",
+   "date": "2026-08-22T21:03:18",
+   "date_unixtime": "1787412798",
+   "actor": "intraday-breakout",
+   "actor_id": "channel4450500772",
+   "action": "create_channel",
+   "title": "intraday-breakout",
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 13,
+   "type": "message",
+   "date": "2026-08-26T09:55:06",
+   "date_unixtime": "1787718306",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | INDUSINDBK\n------------------------\nTrigger: VAH-RT\nEntry: 1016\nTarget: 1019.22\nSL: 1012.78\n------------------------\nTP1.5: 1020.03\nTP2: 1020.83\nTP3: 1025.66\n------------------------\nRisk: 3.22 | Reward: 3.22\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 1.8\nVF: 1.28\nCLV: 1.00\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 59\nHeadroom: 2.8\nChase: 0.81\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.27\nSlAtr: 1.16\nORH: 1017.5\nORM: 1013.5\nORL: 1009.4\nIBH: 1018.6\nIBM: 1014.0\nIBL: 1009.4\nPVAH: 1013.8\nPPOC: 1012.8\nPVAL: 1006.8\nPDH: 1022.0\nPDL: 1003.6\n------------------------\n09:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | INDUSINDBK\n------------------------\nTrigger: VAH-RT\nEntry: 1016\nTarget: 1019.22\nSL: 1012.78\n------------------------\nTP1.5: 1020.03\nTP2: 1020.83\nTP3: 1025.66\n------------------------\nRisk: 3.22 | Reward: 3.22\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 1.8\nVF: 1.28\nCLV: 1.00\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 59\nHeadroom: 2.8\nChase: 0.81\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.27\nSlAtr: 1.16\nORH: 1017.5\nORM: 1013.5\nORL: 1009.4\nIBH: 1018.6\nIBM: 1014.0\nIBL: 1009.4\nPVAH: 1013.8\nPPOC: 1012.8\nPVAL: 1006.8\nPDH: 1022.0\nPDL: 1003.6\n------------------------\n09:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "type": "message",
+   "date": "2026-08-26T10:10:03",
+   "date_unixtime": "1787719203",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | INDUSINDBK\n------------------------\n🟢 LONG | Entry: 1016\nExit: 1012.78\n------------------------\nLoss: -3.22 (-0.3%)\nRisk: 3.22 | Reward: 3.22\nR:R was 1:1\n------------------------\n10:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | INDUSINDBK\n------------------------\n🟢 LONG | Entry: 1016\nExit: 1012.78\n------------------------\nLoss: -3.22 (-0.3%)\nRisk: 3.22 | Reward: 3.22\nR:R was 1:1\n------------------------\n10:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "type": "message",
+   "date": "2026-08-27T10:20:06",
+   "date_unixtime": "1787806206",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | ADANIPOWER\n------------------------\nTrigger: VAH-REJ\nEntry: 210.5\nTarget: 209.55\nSL: 211.45\n------------------------\nTP1.5: 208.86\nTP2: 208.16\nTP3: 207.65\n------------------------\nRisk: 0.95 | Reward: 0.95\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 3.1\nVF: 6.49\nCLV: 0.04\nDelta: sell\nTrend: vwap- ema+ slope+\nAuction: Inside Value\nOpenPos: In VA\nAdrUsed: 126\nHeadroom: 2.2\nChase: 0.67\nConf: 0\nDayType: -\nOpenType: Open Auction\nAtrPct: 0.44\nSlAtr: 1.02\nORH: 209.90\nORM: 208.60\nORL: 207.30\nIBH: 212.70\nIBM: 210.00\nIBL: 207.30\nPVAH: 211.13\nPPOC: 208.03\nPVAL: 207.63\nPDH: 213.50\nPDL: 206.57\n------------------------\n10:15 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ADANIPOWER&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | ADANIPOWER\n------------------------\nTrigger: VAH-REJ\nEntry: 210.5\nTarget: 209.55\nSL: 211.45\n------------------------\nTP1.5: 208.86\nTP2: 208.16\nTP3: 207.65\n------------------------\nRisk: 0.95 | Reward: 0.95\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 3.1\nVF: 6.49\nCLV: 0.04\nDelta: sell\nTrend: vwap- ema+ slope+\nAuction: Inside Value\nOpenPos: In VA\nAdrUsed: 126\nHeadroom: 2.2\nChase: 0.67\nConf: 0\nDayType: -\nOpenType: Open Auction\nAtrPct: 0.44\nSlAtr: 1.02\nORH: 209.90\nORM: 208.60\nORL: 207.30\nIBH: 212.70\nIBM: 210.00\nIBL: 207.30\nPVAH: 211.13\nPPOC: 208.03\nPVAL: 207.63\nPDH: 213.50\nPDL: 206.57\n------------------------\n10:15 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ADANIPOWER&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 16,
+   "type": "message",
+   "date": "2026-08-27T10:35:03",
+   "date_unixtime": "1787807103",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | ADANIPOWER\n------------------------\n🔴 SHORT | Entry: 210.5\nExit: 211.45\n------------------------\nLoss: -0.95 (-0.5%)\nRisk: 0.95 | Reward: 0.95\nR:R was 1:1\n------------------------\n10:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ADANIPOWER&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | ADANIPOWER\n------------------------\n🔴 SHORT | Entry: 210.5\nExit: 211.45\n------------------------\nLoss: -0.95 (-0.5%)\nRisk: 0.95 | Reward: 0.95\nR:R was 1:1\n------------------------\n10:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ADANIPOWER&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 17,
+   "type": "message",
+   "date": "2026-08-27T10:55:03",
+   "date_unixtime": "1787808303",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | ICICIBANK\n------------------------\nTrigger: VAH-ACC\nEntry: 1442.3\nTarget: 1446.73\nSL: 1437.87\n------------------------\nTP1.5: 1448.94\nTP2: 1451.15\nTP3: 1455.58\n------------------------\nRisk: 4.43 | Reward: 4.43\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 2.0\nVF: 1.11\nCLV: 0.45\nDelta: neutral\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 53\nHeadroom: 2.3\nChase: 0.23\nConf: 1 IBH \nDayType: Normal Variation\nOpenType: Open Auction\nAtrPct: 0.14\nSlAtr: 2.24\nORH: 1441.0\nORM: 1437.0\nORL: 1433.1\nIBH: 1442.1\nIBM: 1437.6\nIBL: 1433.1\nPVAH: 1441.8\nPPOC: 1436.8\nPVAL: 1435.3\nPDH: 1446.0\nPDL: 1423.1\n------------------------\n10:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | ICICIBANK\n------------------------\nTrigger: VAH-ACC\nEntry: 1442.3\nTarget: 1446.73\nSL: 1437.87\n------------------------\nTP1.5: 1448.94\nTP2: 1451.15\nTP3: 1455.58\n------------------------\nRisk: 4.43 | Reward: 4.43\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 2.0\nVF: 1.11\nCLV: 0.45\nDelta: neutral\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 53\nHeadroom: 2.3\nChase: 0.23\nConf: 1 IBH \nDayType: Normal Variation\nOpenType: Open Auction\nAtrPct: 0.14\nSlAtr: 2.24\nORH: 1441.0\nORM: 1437.0\nORL: 1433.1\nIBH: 1442.1\nIBM: 1437.6\nIBL: 1433.1\nPVAH: 1441.8\nPPOC: 1436.8\nPVAL: 1435.3\nPDH: 1446.0\nPDL: 1423.1\n------------------------\n10:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 18,
+   "type": "message",
+   "date": "2026-08-27T10:55:05",
+   "date_unixtime": "1787808305",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | TATASTEEL\n------------------------\nTrigger: IBL-RT\nEntry: 187.85\nTarget: 187.31\nSL: 188.39\n------------------------\nTP1.5: 186.46\nTP2: 185.61\nTP3: 186.22\n------------------------\nRisk: 0.54 | Reward: 0.54\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 1.0\nVF: 1.99\nCLV: 0.33\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 70\nHeadroom: 2.3\nChase: 0.32\nConf: 1 ORBL \nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.28\nSlAtr: 1.02\nORH: 189.32\nORM: 188.70\nORL: 188.07\nIBH: 190.25\nIBM: 189.13\nIBL: 188.00\nPVAH: 187.63\nPPOC: 185.53\nPVAL: 184.28\nPDH: 189.95\nPDL: 184.29\n------------------------\n10:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | TATASTEEL\n------------------------\nTrigger: IBL-RT\nEntry: 187.85\nTarget: 187.31\nSL: 188.39\n------------------------\nTP1.5: 186.46\nTP2: 185.61\nTP3: 186.22\n------------------------\nRisk: 0.54 | Reward: 0.54\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 1.0\nVF: 1.99\nCLV: 0.33\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 70\nHeadroom: 2.3\nChase: 0.32\nConf: 1 ORBL \nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.28\nSlAtr: 1.02\nORH: 189.32\nORM: 188.70\nORL: 188.07\nIBH: 190.25\nIBM: 189.13\nIBL: 188.00\nPVAH: 187.63\nPPOC: 185.53\nPVAL: 184.28\nPDH: 189.95\nPDL: 184.29\n------------------------\n10:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 19,
+   "type": "message",
+   "date": "2026-08-27T11:10:03",
+   "date_unixtime": "1787809203",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | TATASTEEL\n------------------------\n🔴 SHORT | Entry: 187.85\nExit: 188.39\n------------------------\nLoss: -0.54 (-0.3%)\nRisk: 0.54 | Reward: 0.54\nR:R was 1:1\n------------------------\n11:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | TATASTEEL\n------------------------\n🔴 SHORT | Entry: 187.85\nExit: 188.39\n------------------------\nLoss: -0.54 (-0.3%)\nRisk: 0.54 | Reward: 0.54\nR:R was 1:1\n------------------------\n11:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 20,
+   "type": "message",
+   "date": "2026-08-27T12:55:02",
+   "date_unixtime": "1787815502",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | ICICIBANK\n------------------------\n🟢 LONG | Entry: 1442.3\nExit: 1446.73\n------------------------\nProfit: +4.43 (+0.3%)\nRisk: 4.43 | Reward: 4.43\nR:R 1:1\nExitQtyPct: 50\n------------------------\n12:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | ICICIBANK\n------------------------\n🟢 LONG | Entry: 1442.3\nExit: 1446.73\n------------------------\nProfit: +4.43 (+0.3%)\nRisk: 4.43 | Reward: 4.43\nR:R 1:1\nExitQtyPct: 50\n------------------------\n12:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 21,
+   "type": "message",
+   "date": "2026-08-27T13:05:01",
+   "date_unixtime": "1787816101",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | ICICIBANK\n------------------------\n🟢 LONG | Entry: 1442.3\nExit: 1451.15\n------------------------\nProfit: +8.85 (+0.6%)\nRisk: 4.43 | Reward: 8.85\nR:R 1:2\nExitQtyPct: 100\n------------------------\n13:00 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | ICICIBANK\n------------------------\n🟢 LONG | Entry: 1442.3\nExit: 1451.15\n------------------------\nProfit: +8.85 (+0.6%)\nRisk: 4.43 | Reward: 8.85\nR:R 1:2\nExitQtyPct: 100\n------------------------\n13:00 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 22,
+   "type": "message",
+   "date": "2026-08-28T09:55:02",
+   "date_unixtime": "1787891102",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | M&M\n------------------------\nTrigger: VAL-REJ\nEntry: 3345.7\nTarget: 3355.74\nSL: 3335.66\n------------------------\nTP1.5: 3359.31\nTP2: 3362.89\nTP3: 3375.81\n------------------------\nRisk: 10.04 | Reward: 10.04\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 1.0\nVF: 2.41\nCLV: 0.84\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Inside Value\nOpenPos: Below VAL\nAdrUsed: 79\nHeadroom: 1.6\nChase: 0.10\nConf: 1 ORBH \nDayType: -\nOpenType: Open Auction\nAtrPct: 0.27\nSlAtr: 1.11\nORH: 3344.9\nORM: 3326.5\nORL: 3308.1\nIBH: 3349.9\nIBM: 3329.0\nIBL: 3308.1\nPVAH: 3373.8\nPPOC: 3364.3\nPVAL: 3344.8\nPDH: 3420.0\nPDL: 3334.0\n------------------------\n09:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:M&M&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | M&M\n------------------------\nTrigger: VAL-REJ\nEntry: 3345.7\nTarget: 3355.74\nSL: 3335.66\n------------------------\nTP1.5: 3359.31\nTP2: 3362.89\nTP3: 3375.81\n------------------------\nRisk: 10.04 | Reward: 10.04\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 1.0\nVF: 2.41\nCLV: 0.84\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Inside Value\nOpenPos: Below VAL\nAdrUsed: 79\nHeadroom: 1.6\nChase: 0.10\nConf: 1 ORBH \nDayType: -\nOpenType: Open Auction\nAtrPct: 0.27\nSlAtr: 1.11\nORH: 3344.9\nORM: 3326.5\nORL: 3308.1\nIBH: 3349.9\nIBM: 3329.0\nIBL: 3308.1\nPVAH: 3373.8\nPPOC: 3364.3\nPVAL: 3344.8\nPDH: 3420.0\nPDL: 3334.0\n------------------------\n09:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:M&M&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 23,
+   "type": "message",
+   "date": "2026-08-28T10:10:07",
+   "date_unixtime": "1787892007",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | TATASTEEL\n------------------------\nTrigger: VAL-RT\nEntry: 187.47\nTarget: 186.89\nSL: 188.05\n------------------------\nTP1.5: 186.73\nTP2: 186.56\nTP3: 185.72\n------------------------\nRisk: 0.58 | Reward: 0.58\nR:R 1:1\n------------------------\nScore: 8\nRVOL: 1.6\nVF: 1.13\nCLV: 0.29\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 39\nHeadroom: 4.4\nChase: 0.56\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.22\nSlAtr: 1.39\nORH: 188.79\nORM: 188.05\nORL: 187.31\nIBH: 188.79\nIBM: 188.05\nIBL: 187.31\nPVAH: 189.43\nPPOC: 188.43\nPVAL: 187.73\nPDH: 190.25\nPDL: 186.50\n------------------------\n10:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | TATASTEEL\n------------------------\nTrigger: VAL-RT\nEntry: 187.47\nTarget: 186.89\nSL: 188.05\n------------------------\nTP1.5: 186.73\nTP2: 186.56\nTP3: 185.72\n------------------------\nRisk: 0.58 | Reward: 0.58\nR:R 1:1\n------------------------\nScore: 8\nRVOL: 1.6\nVF: 1.13\nCLV: 0.29\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 39\nHeadroom: 4.4\nChase: 0.56\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.22\nSlAtr: 1.39\nORH: 188.79\nORM: 188.05\nORL: 187.31\nIBH: 188.79\nIBM: 188.05\nIBL: 187.31\nPVAH: 189.43\nPPOC: 188.43\nPVAL: 187.73\nPDH: 190.25\nPDL: 186.50\n------------------------\n10:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 24,
+   "type": "message",
+   "date": "2026-08-28T10:15:00",
+   "date_unixtime": "1787892300",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | ICICIBANK\n------------------------\nTrigger: PDL-RT\nEntry: 1431.8\nTarget: 1427.3\nSL: 1436.3\n------------------------\nTP1.5: 1425.06\nTP2: 1422.81\nTP3: 1418.31\n------------------------\nRisk: 4.5 | Reward: 4.5\nR:R 1:1\n------------------------\nScore: 10\nRVOL: 4.1\nVF: 2.15\nCLV: 0.10\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 61\nHeadroom: 2.4\nChase: 0.41\nConf: 0\nDayType: -\nOpenType: Open Auction\nAtrPct: 0.19\nSlAtr: 1.68\nORH: 1439.8\nORM: 1434.3\nORL: 1428.8\nIBH: 1439.8\nIBM: 1434.3\nIBL: 1428.8\nPVAH: 1449.8\nPPOC: 1449.3\nPVAL: 1442.3\nPDH: 1453.8\nPDL: 1433.1\n------------------------\n10:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | ICICIBANK\n------------------------\nTrigger: PDL-RT\nEntry: 1431.8\nTarget: 1427.3\nSL: 1436.3\n------------------------\nTP1.5: 1425.06\nTP2: 1422.81\nTP3: 1418.31\n------------------------\nRisk: 4.5 | Reward: 4.5\nR:R 1:1\n------------------------\nScore: 10\nRVOL: 4.1\nVF: 2.15\nCLV: 0.10\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 61\nHeadroom: 2.4\nChase: 0.41\nConf: 0\nDayType: -\nOpenType: Open Auction\nAtrPct: 0.19\nSlAtr: 1.68\nORH: 1439.8\nORM: 1434.3\nORL: 1428.8\nIBH: 1439.8\nIBM: 1434.3\nIBL: 1428.8\nPVAH: 1449.8\nPPOC: 1449.3\nPVAL: 1442.3\nPDH: 1453.8\nPDL: 1433.1\n------------------------\n10:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 25,
+   "type": "message",
+   "date": "2026-08-28T10:15:02",
+   "date_unixtime": "1787892302",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | APOLLOTYRE\n------------------------\nTrigger: PDH-RT\nEntry: 448.3\nTarget: 449.55\nSL: 447.05\n------------------------\nTP1.5: 450.08\nTP2: 450.61\nTP3: 452.04\n------------------------\nRisk: 1.25 | Reward: 1.25\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 1.9\nVF: 0.87\nCLV: 0.92\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 69\nHeadroom: 3.9\nChase: 0.32\nConf: 0\nDayType: -\nOpenType: Open Auction\nAtrPct: 0.28\nSlAtr: 0.98\nORH: 449.70\nORM: 447.10\nORL: 444.50\nIBH: 450.80\nIBM: 447.65\nIBL: 444.50\nPVAH: 444.65\nPPOC: 443.65\nPVAL: 441.90\nPDH: 448.00\nPDL: 439.35\n------------------------\n10:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APOLLOTYRE&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | APOLLOTYRE\n------------------------\nTrigger: PDH-RT\nEntry: 448.3\nTarget: 449.55\nSL: 447.05\n------------------------\nTP1.5: 450.08\nTP2: 450.61\nTP3: 452.04\n------------------------\nRisk: 1.25 | Reward: 1.25\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 1.9\nVF: 0.87\nCLV: 0.92\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 69\nHeadroom: 3.9\nChase: 0.32\nConf: 0\nDayType: -\nOpenType: Open Auction\nAtrPct: 0.28\nSlAtr: 0.98\nORH: 449.70\nORM: 447.10\nORL: 444.50\nIBH: 450.80\nIBM: 447.65\nIBL: 444.50\nPVAH: 444.65\nPPOC: 443.65\nPVAL: 441.90\nPDH: 448.00\nPDL: 439.35\n------------------------\n10:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APOLLOTYRE&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 26,
+   "type": "message",
+   "date": "2026-08-28T10:30:13",
+   "date_unixtime": "1787893213",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | SBIN\n------------------------\nTrigger: VAH-RT\nEntry: 1048.7\nTarget: 1053.42\nSL: 1045.55\n------------------------\nTP1.5: 1054.6\nTP2: 1055.78\nTP3: 1062.86\n------------------------\nRisk: 3.15 | Reward: 4.72\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 1.9\nVF: 0.85\nCLV: 0.67\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 66\nHeadroom: 2.5\nChase: 0.49\nConf: 0\nDayType: Normal Variation\nOpenType: Open Drive\nAtrPct: 0.19\nSlAtr: 1.61\nORH: 1048.3\nORM: 1044.4\nORL: 1040.5\nIBH: 1049.0\nIBM: 1044.8\nIBL: 1040.5\nPVAH: 1047.8\nPPOC: 1044.3\nPVAL: 1044.3\nPDH: 1054.4\nPDL: 1042.9\n------------------------\n10:25 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | SBIN\n------------------------\nTrigger: VAH-RT\nEntry: 1048.7\nTarget: 1053.42\nSL: 1045.55\n------------------------\nTP1.5: 1054.6\nTP2: 1055.78\nTP3: 1062.86\n------------------------\nRisk: 3.15 | Reward: 4.72\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 1.9\nVF: 0.85\nCLV: 0.67\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 66\nHeadroom: 2.5\nChase: 0.49\nConf: 0\nDayType: Normal Variation\nOpenType: Open Drive\nAtrPct: 0.19\nSlAtr: 1.61\nORH: 1048.3\nORM: 1044.4\nORL: 1040.5\nIBH: 1049.0\nIBM: 1044.8\nIBL: 1040.5\nPVAH: 1047.8\nPPOC: 1044.3\nPVAL: 1044.3\nPDH: 1054.4\nPDL: 1042.9\n------------------------\n10:25 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 27,
+   "type": "message",
+   "date": "2026-08-28T10:35:03",
+   "date_unixtime": "1787893503",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | APOLLOTYRE\n------------------------\n🟢 LONG | Entry: 448.3\nExit: 450.61\n------------------------\nProfit: +2.31 (+0.5%)\nRisk: 1.25 | Reward: 2.31\nR:R 1:1.9\nExitQtyPct: 100\n------------------------\n10:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APOLLOTYRE&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | APOLLOTYRE\n------------------------\n🟢 LONG | Entry: 448.3\nExit: 450.61\n------------------------\nProfit: +2.31 (+0.5%)\nRisk: 1.25 | Reward: 2.31\nR:R 1:1.9\nExitQtyPct: 100\n------------------------\n10:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APOLLOTYRE&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 28,
+   "type": "message",
+   "date": "2026-08-28T10:35:06",
+   "date_unixtime": "1787893506",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | TATASTEEL\n------------------------\n🔴 SHORT | Entry: 187.47\nExit: 186.89\n------------------------\nProfit: +0.58 (+0.3%)\nRisk: 0.58 | Reward: 0.58\nR:R 1:1\nExitQtyPct: 50\n------------------------\n10:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | TATASTEEL\n------------------------\n🔴 SHORT | Entry: 187.47\nExit: 186.89\n------------------------\nProfit: +0.58 (+0.3%)\nRisk: 0.58 | Reward: 0.58\nR:R 1:1\nExitQtyPct: 50\n------------------------\n10:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 29,
+   "type": "message",
+   "date": "2026-08-28T10:40:05",
+   "date_unixtime": "1787893805",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | TATASTEEL\n------------------------\n🔴 SHORT | Entry: 187.47\nExit: 186.56\n------------------------\nProfit: +0.91 (+0.5%)\nRisk: 0.58 | Reward: 0.91\nR:R 1:1.6\nExitQtyPct: 100\n------------------------\n10:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | TATASTEEL\n------------------------\n🔴 SHORT | Entry: 187.47\nExit: 186.56\n------------------------\nProfit: +0.91 (+0.5%)\nRisk: 0.58 | Reward: 0.91\nR:R 1:1.6\nExitQtyPct: 100\n------------------------\n10:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 30,
+   "type": "message",
+   "date": "2026-08-28T11:00:08",
+   "date_unixtime": "1787895008",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | M&M\n------------------------\n🟢 LONG | Entry: 3345.7\nExit: 3335.66\n------------------------\nLoss: -10.04 (-0.3%)\nRisk: 10.04 | Reward: 10.04\nR:R was 1:1\n------------------------\n10:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:M&M&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | M&M\n------------------------\n🟢 LONG | Entry: 3345.7\nExit: 3335.66\n------------------------\nLoss: -10.04 (-0.3%)\nRisk: 10.04 | Reward: 10.04\nR:R was 1:1\n------------------------\n10:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:M&M&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 31,
+   "type": "message",
+   "date": "2026-08-28T11:10:02",
+   "date_unixtime": "1787895602",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "📈 RUNNER | TATASTEEL\n------------------------\nReached TP3 after the position closed\nRef Entry 187.47 | Ref Level 185.72\nUnbooked 3.00R\n------------------------\n11:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "📈 RUNNER | TATASTEEL\n------------------------\nReached TP3 after the position closed\nRef Entry 187.47 | Ref Level 185.72\nUnbooked 3.00R\n------------------------\n11:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATASTEEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 32,
+   "type": "message",
+   "date": "2026-08-28T11:10:05",
+   "date_unixtime": "1787895605",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | TATAPOWER\n------------------------\nTrigger: VAH-RT\nEntry: 352.25\nTarget: 359.11\nSL: 351.19\n------------------------\nTP1.5: 362.53\nTP2: 365.96\nTP3: 372.82\n------------------------\nRisk: 1.06 | Reward: 6.86\nR:R 1:6.5\n------------------------\nScore: 13\nRVOL: 5.3\nVF: 0.88\nCLV: 1.00\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 47\nHeadroom: 3.2\nChase: 0.20\nConf: 2 IBH ORBH \nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.18\nSlAtr: 1.68\nORH: 352.05\nORM: 350.65\nORL: 349.25\nIBH: 352.05\nIBM: 350.65\nIBL: 349.25\nPVAH: 352.15\nPPOC: 350.15\nPVAL: 349.15\nPDH: 359.20\nPDL: 348.10\n------------------------\n11:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATAPOWER&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | TATAPOWER\n------------------------\nTrigger: VAH-RT\nEntry: 352.25\nTarget: 359.11\nSL: 351.19\n------------------------\nTP1.5: 362.53\nTP2: 365.96\nTP3: 372.82\n------------------------\nRisk: 1.06 | Reward: 6.86\nR:R 1:6.5\n------------------------\nScore: 13\nRVOL: 5.3\nVF: 0.88\nCLV: 1.00\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 47\nHeadroom: 3.2\nChase: 0.20\nConf: 2 IBH ORBH \nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.18\nSlAtr: 1.68\nORH: 352.05\nORM: 350.65\nORL: 349.25\nIBH: 352.05\nIBM: 350.65\nIBL: 349.25\nPVAH: 352.15\nPPOC: 350.15\nPVAL: 349.15\nPDH: 359.20\nPDL: 348.10\n------------------------\n11:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATAPOWER&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 33,
+   "type": "message",
+   "date": "2026-08-28T11:10:06",
+   "date_unixtime": "1787895606",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | INDUSINDBK\n------------------------\nTrigger: VAL-RT\nEntry: 996.3\nTarget: 993.31\nSL: 999.29\n------------------------\nTP1.5: 992.33\nTP2: 991.34\nTP3: 987.33\n------------------------\nRisk: 2.99 | Reward: 2.99\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 2.0\nVF: 0.86\nCLV: 0.07\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 62\nHeadroom: 3.7\nChase: 0.59\nConf: 0\nDayType: Normal\nOpenType: Open Test Drive\nAtrPct: 0.16\nSlAtr: 1.87\nORH: 1000.5\nORM: 995.8\nORL: 991.1\nIBH: 1000.5\nIBM: 995.8\nIBL: 991.1\nPVAH: 1001.3\nPPOC: 999.8\nPVAL: 997.3\nPDH: 1005.3\nPDL: 994.5\n------------------------\n11:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | INDUSINDBK\n------------------------\nTrigger: VAL-RT\nEntry: 996.3\nTarget: 993.31\nSL: 999.29\n------------------------\nTP1.5: 992.33\nTP2: 991.34\nTP3: 987.33\n------------------------\nRisk: 2.99 | Reward: 2.99\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 2.0\nVF: 0.86\nCLV: 0.07\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 62\nHeadroom: 3.7\nChase: 0.59\nConf: 0\nDayType: Normal\nOpenType: Open Test Drive\nAtrPct: 0.16\nSlAtr: 1.87\nORH: 1000.5\nORM: 995.8\nORL: 991.1\nIBH: 1000.5\nIBM: 995.8\nIBL: 991.1\nPVAH: 1001.3\nPPOC: 999.8\nPVAL: 997.3\nPDH: 1005.3\nPDL: 994.5\n------------------------\n11:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 34,
+   "type": "message",
+   "date": "2026-08-28T11:15:09",
+   "date_unixtime": "1787895909",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | RELIANCE\n------------------------\nTrigger: PDL-RT\nEntry: 1286.6\nTarget: 1283.04\nSL: 1290.16\n------------------------\nTP1.5: 1281.26\nTP2: 1279.48\nTP3: 1275.92\n------------------------\nRisk: 3.56 | Reward: 3.56\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 0.9\nVF: 0.85\nCLV: 0.00\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 44\nHeadroom: 2.8\nChase: 0.42\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.13\nSlAtr: 2.16\nORH: 1291.8\nORM: 1288.2\nORL: 1284.5\nIBH: 1291.8\nIBM: 1288.2\nIBL: 1284.5\nPVAH: 1294.3\nPPOC: 1290.3\nPVAL: 1288.8\nPDH: 1308.4\nPDL: 1287.0\n------------------------\n11:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RELIANCE&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | RELIANCE\n------------------------\nTrigger: PDL-RT\nEntry: 1286.6\nTarget: 1283.04\nSL: 1290.16\n------------------------\nTP1.5: 1281.26\nTP2: 1279.48\nTP3: 1275.92\n------------------------\nRisk: 3.56 | Reward: 3.56\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 0.9\nVF: 0.85\nCLV: 0.00\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 44\nHeadroom: 2.8\nChase: 0.42\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.13\nSlAtr: 2.16\nORH: 1291.8\nORM: 1288.2\nORL: 1284.5\nIBH: 1291.8\nIBM: 1288.2\nIBL: 1284.5\nPVAH: 1294.3\nPPOC: 1290.3\nPVAL: 1288.8\nPDH: 1308.4\nPDL: 1287.0\n------------------------\n11:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RELIANCE&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 35,
+   "type": "message",
+   "date": "2026-08-28T11:35:02",
+   "date_unixtime": "1787897102",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | ICICIBANK\n------------------------\n🔴 SHORT | Entry: 1431.8\nExit: 1427.3\n------------------------\nProfit: +4.5 (+0.3%)\nRisk: 4.5 | Reward: 4.5\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | ICICIBANK\n------------------------\n🔴 SHORT | Entry: 1431.8\nExit: 1427.3\n------------------------\nProfit: +4.5 (+0.3%)\nRisk: 4.5 | Reward: 4.5\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 36,
+   "type": "message",
+   "date": "2026-08-28T11:40:02",
+   "date_unixtime": "1787897402",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | SBIN\n------------------------\n🟢 LONG | Entry: 1048.7\nExit: 1045.55\n------------------------\nLoss: -3.15 (-0.3%)\nRisk: 3.15 | Reward: 4.72\nR:R was 1:1.5\n------------------------\n11:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | SBIN\n------------------------\n🟢 LONG | Entry: 1048.7\nExit: 1045.55\n------------------------\nLoss: -3.15 (-0.3%)\nRisk: 3.15 | Reward: 4.72\nR:R was 1:1.5\n------------------------\n11:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 37,
+   "type": "message",
+   "date": "2026-08-28T11:40:04",
+   "date_unixtime": "1787897404",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | INDUSINDBK\n------------------------\n🔴 SHORT | Entry: 996.3\nExit: 993.31\n------------------------\nProfit: +2.99 (+0.3%)\nRisk: 2.99 | Reward: 2.99\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | INDUSINDBK\n------------------------\n🔴 SHORT | Entry: 996.3\nExit: 993.31\n------------------------\nProfit: +2.99 (+0.3%)\nRisk: 2.99 | Reward: 2.99\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 38,
+   "type": "message",
+   "date": "2026-08-28T11:50:06",
+   "date_unixtime": "1787898006",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | RELIANCE\n------------------------\n🔴 SHORT | Entry: 1286.6\nExit: 1283.04\n------------------------\nProfit: +3.56 (+0.3%)\nRisk: 3.56 | Reward: 3.56\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:45 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RELIANCE&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | RELIANCE\n------------------------\n🔴 SHORT | Entry: 1286.6\nExit: 1283.04\n------------------------\nProfit: +3.56 (+0.3%)\nRisk: 3.56 | Reward: 3.56\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:45 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RELIANCE&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 39,
+   "type": "message",
+   "date": "2026-08-28T12:00:09",
+   "date_unixtime": "1787898609",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | INDUSINDBK\n------------------------\n🔴 SHORT | Entry: 996.3\nExit: 991.34\n------------------------\nProfit: +4.96 (+0.5%)\nRisk: 2.99 | Reward: 4.96\nR:R 1:1.7\nExitQtyPct: 100\n------------------------\n11:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | INDUSINDBK\n------------------------\n🔴 SHORT | Entry: 996.3\nExit: 991.34\n------------------------\nProfit: +4.96 (+0.5%)\nRisk: 2.99 | Reward: 4.96\nR:R 1:1.7\nExitQtyPct: 100\n------------------------\n11:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 40,
+   "type": "message",
+   "date": "2026-08-28T12:05:04",
+   "date_unixtime": "1787898904",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | TATAPOWER\n------------------------\n🟢 LONG | Entry: 352.25\nExit: 351.19\n------------------------\nLoss: -1.06 (-0.3%)\nRisk: 1.06 | Reward: 6.86\nR:R was 1:6.5\n------------------------\n12:00 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATAPOWER&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | TATAPOWER\n------------------------\n🟢 LONG | Entry: 352.25\nExit: 351.19\n------------------------\nLoss: -1.06 (-0.3%)\nRisk: 1.06 | Reward: 6.86\nR:R was 1:6.5\n------------------------\n12:00 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:TATAPOWER&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 41,
+   "type": "message",
+   "date": "2026-08-28T13:10:02",
+   "date_unixtime": "1787902802",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "📈 RUNNER | INDUSINDBK\n------------------------\nReached TP3 after the position closed\nRef Entry 996.3 | Ref Level 987.33\nUnbooked 3.00R\n------------------------\n13:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "📈 RUNNER | INDUSINDBK\n------------------------\nReached TP3 after the position closed\nRef Entry 996.3 | Ref Level 987.33\nUnbooked 3.00R\n------------------------\n13:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDUSINDBK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 42,
+   "type": "message",
+   "date": "2026-08-28T13:25:02",
+   "date_unixtime": "1787903702",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | ICICIBANK\n------------------------\n🔴 SHORT | Entry: 1431.8\nExit: 1422.81\n------------------------\nProfit: +8.99 (+0.6%)\nRisk: 4.5 | Reward: 8.99\nR:R 1:2\nExitQtyPct: 100\n------------------------\n13:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | ICICIBANK\n------------------------\n🔴 SHORT | Entry: 1431.8\nExit: 1422.81\n------------------------\nProfit: +8.99 (+0.6%)\nRisk: 4.5 | Reward: 8.99\nR:R 1:2\nExitQtyPct: 100\n------------------------\n13:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<!-- saved from url=(0039)https://breakingtrade.com/scanner-guide -->
+<html lang="en" data-darkreader-proxy-injected="true"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <!-- Google Analytics -->
+    <script async="" src="./How to Use a Live Intraday Scanner _ Market Profile Scanner Guide India _ BreakingTrade_files/js"></script>
+    <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-61WVGZP2NS');</script>
+    <meta name="google-site-verification" content="YriNAyHiSxh4xq20xdb2B5lVW9WMiDiV7AaHEZGbv2M">
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>How to Use a Live Intraday Scanner | Market Profile Scanner Guide India | BreakingTrade</title>
+    <link rel="icon" type="image/x-icon" href="https://breakingtrade.com/Images/Icon_only.png">
+
+    <meta name="description" content="Complete guide to using a Live Intraday Market Profile Scanner for NSE. Learn every column, how to stack filters, how to spot single prints as they form, and 13 ready-made scan combinations for Indian intraday traders.">
+    <meta name="keywords" content="how to use intraday scanner, market profile scanner guide, NSE scanner tutorial, live single print formation, single TPO above days high, IB percentage, open drive, value area scanner, day type scanner, TPO position, intraday trading India">
+    <meta name="author" content="BreakingTrade">
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+    <link rel="canonical" href="https://breakingtrade.com/scanner-guide">
+    <link rel="alternate" hreflang="en-IN" href="https://breakingtrade.com/scanner-guide">
+    <link rel="alternate" hreflang="en" href="https://breakingtrade.com/scanner-guide">
+
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://breakingtrade.com/scanner-guide">
+    <meta property="og:title" content="How to Use the Live Intraday Scanner | Market Profile Guide">
+    <meta property="og:description" content="Every column explained, how to stack filters, how to catch single prints as they form, and 13 ready-made scans for NSE intraday traders.">
+    <meta property="og:site_name" content="BreakingTrade">
+    <meta property="og:locale" content="en_IN">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="How to Use the Live Intraday Scanner | BreakingTrade">
+    <meta name="twitter:description" content="Every column explained, 13 ready-made scans, and how to catch single prints while they form.">
+
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[
+        {"@type":"ListItem","position":1,"name":"Home","item":"https://breakingtrade.com/"},
+        {"@type":"ListItem","position":2,"name":"Live Intraday Scanner","item":"https://breakingtrade.com/live-intraday-scanner"},
+        {"@type":"ListItem","position":3,"name":"Scanner Guide","item":"https://breakingtrade.com/scanner-guide"}]}
+    </script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "How to Use the Live Intraday Market Profile Scanner",
+        "description": "Column-by-column guide, filter-stacking method and 13 ready-made scan combinations for the BreakingTrade Live Intraday Scanner on NSE.",
+        "url": "https://breakingtrade.com/scanner-guide",
+        "inLanguage": "en-IN",
+        "author": {"@type": "Organization", "name": "BreakingTrade"},
+        "publisher": {"@type": "Organization", "name": "BreakingTrade", "url": "https://breakingtrade.com",
+                      "logo": {"@type": "ImageObject", "url": "https://breakingtrade.com/Images/logo.svg"}},
+        "about": {"@type": "Thing", "name": "Market Profile intraday scanning"},
+        "audience": {"@type": "Audience", "audienceType": "Indian intraday traders, NSE F&O traders"}
+    }
+    </script>
+<script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": "How do I use the Live Intraday Scanner?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Read the Market Bias panel at the top to know which side the market is leaning, then use the filter row at the bottom of the table to pick your setup — for example Opening = Gap Up plus OpenDrive = Open Drive Up plus TPO Pos = Above VA. Filters stack, so each column you set narrows 200+ NSE F&O stocks down to the handful that match your exact setup. Click any stock name to open its Market Profile chart and confirm before trading."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "Can I combine multiple filters in the scanner?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Yes. Every dropdown in the filter row works together as an AND condition. Opening, OpenDrive, Tail, SinglePrint, Poor H/L, Day Type, TPO Pos and TPO Pos (Prev) can all be set at the same time, which lets you build hundreds of unique scans from a single screen."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "How do I find a single print that is still forming?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Use the TPO Pos column. When it reads something like 3 TPO up High or 4 TPO down Low, it is counting single TPOs currently stacked beyond the day's high or low with nothing coming back to fill them — a single print in formation, live. A count of 3 or more is treated as a genuine forming single print. To see every such stock at once, type 'Single TPO above Days High' (or 'Single TPO below Days Low') into the scanner's global search box, then keep the rows showing a count of 3 or more. The separate SinglePrint column shows prints that have already completed."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "What is the best time of day to use an intraday scanner?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "The scanner is useful all day but 10:15 AM is the key moment for NSE traders. That is when the first hour (Initial Balance) completes, IB% becomes final and Day Type stops being an estimate. Opening type and Open Drive are most useful between 9:15 and 10:15, range extension setups between 10:15 and 12:30, and Neutral day resolution after 2 PM."
+                }
+            }
+        ]
+    }
+    </script>
+    <link rel="stylesheet" href="./How to Use a Live Intraday Scanner _ Market Profile Scanner Guide India _ BreakingTrade_files/all.min.css">
+    <style>
+        html, body { margin: 0; padding: 0; background: #0b1220; }
+        .bt-nav {
+            background: rgba(17,24,39,0.96); border-bottom: 1px solid rgba(255,255,255,0.09);
+            padding: 10px 18px; display: flex; align-items: center; justify-content: space-between;
+            flex-wrap: wrap; gap: 10px; position: sticky; top: 0; z-index: 50;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .bt-nav > a:first-child { text-decoration: none; color: #b3c0d4; font-weight: 700; }
+        .bt-nav img { height: 46px; width: auto; max-width: 200px; }
+        .bt-nav .bt-nav-links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .bt-nav a.bt-lnk {
+            color: #b3c0d4; text-decoration: none; font-size: 13px; font-weight: 600;
+            padding: 7px 13px; border-radius: 8px; transition: all .2s;
+        }
+        .bt-nav a.bt-lnk:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .bt-nav a.bt-login {
+            display: inline-flex; align-items: center; gap: 6px; background: rgba(129,140,248,0.15);
+            color: #C7D2FE; border: 1px solid rgba(129,140,248,0.25); padding: 7px 16px;
+            border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none;
+        }
+        .bt-nav a.bt-trial {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: linear-gradient(135deg,#818CF8,#A78BFA); color: #fff; border: none;
+            padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none;
+            box-shadow: 0 2px 10px rgba(129,140,248,0.25);
+        }
+        .bt-foot {
+            background: rgba(17,24,39,0.96); border-top: 1px solid rgba(255,255,255,0.09);
+            padding: 30px 18px 22px; text-align: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .bt-foot a { color: rgba(255,255,255,0.7); text-decoration: none; margin: 0 13px; font-size: 14px; }
+        .bt-foot a:hover { color: #fff; }
+        .bt-foot p { color: rgba(255,255,255,0.45); font-size: 0.85rem; margin: 16px 0 0; }
+        @media (max-width: 600px) { .bt-nav a.bt-lnk { display: none; } }
+    </style>
+<style>
+        /* ============================================================
+           How-To Guide — all styles scoped under .bt-howto so nothing
+           leaks into the rest of the SPA.
+           ============================================================ */
+        .bt-howto {
+            --hw-bg: #0b1220;
+            --hw-card: #141d31;
+            --hw-card-2: #1a2540;
+            --hw-border: rgba(255,255,255,0.09);
+            --hw-text: #e6ecf5;
+            --hw-text-2: #b3c0d4;
+            --hw-muted: #7f8ea8;
+            --hw-indigo: #818cf8;
+            --hw-violet: #a78bfa;
+            --hw-green: #34d399;
+            --hw-red: #f87171;
+            --hw-amber: #fbbf24;
+            --hw-cyan: #38bdf8;
+            background: var(--hw-bg);
+            color: var(--hw-text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 15px;
+            line-height: 1.75;
+            padding-bottom: 60px;
+            min-height: 100vh;
+        }
+        .bt-howto * { box-sizing: border-box; }
+        .bt-howto .hw-wrap { max-width: 1100px; margin: 0 auto; padding: 0 18px; }
+
+        /* ── View counter chip ── */
+        .bt-howto .hw-views {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(255,255,255,0.05); border: 1px solid var(--hw-border);
+            color: var(--hw-muted); font-size: 11.5px; font-weight: 600;
+            letter-spacing: 0.4px; padding: 5px 13px; border-radius: 999px;
+            margin: 0 0 18px 8px; vertical-align: middle;
+        }
+        .bt-howto .hw-views i { font-size: 10.5px; opacity: 0.75; }
+        .bt-howto .hw-views span { color: var(--hw-text-2); }
+
+        /* ── Hero ── */
+        .bt-howto .hw-hero {
+            background:
+                radial-gradient(900px 380px at 12% -10%, rgba(129,140,248,0.28), transparent 60%),
+                radial-gradient(700px 340px at 88% 0%, rgba(56,189,248,0.20), transparent 60%),
+                linear-gradient(180deg, #101a2e 0%, #0b1220 100%);
+            border-bottom: 1px solid var(--hw-border);
+            padding: 52px 0 44px;
+            text-align: center;
+        }
+        .bt-howto .hw-eyebrow {
+            display: inline-flex; align-items: center; gap: 7px;
+            background: rgba(129,140,248,0.14);
+            border: 1px solid rgba(129,140,248,0.35);
+            color: #c7d2fe;
+            font-size: 11.5px; font-weight: 700; letter-spacing: 1.3px; text-transform: uppercase;
+            padding: 5px 14px; border-radius: 999px; margin-bottom: 18px;
+        }
+        .bt-howto h1 {
+            font-size: 2.5rem; font-weight: 800; line-height: 1.2;
+            margin: 0 0 16px; color: #fff; letter-spacing: -0.5px;
+        }
+        .bt-howto h1 em {
+            font-style: normal;
+            background: linear-gradient(135deg, #818cf8 0%, #38bdf8 100%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .bt-howto .hw-sub {
+            color: var(--hw-text-2); font-size: 1.08rem; max-width: 780px; margin: 0 auto 26px;
+        }
+        .bt-howto .hw-metrics {
+            display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 6px;
+        }
+        .bt-howto .hw-metric {
+            background: rgba(255,255,255,0.045); border: 1px solid var(--hw-border);
+            border-radius: 12px; padding: 12px 20px; min-width: 130px;
+        }
+        .bt-howto .hw-metric b { display: block; font-size: 1.5rem; font-weight: 800; color: #fff; line-height: 1.2; }
+        .bt-howto .hw-metric span { font-size: 11.5px; color: var(--hw-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+
+        /* ── Sections ── */
+        .bt-howto .hw-sec { padding: 46px 0 6px; }
+        .bt-howto .hw-sec-head { margin-bottom: 26px; }
+        .bt-howto .hw-kicker {
+            font-size: 11.5px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+            color: var(--hw-indigo); margin-bottom: 8px;
+        }
+        .bt-howto h2 {
+            font-size: 1.7rem; font-weight: 800; color: #fff; margin: 0 0 10px; letter-spacing: -0.3px;
+        }
+        .bt-howto h2 i { color: var(--hw-indigo); font-size: 1.3rem; margin-right: 8px; }
+        .bt-howto .hw-lede { color: var(--hw-text-2); max-width: 860px; margin: 0; }
+        .bt-howto h3 { font-size: 1.12rem; font-weight: 700; color: #fff; margin: 0 0 8px; }
+        .bt-howto p { margin: 0 0 12px; }
+        .bt-howto a { color: var(--hw-cyan); }
+
+        /* ── Reality-check block ── */
+        .bt-howto .hw-punch {
+            background: linear-gradient(135deg, rgba(129,140,248,0.13), rgba(56,189,248,0.07));
+            border: 1px solid rgba(129,140,248,0.3);
+            border-left: 4px solid var(--hw-indigo);
+            border-radius: 14px; padding: 22px 26px; margin: 26px 0 0;
+        }
+        .bt-howto .hw-punch p:last-child { margin-bottom: 0; }
+        .bt-howto .hw-punch strong { color: #fff; }
+
+        /* ── Step cards ── */
+        .bt-howto .hw-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .bt-howto .hw-step {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 22px; position: relative; overflow: hidden;
+        }
+        .bt-howto .hw-step::before {
+            content: attr(data-n);
+            position: absolute; right: 14px; top: 2px;
+            font-size: 4.2rem; font-weight: 900; color: rgba(255,255,255,0.045); line-height: 1;
+        }
+        .bt-howto .hw-step-t { font-size: 11px; font-weight: 800; letter-spacing: 1.1px; text-transform: uppercase; color: var(--hw-indigo); margin-bottom: 6px; }
+        .bt-howto .hw-step p { color: var(--hw-text-2); font-size: 14px; margin: 0; }
+
+        /* ── Generic card grid ── */
+        .bt-howto .hw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .bt-howto .hw-card {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 20px 22px;
+        }
+        .bt-howto .hw-card p:last-child { margin-bottom: 0; }
+        .bt-howto .hw-card p, .bt-howto .hw-card li { color: var(--hw-text-2); font-size: 14px; }
+        .bt-howto .hw-card h3 i { margin-right: 7px; }
+
+        /* ── Tables ── */
+        .bt-howto .hw-table-wrap {
+            border: 1px solid var(--hw-border); border-radius: 14px; overflow-x: auto; background: var(--hw-card);
+        }
+        .bt-howto table.hw-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 720px; }
+        .bt-howto table.hw-table th {
+            background: #1c2842; color: #dbe4f2; text-align: left; font-weight: 700; font-size: 11.5px;
+            letter-spacing: 0.7px; text-transform: uppercase; padding: 12px 14px;
+            border-bottom: 1px solid var(--hw-border); white-space: nowrap;
+        }
+        .bt-howto table.hw-table td {
+            padding: 13px 14px; border-bottom: 1px solid rgba(255,255,255,0.055);
+            color: var(--hw-text-2); vertical-align: top;
+        }
+        .bt-howto table.hw-table tr:last-child td { border-bottom: none; }
+        .bt-howto table.hw-table tr:hover td { background: rgba(255,255,255,0.022); }
+        .bt-howto table.hw-table td.hw-col { color: #fff; font-weight: 700; white-space: nowrap; }
+        .bt-howto table.hw-table td b { color: #eef3fa; }
+        .bt-howto .hw-tag {
+            display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+            padding: 2px 7px; border-radius: 5px; margin-left: 6px; vertical-align: middle; text-transform: uppercase;
+        }
+        .bt-howto .hw-tag.drop { background: rgba(129,140,248,0.18); color: #c7d2fe; border: 1px solid rgba(129,140,248,0.35); }
+        .bt-howto .hw-tag.type { background: rgba(56,189,248,0.15); color: #a5e4ff; border: 1px solid rgba(56,189,248,0.32); }
+        .bt-howto .hw-tag.sort { background: rgba(251,191,36,0.14); color: #fcd34d; border: 1px solid rgba(251,191,36,0.32); }
+        .bt-howto .hw-tag.none { background: rgba(255,255,255,0.06); color: var(--hw-muted); border: 1px solid var(--hw-border); }
+
+        /* ── "Think it, then scan it" cards ── */
+        .bt-howto .hw-think {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 20px 22px; margin-bottom: 14px;
+        }
+        .bt-howto .hw-think-q {
+            display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px;
+        }
+        .bt-howto .hw-think-q i { color: var(--hw-violet); font-size: 16px; margin-top: 5px; flex-shrink: 0; }
+        .bt-howto .hw-think-q span {
+            font-size: 15px; font-style: italic; color: #fff; font-weight: 500; line-height: 1.6;
+        }
+        .bt-howto .hw-think-a { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+        .bt-howto .hw-think-a > i { color: var(--hw-green); font-size: 15px; margin-top: 6px; flex-shrink: 0; }
+        .bt-howto .hw-think p.hw-think-note { margin: 12px 0 0; font-size: 13.5px; color: var(--hw-text-2); }
+
+        /* ── Spotlight (feature callout) ── */
+        .bt-howto .hw-spotlight {
+            background:
+                radial-gradient(600px 220px at 8% 0%, rgba(251,191,36,0.14), transparent 62%),
+                linear-gradient(135deg, #1a2038 0%, #131b2e 100%);
+            border: 1px solid rgba(251,191,36,0.32);
+            border-radius: 16px; padding: 26px 28px;
+        }
+        .bt-howto .hw-spotlight h3 { font-size: 1.15rem; margin-top: 22px; }
+        .bt-howto .hw-spotlight h3:first-of-type { margin-top: 0; }
+        .bt-howto .hw-spotlight p { color: var(--hw-text-2); }
+        .bt-howto .hw-spotlight strong { color: #fff; }
+        .bt-howto .hw-live {
+            display: inline-flex; align-items: center; gap: 7px;
+            background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.42);
+            color: #fcd34d; font-size: 11px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase;
+            padding: 4px 12px; border-radius: 999px; margin-bottom: 14px;
+        }
+        .bt-howto .hw-cell {
+            display: inline-block; font-family: 'Consolas','Menlo',monospace; font-weight: 700;
+            background: #0d1526; border: 1px solid rgba(251,191,36,0.35); color: #fcd34d;
+            padding: 3px 10px; border-radius: 6px; font-size: 13px; white-space: nowrap;
+        }
+        .bt-howto .hw-search {
+            display: inline-block; font-family: 'Consolas','Menlo',monospace;
+            background: #0d1526; border: 1px solid var(--hw-border); color: #a5e4ff;
+            padding: 3px 10px; border-radius: 6px; font-size: 13px;
+        }
+        .bt-howto .hw-warn {
+            margin-top: 20px; background: rgba(248,113,113,0.09); border: 1px solid rgba(248,113,113,0.3);
+            border-left: 4px solid var(--hw-red); border-radius: 10px; padding: 14px 18px;
+        }
+        .bt-howto .hw-warn p { margin: 0; font-size: 13.5px; }
+        .bt-howto .hw-warn b { color: #fca5a5; }
+
+        /* ── Recipe cards ── */
+        .bt-howto .hw-recipes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .bt-howto .hw-recipe {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 20px 22px; border-top: 3px solid var(--hw-indigo);
+        }
+        .bt-howto .hw-recipe.bull { border-top-color: var(--hw-green); }
+        .bt-howto .hw-recipe.bear { border-top-color: var(--hw-red); }
+        .bt-howto .hw-recipe.rev  { border-top-color: var(--hw-amber); }
+        .bt-howto .hw-recipe.flat { border-top-color: var(--hw-cyan); }
+        .bt-howto .hw-recipe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+        .bt-howto .hw-recipe-name { font-size: 1.05rem; font-weight: 800; color: #fff; }
+        .bt-howto .hw-when { font-size: 11px; font-weight: 700; color: var(--hw-muted); white-space: nowrap; }
+        .bt-howto .hw-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .bt-howto .hw-chip {
+            font-size: 11.5px; font-weight: 600; font-family: 'Consolas', 'Menlo', monospace;
+            background: rgba(255,255,255,0.05); border: 1px solid var(--hw-border);
+            color: #dce5f2; padding: 4px 9px; border-radius: 6px; white-space: nowrap;
+        }
+        .bt-howto .hw-chip b { color: var(--hw-indigo); font-weight: 800; }
+        .bt-howto .hw-recipe p { font-size: 13.5px; color: var(--hw-text-2); margin: 0 0 8px; }
+        .bt-howto .hw-recipe p:last-child { margin-bottom: 0; }
+        .bt-howto .hw-recipe .hw-read { color: #fff; font-weight: 600; }
+
+        /* ── Timeline ── */
+        .bt-howto .hw-clock { border-left: 2px solid rgba(129,140,248,0.28); margin-left: 8px; padding-left: 0; }
+        .bt-howto .hw-slot { position: relative; padding: 0 0 22px 26px; }
+        .bt-howto .hw-slot:last-child { padding-bottom: 4px; }
+        .bt-howto .hw-slot::before {
+            content: ''; position: absolute; left: -7px; top: 7px; width: 12px; height: 12px;
+            border-radius: 50%; background: var(--hw-indigo); box-shadow: 0 0 0 4px rgba(129,140,248,0.16);
+        }
+        .bt-howto .hw-slot.key::before { background: var(--hw-amber); box-shadow: 0 0 0 5px rgba(251,191,36,0.2); }
+        .bt-howto .hw-time { font-family: 'Consolas','Menlo',monospace; font-size: 12.5px; font-weight: 800; color: var(--hw-amber); letter-spacing: 0.4px; }
+        .bt-howto .hw-slot h3 { margin: 2px 0 4px; font-size: 1rem; }
+        .bt-howto .hw-slot p { color: var(--hw-text-2); font-size: 13.5px; margin: 0; }
+
+        /* ── Do / Don't ── */
+        .bt-howto .hw-list { list-style: none; padding: 0; margin: 0; }
+        .bt-howto .hw-list li { position: relative; padding: 7px 0 7px 28px; font-size: 14px; color: var(--hw-text-2); }
+        .bt-howto .hw-list li::before {
+            font-family: 'Font Awesome 5 Free'; font-weight: 900; position: absolute; left: 0; top: 8px; font-size: 12px;
+        }
+        .bt-howto .hw-list.do li::before { content: '\f00c'; color: var(--hw-green); }
+        .bt-howto .hw-list.dont li::before { content: '\f00d'; color: var(--hw-red); }
+        .bt-howto .hw-list li b { color: #fff; }
+
+        /* ── CTA ── */
+        .bt-howto .hw-cta {
+            margin-top: 44px; text-align: center; border-radius: 18px; padding: 42px 26px;
+            background:
+                radial-gradient(700px 260px at 50% 0%, rgba(129,140,248,0.28), transparent 65%),
+                linear-gradient(135deg, #16203a 0%, #101a2e 100%);
+            border: 1px solid rgba(129,140,248,0.28);
+        }
+        .bt-howto .hw-cta h2 { font-size: 1.85rem; margin-bottom: 12px; }
+        .bt-howto .hw-cta p { color: var(--hw-text-2); max-width: 640px; margin: 0 auto 22px; }
+        .bt-howto .hw-btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .bt-howto .hw-btn {
+            display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+            padding: 13px 28px; border-radius: 10px; font-weight: 700; font-size: 14.5px; transition: all 0.22s ease;
+        }
+        .bt-howto .hw-btn.primary {
+            background: linear-gradient(135deg, #818cf8 0%, #a78bfa 100%); color: #fff;
+            box-shadow: 0 6px 22px rgba(129,140,248,0.32);
+        }
+        .bt-howto .hw-btn.primary:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(129,140,248,0.45); color: #fff; }
+        .bt-howto .hw-btn.ghost { background: rgba(255,255,255,0.05); color: #dbe4f2; border: 1px solid var(--hw-border); }
+        .bt-howto .hw-btn.ghost:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .bt-howto .hw-note {
+            margin-top: 34px; font-size: 12px; color: var(--hw-muted); text-align: center;
+            max-width: 820px; margin-left: auto; margin-right: auto; line-height: 1.7;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            .bt-howto .hw-steps, .bt-howto .hw-grid-2, .bt-howto .hw-recipes { grid-template-columns: 1fr; }
+            .bt-howto h1 { font-size: 1.85rem; }
+            .bt-howto h2 { font-size: 1.4rem; }
+            .bt-howto .hw-hero { padding: 36px 0 32px; }
+            .bt-howto .hw-metric { flex: 1 1 40%; min-width: 0; padding: 10px 14px; }
+        }
+    </style>
+</head>
+<body>
+<nav class="bt-nav">
+    <a href="https://breakingtrade.com/"><img src="./How to Use a Live Intraday Scanner _ Market Profile Scanner Guide India _ BreakingTrade_files/logo.svg" alt="BreakingTrade - Market Profile Scanner" width="200" height="46"></a>
+    <div class="bt-nav-links">
+        <a class="bt-lnk" href="https://breakingtrade.com/live-intraday-scanner">Intraday Scanner</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/mp-charts-guide">MP Charts Guide</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/volume-scanner-guide">Volume Scanner Guide</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/what-is-market-profile">Market Profile</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/pricing">Pricing</a>
+        <a class="bt-login" href="https://breakingtrade.com/login"><i class="fas fa-sign-in-alt"></i> Log In</a>
+        <a class="bt-trial" href="https://breakingtrade.com/signup"><i class="fas fa-bolt"></i> Start Free Trial</a>
+    </div>
+</nav>
+
+<div class="bt-howto">
+
+    <!-- ══════════════ HERO ══════════════ -->
+    <section class="hw-hero">
+        <div class="hw-wrap">
+            <span class="hw-eyebrow"><i class="fas fa-graduation-cap"></i> Scanner User Guide</span>
+            <span class="hw-views">
+                <i class="fas fa-eye"></i>
+                <span>108</span> views
+            </span>
+            <h1>Read the whole market<br>in <em>60 seconds</em></h1>
+            <p class="hw-sub">
+                A serious Market Profile trader checks 8 things on a stock before taking an intraday trade.
+                On 200+ NSE F&amp;O stocks, that is <b>1,600 checks before 10:15 AM</b> — impossible by hand.
+                The Live Intraday Scanner does all of it for you, every 2 minutes, and hands you the 3 names that actually matter.
+                Here is exactly how to use it.
+            </p>
+            <div class="hw-metrics">
+                <div class="hw-metric"><b>200+</b><span>F&amp;O Stocks</span></div>
+                <div class="hw-metric"><b>13</b><span>MP Signals</span></div>
+                <div class="hw-metric"><b>2 min</b><span>Refresh</span></div>
+                <div class="hw-metric"><b>1</b><span>Screen</span></div>
+            </div>
+        </div>
+    </section>
+
+    <div class="hw-wrap">
+
+        <!-- ══════════════ 1. THE 60-SECOND ROUTINE ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Start here</div>
+                <h2><i class="fas fa-bolt"></i>The 60-second routine</h2>
+                <p class="hw-lede">If you learn nothing else on this page, learn these three moves. They work every single trading day.</p>
+            </div>
+            <div class="hw-steps">
+                <div class="hw-step" data-n="1">
+                    <div class="hw-step-t">Look up</div>
+                    <h3>Which way is the market leaning?</h3>
+                    <p>The <b>Market Bias</b> panel at the top counts bullish vs bearish stocks across the whole F&amp;O list.
+                       Bias strongly bullish? Hunt longs. Bearish? Hunt shorts. Flat? Expect a range day and trade the edges.
+                       You just took the single most important decision of the day — in 5 seconds.</p>
+                </div>
+                <div class="hw-step" data-n="2">
+                    <div class="hw-step-t">Filter down</div>
+                    <h3>Ask the table one clear question</h3>
+                    <p>Scroll to the <b>filter row at the bottom of the table</b>. Pick a value in one column, then another,
+                       then another. Every filter you add narrows the list further. 200 stocks become 40, then 9, then 3.
+                       Those 3 are your day.</p>
+                </div>
+                <div class="hw-step" data-n="3">
+                    <div class="hw-step-t">Confirm</div>
+                    <h3>Click the stock name</h3>
+                    <p>The Market Profile chart opens instantly with all reference levels. The scanner is your <i>alert</i>;
+                       the profile is your <i>decision</i>. Never skip this step. In a hurry? Hit the
+                       <b><i class="fas fa-robot"></i> AI</b> button on the row and get a plain-English read.</p>
+                </div>
+            </div>
+
+            <div class="hw-punch">
+                <p><strong>The mindset shift.</strong> Most traders use a scanner to ask <i>"which stock is moving?"</i>
+                   — that is what every free screener on the internet already tells you, and by then the move is gone.</p>
+                <p>This scanner answers a completely different question: <strong>"who is in control of this stock, and are they still in control right now?"</strong>
+                   That is what Market Profile was built for, and it is why you will often be positioned <i>before</i> the candle everyone else is chasing.</p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 2. ANATOMY OF THE SCREEN ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Orientation</div>
+                <h2><i class="fas fa-desktop"></i>What is on the screen</h2>
+                <p class="hw-lede">Top half = market context. Bottom half = your hunting ground. Learn the top half once and it does half your thinking every morning.</p>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3><i class="fas fa-compass" style="color: rgb(129, 140, 248); --darkreader-inline-color: var(--darkreader-text-818cf8, #76aaf7);" data-darkreader-inline-color=""></i>Market Bias</h3>
+                    <p>Live count of bullish vs bearish stocks, plus the net score. This is market internals without opening a single index chart.
+                       A net of +60 tells you far more than the Nifty candle does.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-th" style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color=""></i>Bull &amp; Bear Signal Tiles</h3>
+                    <p><b>Click any tile</b> — Gap Up, Open Drive ↑, Buy Tail, Single Print ↑, Poor High and their bearish twins —
+                       and the table instantly filters to those stocks. Click again to clear. Note: tiles apply <b>one</b> filter at a time.
+                       For combinations, use the dropdown row.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-chart-pie" style="color: rgb(56, 189, 248); --darkreader-inline-color: var(--darkreader-text-38bdf8, #42c0f8);" data-darkreader-inline-color=""></i>Distribution Analysis</h3>
+                    <p>Three read-only bars: <b>Opening Type</b>, <b>TPO Position vs yesterday</b>, and <b>IB% buckets</b>.
+                       Hover any segment for exact counts. If 120 stocks opened above yesterday's value area, do not spend your morning looking for shorts.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-bolt" style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color=""></i>ML High-Confidence Signals</h3>
+                    <p>Machine-learning breakout signals above 70% model confidence, trained on years of NSE Market Profile data.
+                       Click a card to jump straight to that chart. Treat it as a second opinion, never as an order.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-calendar-day" style="color: rgb(167, 139, 250); --darkreader-inline-color: var(--darkreader-text-a78bfa, #9c7df9);" data-darkreader-inline-color=""></i>Date Arrows &amp; Snapshot Time</h3>
+                    <p>The <b>← →</b> arrows walk back through previous trading days — the same scanner, replayed.
+                       The <b>Snapshot</b> label tells you exactly how fresh the data is. Always glance at it before acting on a signal.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-sync-alt" style="color: rgb(248, 113, 113); --darkreader-inline-color: var(--darkreader-text-f87171, #f86b6b);" data-darkreader-inline-color=""></i>Auto Refresh</h3>
+                    <p>On by default, refreshing every 2 minutes through market hours, with a <b>Refresh</b> button for when you cannot wait.
+                       Leave it on. A Market Profile signal that appeared 40 minutes ago is history, not an opportunity.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 3. COLUMNS ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The engine room</div>
+                <h2><i class="fas fa-table"></i>Every column, and what to do with it</h2>
+                <p class="hw-lede">
+                    The <b>Glossary</b> button on the scanner explains what each value <i>means</i>.
+                    This table tells you what to <i>do</i> with it — and how each column is filtered.
+                </p>
+            </div>
+            <div class="hw-table-wrap">
+                <table class="hw-table">
+                    <thead>
+                    <tr>
+                        <th style="width:150px;">Column</th>
+                        <th style="width:220px;">The question it answers</th>
+                        <th>How you trade it</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <td class="hw-col">Name <span class="hw-tag type">type</span></td>
+                        <td>Which stock?</td>
+                        <td><b>Click it to open the Market Profile chart.</b> Type any part of a symbol in the box to jump straight to it —
+                            handy when you already hold a position and just want its live profile read.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Sector <span class="hw-tag none">sort / search</span></td>
+                        <td>Is this one stock, or the whole sector?</td>
+                        <td>The strongest intraday moves are sector-wide. Sort by Sector, or type a sector into the global
+                            <b>Search</b> box, and if 6 banking names show the same bullish signal you are looking at institutional rotation, not noise.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Opening <span class="hw-tag drop">dropdown</span></td>
+                        <td>Who grabbed control at 9:15?</td>
+                        <td>Your first filter of the day. <b>Gap Up / Above VAH</b> = buyers walked in with confidence.
+                            <b>Gap Down / Below VAL</b> = sellers did. <b>In Value</b> = nobody did, so expect chop until someone commits.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">IB % <span class="hw-tag sort">sort</span></td>
+                        <td>How much of the day's range is already used up?</td>
+                        <td><b>Click the header to sort.</b> Sort ascending and the narrowest first hours float to the top — these are
+                            coiled springs, the classic trend-day candidates. Sort descending and you get stocks that have already spent their
+                            range: fade the edges, do not chase breakouts. The <b>IB% Distribution</b> bar at the top shows how many stocks
+                            sit in the <i>Trend (&lt;30%)</i> bucket right now.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">OpenDrive <span class="hw-tag drop">dropdown</span></td>
+                        <td>Did the opening side actually follow through?</td>
+                        <td>The conviction column. <b>Open Drive ↑/↓</b> = no pullback, strongest signal on the screen.
+                            <b>Test Drive</b> = a quick test first, then commitment — often a better entry.
+                            <b>Rejection</b> = the opening side <i>failed</i>, which is your reversal hunting ground.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Tail <span class="hw-tag drop">dropdown</span></td>
+                        <td>Did big money step in at an extreme?</td>
+                        <td>A <b>Buy Tail</b> is aggressive buying at the low; a <b>Sell Tail</b> is aggressive selling at the high.
+                            Tails give you something rare: a defined risk level. Your stop goes just beyond the tail, so the trade is small-risk by design.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">SinglePrint <span class="hw-tag drop">dropdown</span></td>
+                        <td>Where did price move so fast it left a hole?</td>
+                        <td>Single prints are unfinished business — future support and resistance. The letter in brackets, e.g.
+                            <b>[K]</b>, tells you which 30-minute period created it, so you know whether it formed at the open or minutes ago.
+                            Fresh prints near the current price are the most tradeable levels on the chart.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Poor H/L <span class="hw-tag drop">dropdown</span></td>
+                        <td>Was the high/low left unfinished?</td>
+                        <td>A <b>Poor High</b> means the market stopped without a clean rejection — the auction did not finish its job.
+                            Such levels act like magnets and often get taken out later in the session. <b>Poor Low</b> is the mirror image.
+                            Underrated column, brilliant for afternoon setups.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Day Type <span class="hw-tag drop">dropdown</span></td>
+                        <td>What kind of day is this?</td>
+                        <td>This one column decides your entire strategy. <b>Trend ↑/↓</b> = go with it and hold, never fade.
+                            <b>Normal</b> = range day, fade the extremes. <b>Neutral</b> = both sides fought; the close tells you who won.
+                            A <b>~</b> prefix means it is an early estimate before 10:15 AM — useful, but not final.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">TPO Pos <span class="hw-tag drop">dropdown</span></td>
+                        <td>Where is price <i>right now</i> vs today's value? Is a single print forming this minute?</td>
+                        <td>Your live confirmation column. <b>Above VA</b> = buyers still in control this minute.
+                            <b>Below VA</b> = sellers are. <b>In VA</b> = balance, stand aside. A great-looking bullish signal with price
+                            <i>Below VA</i> has already failed — this column saves you from those trades.
+                            <br><br><b style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color="">It also does something no other column does:</b> when it reads
+                            <b>3 TPO ↑ High</b>, <b>4 TPO ↑ High</b>, <b>5 TPO ↓ Low</b> and so on, it is counting single TPOs
+                            piling up beyond the day's extreme — a single print <i>being born, live</i>. See the highlighted section below.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">TPO Pos (Prev) <span class="hw-tag drop">dropdown</span></td>
+                        <td>Has the market <i>accepted</i> a new price level?</td>
+                        <td>The professional's column. Holding <b>Above VA</b> or <b>Above PDH</b> of yesterday means real acceptance of higher
+                            prices, not a spike. These are the moves that trend all afternoon instead of reversing at 11 AM.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Price / Change% <span class="hw-tag type">type</span></td>
+                        <td>How far has it already run?</td>
+                        <td>Sort Change% to rank your filtered list by momentum. Reality check: a stock already up 4% offers a worse
+                            entry than the same setup at +0.6%. Great setup, terrible price, is still a bad trade.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">AI <span class="hw-tag none">button</span></td>
+                        <td>What does all of this add up to?</td>
+                        <td>One click on the <i class="fas fa-robot"></i> icon asks SarthoAI to read that stock's full profile and
+                            explain the setup in plain language. Perfect while you are still learning the vocabulary.</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ══════════════ 3b. LIVE SINGLE PRINT ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The column nobody else has</div>
+                <h2><i class="fas fa-satellite-dish"></i>Catch a single print <em style="font-style: normal; color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color="">while it is still forming</em></h2>
+                <p class="hw-lede">
+                    This one deserves its own section. Every platform can show you a single print <i>after</i> it has formed.
+                    This scanner shows it to you <b>while it is being created</b> — and that is a completely different trade.
+                </p>
+            </div>
+
+            <div class="hw-spotlight">
+                <span class="hw-live"><i class="fas fa-circle" style="font-size:7px;"></i> Live formation</span>
+
+                <h3>Two columns, two different jobs</h3>
+                <p>
+                    The <b>SinglePrint</b> column shows prints that are <b>already complete</b> — holes left behind inside the
+                    profile. Excellent as future support and resistance, but the move that created them is over.
+                </p>
+                <p>
+                    The <b>TPO Pos</b> column shows something else entirely. When it reads
+                    <span class="hw-cell">4 TPO ↑ High</span> it is telling you: <strong>4 single TPOs are currently stacked
+                    beyond the day's high, right now, and nothing has come back to fill them.</strong> Hover the cell and you will
+                    see the full text: <i>"4 Single TPO above Days High"</i>. The mirror version,
+                    <span class="hw-cell">4 TPO ↓ Low</span>, is a downside print forming below the day's low.
+                </p>
+
+                <h3>Reading the number</h3>
+                <div class="hw-table-wrap" style="margin: 10px 0px 4px; background: rgb(15, 23, 40); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-0f1728, #0c1220);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">
+                    <table class="hw-table" style="min-width:520px;">
+                        <thead>
+                        <tr><th style="width:150px;">What you see</th><th>What it means</th></tr>
+                        </thead>
+                        <tbody>
+                        <tr>
+                            <td class="hw-col">1 – 2 TPO</td>
+                            <td>Ordinary range extension. Price nudged past the extreme. Not a print yet — ignore it.</td>
+                        </tr>
+                        <tr>
+                            <td class="hw-col" style="color: rgb(252, 211, 77); --darkreader-inline-color: var(--darkreader-text-fcd34d, #fcd450);" data-darkreader-inline-color="">3 TPO or more</td>
+                            <td><b>A single print is genuinely in formation.</b> Price has run through three or more price levels
+                                without one single pull-back to fill them. One side has simply vacated. This is the threshold
+                                BreakingTrade's own signal engine uses internally before it will call a single print.</td>
+                        </tr>
+                        <tr>
+                            <td class="hw-col" style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color="">Count rising on each refresh</td>
+                            <td>The print is <b>extending</b> — nobody is defending. This is the strongest live momentum
+                                reading available anywhere on the screen.</td>
+                        </tr>
+                        <tr>
+                            <td class="hw-col" style="color: rgb(248, 113, 113); --darkreader-inline-color: var(--darkreader-text-f87171, #f86b6b);" data-darkreader-inline-color="">Count frozen, price coming back</td>
+                            <td>The print is being <b>filled</b>. The move is done. That zone now flips into resistance
+                                (upside print) or support (downside print) — trade it from the other side instead.</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>How to scan for it in 5 seconds</h3>
+                <p>
+                    Because the count is part of the value, the TPO Pos dropdown lists each count as its own option
+                    (<i>3 TPO ↑ High</i>, <i>4 TPO ↑ High</i>…). To catch <b>every</b> forming print in one shot, use the
+                    global <b>Search</b> box above the table instead and type:
+                </p>
+                <p style="margin:12px 0 6px;">
+                    <span class="hw-search">Single TPO above Days High</span>
+                    <span style="color: var(--hw-muted); font-size: 12.5px; margin: 0px 8px; --darkreader-inline-color: var(--darkreader-text--hw-muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">← upside prints forming</span>
+                </p>
+                <p style="margin:0 0 14px;">
+                    <span class="hw-search">Single TPO below Days Low</span>
+                    <span style="color: var(--hw-muted); font-size: 12.5px; margin: 0px 8px; --darkreader-inline-color: var(--darkreader-text--hw-muted, var(--darkreader-text-000000, #e8e6e3));" data-darkreader-inline-color="">← downside prints forming</span>
+                </p>
+                <p>
+                    Every stock currently printing singles at an extreme appears instantly, whatever the count.
+                    Then just read the number in each TPO Pos cell and keep the ones showing <b>3 or more</b>.
+                    Short on typing? <span class="hw-search">Days High</span> works too. Leave the search on and hit
+                    <b>Refresh</b> every couple of minutes — you are now watching single prints appear across
+                    200+ F&amp;O stocks in real time.
+                </p>
+
+                <h3>Why this is worth the subscription on its own</h3>
+                <p>
+                    A single print is the market's clearest confession that one side has given up. By the time it is a visible
+                    hole on everyone's profile chart, the easy money in that move has been paid out to whoever was already positioned.
+                    <strong>This column puts you in the second group.</strong> A stock showing 4 TPOs above the day's high on a
+                    <b>Trend ↑</b> day is not a stock that <i>moved</i> — it is a stock that <i>is moving</i>, and you found it
+                    from a list of 200 without opening a single chart.
+                </p>
+
+                <div class="hw-warn">
+                    <p>
+                        <b>Trade it with respect.</b> This is the fastest signal on the screen and therefore the easiest one to
+                        get hurt chasing. Open the chart and confirm the zone is genuinely empty, keep your size honest, and place
+                        your stop back inside the profile — not at the print, which is exactly where price will wick to.
+                        If the count has already reached 6 or 7, you are late; wait for the pull-back to the print instead.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 4. FILTER MECHANICS ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The superpower</div>
+                <h2><i class="fas fa-filter"></i>Stacking filters — where the real edge lives</h2>
+                <p class="hw-lede">
+                    One filter gives you a list. <b>Stacked filters give you a setup.</b> This is the part almost nobody uses fully,
+                    and it is the reason this screen replaces a dozen tools.
+                </p>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3><i class="fas fa-arrow-down" style="color: rgb(129, 140, 248); --darkreader-inline-color: var(--darkreader-text-818cf8, #76aaf7);" data-darkreader-inline-color=""></i>Where the filters are</h3>
+                    <p>Scroll to the <b>bottom row of the table</b>. Eight columns have dropdowns — Opening, OpenDrive, Tail,
+                       SinglePrint, Poor H/L, Day Type, TPO Pos and TPO Pos (Prev). Name, IB %, Price and Change% take typed text.
+                       There is also a global <b>Search</b> box above the table.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-layer-group" style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color=""></i>Filters multiply, they don't replace</h3>
+                    <p>Every dropdown you set is an <b>AND</b> condition. Opening <i>and</i> OpenDrive <i>and</i> Day Type <i>and</i> TPO Pos,
+                       all at once. Eight columns with several values each means <b>hundreds of distinct scans</b> from one screen —
+                       and every one of them is a scan you defined, not a preset someone sold you.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-sort-numeric-down" style="color: rgb(56, 189, 248); --darkreader-inline-color: var(--darkreader-text-38bdf8, #42c0f8);" data-darkreader-inline-color=""></i>Counts are built into the dropdown</h3>
+                    <p>Each option shows a live count, like <b>Gap Up (14)</b>. So before you even filter, the dropdown has told you how
+                       crowded that condition is today. Only 2 stocks in Open Drive ↑ on a strong day? Those 2 are the leaders.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-lightbulb" style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color=""></i>Three small tricks worth knowing</h3>
+                    <p><b>1.</b> Picking <b>Trend ↑</b> also keeps the early <b>~Trend ↑</b> estimates — useful before 10:15.<br>
+                       <b>2.</b> Prefer the most specific option: <b>Normal</b> also matches <b>Normal Var ↑/↓</b>.<br>
+                       <b>3.</b> Stuck at "no data"? You have a stale filter. Hit <b>Clear All Filters</b> and start clean.</p>
+                </div>
+            </div>
+
+            <div class="hw-punch">
+                <p><strong>Build any scan yourself with three questions.</strong> You do not need to memorise setups. Every good
+                   Market Profile trade is just these three answers lining up:</p>
+                <p>
+                    <b>1. Who took control at the open?</b> → <i>Opening</i><br>
+                    <b>2. Did they follow through?</b> → <i>OpenDrive, Tail, SinglePrint, IB %</i><br>
+                    <b>3. Are they still in control right now?</b> → <i>TPO Pos, TPO Pos (Prev), Day Type</i>
+                </p>
+                <p>Answer all three in the same direction and you have a trade. Answer them in different directions and you have
+                   just saved yourself a loss. That is the whole scanner in one idea.</p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 4b. THINK IT, THEN SCAN IT ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The real skill</div>
+                <h2><i class="fas fa-brain"></i>Think of a setup. Then ask the market if it exists today.</h2>
+                <p class="hw-lede">
+                    This is the habit that separates people who <i>own</i> a scanner from people who <i>use</i> one.
+                    You do not have to wait for a signal to be handed to you. Picture the trade you want — in plain
+                    words, in your head — then translate it into filters and let the scanner tell you whether any of
+                    200+ stocks is doing exactly that, right now. Four examples:
+                </p>
+            </div>
+
+            <div class="hw-think">
+                <div class="hw-think-q">
+                    <i class="fas fa-comment-dots"></i>
+                    <span>“I want a stock that gapped down in panic, where the sellers failed, and buyers have
+                        already dragged it back above yesterday's value area.”</span>
+                </div>
+                <div class="hw-think-a">
+                    <i class="fas fa-arrow-right"></i>
+                    <div class="hw-chips" style="margin:0;">
+                        <span class="hw-chip"><b>Opening</b> = Gap Down</span>
+                        <span class="hw-chip"><b>OpenDrive</b> = Rejection ↑</span>
+                        <span class="hw-chip"><b>TPO Pos (Prev)</b> = Above VA</span>
+                    </div>
+                </div>
+                <p class="hw-think-note">Three dropdowns. Fifteen seconds. You have just screened a complete
+                    failed-breakdown reversal thesis across the entire F&amp;O universe.</p>
+            </div>
+
+            <div class="hw-think">
+                <div class="hw-think-q">
+                    <i class="fas fa-comment-dots"></i>
+                    <span>“Is any trending stock printing singles above its high <i>this minute</i>?”</span>
+                </div>
+                <div class="hw-think-a">
+                    <i class="fas fa-arrow-right"></i>
+                    <div class="hw-chips" style="margin:0;">
+                        <span class="hw-chip"><b>Search</b> = Single TPO above Days High</span>
+                        <span class="hw-chip"><b>Day Type</b> = Trend ↑</span>
+                    </div>
+                </div>
+                <p class="hw-think-note">Then keep only the rows showing <b>3 TPO ↑ High</b> or more. You are watching
+                    single prints being born on a trend day — the earliest entry Market Profile offers.</p>
+            </div>
+
+            <div class="hw-think">
+                <div class="hw-think-q">
+                    <i class="fas fa-comment-dots"></i>
+                    <span>“Show me a stock that has done nothing all day but has an unfinished low sitting
+                        underneath it — something the market will probably come back for.”</span>
+                </div>
+                <div class="hw-think-a">
+                    <i class="fas fa-arrow-right"></i>
+                    <div class="hw-chips" style="margin:0;">
+                        <span class="hw-chip"><b>Poor H/L</b> = Poor Low</span>
+                        <span class="hw-chip"><b>Day Type</b> = Non-Trend</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = In VA</span>
+                    </div>
+                </div>
+                <p class="hw-think-note">A patient, low-noise afternoon idea that no preset screener anywhere will
+                    ever offer you — because you invented it thirty seconds ago.</p>
+            </div>
+
+            <div class="hw-think">
+                <div class="hw-think-q">
+                    <i class="fas fa-comment-dots"></i>
+                    <span>“Nobody was in control at the open, but somebody has taken control since. Who?”</span>
+                </div>
+                <div class="hw-think-a">
+                    <i class="fas fa-arrow-right"></i>
+                    <div class="hw-chips" style="margin:0;">
+                        <span class="hw-chip"><b>Opening</b> = In Value</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Above VA</span>
+                        <span class="hw-chip"><b>Tail</b> = Buy Tail</span>
+                    </div>
+                </div>
+                <p class="hw-think-note">Quiet open, buyers stepped in, price now accepted above value. The kind of move
+                    that never shows up on a top-gainers list until it is far too late.</p>
+            </div>
+
+            <div class="hw-punch">
+                <p><strong>And if the scanner returns nothing?</strong> That is not a failure — that is the most
+                   valuable answer it gives you all day.</p>
+                <p>It means the setup you had in mind <b>is not present in the market today</b>. Most intraday losses come from
+                   forcing a favourite setup onto a day that was never offering it. Instead of finding that out at 2 PM through
+                   your P&amp;L, you found it out in five seconds, for free, before risking a rupee. Clear the filters,
+                   ask a different question, or simply sit out.</p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 5. RECIPES ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Copy these first</div>
+                <h2><i class="fas fa-utensils"></i>13 ready-made scans</h2>
+                <p class="hw-lede">
+                    Set the dropdowns exactly as shown. Each card also tells you <i>when</i> to run it and what to check on the chart
+                    before you commit. Start with two or three that suit your style rather than trying all thirteen.
+                </p>
+            </div>
+
+            <div class="hw-recipes">
+
+                <!-- BULLISH -->
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">1. The Runaway</span>
+                        <span class="hw-when">9:20 – 10:30</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Opening</b> = Gap Up</span>
+                        <span class="hw-chip"><b>OpenDrive</b> = Open Drive ↑</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Above VA</span>
+                        <span class="hw-chip">sort <b>IB %</b> ↑</span>
+                    </div>
+                    <p class="hw-read">Buyers gapped it up, never let it pull back, and price is still above today's value.</p>
+                    <p>The cleanest trend-day long on the screen. A narrow IB on top of this is the classic setup for a stock that
+                       trends one way till 3:15. On such a name, trail your stop — do not book at +0.5%.</p>
+                </div>
+
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">2. Value Migration</span>
+                        <span class="hw-when">10:30 – 14:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>TPO Pos (Prev)</b> = Above VA</span>
+                        <span class="hw-chip"><b>Day Type</b> = Double Dist ↑</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Above VA</span>
+                    </div>
+                    <p class="hw-read">The market built a brand-new value area higher and stayed there.</p>
+                    <p>Not a spike — genuine <i>acceptance</i> of higher prices. These are the calmest holds of the day and the
+                       setups positional traders quietly love. Yesterday's value area high becomes your stop reference.</p>
+                </div>
+
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">3. Breakaway Above PDH</span>
+                        <span class="hw-when">10:15 – 13:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>TPO Pos (Prev)</b> = Above PDH</span>
+                        <span class="hw-chip"><b>Tail</b> = Buy Tail</span>
+                        <span class="hw-chip"><b>Day Type</b> = Trend ↑</span>
+                    </div>
+                    <p class="hw-read">Trading above yesterday's high, with aggressive buying defending the low of the day.</p>
+                    <p>Above PDH is where trapped shorts live. Add a buying tail and you have both fuel and a defined risk point.
+                       Check the chart for how firmly yesterday's high has been left behind.</p>
+                </div>
+
+                <!-- BEARISH -->
+                <div class="hw-recipe bear">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">4. The Breakdown</span>
+                        <span class="hw-when">9:20 – 10:30</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Opening</b> = Gap Down</span>
+                        <span class="hw-chip"><b>OpenDrive</b> = Open Drive ↓</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Below VA</span>
+                        <span class="hw-chip">sort <b>IB %</b> ↑</span>
+                    </div>
+                    <p class="hw-read">The mirror image of The Runaway — sellers took control and never gave it back.</p>
+                    <p>Down-trend days move faster than up-trend days on NSE. Respect that in both your target and your stop,
+                       and never average into it.</p>
+                </div>
+
+                <div class="hw-recipe bear">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">5. The Gap-Up Trap</span>
+                        <span class="hw-when">9:30 – 11:30</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Opening</b> = Gap Up</span>
+                        <span class="hw-chip"><b>OpenDrive</b> = Rejection ↓</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Below VA</span>
+                    </div>
+                    <p class="hw-read">Opened strong, got rejected, and has now lost today's value area entirely.</p>
+                    <p>Every retail long who bought the gap is now underwater. This combination is exactly how a scanner spots a trap
+                       that looks bullish on a candle chart. Confirm a clear failure at the highs on the profile.</p>
+                </div>
+
+                <div class="hw-recipe bear">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">6. Sell Tail Fade</span>
+                        <span class="hw-when">10:00 – 14:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Tail</b> = Sell Tail</span>
+                        <span class="hw-chip"><b>Day Type</b> = Normal Var ↓</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = In VA</span>
+                    </div>
+                    <p class="hw-read">Big money sold the highs and the day is quietly extending lower.</p>
+                    <p>A defined-risk short: stop just above the sell tail, target the value area low. The best risk-reward on
+                       the screen on ordinary, boring days — which is most days.</p>
+                </div>
+
+                <!-- REVERSAL -->
+                <div class="hw-recipe rev">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">7. Gap-Down Rescue</span>
+                        <span class="hw-when">9:25 – 11:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Opening</b> = Gap Down</span>
+                        <span class="hw-chip"><b>OpenDrive</b> = Rejection ↑</span>
+                        <span class="hw-chip"><b>Tail</b> = Buy Tail</span>
+                    </div>
+                    <p class="hw-read">Panic open, sellers failed, buyers took the low aggressively.</p>
+                    <p>Reversals off a fearful open can be violent because shorts have to cover. This is a higher-risk, higher-reward
+                       scan — keep size modest and let the buy tail define your stop. Especially worth watching on a high-VIX day.</p>
+                </div>
+
+                <div class="hw-recipe rev">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">8. Poor High Magnet</span>
+                        <span class="hw-when">12:30 – 15:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Poor H/L</b> = Poor High</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = In VA</span>
+                        <span class="hw-chip"><b>Day Type</b> = Neutral Center</span>
+                    </div>
+                    <p class="hw-read">The high was left unfinished and price is sitting back in balance.</p>
+                    <p>Unfinished auctions tend to get revisited. This is the afternoon setup nobody screens for — because
+                       almost no platform gives you a Poor H/L column at all. Target: the poor high itself.</p>
+                </div>
+
+                <div class="hw-recipe rev">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">9. Single Print Refill</span>
+                        <span class="hw-when">11:00 – 15:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>SinglePrint</b> = Single Print ↑</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = In VA</span>
+                    </div>
+                    <p class="hw-read">Price shot up leaving a hole, and has drifted back toward it.</p>
+                    <p>Single prints are the most reliable intraday support and resistance you will find, because they mark a level
+                       where one side simply gave up. Note the letter in brackets to see how recently it formed, then trade the reaction
+                       at the print — long if it holds, short if it fails.</p>
+                </div>
+
+                <div class="hw-recipe rev" style="border-top-color: rgb(251, 191, 36); --darkreader-inline-border-top: var(--darkreader-border-fbbf24, #a67803);" data-darkreader-inline-border-top="">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">10. Live Print in Formation</span>
+                        <span class="hw-when">Any time</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Search</b> = Single TPO above Days High</span>
+                        <span class="hw-chip">keep <b>3 TPO ↑ High</b> or more</span>
+                        <span class="hw-chip"><b>Day Type</b> = Trend ↑</span>
+                    </div>
+                    <p class="hw-read">Singles are stacking up beyond the day's high <i>right now</i> and nobody is filling them.</p>
+                    <p>The earliest signal on the whole screen — you are watching the print form instead of reading it
+                       afterwards. Swap to <b>Single TPO below Days Low</b> with <b>Trend ↓</b> for shorts. If the count is
+                       already 6 or 7 you are late: wait for the pull-back into the print.</p>
+                </div>
+
+                <!-- RANGE / STRUCTURAL -->
+                <div class="hw-recipe flat">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">11. Range-Day Edge Fade</span>
+                        <span class="hw-when">11:00 – 14:30</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Day Type</b> = Normal</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Above VA</span>
+                        <span class="hw-chip">sort <b>IB %</b> ↓</span>
+                    </div>
+                    <p class="hw-read">A wide first hour already used up the day's range, and price is now stretched to the top edge.</p>
+                    <p>On a Normal day the odds favour rotation back toward the middle, not a breakout. This scan is how you stop
+                       buying breakouts that were never going to break out. Flip <i>TPO Pos</i> to <b>Below VA</b> for the long version.</p>
+                </div>
+
+                <div class="hw-recipe flat">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">12. Neutral Day Resolution</span>
+                        <span class="hw-when">14:00 – 15:15</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Day Type</b> = Neutral Ext ↑</span>
+                        <span class="hw-chip"><b>TPO Pos</b> = Above VA</span>
+                    </div>
+                    <p class="hw-read">Both sides fought all day and the buyers are winning into the close.</p>
+                    <p>A neutral day that resolves late often carries into the next session's open. Use this scan after 2 PM to
+                       find closing-hour momentum — and to build a genuine watchlist for tomorrow morning. Swap to
+                       <b>Neutral Ext ↓</b> / <b>Below VA</b> for shorts.</p>
+                </div>
+
+                <div class="hw-recipe flat">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">13. Sector Sweep</span>
+                        <span class="hw-when">Any time</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Search</b> = sector name</span>
+                        <span class="hw-chip"><b>Opening</b> = Gap Up</span>
+                        <span class="hw-chip">sort <b>Change%</b> ↓</span>
+                    </div>
+                    <p class="hw-read">One whole sector showing the same Market Profile signal.</p>
+                    <p>When 6 names in a sector print the same structure, that is a fund rotating money, not a random tick.
+                       Trade the strongest name for momentum or the laggard for catch-up. Either way you are trading with the flow,
+                       not guessing at it.</p>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- ══════════════ 6. TIME OF DAY ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Daily rhythm</div>
+                <h2><i class="fas fa-clock"></i>Your trading day, hour by hour</h2>
+                <p class="hw-lede">The same scanner tells you different things at different times. Use the right column at the right hour (all times IST).</p>
+            </div>
+            <div class="hw-clock">
+                <div class="hw-slot">
+                    <div class="hw-time">09:15 – 09:20</div>
+                    <h3>Take the market's temperature</h3>
+                    <p>Read <b>Market Bias</b> and the <b>Opening Type</b> distribution bar. Nothing else. Decide whether today is a
+                       long day, a short day, or a sit-on-hands day. Day Type is still showing <b>~</b> estimates — do not lean on it yet.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">09:20 – 10:15</div>
+                    <h3>Conviction window</h3>
+                    <p><b>OpenDrive</b> and <b>Tail</b> are at their most valuable. Run <i>The Runaway</i>, <i>The Breakdown</i>,
+                       <i>The Gap-Up Trap</i> and <i>Gap-Down Rescue</i>. First single prints start appearing.</p>
+                </div>
+                <div class="hw-slot key">
+                    <div class="hw-time">10:15</div>
+                    <h3>The most important minute of your day</h3>
+                    <p>The first hour is complete. <b>IB %</b> becomes final and <b>Day Type</b> drops its <b>~</b> and turns real.
+                       Refresh, re-read Day Type, and pick your approach: trend-follow or fade. Every good Market Profile session pivots here.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">10:15 – 12:30</div>
+                    <h3>Range extension</h3>
+                    <p>Watch <b>TPO Pos</b> flips and <b>TPO Pos (Prev)</b> acceptance. Run <i>Value Migration</i>,
+                       <i>Breakaway Above PDH</i> and <i>Range-Day Edge Fade</i>. This is where the day's biggest clean moves happen.
+                       On a strong day, park the search on <b>Single TPO above Days High</b> and just keep refreshing —
+                       forming prints appear here more than in any other window.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">12:30 – 14:00</div>
+                    <h3>The lunch lull — be selective</h3>
+                    <p>Volumes thin out and breakouts fail more often. Switch to structure: <i>Poor High Magnet</i> and
+                       <i>Single Print Refill</i>. This is the window where most traders give back their morning profits by
+                       forcing trades. Don't.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">14:00 – 15:30</div>
+                    <h3>Resolution and tomorrow's list</h3>
+                    <p><b>Day Type</b> is now nearly settled. Run <i>Neutral Day Resolution</i> for closing momentum, square off
+                       intraday positions, and export the filtered table to Excel — today's structure is tomorrow's watchlist.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 7. HABITS ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Get good fast</div>
+                <h2><i class="fas fa-medal"></i>Habits of traders who get the most out of this screen</h2>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3 style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color=""><i class="fas fa-check-circle"></i>Do this</h3>
+                    <ul class="hw-list do">
+                        <li><b>Backtest with the date arrows.</b> Pick one combo and walk it back 20 trading days with <b>←</b>.
+                            Twenty real days of your own data will teach you more than twenty YouTube videos.</li>
+                        <li><b>Hit Clear All Filters</b> before every new hunt. Stale filters are the number one reason people think
+                            the scanner is "empty".</li>
+                        <li><b>Cap yourself at 2–3 names.</b> If a filter returns 40 stocks, your question was too vague. Add one more column.</li>
+                        <li><b>Export to Excel</b> and journal what you took and what you skipped. This is how a scanner becomes an edge.</li>
+                        <li><b>Always open the chart</b> before entering. The pill is the alert; the profile is the decision.</li>
+                        <li><b>Check the Snapshot time</b> whenever the market is moving fast.</li>
+                        <li><b>Invent your own scans.</b> Picture the trade in words, turn it into two or three dropdowns,
+                            and ask the market whether it exists today. That habit is worth more than any preset.</li>
+                    </ul>
+                </div>
+                <div class="hw-card">
+                    <h3 style="color: rgb(248, 113, 113); --darkreader-inline-color: var(--darkreader-text-f87171, #f86b6b);" data-darkreader-inline-color=""><i class="fas fa-times-circle"></i>Avoid this</h3>
+                    <ul class="hw-list dont">
+                        <li><b>Trading with zero filters.</b> 200 unfiltered rows is not information, it is noise with your money attached.</li>
+                        <li><b>Fading a Trend day.</b> The single most expensive mistake in Market Profile. If Day Type says
+                            Trend ↑, you are a buyer or you are out.</li>
+                        <li><b>Ignoring TPO Pos.</b> A perfect bullish opening with price below today's value area is a
+                            <i>failed</i> setup, not a discounted one.</li>
+                        <li><b>Treating “~” estimates as final.</b> Before 10:15 they are a guess with good manners.</li>
+                        <li><b>Chasing a Normal day breakout at 2 PM.</b> The range was already spent by 10:15.</li>
+                        <li><b>Taking the ML signal as an order.</b> It is a probability, and probabilities lose sometimes.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ FURTHER READING ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Further reading</div>
+                <h2><i class="fas fa-book-open"></i>Where to go next</h2>
+                <p class="hw-lede">This page is the operating manual. These go wider and deeper.</p>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3><i class="fas fa-lightbulb" style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color=""></i>Why the scanner exists</h3>
+                    <p><a href="https://breakingtrade.com/blog/live-intraday-scanner-guide">The Live Intraday Scanner: how to find high-probability
+                        trades across 200+ stocks in seconds</a> — the background story. What the scanner replaces,
+                        what the Market Bias dashboard is really measuring, and why watching 15 stocks means missing 185.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-book" style="color: rgb(129, 140, 248); --darkreader-inline-color: var(--darkreader-text-818cf8, #76aaf7);" data-darkreader-inline-color=""></i>The vocabulary</h3>
+                    <p><a href="https://breakingtrade.com/Home.jsp#/MPGlossary">Market Profile Glossary</a> and
+                        <a href="https://breakingtrade.com/what-is-market-profile">What is Market Profile</a> — TPO, Value Area, POC, Initial
+                        Balance and single prints explained from scratch, with worked examples on Nifty.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-signal" style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color=""></i>Confirm with volume</h3>
+                    <p><a href="https://breakingtrade.com/volume-scanner-guide">The Live Volume Scanner guide</a> — a signal on this
+                        screen is interesting; the same signal with 2x session volume behind it is conviction.
+                        Session-wise Volume Factor is how you tell the two apart, and that guide is the operating
+                        manual for it. Background reading:
+                        <a href="https://breakingtrade.com/blog/volume-scanner-complete-guide">why volume beats price</a>.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-chart-area" style="color: rgb(167, 139, 250); --darkreader-inline-color: var(--darkreader-text-a78bfa, #9c7df9);" data-darkreader-inline-color=""></i>Read the chart properly</h3>
+                    <p><a href="https://breakingtrade.com/mp-charts-guide">MP Charts guide</a> — the scanner tells you which stock;
+                        the chart tells you where. Value area, POC, tails, single prints, TPO size, Volume Profile
+                        and composites, plus why F&amp;O stocks are charted on NSE cash data.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-chart-line" style="color: rgb(56, 189, 248); --darkreader-inline-color: var(--darkreader-text-38bdf8, #42c0f8);" data-darkreader-inline-color=""></i>The scanner itself</h3>
+                    <p><a href="https://breakingtrade.com/live-intraday-scanner">Live Intraday Scanner overview</a> — what it detects, how
+                        often it refreshes, and how to get alerts on Telegram when your watchlist stocks trigger.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ CTA ══════════════ -->
+        <section class="hw-cta">
+            <h2>You now know the scanner better than most people who own one</h2>
+            <p>
+                Without logging in you are looking at the <b>previous session's snapshot</b> — enough to learn the columns
+                and practise the combos. The live screen, refreshing every 2 minutes with ML signals, Market Bias, alerts and
+                one-click Market Profile charts, is what you use to actually trade the day.
+            </p>
+            <div class="hw-btns">
+                <a class="hw-btn primary" href="https://breakingtrade.com/pricing"><i class="fas fa-bolt"></i> See Plans &amp; Start Free Trial</a>
+                <a class="hw-btn ghost" href="https://breakingtrade.com/Home.jsp#/intradaySignal"><i class="fas fa-search"></i> Back to the Scanner</a>
+                <a class="hw-btn ghost" href="https://breakingtrade.com/Home.jsp#/MPGlossary"><i class="fas fa-book"></i> Market Profile Glossary</a>
+            </div>
+            <p class="hw-note">
+                Market Profile concepts by J. Peter Steidlmayer &amp; James Dalton. The scanner is an analysis and education tool:
+                it identifies market structure, it does not predict outcomes or give investment advice. Every setup on this page can
+                and will fail sometimes — position size and stop-losses are your responsibility. Please trade only with capital
+                you can afford to risk.
+            </p>
+        </section>
+
+    </div>
+</div>
+
+<footer class="bt-foot">
+    <div>
+        <a href="https://breakingtrade.com/live-intraday-scanner">Live Intraday Scanner</a>
+        <a href="https://breakingtrade.com/live-volume-scanner">Volume Scanner</a>
+        <a href="https://breakingtrade.com/what-is-market-profile">What is Market Profile</a>
+        <a href="https://breakingtrade.com/ai-market-analysis">AI Analysis</a>
+        <a href="https://breakingtrade.com/pricing">Pricing</a>
+        <a href="https://breakingtrade.com/blog">Blog</a>
+    </div>
+    <p>© BreakingTrade.com | India's First Live Market Profile Platform</p>
+</footer>
+
+
+</body></html>

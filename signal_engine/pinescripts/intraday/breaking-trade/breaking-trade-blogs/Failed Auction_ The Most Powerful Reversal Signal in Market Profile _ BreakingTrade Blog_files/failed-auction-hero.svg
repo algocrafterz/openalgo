@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="bigGlow"><feGaussianBlur stdDeviation="12"/></filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- Price axis -->
+  <line x1="100" y1="50" x2="100" y2="580" stroke="#475569" stroke-width="1.5"/>
+  <!-- Previous day's high reference -->
+  <line x1="95" y1="150" x2="900" y2="150" stroke="#f87171" stroke-width="1.5" stroke-dasharray="8,5" opacity="0.5"/>
+  <text x="910" y="155" fill="#f87171" font-family="system-ui" font-size="12" opacity="0.7">Prev Day High</text>
+  <!-- Previous day profile (faded) -->
+  <g opacity="0.2">
+    <rect x="120" y="150" width="30" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="168" width="60" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="186" width="120" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="204" width="200" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="222" width="260" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="240" width="300" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="258" width="320" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="276" width="300" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="294" width="260" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="312" width="200" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="330" width="120" height="12" rx="2" fill="#475569"/>
+    <rect x="120" y="348" width="60" height="12" rx="2" fill="#475569"/>
+  </g>
+  <text x="200" y="400" fill="#475569" font-family="system-ui" font-size="12" text-anchor="middle">Yesterday</text>
+  <!-- Today's attempt to break high -->
+  <g transform="translate(500, 0)">
+    <!-- Price path going up -->
+    <path d="M100,350 Q120,300 130,260 Q140,220 150,180 Q155,160 160,145" fill="none" stroke="#22D3EE" stroke-width="3" filter="url(#glow)"/>
+    <!-- Failure at the high -->
+    <circle cx="160" cy="145" r="25" fill="#f87171" opacity="0.1" filter="url(#bigGlow)"/>
+    <circle cx="160" cy="145" r="15" fill="#f87171" opacity="0.15" filter="url(#glow)"/>
+    <!-- X mark at failure -->
+    <line x1="150" y1="135" x2="170" y2="155" stroke="#f87171" stroke-width="3" opacity="0.8"/>
+    <line x1="170" y1="135" x2="150" y2="155" stroke="#f87171" stroke-width="3" opacity="0.8"/>
+    <!-- Sharp reversal down -->
+    <path d="M160,155 Q165,200 170,250 Q175,320 180,400 Q183,440 185,480" fill="none" stroke="#f87171" stroke-width="3.5" filter="url(#glow)"/>
+    <polygon points="178,470 185,495 192,470" fill="#f87171"/>
+    <!-- Acceleration marks -->
+    <line x1="175" y1="300" x2="160" y2="310" stroke="#f87171" stroke-width="1.5" opacity="0.4"/>
+    <line x1="178" y1="350" x2="163" y2="360" stroke="#f87171" stroke-width="1.5" opacity="0.4"/>
+    <line x1="180" y1="400" x2="165" y2="410" stroke="#f87171" stroke-width="1.5" opacity="0.4"/>
+  </g>
+  <text x="660" y="550" fill="#64748b" font-family="system-ui" font-size="12" text-anchor="middle">Today</text>
+  <!-- Annotation panel -->
+  <g transform="translate(830, 200)">
+    <rect width="320" height="280" rx="16" fill="#1e293b" opacity="0.6" stroke="#f87171" stroke-width="1" stroke-opacity="0.3"/>
+    <text x="160" y="35" fill="#f87171" font-family="system-ui" font-size="16" font-weight="700" text-anchor="middle">Failed Auction</text>
+    <line x1="30" y1="50" x2="290" y2="50" stroke="#334155" stroke-width="1"/>
+    <g font-family="system-ui" font-size="13">
+      <text x="30" y="80" fill="#94a3b8">1. Price approaches prev extreme</text>
+      <text x="30" y="110" fill="#94a3b8">2. Fails to exceed it</text>
+      <text x="30" y="140" fill="#f87171">3. Sharp reversal follows</text>
+    </g>
+    <line x1="30" y1="160" x2="290" y2="160" stroke="#334155" stroke-width="1"/>
+    <text x="160" y="190" fill="#f1f5f9" font-family="system-ui" font-size="14" font-weight="600" text-anchor="middle">Signal Strength</text>
+    <!-- Signal meter -->
+    <rect x="30" y="205" width="260" height="12" rx="6" fill="#1e293b"/>
+    <rect x="30" y="205" width="230" height="12" rx="6" fill="#f87171" opacity="0.7"/>
+    <text x="160" y="240" fill="#f87171" font-family="system-ui" font-size="12" text-anchor="middle" font-weight="600">VERY HIGH — Strongest reversal signal</text>
+    <text x="160" y="268" fill="#64748b" font-family="system-ui" font-size="11" text-anchor="middle">Works best with single-print tails</text>
+  </g>
+</svg>

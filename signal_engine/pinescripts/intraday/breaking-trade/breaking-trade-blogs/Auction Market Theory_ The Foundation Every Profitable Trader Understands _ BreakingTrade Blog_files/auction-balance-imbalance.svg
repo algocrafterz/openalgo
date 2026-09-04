@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <!-- BALANCE -->
+  <g transform="translate(50, 60)">
+    <rect width="500" height="650" rx="16" fill="#1e293b" opacity="0.4" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="250" y="40" fill="#22D3EE" font-family="system-ui" font-size="22" font-weight="800" text-anchor="middle">BALANCE</text>
+    <text x="250" y="65" fill="#64748b" font-family="system-ui" font-size="13" text-anchor="middle">Buyers = Sellers → Fair value found</text>
+    <!-- Symmetric profile -->
+    <g transform="translate(50, 100)" filter="url(#glow)">
+      <rect x="120" y="0" width="40" height="14" rx="3" fill="#22D3EE" opacity="0.4"/>
+      <rect x="100" y="20" width="80" height="14" rx="3" fill="#22D3EE" opacity="0.5"/>
+      <rect x="70" y="40" width="140" height="14" rx="3" fill="#22D3EE" opacity="0.6"/>
+      <rect x="40" y="60" width="200" height="14" rx="3" fill="#22D3EE" opacity="0.7"/>
+      <rect x="20" y="80" width="240" height="14" rx="3" fill="#22D3EE" opacity="0.8"/>
+      <rect x="10" y="100" width="260" height="14" rx="3" fill="#22D3EE" opacity="0.9"/>
+      <rect x="0" y="120" width="280" height="14" rx="3" fill="#22D3EE"/>
+      <rect x="0" y="140" width="280" height="14" rx="3" fill="#22D3EE"/>
+      <rect x="10" y="160" width="260" height="14" rx="3" fill="#22D3EE" opacity="0.9"/>
+      <rect x="20" y="180" width="240" height="14" rx="3" fill="#22D3EE" opacity="0.8"/>
+      <rect x="40" y="200" width="200" height="14" rx="3" fill="#22D3EE" opacity="0.7"/>
+      <rect x="70" y="220" width="140" height="14" rx="3" fill="#22D3EE" opacity="0.6"/>
+      <rect x="100" y="240" width="80" height="14" rx="3" fill="#22D3EE" opacity="0.5"/>
+      <rect x="120" y="260" width="40" height="14" rx="3" fill="#22D3EE" opacity="0.4"/>
+    </g>
+    <!-- Balance scale -->
+    <g transform="translate(150, 420)">
+      <line x1="100" y1="0" x2="100" y2="60" stroke="#22D3EE" stroke-width="2" opacity="0.5"/>
+      <polygon points="90,0 110,0 100,-10" fill="#22D3EE" opacity="0.4"/>
+      <line x1="20" y1="60" x2="180" y2="60" stroke="#22D3EE" stroke-width="2.5" opacity="0.6"/>
+      <rect x="10" y="55" width="40" height="20" rx="4" fill="#22D3EE" opacity="0.3"/>
+      <rect x="150" y="55" width="40" height="20" rx="4" fill="#22D3EE" opacity="0.3"/>
+      <text x="30" y="70" fill="#22D3EE" font-family="system-ui" font-size="9" text-anchor="middle">BUY</text>
+      <text x="170" y="70" fill="#22D3EE" font-family="system-ui" font-size="9" text-anchor="middle">SELL</text>
+    </g>
+    <g font-family="system-ui" font-size="12" fill="#94a3b8">
+      <text x="250" y="530" text-anchor="middle">• Symmetric bell curve shape</text>
+      <text x="250" y="555" text-anchor="middle">• Equal tails on both sides</text>
+      <text x="250" y="580" text-anchor="middle">• Range-bound price action</text>
+      <text x="250" y="605" text-anchor="middle">• Trade: Mean reversion at edges</text>
+    </g>
+  </g>
+  <!-- Arrow between -->
+  <g transform="translate(570, 350)">
+    <rect width="60" height="60" rx="30" fill="#818CF8" opacity="0.15"/>
+    <text x="30" y="37" fill="#818CF8" font-family="system-ui" font-size="20" text-anchor="middle">⇄</text>
+  </g>
+  <!-- IMBALANCE -->
+  <g transform="translate(650, 60)">
+    <rect width="500" height="650" rx="16" fill="#1e293b" opacity="0.4" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="250" y="40" fill="#f59e0b" font-family="system-ui" font-size="22" font-weight="800" text-anchor="middle">IMBALANCE</text>
+    <text x="250" y="65" fill="#64748b" font-family="system-ui" font-size="13" text-anchor="middle">One side dominates → Trend forms</text>
+    <!-- Elongated asymmetric profile (trend) -->
+    <g transform="translate(80, 90)" filter="url(#glow)">
+      <rect x="0" y="0" width="30" height="14" rx="3" fill="#f59e0b" opacity="0.4"/>
+      <rect x="0" y="20" width="50" height="14" rx="3" fill="#f59e0b" opacity="0.45"/>
+      <rect x="0" y="40" width="70" height="14" rx="3" fill="#f59e0b" opacity="0.5"/>
+      <rect x="0" y="60" width="100" height="14" rx="3" fill="#f59e0b" opacity="0.55"/>
+      <rect x="0" y="80" width="130" height="14" rx="3" fill="#f59e0b" opacity="0.6"/>
+      <rect x="0" y="100" width="160" height="14" rx="3" fill="#fbbf24" opacity="0.7"/>
+      <rect x="0" y="120" width="190" height="14" rx="3" fill="#fbbf24" opacity="0.75"/>
+      <rect x="0" y="140" width="160" height="14" rx="3" fill="#fbbf24" opacity="0.7"/>
+      <rect x="0" y="160" width="130" height="14" rx="3" fill="#f59e0b" opacity="0.6"/>
+      <rect x="0" y="180" width="100" height="14" rx="3" fill="#f59e0b" opacity="0.55"/>
+      <rect x="0" y="200" width="70" height="14" rx="3" fill="#f59e0b" opacity="0.5"/>
+      <rect x="0" y="220" width="50" height="14" rx="3" fill="#f59e0b" opacity="0.45"/>
+      <rect x="0" y="240" width="30" height="14" rx="3" fill="#f59e0b" opacity="0.4"/>
+      <rect x="0" y="260" width="20" height="14" rx="3" fill="#f59e0b" opacity="0.35"/>
+      <rect x="0" y="280" width="15" height="14" rx="3" fill="#f59e0b" opacity="0.3"/>
+    </g>
+    <!-- Directional arrow -->
+    <path d="M350,120 L350,380" fill="none" stroke="#f59e0b" stroke-width="3" opacity="0.4" stroke-dasharray="6,4"/>
+    <polygon points="344,370 350,390 356,370" fill="#f59e0b" opacity="0.5"/>
+    <text x="370" y="260" fill="#f59e0b" font-family="system-ui" font-size="14" font-weight="600" opacity="0.6" transform="rotate(90,370,260)">TREND</text>
+    <!-- Tilted scale -->
+    <g transform="translate(150, 420)">
+      <line x1="100" y1="0" x2="100" y2="60" stroke="#f59e0b" stroke-width="2" opacity="0.5"/>
+      <polygon points="90,0 110,0 100,-10" fill="#f59e0b" opacity="0.4"/>
+      <line x1="20" y1="40" x2="180" y2="80" stroke="#f59e0b" stroke-width="2.5" opacity="0.6"/>
+      <rect x="10" y="30" width="40" height="20" rx="4" fill="#38ef7d" opacity="0.4"/>
+      <rect x="150" y="70" width="40" height="20" rx="4" fill="#f87171" opacity="0.4"/>
+      <text x="30" y="45" fill="#38ef7d" font-family="system-ui" font-size="9" text-anchor="middle">BUY</text>
+      <text x="170" y="85" fill="#f87171" font-family="system-ui" font-size="9" text-anchor="middle">SELL</text>
+    </g>
+    <g font-family="system-ui" font-size="12" fill="#94a3b8">
+      <text x="250" y="530" text-anchor="middle">• Elongated, directional profile</text>
+      <text x="250" y="555" text-anchor="middle">• One-sided extension beyond IB</text>
+      <text x="250" y="580" text-anchor="middle">• Strong trend day characteristics</text>
+      <text x="250" y="605" text-anchor="middle">• Trade: Follow the breakout direction</text>
+    </g>
+  </g>
+</svg>

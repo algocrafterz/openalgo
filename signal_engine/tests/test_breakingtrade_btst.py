@@ -1,0 +1,150 @@
+"""Volume row shapes (volume_shapes.py) and the closing-hour carry watchlist (btst.py).
+
+Both encode rules quoted from BreakingTrade_Full_Reference.docx - see those modules' docstrings
+for the source wording each test is pinning.
+"""
+
+from datetime import datetime
+
+import pandas as pd
+import pytest
+
+from signal_engine.analysis.breakingtrade import btst, volume_shapes
+
+
+def _vol_row(change_pct=1.0, delivery_pct=0.8, **sessions):
+    row = {"symbol": "TESTCO", "change_pct": change_pct, "delivery_pct": delivery_pct}
+    for letter in volume_shapes.SESSION_LETTERS:
+        row[f"vol_{letter}"] = sessions.get(letter, float("nan"))
+    row["vol_o"] = sessions.get("o", float("nan"))
+    return pd.Series(row)
+
+
+# ---------------------------------------------------------------------------
+# Row shapes
+# ---------------------------------------------------------------------------
+
+
+def test_staircase_needs_a_run_of_elevated_sessions():
+    assert volume_shapes.is_staircase(_vol_row(a=1.3, b=1.4, c=1.25))
+    assert not volume_shapes.is_staircase(_vol_row(a=1.3, b=0.9, c=1.25))
+
+
+def test_staircase_excludes_extreme_sessions():
+    """'Several consecutive elevated sessions, NOTHING EXTREME' - an extreme cell is a Spike."""
+    assert not volume_shapes.is_staircase(_vol_row(a=1.3, b=3.5, c=1.25))
+
+
+def test_spike_is_one_violent_cell_between_ordinary_ones():
+    assert volume_shapes.is_spike(_vol_row(a=0.9, b=4.0, c=1.0))
+    assert not volume_shapes.is_spike(_vol_row(a=1.3, b=4.0, c=1.4))
+
+
+def test_opening_stub_o_is_never_counted():
+    """O covers only 09:15-09:20 and runs an order of magnitude hotter; the guide says it
+    sits inside session A and must not be double-counted."""
+    row = _vol_row(o=118.0, a=0.9, b=0.8)
+    assert not volume_shapes.is_spike(row)
+    assert volume_shapes.session_factors(row) == [("a", 0.9), ("b", 0.8)]
+
+
+def test_lunch_anomaly_looks_only_at_g_h_i():
+    assert volume_shapes.is_lunch_anomaly(_vol_row(g=1.4))
+    assert not volume_shapes.is_lunch_anomaly(_vol_row(a=4.0, b=3.0))
+
+
+def test_closing_ramp_requires_busy_close_and_price_holding():
+    assert volume_shapes.is_closing_ramp(_vol_row(change_pct=2.0, k=1.0, l=1.3, m=1.6))
+    # a genuinely quiet close is not a ramp however green the day was
+    assert not volume_shapes.is_closing_ramp(_vol_row(change_pct=2.0, k=1.6, l=0.4, m=0.5))
+    # a busy close into a RED close is distribution, not overnight accumulation
+    assert not volume_shapes.is_closing_ramp(_vol_row(change_pct=-2.0, k=1.0, l=1.3, m=1.6))
+
+
+def test_closing_ramp_survives_a_single_dip():
+    """Half-hour volume is noisy: DELHIVERY closed +2.1% on K 1.20 -> L 3.98 -> M 1.99, which
+    a monotonic 'each session beats the last' rule wrongly rejected."""
+    assert volume_shapes.is_closing_ramp(_vol_row(change_pct=2.1, k=1.20, l=3.98, m=1.99))
+
+
+def test_closing_ramp_needs_participation_not_just_shape():
+    assert not volume_shapes.is_closing_ramp(_vol_row(change_pct=2.0, k=0.2, l=0.3, m=0.4))
+
+
+def test_ghost_rally_is_a_price_move_with_no_participation():
+    assert volume_shapes.is_ghost_rally(_vol_row(change_pct=2.0, a=0.5, b=0.6, c=0.4))
+    # same dead volume but no real move - not a ghost rally
+    assert not volume_shapes.is_ghost_rally(_vol_row(change_pct=0.3, a=0.5, b=0.6))
+    # real move WITH participation - not a ghost rally
+    assert not volume_shapes.is_ghost_rally(_vol_row(change_pct=2.0, a=0.5, b=1.9))
+
+
+def test_unfinished_sessions_do_not_read_as_dead_volume():
+    """NaN means 'has not traded yet'; treating it as 0 would make every morning a ghost."""
+    assert not volume_shapes.is_ghost_rally(_vol_row(change_pct=2.0, a=1.5, b=1.8))
+
+
+# ---------------------------------------------------------------------------
+# BTST watchlist
+# ---------------------------------------------------------------------------
+
+
+def _pair(**overrides):
+    profile = {
+        "symbol": "TESTCO",
+        "sector": "IT",
+        "price": 100.0,
+        "change_pct": 2.0,
+        "day_type": "Trend",
+        "day_type_dir": "up",
+        "tpo_pos": "above_va",
+    }
+    profile.update(overrides.get("profile", {}))
+
+    volume = {"symbol": "TESTCO", "delivery_pct": 0.8, "change_pct": 2.0}
+    for letter in volume_shapes.SESSION_LETTERS:
+        volume[f"vol_{letter}"] = float("nan")
+    volume.update({"vol_k": 1.0, "vol_l": 1.3, "vol_m": 1.6})
+    volume.update(overrides.get("volume", {}))
+
+    return pd.DataFrame([profile]), pd.DataFrame([volume])
+
+
+def test_qualifying_name_makes_the_watchlist():
+    market_profile, volume = _pair()
+    assert list(btst.candidates(market_profile, volume)["symbol"]) == ["TESTCO"]
+
+
+def test_low_delivery_is_rejected_as_churn():
+    market_profile, volume = _pair(volume={"delivery_pct": 0.25})
+    assert btst.candidates(market_profile, volume).empty
+
+
+def test_red_close_is_rejected():
+    market_profile, volume = _pair(profile={"change_pct": -1.0}, volume={"change_pct": -1.0})
+    assert btst.candidates(market_profile, volume).empty
+
+
+def test_weak_closing_structure_is_rejected():
+    """High delivery and a ramp are not enough if buyers did not finish in control."""
+    market_profile, volume = _pair(
+        profile={"tpo_pos": "below_va", "day_type": "Normal Var", "day_type_dir": "down"}
+    )
+    assert btst.candidates(market_profile, volume).empty
+
+
+def test_ghost_rally_is_excluded_even_with_high_delivery():
+    market_profile, volume = _pair(volume={"vol_k": 0.1, "vol_l": 0.2, "vol_m": 0.3, "vol_a": 0.4})
+    assert btst.candidates(market_profile, volume).empty
+
+
+def test_btst_requires_a_volume_snapshot():
+    market_profile, _ = _pair()
+    with pytest.raises(ValueError):
+        btst.candidates(market_profile, None)
+
+
+def test_snapshot_time_gate():
+    assert not btst.is_snapshot_late_enough(datetime(2026, 9, 3, 12, 31))
+    assert btst.is_snapshot_late_enough(datetime(2026, 9, 3, 15, 20))
+    assert not btst.is_snapshot_late_enough(None)

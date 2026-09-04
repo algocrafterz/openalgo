@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="bgGlow"><feGaussianBlur stdDeviation="30"/></filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- Left side: Candlestick (muted) -->
+  <ellipse cx="300" cy="315" rx="250" ry="200" fill="#475569" opacity="0.05" filter="url(#bgGlow)"/>
+  <text x="300" y="65" fill="#64748b" font-family="system-ui" font-size="20" font-weight="700" text-anchor="middle">Candlestick Charts</text>
+  <text x="300" y="90" fill="#475569" font-family="system-ui" font-size="13" text-anchor="middle">WHAT happened</text>
+  <!-- Candlestick bars -->
+  <g opacity="0.6">
+    <line x1="130" y1="180" x2="130" y2="420" stroke="#475569" stroke-width="1"/>
+    <rect x="115" y="220" width="30" height="130" fill="#ef4444" opacity="0.6" rx="2"/>
+    <line x1="200" y1="200" x2="200" y2="450" stroke="#475569" stroke-width="1"/>
+    <rect x="185" y="250" width="30" height="120" fill="#22c55e" opacity="0.6" rx="2"/>
+    <line x1="270" y1="160" x2="270" y2="400" stroke="#475569" stroke-width="1"/>
+    <rect x="255" y="190" width="30" height="140" fill="#22c55e" opacity="0.6" rx="2"/>
+    <line x1="340" y1="200" x2="340" y2="430" stroke="#475569" stroke-width="1"/>
+    <rect x="325" y="230" width="30" height="110" fill="#ef4444" opacity="0.6" rx="2"/>
+    <line x1="410" y1="220" x2="410" y2="460" stroke="#475569" stroke-width="1"/>
+    <rect x="395" y="260" width="30" height="120" fill="#22c55e" opacity="0.6" rx="2"/>
+  </g>
+  <!-- Question marks showing missing info -->
+  <g fill="#64748b" font-family="system-ui" font-size="24" opacity="0.4">
+    <text x="160" y="500">?</text><text x="230" y="510">?</text><text x="310" y="495">?</text><text x="380" y="505">?</text>
+  </g>
+  <text x="300" y="560" fill="#64748b" font-family="system-ui" font-size="12" text-anchor="middle">Where is the real action? Who's in control? Where is fair value?</text>
+  <!-- VS divider -->
+  <line x1="600" y1="50" x2="600" y2="580" stroke="#334155" stroke-width="1" stroke-dasharray="6,6"/>
+  <circle cx="600" cy="315" r="28" fill="#1e293b" stroke="#818CF8" stroke-width="2"/>
+  <text x="600" y="322" fill="#818CF8" font-family="system-ui" font-size="16" font-weight="800" text-anchor="middle">VS</text>
+  <!-- Right side: Market Profile (vibrant) -->
+  <ellipse cx="900" cy="315" rx="250" ry="200" fill="#818CF8" opacity="0.06" filter="url(#bgGlow)"/>
+  <text x="900" y="65" fill="#818CF8" font-family="system-ui" font-size="20" font-weight="700" text-anchor="middle">Market Profile</text>
+  <text x="900" y="90" fill="#818CF8" font-family="system-ui" font-size="13" text-anchor="middle" opacity="0.7">WHERE + WHY + WHO</text>
+  <!-- Market Profile TPO shape -->
+  <g filter="url(#glow)">
+    <rect x="700" y="140" width="40" height="16" rx="3" fill="#818CF8" opacity="0.4"/>
+    <rect x="700" y="162" width="80" height="16" rx="3" fill="#818CF8" opacity="0.5"/>
+    <rect x="700" y="184" width="140" height="16" rx="3" fill="#818CF8" opacity="0.6"/>
+    <rect x="700" y="206" width="220" height="16" rx="3" fill="#818CF8" opacity="0.7"/>
+    <rect x="700" y="228" width="300" height="16" rx="3" fill="#6366f1" opacity="0.8"/>
+    <rect x="700" y="250" width="360" height="16" rx="3" fill="#818CF8" opacity="0.85"/>
+    <rect x="700" y="272" width="380" height="16" rx="3" fill="#22D3EE" opacity="0.9"/>
+    <rect x="700" y="294" width="400" height="16" rx="3" fill="#22D3EE"/>
+    <rect x="700" y="316" width="380" height="16" rx="3" fill="#22D3EE" opacity="0.9"/>
+    <rect x="700" y="338" width="360" height="16" rx="3" fill="#818CF8" opacity="0.85"/>
+    <rect x="700" y="360" width="300" height="16" rx="3" fill="#6366f1" opacity="0.8"/>
+    <rect x="700" y="382" width="220" height="16" rx="3" fill="#818CF8" opacity="0.7"/>
+    <rect x="700" y="404" width="140" height="16" rx="3" fill="#818CF8" opacity="0.6"/>
+    <rect x="700" y="426" width="80" height="16" rx="3" fill="#818CF8" opacity="0.5"/>
+    <rect x="700" y="448" width="40" height="16" rx="3" fill="#818CF8" opacity="0.4"/>
+  </g>
+  <!-- Annotations -->
+  <text x="1115" y="165" fill="#f59e0b" font-family="system-ui" font-size="11" text-anchor="end">← Rejection</text>
+  <text x="1115" y="305" fill="#22D3EE" font-family="system-ui" font-size="11" text-anchor="end">← POC (Fair Value)</text>
+  <text x="1115" y="455" fill="#f59e0b" font-family="system-ui" font-size="11" text-anchor="end">← Rejection</text>
+  <!-- VA bracket -->
+  <rect x="670" y="248" width="4" height="130" rx="2" fill="#818CF8" opacity="0.5"/>
+  <text x="665" y="318" fill="#818CF8" font-family="system-ui" font-size="11" text-anchor="end">70%</text>
+  <!-- Checkmarks for Market Profile -->
+  <g fill="#38ef7d" font-family="system-ui" font-size="12">
+    <text x="750" y="500">✓ Time distribution</text>
+    <text x="750" y="520">✓ Price acceptance zones</text>
+    <text x="750" y="540">✓ Institutional activity</text>
+    <text x="750" y="560">✓ Fair value identification</text>
+  </g>
+</svg>

@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<!-- saved from url=(0046)https://breakingtrade.com/volume-scanner-guide -->
+<html lang="en" data-darkreader-proxy-injected="true"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <!-- Google Analytics -->
+    <script async="" src="./How to Use the Live Volume Scanner _ Session Volume Factor Guide NSE _ BreakingTrade_files/js"></script>
+    <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-61WVGZP2NS');</script>
+    <meta name="google-site-verification" content="YriNAyHiSxh4xq20xdb2B5lVW9WMiDiV7AaHEZGbv2M">
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>How to Use the Live Volume Scanner | Session Volume Factor Guide NSE | BreakingTrade</title>
+    <link rel="icon" type="image/x-icon" href="https://breakingtrade.com/Images/Icon_only.png">
+
+    <meta name="description" content="Complete guide to the Live Volume Scanner for NSE. Learn Volume Factor, how to read the 14-session heatmap, spot institutional accumulation and block deals, and 10 ready-made scans for Indian intraday traders.">
+    <meta name="keywords" content="how to use volume scanner, volume factor NSE, session volume analysis, institutional volume India, volume heatmap scanner, delivery percentage trading, block deal detection, volume confirmation breakout, intraday volume scanner India">
+    <meta name="author" content="BreakingTrade">
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+    <link rel="canonical" href="https://breakingtrade.com/volume-scanner-guide">
+    <link rel="alternate" hreflang="en-IN" href="https://breakingtrade.com/volume-scanner-guide">
+    <link rel="alternate" hreflang="en" href="https://breakingtrade.com/volume-scanner-guide">
+
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://breakingtrade.com/volume-scanner-guide">
+    <meta property="og:title" content="How to Use the Live Volume Scanner | Volume Factor Guide">
+    <meta property="og:description" content="Volume Factor explained, how to read the 14-session heatmap, and 10 ready-made scans for spotting institutional activity on NSE.">
+    <meta property="og:site_name" content="BreakingTrade">
+    <meta property="og:locale" content="en_IN">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="How to Use the Live Volume Scanner | BreakingTrade">
+    <meta name="twitter:description" content="Volume Factor, the 14-session heatmap, and 10 ready-made scans for spotting institutional footprints.">
+
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[
+        {"@type":"ListItem","position":1,"name":"Home","item":"https://breakingtrade.com/"},
+        {"@type":"ListItem","position":2,"name":"Live Volume Scanner","item":"https://breakingtrade.com/live-volume-scanner"},
+        {"@type":"ListItem","position":3,"name":"Volume Scanner Guide","item":"https://breakingtrade.com/volume-scanner-guide"}]}
+    </script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "How to Use the Live Volume Scanner",
+        "description": "Volume Factor explained, a column-by-column reference for the 14-session volume heatmap, and 10 ready-made scans for the BreakingTrade Live Volume Scanner on NSE.",
+        "url": "https://breakingtrade.com/volume-scanner-guide",
+        "inLanguage": "en-IN",
+        "author": {"@type": "Organization", "name": "BreakingTrade"},
+        "publisher": {"@type": "Organization", "name": "BreakingTrade", "url": "https://breakingtrade.com",
+                      "logo": {"@type": "ImageObject", "url": "https://breakingtrade.com/Images/logo.svg"}},
+        "about": {"@type": "Thing", "name": "Session-wise volume analysis for intraday trading"},
+        "audience": {"@type": "Audience", "audienceType": "Indian intraday traders, NSE F&O traders"}
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": "What is Volume Factor?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Volume Factor is today's volume in one 30-minute session divided by the average volume for that same session over the past 7 trading days. A Volume Factor of 2.0 in session D means that session traded double its usual volume. Comparing a session against itself is what makes the number meaningful, because session A near the open is naturally busy and session G around lunch is naturally quiet, so comparing them against each other would tell you nothing."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "How do I spot institutional activity with the Volume Scanner?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Look for a run of consecutive green sessions rather than one spike. Three or four sessions in a row at 1.5x or more means somebody is working a large order over time, which is how institutions accumulate or distribute. A single isolated cell at 3x or more with normal sessions around it is usually a block deal or a news reaction instead."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "Why does the current session show a low Volume Factor?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "The live session is still filling. Its Volume Factor is calculated from the volume traded so far, but the baseline it is compared against is a complete session, so the number understates until that session closes. Five minutes into a 30-minute session, expect roughly a fifth of the final reading. Judge the live column by whether it is running ahead of that pace, and treat the last completed session as your reliable figure."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "Can I sort the volume heatmap by a single session?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Yes. Click any session column header to sort the whole table by that session's Volume Factor. Sorting descending puts the stocks with the heaviest volume in that specific 30-minute window at the top, and sessions that have not traded yet sink to the bottom. This is the main way to find which stock the big money was working during any particular half hour."
+                }
+            }
+        ]
+    }
+    </script>
+    <link rel="stylesheet" href="./How to Use the Live Volume Scanner _ Session Volume Factor Guide NSE _ BreakingTrade_files/all.min.css">
+<style>
+        html, body { margin: 0; padding: 0; background: #0b1220; }
+        .bt-nav {
+            background: rgba(17,24,39,0.96); border-bottom: 1px solid rgba(255,255,255,0.09);
+            padding: 10px 18px; display: flex; align-items: center; justify-content: space-between;
+            flex-wrap: wrap; gap: 10px; position: sticky; top: 0; z-index: 50;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .bt-nav > a:first-child { text-decoration: none; color: #b3c0d4; font-weight: 700; }
+        .bt-nav img { height: 46px; width: auto; max-width: 200px; }
+        .bt-nav .bt-nav-links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .bt-nav a.bt-lnk {
+            color: #b3c0d4; text-decoration: none; font-size: 13px; font-weight: 600;
+            padding: 7px 13px; border-radius: 8px; transition: all .2s;
+        }
+        .bt-nav a.bt-lnk:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .bt-nav a.bt-login {
+            display: inline-flex; align-items: center; gap: 6px; background: rgba(129,140,248,0.15);
+            color: #C7D2FE; border: 1px solid rgba(129,140,248,0.25); padding: 7px 16px;
+            border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none;
+        }
+        .bt-nav a.bt-trial {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: linear-gradient(135deg,#818CF8,#A78BFA); color: #fff; border: none;
+            padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none;
+            box-shadow: 0 2px 10px rgba(129,140,248,0.25);
+        }
+        .bt-foot {
+            background: rgba(17,24,39,0.96); border-top: 1px solid rgba(255,255,255,0.09);
+            padding: 30px 18px 22px; text-align: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .bt-foot a { color: rgba(255,255,255,0.7); text-decoration: none; margin: 0 13px; font-size: 14px; }
+        .bt-foot a:hover { color: #fff; }
+        .bt-foot p { color: rgba(255,255,255,0.45); font-size: 0.85rem; margin: 16px 0 0; }
+        @media (max-width: 600px) { .bt-nav a.bt-lnk { display: none; } }
+    </style>
+<style>
+        /* ============================================================
+           How-To Guide — all styles scoped under .bt-howto so nothing
+           leaks into the rest of the SPA.
+           ============================================================ */
+        .bt-howto {
+            --hw-bg: #0b1220;
+            --hw-card: #141d31;
+            --hw-card-2: #1a2540;
+            --hw-border: rgba(255,255,255,0.09);
+            --hw-text: #e6ecf5;
+            --hw-text-2: #b3c0d4;
+            --hw-muted: #7f8ea8;
+            --hw-indigo: #818cf8;
+            --hw-violet: #a78bfa;
+            --hw-green: #34d399;
+            --hw-red: #f87171;
+            --hw-amber: #fbbf24;
+            --hw-cyan: #38bdf8;
+            background: var(--hw-bg);
+            color: var(--hw-text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 15px;
+            line-height: 1.75;
+            padding-bottom: 60px;
+            min-height: 100vh;
+        }
+        .bt-howto * { box-sizing: border-box; }
+        .bt-howto .hw-wrap { max-width: 1100px; margin: 0 auto; padding: 0 18px; }
+
+        /* ── View counter chip ── */
+        .bt-howto .hw-views {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(255,255,255,0.05); border: 1px solid var(--hw-border);
+            color: var(--hw-muted); font-size: 11.5px; font-weight: 600;
+            letter-spacing: 0.4px; padding: 5px 13px; border-radius: 999px;
+            margin: 0 0 18px 8px; vertical-align: middle;
+        }
+        .bt-howto .hw-views i { font-size: 10.5px; opacity: 0.75; }
+        .bt-howto .hw-views span { color: var(--hw-text-2); }
+
+        /* ── Hero ── */
+        .bt-howto .hw-hero {
+            background:
+                radial-gradient(900px 380px at 12% -10%, rgba(245,158,11,0.26), transparent 60%),
+                radial-gradient(700px 340px at 88% 0%, rgba(34,197,94,0.18), transparent 60%),
+                linear-gradient(180deg, #101a2e 0%, #0b1220 100%);
+            border-bottom: 1px solid var(--hw-border);
+            padding: 52px 0 44px;
+            text-align: center;
+        }
+        .bt-howto .hw-eyebrow {
+            display: inline-flex; align-items: center; gap: 7px;
+            background: rgba(129,140,248,0.14);
+            border: 1px solid rgba(129,140,248,0.35);
+            color: #c7d2fe;
+            font-size: 11.5px; font-weight: 700; letter-spacing: 1.3px; text-transform: uppercase;
+            padding: 5px 14px; border-radius: 999px; margin-bottom: 18px;
+        }
+        .bt-howto h1 {
+            font-size: 2.5rem; font-weight: 800; line-height: 1.2;
+            margin: 0 0 16px; color: #fff; letter-spacing: -0.5px;
+        }
+        .bt-howto h1 em {
+            font-style: normal;
+            background: linear-gradient(135deg, #fbbf24 0%, #22c55e 100%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .bt-howto .hw-sub {
+            color: var(--hw-text-2); font-size: 1.08rem; max-width: 780px; margin: 0 auto 26px;
+        }
+        .bt-howto .hw-metrics {
+            display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 6px;
+        }
+        .bt-howto .hw-metric {
+            background: rgba(255,255,255,0.045); border: 1px solid var(--hw-border);
+            border-radius: 12px; padding: 12px 20px; min-width: 130px;
+        }
+        .bt-howto .hw-metric b { display: block; font-size: 1.5rem; font-weight: 800; color: #fff; line-height: 1.2; }
+        .bt-howto .hw-metric span { font-size: 11.5px; color: var(--hw-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+
+        /* ── Sections ── */
+        .bt-howto .hw-sec { padding: 46px 0 6px; }
+        .bt-howto .hw-sec-head { margin-bottom: 26px; }
+        .bt-howto .hw-kicker {
+            font-size: 11.5px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+            color: var(--hw-indigo); margin-bottom: 8px;
+        }
+        .bt-howto h2 {
+            font-size: 1.7rem; font-weight: 800; color: #fff; margin: 0 0 10px; letter-spacing: -0.3px;
+        }
+        .bt-howto h2 i { color: var(--hw-indigo); font-size: 1.3rem; margin-right: 8px; }
+        .bt-howto .hw-lede { color: var(--hw-text-2); max-width: 860px; margin: 0; }
+        .bt-howto h3 { font-size: 1.12rem; font-weight: 700; color: #fff; margin: 0 0 8px; }
+        .bt-howto p { margin: 0 0 12px; }
+        .bt-howto a { color: var(--hw-cyan); }
+
+        /* ── Reality-check block ── */
+        .bt-howto .hw-punch {
+            background: linear-gradient(135deg, rgba(129,140,248,0.13), rgba(56,189,248,0.07));
+            border: 1px solid rgba(129,140,248,0.3);
+            border-left: 4px solid var(--hw-indigo);
+            border-radius: 14px; padding: 22px 26px; margin: 26px 0 0;
+        }
+        .bt-howto .hw-punch p:last-child { margin-bottom: 0; }
+        .bt-howto .hw-punch strong { color: #fff; }
+
+        /* ── Step cards ── */
+        .bt-howto .hw-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .bt-howto .hw-step {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 22px; position: relative; overflow: hidden;
+        }
+        .bt-howto .hw-step::before {
+            content: attr(data-n);
+            position: absolute; right: 14px; top: 2px;
+            font-size: 4.2rem; font-weight: 900; color: rgba(255,255,255,0.045); line-height: 1;
+        }
+        .bt-howto .hw-step-t { font-size: 11px; font-weight: 800; letter-spacing: 1.1px; text-transform: uppercase; color: var(--hw-indigo); margin-bottom: 6px; }
+        .bt-howto .hw-step p { color: var(--hw-text-2); font-size: 14px; margin: 0; }
+
+        /* ── Generic card grid ── */
+        .bt-howto .hw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .bt-howto .hw-card {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 20px 22px;
+        }
+        .bt-howto .hw-card p:last-child { margin-bottom: 0; }
+        .bt-howto .hw-card p, .bt-howto .hw-card li { color: var(--hw-text-2); font-size: 14px; }
+        .bt-howto .hw-card h3 i { margin-right: 7px; }
+
+        /* ── Tables ── */
+        .bt-howto .hw-table-wrap {
+            border: 1px solid var(--hw-border); border-radius: 14px; overflow-x: auto; background: var(--hw-card);
+        }
+        .bt-howto table.hw-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 720px; }
+        .bt-howto table.hw-table th {
+            background: #1c2842; color: #dbe4f2; text-align: left; font-weight: 700; font-size: 11.5px;
+            letter-spacing: 0.7px; text-transform: uppercase; padding: 12px 14px;
+            border-bottom: 1px solid var(--hw-border); white-space: nowrap;
+        }
+        .bt-howto table.hw-table td {
+            padding: 13px 14px; border-bottom: 1px solid rgba(255,255,255,0.055);
+            color: var(--hw-text-2); vertical-align: top;
+        }
+        .bt-howto table.hw-table tr:last-child td { border-bottom: none; }
+        .bt-howto table.hw-table tr:hover td { background: rgba(255,255,255,0.022); }
+        .bt-howto table.hw-table td.hw-col { color: #fff; font-weight: 700; white-space: nowrap; }
+        .bt-howto table.hw-table td b { color: #eef3fa; }
+        .bt-howto .hw-tag {
+            display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+            padding: 2px 7px; border-radius: 5px; margin-left: 6px; vertical-align: middle; text-transform: uppercase;
+        }
+        .bt-howto .hw-tag.drop { background: rgba(129,140,248,0.18); color: #c7d2fe; border: 1px solid rgba(129,140,248,0.35); }
+        .bt-howto .hw-tag.type { background: rgba(56,189,248,0.15); color: #a5e4ff; border: 1px solid rgba(56,189,248,0.32); }
+        .bt-howto .hw-tag.sort { background: rgba(251,191,36,0.14); color: #fcd34d; border: 1px solid rgba(251,191,36,0.32); }
+        .bt-howto .hw-tag.none { background: rgba(255,255,255,0.06); color: var(--hw-muted); border: 1px solid var(--hw-border); }
+
+        /* ── "Think it, then scan it" cards ── */
+        .bt-howto .hw-think {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 20px 22px; margin-bottom: 14px;
+        }
+        .bt-howto .hw-think-q {
+            display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px;
+        }
+        .bt-howto .hw-think-q i { color: var(--hw-violet); font-size: 16px; margin-top: 5px; flex-shrink: 0; }
+        .bt-howto .hw-think-q span {
+            font-size: 15px; font-style: italic; color: #fff; font-weight: 500; line-height: 1.6;
+        }
+        .bt-howto .hw-think-a { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+        .bt-howto .hw-think-a > i { color: var(--hw-green); font-size: 15px; margin-top: 6px; flex-shrink: 0; }
+        .bt-howto .hw-think p.hw-think-note { margin: 12px 0 0; font-size: 13.5px; color: var(--hw-text-2); }
+
+        /* ── Spotlight (feature callout) ── */
+        .bt-howto .hw-spotlight {
+            background:
+                radial-gradient(600px 220px at 8% 0%, rgba(251,191,36,0.14), transparent 62%),
+                linear-gradient(135deg, #1a2038 0%, #131b2e 100%);
+            border: 1px solid rgba(251,191,36,0.32);
+            border-radius: 16px; padding: 26px 28px;
+        }
+        .bt-howto .hw-spotlight h3 { font-size: 1.15rem; margin-top: 22px; }
+        .bt-howto .hw-spotlight h3:first-of-type { margin-top: 0; }
+        .bt-howto .hw-spotlight p { color: var(--hw-text-2); }
+        .bt-howto .hw-spotlight strong { color: #fff; }
+        .bt-howto .hw-live {
+            display: inline-flex; align-items: center; gap: 7px;
+            background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.42);
+            color: #fcd34d; font-size: 11px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase;
+            padding: 4px 12px; border-radius: 999px; margin-bottom: 14px;
+        }
+        .bt-howto .hw-cell {
+            display: inline-block; font-family: 'Consolas','Menlo',monospace; font-weight: 700;
+            background: #0d1526; border: 1px solid rgba(251,191,36,0.35); color: #fcd34d;
+            padding: 3px 10px; border-radius: 6px; font-size: 13px; white-space: nowrap;
+        }
+        .bt-howto .hw-search {
+            display: inline-block; font-family: 'Consolas','Menlo',monospace;
+            background: #0d1526; border: 1px solid var(--hw-border); color: #a5e4ff;
+            padding: 3px 10px; border-radius: 6px; font-size: 13px;
+        }
+        .bt-howto .hw-warn {
+            margin-top: 20px; background: rgba(248,113,113,0.09); border: 1px solid rgba(248,113,113,0.3);
+            border-left: 4px solid var(--hw-red); border-radius: 10px; padding: 14px 18px;
+        }
+        .bt-howto .hw-warn p { margin: 0; font-size: 13.5px; }
+        .bt-howto .hw-warn b { color: #fca5a5; }
+
+        /* ── Recipe cards ── */
+        .bt-howto .hw-recipes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .bt-howto .hw-recipe {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 20px 22px; border-top: 3px solid var(--hw-indigo);
+        }
+        .bt-howto .hw-recipe.bull { border-top-color: var(--hw-green); }
+        .bt-howto .hw-recipe.bear { border-top-color: var(--hw-red); }
+        .bt-howto .hw-recipe.rev  { border-top-color: var(--hw-amber); }
+        .bt-howto .hw-recipe.flat { border-top-color: var(--hw-cyan); }
+        .bt-howto .hw-recipe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+        .bt-howto .hw-recipe-name { font-size: 1.05rem; font-weight: 800; color: #fff; }
+        .bt-howto .hw-when { font-size: 11px; font-weight: 700; color: var(--hw-muted); white-space: nowrap; }
+        .bt-howto .hw-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .bt-howto .hw-chip {
+            font-size: 11.5px; font-weight: 600; font-family: 'Consolas', 'Menlo', monospace;
+            background: rgba(255,255,255,0.05); border: 1px solid var(--hw-border);
+            color: #dce5f2; padding: 4px 9px; border-radius: 6px; white-space: nowrap;
+        }
+        .bt-howto .hw-chip b { color: var(--hw-indigo); font-weight: 800; }
+        .bt-howto .hw-recipe p { font-size: 13.5px; color: var(--hw-text-2); margin: 0 0 8px; }
+        .bt-howto .hw-recipe p:last-child { margin-bottom: 0; }
+        .bt-howto .hw-recipe .hw-read { color: #fff; font-weight: 600; }
+
+        /* ── Timeline ── */
+        .bt-howto .hw-clock { border-left: 2px solid rgba(129,140,248,0.28); margin-left: 8px; padding-left: 0; }
+        .bt-howto .hw-slot { position: relative; padding: 0 0 22px 26px; }
+        .bt-howto .hw-slot:last-child { padding-bottom: 4px; }
+        .bt-howto .hw-slot::before {
+            content: ''; position: absolute; left: -7px; top: 7px; width: 12px; height: 12px;
+            border-radius: 50%; background: var(--hw-indigo); box-shadow: 0 0 0 4px rgba(129,140,248,0.16);
+        }
+        .bt-howto .hw-slot.key::before { background: var(--hw-amber); box-shadow: 0 0 0 5px rgba(251,191,36,0.2); }
+        .bt-howto .hw-time { font-family: 'Consolas','Menlo',monospace; font-size: 12.5px; font-weight: 800; color: var(--hw-amber); letter-spacing: 0.4px; }
+        .bt-howto .hw-slot h3 { margin: 2px 0 4px; font-size: 1rem; }
+        .bt-howto .hw-slot p { color: var(--hw-text-2); font-size: 13.5px; margin: 0; }
+
+        /* ── Do / Don't ── */
+        .bt-howto .hw-list { list-style: none; padding: 0; margin: 0; }
+        .bt-howto .hw-list li { position: relative; padding: 7px 0 7px 28px; font-size: 14px; color: var(--hw-text-2); }
+        .bt-howto .hw-list li::before {
+            font-family: 'Font Awesome 5 Free'; font-weight: 900; position: absolute; left: 0; top: 8px; font-size: 12px;
+        }
+        .bt-howto .hw-list.do li::before { content: '\f00c'; color: var(--hw-green); }
+        .bt-howto .hw-list.dont li::before { content: '\f00d'; color: var(--hw-red); }
+        .bt-howto .hw-list li b { color: #fff; }
+
+        /* ── CTA ── */
+        .bt-howto .hw-cta {
+            margin-top: 44px; text-align: center; border-radius: 18px; padding: 42px 26px;
+            background:
+                radial-gradient(700px 260px at 50% 0%, rgba(129,140,248,0.28), transparent 65%),
+                linear-gradient(135deg, #16203a 0%, #101a2e 100%);
+            border: 1px solid rgba(129,140,248,0.28);
+        }
+        .bt-howto .hw-cta h2 { font-size: 1.85rem; margin-bottom: 12px; }
+        .bt-howto .hw-cta p { color: var(--hw-text-2); max-width: 640px; margin: 0 auto 22px; }
+        .bt-howto .hw-btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .bt-howto .hw-btn {
+            display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+            padding: 13px 28px; border-radius: 10px; font-weight: 700; font-size: 14.5px; transition: all 0.22s ease;
+        }
+        .bt-howto .hw-btn.primary {
+            background: linear-gradient(135deg, #818cf8 0%, #a78bfa 100%); color: #fff;
+            box-shadow: 0 6px 22px rgba(129,140,248,0.32);
+        }
+        .bt-howto .hw-btn.primary:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(129,140,248,0.45); color: #fff; }
+        .bt-howto .hw-btn.ghost { background: rgba(255,255,255,0.05); color: #dbe4f2; border: 1px solid var(--hw-border); }
+        .bt-howto .hw-btn.ghost:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .bt-howto .hw-note {
+            margin-top: 34px; font-size: 12px; color: var(--hw-muted); text-align: center;
+            max-width: 820px; margin-left: auto; margin-right: auto; line-height: 1.7;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            .bt-howto .hw-steps, .bt-howto .hw-grid-2, .bt-howto .hw-recipes { grid-template-columns: 1fr; }
+            .bt-howto h1 { font-size: 1.85rem; }
+            .bt-howto h2 { font-size: 1.4rem; }
+            .bt-howto .hw-hero { padding: 36px 0 32px; }
+            .bt-howto .hw-metric { flex: 1 1 40%; min-width: 0; padding: 10px 14px; }
+        }
+    </style>
+    <style>
+        /* ── Volume-specific: heat band chips and row-shape strips ── */
+        .bt-howto .vf-bands { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; }
+        .bt-howto .vf-band {
+            display: inline-flex; align-items: center; gap: 8px;
+            border: 1px solid var(--hw-border); border-radius: 9px; padding: 7px 12px;
+            background: rgba(255,255,255,0.03); font-size: 12.5px; color: var(--hw-text-2);
+        }
+        .bt-howto .vf-band b { color: #fff; font-family: 'Consolas','Menlo',monospace; font-size: 12.5px; }
+        .bt-howto .vf-sw { width: 26px; height: 18px; border-radius: 4px; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.25); }
+
+        .bt-howto .vf-strip { display: inline-flex; gap: 2px; vertical-align: middle; margin: 6px 0; flex-wrap: wrap; }
+        .bt-howto .vf-strip i {
+            font-style: normal; font-family: 'Consolas','Menlo',monospace; font-size: 10.5px; font-weight: 700;
+            width: 34px; text-align: center; padding: 4px 0; border-radius: 3px; color: #0f172a;
+        }
+        .bt-howto .vf-strip i.na { background: #1c2740; color: #64748b; }
+        .bt-howto .vf-strip.labels i { background: none; color: var(--hw-muted); font-weight: 600; padding: 0 0 2px; }
+
+        .bt-howto .shape-card {
+            background: var(--hw-card); border: 1px solid var(--hw-border);
+            border-radius: 14px; padding: 18px 20px; margin-bottom: 14px;
+        }
+        .bt-howto .shape-card h3 { margin-bottom: 4px; }
+        .bt-howto .shape-card .shape-verdict { color: #fff; font-weight: 600; font-size: 13.5px; margin: 8px 0 6px; }
+        .bt-howto .shape-card p { font-size: 13.5px; color: var(--hw-text-2); margin: 0; }
+    </style>
+</head>
+<body>
+<nav class="bt-nav">
+    <a href="https://breakingtrade.com/"><img src="./How to Use the Live Volume Scanner _ Session Volume Factor Guide NSE _ BreakingTrade_files/logo.svg" alt="BreakingTrade - Volume Scanner" width="200" height="46"></a>
+    <div class="bt-nav-links">
+        <a class="bt-lnk" href="https://breakingtrade.com/live-volume-scanner">Volume Scanner</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/mp-charts-guide">MP Charts Guide</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/scanner-guide">Intraday Scanner Guide</a>
+        <a class="bt-lnk" href="https://breakingtrade.com/pricing">Pricing</a>
+        <a class="bt-login" href="https://breakingtrade.com/login"><i class="fas fa-sign-in-alt"></i> Log In</a>
+        <a class="bt-trial" href="https://breakingtrade.com/signup"><i class="fas fa-bolt"></i> Start Free Trial</a>
+    </div>
+</nav>
+
+<div class="bt-howto">
+
+    <!-- ══════════════ HERO ══════════════ -->
+    <section class="hw-hero">
+        <div class="hw-wrap">
+            <span class="hw-eyebrow"><i class="fas fa-graduation-cap"></i> Volume Scanner User Guide</span>
+            <span class="hw-views">
+                <i class="fas fa-eye"></i>
+                <span>61</span> views
+            </span>
+            <h1>Price can lie.<br><em>Volume cannot.</em></h1>
+            <p class="hw-sub">
+                A stock breaks resistance and you buy it. It reverses and takes your money. The breakout was real
+                — the <b>volume behind it wasn't</b>. The Live Volume Scanner compares every 30-minute session
+                of every F&amp;O stock against what that exact session normally trades, so you can tell a real move
+                from a hollow one <i>before</i> you click buy. Here is exactly how to use it.
+            </p>
+            <div class="hw-metrics">
+                <div class="hw-metric"><b>200+</b><span>F&amp;O Stocks</span></div>
+                <div class="hw-metric"><b>14</b><span>Sessions Each</span></div>
+                <div class="hw-metric"><b>2,800</b><span>Comparisons</span></div>
+                <div class="hw-metric"><b>1</b><span>Heatmap</span></div>
+            </div>
+        </div>
+    </section>
+
+    <div class="hw-wrap">
+
+        <!-- ══════════════ 1. 60-SECOND ROUTINE ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Start here</div>
+                <h2><i class="fas fa-bolt"></i>The 60-second routine</h2>
+                <p class="hw-lede">Three moves. They work every trading day, and they are all you need on day one.</p>
+            </div>
+            <div class="hw-steps">
+                <div class="hw-step" data-n="1">
+                    <div class="hw-step-t">Read the headline</div>
+                    <h3>How hot is the market today?</h3>
+                    <p>The line under the page title says it outright: <b>how many stocks are trading above 1.5x their
+                       usual volume</b>, how many are above average, how many below, out of the total scanned.
+                       Forty stocks surging means real money is moving somewhere. Four means a dead session —
+                       trade smaller, or not at all.</p>
+                </div>
+                <div class="hw-step" data-n="2">
+                    <div class="hw-step-t">Filter, then sort</div>
+                    <h3>Let the heaviest volume come to you</h3>
+                    <p>Click the <b>Volume Surge</b> card to keep only the stocks above 1.5x. Then click a
+                       <b>session column header</b> to sort by that exact half hour. The stock the big money worked
+                       during that window lands at the top of your screen.</p>
+                </div>
+                <div class="hw-step" data-n="3">
+                    <div class="hw-step-t">Read the row</div>
+                    <h3>One spike, or sustained pressure?</h3>
+                    <p>Scan left to right across that stock's row. <b>One green cell</b> is an event.
+                       <b>Four green cells in a row</b> is somebody working a large order. Those mean completely
+                       different trades. Then click the stock name to open its Market Profile chart and see
+                       <i>where</i> the volume happened.</p>
+                </div>
+            </div>
+
+            <div class="hw-punch">
+                <p><strong>Why session-by-session, and not just "today's volume"?</strong> Because total daily volume
+                   is a number that arrives too late to trade on.</p>
+                <p>Session A, right after the open, is naturally busy — everyone acts on overnight news.
+                   Session G, around lunch, is naturally dead. If you only watch total volume, a big lunchtime
+                   buyer is invisible, drowned out by the noisy open. <strong>Compare each session against its own
+                   history and that buyer lights up in a single green cell</strong> — hours before the daily
+                   volume figure looks unusual to anyone else.</p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 2. THE FORMULA ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The one idea</div>
+                <h2><i class="fas fa-divide"></i>Volume Factor, in one line</h2>
+                <p class="hw-lede">Every coloured cell on the screen is this single calculation. Understand it once and the whole screen opens up.</p>
+            </div>
+
+            <div class="hw-spotlight">
+                <h3>The formula</h3>
+                <p style="font-size: 17px; color: rgb(255, 255, 255); font-weight: 700; margin: 6px 0px 14px; --darkreader-inline-color: var(--darkreader-text-ffffff, #e8e6e3);" data-darkreader-inline-color="">
+                    Volume Factor = today's volume in a session ÷ that <em style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color="">same</em> session's 7-day average
+                </p>
+                <p>
+                    <b>1.0</b> means exactly normal. <b>2.0</b> means double what that half hour usually trades.
+                    <b>0.4</b> means barely anyone showed up. That is the entire scale.
+                </p>
+                <p>
+                    The word doing the heavy lifting is <b>same</b>. Session D is only ever compared against session D,
+                    never against session A. This is what turns a raw volume number into a signal: it removes the
+                    natural shape of the trading day and leaves only the part that is genuinely unusual.
+                </p>
+                <p style="margin-bottom:0;">
+                    <i style="color: rgb(148, 163, 184); --darkreader-inline-color: var(--darkreader-text-94a3b8, #b0a99f);" data-darkreader-inline-color="">Example: RELIANCE usually trades about 5 lakh shares in session D
+                    (10:45–11:15). Today session D printed 8 lakh. Volume Factor = 8 ÷ 5 = <b style="color: rgb(255, 255, 255); --darkreader-inline-color: var(--darkreader-text-ffffff, #e8e6e3);" data-darkreader-inline-color="">1.60</b>.
+                    Sixty percent more than normal, in a window nobody was watching.</i>
+                </p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 3. THE COLOUR SCALE ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Reading at a glance</div>
+                <h2><i class="fas fa-palette"></i>Six colours, six meanings</h2>
+                <p class="hw-lede">
+                    You will spend most of your time reading colour, not numbers. The same scale is used for every
+                    session cell and for the Surge× column, and the legend sits right above the table so you
+                    never have to remember it.
+                </p>
+            </div>
+            <div class="vf-bands">
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(21, 128, 61); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-15803d, #116631);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>≥ 3.0x</b> extreme</span>
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>1.5 – 3.0x</b> strong</span>
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>1.2 – 1.5x</b> elevated</span>
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>0.8 – 1.2x</b> normal</span>
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(252, 165, 165); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-fca5a5, #670303);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>0.5 – 0.8x</b> thin</span>
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(220, 38, 38); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-dc2626, #ae1c1c);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>&lt; 0.5x</b> dead</span>
+                <span class="vf-band"><span class="vf-sw" style="background: rgb(28, 39, 64); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-1c2740, #161f33);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor=""></span><b>–</b> not traded yet</span>
+            </div>
+            <div class="hw-grid-2" style="margin-top:18px;">
+                <div class="hw-card">
+                    <h3><i class="fas fa-eye" style="color: rgb(34, 197, 94); --darkreader-inline-color: var(--darkreader-text-22c55e, #4ae081);" data-darkreader-inline-color=""></i>What green actually tells you</h3>
+                    <p>Green means <b>more people traded than usual</b> — it does <i>not</i> tell you which side won.
+                       Heavy volume with price up is buying pressure; the identical green cell with price down is
+                       distribution. Always read the <b>Chg%</b> column alongside the colour. Volume is the size of
+                       the fight; price tells you who is winning it.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-exclamation-triangle" style="color: rgb(252, 165, 165); --darkreader-inline-color: var(--darkreader-text-fca5a5, #fb8f8f);" data-darkreader-inline-color=""></i>Why red matters just as much</h3>
+                    <p>A stock climbing 2% with a row of red cells is the single most dangerous pattern on this screen.
+                       Nobody of size is participating — the move is thin, and thin moves retrace fast.
+                       Traders lose more money chasing red-row rallies than they ever lose missing green ones.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 4. COLUMNS ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The engine room</div>
+                <h2><i class="fas fa-table"></i>Every column, and what to do with it</h2>
+                <p class="hw-lede">
+                    The <b>Glossary</b> button on the scanner defines each term. This table tells you what to
+                    <i>do</i> with it. Every column is sortable — that is the main control on this screen.
+                </p>
+            </div>
+            <div class="hw-table-wrap">
+                <table class="hw-table">
+                    <thead>
+                    <tr>
+                        <th style="width:150px;">Column</th>
+                        <th style="width:210px;">The question it answers</th>
+                        <th>How you trade it</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <td class="hw-col">Name <span class="hw-tag type">search</span></td>
+                        <td>Which stock?</td>
+                        <td><b>Click it and the Market Profile chart opens in a new window</b> — volume tells you
+                            <i>how much</i>, the profile tells you <i>where</i>. Type in the search box below the table
+                            to jump to a stock you already hold. A red <b>BAN</b> badge means the stock is in F&amp;O ban:
+                            open interest has crossed 95% of MWPL and no fresh positions are allowed.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Sector <span class="hw-tag sort">sort</span></td>
+                        <td>One stock, or the whole sector?</td>
+                        <td>Sort by Sector to group names together. When four banking stocks all show green in the same
+                            session, that is a fund rotating into the sector — far more reliable than one stock
+                            spiking alone.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Price / Chg% <span class="hw-tag sort">sort</span></td>
+                        <td>Which way is it going?</td>
+                        <td>The other half of every volume reading. Sort Chg% descending with the Volume Surge filter on
+                            and you get today's genuine leaders: big moves <i>with</i> participation. Sort ascending for
+                            the same list on the short side.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Today (M) <span class="hw-tag sort">sort</span></td>
+                        <td>How much has traded so far?</td>
+                        <td>Total shares traded today, in millions. On its own it means nothing — its job is to be
+                            compared with the next column.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">7D Avg (M) <span class="hw-tag sort">sort</span></td>
+                        <td>What counts as normal here?</td>
+                        <td>Average total daily volume over the last 7 trading days — the baseline. Also a quick
+                            liquidity check: if the 7-day average is tiny, skip the stock regardless of how green the
+                            row looks, because you will struggle to get out of a position.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Surge× <span class="hw-tag sort">default sort</span></td>
+                        <td>How unusual is today overall?</td>
+                        <td>Today ÷ 7-day average, coloured on the same scale. <b>The table already arrives sorted by
+                            this column, highest first</b> — so the most unusual stock of the day is sitting in row one
+                            before you touch anything. Remember it is cumulative: at 10 AM a 0.4x is normal because the
+                            day is only a fifth done.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">Del% <span class="hw-tag sort">sort</span></td>
+                        <td>Real buying, or just churn?</td>
+                        <td>Delivery percentage — how much of the volume was actually taken to demat rather than
+                            squared off intraday. <b>Above 70% turns green.</b> High volume with high delivery is
+                            investment demand and tends to persist for days; high volume with delivery under 30% is
+                            speculative churn that can vanish by tomorrow. This is the column that separates a
+                            multi-day move from a one-day pop.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">O <span class="hw-tag sort">sort</span></td>
+                        <td>How violent was the open?</td>
+                        <td>Just the first five minutes, 9:15–9:20. A big number here means the overnight news was
+                            genuinely repriced at the bell rather than drifting in later. Note that <b>O sits inside A</b>
+                            — it is a zoom on the opening, not an extra session, so do not add them together.</td>
+                    </tr>
+                    <tr>
+                        <td class="hw-col">A … M <span class="hw-tag sort">sort each</span></td>
+                        <td>Which half hour did the money move in?</td>
+                        <td>Fourteen columns, 9:15 to 3:30, each 30 minutes. <b>This is the heart of the scanner.</b>
+                            Click any one of them to rank all 200+ stocks by that single window — the answer to
+                            "who was being bought at 11 o'clock?" is one click away. The current session's header is
+                            highlighted so you always know where you are in the day. Hover any cell to see its exact
+                            multiple.</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ══════════════ 5. ROW SHAPES ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The real skill</div>
+                <h2><i class="fas fa-wave-square"></i>Reading the shape of a row</h2>
+                <p class="hw-lede">
+                    One cell is a data point. <b>The pattern across the row is the story.</b> These six shapes cover
+                    almost everything you will see, and each one implies a different trade. Learn to recognise them and
+                    you are reading order flow, not numbers.
+                </p>
+            </div>
+
+            <div class="shape-card">
+                <h3><i class="fas fa-layer-group" style="color: rgb(34, 197, 94); margin-right: 7px; --darkreader-inline-color: var(--darkreader-text-22c55e, #4ae081);" data-darkreader-inline-color=""></i>1. The Staircase — institutional accumulation</h3>
+                <div class="vf-strip labels"><i>A</i><i>B</i><i>C</i><i>D</i><i>E</i><i>F</i><i>G</i></div>
+                <div class="vf-strip">
+                    <i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.05</i><i style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.30</i><i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.70</i>
+                    <i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.85</i><i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">2.10</i><i style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.45</i><i class="na">-</i>
+                </div>
+                <p class="shape-verdict">Several consecutive sessions elevated, nothing extreme.</p>
+                <p>This is what a large order being worked over time looks like. Nobody buying ₹200 crore does it in
+                   one print — they feed it in so the price does not run away. Sustained pressure like this is the
+                   most tradeable pattern on the screen because it tends to <b>continue for hours, sometimes days</b>.
+                   Check <b>Del%</b>: high delivery here means genuine accumulation, not intraday churn.</p>
+            </div>
+
+            <div class="shape-card">
+                <h3><i class="fas fa-bomb" style="color: rgb(21, 128, 61); margin-right: 7px; --darkreader-inline-color: var(--darkreader-text-15803d, #7ae9a3);" data-darkreader-inline-color=""></i>2. The Spike — news or a block deal</h3>
+                <div class="vf-strip labels"><i>A</i><i>B</i><i>C</i><i>D</i><i>E</i><i>F</i><i>G</i></div>
+                <div class="vf-strip">
+                    <i style="background: rgb(252, 165, 165); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-fca5a5, #670303);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.70</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.95</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.85</i>
+                    <i style="background: rgb(21, 128, 61); color: rgb(255, 255, 255); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-15803d, #116631); --darkreader-inline-color: var(--darkreader-text-ffffff, #e8e6e3);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">4.20</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.10</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.90</i><i class="na">-</i>
+                </div>
+                <p class="shape-verdict">One violent cell surrounded by ordinary ones.</p>
+                <p>Something <i>happened</i> in that half hour — an announcement, a block deal, an index rebalance.
+                   Go read the news before doing anything. The critical question is what comes next: if the following
+                   sessions stay elevated, the market is repricing the stock and there is a trend to trade. If they
+                   collapse back to normal, it was a one-off transaction and the price usually drifts back.</p>
+            </div>
+
+            <div class="shape-card">
+                <h3><i class="fas fa-utensils" style="color: rgb(251, 191, 36); margin-right: 7px; --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color=""></i>3. The Lunch Anomaly — the highest-value signal here</h3>
+                <div class="vf-strip labels"><i>E</i><i>F</i><i>G</i><i>H</i><i>I</i><i>J</i></div>
+                <div class="vf-strip">
+                    <i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.90</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.05</i><i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">2.30</i>
+                    <i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.95</i><i style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.40</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.10</i>
+                </div>
+                <p class="shape-verdict">Green in G, H or I — the sessions that are supposed to be asleep.</p>
+                <p>Between 12:15 and 1:45 the market is at its quietest. Anyone trading serious size in that window is
+                   doing it <b>because it is quiet</b> — less competition, less attention, less price impact.
+                   Retail is not driving a lunchtime volume spike. This is the pattern that most reliably front-runs an
+                   afternoon move, and almost nobody screens for it because you cannot see it without
+                   session-by-session comparison.</p>
+            </div>
+
+            <div class="shape-card">
+                <h3><i class="fas fa-door-closed" style="color: rgb(56, 189, 248); margin-right: 7px; --darkreader-inline-color: var(--darkreader-text-38bdf8, #42c0f8);" data-darkreader-inline-color=""></i>4. The Closing Ramp — positioning for tomorrow</h3>
+                <div class="vf-strip labels"><i>I</i><i>J</i><i>K</i><i>L</i><i>M</i></div>
+                <div class="vf-strip">
+                    <i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.95</i><i style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.25</i><i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.80</i>
+                    <i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">2.40</i><i style="background: rgb(21, 128, 61); color: rgb(255, 255, 255); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-15803d, #116631); --darkreader-inline-color: var(--darkreader-text-ffffff, #e8e6e3);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">3.10</i>
+                </div>
+                <p class="shape-verdict">Volume building into K, L and M with price holding up.</p>
+                <p>Somebody wants to own this stock <i>overnight</i>, and is willing to pay up in the closing auction to
+                   get it. Closing-hour conviction frequently carries into the next morning's open. This is a
+                   watchlist-for-tomorrow signal more than a same-day trade — note the name at 3:20 and check it at
+                   9:15. Pair it with a high <b>Del%</b> and it is a genuine positional footprint.</p>
+            </div>
+
+            <div class="shape-card">
+                <h3><i class="fas fa-ghost" style="color: rgb(220, 38, 38); margin-right: 7px; --darkreader-inline-color: var(--darkreader-text-dc2626, #df3b3b);" data-darkreader-inline-color=""></i>5. The Ghost Rally — the trap</h3>
+                <div class="vf-strip labels"><i>A</i><i>B</i><i>C</i><i>D</i><i>E</i><i>F</i></div>
+                <div class="vf-strip">
+                    <i style="background: rgb(252, 165, 165); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-fca5a5, #670303);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.60</i><i style="background: rgb(220, 38, 38); color: rgb(255, 255, 255); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-dc2626, #ae1c1c); --darkreader-inline-color: var(--darkreader-text-ffffff, #e8e6e3);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">0.45</i><i style="background: rgb(252, 165, 165); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-fca5a5, #670303);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.55</i>
+                    <i style="background: rgb(220, 38, 38); color: rgb(255, 255, 255); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-dc2626, #ae1c1c); --darkreader-inline-color: var(--darkreader-text-ffffff, #e8e6e3);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="" data-darkreader-inline-color="">0.40</i><i style="background: rgb(252, 165, 165); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-fca5a5, #670303);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.65</i><i style="background: rgb(252, 165, 165); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-fca5a5, #670303);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.70</i>
+                </div>
+                <p class="shape-verdict">Price up over 1.5% and every single session is red.</p>
+                <p>The stock is rising on almost no participation — a thin book being pushed by small orders with
+                   nobody of size on either side. It looks strong on a candle chart and it is the easiest way to lose
+                   money on this screen. One real seller and the whole move unwinds. <b>Do not chase it.</b> If anything,
+                   these are the names to watch for a reversal once volume finally arrives.</p>
+            </div>
+
+            <div class="shape-card">
+                <h3><i class="fas fa-check-double" style="color: rgb(167, 139, 250); margin-right: 7px; --darkreader-inline-color: var(--darkreader-text-a78bfa, #9c7df9);" data-darkreader-inline-color=""></i>6. The Confirmation — volume exactly where it matters</h3>
+                <div class="vf-strip labels"><i>A</i><i>B</i><i>C</i><i>D</i><i>E</i></div>
+                <div class="vf-strip">
+                    <i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.00</i><i style="background: rgb(226, 232, 240); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-e2e8f0, #242729);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">0.95</i><i style="background: rgb(34, 197, 94); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-22c55e, #1b9e4b);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">2.20</i>
+                    <i style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.35</i><i style="background: rgb(134, 239, 172); --darkreader-inline-bgimage: initial; --darkreader-inline-bgcolor: var(--darkreader-background-86efac, #107645);" data-darkreader-inline-bgimage="" data-darkreader-inline-bgcolor="">1.30</i>
+                </div>
+                <p class="shape-verdict">The green cell lands in the same session the stock broke a key level.</p>
+                <p>This is the pattern you should care about most, because it is the one that answers a question you
+                   already had. A stock clears its Initial Balance high or yesterday's high in session C, and session C
+                   printed 2.2x — the breakout has real money behind it. Had session C been red, the same
+                   breakout would have been a coin flip. Cross-check the level on the
+                   <a href="https://breakingtrade.com/scanner-guide">Live Intraday Scanner</a>, then read the confirmation here.</p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 6. CONTROLS ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The controls</div>
+                <h2><i class="fas fa-sliders-h"></i>Everything you can actually do on this screen</h2>
+                <p class="hw-lede">
+                    This scanner works differently from the Intraday Scanner: there are no per-column dropdowns.
+                    Your tools are <b>three filter cards, sorting, and search</b> — and sorting is far more
+                    powerful here than people expect.
+                </p>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3><i class="fas fa-sort-amount-down" style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color=""></i>Sorting is your main weapon</h3>
+                    <p>Every column sorts, <b>including each of the 14 session columns</b>. Sorting a session descending
+                       ranks all 200+ stocks by volume in that one half hour, and sessions that have not happened yet
+                       drop harmlessly to the bottom. Want to know who was accumulated during lunch? Sort G. Who is
+                       being loaded into the close? Sort M. No other view in the platform answers that.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-th-large" style="color: rgb(34, 197, 94); --darkreader-inline-color: var(--darkreader-text-22c55e, #4ae081);" data-darkreader-inline-color=""></i>Three filter cards</h3>
+                    <p><b>Volume Surge</b> (today above 1.5x), <b>Above Avg</b> and <b>Below Avg</b>. Click one to
+                       filter the table, click it again — or use <b>Clear Filter</b> — to release it.
+                       Only one is active at a time, so combine them with <i>sorting</i> rather than with each other.
+                       The fourth card, Total Stocks, is a counter and also shows the market-wide average surge.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-fire" style="color: rgb(245, 158, 11); --darkreader-inline-color: var(--darkreader-text-f59e0b, #f6a823);" data-darkreader-inline-color=""></i>Top Volume Surge cards</h3>
+                    <p>Above the table, every stock over 1.5x appears as a card ranked by how extreme it is. Click one
+                       to jump straight to its chart. On a busy day this is your entire shortlist, handed over without
+                       a single filter click.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-chart-line" style="color: rgb(56, 189, 248); --darkreader-inline-color: var(--darkreader-text-38bdf8, #42c0f8);" data-darkreader-inline-color=""></i>Session Momentum</h3>
+                    <p>A line across all 14 sessions showing the <b>average Volume Factor of the whole market</b> in each
+                       one. It tells you when the market as a whole woke up. If the line jumps in session D, that was a
+                       market-wide event — so a single stock's green D cell is much less special than it looks.
+                       Context that stops you mistaking the tide for a fish.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-calendar-day" style="color: rgb(167, 139, 250); --darkreader-inline-color: var(--darkreader-text-a78bfa, #9c7df9);" data-darkreader-inline-color=""></i>Date arrows &amp; Snapshot</h3>
+                    <p>The <b>← →</b> arrows replay previous trading days, cell for cell. This is how you learn
+                       what a 2x session actually led to — pick a big green cell from last week and see what the
+                       stock did next. The <b>Snapshot</b> label tells you how fresh the numbers are.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-download" style="color: rgb(203, 213, 225); --darkreader-inline-color: var(--darkreader-text-cbd5e1, #bacad7);" data-darkreader-inline-color=""></i>Search, page length, export</h3>
+                    <p>The global <b>Search</b> box filters across the whole table — type a sector name to isolate
+                       it. <b>Copy</b> and <b>Excel</b> export exactly what you are looking at, filters and sort included,
+                       which makes building your own volume journal a two-click job. There is also a
+                       <b>Tutorial</b> button in the toolbar if you would rather watch than read.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 7. TWO THINGS THAT TRIP PEOPLE UP ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Read this before you trade it</div>
+                <h2><i class="fas fa-hourglass-half"></i>Two mechanics that fool almost everyone</h2>
+                <p class="hw-lede">Neither of these is a bug. Both will cost you money if you do not know about them.</p>
+            </div>
+
+            <div class="hw-spotlight">
+                <span class="hw-live"><i class="fas fa-circle" style="font-size:7px;"></i> Important</span>
+
+                <h3>1. The live session is only half-written</h3>
+                <p>
+                    The highlighted column is the session happening <i>right now</i>, and its Volume Factor is computed
+                    from the volume traded <b>so far</b> — while the baseline it is divided by is a
+                    <b>complete</b> 30-minute session. So the live cell always understates, and it climbs as the
+                    session fills.
+                </p>
+                <p>
+                    Five minutes into a session, roughly a fifth of the volume has arrived, so a cell reading
+                    <b>0.4x</b> is actually running at about <b>2x pace</b>. Judge the live column by <i>pace</i>,
+                    never by its face value — and treat the <b>last completed session</b> as your reliable number.
+                    This one misunderstanding is why traders dismiss surges that were screaming at them.
+                </p>
+
+                <h3>2. A stock can be missing entirely</h3>
+                <p>
+                    Volume Factor needs a complete history for <i>every</i> session before it can be calculated. If any
+                    session in the lookback window has no volume — a newly listed stock, an illiquid name, a
+                    session that simply did not trade — the stock is <b>left out of the table altogether</b>
+                    rather than shown with gaps. NIFTY-style index instruments such as FINNIFTY futures and INDIAVIX
+                    are excluded by design too.
+                </p>
+                <p style="margin-bottom:0;">
+                    So if a stock you are watching is absent, it is not a glitch: the scanner is telling you it has no
+                    trustworthy baseline for it. That itself is useful information about how thin the name is.
+                </p>
+
+                <div class="hw-warn">
+                    <p>
+                        <b>Volume is a confirmation tool, not an entry signal.</b> A green cell tells you people were
+                        trading, not which direction to take. It answers "should I trust this move?" — never
+                        "which way is it going?" Get the direction from price and Market Profile structure, then come
+                        here to decide whether the move deserves your money.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 8. RECIPES ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Copy these first</div>
+                <h2><i class="fas fa-utensils"></i>10 ready-made scans</h2>
+                <p class="hw-lede">
+                    Each one is a filter card plus a sort plus what to look for in the row. Pick two or three that suit
+                    how you trade rather than trying all ten.
+                </p>
+            </div>
+
+            <div class="hw-recipes">
+
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">1. Today's Real Leaders</span>
+                        <span class="hw-when">Any time</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Card</b> = Volume Surge</span>
+                        <span class="hw-chip">sort <b>Chg%</b> ↓</span>
+                    </div>
+                    <p class="hw-read">Biggest gainers that actually have participation behind them.</p>
+                    <p>The list every "top gainers" screen should show you and never does. Anything at the top here is
+                       rising <i>and</i> being bought — a completely different animal from a thin mover.
+                       Flip the sort to ascending for the short side.</p>
+                </div>
+
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">2. The Accumulation Hunt</span>
+                        <span class="hw-when">10:30 – 14:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Card</b> = Volume Surge</span>
+                        <span class="hw-chip">sort <b>Del%</b> ↓</span>
+                        <span class="hw-chip">look for <b>the Staircase</b></span>
+                    </div>
+                    <p class="hw-read">Heavy volume, high delivery, several consecutive elevated sessions.</p>
+                    <p>Surging volume with delivery above 70% is somebody taking real ownership, not day-trading.
+                       Combine that with a staircase row and you have found a position being built — the kind of
+                       move that is still going tomorrow.</p>
+                </div>
+
+                <div class="hw-recipe rev">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">3. The Lunch Raid</span>
+                        <span class="hw-when">12:45 – 14:00</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip">sort session <b>G</b> ↓</span>
+                        <span class="hw-chip">then check <b>H</b> and <b>I</b></span>
+                    </div>
+                    <p class="hw-read">Who was trading heavily while the market was asleep?</p>
+                    <p>The scan almost nobody runs. Sort the quietest session in the day and read the top five names.
+                       Size traded in dead hours is deliberate, and it very often shows up as an afternoon move.
+                       Check Session Momentum first — if the whole market was busy in G, ignore this.</p>
+                </div>
+
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">4. Breakout Confirmation</span>
+                        <span class="hw-when">Whenever you have a setup</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip">search the <b>stock name</b></span>
+                        <span class="hw-chip">read the <b>breakout session</b> cell</span>
+                    </div>
+                    <p class="hw-read">Did the half hour it broke out in carry real volume?</p>
+                    <p>The single most valuable 10 seconds you can spend before entering. Green in the breakout session
+                       means take the trade; red means it is a coin flip dressed up as a signal. Use this on every
+                       setup the <a href="https://breakingtrade.com/scanner-guide">Intraday Scanner</a> hands you.</p>
+                </div>
+
+                <div class="hw-recipe flat">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">5. Tomorrow's Watchlist</span>
+                        <span class="hw-when">15:10 – 15:30</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip">sort session <b>M</b> ↓</span>
+                        <span class="hw-chip">then <b>L</b></span>
+                        <span class="hw-chip">check <b>Del%</b></span>
+                    </div>
+                    <p class="hw-read">Who is paying up to own this overnight?</p>
+                    <p>Run it in the last twenty minutes, write down three names, and open them at 9:15 tomorrow.
+                       Closing-hour volume with high delivery is the clearest overnight-conviction footprint you can
+                       get without paying for order-flow data.</p>
+                </div>
+
+                <div class="hw-recipe bear">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">6. The Ghost List</span>
+                        <span class="hw-when">11:00 onwards</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Card</b> = Below Avg</span>
+                        <span class="hw-chip">sort <b>Chg%</b> ↓</span>
+                    </div>
+                    <p class="hw-read">Stocks up nicely on below-average volume.</p>
+                    <p>Your do-not-chase list — and a reversal shortlist. These moves have no support underneath
+                       them. Watch for the session where volume finally arrives: if it arrives with price turning down,
+                       the unwind can be quick.</p>
+                </div>
+
+                <div class="hw-recipe rev">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">7. Block Deal Radar</span>
+                        <span class="hw-when">Any time</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Card</b> = Volume Surge</span>
+                        <span class="hw-chip">sort <b>Surge×</b> ↓</span>
+                        <span class="hw-chip">look for <b>the Spike</b></span>
+                    </div>
+                    <p class="hw-read">One extreme cell with ordinary sessions on either side.</p>
+                    <p>Anything at 3x or more deserves a news check before a trade. The follow-through decides
+                       everything: sessions that stay elevated mean the market is repricing the stock; an immediate
+                       drop back to normal means the transaction is done and so is the move.</p>
+                </div>
+
+                <div class="hw-recipe bull">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">8. Opening Violence</span>
+                        <span class="hw-when">9:20 – 9:50</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip">sort session <b>O</b> ↓</span>
+                        <span class="hw-chip">then check <b>A</b> and <b>B</b></span>
+                    </div>
+                    <p class="hw-read">Which stocks were repriced hard in the first five minutes?</p>
+                    <p>A huge O with A and B staying elevated means the market genuinely re-rated the stock and is
+                       continuing to trade it. A huge O that dies in A was just overnight orders clearing —
+                       the excitement is already over.</p>
+                </div>
+
+                <div class="hw-recipe flat">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">9. Sector Sweep</span>
+                        <span class="hw-when">Any time</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>Search</b> = sector name</span>
+                        <span class="hw-chip">sort <b>Surge×</b> ↓</span>
+                    </div>
+                    <p class="hw-read">Is the whole sector being bought, or just one name?</p>
+                    <p>Four or five names in one sector all running above average is fund-level rotation, and rotation
+                       has much better follow-through than a single stock spiking. Trade the strongest for momentum or
+                       the laggard for catch-up.</p>
+                </div>
+
+                <div class="hw-recipe rev">
+                    <div class="hw-recipe-head">
+                        <span class="hw-recipe-name">10. Learn From Last Week</span>
+                        <span class="hw-when">After market</span>
+                    </div>
+                    <div class="hw-chips">
+                        <span class="hw-chip"><b>←</b> back a few days</span>
+                        <span class="hw-chip">sort <b>Surge×</b> ↓</span>
+                        <span class="hw-chip">then open the chart</span>
+                    </div>
+                    <p class="hw-read">What did a 3x session actually lead to?</p>
+                    <p>The fastest way to build real intuition. Walk back ten days, take the top surge each day, and see
+                       what the stock did over the next few hours. Ten days of your own observation beats any amount of
+                       theory about volume.</p>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- ══════════════ 9. TIME OF DAY ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Daily rhythm</div>
+                <h2><i class="fas fa-clock"></i>Your trading day, session by session</h2>
+                <p class="hw-lede">Volume has a natural shape: heavy at the open, dead at lunch, heavy again into the close. Knowing the shape is what lets you spot a break in it (all times IST).</p>
+            </div>
+            <div class="hw-clock">
+                <div class="hw-slot">
+                    <div class="hw-time">09:15 – 09:45 &nbsp;·&nbsp; O, A</div>
+                    <h3>Naturally the busiest — so demand more</h3>
+                    <p>Almost everything looks green early because the open is always heavy. Raise your bar: in these
+                       sessions, only <b>2x and above</b> is genuinely interesting. Sort O to see which stocks were
+                       repriced hardest at the bell.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">09:45 – 11:15 &nbsp;·&nbsp; B, C, D</div>
+                    <h3>The confirmation window</h3>
+                    <p>Breakouts happen here, and this is where volume earns its keep. Any level broken in B, C or D
+                       should have a green cell against it. This is also where staircase patterns first become visible.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">11:15 – 12:15 &nbsp;·&nbsp; E, F</div>
+                    <h3>The honest middle</h3>
+                    <p>No open-auction distortion, no lunch lull. Volume Factor is at its most meaningful here —
+                       whatever is green in E and F is green because someone chose to trade it.</p>
+                </div>
+                <div class="hw-slot key">
+                    <div class="hw-time">12:15 – 13:45 &nbsp;·&nbsp; G, H, I</div>
+                    <h3>The lunch lull — where the edge hides</h3>
+                    <p>These sessions are supposed to be dead, which is exactly why green here means so much.
+                       Run <i>The Lunch Raid</i>. Anyone moving size while the market is at its thinnest is doing it on
+                       purpose, and it frequently precedes the afternoon move.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">13:45 – 15:15 &nbsp;·&nbsp; J, K, L</div>
+                    <h3>Afternoon resolution</h3>
+                    <p>The day's real direction usually settles here. Volume returning in J and K behind the morning's
+                       direction confirms the trend; volume arriving <i>against</i> it is a warning that the move is
+                       being unwound.</p>
+                </div>
+                <div class="hw-slot">
+                    <div class="hw-time">15:15 – 15:30 &nbsp;·&nbsp; M</div>
+                    <h3>The tell for tomorrow</h3>
+                    <p>The closing session carries auction volume and end-of-day positioning. Sort M, note the names,
+                       and export the table — today's closing footprint is tomorrow's watchlist.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ 10. PAIRING ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">The combination that works</div>
+                <h2><i class="fas fa-link"></i>Use it with the Intraday Scanner</h2>
+            </div>
+            <div class="hw-punch">
+                <p><strong>These two screens answer different halves of the same question, and neither is complete alone.</strong></p>
+                <p>
+                    The <a href="https://breakingtrade.com/scanner-guide">Live Intraday Scanner</a> tells you <b>what is happening and where</b>
+                    — the stock gapped up, drove higher, is holding above value, a single print is forming.
+                    That is structure and direction.
+                </p>
+                <p>
+                    This screen tells you <b>whether anyone of size agrees</b>. Same stock, same half hour: green means
+                    the structure has money behind it, red means it is a story without a sponsor.
+                </p>
+                <p style="margin-bottom:0;">
+                    The workflow is simple and it is what experienced users actually do: <b>find the setup on the
+                    Intraday Scanner, confirm it here, then trade it.</b> Two tabs, ten extra seconds, and a large
+                    share of bad trades never get taken.
+                </p>
+            </div>
+        </section>
+
+        <!-- ══════════════ 11. HABITS ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Get good fast</div>
+                <h2><i class="fas fa-medal"></i>Habits that separate the users who profit</h2>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3 style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color=""><i class="fas fa-check-circle"></i>Do this</h3>
+                    <ul class="hw-list do">
+                        <li><b>Always read Chg% with the colour.</b> Volume is the size of the fight; price says who is winning.</li>
+                        <li><b>Judge the live session by pace, not value.</b> Ten minutes in, a 0.5x is running at roughly 1.5x.</li>
+                        <li><b>Prefer sustained green over one big cell.</b> Several elevated sessions beat a single 4x for tradeability.</li>
+                        <li><b>Check Del% before holding overnight.</b> Above 70% is ownership; under 30% is churn that can evaporate.</li>
+                        <li><b>Glance at Session Momentum first.</b> If the whole market surged in that session, one stock's green cell means little.</li>
+                        <li><b>Backtest with the date arrows.</b> Ten past days of watching what surges led to is worth more than any rule you read.</li>
+                    </ul>
+                </div>
+                <div class="hw-card">
+                    <h3 style="color: rgb(248, 113, 113); --darkreader-inline-color: var(--darkreader-text-f87171, #f86b6b);" data-darkreader-inline-color=""><i class="fas fa-times-circle"></i>Avoid this</h3>
+                    <ul class="hw-list dont">
+                        <li><b>Treating green as "buy".</b> Heavy volume with price falling is distribution, not opportunity.</li>
+                        <li><b>Panicking at a low live-session number.</b> It is incomplete, not weak.</li>
+                        <li><b>Getting excited by the open.</b> Sessions O, A and B are always busy; 1.3x there is nothing.</li>
+                        <li><b>Chasing a Ghost Rally.</b> Price up, row all red — the most reliable way to lose money here.</li>
+                        <li><b>Ignoring liquidity.</b> A 5x surge on a stock with a tiny 7-day average is a position you cannot exit.</li>
+                        <li><b>Trading a 3x spike before reading the news.</b> You are usually the last to know why it happened.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ FURTHER READING ══════════════ -->
+        <section class="hw-sec">
+            <div class="hw-sec-head">
+                <div class="hw-kicker">Further reading</div>
+                <h2><i class="fas fa-book-open"></i>Where to go next</h2>
+                <p class="hw-lede">This page is the operating manual. These go wider and deeper.</p>
+            </div>
+            <div class="hw-grid-2">
+                <div class="hw-card">
+                    <h3><i class="fas fa-lightbulb" style="color: rgb(251, 191, 36); --darkreader-inline-color: var(--darkreader-text-fbbf24, #fbc434);" data-darkreader-inline-color=""></i>Why the Volume Scanner exists</h3>
+                    <p><a href="https://breakingtrade.com/blog/volume-scanner-complete-guide">The Volume Scanner Secret: how to see institutional
+                        footprints before the big move</a> — the background story on why absolute volume numbers
+                        are useless and session comparison changes everything.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-search" style="color: rgb(129, 140, 248); --darkreader-inline-color: var(--darkreader-text-818cf8, #76aaf7);" data-darkreader-inline-color=""></i>The other half of the trade</h3>
+                    <p><a href="https://breakingtrade.com/scanner-guide">Live Intraday Scanner guide</a> — every Market Profile column,
+                        how to stack filters into your own scans, and 13 ready-made setups. Find the structure there,
+                        confirm the money here.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-book" style="color: rgb(52, 211, 153); --darkreader-inline-color: var(--darkreader-text-34d399, #47d7a3);" data-darkreader-inline-color=""></i>The vocabulary</h3>
+                    <p><a href="https://breakingtrade.com/what-is-market-profile">What is Market Profile</a> and the
+                        <a href="https://breakingtrade.com/Home.jsp#/MPGlossary">Market Profile Glossary</a> — TPO sessions, Value Area,
+                        POC and Initial Balance from scratch. The session letters on this screen are the same ones.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-chart-area" style="color: rgb(167, 139, 250); --darkreader-inline-color: var(--darkreader-text-a78bfa, #9c7df9);" data-darkreader-inline-color=""></i>Read the chart properly</h3>
+                    <p><a href="https://breakingtrade.com/mp-charts-guide">MP Charts guide</a> — volume tells you how much;
+                        the profile tells you where. Value area, POC, TPO size, the Volume Profile layer,
+                        naked VPOCs and composites.</p>
+                </div>
+                <div class="hw-card">
+                    <h3><i class="fas fa-chart-bar" style="color: rgb(56, 189, 248); --darkreader-inline-color: var(--darkreader-text-38bdf8, #42c0f8);" data-darkreader-inline-color=""></i>The scanner itself</h3>
+                    <p><a href="https://breakingtrade.com/live-volume-scanner">Live Volume Scanner overview</a> — what it covers, how often
+                        it refreshes, and how it fits with the rest of the platform.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ CTA ══════════════ -->
+        <section class="hw-cta">
+            <h2>You can now read order flow off a single screen</h2>
+            <p>
+                Without logging in you are looking at the <b>previous session's data</b> — enough to learn the
+                colour scale, practise the row shapes and walk back through history. The live heatmap, refreshing
+                through the day with surge cards, session momentum and one-click Market Profile charts, is what you
+                use to trade.
+            </p>
+            <div class="hw-btns">
+                <a class="hw-btn primary" href="https://breakingtrade.com/pricing"><i class="fas fa-bolt"></i> See Plans &amp; Start Free Trial</a>
+                <a class="hw-btn ghost" href="https://breakingtrade.com/Home.jsp#/volumeScanner"><i class="fas fa-chart-bar"></i> Back to the Volume Scanner</a>
+                <a class="hw-btn ghost" href="https://breakingtrade.com/scanner-guide"><i class="fas fa-search"></i> Intraday Scanner Guide</a>
+            </div>
+            <p class="hw-note">
+                Volume Factor compares each 30-minute session against its own recent average. The scanner is an
+                analysis and education tool: it measures participation, it does not predict outcomes or give
+                investment advice. Heavy volume can precede a move in either direction, and every pattern on this page
+                fails sometimes — position size and stop-losses are your responsibility. Please trade only with
+                capital you can afford to risk.
+            </p>
+        </section>
+
+    </div>
+</div>
+
+<footer class="bt-foot">
+    <div>
+        <a href="https://breakingtrade.com/live-volume-scanner">Live Volume Scanner</a>
+        <a href="https://breakingtrade.com/volume-scanner-guide">Volume Scanner Guide</a>
+        <a href="https://breakingtrade.com/scanner-guide">Intraday Scanner Guide</a>
+        <a href="https://breakingtrade.com/what-is-market-profile">What is Market Profile</a>
+        <a href="https://breakingtrade.com/pricing">Pricing</a>
+        <a href="https://breakingtrade.com/blog">Blog</a>
+    </div>
+    <p>© BreakingTrade.com | India's First Live Market Profile Platform</p>
+</footer>
+
+
+</body></html>

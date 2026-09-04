@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="starGlow"><feGaussianBlur stdDeviation="6" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- Price axis -->
+  <line x1="150" y1="50" x2="150" y2="580" stroke="#475569" stroke-width="1.5"/>
+  <!-- Full Market Profile with single print area highlighted -->
+  <g filter="url(#glow)">
+    <!-- Dense area top -->
+    <rect x="170" y="80" width="200" height="14" rx="3" fill="#818CF8" opacity="0.6"/>
+    <rect x="170" y="100" width="280" height="14" rx="3" fill="#818CF8" opacity="0.7"/>
+    <rect x="170" y="120" width="360" height="14" rx="3" fill="#818CF8" opacity="0.8"/>
+    <rect x="170" y="140" width="420" height="14" rx="3" fill="#22D3EE" opacity="0.85"/>
+    <rect x="170" y="160" width="460" height="14" rx="3" fill="#22D3EE" opacity="0.95"/>
+    <rect x="170" y="180" width="420" height="14" rx="3" fill="#22D3EE" opacity="0.85"/>
+    <rect x="170" y="200" width="360" height="14" rx="3" fill="#818CF8" opacity="0.8"/>
+    <rect x="170" y="220" width="280" height="14" rx="3" fill="#818CF8" opacity="0.7"/>
+  </g>
+  <!-- SINGLE PRINT AREA — highlighted -->
+  <rect x="155" y="242" width="660" height="120" rx="0" fill="#f59e0b" opacity="0.04" stroke="#f59e0b" stroke-width="1" stroke-dasharray="6,4"/>
+  <g filter="url(#starGlow)">
+    <rect x="170" y="250" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.8"/>
+    <rect x="170" y="270" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.8"/>
+    <rect x="170" y="290" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.8"/>
+    <rect x="170" y="310" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.8"/>
+    <rect x="170" y="330" width="40" height="14" rx="3" fill="#f59e0b" opacity="0.8"/>
+  </g>
+  <!-- Star/footprint markers on single prints -->
+  <g fill="#fbbf24" opacity="0.6">
+    <circle cx="225" cy="257" r="3"/><circle cx="225" cy="277" r="3"/><circle cx="225" cy="297" r="3"/>
+    <circle cx="225" cy="317" r="3"/><circle cx="225" cy="337" r="3"/>
+  </g>
+  <!-- Dense area bottom -->
+  <g filter="url(#glow)">
+    <rect x="170" y="360" width="280" height="14" rx="3" fill="#818CF8" opacity="0.7"/>
+    <rect x="170" y="380" width="360" height="14" rx="3" fill="#818CF8" opacity="0.8"/>
+    <rect x="170" y="400" width="440" height="14" rx="3" fill="#22D3EE" opacity="0.9"/>
+    <rect x="170" y="420" width="480" height="14" rx="3" fill="#22D3EE"/>
+    <rect x="170" y="440" width="440" height="14" rx="3" fill="#22D3EE" opacity="0.9"/>
+    <rect x="170" y="460" width="360" height="14" rx="3" fill="#818CF8" opacity="0.8"/>
+    <rect x="170" y="480" width="280" height="14" rx="3" fill="#818CF8" opacity="0.7"/>
+    <rect x="170" y="500" width="200" height="14" rx="3" fill="#818CF8" opacity="0.6"/>
+  </g>
+  <!-- Annotation: Single Prints -->
+  <g transform="translate(700, 240)">
+    <line x1="0" y1="30" x2="50" y2="30" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="60" y="20" fill="#f59e0b" font-family="system-ui" font-size="16" font-weight="700">Single Prints</text>
+    <text x="60" y="42" fill="#94a3b8" font-family="system-ui" font-size="12">Only 1 TPO at each level</text>
+    <text x="60" y="62" fill="#94a3b8" font-family="system-ui" font-size="12">= Aggressive institutional move</text>
+    <text x="60" y="82" fill="#94a3b8" font-family="system-ui" font-size="12">= Future support/resistance</text>
+  </g>
+  <!-- Magnifying glass over single prints -->
+  <g transform="translate(230, 260)" opacity="0.4">
+    <circle cx="0" cy="0" r="50" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <line x1="35" y1="35" x2="65" y2="65" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <!-- Right panel: Why they matter -->
+  <g transform="translate(780, 380)">
+    <rect width="360" height="200" rx="14" fill="#1e293b" opacity="0.6" stroke="#334155" stroke-width="1"/>
+    <text x="180" y="35" fill="#f1f5f9" font-family="system-ui" font-size="14" font-weight="700" text-anchor="middle">Why Single Prints Matter</text>
+    <line x1="20" y1="50" x2="340" y2="50" stroke="#334155" stroke-width="1"/>
+    <g font-family="system-ui" font-size="12">
+      <circle cx="30" cy="78" r="4" fill="#f59e0b"/><text x="42" y="82" fill="#94a3b8">Price moved too fast to revisit</text>
+      <circle cx="30" cy="108" r="4" fill="#22D3EE"/><text x="42" y="112" fill="#94a3b8">Acts as support/resistance later</text>
+      <circle cx="30" cy="138" r="4" fill="#38ef7d"/><text x="42" y="142" fill="#94a3b8">Filled single prints = trend over</text>
+      <circle cx="30" cy="168" r="4" fill="#818CF8"/><text x="42" y="172" fill="#94a3b8">Institutional footprint visible</text>
+    </g>
+  </g>
+</svg>

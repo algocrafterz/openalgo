@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="bgGlow"><feGaussianBlur stdDeviation="30"/></filter>
+    <radialGradient id="pocGrad"><stop offset="0%" stop-color="#22D3EE"/><stop offset="100%" stop-color="#22D3EE" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- Background glows for 3 elements -->
+  <circle cx="250" cy="315" r="150" fill="#818CF8" opacity="0.06" filter="url(#bgGlow)"/>
+  <circle cx="600" cy="315" r="180" fill="#22D3EE" opacity="0.06" filter="url(#bgGlow)"/>
+  <circle cx="950" cy="315" r="150" fill="#f59e0b" opacity="0.06" filter="url(#bgGlow)"/>
+  <!-- POC Section -->
+  <g transform="translate(100, 100)">
+    <rect width="280" height="430" rx="20" fill="#1e293b" opacity="0.5" stroke="#818CF8" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="140" y="45" fill="#818CF8" font-family="system-ui" font-size="13" font-weight="600" text-anchor="middle" letter-spacing="2">POC</text>
+    <text x="140" y="75" fill="#f1f5f9" font-family="system-ui" font-size="18" font-weight="700" text-anchor="middle">Point of Control</text>
+    <!-- Gravity bowl visualization -->
+    <path d="M40,200 Q140,320 240,200" fill="none" stroke="#818CF8" stroke-width="2" opacity="0.5"/>
+    <path d="M60,210 Q140,300 220,210" fill="none" stroke="#818CF8" stroke-width="1.5" opacity="0.3"/>
+    <!-- Marble at center -->
+    <circle cx="140" cy="260" r="16" fill="#818CF8" filter="url(#glow)">
+      <animate attributeName="cy" values="260;250;260" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="140" cy="260" r="8" fill="#c7d2fe"/>
+    <!-- Arrows pointing to center -->
+    <path d="M60,180 Q100,220 130,250" fill="none" stroke="#818CF8" stroke-width="1.5" opacity="0.4" stroke-dasharray="4,3"/>
+    <path d="M220,180 Q180,220 150,250" fill="none" stroke="#818CF8" stroke-width="1.5" opacity="0.4" stroke-dasharray="4,3"/>
+    <text x="140" y="330" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">Market's center of gravity</text>
+    <text x="140" y="350" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">Most traded price level</text>
+    <!-- Price indicator -->
+    <rect x="50" y="380" width="180" height="32" rx="8" fill="#818CF8" opacity="0.15"/>
+    <text x="140" y="401" fill="#818CF8" font-family="monospace" font-size="14" font-weight="600" text-anchor="middle">₹ 22,450</text>
+  </g>
+  <!-- Value Area Section -->
+  <g transform="translate(460, 100)">
+    <rect width="280" height="430" rx="20" fill="#1e293b" opacity="0.5" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="140" y="45" fill="#22D3EE" font-family="system-ui" font-size="13" font-weight="600" text-anchor="middle" letter-spacing="2">VALUE AREA</text>
+    <text x="140" y="75" fill="#f1f5f9" font-family="system-ui" font-size="18" font-weight="700" text-anchor="middle">VAH / VAL</text>
+    <!-- Profile with VA highlighted -->
+    <g opacity="0.6">
+      <rect x="90" y="120" width="30" height="14" rx="2" fill="#475569"/>
+      <rect x="90" y="140" width="60" height="14" rx="2" fill="#475569"/>
+      <rect x="90" y="160" width="100" height="14" rx="2" fill="#22D3EE" opacity="0.4"/>
+      <rect x="90" y="180" width="140" height="14" rx="2" fill="#22D3EE" opacity="0.6"/>
+      <rect x="90" y="200" width="160" height="14" rx="2" fill="#22D3EE" opacity="0.8"/>
+      <rect x="90" y="220" width="170" height="14" rx="2" fill="#22D3EE" opacity="0.9"/>
+      <rect x="90" y="240" width="160" height="14" rx="2" fill="#22D3EE" opacity="0.8"/>
+      <rect x="90" y="260" width="140" height="14" rx="2" fill="#22D3EE" opacity="0.6"/>
+      <rect x="90" y="280" width="100" height="14" rx="2" fill="#22D3EE" opacity="0.4"/>
+      <rect x="90" y="300" width="60" height="14" rx="2" fill="#475569"/>
+      <rect x="90" y="320" width="30" height="14" rx="2" fill="#475569"/>
+    </g>
+    <!-- VA bracket -->
+    <line x1="50" y1="158" x2="50" y2="292" stroke="#22D3EE" stroke-width="2"/>
+    <line x1="45" y1="158" x2="55" y2="158" stroke="#22D3EE" stroke-width="2"/>
+    <line x1="45" y1="292" x2="55" y2="292" stroke="#22D3EE" stroke-width="2"/>
+    <text x="38" y="230" fill="#22D3EE" font-family="system-ui" font-size="14" font-weight="700" text-anchor="middle" transform="rotate(-90,38,230)">70%</text>
+    <text x="140" y="358" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">70% of trading activity</text>
+    <text x="140" y="378" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">The market's comfort zone</text>
+    <rect x="30" y="390" width="100" height="28" rx="6" fill="#22D3EE" opacity="0.12"/>
+    <text x="80" y="409" fill="#22D3EE" font-family="monospace" font-size="11" font-weight="600" text-anchor="middle">VAH ₹22,510</text>
+    <rect x="150" y="390" width="100" height="28" rx="6" fill="#22D3EE" opacity="0.12"/>
+    <text x="200" y="409" fill="#22D3EE" font-family="monospace" font-size="11" font-weight="600" text-anchor="middle">VAL ₹22,380</text>
+  </g>
+  <!-- Initial Balance Section -->
+  <g transform="translate(820, 100)">
+    <rect width="280" height="430" rx="20" fill="#1e293b" opacity="0.5" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.3"/>
+    <text x="140" y="45" fill="#f59e0b" font-family="system-ui" font-size="13" font-weight="600" text-anchor="middle" letter-spacing="2">INITIAL BALANCE</text>
+    <text x="140" y="75" fill="#f1f5f9" font-family="system-ui" font-size="18" font-weight="700" text-anchor="middle">First Hour Range</text>
+    <!-- IB range visualization -->
+    <line x1="40" y1="160" x2="240" y2="160" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="6,4"/>
+    <line x1="40" y1="280" x2="240" y2="280" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="6,4"/>
+    <rect x="40" y="160" width="200" height="120" rx="0" fill="#f59e0b" opacity="0.08"/>
+    <!-- Price action inside IB -->
+    <polyline points="60,240 80,200 100,220 120,180 140,200 160,190 180,210 200,175 220,195" fill="none" stroke="#fbbf24" stroke-width="2" opacity="0.7"/>
+    <!-- Breakout arrows -->
+    <path d="M140,155 L140,120 L135,130 M140,120 L145,130" fill="none" stroke="#38ef7d" stroke-width="2" opacity="0.6"/>
+    <path d="M140,285 L140,320 L135,310 M140,320 L145,310" fill="none" stroke="#f87171" stroke-width="2" opacity="0.6"/>
+    <text x="245" y="165" fill="#f59e0b" font-family="monospace" font-size="10">IB High</text>
+    <text x="245" y="285" fill="#f59e0b" font-family="monospace" font-size="10">IB Low</text>
+    <!-- Clock icon -->
+    <circle cx="140" cy="355" r="25" fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.5"/>
+    <line x1="140" y1="355" x2="140" y2="340" stroke="#f59e0b" stroke-width="2" opacity="0.7"/>
+    <line x1="140" y1="355" x2="152" y2="360" stroke="#f59e0b" stroke-width="2" opacity="0.7"/>
+    <text x="140" y="405" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">9:15 AM – 10:15 AM</text>
+    <text x="140" y="425" fill="#94a3b8" font-family="system-ui" font-size="12" text-anchor="middle">The day's reference range</text>
+  </g>
+</svg>
