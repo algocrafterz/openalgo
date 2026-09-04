@@ -211,9 +211,19 @@ def _pick_scanner_table(tables: list) -> pd.DataFrame:
     head = _canonical_head(best["head"])
     body = [row for row in best["body"] if len(row) == len(head)]
     if not body:
+        # DataTables renders "No matching records found" as ONE cell spanning every column, so
+        # an empty grid and a genuinely malformed one look identical to a width check. Telling
+        # them apart matters: the first means the page lost its data (stale render, lapsed
+        # session), the second means the vendor changed the table.
+        widths = sorted({len(row) for row in best["body"]})
+        if widths in ([1], []):
+            raise FetchError(
+                f"The scanner grid rendered no data rows (header has {len(head)} columns). "
+                "The page is stale or the session lapsed."
+            )
         raise FetchError(
             f"Found the scanner table ({best_hits} known columns) but no row matched its "
-            f"{len(head)} columns - the grid was probably still rendering."
+            f"{len(head)} columns - row widths seen: {widths}."
         )
     return pd.DataFrame(body, columns=head)
 
@@ -422,7 +432,12 @@ class ScannerSession:
 
         url = BASE_URL + SCANNER_ROUTES[scanner]
         page = self._page
+        # A goto() to a URL differing only in its hash does NOT reload a single-page app, so a
+        # page held open all day keeps drifting further from a clean boot. Observed live: polls
+        # succeeded at 11:01 and 11:16 then failed every 15 minutes after, the grid rendering a
+        # single "no records" row. Reload explicitly so every poll starts from a fresh render.
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        page.reload(timeout=60000, wait_until="domcontentloaded")
         page.wait_for_timeout(self.settle_ms)
 
         self._ensure_signed_in(url)

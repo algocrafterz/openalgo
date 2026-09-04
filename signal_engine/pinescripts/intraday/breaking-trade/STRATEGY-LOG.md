@@ -96,6 +96,27 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-04 12:45 — Swing holding (1–15 days) tested: the signal does not survive the first day
+Held the BTST selection for 1, 2, 3 and 5 sessions. Excess return over the market **decays and
+then reverses**: +0.17% at one day, +0.15% at two, −0.24% at three, −0.42% at five (no result
+statistically meaningful, all abs(t) < 0.6). Mechanically sensible — the selection is built from
+one day's closing auction, and that is information with a roughly one-session shelf life.
+
+Also tested whether names *repeating* on the list day after day (a multi-day accumulation read,
+which would have a longer shelf life) do better. There is no population to test: the list
+averages 4.3 names and only **0.7** of them carry over to the next day. The selection is almost
+entirely fresh each session, so there is nothing persistent to hold.
+
+Conclusion: this data does not support swing trading as it stands. A 1–15 day hold would need a
+different input with a longer half-life — multi-day delivery trends rather than one day's close.
+Note the sample only spans 14 sessions, so holds beyond 5 days cannot be tested at all yet.
+
+### 2026-09-04 12:35 — Poller was silently failing; stale-page bug fixed
+Polls succeeded at 11:01 and 11:16 then failed every 15 minutes until 12:35. Cause: `goto()` to a
+URL differing only by its hash does not reload a single-page app, so the page drifted from a
+clean boot and the grid eventually rendered a single "no records" row. Now every poll forces an
+explicit reload, and an empty grid reports itself as such instead of as a malformed table.
+
 ### 2026-09-04 11:35 — Missing data is informative; scoring beats gating
 Measured completeness of every column (open type 18.8%, tail 44.6%, single print 11.4%) and
 tested whether absence carries information. It does, strongly — see the table above. Concluded
