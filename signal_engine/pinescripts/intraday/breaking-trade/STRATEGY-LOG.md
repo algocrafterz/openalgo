@@ -96,6 +96,54 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-05 23:55 — Close report for Friday 04-Sep. The poller died and status lied.
+
+**Collection failed.** Only three polls survived (10:57, 11:01, 11:16). The 14:50 and 15:05 BTST
+reads never happened, so Friday produced no live BTST list.
+
+Two compounding faults, both operational rather than strategic:
+1. `pkill -f "breakingtrade --watch"` matches the shell running that very command, so the
+   restart killed itself before starting the replacement (it exited 144, which was noticed and
+   dismissed).
+2. `pgrep -f "breakingtrade --watch"` matches its own command line too, so every status check
+   afterwards reported "ALIVE" while nothing was running.
+
+Fixed with `poller.sh` — start/stop/status tracked by PID file, verified against
+`/proc/<pid>/cmdline`, detached with `setsid` so it survives the launching shell. Status was
+confirmed to report NOT RUNNING when nothing runs before being trusted.
+
+**The honest intraday sample: 5 signals, 2 correct.**
+
+| First seen | Scan | Dir | Symbol | Move to close | Right? |
+|---|---|---|---|---|---|
+| 10:57 | Gap-Down Rescue | up | KEI | -0.80% | no |
+| 10:57 | Live Print Down | down | UNITDSPR | +0.05% | no |
+| 11:01 | Live Print Up | up | VOLTAS | -1.01% | no |
+| 11:16 | Live Print Down | down | INDHOTEL | -0.17% | **yes** |
+| 11:16 | Neutral Day Resolution Up | up | HYUNDAI | +0.96% | **yes** |
+
+n=5 proves nothing either way. Market context: 90 of 220 names green, mean -0.11%.
+
+A trap worth recording: scan_hits also holds rows stamped 15:30 from the EOD backfill, and
+scoring those against the 15:30 close gives a flattering 17-of-25. That number is **circular** -
+those signals were derived from the closing state and then measured to that same close. Only
+signals detected *before* the move can be scored. This is the third look-ahead trap found in
+this project; assume more exist.
+
+### 2026-09-05 23:40 — Both BTST lists confirmed working; the M version is not tradeable
+A list using TPO through the M session *can* be produced (`executable=False`) but only exists
+after 15:30, by which time F&O continuous trading has been shut for 15 minutes. Friday's two
+lists, from the same snapshot:
+
+| | Names |
+|---|---|
+| Executable (K only, decide 14:45) | SWIGGY, BAJFINANCE, AXISBANK, ULTRACEMCO, GRASIM, GMRAIRPORT |
+| Full TPO (K+L+M, after 15:30) | SWIGGY, PFC, NTPC, AXISBANK, GRASIM |
+
+Three names overlap. The executable version *adds* BAJFINANCE, ULTRACEMCO and GMRAIRPORT - names
+the full version silently drops because they carry no L/M data at all. So the tradeable list is
+not a degraded copy of the full one; it is differently composed, and covers more of the universe.
+
 ### 2026-09-04 13:15 — BTST was not executable; rebuilt around the 15:15 cutoff
 **The most important correction so far.** The list needed the L (14:45–15:15) and M (15:15–15:30)
 volume sessions, which only exist at or after the close — so the decision could never be acted
