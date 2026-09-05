@@ -96,6 +96,36 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-06 00:15 — Collector hardened; alerts built; intraday backfill ruled out
+
+**Friday audit: 25 of 27 scheduled polls missed (93%).** New `--audit [date]` command reports
+scheduled-vs-collected for any day, so this can never again be discovered days later by accident.
+
+Collector hardening:
+- Every attempt logged to `signal_engine/logs/breakingtrade_poller.log` (rotating weekly, kept 8
+  weeks) with duration, row counts and full tracebacks.
+- **Catch-up on restart**: a scheduled mark is still taken up to 4 minutes late if nothing was
+  stored for it, so a bounced process resumes its slot instead of skipping it. On startup the
+  poller reports how many polls it already has for the day.
+- **Browser rebuilt on failure** - a dead session used to poison every later poll.
+- **Heartbeat**: no successful poll for 35 minutes during market hours raises an alert instead of
+  failing silently, which is exactly how Friday was lost.
+- Nothing in the loop can be fatal; failures are logged and the next mark is still attempted.
+
+Alerts (`alerts.py`): intraday transitions (only names ENTERING a scan) and the BTST list, sent
+via the Telegram **Bot HTTP API** rather than signal_engine's Telethon client - the poller is a
+separate process and sharing a Telethon session file risks corrupting it. **Every alert is
+written to an `alerts` table whether or not delivery succeeds**, because the record is the
+experiment and delivery is only a convenience. Needs `BREAKINGTRADE_BOT_TOKEN` and
+`BREAKINGTRADE_CHAT_ID` in `.env`; without them alerts are still recorded.
+
+**Intraday backfill is impossible - confirmed, not assumed.** MP Replay steps through TPO periods
+for ONE symbol on an HTML `<canvas>`; it is a chart-reading trainer, not the cross-sectional
+scanner table, and canvas pixels cannot be scraped. Day navigation yields exactly one snapshot
+per day, at the close. **Intraday data is use-it-or-lose-it**, which is what makes collector
+reliability the single most important component. End-of-day data remains fully backfillable
+(`--backfill N`), so a future outage costs the intraday sample but never the EOD history.
+
 ### 2026-09-05 23:55 — Close report for Friday 04-Sep. The poller died and status lied.
 
 **Collection failed.** Only three polls survived (10:57, 11:01, 11:16). The 14:50 and 15:05 BTST

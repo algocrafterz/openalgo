@@ -20,6 +20,8 @@ manual pre-trade research step - review the output, do not wire it to auto-fire 
 from __future__ import annotations
 
 import argparse
+import os
+import sqlite3
 import sys
 from datetime import time
 from time import sleep
@@ -180,7 +182,7 @@ def _fetch_and_report(
     store_it: bool, want_volume: bool, debug_dir, btst_mode: bool = False, session=None
 ) -> None:
     """One poll: fetch, store, run the scans, and report only what is NEW since last poll."""
-    from signal_engine.analysis.breakingtrade import fetcher, store
+    from signal_engine.analysis.breakingtrade import alerts, fetcher, store
 
     if session is None:
         with fetcher.ScannerSession(debug_dir=debug_dir) as owned:
@@ -217,6 +219,19 @@ def _fetch_and_report(
         print()
         _print_btst(mp_snapshot.frame, vol_snapshot.frame if vol_snapshot else None, captured_at)
         return
+
+    # The BTST decision window (14:50/15:05) alerts the carry list; every other poll alerts only
+    # names that ENTERED a scan on this poll.
+    if store_it and vol_snapshot is not None and captured_at.time() >= time(14, 45):
+        from signal_engine.analysis.breakingtrade import btst
+
+        try:
+            watchlist = btst.candidates(mp_snapshot.frame, vol_snapshot.frame)
+            alerts.alert_btst(watchlist, captured_at)
+        except Exception as exc:
+            print(f"  BTST alert failed: {type(exc).__name__}: {exc}")
+    elif store_it and new_by_scan:
+        alerts.alert_transitions(new_by_scan, captured_at, mp_snapshot.frame)
 
     for result in results:
         if result.matches.empty:
@@ -271,36 +286,162 @@ def _backfill(args) -> int:
     return 0
 
 
-def _watch(args) -> int:
-    """Poll on the documented schedule until interrupted, on ONE browser for the whole day."""
+LOG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "logs",
+    "breakingtrade_poller.log",
+)
+# How long a gap during market hours counts as "something is wrong" rather than "between polls".
+HEARTBEAT_STALE_MINUTES = 35
+# A poll may still be taken this many minutes after its scheduled mark - covers a restart that
+# lands just after a due time, so a bounced process does not silently skip the slot.
+CATCH_UP_GRACE_MINUTES = 4
+
+
+def _setup_logging():
+    """File logging with rotation, so a failure at 11:31 is still diagnosable next week."""
+    from loguru import logger
+
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    logger.remove()
+    fmt = "{time:YYYY-MM-DD HH:mm:ss} | {level: <7} | {message}"
+    logger.add(sys.stderr, level="INFO", format=fmt)
+    logger.add(LOG_PATH, level="DEBUG", format=fmt, rotation="1 week", retention="8 weeks")
+    return logger
+
+
+def _due_marks(day) -> list:
+    """Every scheduled poll time for one day, as datetimes."""
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    marks, cursor = [], _dt.combine(day, time(9, 0))
+    end = _dt.combine(day, time(15, 40))
+    while cursor < end:
+        if is_due(cursor.time()):
+            marks.append(cursor)
+        cursor += _td(minutes=1)
+    return marks
+
+
+def _stored_polls(day) -> set:
+    from signal_engine.analysis.breakingtrade import store
+
+    with sqlite3.connect(store._DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT captured_at FROM snapshots WHERE captured_at LIKE ? AND kind = ?",
+            (f"{day:%Y-%m-%d}%", "market_profile"),
+        ).fetchall()
+    return {r[0][11:16] for r in rows}
+
+
+def _audit(args) -> int:
+    """Did the poller actually collect what the schedule promised?"""
     from datetime import datetime as _dt
 
-    from signal_engine.analysis.breakingtrade import fetcher
+    day = _dt.strptime(args.audit, "%Y-%m-%d").date() if args.audit else _dt.today().date()
+    due = _due_marks(day)
+    got = _stored_polls(day)
+    missed = [m for m in due if f"{m:%H:%M}" not in got]
 
-    print("watching on this schedule (Ctrl-C to stop):")
-    for start, end, minutes in POLL_WINDOWS:
-        marks = ", ".join(f":{m:02d}" for m in minutes)
-        print(f"  {start:%H:%M}-{end:%H:%M} on {marks}")
+    print(f"COLLECTION AUDIT for {day}")
+    print(f"  scheduled : {len(due)}")
+    print(f"  collected : {len(due) - len(missed)}")
     print(
-        f"  volume scanner only on {VOLUME_FETCH_MINUTES} past the hour "
-        "(its buckets are half-hourly, so fetching it more often reads the same numbers)"
+        f"  missed    : {len(missed)}" + (f"  ({len(missed) / len(due) * 100:.0f}%)" if due else "")
     )
+    if missed:
+        print("  missed at : " + ", ".join(f"{m:%H:%M}" for m in missed[:20]))
+        print(f"  log       : {LOG_PATH}")
+    return 0 if not missed else 1
 
-    last_polled = None
-    with fetcher.ScannerSession(debug_dir=args.debug_dir) as session:
+
+def _watch(args) -> int:
+    """Poll on the documented schedule until interrupted, on ONE browser for the whole day.
+
+    Hardened after 2026-09-04, when 25 of 27 scheduled polls were lost and nothing said so:
+      - every attempt is logged to file, with duration and row counts
+      - a failed poll is retried by the fetcher, then logged and skipped, never fatal
+      - a restart CATCHES UP a mark it landed just after, instead of skipping the slot
+      - the browser is rebuilt if it dies, so one bad session does not end the day
+      - a stale heartbeat during market hours raises an alert rather than failing silently
+    """
+    from datetime import datetime as _dt
+
+    from signal_engine.analysis.breakingtrade import alerts, fetcher
+
+    logger = _setup_logging()
+    logger.info("poller starting; schedule:")
+    for start_t, end_t, minutes in POLL_WINDOWS:
+        logger.info(f"  {start_t:%H:%M}-{end_t:%H:%M} on {', '.join(f':{m:02d}' for m in minutes)}")
+
+    already = _stored_polls(_dt.today().date())
+    if already:
+        logger.info(f"resuming - {len(already)} polls already stored today: {sorted(already)}")
+
+    last_success = None
+    last_heartbeat_alert = None
+    session = None
+
+    try:
         while True:
             now = _dt.now()
-            marker = (now.hour, now.minute)
+            current = now.time()
 
-            if is_due(now.time()) and marker != last_polled:
-                last_polled = marker
-                want_volume = args.volume and now.minute in VOLUME_FETCH_MINUTES
+            # A mark is due if it is this minute, or was up to a few minutes ago and nothing was
+            # stored for it - which is what makes a restart resume rather than skip.
+            pending = None
+            for mark in _due_marks(now.date()):
+                age = (now - mark).total_seconds() / 60
+                if 0 <= age <= CATCH_UP_GRACE_MINUTES and f"{mark:%H:%M}" not in _stored_polls(
+                    now.date()
+                ):
+                    pending = mark
+                    break
+
+            if pending is not None:
+                if session is None:
+                    logger.info("opening browser session")
+                    session = fetcher.ScannerSession(debug_dir=args.debug_dir).__enter__()
+
+                want_volume = args.volume and pending.minute in VOLUME_FETCH_MINUTES
+                started = _dt.now()
                 try:
                     _fetch_and_report(args.store, want_volume, args.debug_dir, session=session)
+                    took = (_dt.now() - started).total_seconds()
+                    last_success = _dt.now()
+                    logger.info(f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume})")
                 except Exception as exc:
-                    # One bad poll (session lapse, slow render) must not end the day's watch.
-                    print(f"  poll failed at {now:%H:%M}: {type(exc).__name__}: {exc}")
+                    logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
+                    # A dead browser poisons every later poll, so drop it and rebuild next time.
+                    try:
+                        if session is not None:
+                            session.__exit__(None, None, None)
+                    except Exception:
+                        logger.warning("could not close the browser session cleanly")
+                    session = None
+
+            # Heartbeat: silence during market hours is the failure mode that cost 04-Sep.
+            if time(9, 20) <= current <= time(15, 15) and last_success is not None:
+                stale = (_dt.now() - last_success).total_seconds() / 60
+                if stale > HEARTBEAT_STALE_MINUTES and (
+                    last_heartbeat_alert is None
+                    or (_dt.now() - last_heartbeat_alert).total_seconds() > 3600
+                ):
+                    logger.error(f"no successful poll for {stale:.0f} minutes")
+                    alerts.alert_health(f"no successful poll for {stale:.0f} minutes")
+                    last_heartbeat_alert = _dt.now()
+
             sleep(20)
+    except KeyboardInterrupt:
+        logger.info("poller stopped by user")
+        return 0
+    finally:
+        if session is not None:
+            try:
+                session.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 def main() -> int:
@@ -334,6 +475,14 @@ def main() -> int:
     )
     parser.add_argument("--debug-dir", default=None, help="Dump page HTML+screenshot on failure")
     parser.add_argument(
+        "--audit",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Report scheduled vs collected polls for a day (default today)",
+    )
+    parser.add_argument(
         "--backfill",
         type=int,
         default=0,
@@ -356,6 +505,9 @@ def main() -> int:
         help="Closing-hour accumulation watchlist for the next session (needs a volume snapshot)",
     )
     args = parser.parse_args()
+
+    if args.audit is not None:
+        return _audit(args)
 
     if args.backfill:
         return _backfill(args)
