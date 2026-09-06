@@ -4,7 +4,14 @@
 import pytest
 import yaml
 
-from signal_engine.config import _build_settings, ConfigError
+from signal_engine.config import (
+    ConfigError,
+    TelegramChannel,
+    _build_settings,
+    _parse_channel,
+    _telegram_fields,
+    enabled_channels,
+)
 
 
 class TestConfigFileMissing:
@@ -562,3 +569,53 @@ class TestNoProgressAbTestDisable:
         assert s.no_progress_check_after_minutes == 90
         assert s.no_progress_min_progress_pct == 0.20
         assert s.no_progress_ab_test_disable is True
+
+
+class TestChannelEnableDisable:
+    """A channel can be listed but switched off.
+
+    Before this, the only way to stop the engine trading a channel was to delete or comment
+    out its block, so a paper-phase strategy was represented by an ABSENCE — invisible in
+    config, and indistinguishable from someone having forgotten to add it. BREAKOUT ran that
+    way for its whole first fortnight: breakout.pine posted to intraday-breakout while
+    telegram.channels listed only smidestn and intraday-orb, and nothing in the file said so
+    on purpose. `enabled: false` makes the paper phase a statement rather than a gap.
+    """
+
+    def test_channel_defaults_to_enabled(self):
+        """Omitting the key keeps every existing config working unchanged."""
+        ch = _parse_channel({"name": "intraday-orb", "id": -100123})
+        assert ch.enabled is True
+
+    def test_channel_can_be_disabled(self):
+        ch = _parse_channel({"name": "intraday-breakout", "id": -100456, "enabled": False})
+        assert ch.enabled is False
+
+    def test_enabled_channels_filters_disabled_out(self):
+        channels = (
+            TelegramChannel(name="live", id=-1),
+            TelegramChannel(name="paper", id=-2, enabled=False),
+            TelegramChannel(name="also-live", id=-3),
+        )
+        assert [c.name for c in enabled_channels(channels)] == ["live", "also-live"]
+
+    def test_disabled_channel_is_still_loaded_into_settings(self):
+        """It must survive parsing so startup can SAY it is off, not silently drop it."""
+        raw = [
+            {"name": "intraday-orb", "id": -1003518225740},
+            {"name": "intraday-breakout", "id": -1004450500772, "enabled": False},
+        ]
+        fields = _telegram_fields({"channels": raw})
+        parsed = fields["telegram_channels"]
+        assert len(parsed) == 2
+        assert [c.enabled for c in parsed] == [True, False]
+
+    def test_all_channels_disabled_yields_no_subscriptions(self):
+        channels = (TelegramChannel(name="paper", id=-2, enabled=False),)
+        assert enabled_channels(channels) == ()
+
+    def test_truthiness_is_not_used_for_enabled(self):
+        """A YAML `enabled: "false"` string must not read as True."""
+        assert _parse_channel({"name": "x", "id": -1, "enabled": "false"}).enabled is False
+        assert _parse_channel({"name": "x", "id": -1, "enabled": "no"}).enabled is False
+        assert _parse_channel({"name": "x", "id": -1, "enabled": "true"}).enabled is True

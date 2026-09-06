@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from signal_engine.main import compute_next_tp, handle_message, structural_runner_sl
+from signal_engine.main import (
+    _replace_runner_sl,
+    compute_next_tp,
+    handle_message,
+    structural_runner_sl,
+)
 from signal_engine.models import (
     Direction,
     OrderStatus,
@@ -793,3 +798,89 @@ class TestExtendedRunnerTierRatchet:
         # -> candidate = 2533.75.
         mock_place_sl.assert_called_once()
         assert mock_place_sl.call_args.kwargs["sl_price"] == pytest.approx(2533.75)
+
+
+class TestKeyLevelRunnerRatchet:
+    """A key-level trade's runner stop must also ratchet as further TP levels are reached.
+
+    structural_runner_sl() floors the runner at the level that justified the trade (itself
+    floored at entry), which is the right FLOOR but was being used as the ANSWER: because it
+    returns a non-None price for every key-level trigger, _replace_runner_sl() took it and
+    returned before the extended-tier ratchet in the elif branch could run. Every BREAKOUT
+    trade carries a trigger, so the ratchet added on 2026-09-02 was reachable only for plain
+    ORB breakouts and never for the strategy it was written for.
+
+    That is harmless while TP2 closes the position outright, and becomes a real leak the
+    moment extended runner tiers hold 35% past TP2 (enabled 2026-09-06): the held tranche sits
+    behind a break-even stop after price has already run 2R, so a reversal gives the whole
+    move back instead of banking ~1.4R. The runner SL must be whichever of the two is
+    TIGHTER — structural early on, ratcheted once a further level is banked.
+    """
+
+    def _pos(self, sl, direction=Direction.LONG):
+        pos = MagicMock()
+        pos.symbol, pos.strategy, pos.exchange, pos.product = "RELIANCE", "BREAKOUT", "NSE", "MIS"
+        pos.quantity = 35
+        pos.entry_price = 2500.0
+        pos.tp = 2525.0  # TP1, so R = 25
+        pos.sl = sl
+        pos.direction = direction
+        pos.sl_order_id = "SL001"
+        pos.context = {"trigger": "VAH-RT", "pvah": "2490.0"}  # below entry -> structural = 2500
+        return pos
+
+    async def _run(self, pos, tp_level, extended=True, buffer=0.3):
+        ok = TradeResult(order_id="SL999", status=OrderStatus.SUCCESS, message="ok")
+        with (
+            patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=ok) as place,
+            patch("signal_engine.main.settings") as st,
+        ):
+            st.bracket_enabled = True
+            st.tp1_runner_sl_buffer = buffer
+            st.use_extended_runner_tiers = extended
+            await _replace_runner_sl(pos, pos.quantity, tp_level)
+        return place
+
+    @pytest.mark.asyncio
+    async def test_long_tp2_ratchets_above_the_structural_floor(self):
+        """TP2 at 2550, buffer 0.3R x 2.0 = 15 -> 2535, which beats break-even 2500."""
+        pos = self._pos(sl=2500.0)
+        place = await self._run(pos, "TP2")
+        assert place.call_args.kwargs["sl_price"] == pytest.approx(2535.0)
+
+    @pytest.mark.asyncio
+    async def test_long_tp1_keeps_the_structural_stop_when_it_is_tighter(self):
+        """At TP1 the ratchet gives 2525 - 0.3x25 = 2517.5, above break-even, so it wins.
+
+        With a level ABOVE entry the structural stop can be the tighter of the two and must
+        then be kept — the ratchet must never loosen a stop, in either direction.
+        """
+        pos = self._pos(sl=2500.0)
+        pos.context = {"trigger": "VAH-RT", "pvah": "2520.0"}
+        place = await self._run(pos, "TP1")
+        assert place.call_args.kwargs["sl_price"] == pytest.approx(2520.0)
+
+    @pytest.mark.asyncio
+    async def test_short_tp2_ratchets_below_the_structural_floor(self):
+        pos = self._pos(sl=2500.0, direction=Direction.SHORT)
+        pos.entry_price, pos.tp = 2500.0, 2475.0  # R = 25 downward
+        pos.context = {"trigger": "VAL-RT", "pval": "2510.0"}  # above entry -> structural = 2500
+        place = await self._run(pos, "TP2")
+        assert place.call_args.kwargs["sl_price"] == pytest.approx(2465.0)
+
+    @pytest.mark.asyncio
+    async def test_flag_off_leaves_the_structural_stop_untouched(self):
+        """Reverting use_extended_runner_tiers must restore the old behaviour exactly."""
+        pos = self._pos(sl=2500.0)
+        place = await self._run(pos, "TP2", extended=False)
+        assert place.call_args.kwargs["sl_price"] == pytest.approx(2500.0)
+
+    @pytest.mark.asyncio
+    async def test_gap_through_tp1_straight_to_tp2_still_ratchets(self):
+        """A single 5-min bar can span TP1..TP3; breakout.pine emits ONE alert for the best
+        level reached, so the engine may see TP2 with no preceding TP1 and pos.sl still at
+        the original loss-side stop. The ratchet must anchor on the level actually reported.
+        """
+        pos = self._pos(sl=2485.0)  # original stop, never moved
+        place = await self._run(pos, "TP2")
+        assert place.call_args.kwargs["sl_price"] == pytest.approx(2535.0)

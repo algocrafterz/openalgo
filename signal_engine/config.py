@@ -81,9 +81,18 @@ def _require_key(section_data: dict, section_name: str, key: str):
 
 @dataclass(frozen=True)
 class TelegramChannel:
-    """A single Telegram channel to listen to."""
+    """A single Telegram channel to listen to.
+
+    `enabled` is what decides whether the engine SUBSCRIBES to it. A disabled channel is
+    still parsed and still carried in settings so startup can report it as deliberately off
+    — the point is to make a paper-phase strategy a statement in the file rather than an
+    absence from it. BREAKOUT spent its first fortnight in that gap: breakout.pine posted to
+    intraday-breakout while telegram.channels listed only smidestn and intraday-orb, and
+    nothing recorded that this was on purpose.
+    """
     name: str
     id: Union[int, str]  # numeric chat ID or @username
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -337,6 +346,23 @@ def _parse_broker_mis_rejected(raw: dict) -> frozenset:
     return frozenset(symbols)
 
 
+#: Strings YAML users write meaning False. Anything unrecognised falls back to truthiness,
+#: so a genuine bool from the YAML parser is used as-is.
+_FALSEY = {"false", "no", "off", "0", ""}
+
+
+def _channel_enabled(raw: dict) -> bool:
+    """Whether the engine subscribes to this channel. Absent key means yes.
+
+    Quoted YAML (`enabled: "false"`) parses as a non-empty string, which is truthy — the one
+    way to write this key and get the exact opposite of what it says. Handled explicitly.
+    """
+    value = raw.get("enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSEY
+    return bool(value)
+
+
 def _parse_channel(raw: dict) -> TelegramChannel:
     """Build a TelegramChannel, keeping the id numeric when it parses as one."""
     raw_id = raw.get("id", "")
@@ -344,7 +370,16 @@ def _parse_channel(raw: dict) -> TelegramChannel:
         ch_id = int(raw_id)
     except (ValueError, TypeError):
         ch_id = str(raw_id)
-    return TelegramChannel(name=raw.get("name", ""), id=ch_id)
+    return TelegramChannel(
+        name=raw.get("name", ""), id=ch_id, enabled=_channel_enabled(raw)
+    )
+
+
+def enabled_channels(
+    channels: "tuple[TelegramChannel, ...]",
+) -> "tuple[TelegramChannel, ...]":
+    """The subset the listener actually subscribes to."""
+    return tuple(ch for ch in channels if ch.enabled)
 
 
 def _parse_strategy_profiles(yml: dict) -> Dict[str, dict]:

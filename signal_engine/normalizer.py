@@ -126,8 +126,24 @@ def _rewrite_tp_hit(lines: list) -> Optional[str]:
     exit_qty_pct_line, exit_tp = _read_tp_hit_body(lines[1:])
     return (
         f"{strategy} EXIT\nSymbol: {symbol}\n"
-        f"Entry: 0.0\nSL: 0.0\nTP: {exit_tp}\nTpLevel: {tp_level}{exit_qty_pct_line}"
+        f"Entry: 0.0\nSL: 0.0\nTP: {exit_tp}\nTpLevel: {tp_level}"
+        f"{_sig_id_line(lines[1:])}{exit_qty_pct_line}"
     )
+
+
+def _sig_id_line(body_lines: list) -> str:
+    """Carry SigID through a rewrite, or "" when the alert has none.
+
+    Both HIT rewrites build the canonical message from scratch rather than editing the
+    original, so anything not named here is dropped. SigID is the key that pairs this exit
+    with its entry, and losing it puts the ledger back on symbol-and-day ordering — the
+    mis-pairing this field exists to prevent.
+    """
+    for line in body_lines:
+        m = re.match(r"^SigID\s*:\s*(\S.*)$", line, re.IGNORECASE)
+        if m:
+            return f"\nSigID: {m.group(1).strip()}"
+    return ""
 
 
 def _read_tp_hit_body(body_lines: list) -> tuple:
@@ -161,7 +177,7 @@ def _rewrite_sl_hit(lines: list) -> Optional[str]:
     symbol = match.group(2).upper()
     return (
         f"{strategy} EXIT\nSymbol: {symbol}\n"
-        f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: SL"
+        f"Entry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: SL{_sig_id_line(lines[1:])}"
     )
 
 

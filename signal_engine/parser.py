@@ -13,7 +13,7 @@ _MANDATORY_FIELDS = {"symbol", "entry", "sl", "tp"}
 _NUMERIC_FIELDS = {"entry", "sl", "tp"}
 # Keys the Signal model has a home for. Anything else is entry-criteria context and is kept
 # verbatim rather than dropped — see Signal.context.
-_CONSUMED_FIELDS = _MANDATORY_FIELDS | {"exchange", "product", "time", "tplevel", "exitqtypct"}
+_CONSUMED_FIELDS = _MANDATORY_FIELDS | {"exchange", "product", "time", "tplevel", "exitqtypct", "sigid"}
 
 
 def parse(text: str) -> Optional[Signal]:
@@ -57,6 +57,7 @@ def parse(text: str) -> Optional[Signal]:
             product=_upper_or_none(fields.get("product")),
             time=fields.get("time"),
             # TP level from TP HIT normalizer (e.g. "TP1", "TP1.5")
+            sig_id=_nonblank_or_none(fields.get("sigid")),
             tp_level=_upper_or_none(fields.get("tplevel")),
             exit_qty_pct=_parse_exit_qty_pct(fields.get("exitqtypct")),
             context=_context_fields(fields),
@@ -114,6 +115,18 @@ def _context_fields(fields: dict) -> dict:
 def _upper_or_none(value):
     """Upper-case an optional string field, leaving None/empty untouched."""
     return value.upper() if value else value
+
+
+def _nonblank_or_none(raw) -> Optional[str]:
+    """Trimmed string, or None when the field is missing or blank.
+
+    A blank SigID must read as "no key", not as the empty-string key — otherwise every
+    keyless leg in a session would group together as one position.
+    """
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
 
 
 def _parse_exit_qty_pct(raw) -> Optional[float]:

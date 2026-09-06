@@ -9,6 +9,661 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-09-06 16:00 IST — Paper week instead of live: ANALYZE mode, and declined signals now leave a record
+
+Live trading is off. From 2026-09-07 BREAKOUT runs one week of paper trading with OpenAlgo in
+**ANALYZE mode**, reviewed EOD daily, before any real money is committed.
+
+### What changes, and what deliberately does not
+
+**Nothing in `config.yaml` sets the mode.** The engine reads it at runtime from OpenAlgo's
+`/api/v1/analyzer` endpoint (`api_client.fetch_trading_mode`) and adapts: `sandbox_capital`
+(Rs35,000, already matching intended live capital) replaces the broker funds call, and
+`risk_store` keys its counters on `(mode, date)` so paper and live totals can never mix. The
+mode is switched in OpenAlgo itself, not here.
+
+**The limits stay at their live values on purpose.** `max_open_positions: 2`, daily loss limit
+4%, price filter 300-5000 — a sandbox could afford any number of positions, but a paper run with
+limits the live account cannot honour produces numbers that do not transfer. The week is meant
+to answer "what would the live configuration have done".
+
+**This is a far better measurement than the fortnight before it.** That was `breakout.pine`
+talking to itself. Now the full pipeline is real: validation, sizing against Rs35k, risk gates,
+slot limits, SL-M placement, staged TP exits, the tracker's 10s position poll, the 14:45 time
+exit. Only the fill is simulated.
+
+### The gap that had to be closed first: declines left no record
+
+Every early return in `_handle_entry` — blacklist, T2T, exposure limit, symbol/sector
+concentration, capital floor, `qty=0`, margin — and the validator gate in `handle_message`
+(which is where the price filter, min_rr, min_sl_pct, duplicate and stale checks live) exit
+**before** `save()`. A declined signal existed only as a log line and a Telegram message;
+`trades.db` recorded the trades that happened and nothing about the ones that did not.
+
+Tolerable when the question is "did my fills work". Not tolerable for this week, whose entire
+question is "what would this strategy have done": at `max_open_positions: 2` on Rs35k a real
+share of signals will never become an order, and a review that cannot see them would read a
+capital constraint as a signal-quality result.
+
+`db.save_declined()` now writes a row for each, carrying the signal's prices, `context` (the
+full entry criteria) and `sig_id`, so a declined signal can be scored after the fact against the
+same chart data as a taken one — which is what lets the review ask whether the refused ones
+would have been the winners.
+
+- **Status `DECLINED`, distinct from `REJECTED`.** REJECTED means the *broker* refused an order
+  that was actually sent. DECLINED means no order ever left the engine. Collapsing them would
+  make an engine policy decision look like a broker failure.
+- **`order_id` is the sentinel `-DECLINED-`, not empty.** The ledger reads a falsy `order_id` as
+  "sent but matched by no fill", which is a reconciliation error. A decline is not an error.
+- **Excluded from the position ledger, read separately by `load_declined()`.** Otherwise every
+  decline becomes a Position with an unfilled entry leg — a `NO_FILL` flag that is not one, and
+  it would bury the genuine unfilled orders.
+- **Never raises.** Persistence is bookkeeping and must not be able to break signal handling.
+- EXIT signals are excluded: an EXIT that fails validation is a reconciliation problem, not a
+  trade that did not happen, and counting it would corrupt the number the review depends on.
+
+`python -m signal_engine.analysis` now prints declines grouped by the gate that stopped them,
+under the ledger rather than inside it (`--declined` lists every one). The pair of numbers is the
+point: a thin week reads completely differently depending on whether the strategy found nothing
+or the risk limits refused what it found.
+
+### A bug this work introduced, and the guard against its whole class
+
+Adding `save_declined()` to main's decline paths wrote **six rows into the live
+`signal_engine/data/trades.db`** on an ordinary `pytest` run — the existing entry-pipeline tests
+patch `save` but knew nothing about a second writer. The rows were deleted; the 221 real ones
+were untouched.
+
+Patching each new writer at each call site is a rule nobody can be relied on to follow, so the
+fix is structural: an autouse fixture in `tests/conftest.py` repoints `db._DB_PATH` at a
+throwaway file for every test in the suite. A future writer is covered before anyone remembers
+it exists.
+
+### What this week can and cannot measure
+
+**Can:** how many signals survive the gates and how many are declined and by which gate; whether
+`max_open_positions: 2` is the binding constraint; whether the new `min_entry_price: 300` filter
+removes the signals it was meant to; whether every trade now emits a terminal event (the
+2026-09-06 14:38 fix, still unverified against live alerts); whether extended runner tiers
+actually book TP2/TP3; whether the reachability gate thins entries as expected.
+
+**Cannot: slippage.** A sandbox fills at the requested price. Slippage is the single largest
+controllable cost in the system — `slippage_factor: 0.10` budgets ~0.19R per round trip, roughly
+half of gross on the ORB numbers — and it stays unmeasured until real orders reach a real broker.
+Any expectancy from this week is therefore an **upper bound**, and should be read as one.
+
+**Also not measured: margin.** `_resolve_entry_quantity` skips `adjust_qty_for_margin` entirely
+in analyze mode, because the sandbox has fixed virtual capital and the broker margin API is not
+available. So the "can I actually fund a second position on Rs35k" question — the one that
+motivated dropping `max_open_positions` to 2 — is the one thing this week is structurally unable
+to answer.
+
+### Open item, deliberately not changed
+
+`intraday-breakingtrade` was switched to `enabled: true` outside this work. It shares the same
+two slots and the same daily loss limit, so some BREAKOUT signals will be declined because
+BreakingTrade took the slot first — the exact contamination `intraday-orb` was stood down to
+avoid. It is at least now visible rather than silent: those declines are recorded with
+`max_open_positions reached` as the reason. Left as set, flagged here as a decision to confirm.
+
+`smidestn` also remains enabled and can inject signals into the pipeline.
+
+---
+
+## 2026-09-06 15:44 IST — Going live: SigID, ORB stood down, and three settings that were wrong for real money
+
+BREAKOUT trades real capital from the next session. Paper phase ends here; everything in this
+file dated before today is PineScript chart simulation.
+
+### SigID — the key that survives a rejected order
+
+`ledger.py` joins signal to fill on `order_id`, which exists only once an order has been SENT.
+A signal the validator rejected, one the broker refused for margin, one that never filled — none
+of them have a key, and the ledger falls back to grouping by `(strategy, symbol, day)` and
+pairing entries to exits by arrival order. Its own docstring warns that this "will silently
+mis-pair two trades in the same name on the same day". `breakout.pine` permits exactly that: a
+re-entry after a stop.
+
+`sigId()` emits `SYMBOL-YYYYMMDD-HHmm` built from the **entry bar's** timestamp — frozen at fill
+in `orbEntrySignalTime`, so a TP firing three hours later produces the identical string. It goes
+out on all five alert types: entry, TP, SL, RUNNER, time exit.
+
+Engine side: `Signal.sig_id`, parsed as a first-class field rather than swept into `context`
+(one copy, not two); a `sig_id` column added to `trades.db` through the existing additive
+`_ADDED_COLUMNS` mechanism, which migrated the live 221-row database in place; and
+`build_ledger` now keys its grouping on it when present. Events without one keep the old
+positional rule exactly, so every historical row reconciles as before.
+
+The normalizer needed a change that is easy to miss: `_rewrite_tp_hit` and `_rewrite_sl_hit`
+build the canonical EXIT message **from scratch** rather than editing the original, so anything
+not explicitly carried is dropped. SigID was being lost on precisely the messages that most need
+it. `_sig_id_line()` now carries it through both.
+
+Blank is treated as absent (`_nonblank_or_none`) — an empty-string key would group every keyless
+leg in a session into one position, which is worse than having no key at all.
+
+Tests: `test_signal_id.py` — parse from all three alert shapes, absent and blank forms, no
+duplication into context, and the two ledger cases that motivated it (two round trips in one
+name on one day; an exit arriving after the next entry opened).
+
+### ORB stood down
+
+`intraday-orb` set `enabled: false`. Nothing about ORB changed and it is not being retired —
+this is about attribution. Two live strategies sharing two slots on Rs35k means whichever fires
+first takes the margin, and the other's rejections then look like signal quality. Running
+BREAKOUT alone for the first weeks makes its numbers its own.
+
+### Three settings that were fine for paper and wrong for money
+
+**`max_open_positions` 4 -> 2.** Arithmetic, not preference. At 1% risk with a ~0.30% stop the
+notional per position is `risk / (sl_pct x (1 + slippage))` — about 3x capital — so at 20% MIS
+margin ONE position needs roughly Rs21k of a Rs35k account. Measured across the 31 Aug - 04 Sep
+signals: median Rs21,123 per position, 60% of capital. Two concurrent already needs 1.2x capital
+and the Margin API scales the second one down. Slots 3 and 4 could never have been funded;
+leaving the cap at 4 would have produced broker rejections that read like signal quality.
+
+**Loss limits re-armed: daily 4%, weekly 8%, monthly 15%.** All three sat at `1.0` — disabled —
+under a `# TESTING` comment. With `max_trades_per_day: 10` at 1% risk, going live with them off
+means a bad day has no floor: ten full stops is a 10% account loss with nothing stopping the
+eleventh. 4% daily is four full stops, and it **would have fired on 03 Sep**, which took exactly
+four -1R hits. That is the intent, not a flaw.
+
+**`min_entry_price` 150 -> 300.** For slippage, not edge. NSE tick is Rs0.05 on every name in
+the sample — verified against `symtoken`, including IEX at Rs118, so there is no fine-tick
+regime to soften this. With a ~0.30% stop the risk per share IS price x 0.003, so one tick costs:
+
+| | price | risk/share | 1 tick |
+|---|---|---|---|
+| IEX | 118.70 | 0.35 | **0.143R** |
+| ITC | 264.65 | 0.79 | 0.063R |
+| SBIN | 1035.70 | 3.11 | 0.016R |
+| MARUTI | 12884.00 | 41.64 | 0.001R |
+
+A MARKET entry plus a MARKET TP exit is two legs, so sub-Rs300 names spend 0.13-0.29R on ticks
+alone against a `slippage_factor` budget of 0.10R. The calibration is simply untrue for them.
+
+**`max_entry_price` deliberately LEFT at 5000.** The same arithmetic says high-priced names are
+the *cheapest* to execute and there is no affordability barrier at Rs35k, so 5000 excludes the
+best-executing part of the universe for no reason. It is not raised today because widening the
+universe on day one adds variance with nothing behind it — and the three names above 5000 in the
+sample (DIVISLAB, MARUTI, BAJAJHLDNG) were all losers, which is n=3 and proves nothing in either
+direction. Revisit after 2-3 live weeks.
+
+### Logging for the EOD debrief
+
+Two additions, since the first read after a bad session is the log rather than the code:
+
+- `backtrace=True` on the file sink — the frames that produced an error, not just the raising
+  line. `diagnose` stays **off** deliberately: it renders local variable values, and the locals
+  around an order call hold the API key and the broker session token.
+- A second sink, `logs/errors_{date}.jsonl`, ERROR and above, one JSON object per line, 90-day
+  retention. The main log is a whole trading day of polls and fills; after a bad session the
+  question is "what broke", and that should be a short file. Mirrors the root CLAUDE.md
+  convention where `log/errors.jsonl` is the documented first place to look.
+
+Tests: `test_logger_setup.py` — errors serialise with symbol and traceback, INFO/WARNING stay out
+of the error sink, the full log still receives everything.
+
+### Unchanged and worth knowing
+
+`smidestn` (the test channel) is still enabled and can inject signals into a live engine. That is
+fine while it is only used deliberately, but it is now a live-money path rather than a paper one.
+
+`intraday-breakingtrade` is configured `enabled: false` — added outside this work, inert.
+
+---
+
+## 2026-09-06 15:16 IST — Per-channel enable/disable: the paper phase is now stated, not implied
+
+BREAKOUT is deliberately PineScript-only and is not meant to reach a broker yet. That decision
+was correct and is unchanged by this entry. What was wrong is that **nothing in the repo said
+so** — the strategy's paper status was expressed as an *absence*: `breakout.pine` posts to
+`intraday-breakout` (`-1004450500772`), `telegram.channels` in `config.yaml` listed only
+`smidestn` and `intraday-orb`, and a missing line looks identical to a line nobody remembered
+to add. It took a database query to establish the difference (`trades.db`: zero BREAKOUT rows,
+ever, against 221 ORB rows), and in the meantime the 13:28 review below was written describing
+chart simulation as though it were executed trades.
+
+### The change
+
+`telegram.channels` entries take an optional `enabled` key, default `true`:
+
+```yaml
+    - name: "intraday-breakout"
+      id: -1004450500772
+      enabled: false
+```
+
+- **Default true** — every pre-existing config keeps working with no edit.
+- **A disabled channel is still parsed and still carried in settings.** It is not dropped at
+  load. That is the entire point: startup now logs `Channel DISABLED, no trades will be taken
+  from it: intraday-breakout (-1004450500772)`, so the paper phase announces itself on every
+  boot instead of being invisible.
+- **All channels disabled is a distinct, loud failure** from an empty list — the engine says
+  which channels it found, that every one is off, and that it will trade nothing.
+- `_channel_names()` still covers disabled channels, so a stray message from one logs by name
+  rather than as a bare chat id.
+- **Prefer `enabled: false` over deleting or commenting out a block.** A commented-out channel
+  carries no intent; a disabled one does.
+
+`enabled: "false"` in quotes is handled explicitly. YAML parses that as a non-empty string,
+which is truthy — the one way to write this key and get the exact opposite of what it says.
+
+### Scope, deliberately
+
+This gates **subscription**, not execution: a disabled channel is not subscribed at all, so its
+messages never enter the pipeline. It is not a shadow or dry-run mode — the engine does not
+read, size, validate and then decline to trade. That is a different feature and a larger one;
+see the note below on what a paper phase actually needs.
+
+Tests: `test_config.py::TestChannelEnableDisable` (default, explicit false, string forms,
+disabled channels surviving into settings) and a new `test_listener_channels.py` (subscription
+split, all-disabled, name resolution for disabled channels). 785 passed.
+
+---
+
+## 2026-09-06 14:38 IST — Findings 1-3 implemented; a fourth defect found while doing it
+
+Follow-up to the review directly below, which is left intact as the record of what was measured.
+This entry is what was actually changed, plus one bug the work uncovered that the review had not
+seen. Full suite green: 772 passed (767 before, 5 new).
+
+### Finding 2 — extended runner tiers switched on, and the ratchet they depend on repaired
+
+`breakout.pine`'s `useExtendedRunnerTiers` and `config.yaml`'s `use_extended_runner_tiers` are
+both now `true`. Booking becomes 30% at TP1, 35% at TP2, 35% at TP3 instead of 50/50 closing the
+position at TP2.
+
+**The defect this exposed, which changes the case for the flip.** The review's counterfactual
+assumed the runner's stop ratchets up as further levels are banked — that is what makes holding
+35% past TP2 safe. It does not, and for BREAKOUT trades it never has:
+
+`_replace_runner_sl()` asked `structural_runner_sl()` first and returned as soon as it got a
+price. That function returns a price for **every** key-level trigger, floored at break-even. So
+for any BREAKOUT trade — all of which carry a trigger — the runner stop was pinned at the entry
+level or break-even and stayed there for the life of the trade, and the extended-tier ratchet
+added on 2026-09-02 was reachable only through the `elif` branch, i.e. only for plain ORB
+breakouts, the one strategy it was not written for.
+
+That is harmless while TP2 closes the position outright: the runner never survives past TP2, so
+there is nothing to ratchet. It becomes a real leak the moment 35% is held past TP2 — that
+tranche would have sat behind a break-even stop after price had already run 2R, so any reversal
+hands the whole move back. **Flipping the toggle without this fix would have made the strategy
+worse, not better.**
+
+Fixed: the structural stop is now treated as a floor rather than the answer. Both candidates are
+computed and the **tighter** wins — structural early, ratcheted once a further level is banked —
+and a stop still never loosens against the one already in place.
+
+The same test run surfaced a second, unrelated bug in that function: `anchor_level` was only
+assigned inside the `elif`/`else` branches, so the `logger.info` after a successful SL placement
+raised `UnboundLocalError` on **every** key-level runner SL — after the order was placed and the
+tracker updated, but before the caller finished the exit. It had gone unnoticed because no test
+exercised the structural path end-to-end. `anchor_level` is now always bound.
+
+New tests in `test_main_partial_exit.py::TestKeyLevelRunnerRatchet` cover: TP2 ratcheting above
+the structural floor (long and short), TP1 keeping a structural stop that is tighter, the flag
+off restoring the old behaviour exactly, and the gap-through case — one 5-minute bar spanning
+TP1 to TP2, where the engine sees a TP2 alert with no preceding TP1 and `pos.sl` still at the
+original loss-side stop. That last one was flagged in the review as needing verification before
+the flip, because 2 of the week's 8 winners (RADICO, LICHSGFIN) gapped through a level.
+
+### Finding 3 — TP1 reachability gate
+
+New `klMaxTpR` input (default **2.0 R**, `0` disables) in the scoring group, threaded through
+`klFireGate` alongside `klRoomOK`. A setup whose nearest structural level sits more than that
+many R from entry no longer fires — it is **skipped, not rescaled**, for the reason argued in
+the review: rescaling TP1 to a flat 2R would re-introduce the arbitrary R-multiple exit the
+key-level engine exists to replace, and would not have saved either of the two known losers.
+
+`na` passes the gate: no level ahead at all is a case `klCalcTargets` already handles by falling
+back to a reachable 1.5R.
+
+Applied to the pooled sample this removes 4 setups — TATAPOWER (6.47R), DIVISLAB (3.15R),
+IEX (2.74R), PIDILITIND (8.73R) — which between them booked nothing and left two of the four
+unresolved trades.
+
+**Not done:** the dashboard's verdict row does not yet show this gate, so a setup skipped for
+reachability is currently invisible on the chart. `renderVerdict` already carries fourteen
+arguments and expanding it is a separate change.
+
+### Finding 1 — every trade now emits an ending
+
+New `orbOpenQtyPct` state variable: the percentage of the original position the **live engine**
+still holds, tracked separately from `strategy.position_size`. Set to 100 at fill, compounded
+down by each alert's `ExitQtyPct` (30% then 50% of the remainder leaves 35%, not 20%), zeroed on
+any 100% exit, SL alert, or time exit.
+
+Two gates now run off it instead of the strategy position:
+
+- **14:45 time exit** — `(strategy.position_size != 0 or orbOpenQtyPct > 0)`. This is the fix for
+  cause (a): a post-TP1 runner is invisible to `strategy.position_size`, which is why APLAPOLLO
+  and ICICIPRULI each sent one `TP1 HIT | ExitQtyPct: 50` and then nothing. The direction now
+  comes from `orbTradeDirection`, since the strategy position is already flat in exactly the case
+  this fires for. `strategy.position_size` stays in the OR so a plain ORB trade behaves as before.
+- **End of session** — a second backstop that emits the terminal event if the 14:45 clock never
+  ran at all.
+
+Because the root cause of (b) is still unknown, the fix is deliberately positioned rather than
+targeted: both gates sit at the top level of the script, outside the `not orbLinesFrozen` block
+that governs per-bar TP/SL detection, so whatever silences that block cannot silence them.
+
+**Known limitation, worth being explicit about.** If a runner is stopped out broker-side after a
+partial (the SL alert is correctly suppressed once any TP has booked, so the engine is not told
+to exit at the original stop), the record will now carry a `TIME_EXIT` event priced at the 14:45
+close rather than at the price the runner actually stopped at. The R attributed to that trade
+will be wrong — but wrong and visible beats absent, which is where the last two weeks left it.
+Reporting the runner's true exit price needs the engine to emit its own terminal event, which is
+a python-side change and a candidate for the next iteration.
+
+`strategy.exit()` was deliberately **not** given a `qty_percent`. Making the strategy model book
+partials would fix cause (a) at the source and keep `strategy.position_size` meaningful, but it
+changes every Strategy Tester number this file has ever produced. The tracking variable gets the
+alert stream right without touching the backtest model.
+
+### What to watch over the next week
+
+1. A `BREAKOUT EXIT / Reason: TIME_EXIT` message should now appear for any trade still holding a
+   runner at 14:45. Zero of them across the next week means the fix did not take.
+2. `TP2 HIT` alerts should read `ExitQtyPct: 50`, not 100, and `TP3 HIT` should start appearing
+   on trades that previously produced a `RUNNER` note instead.
+3. Fewer entries per day, from the reachability gate. Roughly one in five setups in the pooled
+   sample drew a TP1 beyond 2R.
+
+---
+
+## 2026-09-06 13:28 IST — Week-1 forward review (31 Aug - 04 Sep): the sample is net positive, but 4 of 20 trades have no recorded ending
+
+> **Correction added 2026-09-06 15:02 IST — read this before the numbers below.** This entry
+> was written as if the sample were live executed trades. It is not, **by design** — BREAKOUT is
+> deliberately in a PineScript-only paper phase and was never meant to reach a broker yet. The
+> mistake was mine in the framing, not a wiring fault. `breakout.pine` posts to
+> `intraday-breakout` (`-1004450500772`), which the engine does not subscribe to; `trades.db`
+> holds **zero BREAKOUT rows, ever** (221 ORB rows, last one 2026-08-23), and the engine's own
+> logs stop on 2026-08-25.
+>
+> So every price, P&L and R figure below is **PineScript's own chart simulation**: theoretical
+> fills on TradingView's feed, no broker, no slippage, no rejections, no margin. Read "booked"
+> throughout as "the chart would have booked". The findings themselves survive unchanged —
+> Findings 1 and 3 are defects in the alert stream and the target ladder, which are real either
+> way, and Finding 2's runner-tier gap is real in the same sense. What does not survive is any
+> claim about live edge, which was already marked unproven and is now not even a live sample.
+>
+> The one thing this improves: the ratchet defect found while implementing Finding 2 (runner
+> stop pinned at break-even for every key-level trade) was **latent, not costly** — no BREAKOUT
+> trade ever reached the broker for it to damage.
+>
+> Channel topology and what to do about it: see the entry above this one.
+
+The review promised by the 2026-08-30b entry ("a live sample to review after the first week").
+Source: `signal_engine/pinescripts/telegram/intraday-breakout-channel-result-31082026-to-04092026.json`
+(45 Telegram messages, 20 entry alerts, 5 sessions). Cross-checked against the earlier
+`...-26082026-to-28082026.json` (12 entries) wherever a claim could be tested twice — that
+earlier week ran the pre-08-30b configuration, so it is used only to falsify week-2 patterns,
+never to confirm them.
+
+Nothing in the strategy was changed by this entry. It is the measurement plus a ranked list of
+what to change next, so that when a change is made later there is a record of what it was made
+against.
+
+### The result
+
+18 of 20 entries reached a recorded ending. Booked outcome across those 18: **+4.31R, 8 wins /
+10 losses (44% win rate, +0.24R per trade)**. R here means "multiples of the money risked on
+that trade" — +1R is a win the size of the stop, -1R is a full stop-out.
+
+| Session | Entries | Long/Short | Booked R | Detail |
+|---|---|---|---|---|
+| 08-31 | 4 | 1/3 | +0.01 | INDHOTEL -1.00, ITC +1.51, APLAPOLLO +0.50, DIVISLAB -1.00 |
+| 09-01 | 2 | 1/1 | +2.25 | PIDILITIND no ending, RADICO +2.25 |
+| 09-02 | 6 | 0/6 | +2.62 | AXISBANK -1.00, HAVELLS +2.25, LTF -1.00, ICICIPRULI +0.50, CONCOR +1.88, IEX no ending |
+| 09-03 | 5 | 5/0 | -1.58 | UNOMINDA -1.00, PFC -1.00, SBIN -1.00, MARUTI -1.00, INDIGO +2.42 |
+| 09-04 | 3 | 3/0 | +1.01 | DELHIVERY -1.00, BAJAJHLDNG -1.00, LICHSGFIN +3.01 |
+
+Pooled with the earlier week: 30 resolved trades, +6.27R.
+
+**What this does and does not say about the negative backtest.** The entry two below measured
+key-level breaks following through 30.9% of the time against a 33.3% random-walk baseline, and
+concluded the premise is negative. This week does not overturn that and is not offered as
+overturning it. 18 trades is far too few — a run of +4R from 18 samples with an average win
+around +1.8R and losses fixed at -1R is well inside what chance produces from a coin-flip
+process. What it does establish is narrower and still worth having: the asymmetric exit
+structure (fixed -1R stop, winners allowed to reach 2R-4.5R) can carry a sub-50% hit rate to a
+positive number, so the strategy is not obviously bleeding and the collection period should
+continue. Treat the sign as unproven and the process as worth another month.
+
+### Finding 1 (highest priority, mechanical, not statistical) — 4 of 20 trades never emit an ending
+
+This is a data-integrity defect, not a trading one, and it is ranked first because it silently
+corrupts every number above and every number the next review will produce.
+
+**Two separate causes, both confirmed in code.**
+
+*(a) The half of a position held past TP1 has no terminal alert.* `strategy.exit("TP1_L",
+"Long", limit=tp1, stop=sl)` (`breakout.pine:2828`, and `:2949` for shorts) carries no
+`qty_percent`, so in the Pine strategy model TP1 closes the whole position. But the alert sent
+to the engine says `ExitQtyPct: 50`, so the live engine keeps half. From that moment the two
+models disagree, and neither path can report the remainder's fate:
+
+- the SL alert is blocked by `bool anyTPBooked = orbTP1Hit or ...` (`:4037`) — deliberately, so
+  the engine is not told to exit at the original stop after the runner stop has moved up;
+- the time-exit alert at `:4175`-`:4178` requires `strategy.position_size != 0`, which is already 0.
+
+APLAPOLLO and ICICIPRULI both show a lone `TP1 HIT | ExitQtyPct: 50` and then silence. Their
++0.50R each is the booked half only; the other half's result is simply unknown. Two of eight
+winners are therefore recorded at a floor, not a value.
+
+*(b) Two trades went silent for a reason not yet identified.* PIDILITIND (09-01 09:55) and IEX
+(09-02 11:40) produced an entry alert and then no message of any kind.
+
+**Correction, same day:** this entry first attributed that to the `bar_index > orbEntryBar`
+guard on the SL check (`:4038` long, `:4143` short) suppressing a stop tagged on the entry bar.
+That is wrong, and the mistake is left visible rather than edited away. `orbEntryBar` is set to
+the **signal** bar (`:2799` long, `:2921` short), while `strategy.entry` fills at the next bar's open — so the fill
+bar already satisfies `bar_index > orbEntryBar` and a first-bar stop is announced normally. The
+guard is doing its actual job, which is to stop the signal bar's own range from counting.
+
+What is established: whatever silenced them, the entire per-bar TP/SL detection block sits
+behind `if not orbLinesFrozen and ...` (`:3971`), so any path that freezes the trade lines also
+takes the alerts with it, and the 14:45 time exit — the one place that should have caught the
+fallout — was itself unreachable for the same trades because of (a). The remaining
+circumstantial detail is that these two carry the tightest stops in the sample (0.215% and
+0.295% of price, against a 0.30% median). **Root cause still unknown**; the fix below is
+therefore deliberately cause-agnostic rather than a patch to a specific guard.
+
+Corroboration that the emitter itself is not simply broken: the ORB export
+(`trade-analysis/orb-telegram-export-2026-Q1.json`) contains time-exit alerts; both breakout
+exports contain zero across 32 entries.
+
+**Why it matters beyond bookkeeping.** Under (b) the signal engine believes it holds a position
+that the strategy considers closed, and carries that belief until its own 14:45 clock. Under (a)
+the forward test cannot answer the one question it was deployed to answer — whether holding past
+TP1 pays — because the held portion is exactly the part with no recorded outcome.
+
+**Proposed fix (not yet made):** give the exit path a terminal event that does not depend on
+`strategy.position_size`. Track the live-model remainder in a Pine variable of its own
+(`klOpenQtyPct`, set to 100 at fill and decremented by each `tpFireQtyPct`), fire the time exit
+on `klOpenQtyPct > 0` rather than on the strategy position, and allow an SL alert on the entry
+bar when the trigger and the stop are not on the same bar's extremes. Each of these is small in
+isolation; together they make the next review's numbers trustworthy.
+
+### Finding 2 (highest value, already built, just switched off) — extended runner tiers never took effect
+
+Every `TP2 HIT` alert this week reads `ExitQtyPct: 100`, and `config.yaml`'s `bracket.use_extended_runner_tiers` read
+`false`. The TP1/TP2/TP3 tiering shipped on 2026-09-02 (entry below)
+has therefore not been exercised by a single live trade, while the sample produced two explicit
+`RUNNER` observations — RADICO and HAVELLS, **4.50R unbooked each** — which are precisely the
+events that feature exists to capture.
+
+Re-scoring the week under 30/35/35, using the prices actually printed in the alerts and assuming
+the final tranche exits at the ratchet stop (level minus 0.3R x the level's own R-multiple) when
+no further target was reached:
+
+| Trade | Reached | Booked as run | Under 30/35/35 | Delta |
+|---|---|---|---|---|
+| HAVELLS | TP3 (runner) | +2.25 | +3.08 | +0.83 |
+| RADICO | TP3 (runner) | +2.25 | +3.04 | +0.79 |
+| LICHSGFIN | TP3 | +3.01 | +3.61 | +0.60 |
+| INDIGO | TP2 | +2.42 | +2.59 | +0.17 |
+| ITC | TP2 | +1.51 | +1.50 | -0.01 |
+| CONCOR | TP2 | +1.88 | +1.82 | -0.07 |
+| | | | **net** | **+2.31** |
+
+The week would have been roughly **+6.6R instead of +4.31R, a 54% improvement, with no change to
+which trades were taken and no change to risk per trade** — the stop is unchanged, only the
+distribution of what gets booked where. The two trades that lose a little (ITC, CONCOR) lose it
+because 35% is held past TP2 into a ratchet stop instead of being banked at TP2; that is the
+cost the feature was designed to pay, and it is an order of magnitude smaller than what the
+runners return.
+
+This is the cheapest available improvement in the whole review: the mechanism is written, tested
+(`test_main_partial_exit.py`), and revertible by one boolean on each side. Flip
+`config.yaml`'s `use_extended_runner_tiers` and `breakout.pine`'s `useExtendedRunnerTiers`
+together, as that entry instructs.
+
+One wrinkle to verify before flipping: RADICO gapped straight through TP1 to TP2 in a single
+bar, and LICHSGFIN gapped through TP2 to TP3. The Pine only reports the furthest level reached
+in a bar, so the engine never sees the skipped level. Under the current 50/100 split that is
+harmless. Under tiering the engine must close the skipped tranche at the reported price rather
+than wait for a level that has already passed — worth a test in `compute_next_tp` /
+`_replace_runner_sl` before this goes live, because 2 of 8 winners gapped.
+
+### Finding 3 (mechanical argument, thin sample, replicated) — TP1 has a floor but no ceiling
+
+`klCalcTargets` (`breakout.pine:1148`) sets `d = math.max(|t1 - entry|, risk * 1.0)`: the first
+target is the nearest structural level, floored at 1R so R:R never collapses. There is no
+corresponding cap, and the whole ladder scales off `d` (TP3 = 3d), so when the nearest level
+happens to be far away the trade is left with no reachable checkpoint at all.
+
+PIDILITIND drew TP1 at **8.73R** (TP3 therefore at 26R) with its stop 0.215% away. DIVISLAB drew
+3.15R, IEX 2.74R.
+
+Pooled across both weeks, trades whose TP1 landed beyond 2R: **4 of 4 failed to book anything**
+— TATAPOWER (6.47R, week 1) and DIVISLAB stopped out, PIDILITIND and IEX are two of the four
+with no recorded ending at all. Every one of the 8 winners in week 2 had TP1 at exactly 1.00R or
+1.50R. The mechanism explains the outcome without needing the statistics: a trade whose first
+profit-taking checkpoint is unreachable degenerates into all-or-nothing on a distant level
+behind a 0.3% stop, which is the exact shape the negative backtest condemned.
+
+**Proposed change:** add `klMaxTpR` (default 2.0) and **skip the setup** when the nearest level
+in the trade's direction sits beyond it, rather than rescaling TP1 to an arbitrary 2R. Skipping
+is the option consistent with this file's own stated position ("if a level is worth entering on,
+it is worth exiting on", `:1142`-`:1143`) — rescaling would re-introduce the R-multiple exit the
+key-level engine was built to replace. Rescaling also has no support in the data: capping TP1 at
+2R would not have saved DIVISLAB or TATAPOWER, both of which stopped out; skipping them saves
++2R and removes two of the four unresolvable trades.
+
+n=4 is thin, so this belongs behind a default-on input that can be turned off in one click, not
+hardcoded.
+
+### Finding 4 (risk shape, not expectancy) — four same-side positions on one impulse is one bet, not four
+
+09-03 took five entries, all long, all "Above VAH" continuations. PFC and SBIN fired at
+**10:30:12 and 10:30:17** — the same PDH-RT setup on two names five seconds apart — and both
+stopped at 10:35. UNOMINDA, already open from 10:10, stopped at 10:40. Three full stop-outs
+inside ten minutes.
+
+09-02 was the mirror image: six entries, all short, three winners.
+
+With `max_open_positions: 4` and no side constraint, the engine is free to put its entire
+allowance on one direction responding to one index-wide move. On 09-03 that was **-3% of capital
+in ten minutes** from positions the risk engine had counted as three independent 1% risks. The
+week's total was still positive, so this is not an expectancy problem; it is a statement about
+the drawdown shape the current caps permit, and it will matter more as the sample grows.
+
+**Proposed tuning:** a same-side concurrency cap (max 2 concurrent long or short) or a
+short-window entry cap (max 2 entries in any 15 minutes). Applied to this sample the former
+blocks SBIN and turns 09-03 from -1.58R to -0.58R — a small effect on R, which is the point:
+the change buys drawdown shape, not return, and should be judged on that.
+
+### Finding 5 (guard against a tempting wrong move) — do not raise the score threshold
+
+The instinct after a 4-loss session is to demand a higher confluence score. The data says the
+opposite, in both weeks independently:
+
+| | Score >= 9 | Score < 9 |
+|---|---|---|
+| Week 2 (18 resolved) | 5/13 wins, +3.06R | 3/5 wins, +1.25R |
+| Week 1 (12 resolved) | 3/7 wins, +0.68R | 3/5 wins, +1.28R |
+| Pooled (30) | 8/20 wins (40%), +0.19R/trade | 6/10 wins (60%), +0.25R/trade |
+
+Three of week 2's eight winners sat at the minimum score of 7 (APLAPOLLO, RADICO, ICICIPRULI,
+worth +3.25R between them) and would have been filtered out by moving the threshold to 8. The
+single highest-scoring trade of the week, DELHIVERY at 11, was a full stop-out.
+
+The score does not discriminate and mildly inverts. This is consistent with "Corollary 2 —
+per-symbol selection does not work" in the 2026-08-30 entry. **Leave the threshold at 7.**
+Recorded here so the next losing day does not produce this change by reflex.
+
+### Finding 6 (looks strong, does not replicate — do not act on it) — volume-factor and RVOL splits
+
+Week 2 alone produces the most attractive-looking filter in the review:
+
+| Week-2 filter | In | Out |
+|---|---|---|
+| VF >= 1.0 | 8/15 wins, +7.31R | 0/3 wins, -3.00R |
+| RVOL >= 2.5 | 6/11 wins, +8.31R | 2/7 wins, -4.00R |
+| VF >= 1.0 AND RVOL >= 2.5 | 6/10 wins, +9.31R (+0.93R/trade) | 2/8 wins, -5.00R |
+
+A filter that turns +4.31R into +9.31R and removes every losing trade below 1.0 volume factor is
+exactly the kind of result that should be distrusted, so it was checked against week 1 — where
+it inverts:
+
+| Week-1 filter | In | Out |
+|---|---|---|
+| VF >= 1.0 | 3/7 wins, +0.28R | 3/5 wins, +1.68R |
+| RVOL >= 2.5 | 1/3 wins, -0.50R | 5/9 wins, +2.46R |
+
+The pooled numbers still favour the filter, but only because week 2 supplies most of the
+evidence and all of the effect. Three of the three VF < 1.0 losers are a single week's worth of
+coincidence until a second week agrees. **No filter added.** What should happen instead: keep VF
+and RVOL in the entry alert (they already are) and re-test this split at the next review with
+roughly double the sample. If it holds twice, it becomes a candidate gate; if it inverts again,
+it was noise and the record shows it was never acted on.
+
+Same treatment for the direction split — shorts beat longs in both weeks (pooled 9/15 and +6.99R
+short against 5/15 and -0.72R long) — which is at least directionally consistent, but 09-03 and
+09-04 were two long-side sessions in a market that fell, and two weeks cannot separate a
+strategy property from a market regime. Watch it; do not gate on it.
+
+### What was deliberately not changed
+
+- **Score threshold** — see Finding 5; the data argues against the change most likely to be made.
+- **CLV gate (0.50/0.50)** — direction-normalised CLV averages 0.85 for winners and 0.74 for
+  losers, a gap far too small to act on. The gate was relaxed on 08-30b specifically so this
+  regression would be possible; it now has 18 more samples and still says nothing.
+- **Entry window (09:45-11:45)** — week 2 shows the 11:00-11:45 slot going 3 for 3 at +6.55R and
+  the 09:45-10:15 slot going 1 for 4 at -1.49R, which invites narrowing the window. Week 1 shows
+  no such pattern (+0.83R after 11:00 against +1.13R before). Noise.
+- **Trigger families** — PD (PDH/PDL) went 1/5 and -3.50R in week 2, which looks like a case for
+  dropping it, but the same family went 3/3 and +3.85R in week 1. Two weeks, opposite signs, n=8.
+- **Stop construction** — no evidence either way. Stop distance in ATR barely separates winners
+  (1.18 average) from losers (1.29), and every trade's risk sat in a narrow 0.215%-0.437% band.
+
+### Confidence ledger
+
+| Claim | Status |
+|---|---|
+| The post-TP1 remainder has no terminal alert; `strategy.exit` at `:2828` closes 100% | **Strong** — read directly from the code, and matches APLAPOLLO/ICICIPRULI going silent |
+| Zero time-exit alerts across 32 breakout entries while ORB emits them | **Strong** — counted in both exports |
+| Same-bar stop-outs are silenced by `bar_index > orbEntryBar`, explaining PIDILITIND and IEX | **Disproven, same day** — `orbEntryBar` is the signal bar, not the fill bar, so the guard never reaches a first-bar stop. Why those two went silent is still **unknown**; the fix shipped is cause-agnostic |
+| Extended runner tiers are off in live config and would have added about +2.31R this week | **Strong** on "off" (config plus every `ExitQtyPct: 100`); **suggestive** on the magnitude, which assumes the un-run tranches exit at the ratchet |
+| A TP1 beyond 2R produces no bookable trade | **Suggestive** — 0/4 pooled with a clean mechanical explanation, but n=4 |
+| Four same-side positions on one impulse concentrate risk beyond what the caps intend | **Strong** as a description of 09-03; **unproven** that a side cap improves returns |
+| Raising the score threshold would hurt | **Suggestive** — same sign in both weeks, and it cost +3.25R of week-2 winners, but the effect is small |
+| VF >= 1.0 and RVOL >= 2.5 select winners | **Disproven as a stable effect for now** — strong in week 2, inverted in week 1 |
+| Shorts outperform longs | **Suggestive** — same sign both weeks, confounded by a falling market on the two long-heavy days |
+| The strategy has a positive edge | **Unproven, and not even live-tested** — +4.31R over 18 trades is inside chance, 4 of 20 endings are missing, and the whole sample is chart simulation with the engine disconnected (see the correction at the top of this entry) |
+
+### Next review
+
+Re-run at roughly 40-50 resolved trades. The three things that must be true for that review to
+say more than this one: every trade has a recorded ending (Finding 1), the runner tiers are
+actually running (Finding 2), and VF/RVOL are re-tested on the new sample without week 2's
+numbers being reused to confirm themselves.
+
+---
+
 ## 2026-09-02 — Extended runner tiers: TP1/TP2/TP3 profit booking, revertible via one input
 
 The 2-tier exit (`tp1ExitQtyPct` at TP1, then either `tp1_5ExitQtyPct` or a hardcoded 100% at

@@ -253,7 +253,7 @@ tp2ExitQtyPct   = input.int(100, "TP2 Exit %", minval=0, maxval=100, group=grp_t
 // the 70% held past TP1 is already locked in near TP1's level before TP2 is ever reached —
 // the fixed exit fractions only decide how much is banked as cash at each checkpoint, not
 // whether the rest is protected.
-useExtendedRunnerTiers = input.bool(false, "Use extended runner tiers (TP1/TP2/TP3 thirds)", group=grp_targets, tooltip="OFF (default): use the TP1/TP1.5/TP2 Exit % inputs above exactly as configured — today's behavior.\n\nON: TP1=30%, TP1.5=0% (display-only, held for TP2), TP2=50% of remainder, TP3=100% of remainder. Net 30/35/35 split, so a real runner leg survives to TP3 instead of the position being fully closed at TP2. Revised 2026-09-02 from an initial 40/30/30 — see the comment above this input for why.\n\nKeep signal_engine's config.yaml `bracket.use_extended_runner_tiers` in lockstep with this — it governs the runner-SL ratchet on the python side, which locks in profit at each level hit even when the exit fraction itself is small. Flip both together; flip both back to revert.")
+useExtendedRunnerTiers = input.bool(true, "Use extended runner tiers (TP1/TP2/TP3 thirds)", group=grp_targets, tooltip="OFF: use the TP1/TP1.5/TP2 Exit % inputs above exactly as configured — the pre-2026-09-06 behaviour.\n\nON (default since 2026-09-06, see breakout.md): TP1=30%, TP1.5=0% (display-only, held for TP2), TP2=50% of remainder, TP3=100% of remainder. Net 30/35/35 split, so a real runner leg survives to TP3 instead of the position being fully closed at TP2. Revised 2026-09-02 from an initial 40/30/30 — see the comment above this input for why.\n\nKeep signal_engine's config.yaml `bracket.use_extended_runner_tiers` in lockstep with this — it governs the runner-SL ratchet on the python side, which locks in profit at each level hit even when the exit fraction itself is small. Flip both together; flip both back to revert.")
 
 // Effective exit fractions actually used at the TP1/TP1.5/TP2 alert sites below. Computed
 // once so the ON/OFF branch lives in one place instead of being repeated at all 4 call sites
@@ -434,6 +434,7 @@ klBreakMinRvol   = input.float(1.5, "Break-bar min RVOL (skips HTF wait)", minva
 klBlockCounterBias = input.bool(true, "Block counter-bias on trend days", group=grp_score, tooltip="Refuse a setup that trades AGAINST the day's established direction, but only on the two day types where the rule is unconditional.\n\nThe cheat sheet's Avoid List opens with \"Never fade a Trend Day\", and a Double Distribution is a trend day that has relocated. On those two, a counter-directional setup is fighting the auction.\n\nDeliberately NOT applied to Normal, Normal Variation or Neutral days: on those the extremes hold and fading them IS the play, so blocking counter-bias setups would remove the correct trade.\n\nBias comes from which side of the Initial Balance the day has extended, so it only exists once the IB has closed and price has moved.")
 klMaxChaseATR    = input.float(1.0, "Max chase from level (× ATR)", minval=0, maxval=5, step=0.25, group=grp_score, tooltip="Refuse a setup whose confirming bar has already closed this far beyond the level.\n\nA retest is supposed to be entered NEAR the level it defended. If confirmation only arrives once price has run a full ATR past it, the good part of the move is gone and the stop — still measured from the level — is now much further away, so the R:R quietly collapses.\n\nThis does not improve the fill; it declines the ones that are already bad.\n\n1.0 = recommended\n0 = disabled")
 klMinHeadroomR   = input.float(1.5, "Min headroom (R to ADR projection)", minval=0, maxval=10, step=0.25, group=grp_score, tooltip="Refuse a setup that has no room left to run.\n\nProjects where the day would top out if its range expanded to a normal ADR (day low + ADR for a long), measures the distance from entry to there, and divides by the trade's own risk. 2.0 means \"two times my stop distance of room remains\".\n\nThis is the objective form of \"do not buy a breakout after the move is done\" -- the single most common way a technically valid signal still loses.\n\nADR is an AVERAGE, and a genuine trend day blows straight through the projection, so the default is deliberately permissive.\n\n1.0 = must have at least its own risk in room (recommended)\n1.5-2.0 = stricter, skips late entries\n0 = disabled")
+klMaxTpR         = input.float(2.0, "Max TP1 distance (R)", minval=0, maxval=10, step=0.5, group=grp_score, tooltip="Refuse a setup whose nearest structural level sits further than this many R away.\n\nTP1 is the next level, floored at 1R but with no ceiling, and the whole ladder scales off it (TP3 = 3x). When the next level is far, the first profit-taking checkpoint becomes unreachable and the trade degenerates into all-or-nothing on a distant level behind a ~0.3% stop.\n\nPooled 26-28 Aug + 31 Aug-04 Sep: 4 setups drew TP1 beyond 2R, none booked anything, and 2 never resolved at all.\n\n2.0 = recommended\n0 = disabled")
 enableAfternoonWindow = input.bool(false, "Second entry window (PM)", group=grp_session, inline="pm", tooltip="Reopen entries for the afternoon volatility wave.\n\nThe cheat sheet's session map puts a distinct pickup at J-K (13:45-14:45) — the European open feeding through. It is a different regime from the morning: far less runway to the 15:00 time exit, so a target is reached quickly or not at all.\n\nAfternoon entries carry an EXTRA requirement the morning does not: session volume factor at or above the Min Volume × threshold. The PM thesis is entirely volume-driven — without the wave there is no edge, only a thin tape.\n\nOFF = morning window only.")
 pmStartHour = input.int(13, "PM from", minval=9, maxval=15, group=grp_session, inline="pm2", tooltip="Start of the afternoon entry window (IST). 13:45 is where the J-K pickup actually begins.")
 pmStartMinute = input.int(0, ":", minval=0, maxval=59, group=grp_session, inline="pm2")
@@ -815,6 +816,20 @@ var bool orbSLHit = false
 // after TP2 closed it. Chart labels still update; only the alerts stop.
 var bool orbExitAlerted = false
 
+// Percentage of the ORIGINAL position the LIVE ENGINE still holds, tracked independently of
+// strategy.position_size. The two diverge the moment a partial books: strategy.exit() carries
+// no qty_percent, so the strategy model closes 100% at TP1, while the engine acts on the
+// alert's ExitQtyPct and keeps the runner. Anything gating a terminal alert on
+// strategy.position_size is therefore blind to exactly the part of the trade that is still
+// open -- which is why 4 of 20 trades in the 31 Aug - 04 Sep sample emitted no ending at all
+// and their outcome is simply unknown (breakout.md 2026-09-06, Finding 1). This is the
+// engine's view of the position, and the time exit and EOD backstop below fire off it.
+var float orbOpenQtyPct = 0.0
+
+// Timestamp of the bar the current trade signalled on. Frozen at entry and used for nothing
+// but the SigID below, so the id stays identical across every alert of the trade's life.
+var int orbEntrySignalTime = na
+
 var int session_wins = 0
 var int session_losses = 0
 var float session_total_rr = 0.0
@@ -866,6 +881,22 @@ getChartUrl() =>
 getTimeIST() =>
     str.format_time(time, "HH:mm", "Asia/Kolkata") + " IST"
 
+// Stable per-trade key, repeated on EVERY alert of one trade: entry, each TP, the SL, the
+// time exit. "SBIN-20260903-1030".
+//
+// It exists because the engine's ledger otherwise has only order_id to join on, and order_id
+// exists only once an order has been SENT -- a signal that was rejected, unfilled or never
+// sized has no key at all. Its fallback is to group by (strategy, symbol, day) and pair
+// entries to exits by arrival order, which mis-pairs two round trips in the same name on the
+// same day without anything in the data showing it happened. breakout.pine allows exactly
+// that: a re-entry after a stop.
+//
+// The entry BAR's time is the identity, not the alert's send time -- a TP firing hours later
+// must produce the same string as the entry did. Symbol is included so the id is readable and
+// unique across a multi-symbol scan without a lookup.
+sigId() =>
+    na(orbEntrySignalTime) ? "" : syminfo.ticker + "-" + str.format_time(orbEntrySignalTime, "yyyyMMdd-HHmm", sessionTimezone)
+
 // Build Entry Alert Message (LONG/SHORT) - Telegram JSON format
 // srcTag names which key level triggered the entry ("" = a plain ORB breakout).
 // It is emitted as a separate "Trigger:" line, NOT folded into the first line: the
@@ -884,6 +915,7 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
 
     string msg = emoji + " BREAKOUT " + direction + " | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
+    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
     msg += (srcTag != "" ? "Trigger: " + srcTag + "\\n" : "")
     msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Target: " + str.tostring(tpPrice, "#.##") + "\\n"
@@ -938,6 +970,7 @@ buildSLAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
 
     string msg = "❌ BREAKOUT SL HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
+    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
@@ -963,6 +996,7 @@ buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
 
     string msg = "✅ BREAKOUT " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
+    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
@@ -990,6 +1024,7 @@ buildRunnerObsAlert(bool isLong, float entryPrice, float slPrice, float exitPric
     float moveVal = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
     string msg = "📈 RUNNER | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
+    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
     msg += "Reached " + lvl + " after the position closed\\n"
     msg += "Ref Entry " + str.tostring(entryPrice, "#.##") + " | Ref Level " + str.tostring(exitPrice, "#.##") + "\\n"
     msg += "Unbooked " + (riskVal > 0 ? str.tostring(moveVal / riskVal, "0.00") + "R" : "-") + "\\n"
@@ -1018,6 +1053,7 @@ buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, 
     // already closed the position (it finds qty 0 and no-ops).
     string msg = "⏰ BREAKOUT EXIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
+    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
     msg += "Reason: TIME_EXIT\\n"
     msg += "Side: " + emoji + " " + direction + "\\n"
     msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
@@ -2096,6 +2132,8 @@ if shouldReset
     orbTP3Hit := false
     orbSLHit := false
     orbTradeDirection := 0
+    orbOpenQtyPct := 0.0
+    orbEntrySignalTime := na
 
     current_trade_r := 0.0
     tp1_counted := false
@@ -2799,6 +2837,8 @@ if pendingLongEntry and bar_index > pendingLongBar and canFillLong and not (pend
             orbSLHit := false
             orbExitAlerted := false
             orbTradeDirection := 1
+            orbOpenQtyPct := 100.0
+            orbEntrySignalTime := time
 
             maxShares := shares
             positionValue := posValue
@@ -2920,6 +2960,8 @@ if pendingShortEntry and bar_index > pendingShortBar and canFillShort
             orbSLHit := false
             orbExitAlerted := false
             orbTradeDirection := -1
+            orbOpenQtyPct := 100.0
+            orbEntrySignalTime := time
 
             maxShares := shares
             positionValue := posValue
@@ -3582,6 +3624,16 @@ float klT2 = na(klT1Raw) ? float(na) : klPadTarget(klNextLevel(klAllLevels, klDi
 // arriving rather than a stop run, and holding it a full HTF bar gives back most of the move.
 float klHeadroom = klHeadroomR(klDir, klEntryRef, klDayHigh, klDayLow, klADR, klRiskPts)
 bool klRoomOK = klMinHeadroomR <= 0 or na(klHeadroom) or klHeadroom >= klMinHeadroomR
+// Is the first structural target close enough to be a real checkpoint? klCalcTargets floors
+// TP1 at 1R but caps nothing, and every later level scales off it (TP3 = 3 x TP1 distance), so
+// a setup whose next level sits 8R away draws a ladder no session can climb: nothing can be
+// booked, the runner tiers never engage, and the trade reduces to all-or-nothing on a distant
+// level behind a stop worth ~0.3% of price -- the exact shape the 2026-08-30 backtest condemned.
+// na means no level lies ahead at all, which klCalcTargets already handles by falling back to a
+// reachable 1.5R, so na passes. Evidence and the decision to SKIP rather than rescale TP1:
+// breakout.md 2026-09-06, Finding 3.
+float klTpR = na(klT1) or na(klRiskPts) or klRiskPts <= 0 ? float(na) : math.abs(klT1 - klEntryRef) / klRiskPts
+bool klTpReachOK = klMaxTpR <= 0 or na(klTpR) or klTpR <= klMaxTpR
 // Distance already travelled from the level, in ATRs. Entry quality, not direction quality.
 float klChase = na(klSetupLevel) or nz(cachedATR) <= 0 ? na : math.abs(close - klSetupLevel) / cachedATR
 bool klChaseOK = klMaxChaseATR <= 0 or na(klChase) or klChase <= klMaxChaseATR
@@ -3647,21 +3699,21 @@ buildKeyLevelAlert() =>
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable, bool sessOK) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable, bool sessOK, bool tpReachOK) =>
     var int lastBar = na
     // `tradeable` is the session slot. Once a position is taken the slot is gone, so any later
     // setup -- including one pointing the OPPOSITE way -- can never become a trade. Firing its
     // alert anyway put a SHORT packet in Telegram while a LONG was open, which is noise at best
     // and a contradictory instruction at worst. In OBSERVE mode this is left open so the engine
     // can still be watched.
-    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable and sessOK
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable and sessOK and tpReachOK
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry, klSessionOK)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry, klSessionOK, klTpReachOK)
 
 // Latched last setup. The live row is blank on all but the single bar a setup fires, so
 // without this the panel reads 'nothing here' during the 99% of bars between signals --
@@ -4012,8 +4064,12 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if tpFireLevel != "" and not orbExitAlerted
             alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, tpFirePrice, tpFirePrice, tpFireLevel, tpFireQtyPct), alert.freq_once_per_bar)
+            // ExitQtyPct is a share of what is STILL open, not of the original size, so the
+            // remainder compounds down: 30% at TP1 then 50% at TP2 leaves 35%, not 20%.
+            orbOpenQtyPct := orbOpenQtyPct * (100.0 - tpFireQtyPct) / 100.0
             if tpFireQtyPct >= 100
                 orbExitAlerted := true
+                orbOpenQtyPct := 0.0
         else if tpFireLevel != "" and orbExitAlerted and enableRunnerObs
             alert(buildRunnerObsAlert(true, orbEntryPrice, orbSLPrice, tpFirePrice, tpFireLevel), alert.freq_once_per_bar)
 
@@ -4043,6 +4099,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             if not orbExitAlerted
                 alert(buildSLAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
                 orbExitAlerted := true
+                orbOpenQtyPct := 0.0
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -4117,8 +4174,12 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
         if tpFireLevel != "" and not orbExitAlerted
             alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, tpFirePrice, tpFirePrice, tpFireLevel, tpFireQtyPct), alert.freq_once_per_bar)
+            // ExitQtyPct is a share of what is STILL open, not of the original size, so the
+            // remainder compounds down: 30% at TP1 then 50% at TP2 leaves 35%, not 20%.
+            orbOpenQtyPct := orbOpenQtyPct * (100.0 - tpFireQtyPct) / 100.0
             if tpFireQtyPct >= 100
                 orbExitAlerted := true
+                orbOpenQtyPct := 0.0
         else if tpFireLevel != "" and orbExitAlerted and enableRunnerObs
             alert(buildRunnerObsAlert(false, orbEntryPrice, orbSLPrice, tpFirePrice, tpFireLevel), alert.freq_once_per_bar)
 
@@ -4148,6 +4209,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             if not orbExitAlerted
                 alert(buildSLAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
                 orbExitAlerted := true
+                orbOpenQtyPct := 0.0
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -4171,21 +4233,46 @@ if inSession and not inSession[1]
 // Time exit: Close position at time exit hour + send Telegram alert.
 // strategy.close_all simulates the exit for backtest accuracy.
 // Signal engine handles actual exit independently via its own time exit logic.
-// strategy.position_size != 0 ensures we only fire if position is still open
-if isPastTimeExit and not timeExitTriggered and strategy.position_size != 0
-    bool isLongPos = strategy.position_size > 0
+//
+// The gate is orbOpenQtyPct > 0 (the ENGINE's remainder), not strategy.position_size. Gating
+// on the strategy position meant a trade that booked a partial could never emit an ending:
+// strategy.exit() closes 100% at TP1, so the strategy is flat from that moment while the
+// engine still holds the runner, and the SL alert is separately (and correctly) suppressed
+// once any TP has booked. APLAPOLLO and ICICIPRULI on 31 Aug / 02 Sep each sent one
+// "TP1 HIT | ExitQtyPct: 50" and then nothing ever again -- half of each position has no
+// recorded outcome. strategy.position_size is kept in the OR so a plain ORB trade, which
+// never touches orbOpenQtyPct, still closes and alerts exactly as before.
+//
+// This is also the backstop for a trade that goes quiet for any other reason: whatever
+// silences the per-bar TP/SL detection block (which sits behind `not orbLinesFrozen`), the
+// 14:45 clock is top-level and unconditional, so every trade now ends with an event.
+// See breakout.md 2026-09-06, Finding 1.
+if isPastTimeExit and not timeExitTriggered and (strategy.position_size != 0 or orbOpenQtyPct > 0)
+    // Direction from the tracked trade, not from strategy.position_size -- that is already 0
+    // whenever this fires for a post-partial runner.
+    bool isLongPos = orbTradeDirection != 0 ? orbTradeDirection == 1 : strategy.position_size > 0
     // Send Time Exit Alert — always reference TP1 for R:R consistency with entry alert
     if not orbExitAlerted
         alert(buildTimeExitAlert(isLongPos, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
         orbExitAlerted := true
+        orbOpenQtyPct := 0.0
 
     strategy.close_all(comment="Time Exit")
     timeExitTriggered := true
     orbLinesFrozen := true
 
 // === STRATEGY: Close all positions at end of session ===
-if not inSession and inSession[1] and strategy.position_size != 0
-    strategy.close_all(comment="EOD Close")
+// Second backstop. If the time exit above never ran -- time_exit misconfigured past the close,
+// a session with no bar printed in the 14:45 window -- the record still gets its terminal
+// event here rather than the trade vanishing from the forward-test sample.
+if not inSession and inSession[1]
+    if orbOpenQtyPct > 0 and not orbExitAlerted and not na(orbEntryPrice)
+        bool isLongEod = orbTradeDirection != 0 ? orbTradeDirection == 1 : strategy.position_size > 0
+        alert(buildTimeExitAlert(isLongEod, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
+        orbExitAlerted := true
+        orbOpenQtyPct := 0.0
+    if strategy.position_size != 0
+        strategy.close_all(comment="EOD Close")
 
 // ===================== REAL-TIME TP TRACKING & TRADE CLOSE DETECTION ==============================
 bool cyclesChanged = (cyclesUp != prevCyclesUp) or (cyclesDown != prevCyclesDown)

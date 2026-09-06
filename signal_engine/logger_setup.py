@@ -27,5 +27,23 @@ def setup_logger() -> logger.__class__:
         format=_LOG_FORMAT,
         rotation="1 day",
         retention="30 days",
+        # Frames that produced the error, not just the raising line. `diagnose` stays OFF on
+        # purpose: it renders local variable VALUES into the log, and the locals around an
+        # order call hold the API key and the broker session token.
+        backtrace=True,
+        diagnose=False,
+    )
+    # Errors only, one JSON object per line. The full log above is a whole trading day of
+    # polls and fills; after a bad session the first question is "what broke", and that should
+    # be a short file, not a grep. Mirrors the house convention in the root CLAUDE.md, where
+    # log/errors.jsonl is the documented first place to look when debugging.
+    logger.add(
+        "signal_engine/logs/errors_{time:YYYY-MM-DD}.jsonl",
+        level="ERROR",
+        rotation="1 day",
+        retention="90 days",
+        serialize=True,
+        backtrace=True,
+        diagnose=False,
     )
     return logger

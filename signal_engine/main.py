@@ -11,7 +11,7 @@ from loguru import logger
 
 from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_order_fill_price, fetch_order_status, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
 from signal_engine.config import settings
-from signal_engine.db import fetch_last_entry_trade, save
+from signal_engine.db import fetch_last_entry_trade, save, save_declined
 from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import Direction, OrderStatus, TradeResult, ValidationStatus
@@ -700,17 +700,19 @@ async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -
     a flat TP1-sized buffer would sit proportionally tighter, and more exposed to a stop-hunt
     wick, against a level further out (e.g. only 15% of TP2's own distance vs 30% of TP1's).
     """
-    new_sl_price = structural_runner_sl(
+    is_long = pos.direction == Direction.LONG
+    tighter = max if is_long else min
+
+    structural_sl = structural_runner_sl(
         pos.direction, pos.entry_price, pos.tp, getattr(pos, "context", None) or {}
     )
-    if new_sl_price is not None:
-        logger.info(
-            f"Runner SL for {pos.symbol}: structural {new_sl_price:.2f} "
-            f"(entry {pos.entry_price:.2f})"
-        )
-    elif pos.tp and pos.tp > 0:
+
+    # The R-based candidate, computed whether or not a structural stop exists so the two can
+    # be compared. Without extended tiers it always anchors to TP1, which is the historical rule.
+    ratchet_sl = None
+    ratchet_level = "TP1"
+    if pos.tp and pos.tp > 0:
         risk_distance = abs(pos.tp - pos.entry_price)
-        anchor_level = "TP1"
         anchor_price = pos.tp
         anchor_multiplier = 1.0
         if settings.use_extended_runner_tiers and tp_level:
@@ -718,26 +720,49 @@ async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -
             ratcheted_multiplier = _TP_LEVEL_R_MULTIPLIERS.get((tp_level or "").upper())
             if ratcheted_anchor is not None and ratcheted_multiplier is not None:
                 anchor_price = ratcheted_anchor
-                anchor_level = tp_level.upper()
+                ratchet_level = tp_level.upper()
                 anchor_multiplier = ratcheted_multiplier
         buffer = settings.tp1_runner_sl_buffer * risk_distance * anchor_multiplier
-        if pos.direction == Direction.LONG:
-            candidate_sl = anchor_price - buffer
-            new_sl_price = (
-                max(candidate_sl, pos.sl)
-                if settings.use_extended_runner_tiers and pos.sl
-                else candidate_sl
-            )
+        ratchet_sl = anchor_price - buffer if is_long else anchor_price + buffer
+
+    if structural_sl is None:
+        # Plain ORB breakout: no key level behind the trade, so the R-based rule is the whole
+        # answer. Unchanged from the original behaviour, including with the flag off.
+        if ratchet_sl is not None:
+            anchor_level = ratchet_level
+            new_sl_price = ratchet_sl
         else:
-            candidate_sl = anchor_price + buffer
-            new_sl_price = (
-                min(candidate_sl, pos.sl)
-                if settings.use_extended_runner_tiers and pos.sl
-                else candidate_sl
-            )
+            anchor_level = "entry"
+            new_sl_price = pos.entry_price
     else:
-        anchor_level = "entry"
-        new_sl_price = pos.entry_price
+        anchor_level = "structural"
+        new_sl_price = structural_sl
+        # structural_runner_sl() is a FLOOR, not the answer. It returns a price for every
+        # key-level trigger and is floored at break-even, so taking it verbatim pinned every
+        # BREAKOUT runner at entry for the life of the trade and made the ratchet reachable
+        # only for plain ORB breakouts — the one strategy it was NOT written for. Harmless
+        # while TP2 closed the position outright; a real leak once extended tiers hold 35%
+        # past TP2 behind a break-even stop after price has already run 2R.
+        # See breakout.md 2026-09-06, Finding 2.
+        if settings.use_extended_runner_tiers and ratchet_sl is not None:
+            best = tighter(structural_sl, ratchet_sl)
+            if best != structural_sl:
+                anchor_level = ratchet_level
+                new_sl_price = best
+
+    # A stop only ever tightens. Guards the gap-through case too: one 5-min bar can span
+    # TP1..TP3 and breakout.pine emits a single alert for the best level reached, so the
+    # engine can see TP2 while pos.sl is still the original loss-side stop. Skipped for the
+    # entry fallback, which has neither a level nor a TP to reason from and is left exactly
+    # as it was.
+    have_priced_stop = structural_sl is not None or ratchet_sl is not None
+    if settings.use_extended_runner_tiers and have_priced_stop and pos.sl:
+        new_sl_price = tighter(new_sl_price, pos.sl)
+
+    logger.info(
+        f"Runner SL for {pos.symbol}: {anchor_level} {new_sl_price:.2f} "
+        f"(entry {pos.entry_price:.2f}, tp_level={tp_level})"
+    )
     if not (settings.bracket_enabled and new_sl_price > 0):
         return
 
@@ -794,6 +819,18 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
         await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
 
 
+async def _decline(signal, stage: str, reason: str) -> None:
+    """Record a signal the engine refused before sending an order.
+
+    Entry directions only: an EXIT that fails validation is a reconciliation problem, not a
+    trade that did not happen, and recording it as a declined entry would corrupt the count
+    the review depends on.
+    """
+    if signal.direction not in (Direction.LONG, Direction.SHORT):
+        return
+    save_declined(signal, stage=stage, reason=reason)
+
+
 async def _handle_entry(signal) -> None:
     """Handle a LONG/SHORT entry signal — the existing ORB pipeline.
 
@@ -844,6 +881,7 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
         msg = f"{signal.symbol} is T2T (BE series) — MIS not allowed, add to blacklist to suppress"
         logger.warning(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await _decline(signal, stage="symbol_rules", reason=msg)
         return True
 
     # Pre-flight broker reject list — symbols the broker is known to refuse for MIS
@@ -856,6 +894,7 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
         )
         logger.warning(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await _decline(signal, stage="symbol_rules", reason=msg)
         return True
 
     return False
@@ -867,14 +906,17 @@ async def _entry_passes_risk_gates(signal) -> bool:
         reason = risk_engine.exposure_block_reason()
         logger.warning(f"Risk limit reached, skipping {signal.symbol}: {reason}")
         await notifier.notify_risk_limit_hit(reason)
+        await _decline(signal, stage="risk_gates", reason=reason)
         return False
 
     if not risk_engine.can_trade_symbol(signal.symbol):
         logger.warning(f"Symbol concentration limit reached for {signal.symbol}")
+        await _decline(signal, stage="risk_gates", reason="symbol concentration limit")
         return False
 
     if not risk_engine.can_trade_sector(signal.symbol):
         logger.warning(f"Sector concentration limit reached for {signal.symbol}")
+        await _decline(signal, stage="risk_gates", reason="sector concentration limit")
         return False
 
     return True
@@ -885,6 +927,7 @@ async def _resolve_entry_capital(signal) -> float | None:
     capital = await fetch_available_capital()
     if capital <= 0:
         logger.error("Cannot fetch capital from OpenAlgo, skipping trade")
+        await _decline(signal, stage="capital", reason="capital fetch failed or zero")
         return None
 
     # Minimum capital floor — skip entry if live capital is too depleted.
@@ -899,6 +942,7 @@ async def _resolve_entry_capital(signal) -> float | None:
         )
         logger.warning(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await _decline(signal, stage="capital", reason=msg)
         return None
 
     return capital
@@ -916,6 +960,7 @@ async def _resolve_entry_quantity(
         msg = f"Sizing returned 0 for {signal.symbol} — entry price too high for risk budget ({signal.entry:.2f} vs capital={sizing_capital:,.0f})"
         logger.info(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await _decline(signal, stage="sizing", reason=msg)
         return None
 
     # Adjust qty to fit actual broker margin (uses live capital, not day-start)
@@ -930,6 +975,7 @@ async def _resolve_entry_quantity(
             msg = f"Margin API failed: {e}"
             logger.error(f"{signal.symbol}: {msg}, skipping trade")
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+            await _decline(signal, stage="margin", reason=msg)
             return None
         if quantity <= 0:
             msg = f"Insufficient capital after margin check — {signal.symbol} requires more margin than available (capital={capital:,.0f})"
@@ -1157,6 +1203,7 @@ async def handle_message(text: str) -> None:
     result = validate(signal)
     if result.status != ValidationStatus.VALID:
         logger.info(f"Signal {result.status.value}: {result.reason}")
+        await _decline(signal, stage=f"validator:{result.status.value}", reason=result.reason or "")
         return
 
     # 3. Dispatch based on direction.
