@@ -9,6 +9,85 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-09-06 16:51 IST — Token limit hit; KEYLEVEL packet removed. Day summary fixed.
+
+### "Compiled code contains too many tokens: 101359. The limit is 100256"
+
+1,103 compiled tokens over. Measured with a rough tokenizer over comment-stripped source
+(comments and tooltip strings do not count — see the 2026-08-22 entry; a string literal is one
+token however long, so shortening tooltip prose saves nothing):
+
+| | raw tokens |
+|---|---|
+| before this session's work | 35,259 |
+| when the error appeared | 35,598 |
+| after the cuts below | 34,972 |
+
+This session's Pine additions were **+339 raw**, and the overrun needed **-386 raw**. So the
+file was already within ~50 raw tokens of the ceiling before anything was added — the 2026-08-22
+warning that "the budget for anything added to this script is about 20k tokens, and the
+key-level layer very nearly spent all of it" had already come true.
+
+**Cuts, in order of what they cost to give up:**
+
+1. `sigId()` now returns the finished `"SigID: ...\n"` line rather than the bare id, so each of
+   the five call sites is `msg += sigId()` instead of a ternary with two calls. **-85 raw.**
+   No behaviour change.
+2. `klTpReachOK` folded into the existing `roomOK` argument (`klRoomOK and klTpReachOK`) instead
+   of threading a new parameter through the signature, the candidate expression and the call.
+   **-8 raw.** Same gate, same result.
+3. The duplicated direction ternary in the EOD backstop replaced with `orbTradeDirection == 1`.
+   **-10 raw.**
+4. **`buildKeyLevelAlert()` and `klFootprintCue()` removed entirely. -456 raw (~1,300 compiled),
+   more than the whole overrun on its own.**
+
+**Why (4) is the right thing to drop rather than a reluctant sacrifice.** `enableKeyLevelAlerts`
+defaulted to **false**; its own tooltip already said *"the entry alert now carries the same
+context inline"*; and the signal engine ignores KEYLEVEL packets by design. Every field the
+packet carried — Score, RVOL, VF, CLV, Trend, Auction, AdrUsed, Chase, DayType, OpenType and all
+eleven levels — is still emitted inline by `buildEntryAlert`, which is what the entire week-1
+review was built from. Nothing that fed the engine or the analysis is gone.
+
+What IS gone: the FOOTPRINT prompt and the OBSERVE/EXECUTING mode line, both read by a human
+watching a separate channel. `git show e15a78b80 -- <the file>` restores them.
+
+`telegram_chat_id_keylevel` is kept — RUNNER observations still route through it.
+
+**Headroom now is about 650 compiled tokens.** That is not comfortable. The documented next
+move stands: split the key-level engine into its own indicator rather than shave further. The
+next feature of any size will hit this wall again.
+
+### Day summary: it was never sent because the engine was not running — but it was also broken
+
+The engine's last log is 2026-08-25 and its last trade 2026-08-23, so nothing was alive on
+Friday 04 Sep to send anything. The chain itself is sound: the scheduler fires `time_exit_all()`
+at 14:45, which calls `send_day_summary()` on both branches (positions or none), and
+`notify_day_summary` handles a zero-trade day with "No trades taken today." `day_summary` is
+classified `quiet`, so `notify_level` never suppresses it.
+
+Tracing that turned up a real defect anyway. `time_exit_all()` sends the summary and then calls
+`_reset_day_counters()`, which set `_day_summary_sent = False` and zeroed every counter. **The
+one-shot guard was dead for the rest of the day.** Two consequences:
+
+- Any later full-close reaching `maybe_send_day_summary()` (book empty, within 30 min of the
+  time exit) sends a **second** summary reading zero, contradicting the real one minutes earlier.
+- The watchdog restarts the engine every 5 minutes until 15:25. A restart after 14:45 gives a
+  fresh scheduler whose catch-up branch fires `time_exit_all()` immediately — against counters
+  that are empty because the process just started. That is a false "No trades taken today."
+  landing on top of a correct summary, which is worse than no summary at all in a week whose
+  whole point is the daily review.
+
+Fixed: the guard is now the **date** the summary was sent, held both in-process
+(`_day_summary_date`) and in a marker file (`data/day_summary`) so it survives a restart.
+`_reset_day_counters()` no longer touches it — the date is what ends the day, not the reset. An
+unreadable or corrupt marker answers "not sent", because sending twice is a nuisance while going
+silent for a week is the failure that matters.
+
+Tests: `test_day_summary.py` — once per day, reset does not re-arm, a new day sends again, a
+restart does not duplicate, a later-day restart does send, a corrupt marker does not silence.
+
+---
+
 ## 2026-09-06 16:31 IST — Mode profiles, quieter notifications, automated EOD
 
 Both `intraday-breakout` and `intraday-breakingtrade` now paper-trade together in ANALYZE mode

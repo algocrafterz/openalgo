@@ -1,6 +1,7 @@
 """Position tracker — polls OpenAlgo to detect closed positions and update risk counters."""
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Set
@@ -105,6 +106,37 @@ class TrackedPosition:
     context: dict = field(default_factory=dict)
 
 
+#: Remembers which date's day summary has already gone out. A file rather than in-memory
+#: state because the watchdog restarts the engine every 5 minutes until 15:25, and the
+#: scheduler's catch-up branch fires time_exit_all() on any start after 14:45 — against
+#: counters that are empty because the process just began. Without this, a 14:50 restart
+#: reports "No trades taken today." over the real summary sent minutes earlier.
+_DAY_SUMMARY_MARKER = os.path.join(os.path.dirname(__file__), "data", "day_summary")
+
+
+def _summary_already_sent_today() -> bool:
+    """True if today's summary is already recorded as sent.
+
+    Any read problem answers False: a corrupt or unreadable marker must never be able to
+    suppress the summary indefinitely. Sending twice is a nuisance; going silent for the
+    rest of the week is the failure that matters.
+    """
+    try:
+        with open(_DAY_SUMMARY_MARKER, encoding="utf-8") as fh:
+            return fh.read().strip() == datetime.now(IST).date().isoformat()
+    except (OSError, ValueError):
+        return False
+
+
+def _mark_summary_sent() -> None:
+    try:
+        os.makedirs(os.path.dirname(_DAY_SUMMARY_MARKER), exist_ok=True)
+        with open(_DAY_SUMMARY_MARKER, "w", encoding="utf-8") as fh:
+            fh.write(datetime.now(IST).date().isoformat())
+    except OSError as e:
+        logger.warning(f"Could not record day-summary marker: {e}")
+
+
 class PositionTracker:
     """Monitors open positions by polling OpenAlgo API.
 
@@ -128,7 +160,9 @@ class PositionTracker:
         self._day_pnl: float = 0.0
         self._day_no_progress_exits: int = 0  # firings of no-progress gate today (chop signal)
         self._chop_tightener_logged: bool = False  # one-shot info log when tightener engages
-        self._day_summary_sent: bool = False  # prevent duplicate summaries
+        # Date whose summary has been sent in THIS process. Paired with the on-disk
+        # marker above, which covers restarts.
+        self._day_summary_date = None
         self._completed_trades: List[TradeRecord] = []  # one record per closed position
         # Per-(key, log-kind) throttle to suppress repeated debug lines on every 5s poll.
         # Value = last time we emitted that log line for the position/kind pair.
@@ -287,7 +321,8 @@ class PositionTracker:
         maybe_send_day_summary() instead; this is the low-level primitive time_exit_all()
         itself uses once the day is genuinely over.
         """
-        if self._day_summary_sent:
+        today = datetime.now(IST).date()
+        if self._day_summary_date == today or _summary_already_sent_today():
             return
         capital = self._risk_engine._last_known_capital or 0.0
         await notifier.notify_day_summary(
@@ -299,7 +334,8 @@ class PositionTracker:
             time_exits=self._day_time_exits,
             trade_records=self._completed_trades,
         )
-        self._day_summary_sent = True
+        self._day_summary_date = today
+        _mark_summary_sent()
 
     async def maybe_send_day_summary(self) -> None:
         """Send the day summary now, unless positions remain open or the day could
@@ -938,7 +974,10 @@ class PositionTracker:
         self._day_pnl = 0.0
         self._day_no_progress_exits = 0
         self._chop_tightener_logged = False
-        self._day_summary_sent = False
+        # _day_summary_date is deliberately NOT cleared here. This runs immediately after
+        # time_exit_all() has sent the summary, so clearing it would disarm the one-shot
+        # guard for the rest of the day and let the next empty-book moment send a second,
+        # zeroed summary contradicting the first. The date itself is what ends the day.
         self._completed_trades = []
 
     async def start(self) -> None:

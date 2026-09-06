@@ -466,7 +466,6 @@ telegram_chat_id = input.string("-1004450500772", "Telegram Chat ID", group=grp_
 // cannot read them by design. Off by default so the engine channel carries BREAKOUT only.
 // Turn back on and point telegram_chat_id_keylevel at a separate channel to watch the engine
 // arm setups without that traffic reaching the signal engine.
-enableKeyLevelAlerts = input.bool(false, "Send KEYLEVEL packets", group=grp_telegram, tooltip="Key-level decision packets — the pre-arm heads-up that fires one bar before an entry.\n\nOFF: only BREAKOUT entry / TP HIT / SL HIT alerts are sent. Simplest, and the entry alert now carries the same context inline.\n\nON: also sends the KEYLEVEL packet. Point 'KEYLEVEL Chat ID' at a SEPARATE channel — the signal engine ignores these, so mixing them into the trade channel is noise.")
 telegram_chat_id_keylevel = input.string("", "KEYLEVEL Chat ID", group=grp_telegram, tooltip="Channel for KEYLEVEL packets when they are enabled.\n\nLeave EMPTY to reuse the main Telegram Chat ID.\n\nSet this to a channel the signal engine does NOT listen on (it is absent from telegram.channels in config.yaml), so observation traffic never reaches the trade pipeline.")
 // Measures what the exit policy gives up, without risking anything: observation only.
 enableRunnerObs = input.bool(true, "Send RUNNER observations", group=grp_telegram, tooltip="When a TP level is reached AFTER the position is already flat, send a non-actionable note recording how far the move actually ran.\n\nThis is the evidence for whether booking 100% by TP1.5 is leaving money on the table. The signal engine cannot parse these, and they go to the KEYLEVEL channel when one is set.\n\nOFF: no record of unbooked runners.")
@@ -894,8 +893,12 @@ getTimeIST() =>
 // The entry BAR's time is the identity, not the alert's send time -- a TP firing hours later
 // must produce the same string as the entry did. Symbol is included so the id is readable and
 // unique across a multi-symbol scan without a lookup.
+// Returns the whole "SigID: ...\n" line, or "" when there is no trade. Emitting the finished
+// line rather than the bare id keeps each of the five call sites to `msg += sigId()`: the
+// ternary and the second sigId() call they used to need cost ~70 compiled tokens across the
+// file, and this script sits within ~150 tokens of TradingView's 100,256 limit.
 sigId() =>
-    na(orbEntrySignalTime) ? "" : syminfo.ticker + "-" + str.format_time(orbEntrySignalTime, "yyyyMMdd-HHmm", sessionTimezone)
+    na(orbEntrySignalTime) ? "" : "SigID: " + syminfo.ticker + "-" + str.format_time(orbEntrySignalTime, "yyyyMMdd-HHmm", sessionTimezone) + "\\n"
 
 // Build Entry Alert Message (LONG/SHORT) - Telegram JSON format
 // srcTag names which key level triggered the entry ("" = a plain ORB breakout).
@@ -915,7 +918,7 @@ buildEntryAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, flo
 
     string msg = emoji + " BREAKOUT " + direction + " | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
+    msg += sigId()
     msg += (srcTag != "" ? "Trigger: " + srcTag + "\\n" : "")
     msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Target: " + str.tostring(tpPrice, "#.##") + "\\n"
@@ -970,7 +973,7 @@ buildSLAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
 
     string msg = "❌ BREAKOUT SL HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
+    msg += sigId()
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
@@ -996,7 +999,7 @@ buildTPAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, float 
 
     string msg = "✅ BREAKOUT " + tpLevel + " HIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
+    msg += sigId()
     msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
@@ -1024,7 +1027,7 @@ buildRunnerObsAlert(bool isLong, float entryPrice, float slPrice, float exitPric
     float moveVal = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice)
     string msg = "📈 RUNNER | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
+    msg += sigId()
     msg += "Reached " + lvl + " after the position closed\\n"
     msg += "Ref Entry " + str.tostring(entryPrice, "#.##") + " | Ref Level " + str.tostring(exitPrice, "#.##") + "\\n"
     msg += "Unbooked " + (riskVal > 0 ? str.tostring(moveVal / riskVal, "0.00") + "R" : "-") + "\\n"
@@ -1053,7 +1056,7 @@ buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, 
     // already closed the position (it finds qty 0 and no-ops).
     string msg = "⏰ BREAKOUT EXIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += (sigId() != "" ? "SigID: " + sigId() + "\\n" : "")
+    msg += sigId()
     msg += "Reason: TIME_EXIT\\n"
     msg += "Side: " + emoji + " " + direction + "\\n"
     msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
@@ -3668,52 +3671,42 @@ bool klHTFOK = not klRequireHTFClose or na(klHTFClose) or na(klSetupLevel) or kl
 klSetupPhrase(string cd) =>
     str.substring(cd, 0, 3) + (str.endswith(cd, "-RT") ? " breakout-retest" : str.endswith(cd, "-REJ") ? " rejection" : str.endswith(cd, "-ACC") ? " acceptance" : " breakout")
 
-klFootprintCue(int d, bool rejFamily, string lvlName) =>
-    d == 0 ? "" : d == 1 ? (rejFamily ? "Sellers absorbed near " + lvlName + "? Buy imbalance? Delta flips up?" : "Buyers stacked above " + lvlName + "? No absorption? Delta up?") : (rejFamily ? "Buyers absorbed near " + lvlName + "? Sell imbalance? Delta flips down?" : "Sellers stacked below " + lvlName + "? No absorption? Delta down?")
-
-buildKeyLevelAlert() =>
-    // lvlName = the family prefix (VAH/VAL/PDH/PDL/IBH/IBL) without the -RT/-REJ/-ACC/-BRK
-    // suffix; substring is cheaper than four chained str.replace_all calls.
-    string lvlName = str.substring(klSetupCode, 0, 3)
-    string sep = "------------------------\\n"
-    string msg = (klDir == 1 ? "🟢 KEYLEVEL LONG | " : "🔴 KEYLEVEL SHORT | ") + syminfo.ticker + "\\n" + sep
-    msg += "Setup: " + klSetupPhrase(klSetupCode) + " | Score " + str.tostring(klScore) + "\\n"
-    msg += "Level: " + lvlName + " " + str.tostring(klSetupLevel, format.mintick) + (klConfCnt > 0 ? "  (+" + klConfNames + ")" : "") + "\\n" + sep
-    msg += "Ref Entry " + str.tostring(klEntryRef, format.mintick) + " | Ref SL " + str.tostring(klSLLevel, format.mintick) + "\\n"
-    // Report the target the EXECUTED trade would actually use, not the raw structural level.
-    // klCalcTargets floors the target distance at 1R, so a structural T1 nearer than the stop
-    // gets pushed out -- FEDERALBNK showed Ref T1 = 0.36R here on 2026-08-24 while the entry
-    // alert that followed carried 1.0R. Two numbers for one level reads as a bug to anyone
-    // checking the packet against the fill.
-    float klRefT1 = na(klSetupLevel) or klDir == 0 ? float(na) : klDir == 1 ? klEntryRef + math.max(na(klT1) ? klRiskPts * 1.5 : math.abs(klT1 - klEntryRef), klRiskPts) : klEntryRef - math.max(na(klT1) ? klRiskPts * 1.5 : math.abs(klT1 - klEntryRef), klRiskPts)
-    msg += "Ref T1 " + (na(klRefT1) ? "-" : str.tostring(klRefT1, format.mintick)) + " | Ref Qty " + (na(klQtyEst) ? "-" : str.tostring(klQtyEst)) + "\\n"
-    msg += "Risk " + str.tostring(klRiskPts, format.mintick) + " pts\\n" + sep
-    msg += "VF " + (na(klSessionVF) ? "-" : str.tostring(klSessionVF, "0.00") + "x") + " | RVOL " + str.tostring(klRVOL, "0.0") + " | CLV " + str.tostring(klCLV, "0.00") + " | d-proxy " + klDeltaProxy + "\\n"
-    msg += "Trend " + (not na(sessionVWAP) and close > sessionVWAP ? "vwap+ " : "vwap- ") + (close > klEMA9 ? "ema+ " : "ema- ") + (klEMASlope > 0 ? "slope+" : "slope-") + "\\n"
-    msg += "Auction: " + klAuction + " | Open " + klOpenPos + " | ADR " + (na(klADR) or klADR <= 0 or na(klDayHigh) ? "-" : str.tostring((klDayHigh - klDayLow) / klADR * 100, "#") + "% used") + "\\n" + sep
-    msg += "FOOTPRINT: " + klFootprintCue(klDir, klRejectionFamily, lvlName) + "\\n"
-    msg += (enableKeyLevelExecution ? "MODE: EXECUTING\\n" : "MODE: OBSERVE ONLY\\n") + sep + getTimeIST() + "\\n" + getChartUrl()
-    '{"chat_id": "' + (telegram_chat_id_keylevel == "" ? telegram_chat_id : telegram_chat_id_keylevel) + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+// buildKeyLevelAlert() and klFootprintCue() were REMOVED 2026-09-06 to get back under
+// TradingView's 100,256-token limit (the compile was 1,103 over). They cost ~456 raw
+// tokens, roughly 1,300 compiled -- more than the whole overrun.
+//
+// Nothing was lost that was in use: enableKeyLevelAlerts defaulted to FALSE, its own
+// tooltip said "the entry alert now carries the same context inline", and the signal
+// engine ignores KEYLEVEL packets by design. Every field the packet carried (Score, RVOL,
+// VF, CLV, Trend, Auction, AdrUsed, Chase, DayType, OpenType, and all eleven levels) is
+// still emitted inline by buildEntryAlert, which is what the week-1 review was built from.
+//
+// The FOOTPRINT prompt and the OBSERVE/EXECUTING mode line are the only things gone. Both
+// were read by a human watching a separate channel; neither fed the engine.
+//
+// `git show e15a78b80 -- <this file>` restores them if the packet is ever wanted back --
+// but see the 2026-08-22 entry: this script is at its token ceiling, and the documented
+// next move is splitting the key-level engine into its own indicator, not shaving further.
 
 // ─── Fire ───────────────────────────────────────────────────────────────────
 // Cooldown state lives inside the gate, so this must be called unconditionally.
 // beforeCutoff/inSess keep key-level setups inside the same trading window as ORB
 // entries — an observation alert must never suggest a trade the strategy would refuse.
-klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable, bool sessOK, bool tpReachOK) =>
+klFireGate(bool en, int d, int score, int threshold, int cooldown, bool confirmed, bool beforeCutoff, bool inSess, bool htfOK, bool roomOK, bool chaseOK, bool biasOK, bool tradeable, bool sessOK) =>
     var int lastBar = na
     // `tradeable` is the session slot. Once a position is taken the slot is gone, so any later
     // setup -- including one pointing the OPPOSITE way -- can never become a trade. Firing its
     // alert anyway put a SHORT packet in Telegram while a LONG was open, which is noise at best
     // and a contradictory instruction at worst. In OBSERVE mode this is left open so the engine
     // can still be watched.
-    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable and sessOK and tpReachOK
+    bool candidate = en and d != 0 and score >= threshold and htfOK and roomOK and chaseOK and biasOK and tradeable and sessOK
     bool fresh = na(lastBar) or (bar_index - lastBar > cooldown)
     bool f = confirmed and candidate and fresh and beforeCutoff and inSess
     if f
         lastBar := bar_index
     f
 
-bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry, klSessionOK, klTpReachOK)
+bool klFire = klFireGate(enableKeyLevels, klDir, klScore, klScoreThreshold, klCooldownBars, barstate.isconfirmed, isBeforeCutoff, inSession, klHTFOK, klRoomOK and klTpReachOK, klChaseOK, klBiasOK, not enableKeyLevelExecution or canTakeKeyLevelEntry, klSessionOK)
 
 // Latched last setup. The live row is blank on all but the single bar a setup fires, so
 // without this the panel reads 'nothing here' during the 99% of bars between signals --
@@ -3732,9 +3725,6 @@ if klFire
     klLastConfN := klConfNames
     klLastTime  := time
 
-
-if klFire and enableKeyLevelAlerts
-    alert(buildKeyLevelAlert(), alert.freq_once_per_bar_close)
 
 // NOTE: alertcondition() is INERT inside a strategy() script — TradingView compiles it but
 // never fires it, and warns as much. Every alert this file sends goes through alert() on the
@@ -4267,8 +4257,7 @@ if isPastTimeExit and not timeExitTriggered and (strategy.position_size != 0 or 
 // event here rather than the trade vanishing from the forward-test sample.
 if not inSession and inSession[1]
     if orbOpenQtyPct > 0 and not orbExitAlerted and not na(orbEntryPrice)
-        bool isLongEod = orbTradeDirection != 0 ? orbTradeDirection == 1 : strategy.position_size > 0
-        alert(buildTimeExitAlert(isLongEod, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
+        alert(buildTimeExitAlert(orbTradeDirection == 1, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
         orbExitAlerted := true
         orbOpenQtyPct := 0.0
     if strategy.position_size != 0

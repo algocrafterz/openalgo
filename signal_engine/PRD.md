@@ -215,6 +215,31 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-06)
 
+### PineScript token limit; day-summary one-shot guard
+
+`breakout.pine` hit TradingView's compile limit (101,359 vs 100,256). This session's additions
+were +339 raw tokens against an overrun needing -386, so the file was already ~50 tokens from
+the ceiling. Comments and tooltips do not count — a string literal is one token however long.
+
+Cuts: `sigId()` returns the finished alert line so each of five call sites is `msg += sigId()`
+(-85 raw); `klTpReachOK` folded into the existing `roomOK` argument rather than a new gate
+parameter (-8); duplicated direction ternary removed (-10); and **`buildKeyLevelAlert()` plus
+`klFootprintCue()` removed (-456 raw, ~1,300 compiled)**. The packet's input defaulted to false,
+its tooltip already said the entry alert carries the same context inline, and the engine ignores
+KEYLEVEL packets — every field it carried is still emitted by `buildEntryAlert`. Headroom is now
+~650 compiled tokens; the documented next move is splitting the key-level engine into its own
+indicator.
+
+**Day summary** was missing on 2026-09-04 only because the engine was not running (last log
+2026-08-25). The delivery chain is sound. But `time_exit_all()` sent the summary then called
+`_reset_day_counters()`, which cleared `_day_summary_sent` — killing the one-shot guard for the
+rest of the day, so any later empty-book moment, or the watchdog's post-14:45 restart, sent a
+false "No trades taken today." over the real summary. The guard is now the date sent, held in
+process and in a `data/day_summary` marker so it survives a restart; the reset no longer clears
+it, and an unreadable marker answers "not sent" rather than silencing the summary indefinitely.
+
+---
+
 ### Mode profiles, notify_level, and automated EOD review
 
 **`mode_profiles`** — `live` and `analyze` each state their own risk limits; the engine layers

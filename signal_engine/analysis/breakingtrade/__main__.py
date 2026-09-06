@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sqlite3
 import sys
 from datetime import time
@@ -386,6 +387,21 @@ def _audit(args) -> int:
     return 0 if not missed else 1
 
 
+def _signals_sent_today() -> int:
+    from datetime import datetime as _dt
+
+    from signal_engine.analysis.breakingtrade import store
+
+    try:
+        with sqlite3.connect(store._DB_PATH) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE kind = 'trade_signal' AND created_at LIKE ?",
+                (f"{_dt.today():%Y-%m-%d}%",),
+            ).fetchone()[0]
+    except Exception:
+        return 0
+
+
 def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
     """Turn each newly-selected name into a signal the engine can act on.
 
@@ -445,17 +461,25 @@ def _watch(args) -> int:
 
     from signal_engine.analysis.breakingtrade import alerts, fetcher
 
+    # poller.sh stop sends SIGTERM; without this the process dies without running the shutdown
+    # path, so the channel never learns the poller went away.
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+
     logger = _setup_logging()
     logger.info("poller starting; schedule:")
     for start_t, end_t, minutes in POLL_WINDOWS:
         logger.info(f"  {start_t:%H:%M}-{end_t:%H:%M} on {', '.join(f':{m:02d}' for m in minutes)}")
 
+    already_polls = _stored_polls(_dt.today().date())
+
     # The paper phase is only paper if OpenAlgo is in analyze mode. Check at startup and say so
-    # in the log, so a mis-set mode is discovered on day one rather than in the P&L.
+    # in the log AND on Telegram, so a mis-set mode is discovered on day one, not in the P&L.
     try:
         from signal_engine.analysis.breakingtrade import review as _review
 
         mode, is_analyze = _review.trading_mode()
+        windows = " | ".join(f"{a:%H:%M}-{b:%H:%M}" for a, b, _ in POLL_WINDOWS)
+        alerts.alert_started(mode, is_analyze, windows, len(already_polls))
         if is_analyze:
             logger.info(f"OpenAlgo mode: {mode} (analyze - orders are sandboxed)")
         elif mode == "unknown":
@@ -466,7 +490,7 @@ def _watch(args) -> int:
     except Exception as exc:
         logger.warning(f"could not check trading mode: {type(exc).__name__}: {exc}")
 
-    already = _stored_polls(_dt.today().date())
+    already = already_polls
     if already:
         logger.info(f"resuming - {len(already)} polls already stored today: {sorted(already)}")
 
@@ -525,7 +549,12 @@ def _watch(args) -> int:
 
             sleep(20)
     except KeyboardInterrupt:
-        logger.info("poller stopped by user")
+        logger.info("poller stopped")
+        try:
+            polls = len(_stored_polls(_dt.today().date()))
+            alerts.alert_stopped(polls, _signals_sent_today())
+        except Exception:
+            logger.warning("could not send the shutdown notification")
         return 0
     finally:
         if session is not None:

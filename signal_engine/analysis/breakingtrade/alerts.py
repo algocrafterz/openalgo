@@ -334,6 +334,27 @@ def alert_health(text: str) -> None:
     record("health", f"BT poller: {text}")
 
 
+def alert_started(mode: str, is_analyze: bool, windows: str, already: int) -> None:
+    """One message on start, led by the trading mode.
+
+    Silence is ambiguous - a poller that never speaks looks identical to one that died, which
+    is exactly what happened on 2026-09-04. So it says hello, and the FIRST thing it says is
+    whether orders are paper or real, because that is the fact that decides whether an enabled
+    channel is safe.
+    """
+    banner = "PAPER (analyze)" if is_analyze else f"*** LIVE ({mode}) - ORDERS ARE REAL ***"
+    lines = [f"BT poller STARTED | {banner}", windows]
+    if already:
+        lines.append(f"resuming - {already} polls already stored today")
+    record("health", "\n".join(lines))
+
+
+def alert_stopped(polls: int, signals: int, reason: str = "stopped") -> None:
+    """One message on exit, with the day's tally so an empty day is distinguishable from a
+    dead poller."""
+    record("health", f"BT poller {reason} | {polls} polls stored today, {signals} signals sent")
+
+
 def history(since: datetime = None):
     """Stored alerts, for scoring what was claimed against what happened."""
     import pandas as pd
