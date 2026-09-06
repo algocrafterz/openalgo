@@ -29,9 +29,61 @@ def set_client(client: TelegramClient) -> None:
     _client = client
 
 
-async def notify(text: str) -> None:
+#: Lowest notify_level at which each event is delivered. Events absent from this map are
+#: ALWAYS delivered: a notify_* added later must show up until someone deliberately
+#: classifies it, rather than disappearing because nobody remembered this table.
+#:
+#: Nothing that reports a FAILURE appears here at all. Trimming routine traffic is only
+#: worth doing if it makes the exceptional traffic easier to see, and a channel that can
+#: also hide a failed SL would be worse than a noisy one.
+EVENT_LEVELS = {
+    # Acknowledgements: report that something was received, not what happened.
+    "exit_signal_received": "verbose",
+    # Intermediate steps of an entry that ends in its own message anyway.
+    "order_placed": "normal",
+    "sl_placed": "normal",
+    "be_stop_applied": "normal",
+    "exit_no_position": "normal",
+    # Outcomes — kept even in quiet.
+    "entry_filled": "quiet",
+    # A partial exit BOOKS money — it is an outcome, not a step. With extended runner tiers
+    # (30/35/35) most trades end as a sequence of these and never send position_closed at all,
+    # so suppressing them would make a quiet channel silent about the actual results.
+    "partial_exit": "quiet",
+    "position_closed": "quiet",
+    "time_exit": "quiet",
+    "no_progress_exit": "quiet",
+    "day_summary": "quiet",
+}
+
+_LEVEL_RANK = {"quiet": 0, "normal": 1, "verbose": 2}
+
+
+def should_notify(event: str, level: str) -> bool:
+    """Whether `event` is delivered at the configured `level`.
+
+    Unknown event or unknown level both resolve to "deliver". Silence should always be a
+    decision someone made, never a gap in a lookup table.
+    """
+    required = EVENT_LEVELS.get(event)
+    if required is None:
+        return True
+    configured = _LEVEL_RANK.get((level or "").lower())
+    if configured is None:
+        return True
+    return configured >= _LEVEL_RANK[required]
+
+
+async def notify_event(event: str, text: str) -> None:
+    """notify() with the event name first, so call sites read as `notify_event(\"x\", msg)`."""
+    await notify(text, event=event)
+
+
+async def notify(text: str, event: str = "") -> None:
     """Send a message to the notify_channel. No-op if not configured or client not ready."""
     if not settings.notify_channel:
+        return
+    if event and not should_notify(event, getattr(settings, "notify_level", "normal")):
         return
     if _client is None:
         logger.debug("Notifier: client not ready, skipping")
@@ -108,7 +160,7 @@ async def notify_order_placed(
     tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
     price_str = f"Signal: {signal_price:.2f}" if signal_price is not None else "Signal: —"
     slot_line = f"\n{slot_context}" if slot_context else ""
-    await notify(
+    await notify_event("order_placed",
         f"📤 ENTRY SENT | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"{price_str}{sl_str}{tp_str}{rr_str}{slot_line}"
     )
@@ -128,14 +180,14 @@ async def notify_entry_filled(
     logger.info(f"LIVE | {symbol} [{strategy}] fill={fill_price:.2f} slip={slip:+.2f} qty={qty} sl={sl}")
     sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
     tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
-    await notify(
+    await notify_event("entry_filled",
         f"💰 LIVE | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"Fill: {fill_price:.2f} (slip {slip:+.2f}) | Qty: {qty}{sl_str}{tp_str}"
     )
 
 
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
-    await notify(
+    await notify_event("order_rejected",
         f"🚫 ENTRY REJECTED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"No trade taken. Reason: {reason}"
     )
@@ -148,14 +200,14 @@ async def notify_sl_placed(
     price_str = f" sl={sl_price:.2f}" if sl_price is not None else ""
     logger.info(f"SL confirmed | {symbol} [{strategy}]{price_str} id={order_id}")
     sl_line = f"SL: {sl_price:.2f}" if sl_price is not None else "SL: —"
-    await notify(
+    await notify_event("sl_placed",
         f"🛡️ SL PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"{sl_line} | Order: {order_id}"
     )
 
 
 async def notify_sl_failed(symbol: str, reason: str, strategy: str = "") -> None:
-    await notify(
+    await notify_event("sl_failed",
         f"🚨 SL NOT PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"Position UNPROTECTED. Reason: {reason}\n"
         f"Place SL manually or close position."
@@ -196,7 +248,7 @@ async def notify_partial_exit(
         if next_tp_label and next_tp_price is not None
         else ""
     )
-    await notify(
+    await notify_event("partial_exit",
         f"✅ {tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
         f"Booked: {exit_qty} | Remaining: {remaining_qty}\n"
         f"{_pnl(pnl)}{_r(r_multiple)}{sl_str}{next_str}"
@@ -208,7 +260,7 @@ async def notify_exit_no_position(symbol: str, strategy: str) -> None:
 
 
 async def notify_exit_failed(symbol: str, reason: str, strategy: str = "") -> None:
-    await notify(
+    await notify_event("exit_failed",
         f"❌ EXIT FAILED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"Reason: {reason}"
     )
@@ -239,7 +291,7 @@ async def notify_position_closed(
     entry_str = f"{entry_price:.2f}" if entry_price is not None else "—"
     exit_str = f"{exit_price:.2f}" if exit_price is not None else "—"
     ctx_str = f"\n{day_context}" if day_context else ""
-    await notify(
+    await notify_event("position_closed",
         f"{icon} CLOSED [{last_exit}] | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
         f"{entry_str} → {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
     )
@@ -262,7 +314,7 @@ async def notify_be_stop_applied(
     )
     dir_str = f" {_dir(direction)}" if direction else ""
     sl_move = f"{original_sl:.2f} → {be_price:.2f}" if original_sl is not None else f"→ {be_price:.2f}"
-    await notify(
+    await notify_event("be_stop_applied",
         f"⚠️ STOP → BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
         f"SL: {sl_move} | LTP: {ltp:.2f} | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
@@ -283,7 +335,7 @@ async def notify_no_progress_exit(
         f"diff={diff:+.2f} progress={progress:.0%} age={age_minutes}min"
     )
     dir_str = f" {_dir(direction)}" if direction else ""
-    await notify(
+    await notify_event("no_progress_exit",
         f"🚪 NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
         f"{entry:.2f} → {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
@@ -307,7 +359,7 @@ async def notify_orphaned_position(
     else:
         plain_reason = reason
 
-    await notify(
+    await notify_event("orphaned_position",
         f"⚠️ ORDER NOT FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"No position taken. {plain_reason}\n"
         f"Check broker terminal: order {order_id}"
@@ -334,7 +386,7 @@ async def notify_time_exit(
         pnl_str = f"\n{traj} | {_pnl(pnl)}{_r(r_multiple)}"
 
     ctx_str = f"\n{day_context}" if day_context else ""
-    await notify(
+    await notify_event("time_exit",
         f"⏰ TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}"
     )
 
@@ -342,7 +394,7 @@ async def notify_time_exit(
 # ── Risk events ────────────────────────────────────────────────────────────────
 
 async def notify_risk_limit_hit(reason: str) -> None:
-    await notify(
+    await notify_event("risk_limit_hit",
         f"🛑 TRADING HALTED | {_now_ist()}\n"
         f"Risk limit: {reason}\n"
         f"New entries blocked. Existing positions monitored normally."
@@ -363,7 +415,7 @@ async def notify_day_summary(
     today = datetime.now(IST).strftime("%d-%b-%Y")
 
     if trades == 0:
-        await notify(f"📊 DAY SUMMARY | {today}\nNo trades taken today.")
+        await notify_event("day_summary", f"📊 DAY SUMMARY | {today}\nNo trades taken today.")
         return
 
     lines = _day_summary_header(today, trades, wins, losses, net_pnl, capital, time_exits, trade_records)
@@ -372,7 +424,7 @@ async def notify_day_summary(
         # Best trade first
         lines += [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
 
-    await notify("\n".join(lines))
+    await notify_event("day_summary", "\n".join(lines))
 
 
 def _day_summary_header(
@@ -434,13 +486,13 @@ def _trade_line(rec) -> str:
 
 
 async def notify_engine_started(capital: float, mode: str) -> None:
-    await notify(
+    await notify_event("engine_started",
         f"🟢 Engine started | {mode} | Capital: ₹{capital:,.0f} | {_now_ist()}"
     )
 
 
 async def notify_engine_stopped() -> None:
-    await notify(f"🔴 Engine stopped | {_now_ist()}")
+    await notify_event("engine_stopped", f"🔴 Engine stopped | {_now_ist()}")
 
 
 async def notify_startup_result(all_passed: bool, summary: str) -> None:

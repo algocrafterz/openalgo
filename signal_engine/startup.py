@@ -13,6 +13,7 @@ from loguru import logger
 
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
+from signal_engine.runtime import apply_trade_mode
 from signal_engine.db import fetch_last_entry_trade
 from signal_engine.listener import start_listener
 from signal_engine.models import Direction
@@ -292,6 +293,11 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
         logger.info("Trading mode: ANALYZE (sandbox capital)")
     else:
         logger.info("Trading mode: LIVE (broker capital)")
+
+    # risk_engine was built at import, before the mode could be known, so it defaults to
+    # "live". Correct it here -- BEFORE reconcile and before any signal -- so the mode's own
+    # limits apply and its losses land in the mode's own risk_store row.
+    apply_trade_mode(risk_engine, "analyze" if is_analyze else "live")
 
     await reconcile_open_positions(risk_engine, tracker)
 

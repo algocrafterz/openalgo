@@ -9,6 +9,104 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-09-06 16:31 IST — Mode profiles, quieter notifications, automated EOD
+
+Both `intraday-breakout` and `intraday-breakingtrade` now paper-trade together in ANALYZE mode
+from 2026-09-07.
+
+### `mode_profiles` — paper and live limits stated separately
+
+One config served both modes, which left two bad options: run the paper week with live limits
+and lose the outcome of every signal they refused, or loosen the live numbers by hand and
+remember to restore them. The second is the dangerous one.
+
+`mode_profiles.live` and `mode_profiles.analyze` now each state their own limits. The engine
+asks OpenAlgo which mode it is in at startup and layers the matching profile over the base
+`risk:`/`sizing:` values. Both modes are listed even though `live` largely repeats the base —
+a profile for only one mode is exactly the confusing state this removes. An unknown mode name
+falls through to base rather than guessing: a typo must never hand a live account paper limits.
+
+| | live | analyze |
+|---|---|---|
+| max_open_positions | 2 | 6 |
+| max_trades_per_day | 10 | 24 |
+| daily / weekly / monthly loss limit | 4% / 8% / 15% | off |
+| price filter | 300-5000 | 300-5000 |
+
+**The analyze profile is deliberately looser, which reverses the 15:44 entry's reasoning.**
+That entry argued paper should mirror live so the numbers transfer. That was right when a
+declined signal left no trace; it stopped being right once `save_declined` landed an hour
+later. With declines recorded, loose paper limits give strictly more information: every signal
+is taken, so the OUTCOME of a signal live would have refused is observable, and "would the 4%
+daily limit have fired?" can be replayed offline from the ledger. Tight paper limits never
+generate those outcomes and no later analysis recovers them.
+
+Six slots rather than two also stops the two strategies starving each other — with live limits
+every BREAKOUT decline would have to be disentangled from "BreakingTrade got there first".
+
+**A pre-existing bug this exposed.** `risk_engine` is built at import, before OpenAlgo can be
+asked anything, so it defaulted to `trade_mode="live"` and was never corrected. Every paper
+loss would have been written into the **live** row of `risk_store` — the precise mixing that
+store keys on `(mode, date)` to prevent. `runtime.apply_trade_mode()` now sets the mode and
+reloads the counters at startup, immediately after `fetch_trading_mode()` and before any signal
+is handled. Overridable keys are a fixed allowlist, not "anything in the profile", so a typo
+cannot set an attribute nothing reads while the operator believes a limit is in force.
+
+### `notify_level` — the signal-engine channel at paper volume
+
+One entry sent three messages (order placed, entry filled, SL placed); one exit sent two or
+more, plus an "exit signal received" ack that reports nothing about an outcome. At 24 trades a
+day across two strategies that is ~120 messages, and the ones that matter — a rejection, a
+failed SL, a risk lockout — are the easiest to miss in that volume.
+
+`telegram.notify_level` is `quiet` for the paper week. At `quiet`, 6 routine events are dropped
+(`order_placed`, `sl_placed`, `exit_signal_received`, `be_stop_applied`, `exit_no_position`)
+and 13 are kept.
+
+Two rules the table follows:
+
+- **No failure event appears in it at all.** Rejections, SL failures, risk lockouts, orphans and
+  engine start/stop ignore the level entirely. Trimming routine traffic is only worth doing
+  because it makes exceptional traffic visible; a channel that could also hide a failed SL would
+  be worse than a noisy one.
+- **An unclassified event is delivered.** A `notify_*` added later shows up until someone
+  deliberately classifies it, rather than vanishing because nobody remembered this table.
+
+`partial_exit` is classified `quiet` (always delivered) after first being put at `normal`. It
+books money — it is an outcome, not a step — and under extended runner tiers most trades end as
+a sequence of partials and never send `position_closed` at all, so suppressing them would leave
+a quiet channel silent about the actual results.
+
+### `eod.sh` — the daily review, automated
+
+`signal_engine/analysis/eod.sh`, scheduled **15:25 IST on weekdays**. Writes
+`signal_engine/analysis/reports/eod-YYYY-MM-DD.md` containing the position ledger, the declined
+signals grouped by the gate that stopped them, the BreakingTrade scanner-vs-engine review, and
+the day's errors from `errors_{date}.jsonl`.
+
+**15:25 is not arbitrary and is the fragile part.** The broker tradebook snapshot is the only
+source of actual fill prices — the ledger's slippage columns are empty without it — and it
+needs OpenAlgo running. `openAlgoAutoStop` kills OpenAlgo at 15:30, and broker auto-square-off
+finishes by 15:20, so the window is 15:20-15:30. If that stop time ever moves earlier, this
+job breaks silently in the one way that matters: it still produces a report, just one with no
+fills in it. Which is why a failed snapshot writes a warning banner into the report itself and
+exits non-zero rather than quietly succeeding.
+
+Also: weekday guard (an NSE holiday otherwise produces an empty report that reads like a bad
+day rather than no day), `flock` so a hand-run and the cron run cannot write the same file, and
+it accepts a date argument for re-running a past session.
+
+Reports and `signal_engine/logs/` are gitignored — they are output, regenerated from `trades.db`
+plus the tradebook snapshots. The durable record is `trades.db` and this changelog.
+
+### Still true
+
+Slippage remains unmeasurable in paper (a sandbox fills at the requested price), and margin is
+not exercised either (`_resolve_entry_quantity` skips `adjust_qty_for_margin` in analyze mode).
+Any expectancy from this week is an upper bound. `smidestn` remains enabled.
+
+---
+
 ## 2026-09-06 16:00 IST — Paper week instead of live: ANALYZE mode, and declined signals now leave a record
 
 Live trading is off. From 2026-09-07 BREAKOUT runs one week of paper trading with OpenAlgo in

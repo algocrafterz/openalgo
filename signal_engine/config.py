@@ -108,6 +108,9 @@ class Settings:
     telegram_channels: Tuple[TelegramChannel, ...]
     # Optional: dedicated channel for system notifications (startup/shutdown)
     notify_channel: TelegramChannel | None
+    #: quiet | normal | verbose — how much routine traffic reaches notify_channel.
+    #: Failure events ignore it entirely; see notifier.EVENT_LEVELS.
+    notify_level: str
 
     # Position sizing (from yaml)
     sizing_mode: str
@@ -136,6 +139,9 @@ class Settings:
 
     # Capital override (from yaml) — 0 means fetch from OpenAlgo API
     sandbox_capital: float
+    #: Per-mode risk-limit overrides, {"live": {...}, "analyze": {...}}. Empty when the
+    #: config has no mode_profiles block, which leaves the base risk: values in force.
+    mode_profiles: Dict[str, dict]
 
     # Day-start capital caching (from yaml)
     use_day_start_capital: bool  # Cache capital at first signal, use for all trades
@@ -382,6 +388,35 @@ def enabled_channels(
     return tuple(ch for ch in channels if ch.enabled)
 
 
+def resolve_mode_profile(base: dict, profiles: dict, trade_mode: str) -> dict:
+    """Base risk limits with the named mode's overrides layered on top.
+
+    One config serving both modes meant the paper week either ran with live limits -- losing
+    the OUTCOME of every signal those limits refused, which is most of what a paper week is
+    for -- or someone loosened the live numbers by hand and had to remember to restore them.
+    The second is the dangerous one.
+
+    An unknown mode returns base unchanged rather than guessing: a typo in the profile name
+    must not silently hand a live account the paper limits. Base is never mutated.
+    """
+    override = (profiles or {}).get((trade_mode or "").lower())
+    if not isinstance(override, dict):
+        return dict(base)
+    return {**base, **override}
+
+
+def _parse_mode_profiles(yml: dict) -> Dict[str, dict]:
+    """Optional `mode_profiles:` block. Absent means "no overrides", not an error."""
+    raw = yml.get("mode_profiles", {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(mode).lower(): dict(values)
+        for mode, values in raw.items()
+        if isinstance(values, dict)
+    }
+
+
 def _parse_strategy_profiles(yml: dict) -> Dict[str, dict]:
     """Per-strategy TP levels and product. Optional section — empty if missing."""
     raw_profiles = yml.get("strategy_profiles", {})
@@ -426,6 +461,7 @@ def _telegram_fields(telegram: dict) -> dict:
     return dict(
         telegram_channels=tuple(_parse_channel(ch) for ch in telegram.get("channels", [])),
         notify_channel=_parse_channel(raw_notify) if isinstance(raw_notify, dict) and raw_notify else None,
+        notify_level=str(telegram.get("notify_level", "normal")).strip().lower(),
     )
 
 
@@ -550,6 +586,7 @@ def _build_settings() -> Settings:
         api_timeout=float(_require_key(api, "api", "timeout")),
         margin_api_retries=int(api.get("margin_retries", 3)),
         strategy_profiles=_parse_strategy_profiles(yml),
+        mode_profiles=_parse_mode_profiles(yml),
         blacklist=blacklist,
         soft_blacklist=soft_blacklist,
         soft_blacklist_multipliers=soft_blacklist_multipliers,

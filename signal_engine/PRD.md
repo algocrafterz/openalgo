@@ -215,6 +215,50 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-06)
 
+### Mode profiles, notify_level, and automated EOD review
+
+**`mode_profiles`** — `live` and `analyze` each state their own risk limits; the engine layers
+the profile matching whatever OpenAlgo reports at startup over the base `risk:`/`sizing:`
+values. Both modes are listed explicitly (a profile for only one mode is the confusing state
+this removes), and an unknown mode falls through to base rather than guessing.
+
+| | live | analyze |
+|---|---|---|
+| max_open_positions | 2 | 6 |
+| max_trades_per_day | 10 | 24 |
+| daily / weekly / monthly loss | 4% / 8% / 15% | off |
+
+Analyze is deliberately looser: with `save_declined` recording refusals, loose paper limits mean
+every signal is taken, so the outcome of a signal live would have refused is observable and the
+live limits can be replayed offline from the ledger. Tight paper limits never generate those
+outcomes. Six slots also stops `intraday-breakout` and `intraday-breakingtrade` starving each
+other in the shared sandbox.
+
+Fixes a pre-existing bug: `risk_engine` is built at import with `trade_mode="live"` and was
+never corrected, so paper losses would have been written into the LIVE row of `risk_store` —
+the mixing that store keys on `(mode, date)` to prevent. `runtime.apply_trade_mode()` sets the
+mode and reloads counters at startup, before any signal. Overridable keys are a fixed allowlist,
+so a profile typo cannot set an attribute nothing reads.
+
+**`telegram.notify_level`** (`quiet` | `normal` | `verbose`, set to `quiet`) — one entry sent
+three messages and one exit two or more, ~120/day across two strategies at 24 trades. At `quiet`
+six routine events are dropped and 13 kept. No failure event is in the level table at all
+(rejections, SL failures, risk lockouts, orphans, engine start/stop always send), and an
+unclassified event is delivered rather than dropped. `partial_exit` is `quiet`-level because it
+books money — under extended runner tiers most trades end as a sequence of partials and never
+send `position_closed`.
+
+**`signal_engine/analysis/eod.sh`** — cron at 15:25 IST weekdays, writing
+`analysis/reports/eod-YYYY-MM-DD.md`: position ledger, declined signals by gate, BreakingTrade
+scanner-vs-engine review, and the day's `errors_{date}.jsonl`. 15:25 is bounded by broker
+square-off finishing ~15:20 and `openAlgoAutoStop` at 15:30 — the tradebook snapshot is the only
+source of fill prices and needs OpenAlgo up. A failed snapshot writes a warning banner into the
+report and exits non-zero rather than silently producing a fill-less report. Weekday guard,
+`flock` against overlap, accepts a date argument to re-run a past session. Reports and
+`signal_engine/logs/` are gitignored as regenerable output.
+
+---
+
 ### BREAKOUT paper week (ANALYZE mode); ORB stood down; SigID threads the trade
 
 **Superseded same day:** live trading was prepared and then deliberately deferred. From
