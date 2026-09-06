@@ -247,12 +247,19 @@ def _fetch_and_report(
         from signal_engine.analysis.breakingtrade import btst
 
         try:
+            from signal_engine.analysis.breakingtrade import paper
+
             watchlist = btst.candidates(mp_snapshot.frame, vol_snapshot.frame)
             alerts.alert_btst(watchlist, captured_at)
+            # Paper-trade it rather than risking capital on an unproven list. Settlement
+            # happens automatically once the next session is captured.
+            opened = paper.record_entries(watchlist, captured_at)
+            print(f"  paper: opened {opened} hypothetical positions")
         except Exception as exc:
             print(f"  BTST alert failed: {type(exc).__name__}: {exc}")
     elif store_it and new_by_scan:
         alerts.alert_transitions(new_by_scan, captured_at, mp_snapshot.frame)
+        _emit_trade_signals(new_by_scan, mp_snapshot.frame, captured_at)
 
     for result in results:
         if result.matches.empty:
@@ -379,6 +386,51 @@ def _audit(args) -> int:
     return 0 if not missed else 1
 
 
+def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
+    """Turn each newly-selected name into a signal the engine can act on.
+
+    The scan says WHICH symbol; entry, stop and targets come from trigger.py using OpenAlgo
+    bars. If the bars are unavailable, or the entry trigger has not fired yet, no signal is
+    emitted - a selection without levels is not a trade, and inventing levels to fill the gap
+    would be worse than staying silent.
+    """
+    from signal_engine.analysis.breakingtrade import alerts, trigger, validate
+
+    directions = {}
+    for result_scan, symbols in new_by_scan.items():
+        for symbol in symbols:
+            directions.setdefault(symbol, "down" if _is_bearish(result_scan) else "up")
+
+    day_types = {}
+    if snapshot is not None and "day_type" in snapshot.columns:
+        day_types = dict(zip(snapshot["symbol"], snapshot["day_type"], strict=False))
+
+    emitted = 0
+    for symbol, direction in directions.items():
+        try:
+            bars = validate.fetch_bars(symbol, captured_at)
+            if bars.empty:
+                continue
+            before = bars[pd.to_datetime(bars["timestamp"]) <= captured_at]
+            atr = validate.average_true_range(before) if not before.empty else None
+            plan = trigger.plan_trade(
+                symbol, direction, day_types.get(symbol), bars, captured_at, atr
+            )
+            if plan is None:
+                continue
+            alerts.alert_trade_signal(plan)
+            emitted += 1
+        except Exception as exc:
+            print(f"  signal for {symbol} skipped: {type(exc).__name__}: {exc}")
+    if emitted:
+        print(f"  emitted {emitted} trade signal(s)")
+    return emitted
+
+
+def _is_bearish(scan_name: str) -> bool:
+    return scan_name.rstrip().endswith(("Down", "Dn", "Trap", "Breakdown", "PDL"))
+
+
 def _watch(args) -> int:
     """Poll on the documented schedule until interrupted, on ONE browser for the whole day.
 
@@ -498,6 +550,11 @@ def main() -> int:
     )
     parser.add_argument("--debug-dir", default=None, help="Dump page HTML+screenshot on failure")
     parser.add_argument(
+        "--paper",
+        action="store_true",
+        help="Settle and report the BTST paper-trade ledger",
+    )
+    parser.add_argument(
         "--audit",
         nargs="?",
         const="",
@@ -528,6 +585,12 @@ def main() -> int:
         help="Closing-hour accumulation watchlist for the next session (needs a volume snapshot)",
     )
     args = parser.parse_args()
+
+    if args.paper:
+        from signal_engine.analysis.breakingtrade import paper
+
+        paper.report()
+        return 0
 
     if args.audit is not None:
         return _audit(args)

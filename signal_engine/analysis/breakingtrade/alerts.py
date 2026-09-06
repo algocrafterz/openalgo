@@ -105,6 +105,7 @@ _CHANNEL_BY_KIND = {
     "btst": "BREAKINGTRADE_CHAT_ID_BTST",
     "btst_empty": "BREAKINGTRADE_CHAT_ID_BTST",
     "intraday_transition": "BREAKINGTRADE_CHAT_ID_INTRADAY",
+    "trade_signal": "BREAKINGTRADE_CHAT_ID_INTRADAY",
     "health": "BREAKINGTRADE_CHAT_ID_INTRADAY",
 }
 _DEFAULT_CHANNEL_KEY = "BREAKINGTRADE_CHAT_ID_INTRADAY"
@@ -295,6 +296,38 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
             delivered=delivered,
         )
     return len(watchlist)
+
+
+def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE") -> bool:
+    """Emit ONE trade in the exact shape signal_engine's parser accepts, so the engine can take
+    it end to end - sizing, entry, stop placement, staged exits and the time exit.
+
+    The format is deliberately identical to a PineScript alert:
+
+        BREAKINGTRADE LONG
+        Symbol: VOLTAS
+        Entry: 1186.5
+        SL: 1178.2
+        TP: 1203.0
+
+    Sent to the intraday channel. Whether it actually TRADES is decided by that channel's
+    `enabled` flag in config.yaml, not by anything here - which is what lets the same message
+    stream be recorded, read and scored long before it is allowed to touch money.
+    """
+    side = "LONG" if plan.direction == "up" else "SHORT"
+    message = "\n".join(
+        [
+            f"{strategy} {side}",
+            f"Symbol: {plan.symbol}",
+            f"Entry: {plan.entry}",
+            f"SL: {plan.stop}",
+            f"TP: {plan.targets[0]}",
+            f"Time: {plan.triggered_at:%H:%M}" if plan.triggered_at else "",
+        ]
+    ).strip()
+    return record(
+        "trade_signal", message, symbol=plan.symbol, direction=plan.direction, scan=strategy
+    )
 
 
 def alert_health(text: str) -> None:

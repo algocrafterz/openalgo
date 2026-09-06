@@ -96,6 +96,44 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-06 16:20 — Wired to signal_engine; BTST on paper, and the paper says no
+
+**signal_engine integration complete.** The scanner now emits signals in the engine's own alert
+shape, so no special case is needed anywhere in the pipeline:
+
+    BREAKINGTRADE LONG
+    Symbol: VOLTAS
+    Entry: 1186.5
+    SL: 1178.2
+    TP: 1203.0
+
+Verified end to end - `parser.parse()` returns a valid Signal from it. The symbol comes from the
+scan; entry, stop and targets come from `trigger.py` using OpenAlgo bars. **If the bars are
+unavailable or the entry trigger has not fired, no signal is emitted** - a selection without
+levels is not a trade, and inventing levels to fill the gap would be worse than silence.
+
+Config added: `BREAKINGTRADE` tag in strategies.py, a blacklist section, and the channel
+`intraday-breakingtrade` in config.yaml with **`enabled: false`** - the same paper-phase pattern
+`intraday-breakout` already uses. Everything is parsed, logged and scoreable; one word turns it
+into real orders.
+
+**BTST paper ledger built and seeded from the 13 stored sessions. The result is not encouraging:**
+
+| | |
+|---|---|
+| Closed trades | 48 |
+| Mean gross return | **+0.005%** |
+| Mean NET return | **-0.185%** (after ~0.19% round-trip cost) |
+| Win rate | 48% |
+| Best / worst | +3.64% / -4.24% |
+
+Gross is indistinguishable from zero, and after realistic costs the strategy **loses money**.
+That is the clearest read yet, and it points the same way as every earlier measurement. The
+ledger simulates exactly what the backtest did - buy the list at the 14:50 snapshot price, sell
+at the next session's close, no stop, no target - so paper and backtest remain poolable.
+
+Settlement is automatic: a position closes as soon as the next session's snapshot is captured.
+
 ### 2026-09-06 15:30 — Alerts split onto their own two channels
 
 The alerts had been going to `intraday-breakout`, the channel `breakout.pine` already publishes
