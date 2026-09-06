@@ -274,7 +274,13 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
         lines.append(
             f"{row.symbol:<{width}} {row.price:>9,.1f} {row.change_pct:>+6.1f}% {delivery}{trend}"
         )
-    lines.append("Long only. Size for a gap, not a stop.")
+    # State the EXIT RULE rather than an SL/TP. The measured result was a close-to-close hold
+    # with no stop; printing a stop and target here would imply a precision the test never had,
+    # and would quietly change the distribution the numbers came from. The disaster stop is
+    # risk control against an overnight gap, not a strategy parameter - deliberately wide
+    # enough that it should almost never trigger.
+    lines.append("Exit: sell next session (~15:10). Disaster GTT stop -4%. Long only.")
+    lines.append("Size for a gap, not a stop. No edge established - paper first.")
     message = "\n".join(lines)
 
     delivered = send(message, "btst")  # one message listing the whole watchlist
