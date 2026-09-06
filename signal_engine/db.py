@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS trades (
     raw_message TEXT,
     context TEXT,
     fill_price REAL,
-    sig_id TEXT
+    sig_id TEXT,
+    trade_mode TEXT
 )
 """
 
@@ -45,6 +46,10 @@ _ADDED_COLUMNS = (
     ("context", "TEXT"),
     ("fill_price", "REAL"),
     ("sig_id", "TEXT"),
+    # Deliberately NOT backfilled. The engine has an analyze mode and an off-hours testing
+    # switch, so some pre-existing rows may not be live trades, and nothing in the data
+    # distinguishes them. A NULL that analysis can see and exclude beats a guess it cannot.
+    ("trade_mode", "TEXT"),
 )
 
 _INSERT = """
@@ -52,8 +57,8 @@ INSERT INTO trades (
     strategy, direction, symbol, entry, sl, tp,
     quantity, order_id, status, message,
     signal_time, received_at, executed_at,
-    raw_message, context, fill_price, sig_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    raw_message, context, fill_price, sig_id, trade_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -83,6 +88,29 @@ DECLINED_ORDER_ID = "-DECLINED-"
 #: Status for a signal the engine refused before sending anything. Distinct from REJECTED,
 #: which means the BROKER refused an order that was actually placed.
 DECLINED_STATUS = "DECLINED"
+
+#: Written when a row is saved before startup has learned the mode from OpenAlgo. The engine
+#: builds its objects at import, so that window is real; "unknown" is honest where "live"
+#: would be a guess about real money.
+UNKNOWN_TRADE_MODE = "unknown"
+
+#: Which mode the engine is running in, set once by startup after fetch_trading_mode().
+#: A module-level value rather than a lookup into risk_engine so db.py stays free of any
+#: import back into main/runtime.
+_TRADE_MODE = UNKNOWN_TRADE_MODE
+
+
+def set_trade_mode(mode: str) -> None:
+    """Record which mode subsequent rows were produced in.
+
+    risk.db has keyed its counters on (mode, date) from the start, because mixing paper losses
+    into live totals would be wrong. trades.db — the audit trail every performance report and
+    the ledger actually read — had no equivalent, so a paper week would land in the same table
+    as months of real trades with only the date to separate them. That breaks the moment one
+    strategy is paper-tested while another runs live, or the mode changes mid-session.
+    """
+    global _TRADE_MODE
+    _TRADE_MODE = (mode or UNKNOWN_TRADE_MODE).strip().lower() or UNKNOWN_TRADE_MODE
 
 
 def save_declined(signal: Signal, stage: str, reason: str) -> None:
@@ -121,6 +149,7 @@ def save_declined(signal: Signal, stage: str, reason: str) -> None:
                 json.dumps(signal.context or {}),
                 None,
                 signal.sig_id,
+                _TRADE_MODE,
             ),
         )
         conn.commit()
@@ -153,6 +182,7 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
                 json.dumps(signal.context or {}),
                 result.fill_price,
                 signal.sig_id,
+                _TRADE_MODE,
             ),
         )
         conn.commit()

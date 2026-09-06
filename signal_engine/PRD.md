@@ -215,6 +215,30 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-06)
 
+### trades.db records the trade mode; per-strategy scorecard
+
+`risk.db` has always keyed counters on `(mode, date)`; `trades.db` — the audit trail the ledger
+and every report read — had no such column, so a paper week would land in the same table as the
+221 real ORB trades with only the date to separate them. `db.set_trade_mode()` is called by
+startup after `fetch_trading_mode()`. Rows written before the mode is known say `unknown`, never
+`live`. The 221 pre-existing rows are deliberately not backfilled — the engine has an analyze
+mode and an off-hours testing switch, so nothing in the data distinguishes them, and a NULL
+analysis can see beats a guess it cannot. Mode is part of the ledger's position identity, so an
+entry in one mode and an exit after a switch never merge.
+
+`python -m signal_engine.analysis` gained a `BY STRATEGY` block split by mode, showing trades,
+declines, win% and R per strategy. Never pooled across modes (a paper fill has no slippage in
+it), and declines are shown beside trades because a strategy that fired 20 signals and traded 4
+is a different thing from one that fired 4.
+
+Where each strategy's data lives: `trades.db` (orders sent + signals declined, per strategy and
+per mode), `risk.db` (counters, per mode), `breakingtrade.db` (scanner claims + BTST paper
+ledger), tradebook snapshots (broker fills, joined on `order_id`), and the Telegram channels
+(claims only — neither can see a fill). `trades.db` joined to the snapshots is the only
+combination holding signal, order and fill together.
+
+---
+
 ### PineScript token limit; day-summary one-shot guard
 
 `breakout.pine` hit TradingView's compile limit (101,359 vs 100,256). This session's additions

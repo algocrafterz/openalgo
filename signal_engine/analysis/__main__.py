@@ -153,6 +153,54 @@ def report(positions: list, show_positions: bool = False) -> None:
                   f"{p.exit_reasons}{' [' + ','.join(p.flags) + ']' if p.flags else ''}")
 
 
+def report_by_strategy(positions: list, declined: list) -> None:
+    """Per-strategy scorecard, split by mode. The answer to "which strategy is working".
+
+    Split by MODE and never pooled: a paper fill carries no slippage, so averaging a paper
+    row with a live one produces a number that describes neither. Rows with no mode are the
+    221 trades that predate the trade_mode column and are shown as `unknown` rather than
+    assumed live.
+
+    Declines are reported beside the trades on purpose. A strategy that fired 20 signals and
+    traded 4 is a different thing from one that fired 4, and the ratio is invisible if only
+    the taken trades are counted.
+    """
+    if not positions and not declined:
+        return
+
+    buckets: dict[tuple, dict] = defaultdict(
+        lambda: {"n": 0, "wins": 0, "r": 0.0, "scored": 0, "declined": 0}
+    )
+    for p in positions:
+        b = buckets[(p.strategy or "?", p.trade_mode or "unknown")]
+        b["n"] += 1
+        r = p.realised_r
+        if r is not None:
+            b["r"] += r
+            b["scored"] += 1
+            if r > 0:
+                b["wins"] += 1
+    for d in declined:
+        buckets[(d.get("strategy") or "?", d.get("trade_mode") or "unknown")]["declined"] += 1
+
+    print("\n" + "=" * 78)
+    print("BY STRATEGY")
+    print("=" * 78)
+    print(f"{'strategy':<16}{'mode':<10}{'trades':>7}{'declined':>10}{'scored':>8}"
+          f"{'win%':>7}{'sum R':>9}{'avg R':>8}")
+    for (strategy, mode), b in sorted(buckets.items()):
+        win = f"{b['wins'] / b['scored'] * 100:.0f}%" if b["scored"] else "-"
+        avg = f"{b['r'] / b['scored']:+.2f}" if b["scored"] else "-"
+        total = f"{b['r']:+.2f}" if b["scored"] else "-"
+        print(f"{strategy:<16}{mode:<10}{b['n']:>7}{b['declined']:>10}{b['scored']:>8}"
+              f"{win:>7}{total:>9}{avg:>8}")
+
+    if any(m == "unknown" for _, m in buckets):
+        print("\n  `unknown` = rows written before trades.db carried a mode column. Not")
+        print("  assumed live: the engine has an analyze mode, so a guess would be wrong")
+        print("  in a way nothing in the data could reveal.")
+
+
 def report_declined(declined: list, show_all: bool = False) -> None:
     """Signals the engine refused before sending an order, grouped by which gate stopped them.
 
@@ -202,8 +250,11 @@ def main() -> None:
     events = load_engine_events(db_path=args.db, since=since)
     fills = load_fills(load_snapshots())
     print(f"engine events: {len(events)}   broker orders with fills: {len(fills)}")
-    report(build_ledger(events, fills), show_positions=args.positions)
-    report_declined(load_declined(db_path=args.db, since=since), show_all=args.declined)
+    positions = build_ledger(events, fills)
+    declined = load_declined(db_path=args.db, since=since)
+    report(positions, show_positions=args.positions)
+    report_by_strategy(positions, declined)
+    report_declined(declined, show_all=args.declined)
 
 
 if __name__ == "__main__":

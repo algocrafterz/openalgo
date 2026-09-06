@@ -124,6 +124,10 @@ class Position:
     #: The PineScript's per-trade key, when the alerts carried one. None for rows written
     #: before SigID existed, which reconcile by the arrival-order rule instead.
     sig_id: str | None = None
+    #: "live" | "analyze" | "unknown" | None (rows predating the column). Positions are never
+    #: pooled across modes: a paper fill has no slippage in it, so averaging the two produces
+    #: a number that describes neither.
+    trade_mode: str | None = None
 
     # ---- quantities -----------------------------------------------------
 
@@ -373,10 +377,13 @@ def build_ledger(events: list[dict], fills: dict[str, dict] | None = None) -> li
         sig_id = str(e.get("sig_id") or "").strip()
         strategy = e.get("strategy") or ""
         symbol = e.get("symbol") or ""
+        # Mode is part of the identity, not a label: an entry taken in analyze and an exit
+        # arriving after a switch to live are not the same position, and must not merge.
+        mode = e.get("trade_mode")
         key = (
-            (strategy, symbol, e["_ts"].date(), sig_id)
+            (strategy, symbol, e["_ts"].date(), mode, sig_id)
             if sig_id
-            else (strategy, symbol, e["_ts"].date())
+            else (strategy, symbol, e["_ts"].date(), mode)
         )
         groups[key].append(e)
 
@@ -384,8 +391,8 @@ def build_ledger(events: list[dict], fills: dict[str, dict] | None = None) -> li
     matched_ids: set[str] = set()
 
     for group_key, evs in sorted(groups.items(), key=lambda kv: (kv[0][2], kv[0][1], kv[0][3:])):
-        strategy, symbol, day = group_key[0], group_key[1], group_key[2]
-        group_sig_id = group_key[3] if len(group_key) > 3 else None
+        strategy, symbol, day, group_mode = group_key[0], group_key[1], group_key[2], group_key[3]
+        group_sig_id = group_key[4] if len(group_key) > 4 else None
         evs.sort(key=lambda e: e["_ts"])
         cur: Position | None = None
         for e in evs:
@@ -404,6 +411,7 @@ def build_ledger(events: list[dict], fills: dict[str, dict] | None = None) -> li
                     signal_sl=float(e.get("sl") or 0.0),
                     signal_tp=float(e.get("tp") or 0.0),
                     sig_id=group_sig_id,
+                    trade_mode=group_mode,
                 )
             elif cur is not None:
                 cur.exits.append(leg)
@@ -418,6 +426,7 @@ def build_ledger(events: list[dict], fills: dict[str, dict] | None = None) -> li
                     entry=leg,
                     flags=[FLAG_NO_ENTRY],
                     sig_id=group_sig_id,
+                    trade_mode=group_mode,
                 )
                 positions.append(orphan)
         if cur is not None:

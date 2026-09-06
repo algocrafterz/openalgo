@@ -9,6 +9,69 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-09-06 17:03 IST — trades.db now records which mode produced each row
+
+`risk.db` has keyed its counters on `(mode, date)` since it was written, because mixing paper
+losses into live totals would be wrong. **`trades.db` — the audit trail the ledger and every
+performance report actually read — had no equivalent column.**
+
+From 2026-09-07 that stops being theoretical. A week of ANALYZE-mode paper trades from two
+strategies lands in the same table as the 221 real ORB trades from March-August, and the only
+thing separating them is the date. That proxy fails the moment one strategy is paper-tested
+while another runs live, or the mode is switched mid-session — and it fails silently, producing
+a blended number that describes neither mode.
+
+- `db.set_trade_mode()` is called by startup right after `fetch_trading_mode()`, alongside
+  `apply_trade_mode`. A module-level value rather than a lookup into `risk_engine`, so `db.py`
+  needs no import back into `main`/`runtime`.
+- Rows written before startup learns the mode say **`unknown`**, never `live`. The engine builds
+  its objects at import, so that window is real, and a guess about real money is not acceptable
+  where a truthful "don't know" is available.
+- The 221 pre-existing rows are **deliberately not backfilled**. The engine has an analyze mode
+  and an off-hours testing switch, so some of them may not be live trades, and nothing in the
+  data distinguishes them. A NULL analysis can see and exclude beats a guess it cannot.
+- Mode is part of the ledger's **position identity**, not a label on it: an entry taken in
+  analyze and an exit arriving after a switch to live are not the same position and must not
+  merge into one.
+
+### `BY STRATEGY` scorecard
+
+`python -m signal_engine.analysis` now prints a per-strategy block split by mode:
+
+```
+strategy        mode       trades  declined  scored   win%    sum R   avg R
+BREAKOUT        analyze        18         6      18    44%    +4.31   +0.24
+BREAKINGTRADE   analyze         5         9       5    40%    -0.50   -0.10
+ORB             unknown       186         0       0      -        -       -
+```
+
+Two deliberate choices in that table:
+
+**Never pooled across modes.** A paper fill has no slippage in it. Averaging a paper row with a
+live one produces a number that is true of neither, and it is exactly the kind of average that
+looks authoritative in a report.
+
+**Declines sit beside the trades.** A strategy that fired 20 signals and traded 4 is a different
+thing from one that fired 4, and that ratio is invisible if only taken trades are counted — it
+is also the first place to look when a paper week comes out thin.
+
+### Where each strategy's data actually lives
+
+| Store | Written by | Holds | Per-strategy? | Per-mode? |
+|---|---|---|---|---|
+| `trades.db` | signal_engine | every order sent, and every signal declined | yes (`strategy`) | yes, from today |
+| `risk.db` | signal_engine | day/week/month counters | no | yes |
+| `breakingtrade.db` | the scanner | what the scanner CLAIMED, plus the BTST close-to-close paper ledger | scanner only | n/a |
+| tradebook snapshots | `eod.sh` | broker fills — the only source of actual fill prices | via `order_id` | n/a |
+| `intraday-*` channels | PineScript / scanner | what the strategy claimed, at bar-close prices | one channel each | no |
+| `signal-engine` channel | engine notifier | live commentary | tagged, not queryable | no |
+
+`trades.db` joined to the tradebook snapshots on `order_id` is the only combination that holds
+signal, order and fill together. Everything else answers a narrower question, and the two
+Telegram channels answer the narrowest one of all — neither can see a fill.
+
+---
+
 ## 2026-09-06 16:51 IST — Token limit hit; KEYLEVEL packet removed. Day summary fixed.
 
 ### "Compiled code contains too many tokens: 101359. The limit is 100256"
