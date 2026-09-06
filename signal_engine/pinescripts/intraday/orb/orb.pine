@@ -661,6 +661,13 @@ var float orbTP3Price = na
 var bool orbLinesFrozen = false
 var int orbTradeDirection = 0
 
+// Alert-side position state. Deliberately SEPARATE from strategy.position_size: the
+// strategy exits 100% at TP1, while the alert advertises ExitQtyPct 50 and the signal
+// engine keeps holding the other half. Gating an alert on strategy.position_size
+// therefore silences every notification the residual position still needs - which is
+// exactly how the time exit went missing.
+var bool alertPosOpen = false
+var bool alertPosLong = false
 var bool orbTP1Hit = false
 var bool orbTP1_5Hit = false
 var bool orbTP2Hit = false
@@ -810,10 +817,21 @@ buildTimeExitAlert(bool isLong, float entryPrice, float slPrice, float tpPrice, 
     float rrRatio = riskVal > 0 ? rewardVal / riskVal : 0
     string pnlSign = pnlAmt >= 0 ? "+" : ""
 
-    string msg = "⏰ TIME EXIT | " + syminfo.ticker + "\\n"
+    // Header carries the ORB tag and the EXIT token, and Side/Entry/SL/TP each get their
+    // own line. The previous shape -- "TIME EXIT | SYM" over "LONG | Entry: x" -- was
+    // silently DROPPED by the pipeline twice over: the header regex
+    // ^([\\w-]+\\s+(?:LONG|SHORT|EXIT))\\s*\\| reads the tag as "TIME", and parser.py
+    // matches ^(\\w+)\\s*:\\s*(.+)$ so "LONG | Entry: 440" yields no entry field. Unlike
+    // TP/SL HIT this message has no normalizer rewrite rule to synthesise the mandatory
+    // fields, so every time exit vanished. Same fix breakout.pine already carries.
+    string msg = "⏰ ORB EXIT | " + syminfo.ticker + "\\n"
     msg += "------------------------\\n"
-    msg += emoji + " " + direction + " | Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
+    msg += "Reason: TIME_EXIT\\n"
+    msg += "Side: " + emoji + " " + direction + "\\n"
+    msg += "Entry: " + str.tostring(entryPrice, "#.##") + "\\n"
     msg += "Exit: " + str.tostring(exitPrice, "#.##") + "\\n"
+    msg += "SL: " + str.tostring(slPrice, "#.##") + "\\n"
+    msg += "TP: " + str.tostring(tpPrice, "#.##") + "\\n"
     msg += "------------------------\\n"
     msg += "P&L: " + pnlSign + str.tostring(pnlAmt, "#.##") + " (" + pnlSign + str.tostring(pnlPct, "#.#") + "%)\\n"
     msg += "Risk: " + str.tostring(riskVal, "#.##") + " | Reward: " + str.tostring(rewardVal, "#.##") + "\\n"
@@ -2129,6 +2147,8 @@ if pendingLongEntry and bar_index > pendingLongBar and canTakeLongEntry
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
             float tpForAlert = tp1
             alert(buildEntryAlert(true, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(tpForAlert - entry) * shares), alert.freq_once_per_bar)
+            alertPosOpen := true
+            alertPosLong := true
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2230,6 +2250,8 @@ if pendingShortEntry and bar_index > pendingShortBar and canTakeShortEntry
             // TP1.5/TP2/TP3 are observation-only (alerts sent on hit, no execution change)
             float tpForAlert = tp1
             alert(buildEntryAlert(false, entry, sl, tpForAlert, tp1_5, tp2, tp3, maxLossCalc, math.abs(entry - tpForAlert) * shares), alert.freq_once_per_bar)
+            alertPosOpen := true
+            alertPosLong := false
 
             // Set exits with TP and SL
             // EXECUTION: Always TP1 only (full position exit at 1R)
@@ -2828,6 +2850,8 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (LONG)
             alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5", tp1_5ExitQtyPct), alert.freq_once_per_bar)
+            if tp1_5ExitQtyPct >= 100
+                alertPosOpen := false
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -2840,6 +2864,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             alertTP2Triggered := true  // Trigger TP2 alert
             // Send TP2 Hit Alert (LONG)
             alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2", 100), alert.freq_once_per_bar)
+            alertPosOpen := false
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -2851,6 +2876,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP3Hit := true
             // Send TP3 Hit Alert (LONG)
             alert(buildTPAlert(true, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3", 100), alert.freq_once_per_bar)
+            alertPosOpen := false
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
@@ -2878,6 +2904,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
             // Send SL Hit Alert (LONG) — always reference TP1 for R:R consistency with entry alert
             alert(buildSLAlert(true, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
+            alertPosOpen := false
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -2904,6 +2931,8 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP1_5Hit := true
             // Send TP1.5 Hit Alert (SHORT)
             alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP1_5Price, orbTP1_5Price, "TP1.5", tp1_5ExitQtyPct), alert.freq_once_per_bar)
+            if tp1_5ExitQtyPct >= 100
+                alertPosOpen := false
             if not na(orbTP1_5Label)
                 string tp1_5Text = labelFormat == "Simple" ? "✅ TP1.5" : str.format("✅ TP1.5: {0}", str.tostring(orbTP1_5Price, "#.##"))
                 label.set_text(orbTP1_5Label, tp1_5Text)
@@ -2916,6 +2945,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             alertTP2Triggered := true  // Trigger TP2 alert for short
             // Send TP2 Hit Alert (SHORT)
             alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP2Price, orbTP2Price, "TP2", 100), alert.freq_once_per_bar)
+            alertPosOpen := false
             if not na(orbTP2Label)
                 string tp2Text = labelFormat == "Simple" ? "✅ TP2" : str.format("✅ TP2: {0}", str.tostring(orbTP2Price, "#.##"))
                 label.set_text(orbTP2Label, tp2Text)
@@ -2927,6 +2957,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
             orbTP3Hit := true
             // Send TP3 Hit Alert (SHORT)
             alert(buildTPAlert(false, orbEntryPrice, orbSLPrice, orbTP3Price, orbTP3Price, "TP3", 100), alert.freq_once_per_bar)
+            alertPosOpen := false
             if not na(orbTP3Label)
                 string tp3Text = labelFormat == "Simple" ? "✅ TP3" : str.format("✅ TP3: {0}", str.tostring(orbTP3Price, "#.##"))
                 label.set_text(orbTP3Label, tp3Text)
@@ -2954,6 +2985,7 @@ if not orbLinesFrozen and not na(orbEntryPrice) and (barstate.isconfirmed or bar
 
             // Send SL Hit Alert (SHORT) — always reference TP1 for R:R consistency with entry alert
             alert(buildSLAlert(false, orbEntryPrice, orbSLPrice, orbTP1Price, orbSLPrice), alert.freq_once_per_bar)
+            alertPosOpen := false
 
             // Reset breakout flag to allow new breakouts after SL hit
             if not na(activeORB)
@@ -2973,17 +3005,20 @@ bool isPastTimeExit = currentHourNow > timeExitHour or (currentHourNow == timeEx
 // Reset time exit flag at start of session
 if inSession and not inSession[1]
     timeExitTriggered := false
+    alertPosOpen := false
 
 // Time exit: Close position at time exit hour + send Telegram alert.
 // strategy.close_all simulates the exit for backtest accuracy.
 // Signal engine handles actual exit independently via its own time exit logic.
-// strategy.position_size != 0 ensures we only fire if position is still open
-if isPastTimeExit and not timeExitTriggered and strategy.position_size != 0
-    bool isLongPos = strategy.position_size > 0
+// Gated on alertPosOpen, NOT strategy.position_size: after a 50% TP1 the strategy is
+// flat while the signal engine still holds half, and the residual needs this alert.
+if isPastTimeExit and not timeExitTriggered and alertPosOpen
+    bool isLongPos = alertPosLong
     // Send Time Exit Alert — always reference TP1 for R:R consistency with entry alert
     alert(buildTimeExitAlert(isLongPos, orbEntryPrice, orbSLPrice, orbTP1Price, close), alert.freq_once_per_bar)
 
     strategy.close_all(comment="Time Exit")
+    alertPosOpen := false
     timeExitTriggered := true
     orbLinesFrozen := true
 

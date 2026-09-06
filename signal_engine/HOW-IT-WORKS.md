@@ -1,8 +1,15 @@
 # How the ORB Strategy Works — Plain-English Guide
 
-> Covers `orb.pine` (alert tag `ORB`), which is frozen and unchanged. A second strategy,
-> `breakout.pine` (tag `BREAKOUT`), is under development — see `PRD.md` and
-> `pinescripts/intraday/orb/breakout.md`. This guide does not describe it.
+> Covers `orb.pine` (alert tag `ORB`). A second strategy, `breakout.pine` (tag `BREAKOUT`),
+> is under development — see `PRD.md` and `pinescripts/intraday/orb/breakout.md`. This guide
+> does not describe it.
+>
+> **The chart you are running may not be this file.** As of 2026-08-29 the live
+> `intraday-orb` channel is still publishing from an older build: it has the TP1.5/TP2/TP3
+> and `ExitQtyPct` features but predates the R:R fix, so it is emitting R:R 1:0.8 on stops
+> around 2% of price where this file emits 1:1.5 on stops around 0.7%. Re-upload `orb.pine`
+> to TradingView and re-create the alert before reading anything into the channel's numbers.
+> See "Recent Changes (2026-08-29)" in `PRD.md`.
 
 Two things work together to place a live trade:
 
@@ -77,11 +84,22 @@ It fires a webhook alert that looks like this:
 
 ```
 🟢 ORB LONG | ASHOKLEY
-Entry: 163.76 | Target: 168.83 | SL: 158.69
-TP1.5: 171.37 | TP2: 173.9 | TP3: 178.97
-Risk: 5.07 | Reward: 5.07 | R:R 1:1
+Entry: 163.76
+Target: 168.83
+SL: 158.69
+TP1.5: 171.37
+TP2: 173.9
+TP3: 178.97
+Risk: 5.07 | Reward: 5.07
+R:R 1:1
 09:50 IST
 ```
+
+Each field is on its own line, and that is not cosmetic: `parser.py` matches
+`^(\w+)\s*:\s*(.+)$`, so an `Entry:` sitting behind a `|` on a shared line yields no entry
+price and the whole signal is dropped. The example above is a real alert from the deployed
+build — note `R:R 1:1` with a stop 3.1% wide, which is the geometry the current `orb.pine`
+no longer produces.
 
 This goes to the **`intraday-orb` Telegram channel**.
 
@@ -92,7 +110,15 @@ After entry the script watches every candle:
 - **Price hits TP1?** → fires a `✅ ORB TP1 HIT` alert (asks engine to exit 50% of the position).
 - **Price hits TP1.5/TP2/TP3?** → fires informational alerts (no real exit — the engine doesn't act on these by default; they're observation-only).
 - **Price hits SL?** → fires a `❌ SL HIT` alert (so the engine can clean up its tracker — actual SL exit is done by the broker SL-M order).
-- **Time exit (15:00 IST)?** → fires a time-exit alert.
+- **Time exit (15:00 IST)?** → fires an `⏰ ORB EXIT` alert carrying `Reason: TIME_EXIT`.
+
+> Both halves of this alert were broken until 2026-08-29 and are worth knowing about,
+> because the symptom was silence rather than an error. It was gated on
+> `strategy.position_size`, which goes to zero the moment TP1 is touched even though the
+> engine is still holding the other 50% — so the position that most needed the alert could
+> never get one. And the message header was `TIME EXIT | SYM`, which parses as a strategy
+> named `TIME`. Across 2026-04 to 2026-08 that left 47% of ORB signals with no exit alert of
+> any kind.
 
 That's the entire PineScript loop: build range → wait for breakout → filter → enter → alert TP/SL.
 

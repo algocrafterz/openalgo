@@ -26,11 +26,13 @@ def _register():
     from signal_engine.backtest.strategies.ema9 import Ema9, Ema9Params
     from signal_engine.backtest.strategies.ema9_pdf import Ema9Pdf, Ema9PdfParams
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
+    from signal_engine.backtest.strategies.dhb import Dhb, DhbParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
     from signal_engine.backtest.strategies.phoenix import Phoenix, PhoenixParams
     from signal_engine.backtest.strategies.value_zone import ValueZone, ValueZoneParams
+    REGISTRY["dhb"] = (Dhb, DhbParams, "intraday")
     REGISTRY["ema9"] = (Ema9, Ema9Params, "intraday")
     REGISTRY["ema9_pdf"] = (Ema9Pdf, Ema9PdfParams, "intraday")
     REGISTRY["gap_rsi"] = (GapRsi, GapRsiParams, "swing")
@@ -70,7 +72,9 @@ def main() -> None:
                       engine=simulate_swing)
     else:
         frames = data.load(period=period, interval=interval, refresh=args.refresh)
-        bt = Backtest(cls(), frames, RunConfig(cost_bps=cost_bps))
+        strategy = cls()
+        run = RunConfig(cost_bps=cost_bps).with_(**getattr(strategy, "run_overrides", {}))
+        bt = Backtest(strategy, frames, run)
     p = params_cls()
 
     print(bt.describe())

@@ -1,0 +1,450 @@
+indicator("Key Level Candles", overlay=true)
+
+// Ported from
+// signal_engine/pinescripts/intraday/orderflow/keylevel-candles.pine
+//
+// The candle is AT a key level. Does its shape say the level gets breached, or
+// does it say the attempt was not good enough? This script draws no lines -
+// your other indicators already plot the levels. It only marks the candles.
+//
+// ==== THE TAXONOMY IS POSITIONAL ====
+// A bar earns a verdict only if it TRADED THROUGH a level: high at or above it
+// and low at or below it. Two facts then decide the verdict - where the
+// PREVIOUS close sat versus where THIS one closed.
+//
+//   from below -> closed above    B up   green   broke up
+//   from above -> closed below    B dn   red     broke down
+//   from above -> closed above    F dn   red     dipped below, held as support
+//   from below -> closed below    F up   green   poked above, held as resistance
+//   a hold soon after a break     R up   green   retest held
+//                                 R dn   red
+//
+// Colour follows the direction of the PROBE, not the implication. A red F dn
+// is a BULLISH event (the level held as support) and a green F up is BEARISH.
+//
+// ==== CONVICTION IS AN ATTRIBUTE, NEVER A GATE ====
+// A verdict is never suppressed for being weak. A marker ending in "?" is
+// unconfirmed - the level was crossed or held, but without the body, the wick
+// discipline or the volume behind it. A feeble test at a level is tradeable
+// information: the level held without effort. If weak tests rendered as
+// nothing you could not tell that from "the level was never tested".
+//
+// ==== WHY THIS FILE WAS REWRITTEN ====
+// Earlier versions compiled to nothing. The cause was type inference: an
+// expression whose branch is the bare `na` literal defeats it, and a script
+// that fails to compile renders NOTHING - no marks, no partial draw. The two
+// sibling scripts in this folder contain no such expression, which is exactly
+// why they rendered and this one did not.
+//
+// This version therefore contains NO `na` literal in any expression anywhere.
+// `na` appears only inside the na() test function and in typed static
+// declarations, both of which are proven by the working scripts. To keep it
+// that way, two things changed shape:
+//   - There is no nearest-level search. Every level is judged independently
+//     and the verdicts are OR'd. A bar piercing two levels can raise two
+//     marks, which is honest rather than arbitrary.
+//   - A retest is a hold (F dn / F up) that lands within the retest window of
+//     a break in the same direction. It tracks WHEN the break happened, not at
+//     which level, so a retest at a nearby level still counts.
+//
+// ==== TIMEFRAME ====
+// Range Window Mode 1 (the default) uses the clock, so ORH/ORL and IBH/IBL are
+// the same 09:15-09:30 and 09:15-10:15 windows on every timeframe. Mode 0
+// counts bars from the day open and is therefore timeframe SPECIFIC - the bar
+// counts below are right for 5 minutes only. Use mode 0 only if the chart is
+// not on IST and the clock windows come out empty.
+//
+// hour and minute follow the CHART timezone, not the exchange. Diagnostic 3
+// tests that directly.
+//
+// ==== IF NOTHING APPEARS ====
+// Every colour, shape and built-in used below appears in a script that has
+// already rendered on your chart, so a compile failure would now be a surprise.
+//
+//   Diagnostic 1  marks every bar. Nothing = the script is not compiling or
+//                 not added to the chart. Send me the editor error.
+//   Diagnostic 3  marks every bar the clock calls in-session. Nothing = the
+//                 chart is not on IST; fix the session hours or use mode 0.
+//   Diagnostic 2  marks every bar on which at least one level was pierced.
+//                 Nothing = levels exist but price is not reaching them, or
+//                 not enough history is loaded. PDH/PDL need a prior day,
+//                 PWH/PWL a prior week, PMH/PML a prior month.
+
+// ==== RANGE WINDOWS ====
+rangeMode = input.int(1, "Range Window Mode (1=clock, 0=bars from day open)")
+orMinutes = input.int(15, "Opening Range Minutes (mode 1)")
+ibMinutes = input.int(60, "Initial Balance Minutes (mode 1)")
+orBars = input.int(3, "Opening Range Bars (mode 0, 5min chart)")
+ibBars = input.int(12, "Initial Balance Bars (mode 0, 5min chart)")
+
+// ==== SESSION CLOCK ====
+sessionStartHour = input.int(9, "Session Start Hour")
+sessionStartMin = input.int(15, "Session Start Minute")
+sessionEndHour = input.int(15, "Session End Hour")
+sessionEndMin = input.int(30, "Session End Minute")
+stampMode = input.int(0, "Bar Timestamp (0=open time, 1=close time)")
+useSession = input.int(0, "Restrict Verdicts to Session Clock (0=no, 1=yes)")
+
+// ==== KEY LEVELS ====
+useOR = input.int(1, "ORH / ORL (0=no, 1=yes)")
+useIB = input.int(1, "IBH / IBL (0=no, 1=yes)")
+usePD = input.int(1, "Previous Day High / Low (0=no, 1=yes)")
+usePW = input.int(1, "Previous Week High / Low (0=no, 1=yes)")
+usePM = input.int(1, "Previous Month High / Low (0=no, 1=yes)")
+
+// Previous session value area. 0 = off. 1 = entered by hand in PAISE, since
+// there is no input.float: 24175 means 241.75. 2 = approximated from the
+// previous day by the pivot formula - indicative, no volume profile involved.
+vpMode = input.int(0, "Prev VAH / VAL (0=off, 1=manual paise, 2=auto)")
+vahPaise = input.int(0, "PVAH in Paise (mode 1)")
+valPaise = input.int(0, "PVAL in Paise (mode 1)")
+
+// ==== CANDLE THRESHOLDS ====
+volLen = input.int(20, "Volume Average Length (10, 20 or 30)")
+atrLen = input.int(14, "ATR Length")
+minRvolPct = input.int(150, "BREAK Minimum RVOL Percent")
+bodyMinPct = input.int(55, "BREAK Minimum Body Percent of Range")
+bodyAtrPct = input.int(80, "BREAK Minimum Body Percent of ATR")
+oppWickMax = input.int(30, "BREAK Maximum Wick Into Level Percent")
+wickMinPct = input.int(45, "FAKE Minimum Rejection Wick Percent")
+lvlCooldown = input.int(0, "Bars Between Verdicts")
+
+// ==== RETEST AND DISPLAY ====
+useRetest = input.int(1, "Show Retests (0=no, 1=yes)")
+retestBars = input.int(12, "Retest Window Bars After a Break")
+showBreak = input.int(1, "Show BREAK (0=no, 1=yes)")
+showFake = input.int(1, "Show FAKE (0=no, 1=yes)")
+diagMode = input.int(0, "Diagnostic (0=off, 1=alive, 2=pierced, 3=in session)")
+
+// ==== DAY, WEEK AND MONTH BOUNDARIES ====
+// All three come from dayofmonth, which is verified. dayofweek is not, and an
+// unverified built-in that fails takes the whole script down.
+//   New day:   the day number changes.
+//   New month: the day number drops.
+//   New week:  NSE trades Mon-Fri, so a gap of three or more calendar days
+//              between sessions is a weekend. Crossing into a new month
+//              midweek also reads as a new week, so PWH / PWL can restart a
+//              few days early in that one case. Context levels, accepted.
+isNewDay = na(dayofmonth[1]) or dayofmonth != dayofmonth[1]
+dayJump = dayofmonth - dayofmonth[1]
+isNewMonth = isNewDay and dayJump < 0
+isNewWeek = isNewDay and (dayJump >= 3 or dayJump < 0)
+
+// ==== COUNTERS ====
+static int barCount = 0
+static int barsInDay = 0
+
+barCount := barCount + 1
+
+if isNewDay {
+    barsInDay := 0
+}
+
+barsInDay := barsInDay + 1
+
+// ==== SESSION AND RANGE WINDOWS ====
+minuteOfDay = hour * 60 + minute
+sessionOpen = sessionStartHour * 60 + sessionStartMin
+sessionCloseMin = sessionEndHour * 60 + sessionEndMin
+orClose = sessionOpen + orMinutes
+ibClose = sessionOpen + ibMinutes
+
+inSessionClock = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= sessionCloseMin : minuteOfDay >= sessionOpen and minuteOfDay < sessionCloseMin
+inORclock = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= orClose : minuteOfDay >= sessionOpen and minuteOfDay < orClose
+inIBclock = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= ibClose : minuteOfDay >= sessionOpen and minuteOfDay < ibClose
+
+inOR = rangeMode == 0 ? barsInDay <= orBars : inORclock
+inIB = rangeMode == 0 ? barsInDay <= ibBars : inIBclock
+
+// A range cannot be broken while it is still being built: until the window
+// closes, orH moves with price and every bar inside it touches the level.
+orReady = not inOR
+ibReady = not inIB
+sessionOK = useSession == 0 or inSessionClock
+
+// ==== CANDLE GEOMETRY ====
+rng = high - low
+bodyV = close > open ? close - open : open - close
+
+// A float typed zero and hundred. Lipi is Go based, so an int sitting opposite
+// a float in a ternary, or an int divided by an int, is a trap.
+zeroF = high - high
+hundredF = zeroF + 100
+
+bodyTop = close > open ? close : open
+bodyBot = close > open ? open : close
+upWick = high - bodyTop
+dnWick = bodyBot - low
+hasRange = rng > zeroF
+
+prevBody = close[1] > open[1] ? close[1] - open[1] : open[1] - close[1]
+bullEngulf = close > open and open[1] > close[1] and close >= open[1] and open <= close[1] and bodyV > prevBody
+bearEngulf = close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and bodyV > prevBody
+
+// ==== ATR, WILDER (HAND ROLLED) ====
+gapUp = na(close[1]) ? rng : high - close[1]
+gapDn = na(close[1]) ? rng : close[1] - low
+absGapUp = math.max(gapUp, zeroF - gapUp)
+absGapDn = math.max(gapDn, zeroF - gapDn)
+trueRange = math.max(rng, math.max(absGapUp, absGapDn))
+
+static float atrVal = na
+atrVal := na(atrVal) ? trueRange : (atrVal * (atrLen - 1) + trueRange) / atrLen
+
+// ==== VOLUME AVERAGE (HAND ROLLED ROLLING MEAN) ====
+effVolLen = volLen <= 10 ? 10 : volLen <= 20 ? 20 : 30
+dropVol = effVolLen == 10 ? volume[10] : effVolLen == 20 ? volume[20] : volume[30]
+
+static float volSum = na
+volSum := na(volSum) ? volume : (barCount > effVolLen ? volSum + volume - dropVol : volSum + volume)
+volDenom = barCount < effVolLen ? barCount : effVolLen
+volMA = volSum / volDenom
+volOK = volMA > zeroF and volume * 100 >= volMA * minRvolPct
+
+// ==== PREVIOUS DAY, WEEK AND MONTH ====
+static float pdh = na
+static float pdl = na
+static float pdc = na
+static float dayHigh = na
+static float dayLow = na
+static float dayClose = na
+
+// dayClose still holds the previous day's last close here: it is overwritten
+// only at the end of this block.
+if isNewDay {
+    pdh := dayHigh
+    pdl := dayLow
+    pdc := dayClose
+    dayHigh := na
+    dayLow := na
+}
+
+dayHigh := na(dayHigh) ? high : math.max(dayHigh, high)
+dayLow := na(dayLow) ? low : math.min(dayLow, low)
+dayClose := close
+
+static float pwh = na
+static float pwl = na
+static float weekHigh = na
+static float weekLow = na
+
+if isNewWeek {
+    pwh := weekHigh
+    pwl := weekLow
+    weekHigh := na
+    weekLow := na
+}
+
+weekHigh := na(weekHigh) ? high : math.max(weekHigh, high)
+weekLow := na(weekLow) ? low : math.min(weekLow, low)
+
+static float pmh = na
+static float pml = na
+static float monthHigh = na
+static float monthLow = na
+
+if isNewMonth {
+    pmh := monthHigh
+    pml := monthLow
+    monthHigh := na
+    monthLow := na
+}
+
+monthHigh := na(monthHigh) ? high : math.max(monthHigh, high)
+monthLow := na(monthLow) ? low : math.min(monthLow, low)
+
+// ==== PREVIOUS DAY VALUE AREA ====
+// na propagates through this arithmetic on its own when there is no prior day,
+// and the pierce tests below screen it out with na().
+pivotPoc = (pdh + pdl + pdc) / 3
+autoVah = pivotPoc + (pdh - pdl) / 4
+autoVal = pivotPoc - (pdh - pdl) / 4
+vahOn = vpMode == 2 or (vpMode == 1 and vahPaise > 0)
+valOn = vpMode == 2 or (vpMode == 1 and valPaise > 0)
+vahVal = vpMode == 2 ? autoVah : vahPaise / hundredF
+valVal = vpMode == 2 ? autoVal : valPaise / hundredF
+
+// ==== OPENING RANGE AND INITIAL BALANCE ====
+static float orH = na
+static float orL = na
+static float ibH = na
+static float ibL = na
+
+if isNewDay {
+    orH := na
+    orL := na
+    ibH := na
+    ibL := na
+}
+
+if inOR {
+    orH := na(orH) ? high : math.max(orH, high)
+    orL := na(orL) ? low : math.min(orL, low)
+}
+
+if inIB {
+    ibH := na(ibH) ? high : math.max(ibH, high)
+    ibL := na(ibL) ? low : math.min(ibL, low)
+}
+
+// ==== DID THIS BAR TRADE THROUGH EACH LEVEL ====
+pORH = useOR == 1 and orReady and not na(orH) and high >= orH and low <= orH
+pORL = useOR == 1 and orReady and not na(orL) and high >= orL and low <= orL
+pIBH = useIB == 1 and ibReady and not na(ibH) and high >= ibH and low <= ibH
+pIBL = useIB == 1 and ibReady and not na(ibL) and high >= ibL and low <= ibL
+pPDH = usePD == 1 and not na(pdh) and high >= pdh and low <= pdh
+pPDL = usePD == 1 and not na(pdl) and high >= pdl and low <= pdl
+pPWH = usePW == 1 and not na(pwh) and high >= pwh and low <= pwh
+pPWL = usePW == 1 and not na(pwl) and high >= pwl and low <= pwl
+pPMH = usePM == 1 and not na(pmh) and high >= pmh and low <= pmh
+pPML = usePM == 1 and not na(pml) and high >= pml and low <= pml
+pPVAH = vahOn and not na(vahVal) and high >= vahVal and low <= vahVal
+pPVAL = valOn and not na(valVal) and high >= valVal and low <= valVal
+
+// ==== VERDICT PER LEVEL ====
+bUpORH = pORH and close[1] < orH and close >= orH
+bDnORH = pORH and close[1] >= orH and close < orH
+fDnORH = pORH and close[1] >= orH and close >= orH
+fUpORH = pORH and close[1] < orH and close < orH
+bUpORL = pORL and close[1] < orL and close >= orL
+bDnORL = pORL and close[1] >= orL and close < orL
+fDnORL = pORL and close[1] >= orL and close >= orL
+fUpORL = pORL and close[1] < orL and close < orL
+bUpIBH = pIBH and close[1] < ibH and close >= ibH
+bDnIBH = pIBH and close[1] >= ibH and close < ibH
+fDnIBH = pIBH and close[1] >= ibH and close >= ibH
+fUpIBH = pIBH and close[1] < ibH and close < ibH
+bUpIBL = pIBL and close[1] < ibL and close >= ibL
+bDnIBL = pIBL and close[1] >= ibL and close < ibL
+fDnIBL = pIBL and close[1] >= ibL and close >= ibL
+fUpIBL = pIBL and close[1] < ibL and close < ibL
+bUpPDH = pPDH and close[1] < pdh and close >= pdh
+bDnPDH = pPDH and close[1] >= pdh and close < pdh
+fDnPDH = pPDH and close[1] >= pdh and close >= pdh
+fUpPDH = pPDH and close[1] < pdh and close < pdh
+bUpPDL = pPDL and close[1] < pdl and close >= pdl
+bDnPDL = pPDL and close[1] >= pdl and close < pdl
+fDnPDL = pPDL and close[1] >= pdl and close >= pdl
+fUpPDL = pPDL and close[1] < pdl and close < pdl
+bUpPWH = pPWH and close[1] < pwh and close >= pwh
+bDnPWH = pPWH and close[1] >= pwh and close < pwh
+fDnPWH = pPWH and close[1] >= pwh and close >= pwh
+fUpPWH = pPWH and close[1] < pwh and close < pwh
+bUpPWL = pPWL and close[1] < pwl and close >= pwl
+bDnPWL = pPWL and close[1] >= pwl and close < pwl
+fDnPWL = pPWL and close[1] >= pwl and close >= pwl
+fUpPWL = pPWL and close[1] < pwl and close < pwl
+bUpPMH = pPMH and close[1] < pmh and close >= pmh
+bDnPMH = pPMH and close[1] >= pmh and close < pmh
+fDnPMH = pPMH and close[1] >= pmh and close >= pmh
+fUpPMH = pPMH and close[1] < pmh and close < pmh
+bUpPML = pPML and close[1] < pml and close >= pml
+bDnPML = pPML and close[1] >= pml and close < pml
+fDnPML = pPML and close[1] >= pml and close >= pml
+fUpPML = pPML and close[1] < pml and close < pml
+bUpPVAH = pPVAH and close[1] < vahVal and close >= vahVal
+bDnPVAH = pPVAH and close[1] >= vahVal and close < vahVal
+fDnPVAH = pPVAH and close[1] >= vahVal and close >= vahVal
+fUpPVAH = pPVAH and close[1] < vahVal and close < vahVal
+bUpPVAL = pPVAL and close[1] < valVal and close >= valVal
+bDnPVAL = pPVAL and close[1] >= valVal and close < valVal
+fDnPVAL = pPVAL and close[1] >= valVal and close >= valVal
+fUpPVAL = pPVAL and close[1] < valVal and close < valVal
+
+// ==== AGGREGATE ====
+anyPierce = pORH or pORL or pIBH or pIBL or pPDH or pPDL or pPWH or pPWL or pPMH or pPML or pPVAH or pPVAL
+rawBreakUp = bUpORH or bUpORL or bUpIBH or bUpIBL or bUpPDH or bUpPDL or bUpPWH or bUpPWL or bUpPMH or bUpPML or bUpPVAH or bUpPVAL
+rawBreakDn = bDnORH or bDnORL or bDnIBH or bDnIBL or bDnPDH or bDnPDL or bDnPWH or bDnPWL or bDnPMH or bDnPML or bDnPVAH or bDnPVAL
+rawFakeDn = fDnORH or fDnORL or fDnIBH or fDnIBL or fDnPDH or fDnPDL or fDnPWH or fDnPWL or fDnPMH or fDnPML or fDnPVAH or fDnPVAL
+rawFakeUp = fUpORH or fUpORL or fUpIBH or fUpIBL or fUpPDH or fUpPDL or fUpPWH or fUpPWL or fUpPMH or fUpPML or fUpPVAH or fUpPVAL
+
+// ==== COOLDOWN ====
+static int lastVerdictBar = 0
+verdictReady = lvlCooldown == 0 or lastVerdictBar == 0 or barCount - lastVerdictBar >= lvlCooldown
+gateOK = sessionOK and verdictReady
+
+breakUp = rawBreakUp and gateOK
+breakDn = rawBreakDn and gateOK
+fakeDn = rawFakeDn and gateOK
+fakeUp = rawFakeUp and gateOK
+anyVerdict = breakUp or breakDn or fakeUp or fakeDn
+
+if anyVerdict {
+    lastVerdictBar := barCount
+}
+
+// ==== CONVICTION, AN ATTRIBUTE AND NEVER A GATE ====
+// The ATR floor is what stops a 55 percent body on a tiny range reading as
+// conviction. An engulfing has to clear it too.
+bodyAtrOK = not na(atrVal) and atrVal > zeroF and bodyV * 100 >= atrVal * bodyAtrPct
+bodyShapeUp = hasRange and bodyV * 100 >= rng * bodyMinPct and upWick * 100 <= rng * oppWickMax
+bodyShapeDn = hasRange and bodyV * 100 >= rng * bodyMinPct and dnWick * 100 <= rng * oppWickMax
+strongUp = volOK and bodyAtrOK and (bodyShapeUp or bullEngulf)
+strongDn = volOK and bodyAtrOK and (bodyShapeDn or bearEngulf)
+strongBrk = breakUp ? strongUp : strongDn
+strongFakeUp = hasRange and upWick * 100 >= rng * wickMinPct
+strongFakeDn = hasRange and dnWick * 100 >= rng * wickMinPct
+
+// ==== RETEST ====
+// A retest is a hold that lands soon after a break in the same direction. It
+// remembers WHEN the break happened, not at which level, so a hold at a nearby
+// level still counts. Computed before the state updates, so a bar that both
+// breaks and holds cannot retest its own break.
+static int lastBrkUpBar = 0
+static int lastBrkDnBar = 0
+
+retestUp = useRetest == 1 and fakeDn and lastBrkUpBar > 0 and barCount > lastBrkUpBar and barCount - lastBrkUpBar <= retestBars
+retestDn = useRetest == 1 and fakeUp and lastBrkDnBar > 0 and barCount > lastBrkDnBar and barCount - lastBrkDnBar <= retestBars
+
+if breakUp {
+    lastBrkUpBar := barCount
+}
+
+if breakDn {
+    lastBrkDnBar := barCount
+}
+
+// ==== MARKER CONDITIONS ====
+// A hold that is also a retest shows as R, not F.
+showFakeDn = showFake == 1 and fakeDn and not retestUp
+showFakeUp = showFake == 1 and fakeUp and not retestDn
+mBreakUpStrong = showBreak == 1 and breakUp and strongBrk
+mBreakUpWeak = showBreak == 1 and breakUp and not strongBrk
+mBreakDnStrong = showBreak == 1 and breakDn and strongBrk
+mBreakDnWeak = showBreak == 1 and breakDn and not strongBrk
+mFakeDnStrong = showFakeDn and strongFakeDn
+mFakeDnWeak = showFakeDn and not strongFakeDn
+mFakeUpStrong = showFakeUp and strongFakeUp
+mFakeUpWeak = showFakeUp and not strongFakeUp
+
+// ==== DIAGNOSTICS ====
+diagAlive = diagMode == 1
+diagPierce = diagMode == 2 and anyPierce
+diagSession = diagMode == 3 and inSessionClock
+
+plotshape(diagAlive, shape=shape.triangleup, location=location.belowbar, color=color.blue, size=size.small, text="a", title="Diagnostic Alive")
+plotshape(diagPierce, shape=shape.triangleup, location=location.belowbar, color=color.blue, size=size.small, text="L", title="Diagnostic Pierced")
+plotshape(diagSession, shape=shape.triangleup, location=location.belowbar, color=color.blue, size=size.small, text="s", title="Diagnostic In Session")
+
+// ==== VERDICT MARKERS ====
+plotshape(mBreakUpStrong, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="B up", title="BREAK Up")
+plotshape(mBreakUpWeak, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="B up ?", title="BREAK Up Unconfirmed")
+plotshape(mFakeDnStrong, shape=shape.triangleup, location=location.belowbar, color=color.red, size=size.small, text="F dn", title="FAKE Down, Level Held as Support")
+plotshape(mFakeDnWeak, shape=shape.triangleup, location=location.belowbar, color=color.red, size=size.small, text="F dn ?", title="FAKE Down Unconfirmed")
+plotshape(mBreakDnStrong, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="B dn", title="BREAK Down")
+plotshape(mBreakDnWeak, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="B dn ?", title="BREAK Down Unconfirmed")
+plotshape(mFakeUpStrong, shape=shape.triangledown, location=location.abovebar, color=color.green, size=size.small, text="F up", title="FAKE Up, Level Held as Resistance")
+plotshape(mFakeUpWeak, shape=shape.triangledown, location=location.abovebar, color=color.green, size=size.small, text="F up ?", title="FAKE Up Unconfirmed")
+plotshape(retestUp, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="R up", title="Retest Held Up")
+plotshape(retestDn, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="R dn", title="Retest Held Down")
+
+// ==== ALERTS ====
+alertcondition(breakUp, title="Key level breached up", message="Key level BREACHED up - close through the level")
+alertcondition(breakDn, title="Key level breached down", message="Key level BREACHED down - close through the level")
+alertcondition(mBreakUpStrong, title="Key level breached up with conviction", message="Key level BREACHED up - conviction close on volume")
+alertcondition(mBreakDnStrong, title="Key level breached down with conviction", message="Key level BREACHED down - conviction close on volume")
+alertcondition(fakeUp, title="Fakeout up", message="Key level HELD - upside breach rejected")
+alertcondition(fakeDn, title="Fakeout down", message="Key level HELD - downside breach rejected")
+alertcondition(retestUp, title="Retest held up", message="Key level RETESTED and held as support")
+alertcondition(retestDn, title="Retest held down", message="Key level RETESTED and held as resistance")
+alertcondition(anyVerdict, title="Any key level verdict", message="Key level interaction")

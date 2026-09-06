@@ -1,0 +1,77 @@
+indicator("Session Based Custom ORB Optimized", overlay=true)
+
+// ==== SESSION TYPE INPUT (0 = NSE, 1 = US) ====
+sessionType = input.int(0, "Session Type (0=NSE, 1=US)")
+
+// ==== CUSTOM RANGE TIME INPUTS ====
+startHour = input.int(9, "Range Start Hour")
+startMin = input.int(15, "Range Start Minute")
+endHour = input.int(9, "Range End Hour")
+endMin = input.int(30, "Range End Minute")
+
+// ==== SESSION TIMINGS BASED ON SELECTION ====
+sessionOpenHour = sessionType == 0 ? 9 : 9
+sessionOpenMin = sessionType == 0 ? 15 : 30
+sessionCloseHour = sessionType == 0 ? 15 : 16
+sessionCloseMin = sessionType == 0 ? 30 : 0
+
+// ==== SESSION ACTIVE CONDITION ====
+inSession = (hour > sessionOpenHour or (hour == sessionOpenHour and minute >= sessionOpenMin)) and (hour < sessionCloseHour or (hour == sessionCloseHour and minute <= sessionCloseMin))
+
+// ==== DETECT SESSION OPEN BAR ====
+isSessionOpenBar = hour == sessionOpenHour and minute == sessionOpenMin
+
+// ==== PERSISTENT VARIABLES ====
+static float rangeHigh = na
+static float rangeLow = na
+static float midLevel = na
+static bool rangeLocked = false
+static bool longTaken = false
+static bool shortTaken = false
+
+// ==== RESET VARIABLES AT SESSION OPEN ====
+if isSessionOpenBar {
+    rangeHigh := na
+    rangeLow := na
+    midLevel := na
+    rangeLocked := false
+    longTaken := false
+    shortTaken := false
+}
+
+// ==== VALID RANGE WINDOW CONDITION ====
+inTimeWindow = inSession and (hour > startHour or (hour == startHour and minute >= startMin)) and (hour < endHour or (hour == endHour and minute <= endMin))
+
+// ==== CAPTURE RANGE HIGH AND LOW ====
+if inTimeWindow {
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow := na(rangeLow) ? low : math.min(rangeLow, low)
+}
+
+// ==== LOCK RANGE AFTER WINDOW ENDS ====
+if not inTimeWindow and inSession and not rangeLocked and not na(rangeHigh) {
+    rangeLocked := true
+    midLevel := (rangeHigh + rangeLow) / 2
+}
+
+// ==== PLOT LEVELS ONLY DURING SESSION ====
+plot(inSession and rangeLocked ? rangeHigh : na, color=color.green, linewidth=2, title="Range High")
+plot(inSession and rangeLocked ? rangeLow : na, color=color.red, linewidth=2, title="Range Low")
+plot(inSession and rangeLocked ? midLevel : na, color=color.blue, linewidth=1, title="Mid Level")
+
+// ==== BREAKOUT CONDITIONS (FIRST OCCURRENCE ONLY) ====
+longBreak = inSession and rangeLocked and not longTaken and talib.crossover(close, rangeHigh)
+shortBreak = inSession and rangeLocked and not shortTaken and talib.crossunder(close, rangeLow)
+
+// ==== MARK SIGNALS AS TAKEN ====
+if longBreak {
+    longTaken := true
+}
+
+if shortBreak {
+    shortTaken := true
+}
+
+// ==== PLOT BREAKOUT SIGNALS ====
+plotshape(longBreak, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, title="Long Breakout")
+plotshape(shortBreak, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, title="Short Breakout")

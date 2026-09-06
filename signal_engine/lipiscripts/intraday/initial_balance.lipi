@@ -1,0 +1,102 @@
+indicator("Initial Balance", overlay=true)
+
+// Initial Balance for NSE intraday charts.
+// Default window is 09:15-10:15 IST (first 60 minutes of the regular session).
+// Tracks the running high/low inside the window, locks them when it closes,
+// then plots the midpoint and range extensions for the rest of the session.
+//
+// hour and minute follow the CHART timezone, not the exchange. If the chart is
+// not on Asia/Kolkata, change the start hour/minute inputs, not the code.
+//
+// Use an interval that divides the window evenly: 1, 3, 5, 15 or 30 minutes.
+
+// ==== IB WINDOW INPUTS ====
+startHour = input.int(9, "IB Start Hour")
+startMin = input.int(15, "IB Start Minute")
+ibMinutes = input.int(60, "IB Duration Minutes")
+
+// ==== SESSION END INPUTS ====
+sessionEndHour = input.int(15, "Session End Hour")
+sessionEndMin = input.int(30, "Session End Minute")
+
+// ==== DISPLAY INPUTS ====
+stampMode = input.int(0, "Bar Timestamp (0=open time, 1=close time)")
+showMid = input.int(1, "Show Midpoint (0=no, 1=yes)")
+showExt = input.int(1, "Show Extensions (0=no, 1=yes)")
+extPercent = input.int(100, "Extension Percent of IB Range")
+
+// ==== MINUTE OF DAY BOUNDS ====
+minuteOfDay = hour * 60 + minute
+windowOpen = startHour * 60 + startMin
+windowClose = windowOpen + ibMinutes
+sessionEnd = sessionEndHour * 60 + sessionEndMin
+
+// ==== WINDOW AND SESSION CONDITIONS ====
+// An open-stamped 5m bar printed at 10:10 is the last IB bar; one printed at
+// 10:15 is not. A close-stamped feed shifts both comparisons by one bar.
+inWindow = stampMode == 1 ? minuteOfDay > windowOpen and minuteOfDay <= windowClose : minuteOfDay >= windowOpen and minuteOfDay < windowClose
+inSession = stampMode == 1 ? minuteOfDay > windowOpen and minuteOfDay <= sessionEnd : minuteOfDay >= windowOpen and minuteOfDay < sessionEnd
+
+// ==== PERSISTENT VARIABLES ====
+static float ibHigh = na
+static float ibLow = na
+static float ibMid = na
+static bool ibLocked = false
+static bool longTaken = false
+static bool shortTaken = false
+
+// ==== RESET AT THE START OF EACH TRADING DAY ====
+isNewDay = na(dayofmonth[1]) or dayofmonth != dayofmonth[1]
+
+if isNewDay {
+    ibHigh := na
+    ibLow := na
+    ibMid := na
+    ibLocked := false
+    longTaken := false
+    shortTaken := false
+}
+
+// ==== CAPTURE IB HIGH AND LOW ====
+if inWindow {
+    ibHigh := na(ibHigh) ? high : math.max(ibHigh, high)
+    ibLow := na(ibLow) ? low : math.min(ibLow, low)
+}
+
+// ==== LOCK THE RANGE WHEN THE WINDOW CLOSES ====
+if not inWindow and inSession and not ibLocked and not na(ibHigh) {
+    ibLocked := true
+    ibMid := (ibHigh + ibLow) / 2
+}
+
+// ==== EXTENSION LEVELS ====
+ibRange = ibHigh - ibLow
+extAmount = ibRange * extPercent / 100
+
+// ==== PLOT LEVELS ONLY DURING THE SESSION ====
+plot(inSession and not na(ibHigh) ? ibHigh : na, color=color.yellow, linewidth=1, title="IB High")
+plot(inSession and not na(ibLow) ? ibLow : na, color=color.yellow, linewidth=1, title="IB Low")
+plot(inSession and ibLocked and showMid == 1 ? ibMid : na, color=color.yellow, linewidth=1, title="IB Mid")
+plot(inSession and ibLocked and showExt == 1 ? ibHigh + extAmount : na, color=color.yellow, linewidth=1, title="IB Upper Extension")
+plot(inSession and ibLocked and showExt == 1 ? ibLow - extAmount : na, color=color.yellow, linewidth=1, title="IB Lower Extension")
+
+// ==== BREAKOUT CONDITIONS (FIRST OCCURRENCE ONLY) ====
+longBreak = inSession and ibLocked and not longTaken and talib.crossover(close, ibHigh)
+shortBreak = inSession and ibLocked and not shortTaken and talib.crossunder(close, ibLow)
+
+// ==== MARK SIGNALS AS TAKEN ====
+if longBreak {
+    longTaken := true
+}
+
+if shortBreak {
+    shortTaken := true
+}
+
+// ==== PLOT BREAKOUT SIGNALS ====
+plotshape(longBreak, shape=shape.triangleup, location=location.belowbar, color=color.yellow, size=size.small, title="IB Breakout Up")
+plotshape(shortBreak, shape=shape.triangledown, location=location.abovebar, color=color.yellow, size=size.small, title="IB Breakdown")
+
+// ==== ALERTS ====
+alertcondition(longBreak, title="IB Breakout Up", message="IB breakout up")
+alertcondition(shortBreak, title="IB Breakdown", message="IB breakdown")

@@ -1,0 +1,221 @@
+indicator("Candlestick Patterns", overlay=true)
+
+// Six candlestick families, pure candle geometry. Nothing here knows about key
+// levels, volume, ATR or the session clock - it marks the candle and stops.
+// You read the context off the chart yourself.
+//
+// Bullish markers sit below the bar in green, bearish above it in red, and the
+// marker text names the pattern. Nothing is encoded in the shape or the side
+// beyond direction, so there is nothing to memorise.
+//
+// REVERSAL
+//   Engulfing              Engulf                body covers the prior body
+//   Morning / Evening Star M.Star / E.Star       small star between two bodies
+//   Hammer / Shooting Star Hammer / S.Star       long wick, body at the far end
+//
+// CONTINUATION
+//   Three Soldiers / Crows 3 Soldiers / 3 Crows  three controlled trend candles
+//   Rising / Falling Three Rise 3 / Fall 3       pause inside a big candle
+//
+// PAUSE (directionless, off by default)
+//   Inside Bar / Doji      Pause                 the bar paused, no direction
+//
+// ==== PORTING NOTES: LIPISCRIPT IS NOT PINE ====
+//   - Marker text uses plotshape's `text` parameter. It is documented, with a
+//     worked example, but no compile in this repo proves it. label.new has no
+//     documented signature at all and is not used here.
+//     IF THE EDITOR REJECTS `text=`: delete every text= argument. The script
+//     still runs, but the markers stop naming themselves, so switch the
+//     pattern families on one at a time to know what you are looking at.
+//   - `text` must be a constant string, so a marker cannot carry a price or a
+//     count. Each pattern also has its own alertcondition.
+//   - No input.bool / input.float / input.color: switches are 0 / 1 integers
+//     and fractions are integer percents divided in code.
+//   - History offsets must be constant, so the trend lookback is unrolled and
+//     limited to 1 to 10 bars.
+//   - There is no barstate.isconfirmed. A pattern can form and un-form inside
+//     a live bar. Set GoCharting alerts to fire once per bar close.
+
+// ==== PATTERN SWITCHES ====
+useEngulf = input.int(1, "Engulfing (0=no, 1=yes)")
+useStar = input.int(1, "Morning / Evening Star (0=no, 1=yes)")
+usePin = input.int(1, "Hammer / Shooting Star (0=no, 1=yes)")
+useThreeLine = input.int(1, "Three Soldiers / Crows (0=no, 1=yes)")
+useThreeMethods = input.int(1, "Rising / Falling Three Methods (0=no, 1=yes)")
+usePause = input.int(0, "Inside Bar / Doji (0=no, 1=yes)")
+
+// ==== TREND CONTEXT ====
+// A reversal needs something to reverse. This checks that the open N bars back
+// sat on the far side of the current open.
+useTrendFilter = input.int(1, "Require Prior Move Into Pattern (0=no, 1=yes)")
+trendLen = input.int(5, "Trend Lookback Bars (1 to 10)")
+
+// ==== GEOMETRY THRESHOLDS ====
+dojiPct = input.int(10, "Doji Body Percent of Range")
+starBodyPct = input.int(30, "Star Body Percent of Range")
+strongBodyPct = input.int(50, "Strong Candle Body Percent of Range")
+pinWickPct = input.int(55, "Pin Bar Wick Percent of Range")
+pinBodyPct = input.int(30, "Pin Bar Body Percent of Range")
+pinOppWickPct = input.int(20, "Pin Bar Opposite Wick Percent of Range")
+soldierBodyPct = input.int(50, "Soldier Body Percent of Range")
+soldierClosePct = input.int(60, "Soldier Close Percent Into Range")
+bigBodyPct = input.int(55, "Three Methods Big Candle Body Percent of Range")
+methodsBars = input.int(0, "Three Methods Pause Bars (0=2 or 3, 2=two, 3=three)")
+
+// ==== CANDLE GEOMETRY ====
+rng = high - low
+body = close > open ? close - open : open - close
+
+// A float typed zero. Lipi is Go based, so an integer 0 sitting opposite a
+// float in a ternary is a type mismatch waiting to happen.
+zeroF = high - high
+
+bodyTop = close > open ? close : open
+bodyBot = close > open ? open : close
+upperWick = high - bodyTop
+lowerWick = bodyBot - low
+hasRange = rng > zeroF
+
+// ==== WARMUP ====
+// The deepest reference is close[4] for three methods and open[10] for the
+// trend lookback.
+static int barCount = 0
+barCount := barCount + 1
+warmedUp = barCount > 11
+
+// ==== TREND LOOKBACK OPEN ====
+// History offsets must be constant, so the choice is unrolled.
+trendOpen = trendLen <= 1 ? open[1] : trendLen == 2 ? open[2] : trendLen == 3 ? open[3] : trendLen == 4 ? open[4] : trendLen == 5 ? open[5] : trendLen == 6 ? open[6] : trendLen == 7 ? open[7] : trendLen == 8 ? open[8] : trendLen == 9 ? open[9] : open[10]
+
+// Price fell into this bar / rose into this bar.
+fellInto = useTrendFilter == 0 or trendOpen > open
+roseInto = useTrendFilter == 0 or trendOpen < open
+
+// ==== ENGULFING ====
+// The current body fully covers the prior body, and the prior body is real
+// rather than a doji that anything would swallow.
+priorHasBody = body[1] > zeroF
+bullEngulfCore = close[1] < open[1] and close > open and close >= open[1] and open <= close[1] and close - open > open[1] - close[1]
+bearEngulfCore = close[1] > open[1] and close < open and close <= open[1] and open >= close[1] and open - close > close[1] - open[1]
+bullEngulf = bullEngulfCore and priorHasBody and fellInto
+bearEngulf = bearEngulfCore and priorHasBody and roseInto
+
+// ==== MORNING / EVENING STAR ====
+// Bar 2 back is the strong candle, bar 1 back is the small star, this bar is
+// the confirmation that closes past the midpoint of the first body.
+starIsSmall = rng[1] > zeroF and body[1] * 100 <= rng[1] * starBodyPct
+firstStrongDown = close[2] < open[2] and rng[2] > zeroF and body[2] * 100 >= rng[2] * strongBodyPct
+firstStrongUp = close[2] > open[2] and rng[2] > zeroF and body[2] * 100 >= rng[2] * strongBodyPct
+starBelow = math.max(open[1], close[1]) < close[2]
+starAbove = math.min(open[1], close[1]) > close[2]
+morningStar = firstStrongDown and starIsSmall and starBelow and close > open and close * 2 > open[2] + close[2]
+eveningStar = firstStrongUp and starIsSmall and starAbove and close < open and close * 2 < open[2] + close[2]
+
+// ==== HAMMER / SHOOTING STAR ====
+// A long wick with the body pushed to the far end and almost nothing on the
+// other side: the extreme was tested and rejected inside one bar.
+hammerShape = hasRange and lowerWick * 100 >= rng * pinWickPct and body * 100 <= rng * pinBodyPct and upperWick * 100 <= rng * pinOppWickPct
+shootShape = hasRange and upperWick * 100 >= rng * pinWickPct and body * 100 <= rng * pinBodyPct and lowerWick * 100 <= rng * pinOppWickPct
+hammer = hammerShape and fellInto
+shootingStar = shootShape and roseInto
+
+// ==== THREE WHITE SOLDIERS / THREE BLACK CROWS ====
+// Three trend candles in a row, each opening inside the previous body and
+// closing near its own extreme. Steady progress, not one spike plus two stubs.
+sol3Dir = close[2] > open[2] and close[1] > open[1] and close > open
+sol3Step = close > close[1] and close[1] > close[2]
+sol3Open = open <= close[1] and open >= open[1] and open[1] <= close[2] and open[1] >= open[2]
+sol3Body = rng[2] > zeroF and rng[1] > zeroF and hasRange and body[2] * 100 >= rng[2] * soldierBodyPct and body[1] * 100 >= rng[1] * soldierBodyPct and body * 100 >= rng * soldierBodyPct
+sol3Close = (close - low) * 100 >= rng * soldierClosePct and (close[1] - low[1]) * 100 >= rng[1] * soldierClosePct and (close[2] - low[2]) * 100 >= rng[2] * soldierClosePct
+threeSoldiers = sol3Dir and sol3Step and sol3Open and sol3Body and sol3Close
+
+crw3Dir = close[2] < open[2] and close[1] < open[1] and close < open
+crw3Step = close < close[1] and close[1] < close[2]
+crw3Open = open >= close[1] and open <= open[1] and open[1] >= close[2] and open[1] <= open[2]
+crw3Body = rng[2] > zeroF and rng[1] > zeroF and hasRange and body[2] * 100 >= rng[2] * soldierBodyPct and body[1] * 100 >= rng[1] * soldierBodyPct and body * 100 >= rng * soldierBodyPct
+crw3Close = (high - close) * 100 >= rng * soldierClosePct and (high[1] - close[1]) * 100 >= rng[1] * soldierClosePct and (high[2] - close[2]) * 100 >= rng[2] * soldierClosePct
+threeCrows = crw3Dir and crw3Step and crw3Open and crw3Body and crw3Close
+
+// ==== RISING / FALLING THREE METHODS ====
+// One big trend candle, then two or three small bars that stay inside its
+// range, then a candle that resumes the trend past the big candle's close.
+// Three pause bars: the big candle is 4 back. Two pause bars: it is 3 back.
+r3Big = close[4] > open[4] and rng[4] > zeroF and body[4] * 100 >= rng[4] * bigBodyPct
+r3Hold = high[3] <= high[4] and low[3] >= low[4] and high[2] <= high[4] and low[2] >= low[4] and high[1] <= high[4] and low[1] >= low[4]
+r3Small = body[3] * 2 <= body[4] and body[2] * 2 <= body[4] and body[1] * 2 <= body[4]
+r3Break = close > open and close > close[4]
+rising3 = r3Big and r3Hold and r3Small and r3Break
+
+r2Big = close[3] > open[3] and rng[3] > zeroF and body[3] * 100 >= rng[3] * bigBodyPct
+r2Hold = high[2] <= high[3] and low[2] >= low[3] and high[1] <= high[3] and low[1] >= low[3]
+r2Small = body[2] * 2 <= body[3] and body[1] * 2 <= body[3]
+r2Break = close > open and close > close[3]
+rising2 = r2Big and r2Hold and r2Small and r2Break
+
+f3Big = close[4] < open[4] and rng[4] > zeroF and body[4] * 100 >= rng[4] * bigBodyPct
+f3Hold = high[3] <= high[4] and low[3] >= low[4] and high[2] <= high[4] and low[2] >= low[4] and high[1] <= high[4] and low[1] >= low[4]
+f3Small = body[3] * 2 <= body[4] and body[2] * 2 <= body[4] and body[1] * 2 <= body[4]
+f3Break = close < open and close < close[4]
+falling3 = f3Big and f3Hold and f3Small and f3Break
+
+f2Big = close[3] < open[3] and rng[3] > zeroF and body[3] * 100 >= rng[3] * bigBodyPct
+f2Hold = high[2] <= high[3] and low[2] >= low[3] and high[1] <= high[3] and low[1] >= low[3]
+f2Small = body[2] * 2 <= body[3] and body[1] * 2 <= body[3]
+f2Break = close < open and close < close[3]
+falling2 = f2Big and f2Hold and f2Small and f2Break
+
+risingThree = (methodsBars != 2 and rising3) or (methodsBars != 3 and rising2)
+fallingThree = (methodsBars != 2 and falling3) or (methodsBars != 3 and falling2)
+
+// ==== INSIDE BAR / DOJI ====
+insideBar = high <= high[1] and low >= low[1]
+doji = hasRange and body * 100 <= rng * dojiPct
+pauseBar = insideBar or doji
+
+// ==== SIGNALS ====
+sBullEngulf = warmedUp and useEngulf == 1 and bullEngulf
+sBearEngulf = warmedUp and useEngulf == 1 and bearEngulf
+sMorningStar = warmedUp and useStar == 1 and morningStar
+sEveningStar = warmedUp and useStar == 1 and eveningStar
+sHammer = warmedUp and usePin == 1 and hammer
+sShootingStar = warmedUp and usePin == 1 and shootingStar
+sThreeSoldiers = warmedUp and useThreeLine == 1 and threeSoldiers
+sThreeCrows = warmedUp and useThreeLine == 1 and threeCrows
+sRisingThree = warmedUp and useThreeMethods == 1 and risingThree
+sFallingThree = warmedUp and useThreeMethods == 1 and fallingThree
+sPause = warmedUp and usePause == 1 and pauseBar
+
+anyBull = sBullEngulf or sMorningStar or sHammer or sThreeSoldiers or sRisingThree
+anyBear = sBearEngulf or sEveningStar or sShootingStar or sThreeCrows or sFallingThree
+
+// ==== REVERSAL MARKERS ====
+plotshape(sBullEngulf, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="Engulf", title="Bullish Engulfing")
+plotshape(sBearEngulf, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="Engulf", title="Bearish Engulfing")
+plotshape(sMorningStar, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="M.Star", title="Morning Star")
+plotshape(sEveningStar, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="E.Star", title="Evening Star")
+plotshape(sHammer, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="Hammer", title="Hammer")
+plotshape(sShootingStar, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="S.Star", title="Shooting Star")
+
+// ==== CONTINUATION MARKERS ====
+plotshape(sThreeSoldiers, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="3 Soldiers", title="Three White Soldiers")
+plotshape(sThreeCrows, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="3 Crows", title="Three Black Crows")
+plotshape(sRisingThree, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="Rise 3", title="Rising Three Methods")
+plotshape(sFallingThree, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="Fall 3", title="Falling Three Methods")
+
+// ==== PAUSE MARKER ====
+plotshape(sPause, shape=shape.triangleup, location=location.abovebar, color=color.orange, size=size.small, text="Pause", title="Inside Bar or Doji")
+
+// ==== ALERTS ====
+alertcondition(sBullEngulf, title="Bullish Engulfing", message="CANDLE bullish engulfing")
+alertcondition(sBearEngulf, title="Bearish Engulfing", message="CANDLE bearish engulfing")
+alertcondition(sMorningStar, title="Morning Star", message="CANDLE morning star")
+alertcondition(sEveningStar, title="Evening Star", message="CANDLE evening star")
+alertcondition(sHammer, title="Hammer", message="CANDLE hammer")
+alertcondition(sShootingStar, title="Shooting Star", message="CANDLE shooting star")
+alertcondition(sThreeSoldiers, title="Three White Soldiers", message="CANDLE three white soldiers")
+alertcondition(sThreeCrows, title="Three Black Crows", message="CANDLE three black crows")
+alertcondition(sRisingThree, title="Rising Three Methods", message="CANDLE rising three methods")
+alertcondition(sFallingThree, title="Falling Three Methods", message="CANDLE falling three methods")
+alertcondition(sPause, title="Inside Bar or Doji", message="CANDLE inside bar or doji")
+alertcondition(anyBull, title="Any Bullish Pattern", message="CANDLE bullish pattern")
+alertcondition(anyBear, title="Any Bearish Pattern", message="CANDLE bearish pattern")

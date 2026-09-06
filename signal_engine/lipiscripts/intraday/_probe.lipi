@@ -1,0 +1,34 @@
+indicator("Lipi Probe", overlay=true)
+
+// Throwaway diagnostic, not a study. Paste it into the Lipi Editor and press
+// Save. It marks every up bar and every bar with volume, so if it renders at
+// all you know plotting works and both constructs below are accepted.
+//
+// It exists to settle two things the GoCharting docs describe but that no
+// compile in this repo has ever confirmed:
+//   SECTION 1  plotshape's `text` parameter
+//   SECTION 2  the `volume` built-in
+//   SECTION 3  the `dayofweek` built-in (needed for previous-week levels)
+//
+// HOW TO READ THE RESULT
+//   Saves, and triangles appear      both constructs work
+//   Fails -> delete SECTION 2 -> saves    `volume` is the problem
+//   Fails -> delete `text=` args -> saves `text` is the problem
+//   Fails -> delete SECTION 3 -> saves    `dayofweek` is the problem
+//   Fails with all three removed     something else - send me the error text
+//
+// Whichever one fails, the fix in the real scripts is to delete that construct:
+// every text= argument, or the RVOL / VWAP blocks that use volume.
+
+// ==== SECTION 1: plotshape text parameter ====
+upBar = close > open
+plotshape(upBar, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text="UP", title="Text Probe")
+
+// ==== SECTION 2: volume built-in ====
+zeroF = high - high
+hasVol = volume > zeroF
+plotshape(hasVol, shape=shape.triangledown, location=location.abovebar, color=color.orange, size=size.small, text="V", title="Volume Probe")
+
+// ==== SECTION 3: dayofweek built-in ====
+newWeek = dayofweek < dayofweek[1]
+plotshape(newWeek, shape=shape.triangleup, location=location.abovebar, color=color.purple, size=size.small, text="W", title="Dayofweek Probe")

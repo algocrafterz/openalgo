@@ -26,6 +26,11 @@ class Strategy(ABC):
     tag: str = ""
     #: Path to the PineScript this mirrors, so a reader can diff the two.
     pine: str = ""
+    #: RunConfig fields this strategy needs changed from the intraday defaults, applied
+    #: by the CLI. A setup that only arms after 10:00 measured through an 11:00 entry
+    #: cutoff is being reported on a fraction of its own signals, which reads as a weak
+    #: strategy rather than as a misconfigured harness. Leave empty to take the defaults.
+    run_overrides: dict = {}
 
     # ---- required -------------------------------------------------------
 

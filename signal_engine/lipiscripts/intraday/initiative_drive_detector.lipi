@@ -1,0 +1,321 @@
+indicator("Initiative Drive Detector", overlay=true)
+
+// Ported from
+// signal_engine/pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine
+//
+// Marks INITIATIVE DRIVE candles: an aggressor lifting offers or hitting bids
+// hard enough to move price away from value, as opposed to RESPONSIVE activity
+// that fades an extreme.
+//
+// This script does NOT confirm order flow. Every mark is a prompt to open the
+// footprint and check for stacked imbalances in the direction of the flag,
+// absorption at the opposite extreme (which invalidates it), and delta
+// agreeing with price.
+//
+// GATES vs SCORE. Four properties DEFINE an initiative drive and are hard
+// gates, all of which must pass:
+//   1. Body expansion   - body beats the baseline body of recent bars. This is
+//                         the visibly large candle test, in absolute terms.
+//   2. Range expansion  - range beats the baseline range.
+//   3. Directional body - closes in the signal direction, body a majority of
+//                         the range.
+//   4. Close at extreme - little or no wick against the direction. A drive
+//                         pushed back off its extreme was not a drive.
+// The remaining five criteria only RANK the context; they never create a
+// signal on their own.
+//
+// ==== PORTING NOTES: LIPISCRIPT IS NOT PINE ====
+// LipiScript has no ta.median, ta.dmi, ta.vwap, ta.highest, table, bgcolor,
+// barcolor, label, input.bool, input.float, input.color or input.session, and
+// no barstate. The port therefore differs from the Pine original as follows.
+//
+//   - BASELINE IS A MEAN, NOT A MEDIAN. The Pine version used a median because
+//     one gap-open drive lifts a mean for the whole window and locks out the
+//     expansions behind it. Over 20 bars that lift is a few percent, not a
+//     regime change. If signals dry up for a session after a gap day, lower
+//     the expansion percents rather than shortening the window.
+//   - BASELINE LENGTH IS 10, 20 OR 30 ONLY. A rolling sum needs a constant
+//     history offset, so the three offsets are written out literally below.
+//     Any other value snaps to one of the three.
+//   - EMA, session VWAP, true range and Wilder ADX / DI are hand rolled from
+//     arithmetic the Lipi parser accepts.
+//   - BREAKOUT LOOKBACK IS 1 TO 5 BARS, unrolled for the same reason.
+//   - Fractional inputs are taken as integer percents and divided in code.
+//     Booleans are 0 / 1 integer inputs.
+//   - The score table, the background tint and the candle recolour are gone.
+//     Nothing in the verified Lipi surface can draw them, and the marker no
+//     longer reports the score either - one mark per direction, nothing else.
+//     If you want the score back, the alert message is the place for it, or
+//     lower "Minimum Score" so the weaker drives at least appear.
+//   - Marker text uses plotshape's `text` parameter. It is documented, with a
+//     worked example, but no compile in this repo proves it. label.new has no
+//     documented signature at all and is not used here.
+//     IF THE EDITOR REJECTS `text=`: delete both text= arguments. The script
+//     still runs and the triangles still mark the drives.
+//   - Cyan is spelled `color.aqua` in Lipi. There is no color.cyan.
+//   - THERE IS NO barstate.isconfirmed. A marker can appear and vanish inside
+//     a forming bar. Set the GoCharting alert to fire once per bar close.
+//   - The JSON order payload is not in the script. GoCharting carries the
+//     payload configured in the alert dialog; generate it in OpenAlgo at
+//     /gocharting/ and point the alert at the alertcondition by title.
+//   - `volume` drives RVOL and VWAP. If the editor rejects it, delete the RVOL
+//     and VWAP blocks and lower "Minimum Score" accordingly.
+//
+// hour and minute follow the CHART timezone, not the exchange. If the chart is
+// not on Asia/Kolkata, change the session hour and minute inputs, not the code.
+
+// ==== SESSION INPUTS ====
+useSession = input.int(1, "Restrict to Session (0=no, 1=yes)")
+sessionStartHour = input.int(9, "Session Start Hour")
+sessionStartMin = input.int(15, "Session Start Minute")
+sessionEndHour = input.int(15, "Session End Hour")
+sessionEndMin = input.int(30, "Session End Minute")
+stampMode = input.int(0, "Bar Timestamp (0=open time, 1=close time)")
+skipOpenBars = input.int(0, "Skip First N Bars of Session")
+
+// ==== DRIVE GATE INPUTS (HARD GATES) ====
+baseLen = input.int(20, "Baseline Length (10, 20 or 30)")
+bodyExpPct = input.int(150, "Body vs Baseline Body Percent")
+rangeExpPct = input.int(115, "Range vs Baseline Range Percent")
+bodyMinPct = input.int(60, "Body Percent of Range")
+closeZonePct = input.int(30, "Close Within Percent of Extreme")
+
+// ==== CONTEXT SCORE INPUTS (RANKING ONLY) ====
+rvolMinPct = input.int(130, "Minimum RVOL Percent")
+emaLen = input.int(9, "EMA Length")
+adxLen = input.int(14, "ADX / DI Length")
+adxMin = input.int(20, "Minimum ADX")
+lookback = input.int(3, "Breakout Lookback (1 to 5)")
+scoreMin = input.int(3, "Minimum Score (of 5)")
+
+// ==== FILTER INPUTS ====
+cooldownBars = input.int(0, "Minimum Bars Between Signals")
+firstOnly = input.int(0, "First Bar of a Run Only (0=no, 1=yes)")
+requireTrend = input.int(0, "Require Trend Regime ADX (0=no, 1=yes)")
+
+// ==== DISPLAY INPUTS ====
+showMarkers = input.int(1, "Show ID Markers (0=no, 1=yes)")
+showContext = input.int(0, "Show EMA and VWAP (0=no, 1=yes)")
+
+// ==== SESSION BOUNDS ====
+minuteOfDay = hour * 60 + minute
+sessionOpen = sessionStartHour * 60 + sessionStartMin
+sessionClose = sessionEndHour * 60 + sessionEndMin
+
+// An open-stamped bar printed at the close minute belongs to the next session
+// slot; a close-stamped feed shifts both comparisons by one bar.
+inWindow = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= sessionClose : minuteOfDay >= sessionOpen and minuteOfDay < sessionClose
+inSession = useSession == 0 or inWindow
+
+// ==== NEW DAY DETECTION ====
+isNewDay = na(dayofmonth[1]) or dayofmonth != dayofmonth[1]
+
+// ==== BAR COUNTERS ====
+static int barCount = 0
+static int barsIntoSession = 0
+
+barCount := barCount + 1
+
+if isNewDay {
+    barsIntoSession := 0
+}
+
+if inSession {
+    barsIntoSession := barsIntoSession + 1
+}
+
+pastOpen = barsIntoSession > skipOpenBars
+
+// ==== CANDLE GEOMETRY ====
+barRange = high - low
+bodyV = close > open ? close - open : open - close
+
+// A float-typed zero. Lipi is Go based, so an integer 0 sitting opposite a
+// float in a ternary is a type mismatch waiting to happen.
+zeroF = high - high
+
+// ==== BASELINE LENGTH SNAPPED TO A SUPPORTED OFFSET ====
+effLen = baseLen <= 10 ? 10 : baseLen <= 20 ? 20 : 30
+
+// The value leaving the rolling window. Constant offsets only, which is why
+// the length is restricted to these three.
+dropBody = effLen == 10 ? bodyV[10] : effLen == 20 ? bodyV[20] : bodyV[30]
+dropRange = effLen == 10 ? barRange[10] : effLen == 20 ? barRange[20] : barRange[30]
+dropVol = effLen == 10 ? volume[10] : effLen == 20 ? volume[20] : volume[30]
+
+// ==== ROLLING BASELINES ====
+static float bodySum = na
+static float rangeSum = na
+static float volSum = na
+
+bodySum := na(bodySum) ? bodyV : (barCount > effLen ? bodySum + bodyV - dropBody : bodySum + bodyV)
+rangeSum := na(rangeSum) ? barRange : (barCount > effLen ? rangeSum + barRange - dropRange : rangeSum + barRange)
+volSum := na(volSum) ? volume : (barCount > effLen ? volSum + volume - dropVol : volSum + volume)
+
+denom = barCount < effLen ? barCount : effLen
+avgBody = bodySum / denom
+avgRange = rangeSum / denom
+avgVol = volSum / denom
+
+// ==== EMA (HAND ROLLED) ====
+static float emaVal = na
+emaVal := na(emaVal) ? close : emaVal + (close - emaVal) * 2 / (emaLen + 1)
+
+// ==== SESSION VWAP (HAND ROLLED, RESETS EACH DAY) ====
+static float vwapPV = na
+static float vwapVol = na
+
+if isNewDay {
+    vwapPV := na
+    vwapVol := na
+}
+
+vwapPV := na(vwapPV) ? close * volume : vwapPV + close * volume
+vwapVol := na(vwapVol) ? volume : vwapVol + volume
+vwapVal = vwapVol > zeroF ? vwapPV / vwapVol : close
+
+// ==== TRUE RANGE AND WILDER ADX / DI (HAND ROLLED) ====
+gapUp = na(close[1]) ? zeroF : high - close[1]
+gapDown = na(close[1]) ? zeroF : close[1] - low
+absGapUp = math.max(gapUp, 0 - gapUp)
+absGapDown = math.max(gapDown, 0 - gapDown)
+trueRange = math.max(barRange, math.max(absGapUp, absGapDown))
+
+upMove = na(high[1]) ? zeroF : high - high[1]
+downMove = na(low[1]) ? zeroF : low[1] - low
+plusDM = upMove > downMove and upMove > zeroF ? upMove : zeroF
+minusDM = downMove > upMove and downMove > zeroF ? downMove : zeroF
+
+static float trSm = na
+static float plusSm = na
+static float minusSm = na
+static float adxVal = na
+
+trSm := na(trSm) ? trueRange : trSm - trSm / adxLen + trueRange
+plusSm := na(plusSm) ? plusDM : plusSm - plusSm / adxLen + plusDM
+minusSm := na(minusSm) ? minusDM : minusSm - minusSm / adxLen + minusDM
+
+diPlus = trSm > zeroF ? plusSm * 100 / trSm : zeroF
+diMinus = trSm > zeroF ? minusSm * 100 / trSm : zeroF
+diSpread = diPlus > diMinus ? diPlus - diMinus : diMinus - diPlus
+diSum = diPlus + diMinus
+dx = diSum > zeroF ? diSpread * 100 / diSum : zeroF
+
+adxVal := na(adxVal) ? dx : (adxVal * (adxLen - 1) + dx) / adxLen
+
+// ==== GATE 1 AND 2: EXPANSION (ABSOLUTE SIZE, NOT RELATIVE TO SELF) ====
+// Body percent alone is measured against the bar's own range, so a doji sized
+// bar with a 90 percent body passes it. These two gates are what stop a small
+// candle being called a drive.
+bodyExp = not na(avgBody) and avgBody > zeroF and bodyV * 100 >= avgBody * bodyExpPct
+rangeExp = not na(avgRange) and avgRange > zeroF and barRange * 100 >= avgRange * rangeExpPct
+
+// ==== GATE 3: DIRECTIONAL BODY ====
+bodyPass = barRange > zeroF and bodyV * 100 >= barRange * bodyMinPct
+bullBody = bodyPass and close > open
+bearBody = bodyPass and close < open
+
+// ==== GATE 4: CLOSE AT THE EXTREME (OPPOSING WICK CAP) ====
+// Closing in the top 30 percent means the upper wick is at most 30 percent of
+// the range.
+bullClose = close >= high - barRange * closeZonePct / 100
+bearClose = close <= low + barRange * closeZonePct / 100
+
+// ==== A CANDLE IS A DRIVE ONLY IF ALL FOUR HOLD ====
+bullDrive = bodyExp and rangeExp and bullBody and bullClose
+bearDrive = bodyExp and rangeExp and bearBody and bearClose
+
+// ==== CONTEXT SCORE: RVOL ====
+rvolPass = avgVol > zeroF and volume * 100 >= avgVol * rvolMinPct
+
+// ==== CONTEXT SCORE: EMA TREND ====
+bullTrend = close > emaVal and emaVal > emaVal[1]
+bearTrend = close < emaVal and emaVal < emaVal[1]
+
+// ==== CONTEXT SCORE: VWAP SIDE ====
+bullVWAP = close > vwapVal
+bearVWAP = close < vwapVal
+
+// ==== CONTEXT SCORE: BREAKOUT ON THE CLOSE ====
+// On the CLOSE, not the intrabar extreme. `high > highest` is satisfied by an
+// upthrust that pokes through and gets sold back, which is the absorption bar
+// this script exists to filter out.
+priorHigh1 = high[1]
+priorHigh2 = math.max(priorHigh1, high[2])
+priorHigh3 = math.max(priorHigh2, high[3])
+priorHigh4 = math.max(priorHigh3, high[4])
+priorHigh5 = math.max(priorHigh4, high[5])
+priorLow1 = low[1]
+priorLow2 = math.min(priorLow1, low[2])
+priorLow3 = math.min(priorLow2, low[3])
+priorLow4 = math.min(priorLow3, low[4])
+priorLow5 = math.min(priorLow4, low[5])
+
+priorHigh = lookback <= 1 ? priorHigh1 : lookback == 2 ? priorHigh2 : lookback == 3 ? priorHigh3 : lookback == 4 ? priorHigh4 : priorHigh5
+priorLow = lookback <= 1 ? priorLow1 : lookback == 2 ? priorLow2 : lookback == 3 ? priorLow3 : lookback == 4 ? priorLow4 : priorLow5
+
+bullBreak = not na(priorHigh) and close > priorHigh
+bearBreak = not na(priorLow) and close < priorLow
+
+// ==== CONTEXT SCORE: ADX REGIME ====
+// ADX measures trend STRENGTH only, so on its own it was a free point for both
+// sides. +DI / -DI supplies the direction.
+trendStrong = not na(adxVal) and adxVal >= adxMin
+bullRegime = trendStrong and diPlus > diMinus
+bearRegime = trendStrong and diMinus > diPlus
+
+bullScore = (rvolPass ? 1 : 0) + (bullBreak ? 1 : 0) + (bullTrend ? 1 : 0) + (bullVWAP ? 1 : 0) + (bullRegime ? 1 : 0)
+bearScore = (rvolPass ? 1 : 0) + (bearBreak ? 1 : 0) + (bearTrend ? 1 : 0) + (bearVWAP ? 1 : 0) + (bearRegime ? 1 : 0)
+
+// ==== QUALIFICATION ====
+bullRegimeGate = requireTrend == 0 or bullRegime
+bearRegimeGate = requireTrend == 0 or bearRegime
+
+warmedUp = barCount > effLen and barCount > adxLen and barCount > emaLen and barCount > lookback
+context = inSession and warmedUp and pastOpen
+
+bullQualifies = bullDrive and bullScore >= scoreMin and bullRegimeGate and context
+bearQualifies = bearDrive and bearScore >= scoreMin and bearRegimeGate and context
+
+// The gates are mutually exclusive (close > open vs close < open), so this can
+// only fire if the gates are disabled in a future edit. Kept as a guard.
+bothQualify = bullQualifies and bearQualifies
+bullCandidate = bullQualifies and not bothQualify
+bearCandidate = bearQualifies and not bothQualify
+
+bullRaw = bullCandidate and (firstOnly == 0 or not bullCandidate[1])
+bearRaw = bearCandidate and (firstOnly == 0 or not bearCandidate[1])
+
+// ==== COOLDOWN ====
+static int lastBullBar = 0
+static int lastBearBar = 0
+
+// lastBullBar / lastBearBar hold 0 until the first signal; barCount starts at
+// 1, so 0 is a safe "never fired" sentinel.
+bullSignal = bullRaw and (lastBullBar == 0 or barCount - lastBullBar >= cooldownBars)
+bearSignal = bearRaw and (lastBearBar == 0 or barCount - lastBearBar >= cooldownBars)
+
+if bullSignal {
+    lastBullBar := barCount
+}
+
+if bearSignal {
+    lastBearBar := barCount
+}
+
+// ==== CONTEXT PLOTS ====
+plot(showContext == 1 and inSession ? emaVal : na, color=color.orange, linewidth=1, title="EMA")
+plot(showContext == 1 and inSession ? vwapVal : na, color=color.blue, linewidth=1, title="Session VWAP")
+
+// ==== SIGNAL MARKERS ====
+markOn = showMarkers == 1
+bullMark = markOn and bullSignal
+bearMark = markOn and bearSignal
+
+plotshape(bullMark, shape=shape.triangleup, location=location.belowbar, color=color.aqua, size=size.small, text="Bullish ID", title="Bullish Initiative Drive")
+plotshape(bearMark, shape=shape.triangledown, location=location.abovebar, color=color.purple, size=size.small, text="Bearish ID", title="Bearish Initiative Drive")
+
+// ==== ALERTS ====
+alertcondition(bullSignal, title="Bull Initiative Drive", message="Bullish Initiative Drive - verify on footprint (ask-side stacking, no absorption)")
+alertcondition(bearSignal, title="Bear Initiative Drive", message="Bearish Initiative Drive - verify on footprint (bid-side stacking, no absorption)")
+alertcondition(bullSignal or bearSignal, title="Any Initiative Drive", message="Initiative Drive - verify on footprint")

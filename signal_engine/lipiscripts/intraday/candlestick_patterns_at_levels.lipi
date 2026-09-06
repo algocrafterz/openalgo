@@ -1,0 +1,365 @@
+indicator("Candlestick Patterns at Key Levels NSE", overlay=true)
+
+// Ported from
+// signal_engine/pinescripts/intraday/orderflow/candlestick-patterns.pine
+// Pattern definitions (c) repo32, "Candlestick Patterns Identified", under the
+// Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//
+// Retuned for NSE F&O intraday: patterns are gated to key levels, and the
+// default set is chosen from measured forward returns rather than tradition.
+//
+// ==== MEASUREMENT ====
+// 208 NSE F&O names, 58 sessions of 5-minute bars, 764,573 bars. For each
+// pattern: the mean forward return over the next 12 bars (1 hour), in ATR
+// units, signed by the pattern's own direction, MINUS the unconditional
+// forward return of the same bars.
+//
+// That subtraction is the whole test. The raw numbers looked decisive - every
+// bearish pattern positive, every bullish one negative - until the baseline
+// turned out to be -0.0393 ATR. The sample window simply drifted down, and the
+// "edge" was the drift. What survives the subtraction is far smaller and
+// mostly indistinguishable from noise.
+//
+//   pattern          n (at level)   excess ATR   t
+//   bearHarami            8,819       +0.0345   +1.43
+//   invHammer            16,377       +0.0232   +1.32
+//   bullKick              1,342       +0.0192   +0.30
+//   bearKick              1,318       +0.0184   +0.31
+//   bullHarami            9,458       +0.0078   +0.35
+//   piercing                455       -0.0011   -0.01
+//   bearEngulfing         7,380       -0.0096   -0.36
+//   eveningStar             797       -0.0249   -0.27
+//   hammer               16,931       -0.0420   -2.37   <-- significantly BACKWARDS
+//   bullEngulfing         7,579       -0.0525   -2.03   <-- significantly BACKWARDS
+//   morningStar             781       -0.0843   -1.04
+//   shootingStar            742       -0.0917   -1.18
+//   hangingMan              172       -0.0987   -0.48
+//   bullBelt                213       -0.1414   -0.70
+//
+// CONCLUSIONS, stated plainly:
+//
+//   1. NOT ONE PATTERN HAS A RELIABLE POSITIVE EDGE. Nothing reaches |t| > 2
+//      on the positive side at a level. The best, bearish harami, is +0.03 ATR
+//      at t = 1.43 - a real possibility, not a finding. Treat every marker on
+//      this chart as CONTEXT, never as a signal you may act on by itself.
+//
+//   2. TWO ARE MEASURABLY BACKWARDS. Hammer (t = -2.37) and bullish engulfing
+//      (t = -2.03) are followed by price going DOWN relative to baseline, on
+//      17,000 and 7,600 samples. They are OFF by default. They are not
+//      inverted into short signals either: with 14 patterns tested, one or two
+//      crossing |t| = 2 by chance is expected, and building a rule on the
+//      unluckiest of a swept set is how backtests lie.
+//
+//   3. THE RARE ONES CANNOT HELP YOU ANYWAY. Belt hold, hanging man, the stars
+//      and piercing line each fire a few hundred times across 208 symbols and
+//      58 sessions - roughly once a week per watchlist. Even a real edge that
+//      size is unusable.
+//
+//   4. This matches the DHB study in this repo, where a required confirmation
+//      candle turned out to be completely inert: results were bit-identical
+//      with it switched off.
+//
+// DEFAULT SET: bearHarami, bullHarami, invHammer, bullKick, bearKick - the
+// five with non-negative measured behaviour and enough frequency to be seen.
+// Everything else off.
+//
+// WHY GATE TO KEY LEVELS AT ALL, given the above? Because a reversal candle in
+// the middle of nowhere has no invalidation point. At a level you have defined
+// risk (the other side of the level) and a reason for supply to exist. The
+// gate does not create edge - it makes the occurrences you look at ones you
+// could actually structure a trade around.
+//
+// ==== PORTING NOTES: LIPISCRIPT IS NOT PINE ====
+// LipiScript has no request.security, ta.atr, ta.sma, ta.lowest, label,
+// input.bool, input.float, input.color, tuple returns, user functions or
+// barstate. The port therefore differs from the Pine original as follows.
+//
+//   - PREVIOUS DAY HIGH / LOW / CLOSE ARE TRACKED IN SCRIPT, rolled over on a
+//     dayofmonth change, instead of request.security on the daily series. This
+//     is non-repainting by construction, but it only knows the days the chart
+//     has actually loaded, so the first day on the chart has no prior day.
+//   - PREVIOUS WEEK HIGH / LOW ARE DROPPED. There is no verified dayofweek or
+//     weekofyear to detect a week boundary with.
+//   - ORB AND IB WINDOWS ARE MINUTE-OF-DAY BASED, not bar-count based, so they
+//     stay correct on any interval that divides the window (1, 3, 5, 15).
+//   - THE NEAREST-LEVEL NAME IS GONE. There is no label to write it into, so
+//     the gate is a plain "within tolerance of any enabled level" test. Turn on
+//     "Draw the Levels" to see which one the bar is sitting at.
+//   - ATR is a hand-rolled Wilder average; the volume average is a hand-rolled
+//     rolling mean of the last 20 bars.
+//   - Fractional inputs are taken as integer percents and divided in code.
+//     Booleans are 0 / 1 integer inputs. Divisions inside the pattern
+//     definitions are rewritten as multiplications, so the epsilon guard in
+//     the Pine original is replaced by an explicit range > 0 test.
+//   - TREND LOOKBACK IS 1 TO 10 BARS, unrolled: history offsets must be
+//     constant.
+//   - THERE IS NO barstate.isconfirmed. A pattern can form and un-form inside
+//     a live bar. Set the GoCharting alert to fire once per bar close.
+//   - `volume` drives the confirmation filter. If the editor rejects it, set
+//     "Require Above Average Volume" to 0 and delete the volume block.
+//
+// hour and minute follow the CHART timezone, not the exchange. If the chart is
+// not on Asia/Kolkata, change the session hour and minute inputs, not the code.
+
+// ==== PATTERN SELECTION (DEFAULTS FROM MEASURED FORWARD RETURNS) ====
+usebearHarami = input.int(1, "Bearish Harami (0=no, 1=yes)")
+usebullHarami = input.int(1, "Bullish Harami (0=no, 1=yes)")
+useinvHammer = input.int(1, "Inverted Hammer (0=no, 1=yes)")
+usebullKick = input.int(1, "Bullish Kicker (0=no, 1=yes)")
+usebearKick = input.int(1, "Bearish Kicker (0=no, 1=yes)")
+usebearEng = input.int(0, "Bearish Engulfing (0=no, 1=yes)")
+usehammer = input.int(0, "Hammer BACKWARDS (0=no, 1=yes)")
+usebullEng = input.int(0, "Bullish Engulfing BACKWARDS (0=no, 1=yes)")
+usepiercing = input.int(0, "Piercing Line (0=no, 1=yes)")
+usebullBelt = input.int(0, "Bullish Belt (0=no, 1=yes)")
+usemorningStar = input.int(0, "Morning Star (0=no, 1=yes)")
+useeveningStar = input.int(0, "Evening Star (0=no, 1=yes)")
+useshootingStar = input.int(0, "Shooting Star (0=no, 1=yes)")
+usehangingMan = input.int(0, "Hanging Man (0=no, 1=yes)")
+usedoji = input.int(0, "Doji (0=no, 1=yes)")
+
+// Several patterns require price to have been moving into them.
+// 5 bars = 25 minutes on a 5-minute chart.
+trendLen = input.int(5, "Trend Lookback Bars (1 to 10)")
+dojiPct = input.int(5, "Doji Body Percent of Range")
+
+// ==== KEY LEVEL GATE ====
+gateToLevels = input.int(1, "Only Show Patterns at a Key Level (0=no, 1=yes)")
+levelTolPct = input.int(25, "Level Tolerance Percent of ATR")
+atrLen = input.int(14, "ATR Length")
+useORB = input.int(1, "ORB High/Low 15m (0=no, 1=yes)")
+useIB = input.int(1, "IB High/Low 60m (0=no, 1=yes)")
+usePD = input.int(1, "Previous Day High/Low (0=no, 1=yes)")
+usePVA = input.int(1, "Previous Day VAH/POC/VAL (0=no, 1=yes)")
+
+// ==== CONFIRMATION ====
+// A rejection candle on a dead bar was not a rejection - nobody was there.
+// This is the one filter that helped in the ORB and DHB studies in this repo.
+useVolFilter = input.int(1, "Require Above Average Volume (0=no, 1=yes)")
+volMultPct = input.int(120, "Volume Percent of 20-Bar Average")
+
+// The opening bars gap and print patterns no intraday auction created.
+// 3 bars = 15 minutes on a 5-minute chart.
+skipOpenBars = input.int(3, "Skip First N Bars of Session")
+
+// ==== SESSION ====
+sessionStartHour = input.int(9, "Session Start Hour")
+sessionStartMin = input.int(15, "Session Start Minute")
+sessionEndHour = input.int(15, "Session End Hour")
+sessionEndMin = input.int(30, "Session End Minute")
+orbMinutes = input.int(15, "ORB Duration Minutes")
+ibMinutes = input.int(60, "IB Duration Minutes")
+stampMode = input.int(0, "Bar Timestamp (0=open time, 1=close time)")
+
+// ==== DISPLAY ====
+showLevels = input.int(0, "Draw the Levels (0=no, 1=yes)")
+
+// ==== SESSION BOUNDS ====
+minuteOfDay = hour * 60 + minute
+sessionOpen = sessionStartHour * 60 + sessionStartMin
+sessionClose = sessionEndHour * 60 + sessionEndMin
+orbClose = sessionOpen + orbMinutes
+ibClose = sessionOpen + ibMinutes
+
+// An open-stamped bar printed at the window close minute is outside the
+// window; a close-stamped feed shifts both comparisons by one bar.
+inSession = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= sessionClose : minuteOfDay >= sessionOpen and minuteOfDay < sessionClose
+inORB = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= orbClose : minuteOfDay >= sessionOpen and minuteOfDay < orbClose
+inIB = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= ibClose : minuteOfDay >= sessionOpen and minuteOfDay < ibClose
+
+// ==== NEW DAY DETECTION ====
+isNewDay = na(dayofmonth[1]) or dayofmonth != dayofmonth[1]
+
+// ==== BAR COUNTERS ====
+static int barCount = 0
+static int barsIn = 0
+
+barCount := barCount + 1
+
+if isNewDay {
+    barsIn := 0
+}
+
+if not isNewDay {
+    barsIn := barsIn + 1
+}
+
+// ==== CANDLE GEOMETRY ====
+rng = high - low
+body = close > open ? close - open : open - close
+
+// A float-typed zero. Lipi is Go based, so an integer 0 sitting opposite a
+// float in a ternary is a type mismatch waiting to happen.
+zeroF = high - high
+
+// ==== ATR, WILDER (HAND ROLLED) ====
+gapUp = na(close[1]) ? zeroF : high - close[1]
+gapDown = na(close[1]) ? zeroF : close[1] - low
+absGapUp = math.max(gapUp, 0 - gapUp)
+absGapDown = math.max(gapDown, 0 - gapDown)
+trueRange = math.max(rng, math.max(absGapUp, absGapDown))
+
+static float atrVal = na
+atrVal := na(atrVal) ? trueRange : (atrVal * (atrLen - 1) + trueRange) / atrLen
+
+// ==== 20-BAR VOLUME AVERAGE (HAND ROLLED ROLLING MEAN) ====
+static float volSum = na
+volSum := na(volSum) ? volume : (barCount > 20 ? volSum + volume - volume[20] : volSum + volume)
+volDenom = barCount < 20 ? barCount : 20
+volMa = volSum / volDenom
+
+// ==== LOWEST LOW OF THE PRIOR 10 BARS ====
+lo2 = math.min(low[1], low[2])
+lo3 = math.min(lo2, low[3])
+lo4 = math.min(lo3, low[4])
+lo5 = math.min(lo4, low[5])
+lo6 = math.min(lo5, low[6])
+lo7 = math.min(lo6, low[7])
+lo8 = math.min(lo7, low[8])
+lo9 = math.min(lo8, low[9])
+lower10 = math.min(lo9, low[10])
+
+// ==== PREVIOUS DAY HIGH / LOW / CLOSE (ROLLED OVER IN SCRIPT) ====
+static float pdh = na
+static float pdl = na
+static float pdc = na
+static float curHigh = na
+static float curLow = na
+static float dayClose = na
+
+// dayClose still holds the last close of the previous day at this point,
+// because it is only overwritten after this block.
+if isNewDay {
+    pdh := curHigh
+    pdl := curLow
+    pdc := dayClose
+    curHigh := na
+    curLow := na
+}
+
+curHigh := na(curHigh) ? high : math.max(curHigh, high)
+curLow := na(curLow) ? low : math.min(curLow, low)
+dayClose := close
+
+// ==== PRIOR DAY VALUE AREA, APPROXIMATED ====
+// A real volume profile is not affordable here; the classic pivot
+// approximation is close enough to mark the zone. Treat as indicative.
+ppoc = (pdh + pdl + pdc) / 3
+pvah = ppoc + (pdh - pdl) / 4
+pval = ppoc - (pdh - pdl) / 4
+
+// ==== OPENING RANGE AND INITIAL BALANCE, FROZEN WHEN THEIR WINDOWS CLOSE ====
+static float orbH = na
+static float orbL = na
+static float ibH = na
+static float ibL = na
+
+if isNewDay {
+    orbH := na
+    orbL := na
+    ibH := na
+    ibL := na
+}
+
+if inORB {
+    orbH := na(orbH) ? high : math.max(orbH, high)
+    orbL := na(orbL) ? low : math.min(orbL, low)
+}
+
+if inIB {
+    ibH := na(ibH) ? high : math.max(ibH, high)
+    ibL := na(ibL) ? low : math.min(ibL, low)
+}
+
+// ==== IS THE BAR SITTING AT A LEVEL ====
+tolPx = atrVal * levelTolPct / 100
+
+nearOrbH = useORB == 1 and not na(orbH) and close <= orbH + tolPx and close >= orbH - tolPx
+nearOrbL = useORB == 1 and not na(orbL) and close <= orbL + tolPx and close >= orbL - tolPx
+nearIbH = useIB == 1 and not na(ibH) and close <= ibH + tolPx and close >= ibH - tolPx
+nearIbL = useIB == 1 and not na(ibL) and close <= ibL + tolPx and close >= ibL - tolPx
+nearPdh = usePD == 1 and not na(pdh) and close <= pdh + tolPx and close >= pdh - tolPx
+nearPdl = usePD == 1 and not na(pdl) and close <= pdl + tolPx and close >= pdl - tolPx
+nearPvah = usePVA == 1 and not na(pvah) and close <= pvah + tolPx and close >= pvah - tolPx
+nearPpoc = usePVA == 1 and not na(ppoc) and close <= ppoc + tolPx and close >= ppoc - tolPx
+nearPval = usePVA == 1 and not na(pval) and close <= pval + tolPx and close >= pval - tolPx
+
+atLevel = nearOrbH or nearOrbL or nearIbH or nearIbL or nearPdh or nearPdl or nearPvah or nearPpoc or nearPval
+
+// ==== TREND LOOKBACK OPEN ====
+// History offsets must be constant, so the choice is unrolled.
+trendOpen = trendLen <= 1 ? open[1] : trendLen == 2 ? open[2] : trendLen == 3 ? open[3] : trendLen == 4 ? open[4] : trendLen == 5 ? open[5] : trendLen == 6 ? open[6] : trendLen == 7 ? open[7] : trendLen == 8 ? open[8] : trendLen == 9 ? open[9] : open[10]
+
+// ==== PATTERNS, TRANSCRIBED FROM repo32 ====
+// Every division in the originals is rewritten as a multiplication, so the
+// 0.001 epsilon that guarded a zero-range bar becomes an explicit rng > 0.
+doji = rng > zeroF and body * 100 <= rng * dojiPct
+bearHarami = close[1] > open[1] and open > close and open <= close[1] and open[1] <= close and open - close < close[1] - open[1] and trendOpen < open
+bullHarami = open[1] > close[1] and close > open and close <= open[1] and close[1] <= open and close - open < open[1] - close[1] and trendOpen > open
+bearEng = close[1] > open[1] and open > close and open >= close[1] and open[1] >= close and open - close > close[1] - open[1] and trendOpen < open
+bullEng = open[1] > close[1] and close > open and close >= open[1] and close[1] >= open and close - open > open[1] - close[1] and trendOpen > open
+piercing = close[1] < open[1] and open < low[1] and close * 2 > close[1] + open[1] and close < open[1] and trendOpen > open
+bullBelt = low == open and open < lower10 and open < close and close * 2 > high[1] + low[1] and trendOpen > open
+bullKick = open[1] > close[1] and open >= open[1] and close > open and trendOpen > open
+bearKick = open[1] < close[1] and open <= open[1] and close <= open and trendOpen < open
+hangingMan = rng > zeroF and rng > 4 * body and (close - low) * 4 >= rng * 3 and (open - low) * 4 >= rng * 3 and trendOpen < open and high[1] < open and high[2] < open
+eveningStar = close[2] > open[2] and math.min(open[1], close[1]) > close[2] and open < math.min(open[1], close[1]) and close < open
+morningStar = close[2] < open[2] and math.max(open[1], close[1]) < close[2] and open > math.max(open[1], close[1]) and close > open
+shootingStar = open[1] < close[1] and open > close[1] and high - math.max(open, close) >= body * 3 and math.min(close, open) - low <= body
+hammer = rng > zeroF and rng > 3 * body and (close - low) * 5 > rng * 3 and (open - low) * 5 > rng * 3
+invHammer = rng > zeroF and rng > 3 * body and (high - close) * 5 > rng * 3 and (high - open) * 5 > rng * 3
+
+// ==== GATING ====
+volOK = useVolFilter == 0 or (volMa > zeroF and volume * 100 >= volMa * volMultPct)
+timeOK = barsIn >= skipOpenBars
+levelOK = gateToLevels == 0 or atLevel
+gate = inSession and volOK and timeOK and levelOK
+
+sBearHarami = gate and usebearHarami == 1 and bearHarami
+sBullHarami = gate and usebullHarami == 1 and bullHarami
+sInvHammer = gate and useinvHammer == 1 and invHammer
+sBullKick = gate and usebullKick == 1 and bullKick
+sBearKick = gate and usebearKick == 1 and bearKick
+sBearEng = gate and usebearEng == 1 and bearEng
+sBullEng = gate and usebullEng == 1 and bullEng
+sHammer = gate and usehammer == 1 and hammer
+sPiercing = gate and usepiercing == 1 and piercing
+sBullBelt = gate and usebullBelt == 1 and bullBelt
+sMorningStar = gate and usemorningStar == 1 and morningStar
+sEveningStar = gate and useeveningStar == 1 and eveningStar
+sShootingStar = gate and useshootingStar == 1 and shootingStar
+sHangingMan = gate and usehangingMan == 1 and hangingMan
+sDoji = gate and usedoji == 1 and doji
+
+anyBull = sBullHarami or sInvHammer or sBullKick or sBullEng or sPiercing or sBullBelt or sMorningStar or sHammer
+anyBear = sBearHarami or sBearKick or sBearEng or sEveningStar or sShootingStar or sHangingMan
+
+// ==== LEVEL LINES ====
+plot(showLevels == 1 and useORB == 1 and inSession ? orbH : na, color=color.orange, linewidth=1, title="ORB High")
+plot(showLevels == 1 and useORB == 1 and inSession ? orbL : na, color=color.orange, linewidth=1, title="ORB Low")
+plot(showLevels == 1 and useIB == 1 and inSession ? ibH : na, color=color.blue, linewidth=1, title="IB High")
+plot(showLevels == 1 and useIB == 1 and inSession ? ibL : na, color=color.blue, linewidth=1, title="IB Low")
+plot(showLevels == 1 and usePD == 1 and inSession ? pdh : na, color=color.green, linewidth=1, title="Prev Day High")
+plot(showLevels == 1 and usePD == 1 and inSession ? pdl : na, color=color.red, linewidth=1, title="Prev Day Low")
+plot(showLevels == 1 and usePVA == 1 and inSession ? pvah : na, color=color.blue, linewidth=1, title="Prev Day VAH")
+plot(showLevels == 1 and usePVA == 1 and inSession ? ppoc : na, color=color.orange, linewidth=1, title="Prev Day POC")
+plot(showLevels == 1 and usePVA == 1 and inSession ? pval : na, color=color.blue, linewidth=1, title="Prev Day VAL")
+
+// ==== PATTERN MARKERS ====
+plotshape(anyBull, shape=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, title="Bullish at Level")
+plotshape(anyBear, shape=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, title="Bearish at Level")
+plotshape(sDoji, shape=shape.triangledown, location=location.abovebar, color=color.orange, size=size.small, title="Doji")
+
+// ==== ALERTS ====
+// Observation traffic by design. These carry no LONG / SHORT / EXIT token, so
+// signal_engine's parser cannot read them as a trade even if they reach a
+// watched channel - which is correct, because nothing measured above justifies
+// trading one of these alone.
+alertcondition(anyBull, title="Bullish pattern at key level", message="CANDLE bullish at key level")
+alertcondition(anyBear, title="Bearish pattern at key level", message="CANDLE bearish at key level")
+alertcondition(anyBull or anyBear, title="Any pattern at key level", message="CANDLE pattern at key level")
+alertcondition(sBearHarami, title="Bearish harami at key level", message="CANDLE bearish harami at key level")
+alertcondition(sBullHarami, title="Bullish harami at key level", message="CANDLE bullish harami at key level")
+alertcondition(sInvHammer, title="Inverted hammer at key level", message="CANDLE inverted hammer at key level")
+alertcondition(sBullKick, title="Bullish kicker at key level", message="CANDLE bullish kicker at key level")
+alertcondition(sBearKick, title="Bearish kicker at key level", message="CANDLE bearish kicker at key level")

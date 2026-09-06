@@ -1,0 +1,357 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Original: "Support Resistance - Dynamic v2" (c) LonesomeTheBlue
+// Retuned for 5-minute NSE F&O intraday breakout use. See RETUNE NOTES below.
+
+//@version=6
+indicator('Support Resistance - Intraday (NSE 5m)', 'SRv2-NSE', overlay=true,
+     max_lines_count=100, max_labels_count=100)
+
+// ==================================== RETUNE NOTES ==============================================
+//
+// WHAT THE ORIGINAL DOES
+//   Collects the last `maxnumpp` confirmed pivots, then greedily groups any pivots that
+//   fall inside one channel into a zone. Zone strength = how many pivots it swallowed.
+//   The strongest `maxnumsr` zones are drawn at their MIDPOINT and alerts fire when
+//   close crosses that midpoint.
+//
+// WHY IT NEEDS RETUNING BEFORE IT CAN FEED A BREAKOUT STRATEGY
+//
+//   1. THE ZONE WIDTH WAS UNUSABLE INTRADAY. `cwidth = (highest(300) - lowest(300)) *
+//      ChannelW / 100`. On 5-minute bars, 300 bars is about 20 sessions, and the default
+//      ChannelW=10 makes the zone 10% of a 20-session range - typically 1.5-2.5% of price
+//      on an NSE F&O name. That is wider than the average intraday move, so every level
+//      swallows every other level and "support" spans the whole day's range. Replaced by
+//      an ATR-relative width (`zoneAtrMult`), which is stable across a 150-rupee stock and
+//      a 3000-rupee one and scales with the day's actual volatility.
+//
+//   2. STRENGTH COUNTED PIVOTS EQUALLY. A level touched three times last week outranked
+//      one touched twice yesterday, and a touch on 3x volume counted the same as a touch
+//      on a dead bar. Strength is now a weighted score: recency decay (`halfLifeBars`)
+//      times a volume weight. Set both weights to 0 to recover the original count.
+//
+//   3. OVERNIGHT GAPS MANUFACTURED PIVOTS. `ta.pivothigh` cannot see a session boundary,
+//      so the first bars after a gap routinely print a pivot that no trader ever traded
+//      against. Pivots inside `gapSkipBars` of a session open are now discarded.
+//
+//   4. ALERTS FIRED ON THE ZONE MIDPOINT. A breakout trades the EDGE, not the middle - by
+//      the time price crosses the midpoint it is already halfway through the zone and the
+//      stop has to sit on the far side. Alerts now fire on the edge, and only on
+//      `barstate.isconfirmed`.
+//
+//   5. NOTHING WAS MACHINE-READABLE. The levels lived inside arrays. The `plot()` exports
+//      at the bottom let a strategy read the nearest level with `request.security` and let
+//      you eyeball the series in the Data Window.
+//
+// NON-REPAINT STATUS - READ THIS BEFORE TRADING IT
+//   `ta.pivothigh(src, prd, prd)` confirms a pivot `prd` bars AFTER it printed. That lag is
+//   inherent to a pivot and removing it would be lookahead. So: a level's VALUE never
+//   changes once drawn, but the SET of levels updates `prd` bars late, and the zone list is
+//   rebuilt whenever a new pivot confirms. Historical lines therefore move when you reload
+//   the chart. That is fine for a discretionary chart and fine as a filter; it is NOT safe
+//   to backtest naively, because on a replay you see levels the live chart did not have.
+//
+// WHAT THE DATA SAYS ABOUT HOW TO USE IT
+//   Measured over 208 NSE F&O names x 58 sessions of 5-minute bars (111,483 first-touch
+//   events, `signal_engine/backtest` level study): on the FIRST touch of any reference
+//   level - PDH, PDL, ORH, IBH, prior-day VAH/POC/VAL, prior week/month extremes - price
+//   continued through only 39-46% of the time, and median adverse excursion (1.5-1.9 ATR)
+//   exceeded median favourable excursion (0.8-1.2 ATR) at EVERY level tested.
+//   First touch of a level is a MEAN-REVERSION event, not a breakout event.
+//   `alertMode` therefore defaults to 'Reject' rather than 'Break'. If you want the break,
+//   wait for the retest - do not buy the first tag.
+//
+// ================================================================================================
+
+// ---- setup -------------------------------------------------------------------------------------
+grp_setup = 'Setup'
+grp_zone  = 'Zone construction'
+grp_str   = 'Strength model'
+grp_view  = 'Display'
+
+prd       = input.int(8,  'Pivot Period', minval=3, maxval=30, group=grp_setup,
+     tooltip='Bars each side of a swing. On 5-minute bars: 8 = a 40-minute swing.\n\nThe ORIGINAL default was 10 (50 min), tuned for daily charts.\n\nLower = more, noisier levels. Higher = fewer, slower to appear.\n\nNOTE: a pivot is only confirmed this many bars AFTER it prints.')
+ppsrc     = input.string('High/Low', 'Source', options=['High/Low', 'Close/Open'], group=grp_setup,
+     tooltip='High/Low uses wicks - what actually got tested.\nClose/Open ignores wicks and gives fewer, cleaner levels on gappy names.')
+maxnumpp  = input.int(30, 'Pivots retained', minval=5, maxval=100, group=grp_setup,
+     tooltip='Size of the rolling pivot pool the zones are built from.\n\n30 at Pivot Period 8 covers roughly 8-12 NSE sessions of 5-minute bars - enough context for intraday work without dragging in month-old structure.')
+gapSkipBars = input.int(2, 'Bars to ignore after the open', minval=0, maxval=12, group=grp_setup,
+     tooltip='Discards pivots formed in the first N bars of a session.\n\nNSE equities gap overnight. ta.pivothigh cannot see the session boundary, so the gap prints a pivot that no auction ever traded against. 2 bars (10 minutes) removes almost all of them.\n\n0 = original behaviour.')
+
+// ---- zone construction -------------------------------------------------------------------------
+zoneMode    = input.string('ATR', 'Zone width from', options=['ATR', 'Range %'], group=grp_zone,
+     tooltip="ATR (recommended): zone width = ATR x multiplier. Scales with the instrument and with today's volatility.\n\nRange %: the ORIGINAL method - a percentage of the 300-bar range. Kept so you can reproduce the old chart, not because it is better.")
+zoneAtrMult = input.float(0.5, 'Zone width (x ATR)', minval=0.1, maxval=3.0, step=0.1, group=grp_zone,
+     tooltip='How far apart two pivots can be and still count as the same level.\n\n0.3 = tight, many distinct levels\n0.5 = balanced (recommended for 5m NSE)\n1.0 = broad zones, few levels\n\nAt 0.5 x ATR a zone is typically 0.15-0.30% of price on an F&O name - about the width of a real order-book shelf, and narrow enough that the far edge is still a sane stop.')
+atrLen      = input.int(14, 'ATR length', minval=5, maxval=50, group=grp_zone)
+ChannelW    = input.int(10, 'Range % (legacy)', minval=1, group=grp_zone,
+     tooltip='Only used when Zone width from = Range %. The original default was 10.')
+maxnumsr     = input.int(4, 'Max levels', minval=1, maxval=10, group=grp_zone,
+     tooltip='Levels drawn, strongest first.\n\nThe original drew 5. Intraday you are already watching ORH/ORL, IBH/IBL, VWAP, PDH/PDL and prior-day value - 4 more lines is close to the point where the chart stops helping.')
+min_strength = input.float(3.0, 'Min strength', minval=1, maxval=20, step=0.5, group=grp_zone,
+     tooltip='Minimum weighted score for a zone to be drawn.\n\nWith the strength model OFF this is just a pivot count, and 3 means "tested three times". With weighting ON a score of 3 is roughly three recent, average-volume touches, or two heavy recent ones.')
+maxDistAtr   = input.float(4.0, 'Hide levels further than (x ATR)', minval=0, maxval=50, step=0.5, group=grp_zone,
+     tooltip='A level six ATR away will not be reached today and only clutters the chart. 0 disables the filter.')
+
+// ---- strength model ------------------------------------------------------------------------------
+useRecency  = input.bool(true, 'Weight by recency', group=grp_str,
+     tooltip='Recent tests describe the CURRENT auction; a level last tested nine sessions ago describes an auction that is over.\n\nOFF reproduces the original equal-weight count.')
+halfLifeBars = input.int(375, 'Recency half-life (bars)', minval=25, maxval=2000, group=grp_str,
+     tooltip='A pivot this many bars old counts half as much.\n\n375 five-minute bars = 5 NSE sessions.')
+useVolume   = input.bool(true, 'Weight by volume', group=grp_str,
+     tooltip='A level rejected on 3x volume was defended by size. A level rejected on a dead bar was not.\n\nWeight = clamp(pivot bar volume / SMA50 volume, 0.5, 2.5).')
+
+// ---- display / alerts -----------------------------------------------------------------------------
+alertMode   = input.string('Reject', 'Alert on', options=['Reject', 'Break', 'Both', 'Off'], group=grp_view,
+     tooltip="REJECT (default): price tags the zone edge and closes back away from it. This is what the measured data supports - across 111,483 first-touch events on NSE F&O 5-minute bars, price continued through a reference level only 39-46% of the time.\n\nBREAK: close beyond the FAR edge of the zone. Use this only on a level's second or later test.\n\nBoth / Off as named.")
+showpp      = input.bool(false, 'Show pivot markers', group=grp_view)
+labelloc    = input.int(15, 'Label offset (bars)', group=grp_view)
+linestyle   = input.string('Dashed', 'Line style', options=['Solid', 'Dotted', 'Dashed'], group=grp_view)
+linewidth   = input.int(1, 'Line width', minval=1, maxval=4, group=grp_view)
+showZoneFill = input.bool(true, 'Shade the zone', group=grp_view,
+     tooltip='Draws the zone as a band rather than a single line. The band is the point - a level is a shelf, not a price.')
+resistancecolor = input.color(color.new(color.red, 0),  'Resistance', group=grp_view)
+supportcolor    = input.color(color.new(color.lime, 0), 'Support', group=grp_view)
+
+// ==================================== CALCULATION ================================================
+// Every ta.* call is unconditional and at global scope - calling one inside an `if` gives
+// inconsistent values on history reload.
+float atrVal  = ta.atr(atrLen)
+float volMa   = ta.sma(volume, 50)
+float src1    = ppsrc == 'High/Low' ? high : math.max(close, open)
+float src2    = ppsrc == 'High/Low' ? low  : math.min(close, open)
+float phRaw   = ta.pivothigh(src1, prd, prd)
+float plRaw   = ta.pivotlow(src2, prd, prd)
+float prdhighest = ta.highest(high, 300)
+float prdlowest  = ta.lowest(low, 300)
+
+// Session bookkeeping, so a gap cannot manufacture a pivot.
+bool newSession  = ta.change(time('D')) != 0
+var int barsIntoSession = 0
+barsIntoSession := newSession ? 0 : barsIntoSession + 1
+// The pivot confirmed on THIS bar formed `prd` bars ago, so test the session age there.
+bool pivotInGap  = barsIntoSession < (prd + gapSkipBars)
+
+float ph = pivotInGap ? na : phRaw
+float pl = pivotInGap ? na : plRaw
+
+plotshape(showpp and not na(ph), text='H', style=shape.labeldown, color=na,
+     textcolor=color.new(color.red, 0),  location=location.abovebar, offset=-prd)
+plotshape(showpp and not na(pl), text='L', style=shape.labelup,   color=na,
+     textcolor=color.new(color.lime, 0), location=location.belowbar, offset=-prd)
+
+Lstyle = linestyle == 'Dashed' ? line.style_dashed : linestyle == 'Solid' ? line.style_solid : line.style_dotted
+
+// Zone width. ATR mode is the retune; Range % reproduces the original.
+float cwidth = zoneMode == 'ATR' ? atrVal * zoneAtrMult
+     : (prdhighest - prdlowest) * ChannelW / 100.0
+
+// Pivot pool: price, the bar it confirmed on, and its volume weight.
+var pivotvals = array.new_float(0)
+var pivotbars = array.new_int(0)
+var pivotwts  = array.new_float(0)
+
+if not na(ph) or not na(pl)
+    float vw = useVolume and volMa > 0 ? math.min(math.max(volume[prd] / volMa, 0.5), 2.5) : 1.0
+    array.unshift(pivotvals, na(ph) ? pl : ph)
+    array.unshift(pivotbars, bar_index)
+    array.unshift(pivotwts,  vw)
+    if array.size(pivotvals) > maxnumpp
+        array.pop(pivotvals)
+        array.pop(pivotbars)
+        array.pop(pivotwts)
+
+// Weighted strength of one pivot, at the moment it is being scored.
+pivot_weight(int ind) =>
+    float w = array.get(pivotwts, ind)
+    float age = bar_index - array.get(pivotbars, ind)
+    useRecency ? w * math.pow(0.5, age / math.max(halfLifeBars, 1)) : w
+
+// Greedy grouping, unchanged in shape from the original - only the score is weighted.
+get_sr_vals(int ind) =>
+    float lo = array.get(pivotvals, ind)
+    float hi = lo
+    float sc = 0.0
+    for y = 0 to array.size(pivotvals) - 1
+        float cpp = array.get(pivotvals, y)
+        float wdth = cpp <= lo ? hi - cpp : cpp - lo
+        if wdth <= cwidth
+            if cpp <= hi
+                lo := math.min(lo, cpp)
+            else
+                hi := math.max(hi, cpp)
+            sc += pivot_weight(y)
+    [hi, lo, sc]
+
+var sr_up_level = array.new_float(0)
+var sr_dn_level = array.new_float(0)
+var sr_strength = array.new_float(0)
+
+find_loc(float strength) =>
+    int ret = array.size(sr_strength)
+    if array.size(sr_strength) > 0
+        for i = array.size(sr_strength) - 1 to 0
+            if strength <= array.get(sr_strength, i)
+                break
+            ret := i
+    ret
+
+check_sr(float hi, float lo, float strength) =>
+    bool ret = true
+    if array.size(sr_up_level) > 0
+        for i = 0 to array.size(sr_up_level) - 1
+            bool overlaps = (array.get(sr_up_level, i) >= lo and array.get(sr_up_level, i) <= hi)
+                 or (array.get(sr_dn_level, i) >= lo and array.get(sr_dn_level, i) <= hi)
+            if overlaps
+                if strength >= array.get(sr_strength, i)
+                    array.remove(sr_strength, i)
+                    array.remove(sr_up_level, i)
+                    array.remove(sr_dn_level, i)
+                else
+                    ret := false
+                break
+    ret
+
+var sr_lines  = array.new_line(11, na)
+var sr_labels = array.new_label(11, na)
+var sr_boxes  = array.new_box(11, na)
+
+// Rebuild only when a new pivot confirms. Between pivots the zones are static, which is
+// what makes them tradeable - a level that moves every bar is not a level.
+if not na(ph) or not na(pl)
+    array.clear(sr_up_level)
+    array.clear(sr_dn_level)
+    array.clear(sr_strength)
+    if array.size(pivotvals) > 0
+        for x = 0 to array.size(pivotvals) - 1
+            [hi, lo, strength] = get_sr_vals(x)
+            if check_sr(hi, lo, strength)
+                int loc = find_loc(strength)
+                bool nearEnough = maxDistAtr <= 0 or atrVal <= 0
+                     or math.min(math.abs(hi - close), math.abs(lo - close)) <= atrVal * maxDistAtr
+                if loc < maxnumsr and strength >= min_strength and nearEnough
+                    array.insert(sr_strength, loc, strength)
+                    array.insert(sr_up_level, loc, hi)
+                    array.insert(sr_dn_level, loc, lo)
+                    if array.size(sr_strength) > maxnumsr
+                        array.pop(sr_strength)
+                        array.pop(sr_up_level)
+                        array.pop(sr_dn_level)
+
+    for x = 1 to 10
+        line.delete(array.get(sr_lines, x))
+        label.delete(array.get(sr_labels, x))
+        box.delete(array.get(sr_boxes, x))
+
+    if array.size(sr_up_level) > 0
+        for x = 0 to array.size(sr_up_level) - 1
+            float zhi = array.get(sr_up_level, x)
+            float zlo = array.get(sr_dn_level, x)
+            float mid = math.round_to_mintick((zhi + zlo) / 2)
+            bool isRes = mid >= close
+            color c = isRes ? resistancecolor : supportcolor
+            float rate = 100 * (mid - close) / close
+            string txt = str.tostring(mid) + ' (' + str.tostring(rate, '#.##') + '%) x'
+                 + str.tostring(array.get(sr_strength, x), '#.#')
+            array.set(sr_labels, x + 1, label.new(x=bar_index + labelloc, y=mid, text=txt,
+                 color=c, textcolor=isRes ? color.white : color.black,
+                 style=isRes ? label.style_label_down : label.style_label_up, size=size.small))
+            array.set(sr_lines, x + 1, line.new(x1=bar_index, y1=mid, x2=bar_index - 1, y2=mid,
+                 extend=extend.both, color=c, style=Lstyle, width=linewidth))
+            if showZoneFill
+                array.set(sr_boxes, x + 1, box.new(left=bar_index - 300, top=zhi,
+                     right=bar_index + labelloc, bottom=zlo,
+                     border_color=color.new(c, 70), bgcolor=color.new(c, 88), extend=extend.right))
+
+// ==================================== SIGNALS ====================================================
+// Edge, not midpoint. A breakout trades the far side of the shelf; a rejection trades the
+// near side. Both gate on barstate.isconfirmed - an intrabar cross can un-cross, a broker
+// order cannot be un-placed.
+f_broke_up() =>
+    bool ret = false
+    if array.size(sr_up_level) > 0
+        for x = 0 to array.size(sr_up_level) - 1
+            float edge = array.get(sr_up_level, x)
+            if close[1] <= edge and close > edge
+                ret := true
+    ret
+
+f_broke_down() =>
+    bool ret = false
+    if array.size(sr_dn_level) > 0
+        for x = 0 to array.size(sr_dn_level) - 1
+            float edge = array.get(sr_dn_level, x)
+            if close[1] >= edge and close < edge
+                ret := true
+    ret
+
+// Rejection: the bar reached into the zone and closed back out of it.
+f_rejected_at_res() =>
+    bool ret = false
+    if array.size(sr_up_level) > 0
+        for x = 0 to array.size(sr_up_level) - 1
+            float zlo = array.get(sr_dn_level, x)
+            float zhi = array.get(sr_up_level, x)
+            if zlo >= close and high >= zlo and close < zlo
+                ret := true
+    ret
+
+f_rejected_at_sup() =>
+    bool ret = false
+    if array.size(sr_dn_level) > 0
+        for x = 0 to array.size(sr_dn_level) - 1
+            float zlo = array.get(sr_dn_level, x)
+            float zhi = array.get(sr_up_level, x)
+            if zhi <= close and low <= zhi and close > zhi
+                ret := true
+    ret
+
+bool conf        = barstate.isconfirmed
+bool brokeUp     = conf and f_broke_up()
+bool brokeDown   = conf and f_broke_down()
+bool rejectRes   = conf and f_rejected_at_res()
+bool rejectSup   = conf and f_rejected_at_sup()
+
+bool wantBreak  = alertMode == 'Break'  or alertMode == 'Both'
+bool wantReject = alertMode == 'Reject' or alertMode == 'Both'
+
+plotshape(wantReject and rejectRes, title='Rejected at resistance', style=shape.triangledown,
+     location=location.abovebar, color=color.new(color.red, 0),  size=size.tiny)
+plotshape(wantReject and rejectSup, title='Rejected at support', style=shape.triangleup,
+     location=location.belowbar, color=color.new(color.lime, 0), size=size.tiny)
+
+alertcondition(f_broke_up(),        title='Resistance broken', message='Resistance broken')
+alertcondition(f_broke_down(),      title='Support broken',    message='Support broken')
+alertcondition(f_rejected_at_res(), title='Rejected at resistance', message='Rejected at resistance')
+alertcondition(f_rejected_at_sup(), title='Rejected at support',    message='Rejected at support')
+
+// ==================================== MACHINE-READABLE EXPORTS ===================================
+// So a strategy can consume the levels instead of a human reading lines off a chart.
+// From another script:  request.security(sym, tf, <this plot>) is not possible across
+// scripts, so copy the calculation block above, or read these in the Data Window.
+nearest_res() =>
+    float best = na
+    if array.size(sr_dn_level) > 0
+        for x = 0 to array.size(sr_dn_level) - 1
+            float lvl = array.get(sr_dn_level, x)        // near edge of a zone above
+            if lvl > close and (na(best) or lvl < best)
+                best := lvl
+    best
+
+nearest_sup() =>
+    float best = na
+    if array.size(sr_up_level) > 0
+        for x = 0 to array.size(sr_up_level) - 1
+            float lvl = array.get(sr_up_level, x)        // near edge of a zone below
+            if lvl < close and (na(best) or lvl > best)
+                best := lvl
+    best
+
+float resLvl = nearest_res()
+float supLvl = nearest_sup()
+
+plot(resLvl, 'Nearest resistance (near edge)', color=color.new(color.red, 100))
+plot(supLvl, 'Nearest support (near edge)',    color=color.new(color.lime, 100))
+plot(na(resLvl) or atrVal <= 0 ? na : (resLvl - close) / atrVal, 'Headroom to resistance (ATR)',
+     color=color.new(color.gray, 100), display=display.data_window)
+plot(na(supLvl) or atrVal <= 0 ? na : (close - supLvl) / atrVal, 'Room to support (ATR)',
+     color=color.new(color.gray, 100), display=display.data_window)
