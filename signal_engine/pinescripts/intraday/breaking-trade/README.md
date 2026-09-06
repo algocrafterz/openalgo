@@ -1,5 +1,15 @@
 # breakingtrade.com — automation feasibility assessment
 
+> **SUPERSEDED IN PART (2026-09-06).** This file is the original 2026-08-29 buy/don't-buy
+> assessment and is kept as the record of that decision. Its conclusion — "read it, do not wire
+> it" — was overtaken: the subscription was bought and the scanners ARE now automated, via a
+> headless browser rather than the Telegram alerts this file (correctly) judged unparseable.
+> The no-API / no-webhook finding still holds and is exactly why a browser is used.
+>
+> For what was actually built, measured and decided, read
+> [`STRATEGY-LOG.md`](STRATEGY-LOG.md) — including the confidence ledger separating what is
+> measured from what is merely believed.
+
 **Question asked:** is this a good candidate to automate — buy a subscription, define custom
 filters, route them to Telegram, and let `signal_engine` trade them?
 

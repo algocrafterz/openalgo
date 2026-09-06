@@ -175,6 +175,44 @@ Pre-existing conditions confirmed *not* caused by the upgrade: `test_auto_login.
 
 ---
 
+## BreakingTrade scanner (2026-09-03 → 2026-09-06)
+
+New subsystem: `signal_engine/analysis/breakingtrade/`. Scrapes breakingtrade.com's Market
+Profile and Volume scanners (no API exists), turns them into candidate lists, stores every
+snapshot, and measures whether the selection predicts anything.
+
+**Full decision log and confidence ledger: `pinescripts/intraday/breaking-trade/STRATEGY-LOG.md`.**
+That file is the source of truth for this strategy; only the summary lives here.
+
+| Piece | What it does |
+|---|---|
+| `fetcher.py` | Headless Playwright; one browser and one login per day |
+| `scans.py` | The vendor's 13 documented scans, directional ones only |
+| `emerging.py` | Directional setups whose move has NOT already happened |
+| `btst.py` | Closing-hour carry list, long only, decidable by 14:45 |
+| `store.py` | Snapshot history + NEW-since-last-poll transitions |
+| `paper.py` | BTST paper ledger (`--paper`) |
+| `validate.py` | MFE/MAE forward test with a random control |
+| `review.py` | Daily paper review (`--review`), mode check first |
+| `poller.sh` / `breakingtradectl.ps1` | Lifecycle, PID-file tracked, Windows-task driven |
+
+**Status: PAPER ONLY.** `intraday-breakingtrade` is enabled and signal_engine takes the signals
+end to end, but OpenAlgo must be in ANALYZE mode so orders reach the sandbox. Strategy tag
+`BREAKINGTRADE`; alerts use the standard alert shape so parser/validator/risk/executor need no
+special case.
+
+**Evidence so far is negative or absent, and that is the headline:**
+
+- BTST paper ledger, 48 closed trades: gross **+0.005%**, **net −0.185%** after ~0.19% costs.
+- BTST backtest, 96 trades over 14 sessions: excess between −0.10% and +0.07% depending on
+  benchmark, all |t| < 0.65 — underpowered, not damning.
+- Intraday: 5 scored signals, 2 correct. Nothing can be concluded.
+- Disproved along the way: the "narrow IB = coiled spring" belief (t = −8.93, wrong on 14 of
+  14 days), and sector alignment (weakly negative).
+
+Three separate look-ahead traps were found and fixed during this work, including a BTST list
+that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
+
 ## Recent Changes (2026-09-06)
 
 ### BREAKOUT paper week (ANALYZE mode); ORB stood down; SigID threads the trade
