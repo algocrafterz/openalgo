@@ -27,8 +27,16 @@ telegram:
       id: -1003518225740
       enabled: false
 
-    # LIVE from 2026-09-06. Was paper-only (PineScript simulation) until this date; every
-    # number in breakout.md before it is chart simulation, not fills. See that file.
+    # PAPER TRADING from 2026-09-07, one week, reviewed EOD daily. The engine subscribes and
+    # runs the FULL pipeline — validate, size, order, SL-M, staged TPs, tracker, time exit —
+    # but OpenAlgo is in ANALYZE mode, so every order goes to the sandbox and no real money
+    # moves. Nothing here needs changing to switch: the mode is read from OpenAlgo's
+    # /api/v1/analyzer endpoint at runtime, NOT set in this file.
+    #
+    # This is a different and much better measurement than the fortnight before it, which was
+    # breakout.pine talking to itself: sizing, risk gates, slot limits, the tracker and the
+    # exit pipeline are all real now. What is still NOT measured is slippage — a sandbox fills
+    # at the requested price. See breakout.md.
     - name: "intraday-breakout"
       id: -1004450500772
       enabled: true
@@ -37,13 +45,17 @@ telegram:
     # signal_engine/analysis/breakingtrade (not by a PineScript) in the same alert shape, so
     # the engine handles them with no special case: sizing, entry, SL-M, staged TPs, time exit.
     #
-    # DELIBERATELY NOT TRADED YET. The selection has almost no evidence behind it - the only
-    # scored sample so far is 5 signals, 2 correct, which is worth nothing statistically. The
-    # channel is configured, parsed and logged so the record accumulates; flip `enabled` to
-    # true when the forward test justifies it, and not before.
+    # PAPER PHASE from 2026-09-07, one week. ENABLED so signal_engine takes every signal end
+    # to end - sizing, entry, SL-M, staged TPs, time exit - but OpenAlgo must be in ANALYZE
+    # mode, which routes the orders to the sandbox instead of the broker.
+    #
+    # THE SAFETY OF THIS WHOLE PHASE IS ONE SETTING. Enabled channel + live mode = real orders
+    # on a strategy whose only scored sample is 5 signals, 2 correct. `--review` prints the
+    # mode as its first line every day for exactly that reason; if it ever says anything but
+    # analyze, set enabled back to false before anything else.
     - name: "intraday-breakingtrade"
       id: -1004379472313
-      enabled: false
+      enabled: true
 
   # [tune] Personal/admin channel for engine start/stop/error alerts.
   # If omitted, notifications go to all signal channels.
@@ -140,7 +152,14 @@ risk:
   # 57% WR. On chop days (May 5, 7, 12) all 7 slots filled with correlated losers — more
   # positions amplified losses without edge. 4 slots capture the best morning breakouts
   # while limiting exposure when the market isn't following through.
-  # Lowered 4 -> 2 on 2026-09-06, going live on BREAKOUT. This is arithmetic, not preference:
+  # Lowered 4 -> 2 on 2026-09-06. Kept at 2 for the 2026-09-07 paper week ON PURPOSE, even
+  # though a sandbox could afford any number: the point of the week is to learn what the LIVE
+  # configuration would have done, and a paper run with limits the live account cannot honour
+  # produces numbers that do not transfer. Signals refused for a full slot are recorded as
+  # DECLINED rows (db.save_declined) rather than vanishing, so the review can ask what the
+  # refused ones would have been worth.
+  #
+  # This is arithmetic, not preference:
   # at 1% risk with a ~0.30% stop the notional per position is risk/(sl_pct x (1+slippage))
   # = ~3x capital, so at 20% MIS margin ONE position needs ~Rs21k of Rs35k — 60% of the
   # account. Measured across the 31 Aug - 04 Sep sample: median Rs21,123 per position, so 2

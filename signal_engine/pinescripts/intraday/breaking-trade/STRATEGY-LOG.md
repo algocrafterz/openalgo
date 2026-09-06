@@ -96,6 +96,38 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-06 17:00 — Intraday paper phase ENABLED (analyze mode), one week
+
+`intraday-breakingtrade` is now `enabled: true`, so signal_engine takes every signal end to end -
+sizing, entry, SL-M placement, staged TPs, time exit. **OpenAlgo must be in ANALYZE mode**, which
+routes those orders to the sandbox rather than the broker.
+
+**The safety of this entire phase rests on one setting.** Enabled channel + live mode = real
+orders on a strategy whose only scored sample is 5 signals, 2 correct. Two guards added:
+
+- the poller checks the mode at startup, logs it, and raises a Telegram health alert if it is
+  anything but analyze;
+- `--review` prints the mode as its **first line**, every day, and shouts if it is not analyze.
+
+A live order and a sandbox order look identical in the logs until the money is gone, so the mode
+is never assumed.
+
+**Daily routine for the week:**
+
+    ./signal_engine/analysis/breakingtrade/scan.sh --review    # intraday, end of day
+    ./signal_engine/analysis/breakingtrade/scan.sh --paper     # BTST ledger
+    ./signal_engine/analysis/breakingtrade/scan.sh --audit     # was collection complete?
+
+`--review` reads TWO databases on purpose: `breakingtrade.db` holds what the scanner *claimed*,
+`trades.db` holds what the engine *did*. They diverge whenever a signal is rejected for risk,
+margin, a blacklist or a duplicate - and that gap is usually the most informative line in the
+report. Reading only one would present intentions as outcomes.
+
+**What this week is actually testing:** whether the plumbing works end to end - signals emitted,
+parsed, sized, filled, exited, recorded. It is NOT testing whether the strategy makes money; a
+week of intraday signals is nowhere near enough for that, and the evidence so far points the
+other way.
+
 ### 2026-09-06 16:20 — Wired to signal_engine; BTST on paper, and the paper says no
 
 **signal_engine integration complete.** The scanner now emits signals in the engine's own alert

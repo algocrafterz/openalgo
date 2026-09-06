@@ -450,6 +450,22 @@ def _watch(args) -> int:
     for start_t, end_t, minutes in POLL_WINDOWS:
         logger.info(f"  {start_t:%H:%M}-{end_t:%H:%M} on {', '.join(f':{m:02d}' for m in minutes)}")
 
+    # The paper phase is only paper if OpenAlgo is in analyze mode. Check at startup and say so
+    # in the log, so a mis-set mode is discovered on day one rather than in the P&L.
+    try:
+        from signal_engine.analysis.breakingtrade import review as _review
+
+        mode, is_analyze = _review.trading_mode()
+        if is_analyze:
+            logger.info(f"OpenAlgo mode: {mode} (analyze - orders are sandboxed)")
+        elif mode == "unknown":
+            logger.warning("OpenAlgo unreachable - cannot confirm analyze mode")
+        else:
+            logger.error(f"OpenAlgo mode is {mode.upper()}, NOT analyze - orders would be REAL")
+            alerts.alert_health(f"mode is {mode}, NOT analyze - orders would be REAL")
+    except Exception as exc:
+        logger.warning(f"could not check trading mode: {type(exc).__name__}: {exc}")
+
     already = _stored_polls(_dt.today().date())
     if already:
         logger.info(f"resuming - {len(already)} polls already stored today: {sorted(already)}")
@@ -550,6 +566,11 @@ def main() -> int:
     )
     parser.add_argument("--debug-dir", default=None, help="Dump page HTML+screenshot on failure")
     parser.add_argument(
+        "--review",
+        action="store_true",
+        help="End-of-day paper review: mode check, signals emitted, trades taken",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="Settle and report the BTST paper-trade ledger",
@@ -585,6 +606,12 @@ def main() -> int:
         help="Closing-hour accumulation watchlist for the next session (needs a volume snapshot)",
     )
     args = parser.parse_args()
+
+    if args.review:
+        from signal_engine.analysis.breakingtrade import review
+
+        review.report()
+        return 0
 
     if args.paper:
         from signal_engine.analysis.breakingtrade import paper
