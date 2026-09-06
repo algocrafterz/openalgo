@@ -14,10 +14,12 @@ and this poller is a separate long-running process. Two processes sharing one Te
 file is a good way to corrupt it. A bot token is independent, stateless, and safe to call from
 anywhere.
 
-Setup (one time): create a bot with @BotFather, then add to signal_engine/.env
+Setup (one time): create a bot with @BotFather, create TWO channels, add the bot to each as an
+administrator, then put in signal_engine/.env
 
     BREAKINGTRADE_BOT_TOKEN=123456:ABC...
-    BREAKINGTRADE_CHAT_ID=-1001234567890
+    BREAKINGTRADE_CHAT_ID_INTRADAY=-1001234567890   # intraday-breakingtrade
+    BREAKINGTRADE_CHAT_ID_BTST=-1009876543210       # btst-breakingtrade
 
 Without those, alerts are still recorded, just not delivered - and the module says so once
 rather than failing repeatedly.
@@ -93,22 +95,60 @@ def _clean_token(token: str) -> str:
     return token
 
 
-def _credentials() -> tuple:
-    env = dotenv_values(_ENV_PATH) if os.path.exists(_ENV_PATH) else {}
-    token = env.get("BREAKINGTRADE_BOT_TOKEN") or os.getenv("BREAKINGTRADE_BOT_TOKEN")
-    chat = env.get("BREAKINGTRADE_CHAT_ID") or os.getenv("BREAKINGTRADE_CHAT_ID")
-    return _clean_token(token), (chat.strip() if chat else chat)
+# Each strategy gets its OWN channel. Not for tidiness - for attention. The BTST message is a
+# single actionable alert per day with a hard 15:15 deadline; the intraday stream is exploratory
+# research with no established edge. Mixed together, the one message that needs acting on within
+# 25 minutes competes with a scroll of "here is something interesting", which is precisely how a
+# deadline gets missed. Analysis separation is already handled by the `kind` column, so channels
+# exist purely to keep the urgent thing visible.
+_CHANNEL_BY_KIND = {
+    "btst": "BREAKINGTRADE_CHAT_ID_BTST",
+    "btst_empty": "BREAKINGTRADE_CHAT_ID_BTST",
+    "intraday_transition": "BREAKINGTRADE_CHAT_ID_INTRADAY",
+    "health": "BREAKINGTRADE_CHAT_ID_INTRADAY",
+}
+_DEFAULT_CHANNEL_KEY = "BREAKINGTRADE_CHAT_ID_INTRADAY"
 
 
-def send(text: str) -> bool:
-    """Deliver one message. Returns False (never raises) when unconfigured or unreachable -
-    a failed alert must not take the collector down with it."""
+def _env() -> dict:
+    env = dict(dotenv_values(_ENV_PATH)) if os.path.exists(_ENV_PATH) else {}
+    for key in (
+        "BREAKINGTRADE_BOT_TOKEN",
+        "BREAKINGTRADE_CHAT_ID_BTST",
+        "BREAKINGTRADE_CHAT_ID_INTRADAY",
+    ):
+        env.setdefault(key, os.getenv(key))
+    return env
+
+
+def chat_id_for(kind: str) -> str | None:
+    """Which channel a given alert kind belongs in.
+
+    There is deliberately NO fallback to a generic chat id. An earlier single-channel setup sent
+    these into the channel breakout.pine already uses, mixing two unrelated strategies' signals.
+    Silently reverting to that on a missing key would repeat the mistake, so an unconfigured
+    channel means "record it, do not deliver it".
+    """
+    return _env().get(_CHANNEL_BY_KIND.get(kind, _DEFAULT_CHANNEL_KEY))
+
+
+def _credentials(kind: str = None) -> tuple:
+    env = _env()
+    token = _clean_token(env.get("BREAKINGTRADE_BOT_TOKEN"))
+    chat = chat_id_for(kind) if kind else env.get(_DEFAULT_CHANNEL_KEY)
+    return token, (chat.strip() if chat else chat)
+
+
+def send(text: str, kind: str = None) -> bool:
+    """Deliver one message to the channel that `kind` belongs to. Returns False (never raises)
+    when unconfigured or unreachable - a failed alert must not take the collector down."""
     global _warned_missing_config
-    token, chat_id = _credentials()
+    token, chat_id = _credentials(kind)
     if not token or not chat_id:
         if not _warned_missing_config:
+            key = _CHANNEL_BY_KIND.get(kind, _DEFAULT_CHANNEL_KEY)
             print(
-                "  [alerts] BREAKINGTRADE_BOT_TOKEN / BREAKINGTRADE_CHAT_ID not set - "
+                f"  [alerts] BREAKINGTRADE_BOT_TOKEN / {key} not set - "
                 "alerts are being recorded but not delivered"
             )
             _warned_missing_config = True
@@ -153,7 +193,7 @@ def record(
     row - the BTST list did exactly that and fired six identical messages.
     """
     if deliver:
-        delivered = send(message)
+        delivered = send(message, kind)
     with _connect() as conn:
         conn.execute(
             "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered) "
@@ -204,7 +244,7 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     lines += [f"{side:<5} {sym:<{width}} {px:>9} {tag}" for side, sym, px, tag in rows]
     message = "\n".join(lines)
 
-    delivered = send(message)  # one message covering every new name
+    delivered = send(message, "intraday_transition")  # one message covering every new name
     for scan_name, symbols in new_by_scan.items():
         for symbol in symbols:
             record(
@@ -237,7 +277,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     lines.append("Long only. Size for a gap, not a stop.")
     message = "\n".join(lines)
 
-    delivered = send(message)  # one message listing the whole watchlist
+    delivered = send(message, "btst")  # one message listing the whole watchlist
     for row in watchlist.itertuples():
         record(
             "btst",

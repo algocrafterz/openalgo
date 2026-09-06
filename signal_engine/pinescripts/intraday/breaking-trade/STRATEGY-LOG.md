@@ -96,6 +96,27 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-06 15:30 — Alerts split onto their own two channels
+
+The alerts had been going to `intraday-breakout`, the channel `breakout.pine` already publishes
+to - mixing two unrelated strategies' signals in one feed. Now routed per strategy:
+
+| Alert kind | Channel | .env key |
+|---|---|---|
+| BTST list | btst-breakingtrade | `BREAKINGTRADE_CHAT_ID_BTST` |
+| Intraday transitions, poller health | intraday-breakingtrade | `BREAKINGTRADE_CHAT_ID_INTRADAY` |
+
+Two channels rather than one, and the reason is **attention, not tidiness**: the BTST message is
+a single actionable alert per day with a hard 15:15 deadline, while the intraday feed is
+exploratory research with no established edge. Sharing a channel means the message that must be
+acted on within 25 minutes competes with a scroll of "here is something interesting", which is
+exactly how a deadline gets missed. Separating the *analysis* never needed channels - the `kind`
+column already does that.
+
+**There is deliberately no fallback to a generic chat id.** Falling back on a missing key would
+silently resume delivering into breakout.pine's channel, repeating the very problem. An
+unconfigured channel now means "record it, do not deliver it", and a test pins that.
+
 ### 2026-09-06 15:10 — Weekend data corruption found and purged
 
 The new `--audit` command immediately earned itself: it reported **21 polls collected on a

@@ -17,7 +17,7 @@ from signal_engine.analysis.breakingtrade.__main__ import _due_marks
 def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
     # Never attempt a real network call from a test.
-    monkeypatch.setattr(alerts, "send", lambda text: False)
+    monkeypatch.setattr(alerts, "send", lambda text, kind=None: False)
 
 
 def test_alert_is_recorded_even_when_delivery_fails():
@@ -72,6 +72,38 @@ def test_empty_btst_list_is_still_recorded():
     """A day with no candidates is a data point, not a non-event."""
     alerts.alert_btst(pd.DataFrame(), datetime(2026, 9, 4, 14, 50))
     assert alerts.history().iloc[0]["kind"] == "btst_empty"
+
+
+# ---------------------------------------------------------------------------
+# Channel routing - two strategies must never share a channel
+# ---------------------------------------------------------------------------
+
+
+def test_each_strategy_routes_to_its_own_channel(monkeypatch):
+    monkeypatch.setattr(
+        alerts,
+        "_env",
+        lambda: {
+            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
+            "BREAKINGTRADE_CHAT_ID_BTST": "-100BTST",
+            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100INTRA",
+        },
+    )
+    assert alerts.chat_id_for("btst") == "-100BTST"
+    assert alerts.chat_id_for("btst_empty") == "-100BTST"
+    assert alerts.chat_id_for("intraday_transition") == "-100INTRA"
+    assert alerts.chat_id_for("health") == "-100INTRA"
+
+
+def test_missing_channel_never_falls_back_to_another(monkeypatch):
+    """An earlier single-channel setup delivered these into the channel breakout.pine uses.
+    Falling back on a missing key would silently repeat that, so it must not deliver at all."""
+    monkeypatch.setattr(
+        alerts,
+        "_env",
+        lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc", "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100X"},
+    )
+    assert alerts.chat_id_for("btst") is None
 
 
 # ---------------------------------------------------------------------------
