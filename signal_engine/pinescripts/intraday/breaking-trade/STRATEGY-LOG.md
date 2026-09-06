@@ -96,7 +96,34 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
-### 2026-09-06 00:15 — Collector hardened; alerts built; intraday backfill ruled out
+### 2026-09-06 14:40 — Telegram live; autostart installed
+
+**Telegram alerts are delivering.** Two defects found and fixed getting there:
+1. The bot token had been pasted *with* the `bot` prefix (`bot8123...` instead of `8123...`).
+   The API path is `/bot<TOKEN>/`, so this produced `/botbot8123.../` and a bare `404 Not Found`
+   that is indistinguishable from an invalid token. The loader now strips a leading `bot`,
+   surrounding quotes and stray CR from a CRLF `.env`.
+2. `send()` returned a bare `False` on any non-200, hiding Telegram's own explanation. A 404
+   means a bad token, 400 "chat not found" means the bot was never added to the channel, 403
+   means it cannot post - completely different fixes. The description is now printed.
+3. **The BTST alert fired six identical messages** - one per symbol - because delivery was
+   coupled to recording. One message now covers the whole list, while a row is still stored per
+   symbol so alerts can be scored per name later.
+
+**Autostart via cron** (no sudo needed, matches the existing smi-assistant pattern):
+
+    @reboot ... poller.sh start
+    */5 9-15 * * 1-5 ... poller.sh start
+
+`poller.sh start` refuses to launch a second copy, so the five-minute keepalive is safe to run
+repeatedly. **This matters more than `@reboot`:** on 2026-09-04 the poller died *mid-session*,
+which a boot-time entry would never have caught. Verified by killing the poller and running the
+exact cron command - it recovered on the next tick.
+
+**WSL2 caveat, stated plainly:** cron only runs while the WSL virtual machine is running, and
+WSL shuts down shortly after the last terminal closes. The machine being powered on is not
+sufficient. To collect unattended, either keep a WSL terminal open, or have Windows Task
+Scheduler run `wsl.exe -d <distro> -- true` at logon to hold the VM up.
 
 **Friday audit: 25 of 27 scheduled polls missed (93%).** New `--audit [date]` command reports
 scheduled-vs-collected for any day, so this can never again be discovered days later by accident.

@@ -61,12 +61,26 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _clean_token(token: str) -> str:
+    """Normalize a pasted bot token.
+
+    The API path is /bot<TOKEN>/method, so BotFather's token is often copied WITH the "bot"
+    prefix already attached - which produces /botbot123.../ and a bare 404 that looks exactly
+    like an invalid token. Also strips quotes and any stray CR from a CRLF .env file.
+    """
+    if not token:
+        return token
+    token = token.strip().strip("\r").strip("\"'")
+    if token.lower().startswith("bot") and ":" in token[3:]:
+        token = token[3:]
+    return token
+
+
 def _credentials() -> tuple:
     env = dotenv_values(_ENV_PATH) if os.path.exists(_ENV_PATH) else {}
-    return (
-        env.get("BREAKINGTRADE_BOT_TOKEN") or os.getenv("BREAKINGTRADE_BOT_TOKEN"),
-        env.get("BREAKINGTRADE_CHAT_ID") or os.getenv("BREAKINGTRADE_CHAT_ID"),
-    )
+    token = env.get("BREAKINGTRADE_BOT_TOKEN") or os.getenv("BREAKINGTRADE_BOT_TOKEN")
+    chat = env.get("BREAKINGTRADE_CHAT_ID") or os.getenv("BREAKINGTRADE_CHAT_ID")
+    return _clean_token(token), (chat.strip() if chat else chat)
 
 
 def send(text: str) -> bool:
@@ -88,17 +102,41 @@ def send(text: str) -> bool:
             json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
             timeout=15,
         )
-        return response.status_code == 200
+        if response.status_code == 200:
+            return True
+        # Surface Telegram's own reason. Returning a bare False here once cost a diagnosis
+        # session: a 404 "Not Found" means a bad token, 400 "chat not found" means the bot was
+        # never added to the channel, 403 means it lacks permission to post. Very different
+        # fixes, indistinguishable without the description.
+        try:
+            reason = response.json().get("description", response.text[:120])
+        except Exception:  # noqa: BLE001
+            reason = response.text[:120]
+        print(f"  [alerts] Telegram refused ({response.status_code}): {reason}")
+        return False
     except Exception as exc:  # noqa: BLE001 - alerting must never break collection
         print(f"  [alerts] delivery failed: {type(exc).__name__}: {exc}")
         return False
 
 
 def record(
-    kind: str, message: str, symbol: str = None, direction: str = None, scan: str = None
+    kind: str,
+    message: str,
+    symbol: str = None,
+    direction: str = None,
+    scan: str = None,
+    deliver: bool = True,
+    delivered: bool = False,
 ) -> bool:
-    """Persist an alert, then attempt delivery. Returns whether delivery succeeded."""
-    delivered = send(message)
+    """Persist an alert row, optionally delivering it.
+
+    Delivery is separable from recording because ONE message often covers MANY symbols. The
+    message is sent once; a row is written per symbol so the alert can be scored per name
+    later. Recording per symbol AND delivering per symbol would send the same text once per
+    row - the BTST list did exactly that and fired six identical messages.
+    """
+    if deliver:
+        delivered = send(message)
     with _connect() as conn:
         conn.execute(
             "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered) "
@@ -140,9 +178,17 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     lines += ["", "Selection only - not a trade instruction. No edge established yet."]
     message = "\n".join(lines)
 
+    delivered = send(message)  # one message covering every new name
     for scan_name, symbols in new_by_scan.items():
         for symbol in symbols:
-            record("intraday_transition", message, symbol=symbol, scan=scan_name)
+            record(
+                "intraday_transition",
+                message,
+                symbol=symbol,
+                scan=scan_name,
+                deliver=False,
+                delivered=delivered,
+            )
     return count
 
 
@@ -166,8 +212,17 @@ def alert_btst(watchlist, captured_at: datetime, deadline: str = "15:15") -> int
     lines += ["", "Watchlist, not a signal. Long only. Size for an overnight gap, not a stop."]
     message = "\n".join(lines)
 
+    delivered = send(message)  # one message listing the whole watchlist
     for row in watchlist.itertuples():
-        record("btst", message, symbol=row.symbol, direction="up", scan="BTST")
+        record(
+            "btst",
+            message,
+            symbol=row.symbol,
+            direction="up",
+            scan="BTST",
+            deliver=False,
+            delivered=delivered,
+        )
     return len(watchlist)
 
 
