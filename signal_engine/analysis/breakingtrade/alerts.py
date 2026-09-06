@@ -342,7 +342,15 @@ def alert_started(mode: str, is_analyze: bool, windows: str, already: int) -> No
     whether orders are paper or real, because that is the fact that decides whether an enabled
     channel is safe.
     """
-    banner = "PAPER (analyze)" if is_analyze else f"*** LIVE ({mode}) - ORDERS ARE REAL ***"
+    # THREE states, not two. "unknown" means OpenAlgo was unreachable - which is normal on a
+    # weekend start - and reporting that as LIVE fires the alarm on every ordinary restart. An
+    # alarm that cries wolf is one that gets ignored, so unknown says exactly that.
+    if is_analyze:
+        banner = "PAPER (analyze mode)"
+    elif mode in ("unknown", None, ""):
+        banner = "mode UNKNOWN - OpenAlgo unreachable, verify before the open"
+    else:
+        banner = f"*** LIVE ({mode}) - ORDERS WOULD BE REAL ***"
     lines = [f"BT poller STARTED | {banner}", windows]
     if already:
         lines.append(f"resuming - {already} polls already stored today")

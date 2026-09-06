@@ -96,6 +96,29 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-06 17:30 — Lifecycle notifications; analyze mode switchable from the CLI
+
+The poller only ever spoke on FAILURE, so silence was ambiguous - a healthy poller and a dead
+one looked identical, which is exactly how 2026-09-04 went unnoticed for an hour. It now sends:
+
+- **START** - led by the trading mode, plus the schedule and any polls already stored today
+- **STOP** - with the day's tally, so an empty day is distinguishable from a dead process
+- heartbeat alarm (pre-existing) if no poll succeeds for 35 minutes in market hours
+
+`poller.sh stop` sends SIGTERM, which by default kills the process without running the shutdown
+path, so a SIGTERM handler was added - otherwise the channel never learns the poller went away.
+
+**The mode banner has THREE states, not two.** The first version reported "unknown" as LIVE,
+which fires the alarm on every ordinary weekend start when OpenAlgo is not running. An alarm
+that cries wolf gets ignored, which would defeat the one guard protecting an enabled channel.
+Now: PAPER / UNKNOWN-verify-before-the-open / LIVE.
+
+Also added `--set-analyze on|off`, which toggles paper mode over OpenAlgo's REST API. It
+deliberately does NOT call `database.settings_db.set_analyze_mode()` directly: the flag is a
+column in settings.db but the running app caches it in process, so writing the row from another
+process leaves the live app acting on the stale value while orders keep going wherever they were
+going - the worst possible failure for a paper phase.
+
 ### 2026-09-06 17:00 — Intraday paper phase ENABLED (analyze mode), one week
 
 `intraday-breakingtrade` is now `enabled: true`, so signal_engine takes every signal end to end -
