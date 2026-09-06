@@ -1,0 +1,1357 @@
+{
+ "name": "intraday-breakout",
+ "type": "private_channel",
+ "id": 4450500772,
+ "messages": [
+  {
+   "id": 43,
+   "type": "message",
+   "date": "2026-08-31T09:55:02",
+   "date_unixtime": "1788150302",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | INDHOTEL\n------------------------\nTrigger: VAL-RT\nEntry: 703.55\nTarget: 701.49\nSL: 705.61\n------------------------\nTP1.5: 700.46\nTP2: 699.43\nTP3: 697.37\n------------------------\nRisk: 2.06 | Reward: 2.06\nR:R 1:1\n------------------------\nScore: 8\nRVOL: 1.8\nVF: 1.13\nCLV: 0.43\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 53\nHeadroom: 3.4\nChase: 0.68\nConf: 0\nDayType: -\nOpenType: Open Test Drive\nAtrPct: 0.23\nSlAtr: 1.25\nORH: 707.30\nORM: 704.45\nORL: 701.55\nIBH: 707.30\nIBM: 704.45\nIBL: 701.55\nPVAH: 706.90\nPPOC: 705.15\nPVAL: 704.65\nPDH: 716.90\nPDL: 703.55\n------------------------\n09:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDHOTEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | INDHOTEL\n------------------------\nTrigger: VAL-RT\nEntry: 703.55\nTarget: 701.49\nSL: 705.61\n------------------------\nTP1.5: 700.46\nTP2: 699.43\nTP3: 697.37\n------------------------\nRisk: 2.06 | Reward: 2.06\nR:R 1:1\n------------------------\nScore: 8\nRVOL: 1.8\nVF: 1.13\nCLV: 0.43\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 53\nHeadroom: 3.4\nChase: 0.68\nConf: 0\nDayType: -\nOpenType: Open Test Drive\nAtrPct: 0.23\nSlAtr: 1.25\nORH: 707.30\nORM: 704.45\nORL: 701.55\nIBH: 707.30\nIBM: 704.45\nIBL: 701.55\nPVAH: 706.90\nPPOC: 705.15\nPVAL: 704.65\nPDH: 716.90\nPDL: 703.55\n------------------------\n09:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDHOTEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 44,
+   "type": "message",
+   "date": "2026-08-31T10:00:08",
+   "date_unixtime": "1788150608",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | INDHOTEL\n------------------------\n🔴 SHORT | Entry: 703.55\nExit: 705.61\n------------------------\nLoss: -2.06 (-0.3%)\nRisk: 2.06 | Reward: 2.06\nR:R was 1:1\n------------------------\n09:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDHOTEL&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | INDHOTEL\n------------------------\n🔴 SHORT | Entry: 703.55\nExit: 705.61\n------------------------\nLoss: -2.06 (-0.3%)\nRisk: 2.06 | Reward: 2.06\nR:R was 1:1\n------------------------\n09:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDHOTEL&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 45,
+   "type": "message",
+   "date": "2026-08-31T10:10:06",
+   "date_unixtime": "1788151206",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | ITC\n------------------------\nTrigger: VAL-RT\nEntry: 264.65\nTarget: 263.86\nSL: 265.44\n------------------------\nTP1.5: 263.46\nTP2: 263.06\nTP3: 262.27\n------------------------\nRisk: 0.79 | Reward: 0.79\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 9.1\nVF: 1.19\nCLV: 0.33\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 57\nHeadroom: 2.7\nChase: 0.89\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.20\nSlAtr: 1.49\nORH: 266.55\nORM: 265.65\nORL: 264.75\nIBH: 266.55\nIBM: 265.40\nIBL: 264.25\nPVAH: 266.65\nPPOC: 265.15\nPVAL: 265.15\nPDH: 269.00\nPDL: 264.80\n------------------------\n10:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ITC&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | ITC\n------------------------\nTrigger: VAL-RT\nEntry: 264.65\nTarget: 263.86\nSL: 265.44\n------------------------\nTP1.5: 263.46\nTP2: 263.06\nTP3: 262.27\n------------------------\nRisk: 0.79 | Reward: 0.79\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 9.1\nVF: 1.19\nCLV: 0.33\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 57\nHeadroom: 2.7\nChase: 0.89\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.20\nSlAtr: 1.49\nORH: 266.55\nORM: 265.65\nORL: 264.75\nIBH: 266.55\nIBM: 265.40\nIBL: 264.25\nPVAH: 266.65\nPPOC: 265.15\nPVAL: 265.15\nPDH: 269.00\nPDL: 264.80\n------------------------\n10:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ITC&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 46,
+   "type": "message",
+   "date": "2026-08-31T10:15:10",
+   "date_unixtime": "1788151510",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | APLAPOLLO\n------------------------\nTrigger: VAL-REJ\nEntry: 2223.8\nTarget: 2233.51\nSL: 2214.09\n------------------------\nTP1.5: 2244.2\nTP2: 2254.9\nTP3: 2252.93\n------------------------\nRisk: 9.71 | Reward: 9.71\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 2.3\nVF: 1.98\nCLV: 0.66\nDelta: buy\nTrend: vwap- ema+ slope+\nAuction: Inside Value\nOpenPos: In VA\nAdrUsed: 121\nHeadroom: 3.2\nChase: 0.73\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.41\nSlAtr: 1.08\nORH: 2264.9\nORM: 2247.0\nORL: 2229.1\nIBH: 2264.9\nIBM: 2236.0\nIBL: 2207.1\nPVAH: 2276.8\nPPOC: 2256.3\nPVAL: 2217.3\nPDH: 2278.4\nPDL: 2182.5\n------------------------\n10:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APLAPOLLO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | APLAPOLLO\n------------------------\nTrigger: VAL-REJ\nEntry: 2223.8\nTarget: 2233.51\nSL: 2214.09\n------------------------\nTP1.5: 2244.2\nTP2: 2254.9\nTP3: 2252.93\n------------------------\nRisk: 9.71 | Reward: 9.71\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 2.3\nVF: 1.98\nCLV: 0.66\nDelta: buy\nTrend: vwap- ema+ slope+\nAuction: Inside Value\nOpenPos: In VA\nAdrUsed: 121\nHeadroom: 3.2\nChase: 0.73\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.41\nSlAtr: 1.08\nORH: 2264.9\nORM: 2247.0\nORL: 2229.1\nIBH: 2264.9\nIBM: 2236.0\nIBL: 2207.1\nPVAH: 2276.8\nPPOC: 2256.3\nPVAL: 2217.3\nPDH: 2278.4\nPDL: 2182.5\n------------------------\n10:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APLAPOLLO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 47,
+   "type": "message",
+   "date": "2026-08-31T10:25:05",
+   "date_unixtime": "1788152105",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | APLAPOLLO\n------------------------\n🟢 LONG | Entry: 2223.8\nExit: 2233.51\n------------------------\nProfit: +9.71 (+0.4%)\nRisk: 9.71 | Reward: 9.71\nR:R 1:1\nExitQtyPct: 50\n------------------------\n10:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APLAPOLLO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | APLAPOLLO\n------------------------\n🟢 LONG | Entry: 2223.8\nExit: 2233.51\n------------------------\nProfit: +9.71 (+0.4%)\nRisk: 9.71 | Reward: 9.71\nR:R 1:1\nExitQtyPct: 50\n------------------------\n10:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:APLAPOLLO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 48,
+   "type": "message",
+   "date": "2026-08-31T11:45:07",
+   "date_unixtime": "1788156907",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | DIVISLAB\n------------------------\nTrigger: IBL-RT\nEntry: 9158\nTarget: 9082.56\nSL: 9181.96\n------------------------\nTP1.5: 9044.85\nTP2: 9007.13\nTP3: 8931.69\n------------------------\nRisk: 23.96 | Reward: 75.44\nR:R 1:3.1\n------------------------\nScore: 9\nRVOL: 2.1\nVF: 0.90\nCLV: 0.20\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 67\nHeadroom: 2.0\nChase: 0.47\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.15\nSlAtr: 1.74\nORH: 9242.0\nORM: 9201.5\nORL: 9161.0\nIBH: 9256.0\nIBM: 9208.5\nIBL: 9161.0\nPVAH: 9254.0\nPPOC: 9241.5\nPVAL: 9169.0\nPDH: 9270.0\nPDL: 9080.5\n------------------------\n11:40 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DIVISLAB&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | DIVISLAB\n------------------------\nTrigger: IBL-RT\nEntry: 9158\nTarget: 9082.56\nSL: 9181.96\n------------------------\nTP1.5: 9044.85\nTP2: 9007.13\nTP3: 8931.69\n------------------------\nRisk: 23.96 | Reward: 75.44\nR:R 1:3.1\n------------------------\nScore: 9\nRVOL: 2.1\nVF: 0.90\nCLV: 0.20\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 67\nHeadroom: 2.0\nChase: 0.47\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.15\nSlAtr: 1.74\nORH: 9242.0\nORM: 9201.5\nORL: 9161.0\nIBH: 9256.0\nIBM: 9208.5\nIBL: 9161.0\nPVAH: 9254.0\nPPOC: 9241.5\nPVAL: 9169.0\nPDH: 9270.0\nPDL: 9080.5\n------------------------\n11:40 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DIVISLAB&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 49,
+   "type": "message",
+   "date": "2026-08-31T11:50:02",
+   "date_unixtime": "1788157202",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | DIVISLAB\n------------------------\n🔴 SHORT | Entry: 9158\nExit: 9181.96\n------------------------\nLoss: -23.96 (-0.3%)\nRisk: 23.96 | Reward: 75.44\nR:R was 1:3.1\n------------------------\n11:45 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DIVISLAB&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | DIVISLAB\n------------------------\n🔴 SHORT | Entry: 9158\nExit: 9181.96\n------------------------\nLoss: -23.96 (-0.3%)\nRisk: 23.96 | Reward: 75.44\nR:R was 1:3.1\n------------------------\n11:45 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DIVISLAB&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 50,
+   "type": "message",
+   "date": "2026-08-31T15:00:11",
+   "date_unixtime": "1788168611",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | ITC\n------------------------\n🔴 SHORT | Entry: 264.65\nExit: 263.86\n------------------------\nProfit: +0.79 (+0.3%)\nRisk: 0.79 | Reward: 0.79\nR:R 1:1\nExitQtyPct: 50\n------------------------\n14:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ITC&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | ITC\n------------------------\n🔴 SHORT | Entry: 264.65\nExit: 263.86\n------------------------\nProfit: +0.79 (+0.3%)\nRisk: 0.79 | Reward: 0.79\nR:R 1:1\nExitQtyPct: 50\n------------------------\n14:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ITC&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 51,
+   "type": "message",
+   "date": "2026-08-31T15:10:01",
+   "date_unixtime": "1788169201",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | ITC\n------------------------\n🔴 SHORT | Entry: 264.65\nExit: 263.06\n------------------------\nProfit: +1.59 (+0.6%)\nRisk: 0.79 | Reward: 1.59\nR:R 1:2\nExitQtyPct: 100\n------------------------\n15:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ITC&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | ITC\n------------------------\n🔴 SHORT | Entry: 264.65\nExit: 263.06\n------------------------\nProfit: +1.59 (+0.6%)\nRisk: 0.79 | Reward: 1.59\nR:R 1:2\nExitQtyPct: 100\n------------------------\n15:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ITC&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 52,
+   "type": "message",
+   "date": "2026-09-01T09:55:01",
+   "date_unixtime": "1788236701",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | PIDILITIND\n------------------------\nTrigger: VAH-RT\nEntry: 1643.9\nTarget: 1674.82\nSL: 1640.36\n------------------------\nTP1.5: 1682.55\nTP2: 1690.28\nTP3: 1736.67\n------------------------\nRisk: 3.54 | Reward: 30.92\nR:R 1:8.7\n------------------------\nScore: 10\nRVOL: 5.2\nVF: 5.47\nCLV: 0.72\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 120\nHeadroom: 5.0\nChase: 0.56\nConf: 0\nDayType: -\nOpenType: Open Test Drive\nAtrPct: 0.28\nSlAtr: 0.78\nORH: 1675.5\nORM: 1658.3\nORL: 1641.0\nIBH: 1675.5\nIBM: 1658.3\nIBL: 1641.0\nPVAH: 1642.8\nPPOC: 1638.8\nPVAL: 1635.3\nPDH: 1687.7\nPDL: 1612.4\n------------------------\n09:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:PIDILITIND&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | PIDILITIND\n------------------------\nTrigger: VAH-RT\nEntry: 1643.9\nTarget: 1674.82\nSL: 1640.36\n------------------------\nTP1.5: 1682.55\nTP2: 1690.28\nTP3: 1736.67\n------------------------\nRisk: 3.54 | Reward: 30.92\nR:R 1:8.7\n------------------------\nScore: 10\nRVOL: 5.2\nVF: 5.47\nCLV: 0.72\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 120\nHeadroom: 5.0\nChase: 0.56\nConf: 0\nDayType: -\nOpenType: Open Test Drive\nAtrPct: 0.28\nSlAtr: 0.78\nORH: 1675.5\nORM: 1658.3\nORL: 1641.0\nIBH: 1675.5\nIBM: 1658.3\nIBL: 1641.0\nPVAH: 1642.8\nPPOC: 1638.8\nPVAL: 1635.3\nPDH: 1687.7\nPDL: 1612.4\n------------------------\n09:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:PIDILITIND&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 53,
+   "type": "message",
+   "date": "2026-09-01T11:20:01",
+   "date_unixtime": "1788241801",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | RADICO\n------------------------\nTrigger: VAH-REJ\nEntry: 4499.9\nTarget: 4482.51\nSL: 4511.49\n------------------------\nTP1.5: 4478.16\nTP2: 4473.81\nTP3: 4447.73\n------------------------\nRisk: 11.59 | Reward: 17.39\nR:R 1:1.5\n------------------------\nScore: 7\nRVOL: 3.1\nVF: 2.50\nCLV: 0.00\nDelta: sell\nTrend: vwap+ ema- slope-\nAuction: Inside Value\nOpenPos: Below VAL\nAdrUsed: 163\nHeadroom: 3.6\nChase: 0.15\nConf: 0\nDayType: Normal\nOpenType: Open Rejection Reverse\nAtrPct: 0.39\nSlAtr: 0.65\nORH: 4505.6\nORM: 4462.6\nORL: 4419.5\nIBH: 4505.6\nIBM: 4449.5\nIBL: 4393.4\nPVAH: 4500.8\nPPOC: 4494.3\nPVAL: 4478.3\nPDH: 4603.0\nPDL: 4471.1\n------------------------\n11:15 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RADICO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | RADICO\n------------------------\nTrigger: VAH-REJ\nEntry: 4499.9\nTarget: 4482.51\nSL: 4511.49\n------------------------\nTP1.5: 4478.16\nTP2: 4473.81\nTP3: 4447.73\n------------------------\nRisk: 11.59 | Reward: 17.39\nR:R 1:1.5\n------------------------\nScore: 7\nRVOL: 3.1\nVF: 2.50\nCLV: 0.00\nDelta: sell\nTrend: vwap+ ema- slope-\nAuction: Inside Value\nOpenPos: Below VAL\nAdrUsed: 163\nHeadroom: 3.6\nChase: 0.15\nConf: 0\nDayType: Normal\nOpenType: Open Rejection Reverse\nAtrPct: 0.39\nSlAtr: 0.65\nORH: 4505.6\nORM: 4462.6\nORL: 4419.5\nIBH: 4505.6\nIBM: 4449.5\nIBL: 4393.4\nPVAH: 4500.8\nPPOC: 4494.3\nPVAL: 4478.3\nPDH: 4603.0\nPDL: 4471.1\n------------------------\n11:15 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RADICO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 54,
+   "type": "message",
+   "date": "2026-09-01T11:25:01",
+   "date_unixtime": "1788242101",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | RADICO\n------------------------\n🔴 SHORT | Entry: 4499.9\nExit: 4473.81\n------------------------\nProfit: +26.09 (+0.6%)\nRisk: 11.59 | Reward: 26.09\nR:R 1:2.2\nExitQtyPct: 100\n------------------------\n11:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RADICO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | RADICO\n------------------------\n🔴 SHORT | Entry: 4499.9\nExit: 4473.81\n------------------------\nProfit: +26.09 (+0.6%)\nRisk: 11.59 | Reward: 26.09\nR:R 1:2.2\nExitQtyPct: 100\n------------------------\n11:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RADICO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 55,
+   "type": "message",
+   "date": "2026-09-01T13:15:02",
+   "date_unixtime": "1788248702",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "📈 RUNNER | RADICO\n------------------------\nReached TP3 after the position closed\nRef Entry 4499.9 | Ref Level 4447.73\nUnbooked 4.50R\n------------------------\n13:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RADICO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "📈 RUNNER | RADICO\n------------------------\nReached TP3 after the position closed\nRef Entry 4499.9 | Ref Level 4447.73\nUnbooked 4.50R\n------------------------\n13:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:RADICO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 56,
+   "type": "message",
+   "date": "2026-09-02T10:15:09",
+   "date_unixtime": "1788324309",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | AXISBANK\n------------------------\nTrigger: PDL-RT\nEntry: 1254.6\nTarget: 1250.74\nSL: 1258.46\n------------------------\nTP1.5: 1248.8\nTP2: 1246.87\nTP3: 1243.01\n------------------------\nRisk: 3.86 | Reward: 3.86\nR:R 1:1\n------------------------\nScore: 10\nRVOL: 2.0\nVF: 1.27\nCLV: 0.33\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 49\nHeadroom: 3.8\nChase: 0.12\nConf: 0\nDayType: -\nOpenType: Open Test Drive\nAtrPct: 0.20\nSlAtr: 1.50\nORH: 1260.0\nORM: 1255.2\nORL: 1250.4\nIBH: 1260.0\nIBM: 1255.2\nIBL: 1250.4\nPVAH: 1273.8\nPPOC: 1269.3\nPVAL: 1262.3\nPDH: 1275.1\nPDL: 1255.0\n------------------------\n10:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:AXISBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | AXISBANK\n------------------------\nTrigger: PDL-RT\nEntry: 1254.6\nTarget: 1250.74\nSL: 1258.46\n------------------------\nTP1.5: 1248.8\nTP2: 1246.87\nTP3: 1243.01\n------------------------\nRisk: 3.86 | Reward: 3.86\nR:R 1:1\n------------------------\nScore: 10\nRVOL: 2.0\nVF: 1.27\nCLV: 0.33\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 49\nHeadroom: 3.8\nChase: 0.12\nConf: 0\nDayType: -\nOpenType: Open Test Drive\nAtrPct: 0.20\nSlAtr: 1.50\nORH: 1260.0\nORM: 1255.2\nORL: 1250.4\nIBH: 1260.0\nIBM: 1255.2\nIBL: 1250.4\nPVAH: 1273.8\nPPOC: 1269.3\nPVAL: 1262.3\nPDH: 1275.1\nPDL: 1255.0\n------------------------\n10:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:AXISBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 57,
+   "type": "message",
+   "date": "2026-09-02T10:20:05",
+   "date_unixtime": "1788324605",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | AXISBANK\n------------------------\n🔴 SHORT | Entry: 1254.6\nExit: 1258.46\n------------------------\nLoss: -3.86 (-0.3%)\nRisk: 3.86 | Reward: 3.86\nR:R was 1:1\n------------------------\n10:15 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:AXISBANK&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | AXISBANK\n------------------------\n🔴 SHORT | Entry: 1254.6\nExit: 1258.46\n------------------------\nLoss: -3.86 (-0.3%)\nRisk: 3.86 | Reward: 3.86\nR:R was 1:1\n------------------------\n10:15 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:AXISBANK&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 58,
+   "type": "message",
+   "date": "2026-09-02T10:25:03",
+   "date_unixtime": "1788324903",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | HAVELLS\n------------------------\nTrigger: IBL-RT\nEntry: 1201.9\nTarget: 1195.89\nSL: 1205.91\n------------------------\nTP1.5: 1192.88\nTP2: 1189.88\nTP3: 1183.87\n------------------------\nRisk: 4.01 | Reward: 6.01\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 2.8\nVF: 1.17\nCLV: 0.02\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 59\nHeadroom: 3.4\nChase: 0.60\nConf: 0\nDayType: Normal Variation\nOpenType: Open Drive\nAtrPct: 0.22\nSlAtr: 1.51\nORH: 1219.8\nORM: 1211.8\nORL: 1203.9\nIBH: 1219.8\nIBM: 1211.8\nIBL: 1203.9\nPVAH: 1223.8\nPPOC: 1220.3\nPVAL: 1219.8\nPDH: 1229.0\nPDL: 1212.2\n------------------------\n10:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | HAVELLS\n------------------------\nTrigger: IBL-RT\nEntry: 1201.9\nTarget: 1195.89\nSL: 1205.91\n------------------------\nTP1.5: 1192.88\nTP2: 1189.88\nTP3: 1183.87\n------------------------\nRisk: 4.01 | Reward: 6.01\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 2.8\nVF: 1.17\nCLV: 0.02\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: In VA\nAdrUsed: 59\nHeadroom: 3.4\nChase: 0.60\nConf: 0\nDayType: Normal Variation\nOpenType: Open Drive\nAtrPct: 0.22\nSlAtr: 1.51\nORH: 1219.8\nORM: 1211.8\nORL: 1203.9\nIBH: 1219.8\nIBM: 1211.8\nIBL: 1203.9\nPVAH: 1223.8\nPPOC: 1220.3\nPVAL: 1219.8\nPDH: 1229.0\nPDL: 1212.2\n------------------------\n10:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 59,
+   "type": "message",
+   "date": "2026-09-02T10:25:05",
+   "date_unixtime": "1788324905",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | LTF\n------------------------\nTrigger: PDL-RT\nEntry: 304.55\nTarget: 302.87\nSL: 305.71\n------------------------\nTP1.5: 302.04\nTP2: 301.2\nTP3: 299.52\n------------------------\nRisk: 1.16 | Reward: 1.68\nR:R 1:1.4\n------------------------\nScore: 10\nRVOL: 2.3\nVF: 1.31\nCLV: 0.35\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 38\nHeadroom: 7.6\nChase: 0.51\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.38\nSlAtr: 0.99\nORH: 306.15\nORM: 304.40\nORL: 302.70\nIBH: 306.20\nIBM: 304.45\nIBL: 302.70\nPVAH: 310.90\nPPOC: 310.65\nPVAL: 307.40\nPDH: 316.00\nPDL: 305.30\n------------------------\n10:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LTF&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | LTF\n------------------------\nTrigger: PDL-RT\nEntry: 304.55\nTarget: 302.87\nSL: 305.71\n------------------------\nTP1.5: 302.04\nTP2: 301.2\nTP3: 299.52\n------------------------\nRisk: 1.16 | Reward: 1.68\nR:R 1:1.4\n------------------------\nScore: 10\nRVOL: 2.3\nVF: 1.31\nCLV: 0.35\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 38\nHeadroom: 7.6\nChase: 0.51\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.38\nSlAtr: 0.99\nORH: 306.15\nORM: 304.40\nORL: 302.70\nIBH: 306.20\nIBM: 304.45\nIBL: 302.70\nPVAH: 310.90\nPPOC: 310.65\nPVAL: 307.40\nPDH: 316.00\nPDL: 305.30\n------------------------\n10:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LTF&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 60,
+   "type": "message",
+   "date": "2026-09-02T10:35:05",
+   "date_unixtime": "1788325505",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | ICICIPRULI\n------------------------\nTrigger: PDL-RT\nEntry: 494.65\nTarget: 493.17\nSL: 496.13\n------------------------\nTP1.5: 490.44\nTP2: 487.71\nTP3: 490.2\n------------------------\nRisk: 1.48 | Reward: 1.48\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 1.2\nVF: 1.42\nCLV: 0.17\nDelta: sell\nTrend: vwap+ ema+ slope+\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 75\nHeadroom: 6.7\nChase: 0.25\nConf: 0\nDayType: Normal\nOpenType: Open Test Drive\nAtrPct: 0.29\nSlAtr: 1.04\nORH: 493.65\nORM: 490.60\nORL: 487.50\nIBH: 495.70\nIBM: 491.60\nIBL: 487.50\nPVAH: 501.90\nPPOC: 501.15\nPVAL: 499.15\nPDH: 507.00\nPDL: 495.00\n------------------------\n10:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIPRULI&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | ICICIPRULI\n------------------------\nTrigger: PDL-RT\nEntry: 494.65\nTarget: 493.17\nSL: 496.13\n------------------------\nTP1.5: 490.44\nTP2: 487.71\nTP3: 490.2\n------------------------\nRisk: 1.48 | Reward: 1.48\nR:R 1:1\n------------------------\nScore: 7\nRVOL: 1.2\nVF: 1.42\nCLV: 0.17\nDelta: sell\nTrend: vwap+ ema+ slope+\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 75\nHeadroom: 6.7\nChase: 0.25\nConf: 0\nDayType: Normal\nOpenType: Open Test Drive\nAtrPct: 0.29\nSlAtr: 1.04\nORH: 493.65\nORM: 490.60\nORL: 487.50\nIBH: 495.70\nIBM: 491.60\nIBL: 487.50\nPVAH: 501.90\nPPOC: 501.15\nPVAL: 499.15\nPDH: 507.00\nPDL: 495.00\n------------------------\n10:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIPRULI&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 61,
+   "type": "message",
+   "date": "2026-09-02T11:10:09",
+   "date_unixtime": "1788327609",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | CONCOR\n------------------------\nTrigger: VAL-RT\nEntry: 513.7\nTarget: 511.09\nSL: 515.44\n------------------------\nTP1.5: 510.43\nTP2: 509.78\nTP3: 505.86\n------------------------\nRisk: 1.74 | Reward: 2.61\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 5.9\nVF: 1.50\nCLV: 0.14\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 99\nHeadroom: 3.7\nChase: 0.15\nConf: 0\nDayType: Normal\nOpenType: Open Test Drive\nAtrPct: 0.29\nSlAtr: 1.18\nORH: 513.65\nORM: 510.95\nORL: 508.25\nIBH: 520.75\nIBM: 514.50\nIBL: 508.25\nPVAH: 517.40\nPPOC: 515.65\nPVAL: 514.15\nPDH: 518.75\nPDL: 510.50\n------------------------\n11:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:CONCOR&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | CONCOR\n------------------------\nTrigger: VAL-RT\nEntry: 513.7\nTarget: 511.09\nSL: 515.44\n------------------------\nTP1.5: 510.43\nTP2: 509.78\nTP3: 505.86\n------------------------\nRisk: 1.74 | Reward: 2.61\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 5.9\nVF: 1.50\nCLV: 0.14\nDelta: sell\nTrend: vwap- ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 99\nHeadroom: 3.7\nChase: 0.15\nConf: 0\nDayType: Normal\nOpenType: Open Test Drive\nAtrPct: 0.29\nSlAtr: 1.18\nORH: 513.65\nORM: 510.95\nORL: 508.25\nIBH: 520.75\nIBM: 514.50\nIBL: 508.25\nPVAH: 517.40\nPPOC: 515.65\nPVAL: 514.15\nPDH: 518.75\nPDL: 510.50\n------------------------\n11:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:CONCOR&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 62,
+   "type": "message",
+   "date": "2026-09-02T11:15:01",
+   "date_unixtime": "1788327901",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | HAVELLS\n------------------------\n🔴 SHORT | Entry: 1201.9\nExit: 1195.89\n------------------------\nProfit: +6.01 (+0.5%)\nRisk: 4.01 | Reward: 6.01\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n11:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | HAVELLS\n------------------------\n🔴 SHORT | Entry: 1201.9\nExit: 1195.89\n------------------------\nProfit: +6.01 (+0.5%)\nRisk: 4.01 | Reward: 6.01\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n11:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 63,
+   "type": "message",
+   "date": "2026-09-02T11:25:05",
+   "date_unixtime": "1788328505",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | CONCOR\n------------------------\n🔴 SHORT | Entry: 513.7\nExit: 511.09\n------------------------\nProfit: +2.61 (+0.5%)\nRisk: 1.74 | Reward: 2.61\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n11:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:CONCOR&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | CONCOR\n------------------------\n🔴 SHORT | Entry: 513.7\nExit: 511.09\n------------------------\nProfit: +2.61 (+0.5%)\nRisk: 1.74 | Reward: 2.61\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n11:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:CONCOR&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 64,
+   "type": "message",
+   "date": "2026-09-02T11:35:09",
+   "date_unixtime": "1788329109",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | ICICIPRULI\n------------------------\n🔴 SHORT | Entry: 494.65\nExit: 493.17\n------------------------\nProfit: +1.48 (+0.3%)\nRisk: 1.48 | Reward: 1.48\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIPRULI&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | ICICIPRULI\n------------------------\n🔴 SHORT | Entry: 494.65\nExit: 493.17\n------------------------\nProfit: +1.48 (+0.3%)\nRisk: 1.48 | Reward: 1.48\nR:R 1:1\nExitQtyPct: 50\n------------------------\n11:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:ICICIPRULI&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 65,
+   "type": "message",
+   "date": "2026-09-02T11:40:02",
+   "date_unixtime": "1788329402",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🔴 BREAKOUT SHORT | IEX\n------------------------\nTrigger: PDL-RT\nEntry: 118.7\nTarget: 117.74\nSL: 119.05\n------------------------\nTP1.5: 117.25\nTP2: 116.77\nTP3: 115.81\n------------------------\nRisk: 0.35 | Reward: 0.96\nR:R 1:2.8\n------------------------\nScore: 9\nRVOL: 3.1\nVF: 1.29\nCLV: 0.25\nDelta: sell\nTrend: vwap+ ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 86\nHeadroom: 3.5\nChase: 0.45\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.20\nSlAtr: 1.43\nORH: 118.68\nORM: 118.19\nORL: 117.70\nIBH: 118.95\nIBM: 118.33\nIBL: 117.70\nPVAH: 119.73\nPPOC: 119.28\nPVAL: 119.18\nPDH: 120.50\nPDL: 118.80\n------------------------\n11:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:IEX&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🔴 BREAKOUT SHORT | IEX\n------------------------\nTrigger: PDL-RT\nEntry: 118.7\nTarget: 117.74\nSL: 119.05\n------------------------\nTP1.5: 117.25\nTP2: 116.77\nTP3: 115.81\n------------------------\nRisk: 0.35 | Reward: 0.96\nR:R 1:2.8\n------------------------\nScore: 9\nRVOL: 3.1\nVF: 1.29\nCLV: 0.25\nDelta: sell\nTrend: vwap+ ema- slope-\nAuction: Below VAL\nOpenPos: Below VAL\nAdrUsed: 86\nHeadroom: 3.5\nChase: 0.45\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.20\nSlAtr: 1.43\nORH: 118.68\nORM: 118.19\nORL: 117.70\nIBH: 118.95\nIBM: 118.33\nIBL: 117.70\nPVAH: 119.73\nPPOC: 119.28\nPVAL: 119.18\nPDH: 120.50\nPDL: 118.80\n------------------------\n11:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:IEX&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 66,
+   "type": "message",
+   "date": "2026-09-02T11:45:05",
+   "date_unixtime": "1788329705",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | HAVELLS\n------------------------\n🔴 SHORT | Entry: 1201.9\nExit: 1189.88\n------------------------\nProfit: +12.02 (+1%)\nRisk: 4.01 | Reward: 12.02\nR:R 1:3\nExitQtyPct: 100\n------------------------\n11:40 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | HAVELLS\n------------------------\n🔴 SHORT | Entry: 1201.9\nExit: 1189.88\n------------------------\nProfit: +12.02 (+1%)\nRisk: 4.01 | Reward: 12.02\nR:R 1:3\nExitQtyPct: 100\n------------------------\n11:40 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 67,
+   "type": "message",
+   "date": "2026-09-02T12:00:08",
+   "date_unixtime": "1788330608",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "📈 RUNNER | HAVELLS\n------------------------\nReached TP3 after the position closed\nRef Entry 1201.9 | Ref Level 1183.87\nUnbooked 4.50R\n------------------------\n11:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "📈 RUNNER | HAVELLS\n------------------------\nReached TP3 after the position closed\nRef Entry 1201.9 | Ref Level 1183.87\nUnbooked 4.50R\n------------------------\n11:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:HAVELLS&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 68,
+   "type": "message",
+   "date": "2026-09-02T12:45:11",
+   "date_unixtime": "1788333311",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | LTF\n------------------------\n🔴 SHORT | Entry: 304.55\nExit: 305.71\n------------------------\nLoss: -1.16 (-0.4%)\nRisk: 1.16 | Reward: 1.68\nR:R was 1:1.4\n------------------------\n12:40 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LTF&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | LTF\n------------------------\n🔴 SHORT | Entry: 304.55\nExit: 305.71\n------------------------\nLoss: -1.16 (-0.4%)\nRisk: 1.16 | Reward: 1.68\nR:R was 1:1.4\n------------------------\n12:40 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LTF&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 69,
+   "type": "message",
+   "date": "2026-09-02T14:40:06",
+   "date_unixtime": "1788340206",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | CONCOR\n------------------------\n🔴 SHORT | Entry: 513.7\nExit: 509.78\n------------------------\nProfit: +3.92 (+0.8%)\nRisk: 1.74 | Reward: 3.92\nR:R 1:2.3\nExitQtyPct: 100\n------------------------\n14:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:CONCOR&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | CONCOR\n------------------------\n🔴 SHORT | Entry: 513.7\nExit: 509.78\n------------------------\nProfit: +3.92 (+0.8%)\nRisk: 1.74 | Reward: 3.92\nR:R 1:2.3\nExitQtyPct: 100\n------------------------\n14:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:CONCOR&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 70,
+   "type": "message",
+   "date": "2026-09-03T10:10:06",
+   "date_unixtime": "1788410406",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | UNOMINDA\n------------------------\nTrigger: VAH-RT\nEntry: 1244.2\nTarget: 1249.51\nSL: 1240.67\n------------------------\nTP1.5: 1260.51\nTP2: 1271.51\nTP3: 1260.14\n------------------------\nRisk: 3.53 | Reward: 5.31\nR:R 1:1.5\n------------------------\nScore: 8\nRVOL: 1.5\nVF: 0.89\nCLV: 0.80\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 54\nHeadroom: 4.7\nChase: 0.66\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.26\nSlAtr: 1.09\nORH: 1250.0\nORM: 1242.9\nORL: 1235.8\nIBH: 1250.0\nIBM: 1242.9\nIBL: 1235.8\nPVAH: 1242.3\nPPOC: 1235.3\nPVAL: 1229.3\nPDH: 1272.0\nPDL: 1228.3\n------------------------\n10:05 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:UNOMINDA&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | UNOMINDA\n------------------------\nTrigger: VAH-RT\nEntry: 1244.2\nTarget: 1249.51\nSL: 1240.67\n------------------------\nTP1.5: 1260.51\nTP2: 1271.51\nTP3: 1260.14\n------------------------\nRisk: 3.53 | Reward: 5.31\nR:R 1:1.5\n------------------------\nScore: 8\nRVOL: 1.5\nVF: 0.89\nCLV: 0.80\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 54\nHeadroom: 4.7\nChase: 0.66\nConf: 0\nDayType: -\nOpenType: Open Drive\nAtrPct: 0.26\nSlAtr: 1.09\nORH: 1250.0\nORM: 1242.9\nORL: 1235.8\nIBH: 1250.0\nIBM: 1242.9\nIBL: 1235.8\nPVAH: 1242.3\nPPOC: 1235.3\nPVAL: 1229.3\nPDH: 1272.0\nPDL: 1228.3\n------------------------\n10:05 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:UNOMINDA&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 71,
+   "type": "message",
+   "date": "2026-09-03T10:30:12",
+   "date_unixtime": "1788411612",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | PFC\n------------------------\nTrigger: PDH-RT\nEntry: 348\nTarget: 349.09\nSL: 346.91\n------------------------\nTP1.5: 350.35\nTP2: 351.6\nTP3: 351.28\n------------------------\nRisk: 1.09 | Reward: 1.09\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 6.0\nVF: 1.65\nCLV: 0.69\nDelta: buy\nTrend: vwap- ema- slope-\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 85\nHeadroom: 4.6\nChase: 0.66\nConf: 1 PVAH \nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.28\nSlAtr: 1.11\nORH: 351.75\nORM: 350.15\nORL: 348.50\nIBH: 351.75\nIBM: 349.00\nIBL: 346.20\nPVAH: 347.15\nPPOC: 346.90\nPVAL: 345.40\nPDH: 347.30\nPDL: 340.50\n------------------------\n10:25 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:PFC&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | PFC\n------------------------\nTrigger: PDH-RT\nEntry: 348\nTarget: 349.09\nSL: 346.91\n------------------------\nTP1.5: 350.35\nTP2: 351.6\nTP3: 351.28\n------------------------\nRisk: 1.09 | Reward: 1.09\nR:R 1:1\n------------------------\nScore: 9\nRVOL: 6.0\nVF: 1.65\nCLV: 0.69\nDelta: buy\nTrend: vwap- ema- slope-\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 85\nHeadroom: 4.6\nChase: 0.66\nConf: 1 PVAH \nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.28\nSlAtr: 1.11\nORH: 351.75\nORM: 350.15\nORL: 348.50\nIBH: 351.75\nIBM: 349.00\nIBL: 346.20\nPVAH: 347.15\nPPOC: 346.90\nPVAL: 345.40\nPDH: 347.30\nPDL: 340.50\n------------------------\n10:25 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:PFC&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 72,
+   "type": "message",
+   "date": "2026-09-03T10:30:17",
+   "date_unixtime": "1788411617",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | SBIN\n------------------------\nTrigger: PDH-RT\nEntry: 1035.7\nTarget: 1040.36\nSL: 1032.59\n------------------------\nTP1.5: 1042.69\nTP2: 1045.02\nTP3: 1049.68\n------------------------\nRisk: 3.11 | Reward: 4.66\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 4.1\nVF: 1.35\nCLV: 0.93\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 69\nHeadroom: 1.6\nChase: 0.18\nConf: 0\nDayType: Normal Variation\nOpenType: Open Drive\nAtrPct: 0.21\nSlAtr: 1.42\nORH: 1033.5\nORM: 1029.4\nORL: 1025.3\nIBH: 1033.5\nIBM: 1029.4\nIBL: 1025.3\nPVAH: 1023.8\nPPOC: 1020.8\nPVAL: 1018.3\nPDH: 1035.3\nPDL: 1017.3\n------------------------\n10:25 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | SBIN\n------------------------\nTrigger: PDH-RT\nEntry: 1035.7\nTarget: 1040.36\nSL: 1032.59\n------------------------\nTP1.5: 1042.69\nTP2: 1045.02\nTP3: 1049.68\n------------------------\nRisk: 3.11 | Reward: 4.66\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 4.1\nVF: 1.35\nCLV: 0.93\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 69\nHeadroom: 1.6\nChase: 0.18\nConf: 0\nDayType: Normal Variation\nOpenType: Open Drive\nAtrPct: 0.21\nSlAtr: 1.42\nORH: 1033.5\nORM: 1029.4\nORL: 1025.3\nIBH: 1033.5\nIBM: 1029.4\nIBL: 1025.3\nPVAH: 1023.8\nPPOC: 1020.8\nPVAL: 1018.3\nPDH: 1035.3\nPDL: 1017.3\n------------------------\n10:25 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 73,
+   "type": "message",
+   "date": "2026-09-03T10:35:03",
+   "date_unixtime": "1788411903",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | PFC\n------------------------\n🟢 LONG | Entry: 348\nExit: 346.91\n------------------------\nLoss: -1.09 (-0.3%)\nRisk: 1.09 | Reward: 1.09\nR:R was 1:1\n------------------------\n10:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:PFC&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | PFC\n------------------------\n🟢 LONG | Entry: 348\nExit: 346.91\n------------------------\nLoss: -1.09 (-0.3%)\nRisk: 1.09 | Reward: 1.09\nR:R was 1:1\n------------------------\n10:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:PFC&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 74,
+   "type": "message",
+   "date": "2026-09-03T10:35:06",
+   "date_unixtime": "1788411906",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | SBIN\n------------------------\n🟢 LONG | Entry: 1035.7\nExit: 1032.59\n------------------------\nLoss: -3.11 (-0.3%)\nRisk: 3.11 | Reward: 4.66\nR:R was 1:1.5\n------------------------\n10:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | SBIN\n------------------------\n🟢 LONG | Entry: 1035.7\nExit: 1032.59\n------------------------\nLoss: -3.11 (-0.3%)\nRisk: 3.11 | Reward: 4.66\nR:R was 1:1.5\n------------------------\n10:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:SBIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 75,
+   "type": "message",
+   "date": "2026-09-03T10:40:04",
+   "date_unixtime": "1788412204",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | UNOMINDA\n------------------------\n🟢 LONG | Entry: 1244.2\nExit: 1240.67\n------------------------\nLoss: -3.53 (-0.3%)\nRisk: 3.53 | Reward: 5.31\nR:R was 1:1.5\n------------------------\n10:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:UNOMINDA&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | UNOMINDA\n------------------------\n🟢 LONG | Entry: 1244.2\nExit: 1240.67\n------------------------\nLoss: -3.53 (-0.3%)\nRisk: 3.53 | Reward: 5.31\nR:R was 1:1.5\n------------------------\n10:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:UNOMINDA&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 76,
+   "type": "message",
+   "date": "2026-09-03T10:55:07",
+   "date_unixtime": "1788413107",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | MARUTI\n------------------------\nTrigger: IBH-RT\nEntry: 12884\nTarget: 12946.46\nSL: 12842.36\n------------------------\nTP1.5: 12977.7\nTP2: 13008.93\nTP3: 13071.39\n------------------------\nRisk: 41.64 | Reward: 62.46\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 3.0\nVF: 1.13\nCLV: 0.83\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 45\nHeadroom: 3.5\nChase: 0.21\nConf: 0\nDayType: Normal Variation\nOpenType: Open Test Drive\nAtrPct: 0.18\nSlAtr: 1.75\nORH: 12876\nORM: 12828\nORL: 12780\nIBH: 12876\nIBM: 12828\nIBL: 12780\nPVAH: 12748\nPPOC: 12713\nPVAL: 12648\nPDH: 12888\nPDL: 12640\n------------------------\n10:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:MARUTI&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | MARUTI\n------------------------\nTrigger: IBH-RT\nEntry: 12884\nTarget: 12946.46\nSL: 12842.36\n------------------------\nTP1.5: 12977.7\nTP2: 13008.93\nTP3: 13071.39\n------------------------\nRisk: 41.64 | Reward: 62.46\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 3.0\nVF: 1.13\nCLV: 0.83\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 45\nHeadroom: 3.5\nChase: 0.21\nConf: 0\nDayType: Normal Variation\nOpenType: Open Test Drive\nAtrPct: 0.18\nSlAtr: 1.75\nORH: 12876\nORM: 12828\nORL: 12780\nIBH: 12876\nIBM: 12828\nIBL: 12780\nPVAH: 12748\nPPOC: 12713\nPVAL: 12648\nPDH: 12888\nPDL: 12640\n------------------------\n10:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:MARUTI&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 77,
+   "type": "message",
+   "date": "2026-09-03T11:35:05",
+   "date_unixtime": "1788415505",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | INDIGO\n------------------------\nTrigger: VAH-RT\nEntry: 4963.5\nTarget: 4988.08\nSL: 4947.11\n------------------------\nTP1.5: 5003.2\nTP2: 5018.33\nTP3: 5037.24\n------------------------\nRisk: 16.39 | Reward: 24.58\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 8.9\nVF: 1.64\nCLV: 0.96\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 130\nHeadroom: 3.8\nChase: 0.52\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.22\nSlAtr: 1.47\nORH: 5047.0\nORM: 5006.0\nORL: 4965.0\nIBH: 5047.0\nIBM: 5006.0\nIBL: 4964.5\nPVAH: 4956.5\nPPOC: 4926.5\nPVAL: 4921.5\nPDH: 5020.0\nPDL: 4908.5\n------------------------\n11:30 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDIGO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | INDIGO\n------------------------\nTrigger: VAH-RT\nEntry: 4963.5\nTarget: 4988.08\nSL: 4947.11\n------------------------\nTP1.5: 5003.2\nTP2: 5018.33\nTP3: 5037.24\n------------------------\nRisk: 16.39 | Reward: 24.58\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 8.9\nVF: 1.64\nCLV: 0.96\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 130\nHeadroom: 3.8\nChase: 0.52\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.22\nSlAtr: 1.47\nORH: 5047.0\nORM: 5006.0\nORL: 4965.0\nIBH: 5047.0\nIBM: 5006.0\nIBL: 4964.5\nPVAH: 4956.5\nPPOC: 4926.5\nPVAL: 4921.5\nPDH: 5020.0\nPDL: 4908.5\n------------------------\n11:30 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDIGO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 78,
+   "type": "message",
+   "date": "2026-09-03T13:00:09",
+   "date_unixtime": "1788420609",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | INDIGO\n------------------------\n🟢 LONG | Entry: 4963.5\nExit: 4988.08\n------------------------\nProfit: +24.58 (+0.5%)\nRisk: 16.39 | Reward: 24.58\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n12:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDIGO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | INDIGO\n------------------------\n🟢 LONG | Entry: 4963.5\nExit: 4988.08\n------------------------\nProfit: +24.58 (+0.5%)\nRisk: 16.39 | Reward: 24.58\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n12:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDIGO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 79,
+   "type": "message",
+   "date": "2026-09-03T13:40:07",
+   "date_unixtime": "1788423007",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP2 HIT | INDIGO\n------------------------\n🟢 LONG | Entry: 4963.5\nExit: 5018.33\n------------------------\nProfit: +54.83 (+1.1%)\nRisk: 16.39 | Reward: 54.83\nR:R 1:3.3\nExitQtyPct: 100\n------------------------\n13:35 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDIGO&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP2 HIT | INDIGO\n------------------------\n🟢 LONG | Entry: 4963.5\nExit: 5018.33\n------------------------\nProfit: +54.83 (+1.1%)\nRisk: 16.39 | Reward: 54.83\nR:R 1:3.3\nExitQtyPct: 100\n------------------------\n13:35 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:INDIGO&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 80,
+   "type": "message",
+   "date": "2026-09-03T13:50:06",
+   "date_unixtime": "1788423606",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | MARUTI\n------------------------\n🟢 LONG | Entry: 12884\nExit: 12842.36\n------------------------\nLoss: -41.64 (-0.3%)\nRisk: 41.64 | Reward: 62.46\nR:R was 1:1.5\n------------------------\n13:45 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:MARUTI&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | MARUTI\n------------------------\n🟢 LONG | Entry: 12884\nExit: 12842.36\n------------------------\nLoss: -41.64 (-0.3%)\nRisk: 41.64 | Reward: 62.46\nR:R was 1:1.5\n------------------------\n13:45 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:MARUTI&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 81,
+   "type": "message",
+   "date": "2026-09-04T09:55:04",
+   "date_unixtime": "1788495904",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | DELHIVERY\n------------------------\nTrigger: VAH-RT\nEntry: 465.15\nTarget: 466.55\nSL: 463.75\n------------------------\nTP1.5: 467.24\nTP2: 467.94\nTP3: 469.34\n------------------------\nRisk: 1.4 | Reward: 1.4\nR:R 1:1\n------------------------\nScore: 11\nRVOL: 2.8\nVF: 1.55\nCLV: 0.64\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 57\nHeadroom: 3.4\nChase: 0.32\nConf: 1 PDH \nDayType: -\nOpenType: Open Auction\nAtrPct: 0.35\nSlAtr: 0.86\nORH: 463.30\nORM: 461.80\nORL: 460.25\nIBH: 465.75\nIBM: 463.00\nIBL: 460.25\nPVAH: 464.65\nPPOC: 464.15\nPVAL: 458.65\nPDH: 464.95\nPDL: 449.50\n------------------------\n09:50 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DELHIVERY&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | DELHIVERY\n------------------------\nTrigger: VAH-RT\nEntry: 465.15\nTarget: 466.55\nSL: 463.75\n------------------------\nTP1.5: 467.24\nTP2: 467.94\nTP3: 469.34\n------------------------\nRisk: 1.4 | Reward: 1.4\nR:R 1:1\n------------------------\nScore: 11\nRVOL: 2.8\nVF: 1.55\nCLV: 0.64\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 57\nHeadroom: 3.4\nChase: 0.32\nConf: 1 PDH \nDayType: -\nOpenType: Open Auction\nAtrPct: 0.35\nSlAtr: 0.86\nORH: 463.30\nORM: 461.80\nORL: 460.25\nIBH: 465.75\nIBM: 463.00\nIBL: 460.25\nPVAH: 464.65\nPPOC: 464.15\nPVAL: 458.65\nPDH: 464.95\nPDL: 449.50\n------------------------\n09:50 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DELHIVERY&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 82,
+   "type": "message",
+   "date": "2026-09-04T10:00:10",
+   "date_unixtime": "1788496210",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | DELHIVERY\n------------------------\n🟢 LONG | Entry: 465.15\nExit: 463.75\n------------------------\nLoss: -1.4 (-0.3%)\nRisk: 1.4 | Reward: 1.4\nR:R was 1:1\n------------------------\n09:55 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DELHIVERY&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | DELHIVERY\n------------------------\n🟢 LONG | Entry: 465.15\nExit: 463.75\n------------------------\nLoss: -1.4 (-0.3%)\nRisk: 1.4 | Reward: 1.4\nR:R was 1:1\n------------------------\n09:55 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:DELHIVERY&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 83,
+   "type": "message",
+   "date": "2026-09-04T10:25:03",
+   "date_unixtime": "1788497703",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | BAJAJHLDNG\n------------------------\nTrigger: IBH-RT\nEntry: 11315\nTarget: 11367.41\nSL: 11280.06\n------------------------\nTP1.5: 11393.62\nTP2: 11419.83\nTP3: 11472.24\n------------------------\nRisk: 34.94 | Reward: 52.41\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 4.2\nVF: 0.84\nCLV: 0.84\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 73\nHeadroom: 2.1\nChase: 0.48\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.26\nSlAtr: 1.19\nORH: 11195\nORM: 11168\nORL: 11140\nIBH: 11300\nIBM: 11220\nIBL: 11140\nPVAH: 11178\nPPOC: 11118\nPVAL: 11108\nPDH: 11260\nPDL: 11028\n------------------------\n10:20 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:BAJAJHLDNG&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | BAJAJHLDNG\n------------------------\nTrigger: IBH-RT\nEntry: 11315\nTarget: 11367.41\nSL: 11280.06\n------------------------\nTP1.5: 11393.62\nTP2: 11419.83\nTP3: 11472.24\n------------------------\nRisk: 34.94 | Reward: 52.41\nR:R 1:1.5\n------------------------\nScore: 9\nRVOL: 4.2\nVF: 0.84\nCLV: 0.84\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: In VA\nAdrUsed: 73\nHeadroom: 2.1\nChase: 0.48\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.26\nSlAtr: 1.19\nORH: 11195\nORM: 11168\nORL: 11140\nIBH: 11300\nIBM: 11220\nIBL: 11140\nPVAH: 11178\nPPOC: 11118\nPVAL: 11108\nPDH: 11260\nPDL: 11028\n------------------------\n10:20 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:BAJAJHLDNG&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 84,
+   "type": "message",
+   "date": "2026-09-04T10:45:08",
+   "date_unixtime": "1788498908",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "🟢 BREAKOUT LONG | LICHSGFIN\n------------------------\nTrigger: IBH-RT\nEntry: 564.2\nTarget: 566.59\nSL: 562.61\n------------------------\nTP1.5: 567.78\nTP2: 568.98\nTP3: 571.37\n------------------------\nRisk: 1.59 | Reward: 2.39\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 8.0\nVF: 1.28\nCLV: 0.80\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 75\nHeadroom: 2.2\nChase: 0.13\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.27\nSlAtr: 1.05\nORH: 563.05\nORM: 559.10\nORL: 555.10\nIBH: 564.10\nIBM: 559.60\nIBL: 555.10\nPVAH: 550.90\nPPOC: 550.15\nPVAL: 545.90\nPDH: 555.95\nPDL: 536.60\n------------------------\n10:40 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LICHSGFIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "🟢 BREAKOUT LONG | LICHSGFIN\n------------------------\nTrigger: IBH-RT\nEntry: 564.2\nTarget: 566.59\nSL: 562.61\n------------------------\nTP1.5: 567.78\nTP2: 568.98\nTP3: 571.37\n------------------------\nRisk: 1.59 | Reward: 2.39\nR:R 1:1.5\n------------------------\nScore: 10\nRVOL: 8.0\nVF: 1.28\nCLV: 0.80\nDelta: buy\nTrend: vwap+ ema+ slope+\nAuction: Above VAH\nOpenPos: Above VAH\nAdrUsed: 75\nHeadroom: 2.2\nChase: 0.13\nConf: 0\nDayType: Normal\nOpenType: Open Drive\nAtrPct: 0.27\nSlAtr: 1.05\nORH: 563.05\nORM: 559.10\nORL: 555.10\nIBH: 564.10\nIBM: 559.60\nIBL: 555.10\nPVAH: 550.90\nPPOC: 550.15\nPVAL: 545.90\nPDH: 555.95\nPDL: 536.60\n------------------------\n10:40 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LICHSGFIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 85,
+   "type": "message",
+   "date": "2026-09-04T10:50:07",
+   "date_unixtime": "1788499207",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP1 HIT | LICHSGFIN\n------------------------\n🟢 LONG | Entry: 564.2\nExit: 566.59\n------------------------\nProfit: +2.39 (+0.4%)\nRisk: 1.59 | Reward: 2.39\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n10:45 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LICHSGFIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP1 HIT | LICHSGFIN\n------------------------\n🟢 LONG | Entry: 564.2\nExit: 566.59\n------------------------\nProfit: +2.39 (+0.4%)\nRisk: 1.59 | Reward: 2.39\nR:R 1:1.5\nExitQtyPct: 50\n------------------------\n10:45 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LICHSGFIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 86,
+   "type": "message",
+   "date": "2026-09-04T11:15:07",
+   "date_unixtime": "1788500707",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "✅ BREAKOUT TP3 HIT | LICHSGFIN\n------------------------\n🟢 LONG | Entry: 564.2\nExit: 571.37\n------------------------\nProfit: +7.17 (+1.3%)\nRisk: 1.59 | Reward: 7.17\nR:R 1:4.5\nExitQtyPct: 100\n------------------------\n11:10 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LICHSGFIN&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "✅ BREAKOUT TP3 HIT | LICHSGFIN\n------------------------\n🟢 LONG | Entry: 564.2\nExit: 571.37\n------------------------\nProfit: +7.17 (+1.3%)\nRisk: 1.59 | Reward: 7.17\nR:R 1:4.5\nExitQtyPct: 100\n------------------------\n11:10 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:LICHSGFIN&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  },
+  {
+   "id": 87,
+   "type": "message",
+   "date": "2026-09-04T11:20:05",
+   "date_unixtime": "1788501005",
+   "from": "intraday-breakout",
+   "from_id": "channel4450500772",
+   "text": [
+    "❌ BREAKOUT SL HIT | BAJAJHLDNG\n------------------------\n🟢 LONG | Entry: 11315\nExit: 11280.06\n------------------------\nLoss: -34.94 (-0.3%)\nRisk: 34.94 | Reward: 52.41\nR:R was 1:1.5\n------------------------\n11:15 IST\n",
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:BAJAJHLDNG&interval=5"
+    },
+    ""
+   ],
+   "text_entities": [
+    {
+     "type": "plain",
+     "text": "❌ BREAKOUT SL HIT | BAJAJHLDNG\n------------------------\n🟢 LONG | Entry: 11315\nExit: 11280.06\n------------------------\nLoss: -34.94 (-0.3%)\nRisk: 34.94 | Reward: 52.41\nR:R was 1:1.5\n------------------------\n11:15 IST\n"
+    },
+    {
+     "type": "link",
+     "text": "https://www.tradingview.com/chart/?symbol=NSE:BAJAJHLDNG&interval=5"
+    },
+    {
+     "type": "plain",
+     "text": ""
+    }
+   ]
+  }
+ ]
+}
