@@ -52,6 +52,23 @@ CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts (created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts (symbol, created_at);
 """
 
+# Long vendor scan names are unreadable in a phone notification. A trader needs to know which
+# setup fired, not its full title.
+_SHORT_SCAN = {
+    "The Runaway": "Runaway",
+    "The Breakdown": "Breakdown",
+    "Breakaway Above PDH": "BreakPDH",
+    "Breakaway Below PDL": "BreakPDL",
+    "Value Migration Up": "ValueMigUp",
+    "Value Migration Down": "ValueMigDn",
+    "The Gap-Up Trap": "GapUpTrap",
+    "Gap-Down Rescue": "GapDnRescue",
+    "Neutral Day Resolution Up": "NeutResUp",
+    "Neutral Day Resolution Down": "NeutResDn",
+    "Live Print in Formation Up": "LivePrintUp",
+    "Live Print in Formation Down": "LivePrintDn",
+}
+
 _warned_missing_config = False
 
 
@@ -167,15 +184,24 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     if snapshot is not None and "price" in getattr(snapshot, "columns", []):
         prices = dict(zip(snapshot["symbol"], snapshot["price"], strict=False))
 
-    lines = [f"BreakingTrade intraday  {captured_at:%H:%M}"]
-    count = 0
+    # Format is deliberately terse: side, symbol, price, setup. One line per name, aligned so
+    # the eye can scan a column. A phone notification that needs reading twice gets ignored.
+    rows, count = [], 0
     for scan_name, symbols in sorted(new_by_scan.items()):
+        side = (
+            "SHORT"
+            if scan_name.rstrip().endswith(("Down", "Dn", "Trap", "Breakdown", "PDL"))
+            else "LONG"
+        )
+        short = _SHORT_SCAN.get(scan_name, scan_name)
         for symbol in symbols:
             price = prices.get(symbol)
-            suffix = f" @ {price:g}" if price else ""
-            lines.append(f"  NEW  {symbol}{suffix}  [{scan_name}]")
+            rows.append((side, symbol, f"{price:,.1f}" if price else "-", short))
             count += 1
-    lines += ["", "Selection only - not a trade instruction. No edge established yet."]
+
+    width = max((len(r[1]) for r in rows), default=8)
+    lines = [f"BT {captured_at:%H:%M} | {count} new"]
+    lines += [f"{side:<5} {sym:<{width}} {px:>9} {tag}" for side, sym, px, tag in rows]
     message = "\n".join(lines)
 
     delivered = send(message)  # one message covering every new name
@@ -192,24 +218,23 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     return count
 
 
-def alert_btst(watchlist, captured_at: datetime, deadline: str = "15:15") -> int:
+def alert_btst(watchlist, captured_at: datetime) -> int:
     """The closing-hour carry list, with its execution deadline stated in the message."""
     if watchlist is None or watchlist.empty:
-        record("btst_empty", f"BreakingTrade BTST {captured_at:%d-%b %H:%M}: no candidates today.")
+        record("btst_empty", f"BTST {captured_at:%d-%b} | no candidates today")
         return 0
 
-    lines = [
-        f"BreakingTrade BTST  {captured_at:%d-%b %H:%M}",
-        f"Place CNC orders before {deadline} - continuous trading in F&O stocks ends then.",
-        "",
-    ]
+    width = max(len(str(r.symbol)) for r in watchlist.itertuples())
+    lines = [f"BTST {captured_at:%d-%b} | BUY CNC before 15:15 | {len(watchlist)} names"]
     for row in watchlist.itertuples():
-        delivery = f"{row.delivery_pct * 100:.0f}%" if row.delivery_pct == row.delivery_pct else "-"
-        lines.append(
-            f"  {row.symbol:<12} {row.price:>9,.2f}  {row.change_pct:+.2f}%  "
-            f"del {delivery}  {row.day_type}"
+        delivery = (
+            f"del{row.delivery_pct * 100:.0f}" if row.delivery_pct == row.delivery_pct else "del-"
         )
-    lines += ["", "Watchlist, not a signal. Long only. Size for an overnight gap, not a stop."]
+        trend = "  TREND" if row.day_type == "Trend" else ""
+        lines.append(
+            f"{row.symbol:<{width}} {row.price:>9,.1f} {row.change_pct:>+6.1f}% {delivery}{trend}"
+        )
+    lines.append("Long only. Size for a gap, not a stop.")
     message = "\n".join(lines)
 
     delivered = send(message)  # one message listing the whole watchlist
@@ -227,7 +252,7 @@ def alert_btst(watchlist, captured_at: datetime, deadline: str = "15:15") -> int
 
 
 def alert_health(text: str) -> None:
-    record("health", f"BreakingTrade poller: {text}")
+    record("health", f"BT poller: {text}")
 
 
 def history(since: datetime = None):

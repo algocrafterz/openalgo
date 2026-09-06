@@ -171,8 +171,22 @@ def _print_broad(market_profile, volume, top_n, min_legs) -> None:
     print(watchlist.bearish.to_string(index=False) if not watchlist.bearish.empty else "(none)")
 
 
-def is_due(now: time) -> bool:
+def is_trading_day(day) -> bool:
+    """Mon-Fri only.
+
+    Without this the poller happily ran all weekend and stored 32 snapshots of FRIDAY'S closing
+    data stamped with Saturday and Sunday timestamps - the vendor keeps serving the last
+    session's numbers when the market is shut. That is not merely useless, it is corrupting:
+    anything computing a "next session" return would see a fabricated 0% day between Friday and
+    Monday. Exchange holidays are not handled here; the duplicate-data guard below catches those.
+    """
+    return day.weekday() < 5
+
+
+def is_due(now: time, day=None) -> bool:
     """True when `now` falls on a scheduled poll mark inside a POLL_WINDOWS window."""
+    if day is not None and not is_trading_day(day):
+        return False
     return any(
         start <= now <= end and now.minute in minutes for start, end, minutes in POLL_WINDOWS
     )
@@ -207,6 +221,13 @@ def _fetch_and_report(
         volume=vol_snapshot.frame if vol_snapshot else None,
         captured_at=captured_at,
     )
+
+    # A market holiday looks exactly like a trading day to a clock: the vendor keeps serving the
+    # last session's table. If this snapshot is identical to the previous stored one, it carries
+    # no new information and storing it would fabricate a session.
+    if store_it and store.is_duplicate_of_last(mp_snapshot):
+        print("  identical to the previous snapshot - not stored (market likely closed)")
+        return
 
     new_by_scan = {}
     if store_it:
@@ -315,6 +336,8 @@ def _due_marks(day) -> list:
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
+    if not is_trading_day(day):
+        return []
     marks, cursor = [], _dt.combine(day, time(9, 0))
     end = _dt.combine(day, time(15, 40))
     while cursor < end:

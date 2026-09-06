@@ -96,6 +96,28 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-06 15:10 — Weekend data corruption found and purged
+
+The new `--audit` command immediately earned itself: it reported **21 polls collected on a
+Sunday**. `is_due()` only ever checked the time of day, never the day of week, so the poller ran
+all weekend — and the vendor keeps serving the last session's table when the market is shut. The
+result was **6,944 rows of Friday's closing data stamped with Saturday and Sunday timestamps**
+(360ONE at 1137.0 on all three days).
+
+That is worse than useless. Anything computing a "next session" return would have seen a
+fabricated 0% day between Friday and Monday, quietly diluting every forward-return measurement
+taken from here on.
+
+Two guards added, and the bad rows deleted (6,944 snapshots, 360 scan hits; 15 clean sessions
+remain):
+- **Trading-day check** — Mon-Fri only, applied in `is_due()` and `_due_marks()`.
+- **Duplicate guard** — a snapshot byte-identical to the previous stored one is not saved. A
+  weekday exchange holiday looks exactly like a trading day to a clock; only the data can tell
+  you nothing happened.
+
+Worth noting the shape of this failure: the audit tool built to catch *missing* data is what
+caught *fabricated* data. Both are silent by nature.
+
 ### 2026-09-06 14:40 — Telegram live; autostart installed
 
 **Telegram alerts are delivering.** Two defects found and fixed getting there:
@@ -110,20 +132,19 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
    coupled to recording. One message now covers the whole list, while a row is still stored per
    symbol so alerts can be scored per name later.
 
-**Autostart via cron** (no sudo needed, matches the existing smi-assistant pattern):
+**Autostart moved to Windows Task Scheduler**, mirroring the existing openAlgo tasks rather
+than inventing a second mechanism. `breakingtradectl.ps1` (start/stop/status/audit) reaches into
+WSL exactly as `openalgoctl.ps1` does, and `createTaskBreakingTradePoller.ps1` registers three
+tasks: AutoStart 9:10, Watchdog every 5 min 09:15-15:15, AutoStop 15:35.
 
-    @reboot ... poller.sh start
-    */5 9-15 * * 1-5 ... poller.sh start
+The in-WSL cron entries added earlier were **removed** - two mechanisms doing the same job is a
+debugging trap. The Windows task is strictly better here because it holds the WSL VM alive;
+cron inside WSL cannot, since WSL shuts down shortly after its last process exits.
 
-`poller.sh start` refuses to launch a second copy, so the five-minute keepalive is safe to run
-repeatedly. **This matters more than `@reboot`:** on 2026-09-04 the poller died *mid-session*,
-which a boot-time entry would never have caught. Verified by killing the poller and running the
-exact cron command - it recovered on the next tick.
-
-**WSL2 caveat, stated plainly:** cron only runs while the WSL virtual machine is running, and
-WSL shuts down shortly after the last terminal closes. The machine being powered on is not
-sufficient. To collect unattended, either keep a WSL terminal open, or have Windows Task
-Scheduler run `wsl.exe -d <distro> -- true` at logon to hold the VM up.
+**Why a watchdog and not just an autostart:** on 2026-09-04 the poller died *mid-session*, which
+a boot-time entry would never have caught. `start` is idempotent, so a five-minute watchdog is
+safe and bounds worst-case loss to a single poll - which matters because intraday data cannot be
+back-filled.
 
 **Friday audit: 25 of 27 scheduled polls missed (93%).** New `--audit [date]` command reports
 scheduled-vs-collected for any day, so this can never again be discovered days later by accident.

@@ -121,6 +121,40 @@ def save_snapshot(snapshot) -> int:
     return len(rows)
 
 
+def is_duplicate_of_last(snapshot) -> bool:
+    """Is this snapshot byte-identical to the most recent stored one of its kind?
+
+    Guards against storing a session that never happened. On an exchange holiday the scanner
+    still renders the previous session's table, so the clock says "trading day" while the data
+    says nothing has moved. Comparing the payloads is the only reliable tell.
+    """
+    if snapshot.captured_at is None:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT captured_at FROM snapshots WHERE kind = ? AND captured_at < ? "
+            "ORDER BY captured_at DESC LIMIT 1",
+            (snapshot.kind, _iso(snapshot.captured_at)),
+        ).fetchone()
+        if not row:
+            return False
+        previous = conn.execute(
+            "SELECT symbol, payload FROM snapshots WHERE kind = ? AND captured_at = ?",
+            (snapshot.kind, row[0]),
+        ).fetchall()
+
+    if len(previous) != len(snapshot.frame):
+        return False
+    stored = dict(previous)
+    for record in snapshot.frame.to_dict(orient="records"):
+        payload = json.dumps(
+            {k: (None if pd.isna(v) else v) for k, v in record.items()}, default=str
+        )
+        if stored.get(record.get("symbol")) != payload:
+            return False
+    return True
+
+
 def previous_hits(before: datetime) -> dict:
     """{scan_name: {symbols}} from the most recent stored poll before `before`."""
     with _connect() as conn:
