@@ -56,6 +56,26 @@ def trading_mode() -> tuple:
         return ("unknown", False)
 
 
+def set_analyze_mode(enable: bool = True) -> tuple:
+    """Switch OpenAlgo into (or out of) analyze mode over the REST API.
+
+    Deliberately the API and not `database.settings_db.set_analyze_mode()`. The mode lives in a
+    Boolean column in settings.db, but the running app caches it in process - so writing the
+    row from a separate process leaves the live app still acting on the cached value, and the
+    orders keep going wherever they were going. Toggling through the API mutates the same
+    process that serves the orders, so the cache is correct by construction.
+    """
+    from signal_engine.config import settings
+
+    response = httpx.post(
+        f"{settings.openalgo_base_url}/api/v1/analyzer/toggle",
+        json={"apikey": settings.openalgo_api_key, "mode": bool(enable)},
+        timeout=15,
+    )
+    response.raise_for_status()
+    return trading_mode()
+
+
 def signals_on(day: date) -> pd.DataFrame:
     """What the scanner emitted - its claims, not its results."""
     with sqlite3.connect(store._DB_PATH) as conn:

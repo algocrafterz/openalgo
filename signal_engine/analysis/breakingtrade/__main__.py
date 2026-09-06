@@ -566,6 +566,12 @@ def main() -> int:
     )
     parser.add_argument("--debug-dir", default=None, help="Dump page HTML+screenshot on failure")
     parser.add_argument(
+        "--set-analyze",
+        choices=("on", "off"),
+        default=None,
+        help="Switch OpenAlgo analyze (paper) mode on or off via its API",
+    )
+    parser.add_argument(
         "--review",
         action="store_true",
         help="End-of-day paper review: mode check, signals emitted, trades taken",
@@ -606,6 +612,13 @@ def main() -> int:
         help="Closing-hour accumulation watchlist for the next session (needs a volume snapshot)",
     )
     args = parser.parse_args()
+
+    if args.set_analyze is not None:
+        from signal_engine.analysis.breakingtrade import review
+
+        mode, is_analyze = review.set_analyze_mode(args.set_analyze == "on")
+        print(f"OpenAlgo mode is now: {mode} (analyze={is_analyze})")
+        return 0 if is_analyze == (args.set_analyze == "on") else 1
 
     if args.review:
         from signal_engine.analysis.breakingtrade import review
