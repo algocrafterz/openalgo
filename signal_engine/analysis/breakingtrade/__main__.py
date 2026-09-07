@@ -193,6 +193,36 @@ def is_due(now: time, day=None) -> bool:
     )
 
 
+# Trailing slack added to each POLL_WINDOWS end when deciding whether the heartbeat should be
+# watching at all - just enough to still catch a failure that hits right at a window's close.
+HEARTBEAT_WINDOW_BUFFER_MINUTES = 5
+
+
+def _within_poll_hours(now: time) -> bool:
+    """True while `now` sits inside a scheduled POLL_WINDOWS window (plus a short trailing
+    buffer) - NOT the same thing as "market hours".
+
+    POLL_WINDOWS has a deliberate ~2-hour gap between the 10:30-13:00 window and 14:50-15:10
+    (see its own "13:00-15:00 Off" comment - lunch trap, nothing worth polling for). Silence
+    there is the SCHEDULE working, not a failure. Treating "no poll in the last
+    HEARTBEAT_STALE_MINUTES" as failure regardless of the schedule fired a false "no successful
+    poll" alert every single trading day at ~13:21 (and again at ~14:21, hourly, until the 14:50
+    window resumed) - see 2026-09-06 and 2026-09-07's breakingtrade_poller.log. A watchdog that
+    cries wolf on a known, intentional gap trains the reader to ignore it exactly on the day it
+    is right.
+    """
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    for start, end, _marks in POLL_WINDOWS:
+        buffered_end = (
+            _dt.combine(_dt.today(), end) + _td(minutes=HEARTBEAT_WINDOW_BUFFER_MINUTES)
+        ).time()
+        if start <= now <= buffered_end:
+            return True
+    return False
+
+
 def _fetch_and_report(
     store_it: bool, want_volume: bool, debug_dir, btst_mode: bool = False, session=None
 ) -> None:
@@ -236,6 +266,18 @@ def _fetch_and_report(
         if vol_snapshot is not None:
             store.save_snapshot(vol_snapshot)
         new_by_scan = store.record_hits(results, captured_at)
+
+        # Alert-only: does any currently-open BREAKINGTRADE position's own setup now read the
+        # other way? Runs every real poll, independent of whether this poll produced any new
+        # scan matches - a flip is a property of an EXISTING position, not a new one.
+        try:
+            from signal_engine.analysis.breakingtrade import flip_watch
+
+            flipped = flip_watch.check(mp_snapshot.frame, captured_at)
+            if flipped:
+                print(f"  {flipped} structure-flip warning(s) sent")
+        except Exception as exc:
+            print(f"  flip watch failed: {type(exc).__name__}: {exc}")
 
     if btst_mode:
         print()
@@ -536,8 +578,9 @@ def _watch(args) -> int:
                         logger.warning("could not close the browser session cleanly")
                     session = None
 
-            # Heartbeat: silence during market hours is the failure mode that cost 04-Sep.
-            if time(9, 20) <= current <= time(15, 15) and last_success is not None:
+            # Heartbeat: silence during a SCHEDULED poll window is the failure mode that cost
+            # 04-Sep - silence during the 13:00-14:50 gap between windows is just the schedule.
+            if _within_poll_hours(current) and last_success is not None:
                 stale = (_dt.now() - last_success).total_seconds() / 60
                 if stale > HEARTBEAT_STALE_MINUTES and (
                     last_heartbeat_alert is None

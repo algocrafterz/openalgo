@@ -96,6 +96,45 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-07 13:30 — Heartbeat false alarm fixed; structure-flip watch added; watchlist alerts now unmistakable
+
+**The "no successful poll for 35 minutes" alarm from today was a false alarm, not a dead
+poller.** The schedule has a deliberate ~2-hour gap between the 10:30-13:00 window and the
+14:50-15:10 BTST window (nothing worth polling for over lunch), but the heartbeat check only
+knew about "market hours 09:20-15:15" - so it fired every single trading day at ~13:21 and again
+an hour later at ~14:21, for as long as that gap lasted. Confirmed identical on 2026-09-06 (two
+false alarms) and today. Fixed: the heartbeat now only watches inside an actual scheduled poll
+window, not blanket market hours. In plain terms - the watchdog no longer cries wolf during
+lunch, so it stays trustworthy for the day it needs to catch a real failure.
+
+**New: alert-only warning when an open BREAKINGTRADE position's own setup reverses.** A scan
+match (e.g. Gap-Down Rescue) is a read of the tape at one instant; nothing previously re-checked
+whether that read was still true after the trade was taken. Investigating a live example (TCS,
+09:55 LONG) showed its own auction structure had genuinely flipped by 10:25 - the same
+`buy_tail`/`rejection up` combination that justified the LONG had become `sell_tail`/`rejection
+down`. `flip_watch.py` now compares every currently-open position's latest poll reading against
+the direction it was entered on, and sends ONE Telegram warning the first time it reverses
+(never repeats for the same position). Deliberately alert-only, not an auto-exit: this is Day 1
+of the paper week, there is no evidence yet that exiting on a flip beats the existing SL (which
+is already built from the same tail level), and closing early would just as easily cut a
+position that recovers.
+
+**Telegram alerts sent by `alerts.py` now carry a link back to the message that started it.**
+Every send captures Telegram's own message id and stores it; `telegram_link()` turns that into a
+`t.me/c/.../<id>` link a reader can tap to jump straight to the original alert. The flip warning
+above uses this to link back to the original entry signal, so nobody has to scroll the channel
+looking for it.
+
+**The watchlist digest ("BT ... | N new") was visually indistinguishable from a real trade
+signal.** Both used upper-case LONG/SHORT, and the digest's per-row shape ("LONG PNBHOUSING
+1,166.0 BreakPDH") reads exactly like an actionable call on a phone notification preview. Fixed:
+the digest now opens with "BT WATCHLIST ... -- no action, not a trade signal" and its side tags
+are lower-case (`long`/`short`); an upper-case LONG/SHORT now only ever appears in a message the
+engine will actually act on. Verified the direction LABELING logic itself was already correct
+before this change - every scan's canonical `direction` in `scans.py`'s `ScanDef` matched the
+heuristic used to color the digest, in all 12 cases, including Gap-Down Rescue (whose whole
+thesis - "Gap Down + Rejection up + Buy Tail" - is genuinely bullish, not a naming trick).
+
 ### 2026-09-06 17:30 — Lifecycle notifications; analyze mode switchable from the CLI
 
 The poller only ever spoke on FAILURE, so silence was ambiguous - a healthy poller and a dead

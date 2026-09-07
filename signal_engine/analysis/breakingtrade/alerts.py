@@ -54,6 +54,23 @@ CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts (created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts (symbol, created_at);
 """
 
+# Columns added after the table shipped. SQLite has no "ADD COLUMN IF NOT EXISTS", so the
+# existing set is read once per connection and only the gaps are filled - same idiom as
+# signal_engine/db.py's _add_missing_columns, which this was copied from.
+_ADDED_COLUMNS = (
+    # Telegram's own id for the message this row came from. Lets a later alert (e.g. a
+    # structure-flip warning) link straight back to the exact message a symbol was first
+    # called on, instead of making the reader search the channel by eye.
+    ("message_id", "INTEGER"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(alerts)")}
+    for name, coltype in _ADDED_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE alerts ADD COLUMN {name} {coltype}")
+
 # Long vendor scan names are unreadable in a phone notification. A trader needs to know which
 # setup fired, not its full title.
 _SHORT_SCAN = {
@@ -77,6 +94,7 @@ _warned_missing_config = False
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(store._DB_PATH, timeout=10)
     conn.executescript(_SCHEMA)
+    _add_missing_columns(conn)
     return conn
 
 
@@ -106,6 +124,7 @@ _CHANNEL_BY_KIND = {
     "btst_empty": "BREAKINGTRADE_CHAT_ID_BTST",
     "intraday_transition": "BREAKINGTRADE_CHAT_ID_INTRADAY",
     "trade_signal": "BREAKINGTRADE_CHAT_ID_INTRADAY",
+    "structure_flip": "BREAKINGTRADE_CHAT_ID_INTRADAY",
     "health": "BREAKINGTRADE_CHAT_ID_INTRADAY",
 }
 _DEFAULT_CHANNEL_KEY = "BREAKINGTRADE_CHAT_ID_INTRADAY"
@@ -140,9 +159,14 @@ def _credentials(kind: str = None) -> tuple:
     return token, (chat.strip() if chat else chat)
 
 
-def send(text: str, kind: str = None) -> bool:
-    """Deliver one message to the channel that `kind` belongs to. Returns False (never raises)
-    when unconfigured or unreachable - a failed alert must not take the collector down."""
+def send(text: str, kind: str = None) -> tuple[bool, int | None]:
+    """Deliver one message to the channel that `kind` belongs to.
+
+    Returns (delivered, message_id). Never raises - a failed alert must not take the collector
+    down - so both are (False, None) when unconfigured, refused, or unreachable. message_id is
+    Telegram's own id for the sent message, kept so a later alert can link straight back to it
+    (see telegram_link()).
+    """
     global _warned_missing_config
     token, chat_id = _credentials(kind)
     if not token or not chat_id:
@@ -153,7 +177,7 @@ def send(text: str, kind: str = None) -> bool:
                 "alerts are being recorded but not delivered"
             )
             _warned_missing_config = True
-        return False
+        return False, None
     try:
         response = httpx.post(
             _TELEGRAM_API.format(token=token),
@@ -161,7 +185,11 @@ def send(text: str, kind: str = None) -> bool:
             timeout=15,
         )
         if response.status_code == 200:
-            return True
+            try:
+                message_id = response.json().get("result", {}).get("message_id")
+            except Exception:  # noqa: BLE001 - a link is a bonus, not worth failing delivery over
+                message_id = None
+            return True, message_id
         # Surface Telegram's own reason. Returning a bare False here once cost a diagnosis
         # session: a 404 "Not Found" means a bad token, 400 "chat not found" means the bot was
         # never added to the channel, 403 means it lacks permission to post. Very different
@@ -171,10 +199,10 @@ def send(text: str, kind: str = None) -> bool:
         except Exception:  # noqa: BLE001
             reason = response.text[:120]
         print(f"  [alerts] Telegram refused ({response.status_code}): {reason}")
-        return False
+        return False, None
     except Exception as exc:  # noqa: BLE001 - alerting must never break collection
         print(f"  [alerts] delivery failed: {type(exc).__name__}: {exc}")
-        return False
+        return False, None
 
 
 def record(
@@ -185,6 +213,7 @@ def record(
     scan: str = None,
     deliver: bool = True,
     delivered: bool = False,
+    message_id: int | None = None,
 ) -> bool:
     """Persist an alert row, optionally delivering it.
 
@@ -192,13 +221,17 @@ def record(
     message is sent once; a row is written per symbol so the alert can be scored per name
     later. Recording per symbol AND delivering per symbol would send the same text once per
     row - the BTST list did exactly that and fired six identical messages.
+
+    message_id is Telegram's id for the message this row belongs to - passed straight through
+    when the caller already sent the message itself (the multi-symbol callers below), or filled
+    in here when `deliver=True` does the sending.
     """
     if deliver:
-        delivered = send(message, kind)
+        delivered, message_id = send(message, kind)
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, "
+            "delivered, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 datetime.now().replace(microsecond=0).isoformat(sep=" "),
                 kind,
@@ -207,9 +240,57 @@ def record(
                 scan,
                 message,
                 int(delivered),
+                message_id,
             ),
         )
     return delivered
+
+
+def telegram_link(kind: str, message_id: int | None) -> str | None:
+    """A t.me deep link straight to one delivered message, or None when there is nothing to
+    link (never delivered, or the channel isn't a supergroup/channel with a -100... id).
+
+    Telegram's own link shape for a private supergroup/channel is
+    https://t.me/c/<internal_id>/<message_id>, where <internal_id> is the chat id with its
+    leading "-100" stripped. Opens directly in any Telegram client for members of the channel -
+    no need for the channel to be public.
+    """
+    if not message_id:
+        return None
+    chat_id = chat_id_for(kind)
+    if not chat_id:
+        return None
+    chat_id = chat_id.strip()
+    if not chat_id.startswith("-100"):
+        return None
+    return f"https://t.me/c/{chat_id[4:]}/{message_id}"
+
+
+def find_last_alert(symbol: str, kind: str, before: datetime = None) -> dict | None:
+    """Most recent alert of `kind` for `symbol`, at or before `before` (default: now).
+
+    Used to find the trade_signal (or watchlist) message that first called a symbol, so a later
+    alert about it - a structure flip, say - can link straight back rather than making the
+    reader search the channel by eye.
+    """
+    query = "SELECT created_at, scan, message, message_id FROM alerts WHERE symbol = ? AND kind = ?"
+    params = [symbol, kind]
+    if before is not None:
+        query += " AND created_at <= ?"
+        params.append(before.replace(microsecond=0).isoformat(sep=" "))
+    query += " ORDER BY created_at DESC LIMIT 1"
+    with _connect() as conn:
+        row = conn.execute(query, params).fetchone()
+    if not row:
+        return None
+    created_at, scan, message, message_id = row
+    return {
+        "created_at": created_at,
+        "scan": scan,
+        "message": message,
+        "message_id": message_id,
+        "link": telegram_link(kind, message_id),
+    }
 
 
 def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -> int:
@@ -217,6 +298,14 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
 
     Alerting the full match list every poll would repeat the same names for hours and train the
     reader to ignore the channel. The transition is the event.
+
+    This is a WATCHLIST notice, not a trade signal - it just says a symbol newly matched a scan
+    condition. `alert_trade_signal` is the only message the engine will ever act on, and its
+    format ("STRATEGY LONG"/"STRATEGY SHORT" as the exact first line, parsed by parser.py) can't
+    share a first-line shape with this one without becoming parseable as a real signal. So the
+    two are kept visually apart instead: this one is headed "BT WATCHLIST" and says "no action"
+    up front, and its per-row side tag is lowercase ("long"/"short") rather than the upper-case
+    LONG/SHORT that only ever appears in an actual entry signal.
     """
     if not new_by_scan:
         return 0
@@ -230,9 +319,9 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     rows, count = [], 0
     for scan_name, symbols in sorted(new_by_scan.items()):
         side = (
-            "SHORT"
+            "short"
             if scan_name.rstrip().endswith(("Down", "Dn", "Trap", "Breakdown", "PDL"))
-            else "LONG"
+            else "long"
         )
         short = _SHORT_SCAN.get(scan_name, scan_name)
         for symbol in symbols:
@@ -241,11 +330,12 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
             count += 1
 
     width = max((len(r[1]) for r in rows), default=8)
-    lines = [f"BT {captured_at:%H:%M} | {count} new"]
+    lines = [f"BT WATCHLIST {captured_at:%H:%M} | {count} new -- no action, not a trade signal"]
     lines += [f"{side:<5} {sym:<{width}} {px:>9} {tag}" for side, sym, px, tag in rows]
     message = "\n".join(lines)
 
-    delivered = send(message, "intraday_transition")  # one message covering every new name
+    # one message covering every new name
+    delivered, message_id = send(message, "intraday_transition")
     for scan_name, symbols in new_by_scan.items():
         for symbol in symbols:
             record(
@@ -255,6 +345,7 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
                 scan=scan_name,
                 deliver=False,
                 delivered=delivered,
+                message_id=message_id,
             )
     return count
 
@@ -284,7 +375,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     lines.append("Size for a gap, not a stop. No edge established - paper first.")
     message = "\n".join(lines)
 
-    delivered = send(message, "btst")  # one message listing the whole watchlist
+    delivered, message_id = send(message, "btst")  # one message listing the whole watchlist
     for row in watchlist.itertuples():
         record(
             "btst",
@@ -294,6 +385,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
             scan="BTST",
             deliver=False,
             delivered=delivered,
+            message_id=message_id,
         )
     return len(watchlist)
 

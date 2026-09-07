@@ -10,14 +10,14 @@ import pandas as pd
 import pytest
 
 from signal_engine.analysis.breakingtrade import alerts, store
-from signal_engine.analysis.breakingtrade.__main__ import _due_marks
+from signal_engine.analysis.breakingtrade.__main__ import _due_marks, _within_poll_hours
 
 
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
     # Never attempt a real network call from a test.
-    monkeypatch.setattr(alerts, "send", lambda text, kind=None: False)
+    monkeypatch.setattr(alerts, "send", lambda text, kind=None: (False, None))
 
 
 def test_alert_is_recorded_even_when_delivery_fails():
@@ -124,3 +124,26 @@ def test_due_marks_stop_before_the_cas_cutoff():
     """Nothing may be scheduled after 15:10: continuous trading in F&O stocks ends at 15:15."""
     latest = max(f"{m:%H:%M}" for m in _due_marks(date(2026, 9, 7)))
     assert latest <= "15:10"
+
+
+def test_heartbeat_is_quiet_during_the_scheduled_lunch_gap():
+    """The false alarm this locks in: 13:00-14:50 is documented POLL_WINDOWS silence, not a
+    failed poller - the heartbeat must not watch there."""
+    from datetime import time as _time
+
+    assert _within_poll_hours(_time(13, 30)) is False
+    assert _within_poll_hours(_time(14, 21)) is False
+
+
+def test_heartbeat_watches_inside_every_scheduled_window():
+    from datetime import time as _time
+
+    assert _within_poll_hours(_time(9, 30)) is True  # first window
+    assert _within_poll_hours(_time(11, 0)) is True  # second window
+    assert _within_poll_hours(_time(15, 0)) is True  # third window
+
+
+def test_heartbeat_buffer_covers_a_failure_right_at_a_windows_close():
+    from datetime import time as _time
+
+    assert _within_poll_hours(_time(13, 2)) is True  # 2 min past the 13:00 window close

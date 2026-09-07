@@ -194,6 +194,7 @@ That file is the source of truth for this strategy; only the summary lives here.
 | `paper.py` | BTST paper ledger (`--paper`) |
 | `validate.py` | MFE/MAE forward test with a random control |
 | `review.py` | Daily paper review (`--review`), mode check first |
+| `flip_watch.py` | Alert-only warning when an open position's own setup reverses (2026-09-07) |
 | `poller.sh` / `breakingtradectl.ps1` | Lifecycle, PID-file tracked, Windows-task driven |
 
 **Status: PAPER ONLY.** `intraday-breakingtrade` is enabled and signal_engine takes the signals
@@ -212,6 +213,31 @@ special case.
 
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
+
+## Recent Changes (2026-09-07)
+
+**BreakingTrade heartbeat false alarm fixed.** The poller's "no successful poll for N minutes"
+watchdog compared elapsed time against blanket market hours (09:20-15:15), not against
+`POLL_WINDOWS` — which has a deliberate ~2h gap between the 10:30-13:00 and 14:50-15:10 windows
+(lunch, nothing to poll for). Result: a false alarm every trading day at ~13:21 and again at
+~14:21. `_within_poll_hours()` now gates the watchdog on the actual scheduled windows (plus a
+5-minute trailing buffer) instead. See `STRATEGY-LOG.md` 2026-09-07 for the full writeup.
+
+**Alert-only structure-flip watch added** (`flip_watch.py`). Compares each currently-open
+BREAKINGTRADE position's latest poll reading (`open_type_dir`) against the direction it was
+entered on; sends one Telegram warning the first time it reverses, never auto-exits. Found via a
+live example: TCS's Gap-Down Rescue LONG (09:55) had its own `buy_tail`/`rejection up` structure
+flip to `sell_tail`/`rejection down` by 10:25.
+
+**Telegram alerts now carry a link back to the message that started them.** `alerts.send()`
+captures Telegram's own `message_id`; `alerts.telegram_link()` builds a `t.me/c/.../<id>` deep
+link. `alerts.find_last_alert()` looks up a symbol's originating alert. Used by the flip warning
+above to link back to the entry signal.
+
+**Watchlist digest no longer looks like a trade signal.** `alert_transitions()`'s header now
+reads "BT WATCHLIST ... -- no action, not a trade signal" and its per-row side tags are
+lower-case (`long`/`short`); upper-case LONG/SHORT is now reserved for `alert_trade_signal()`,
+the only message type the engine ever acts on.
 
 ## Recent Changes (2026-09-06)
 
