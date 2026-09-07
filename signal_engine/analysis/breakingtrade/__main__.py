@@ -304,6 +304,14 @@ def _fetch_and_report(
             settled = paper.settle_open_trades()
             if settled:
                 print(f"  paper: settled {settled} previously open position(s)")
+
+            from signal_engine.analysis.breakingtrade import eod_summary
+
+            day = captured_at.strftime("%Y-%m-%d")
+            if eod_summary.alert_btst_eod_summary(day):
+                print("  paper: BTST EOD summary sent")
+            if eod_summary.alert_intraday_eod_summary(day, captured_at):
+                print("  paper: intraday EOD summary sent")
         except Exception as exc:
             print(f"  BTST alert failed: {type(exc).__name__}: {exc}")
     elif store_it and new_by_scan:
@@ -469,10 +477,15 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
     """
     from signal_engine.analysis.breakingtrade import alerts, trigger, validate
 
+    # First scan to match a symbol this poll wins both its direction and the reason quoted in
+    # the trade-signal alert - a symbol matching two scans at once is rare, and the trade needs
+    # exactly one direction regardless.
     directions = {}
+    scan_names = {}
     for result_scan, symbols in new_by_scan.items():
         for symbol in symbols:
             directions.setdefault(symbol, "down" if _is_bearish(result_scan) else "up")
+            scan_names.setdefault(symbol, result_scan)
 
     day_types = {}
     if snapshot is not None and "day_type" in snapshot.columns:
@@ -491,7 +504,7 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
             )
             if plan is None:
                 continue
-            alerts.alert_trade_signal(plan)
+            alerts.alert_trade_signal(plan, scan_name=scan_names.get(symbol))
             emitted += 1
         except Exception as exc:
             print(f"  signal for {symbol} skipped: {type(exc).__name__}: {exc}")

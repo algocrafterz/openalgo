@@ -45,6 +45,71 @@ def test_transitions_alert_one_row_per_symbol():
     assert set(stored["kind"]) == {"intraday_transition"}
 
 
+def test_transitions_message_explains_the_call_in_plain_english():
+    """The whole point: a trader reading 'GapDnRescue' on its own shouldn't have to look it up."""
+    alerts.alert_transitions({"Gap-Down Rescue": ["KEI"]}, datetime(2026, 9, 4, 11, 16))
+    with alerts._connect() as conn:
+        message = conn.execute("SELECT message FROM alerts LIMIT 1").fetchone()[0]
+    assert "bought it back" in message
+    assert "(GapDnRescue)" in message
+
+
+def test_scan_reason_has_an_entry_for_every_scan_alert_transitions_can_receive():
+    """Every scan name scans.py can hand to alert_transitions must have a plain-English
+    reason - a missing entry means a trader sees the unhelpful fallback with no warning."""
+    from signal_engine.analysis.breakingtrade.scans import SCANS
+
+    for scan in SCANS:
+        assert scan.name in alerts._SCAN_REASON, f"no reason documented for {scan.name!r}"
+
+
+def test_scan_reason_fallback_for_an_unknown_scan():
+    assert "not documented yet" in alerts.scan_reason("Some New Vendor Scan")
+
+
+def _plan(**overrides):
+    from types import SimpleNamespace
+
+    defaults = {
+        "symbol": "TCS",
+        "direction": "up",
+        "entry": 2283.1,
+        "stop": 2270.0,
+        "targets": [2310.0, 2325.0, 2340.0],
+        "triggered_at": None,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_trade_signal_includes_the_reason_when_a_scan_name_is_given():
+    alerts.alert_trade_signal(_plan(), scan_name="Gap-Down Rescue")
+    with alerts._connect() as conn:
+        message = conn.execute("SELECT message FROM alerts LIMIT 1").fetchone()[0]
+    assert "Reason: Gapped down but buyers stepped in" in message
+
+
+def test_trade_signal_omits_the_reason_line_when_no_scan_name_is_given():
+    """No scan (e.g. a manually-tested plan) must not print a bogus reason."""
+    alerts.alert_trade_signal(_plan())
+    with alerts._connect() as conn:
+        message = conn.execute("SELECT message FROM alerts LIMIT 1").fetchone()[0]
+    assert "Reason:" not in message
+
+
+def test_trade_signal_with_a_reason_still_parses_as_a_valid_signal():
+    """Reason: is not one of parser.py's mandatory fields - it must not break parsing."""
+    from signal_engine import parser
+
+    alerts.alert_trade_signal(_plan(), scan_name="Gap-Down Rescue")
+    with alerts._connect() as conn:
+        message = conn.execute("SELECT message FROM alerts LIMIT 1").fetchone()[0]
+    signal = parser.parse(message)
+    assert signal is not None
+    assert signal.symbol == "TCS"
+    assert signal.entry == 2283.1
+
+
 def test_no_transitions_records_nothing():
     """Silence is not an event - alerting 'nothing changed' every poll trains the reader to
     ignore the channel."""

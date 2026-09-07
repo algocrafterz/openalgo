@@ -88,6 +88,32 @@ _SHORT_SCAN = {
     "Live Print in Formation Down": "LivePrintDn",
 }
 
+# One plain-English line per scan: WHY that side, in terms a trader can check against the
+# chart themselves - not the vendor's column names (TPO Pos, Open Drive, Day Type...), which
+# mean nothing without having read the full guide. Written from each scan's own documented
+# condition in scans.py's SCANS list - see that file for the exact structural test.
+_SCAN_REASON = {
+    "The Runaway": "Gapped up and opened with immediate one-way buying, still above value - momentum hasn't paused yet",
+    "The Breakdown": "Gapped down and opened with immediate one-way selling, still below value - momentum hasn't paused yet",
+    "Breakaway Above PDH": "Broke and held above yesterday's high, dip-buyers defended it on the way - trend day forming",
+    "Breakaway Below PDL": "Broke and held below yesterday's low, rally-sellers defended it on the way - trend day forming",
+    "Value Migration Up": "Trading range has shifted decisively higher - a new, higher value area forming, not just a spike",
+    "Value Migration Down": "Trading range has shifted decisively lower - a new, lower value area forming, not just a spike",
+    "The Gap-Up Trap": "Gapped up but got rejected, now trading back below the open - gap-up buyers are trapped and selling",
+    "Gap-Down Rescue": "Gapped down but buyers stepped in and bought it back - early sellers got rescued, real demand at the lows",
+    "Neutral Day Resolution Up": "A choppy, directionless day is finally breaking upward late in the session - often carries to tomorrow's open",
+    "Neutral Day Resolution Down": "A choppy, directionless day is finally breaking downward late in the session - often carries to tomorrow's open",
+    "Live Print in Formation Up": "Price is actively stacking new highs right now, several ticks running - a breakout forming live, not confirmed yet",
+    "Live Print in Formation Down": "Price is actively stacking new lows right now, several ticks running - a breakdown forming live, not confirmed yet",
+}
+
+
+def scan_reason(scan_name: str) -> str:
+    """The one-line plain-English reason for a scan name, or a safe fallback for an unknown
+    one (a vendor scan added to scans.py without a matching entry here shouldn't crash the
+    poller - just read less helpfully until _SCAN_REASON is updated)."""
+    return _SCAN_REASON.get(scan_name, "setup matched (reason not documented yet)")
+
 _warned_missing_config = False
 
 
@@ -314,8 +340,11 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     if snapshot is not None and "price" in getattr(snapshot, "columns", []):
         prices = dict(zip(snapshot["symbol"], snapshot["price"], strict=False))
 
-    # Format is deliberately terse: side, symbol, price, setup. One line per name, aligned so
-    # the eye can scan a column. A phone notification that needs reading twice gets ignored.
+    # One line per name: side, symbol, price, then the crisp WHY (see _SCAN_REASON) and the
+    # short scan tag in parens for reference. Longer than the old bare "side symbol price tag"
+    # row on purpose - a trader who can't recall what "GapDnRescue" means from the tag alone
+    # has to look it up before trusting or dismissing the call, which is worse than a longer
+    # line they can act on immediately.
     rows, count = [], 0
     for scan_name, symbols in sorted(new_by_scan.items()):
         side = (
@@ -324,14 +353,18 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
             else "long"
         )
         short = _SHORT_SCAN.get(scan_name, scan_name)
+        reason = scan_reason(scan_name)
         for symbol in symbols:
             price = prices.get(symbol)
-            rows.append((side, symbol, f"{price:,.1f}" if price else "-", short))
+            rows.append((side, symbol, f"{price:,.1f}" if price else "-", reason, short))
             count += 1
 
     width = max((len(r[1]) for r in rows), default=8)
     lines = [f"BT WATCHLIST {captured_at:%H:%M} | {count} new -- no action, not a trade signal"]
-    lines += [f"{side:<5} {sym:<{width}} {px:>9} {tag}" for side, sym, px, tag in rows]
+    lines += [
+        f"{side:<5} {sym:<{width}} {px:>9} - {reason} ({tag})"
+        for side, sym, px, reason, tag in rows
+    ]
     message = "\n".join(lines)
 
     # one message covering every new name
@@ -390,7 +423,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     return len(watchlist)
 
 
-def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE") -> bool:
+def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE", scan_name: str = None) -> bool:
     """Emit ONE trade in the exact shape signal_engine's parser accepts, so the engine can take
     it end to end - sizing, entry, stop placement, staged exits and the time exit.
 
@@ -401,22 +434,26 @@ def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE") -> bool:
         Entry: 1186.5
         SL: 1178.2
         TP: 1203.0
+        Reason: Gapped down but buyers stepped in and bought it back...
 
-    Sent to the intraday channel. Whether it actually TRADES is decided by that channel's
-    `enabled` flag in config.yaml, not by anything here - which is what lets the same message
-    stream be recorded, read and scored long before it is allowed to touch money.
+    `Reason:` is not one of parser.py's mandatory fields - it is kept in Signal.context rather
+    than dropped, so it survives into the trade log without the engine needing to know what it
+    means. Sent to the intraday channel. Whether it actually TRADES is decided by that
+    channel's `enabled` flag in config.yaml, not by anything here - which is what lets the same
+    message stream be recorded, read and scored long before it is allowed to touch money.
     """
     side = "LONG" if plan.direction == "up" else "SHORT"
-    message = "\n".join(
-        [
-            f"{strategy} {side}",
-            f"Symbol: {plan.symbol}",
-            f"Entry: {plan.entry}",
-            f"SL: {plan.stop}",
-            f"TP: {plan.targets[0]}",
-            f"Time: {plan.triggered_at:%H:%M}" if plan.triggered_at else "",
-        ]
-    ).strip()
+    lines = [
+        f"{strategy} {side}",
+        f"Symbol: {plan.symbol}",
+        f"Entry: {plan.entry}",
+        f"SL: {plan.stop}",
+        f"TP: {plan.targets[0]}",
+        f"Time: {plan.triggered_at:%H:%M}" if plan.triggered_at else "",
+    ]
+    if scan_name:
+        lines.append(f"Reason: {scan_reason(scan_name)}")
+    message = "\n".join(lines).strip()
     return record(
         "trade_signal", message, symbol=plan.symbol, direction=plan.direction, scan=strategy
     )
