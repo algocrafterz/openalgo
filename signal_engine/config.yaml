@@ -542,6 +542,26 @@ strategy_profiles:
     # itself, so it lands in the same tight band as the key-level stops — the ORB-calibrated
     # 0.50% floor would reject most valid signals outright.
     min_sl_pct: 0.002
+  BREAKINGTRADE:
+    product: MIS
+    # tp_levels absent — alert_trade_signal() sends a single flat TP (trigger.py's staged
+    # target ladder is computed but not yet wired through), so every TP HIT exits 100%.
+    #
+    # min_sl_pct 0.20%, same reasoning as BREAKOUT/EMA9 above rather than the 0.50% global:
+    # trigger.stop_level() places the stop just beyond the scanner's own defended level
+    # (tail_level) plus a 0.25 x ATR buffer - the same "beyond a specific level" style as
+    # BREAKOUT's key-level stops, not ORB's wider IB-extreme stops. No BreakingTrade signal has
+    # reached validation yet to measure its real stop distances (unlike BREAKOUT/EMA9, which
+    # were tuned against actual rejected trades), so this is the closest evidence-based analog
+    # available rather than a measured value - revisit once real signals accumulate.
+    min_sl_pct: 0.002
+    # No price band: unlike ORB/BREAKOUT/EMA9, BreakingTrade is not a fixed universe with its
+    # own execution-cost calibration behind the global 300-5000 band - it scans the whole NSE
+    # F&O list daily. Inheriting that band silently declined real candidates (MARUTI ~12,694,
+    # PERSISTENT ~5,575, GMRAIRPORT ~98, VMM ~104 all seen in one day - 2026-09-07) with nobody
+    # having decided that was wanted. 0 = no filter, so every scan match can be analysed.
+    min_entry_price: 0
+    max_entry_price: 0
   RSI-TP-MR:
     product: MIS
     tp_levels:

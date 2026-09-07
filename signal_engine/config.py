@@ -190,8 +190,10 @@ class Settings:
 
     # Strategy profiles (from yaml) — per-strategy TP levels and product defaults
     # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR")
-    # Values: dict with "tp_levels" (e.g. {"TP1": 0.5, "TP2": 1.0}), "product" (e.g. "CNC")
-    # and an optional "min_sl_pct" overriding the global stop-distance floor.
+    # Values: dict with "tp_levels" (e.g. {"TP1": 0.5, "TP2": 1.0}), "product" (e.g. "CNC"),
+    # an optional "min_sl_pct" overriding the global stop-distance floor, and optional
+    # "min_entry_price"/"max_entry_price" overriding the global price band (0 = no filter,
+    # same convention as the global sizing.min_entry_price/max_entry_price).
     strategy_profiles: Dict[str, dict]
 
     # Symbol blacklist (from yaml) — per-strategy + _global
@@ -440,6 +442,15 @@ def _parse_strategy_profiles(yml: dict) -> Dict[str, dict]:
         # only added when it is actually present.
         if profile.get("min_sl_pct") is not None:
             entry["min_sl_pct"] = float(profile["min_sl_pct"])
+        # Optional per-strategy price band, same "absent means inherit the global value"
+        # convention as min_sl_pct above. A scanner-selected universe (BreakingTrade) has no
+        # natural price band of its own the way a fixed-universe strategy's execution-cost
+        # calibration does, so it needs to be able to opt OUT of the global band (0 = no
+        # filter) rather than silently inherit whatever band was tuned for a different strategy.
+        if profile.get("min_entry_price") is not None:
+            entry["min_entry_price"] = float(profile["min_entry_price"])
+        if profile.get("max_entry_price") is not None:
+            entry["max_entry_price"] = float(profile["max_entry_price"])
         profiles[strategy_key.upper()] = entry
     return profiles
 

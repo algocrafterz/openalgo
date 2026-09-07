@@ -87,4 +87,5 @@ def build_risk_engine(store, trade_mode: str = "live") -> RiskEngine:
         use_day_start_capital=settings.use_day_start_capital,
         soft_blacklist=settings.soft_blacklist,
         soft_blacklist_multipliers=settings.soft_blacklist_multipliers,
+        strategy_profiles=settings.strategy_profiles,
     )

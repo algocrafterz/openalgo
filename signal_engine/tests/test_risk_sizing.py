@@ -256,6 +256,61 @@ class TestPriceFilter:
         assert qty == 0
 
 
+class TestPerStrategyPriceBand:
+    """A strategy_profiles override replaces the global band for that strategy only - added so
+    a scanner-selected universe (BreakingTrade) is not silently bound by a band calibrated for
+    a fixed-universe strategy (ORB) sharing the same engine."""
+
+    def test_strategy_override_widens_the_band(self):
+        engine = _engine(
+            min_entry_price=300,
+            max_entry_price=5000,
+            strategy_profiles={
+                "BREAKINGTRADE": {"min_entry_price": 0, "max_entry_price": 0}
+            },
+        )
+        # Global band would reject this (above 5000); the strategy override disables it.
+        qty = engine.calculate_quantity(
+            _make_signal(strategy="BREAKINGTRADE", entry=12694, sl=12750, tp=12600,
+                         direction=Direction.SHORT),
+            capital=100_000,
+        )
+        assert qty > 0
+
+    def test_other_strategies_keep_the_global_band(self):
+        engine = _engine(
+            min_entry_price=300,
+            max_entry_price=5000,
+            strategy_profiles={
+                "BREAKINGTRADE": {"min_entry_price": 0, "max_entry_price": 0}
+            },
+        )
+        # ORB has no override - the global band still applies to it.
+        qty = engine.calculate_quantity(
+            _make_signal(strategy="ORB", entry=12694, sl=12650, tp=12750), capital=100_000,
+        )
+        assert qty == 0
+
+    def test_override_can_set_a_different_band_not_just_disable(self):
+        engine = _engine(
+            min_entry_price=300,
+            max_entry_price=5000,
+            strategy_profiles={"CUSTOM": {"min_entry_price": 50, "max_entry_price": 100}},
+        )
+        qty = engine.calculate_quantity(
+            _make_signal(strategy="CUSTOM", entry=200, sl=190, tp=220), capital=100_000,
+        )
+        assert qty == 0
+
+    def test_no_strategy_profiles_configured_falls_back_to_global(self):
+        engine = _engine(min_entry_price=300, max_entry_price=5000)
+        qty = engine.calculate_quantity(
+            _make_signal(strategy="BREAKINGTRADE", entry=12694, sl=12650, tp=12750),
+            capital=100_000,
+        )
+        assert qty == 0
+
+
 class TestZeroRiskPerShareReturnsZero:
     """Bug fix: risk_per_share=0 or entry<=0 must return 0, not 1."""
 

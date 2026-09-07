@@ -57,6 +57,7 @@ class RiskEngine:
         use_day_start_capital: bool = False,
         soft_blacklist: Optional[Dict[str, frozenset]] = None,
         soft_blacklist_multipliers: Optional[Dict[str, float]] = None,
+        strategy_profiles: Optional[Dict[str, dict]] = None,
     ):
         self.risk_per_trade = risk_per_trade
         self.use_day_start_capital = use_day_start_capital
@@ -86,6 +87,7 @@ class RiskEngine:
         self._soft_blacklist_multipliers: Dict[str, float] = {
             k.upper(): float(v) for k, v in raw_mult.items()
         }
+        self._strategy_profiles: Dict[str, dict] = strategy_profiles or {}
 
         # Build reverse lookup: symbol -> sector
         raw_sectors: Dict[str, List[str]] = sectors if sectors is not None else {}
@@ -230,17 +232,21 @@ class RiskEngine:
         """
         self._last_known_capital = capital
 
-        # Price filter — reject stocks outside configured price band
-        if self.min_entry_price > 0 and signal.entry < self.min_entry_price:
+        # Price filter — reject stocks outside the configured price band. Per-strategy first:
+        # a fixed-universe strategy's band is calibrated to that universe's tick-cost economics
+        # and has no reason to also apply to a scanner-selected universe with different names
+        # every day (see _price_band_for()).
+        min_entry_price, max_entry_price = self._price_band_for(signal.strategy)
+        if min_entry_price > 0 and signal.entry < min_entry_price:
             logger.warning(
                 f"Skipping {signal.symbol}: entry {signal.entry} below "
-                f"min price {self.min_entry_price}"
+                f"min price {min_entry_price}"
             )
             return 0
-        if self.max_entry_price > 0 and signal.entry > self.max_entry_price:
+        if max_entry_price > 0 and signal.entry > max_entry_price:
             logger.warning(
                 f"Skipping {signal.symbol}: entry {signal.entry} above "
-                f"max price {self.max_entry_price}"
+                f"max price {max_entry_price}"
             )
             return 0
 
@@ -271,6 +277,25 @@ class RiskEngine:
             return 0
 
         return qty
+
+    def _price_band_for(self, strategy: str) -> tuple:
+        """(min_entry_price, max_entry_price) for this strategy, falling back to the global
+        band when the strategy has no override.
+
+        The global band is a property of a FIXED universe's execution economics (tick size vs.
+        stop distance for a specific, unchanging symbol list) - see the `sizing:` comments in
+        config.yaml. A scanner-selected strategy (BreakingTrade) picks from a different set of
+        names every day with no such calibration behind it, so it needs to be able to opt out
+        (min/max = 0, "no filter") rather than silently inherit a band tuned for someone else's
+        universe. Each bound is independently overridable, same as min_sl_pct in validator.py.
+        """
+        profile = self._strategy_profiles.get(strategy.upper(), {})
+        min_price = profile.get("min_entry_price")
+        max_price = profile.get("max_entry_price")
+        return (
+            self.min_entry_price if min_price is None else float(min_price),
+            self.max_entry_price if max_price is None else float(max_price),
+        )
 
     def _apply_soft_scaling(self, signal: Signal, qty: int) -> int:
         """Scale qty by the per-strategy soft-blacklist multiplier if symbol matches.
