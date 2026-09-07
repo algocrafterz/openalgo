@@ -96,6 +96,138 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-08 01:47 — TP checks now happen every ~20 seconds, not every 5-15 minutes
+
+**What changed:** The system now checks stock prices against profit targets much more often —
+roughly every 20 seconds all day, instead of only when the scanner does its regular 5-to-15-minute
+check.
+
+**Entry:** No change to how or when a trade is entered.
+
+**Exit (SL):** No change — the stop-loss is always placed directly with the broker and triggers
+instantly regardless of this fix.
+
+**Exit (TP):** Profit-taking now reacts much faster to price moves, since it is checked roughly
+every 20 seconds instead of waiting for the next scheduled scan.
+
+**Consideration:** Still not instant like a person watching a live chart tick by tick — a
+20-second gap remains — but it is a big step up from the old 5-15 minute gap.
+
+NOTE: `tp_watch.check()` moved from inside the scanner poll (`_fetch_and_report`, gated on
+`POLL_WINDOWS`) into the poller's own outer `while True` loop in `_watch()`, which already
+iterates every `sleep(20)` seconds regardless of scan timing. It needs only `datetime.now()` and
+OpenAlgo's own `/api/v1/quotes` endpoint (never the scanner's scraped price), so no scan-cycle
+dependency existed in the first place — this was a wiring fix, not a new capability.
+
+### 2026-09-08 00:45 — Profit-taking now happens in stages, with the stop-loss moving up as price runs
+
+**What changed:** Previously every trade closed 100% at the first profit target. It now exits
+gradually — a portion at each of three price levels — the same approach already used by the
+other automated strategies (ORB, Breakout).
+
+**Entry:** No change to how a trade is entered.
+
+**Exit (SL):** Once part of the position is booked at a profit level, the stop-loss is walked up
+to that level, so the remaining part of the trade only risks money already gained, never more of
+the original capital.
+
+**Exit (TP):** Instead of selling everything at the first target, the system now sells roughly
+half at the first target, more at the second, and closes the rest at the third — letting winners
+run further while still locking in some profit early.
+
+**Consideration:** This mechanism is brand new and has not been exercised by a single real signal
+yet — it should be watched closely the first few times it actually fires. The exact split (how
+much is sold at each stage) is currently a fixed default rather than adjusted for how strongly
+the stock is trending.
+
+NOTE: Wired `trigger.py`'s already-computed 3-level target ladder (1.0R/1.5R/2.0R) and split
+through to the engine's existing `ExitQtyPct`/TP1-TP1.5-TP2 staged-exit and runner-SL-ratchet
+mechanism (`main.py`'s `_resolve_exit_qty`/`compute_next_tp`), via a new `tp_watch.py` module
+playing the same role as ORB/Breakout's PineScript "TP HIT" alert. The split is a fixed default
+(50/30/20) rather than the day-type-aware version `trigger.py` computes, since preserving that
+would need correlating state across two separate processes (the poller and the trading engine) —
+a deferred follow-up, not a limitation of this change itself. Also fixed a real bug found while
+testing: an undelivered Telegram alert would have permanently stuck a position at its last level;
+delivery is now required before a level counts as "done," so a failed send retries next poll.
+
+### 2026-09-08 00:33 — Alerts now explain themselves in plain English; a daily report shows how the day's calls actually did
+
+**What changed:** Two readability improvements. Every stock alert now includes a one-line, plain
+reason (e.g. "gapped down but buyers stepped in and bought it back") instead of just a code name
+like "GapDnRescue." And a new automatic end-of-day message shows, for every stock flagged that
+day, whether it actually moved the way the alert expected.
+
+**Entry:** No change to how or when a trade is entered — this only makes existing alerts easier to
+read and adds a scorecard afterwards.
+
+**Exit (SL):** Not affected.
+
+**Exit (TP):** Not affected.
+
+**Consideration:** The end-of-day report is purely informational — it never buys or sells
+anything, it just reports afterwards how the day's calls would have done if every one had been
+acted on.
+
+NOTE: Added `alerts._SCAN_REASON` (a one-line description per scan, with a test asserting every
+scan in `scans.py` has one) and threaded it into both the watchlist digest and the confirmed
+trade signal, as a non-mandatory `Reason:` field `parser.py` already tolerates safely. Added
+`eod_summary.py`: scores every symbol first flagged that day against its closing price (fetched
+live via OpenAlgo), and separately summarizes whatever BTST positions settled that day straight
+from the paper ledger. Both send once per day from the existing 14:45+ block.
+
+### 2026-09-08 00:21 — Fixed two settings that could have silently blocked real trades
+
+**What changed:** Two configuration values borrowed from a different, older strategy (ORB) were
+quietly applying to this strategy too, without anyone deciding that was wanted. Both are now
+specific to this strategy.
+
+**Entry:** The scanner can now consider a stock of any price — it previously silently ignored
+anything priced above roughly Rs 5,000 or below roughly Rs 300, and it has already flagged
+several stocks outside that range (Maruti at ~Rs 12,700, for one).
+
+**Exit (SL):** The minimum allowed stop-loss distance was loosened to match how tight this
+strategy's stops actually are (0.20% instead of 0.50%) — the old, wider minimum could have
+rejected a real trade signal outright before it ever placed an order, exactly as happened once
+before to the Breakout strategy.
+
+**Exit (TP):** Not affected by this change.
+
+**Consideration:** Both settings had never actually been tested against a real trade signal, so
+this is a preventative fix based on a strong analogy to a problem already found and fixed
+elsewhere, not a bug confirmed in the act.
+
+NOTE: Added `strategy_profiles.BREAKINGTRADE` to `config.yaml` (`min_sl_pct: 0.002`,
+`min_entry_price: 0`, `max_entry_price: 0`), and built genuine per-strategy price-band support in
+`RiskEngine` (previously the price filter was fixed at construction with no override mechanism
+at all) using the same override pattern `validator.py` already uses for `min_sl_pct`.
+
+### 2026-09-07 16:05 — Fixed the paper-trading scoreboard that was stuck, and made sure the robot always turns off after market close
+
+**What changed:** Two independent fixes. The overnight paper-trading ledger (BTST) was never
+actually closing out old positions and recording their results — it now does, automatically,
+every day. And a hard safety switch was added so the data-collection robot always shuts itself
+off after market hours, rather than depending on someone remembering to stop it.
+
+**Entry:** Not affected — this is about how paper trades get closed and scored, and about the
+robot's own on/off behavior, not about opening new trades.
+
+**Exit (SL):** Not affected.
+
+**Exit (TP):** Not affected — the fix is specifically about the BTST paper ledger's own overnight
+close-out step, which has no stop-loss or profit target (see the earlier BTST entries).
+
+**Consideration:** Before this fix, days of paper-trading results were silently sitting
+unfinished, so nobody could actually see how the strategy was doing — that is now visible again
+every day.
+
+NOTE: `paper.settle_open_trades()` required a snapshot stamped exactly `15:30:00`, which only the
+manual `--backfill` command ever produced; the live `--watch` poller's schedule stops at 15:10 and
+never wrote one, so a position opened while `--watch` was the only data source could never
+settle. It now settles against the latest snapshot of the first later trading day, and is called
+automatically from the daily BTST block rather than only from the manual `--paper` command. Also
+added `AUTO_STOP_TIME` (15:20): the poller now self-terminates through the same clean shutdown
+path as SIGTERM/Ctrl-C, rather than relying on an external process to stop it.
+
 ### 2026-09-07 13:30 — Heartbeat false alarm fixed; structure-flip watch added; watchlist alerts now unmistakable
 
 **The "no successful poll for 35 minutes" alarm from today was a false alarm, not a dead

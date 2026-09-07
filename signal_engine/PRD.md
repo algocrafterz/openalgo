@@ -195,6 +195,8 @@ That file is the source of truth for this strategy; only the summary lives here.
 | `validate.py` | MFE/MAE forward test with a random control |
 | `review.py` | Daily paper review (`--review`), mode check first |
 | `flip_watch.py` | Alert-only warning when an open position's own setup reverses (2026-09-07) |
+| `eod_summary.py` | Once-daily Telegram scorecard: watchlist calls vs. close, BTST settlements (2026-09-08) |
+| `tp_watch.py` | Staged TP + runner-SL trailing, checked every ~20s (2026-09-08) |
 | `poller.sh` / `breakingtradectl.ps1` | Lifecycle, PID-file tracked, Windows-task driven |
 
 **Status: PAPER ONLY.** `intraday-breakingtrade` is enabled and signal_engine takes the signals
@@ -213,6 +215,53 @@ special case.
 
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
+
+## Recent Changes (2026-09-08)
+
+Full plain-language writeups with entry/SL/TP/consideration summaries are in
+`STRATEGY-LOG.md`; this is the technical index.
+
+**BTST paper ledger auto-settlement fixed** (`paper.py`). `settle_open_trades()` required a
+snapshot stamped exactly `15:30:00`, which only `--backfill` ever writes — `--watch`'s schedule
+stops at 15:10 and never produces one, so positions opened while `--watch` was the only data
+source sat `status='open'` forever. Now settles against the latest snapshot of the first later
+trading day, and is called automatically from the daily 14:45+ BTST block.
+
+**Poller hard self-stop added** (`__main__.py`). `AUTO_STOP_TIME = 15:20`: the watch loop
+self-terminates through the same clean shutdown path as SIGTERM/Ctrl-C, rather than depending on
+an external cron or a person to stop it.
+
+**Per-strategy SL floor and price band for BREAKINGTRADE** (`config.yaml`, `risk.py`,
+`config.py`, `runtime.py`). Added `strategy_profiles.BREAKINGTRADE` (`min_sl_pct: 0.002`,
+matching BREAKOUT/EMA9's evidence for the same tail+ATR-buffer stop style). Built genuine
+per-strategy price-band support in `RiskEngine` (didn't exist before — `min_entry_price`/
+`max_entry_price` were fixed at construction) and disabled BREAKINGTRADE's band entirely
+(`min/max = 0`) — the global 300-5000 band is calibrated for ORB's fixed universe and was
+silently declining real BreakingTrade candidates outside that range.
+
+**Plain-English scan reasons** (`alerts.py`). `_SCAN_REASON` gives every scan a one-line
+description (e.g. "gapped down but buyers stepped in and bought it back") instead of a cryptic
+tag like `GapDnRescue`. Threaded into both the watchlist digest and the confirmed trade signal
+(a non-mandatory `Reason:` field `parser.py` already tolerates).
+
+**Automated EOD Telegram summaries** (`eod_summary.py`, new). Once per day, from the existing
+14:45+ block: scores every symbol first flagged that day against its closing price (live
+OpenAlgo quote), and separately summarizes whatever BTST positions settled that day straight
+from the paper ledger. Both informational only, deduped to one send per day.
+
+**Staged TP + runner-SL trailing for BREAKINGTRADE** (`tp_watch.py`, new). Wires
+`trigger.py`'s already-computed 3-level target ladder (1.0R/1.5R/2.0R) and split through to the
+engine's existing multi-TP mechanism (`ExitQtyPct`, TP1/TP1.5/TP2 ratcheting) — the same one
+ORB/BREAKOUT use, not a new one. Split is a fixed default (trigger.DEFAULT_SPLIT, 50/30/20) —
+day-type awareness deferred, needs cross-process state correlation. Dedup is gated on confirmed
+Telegram delivery, not the attempt, so an undelivered TP-hit alert retries next poll instead of
+permanently sticking a position.
+
+**TP checks moved to the poller's ~20s loop, not the 5-15 min scan schedule**
+(`__main__.py`). `tp_watch.check()` needs nothing from a scan poll — only an open position and
+a live OpenAlgo quote — so tying it to the scan cadence left real accuracy on the table. Now
+runs on `_watch()`'s own outer loop (already iterates every ~20s), gated to market hours
+(09:15-15:30).
 
 ## Recent Changes (2026-09-07)
 

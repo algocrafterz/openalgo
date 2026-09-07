@@ -253,6 +253,23 @@ component files, TanStack Query for server state.
 messages, PR descriptions, changelogs, release notes, or any generated text
 including drafts for Discord or Telegram. Use plain text labels.
 
+**Strategy logic changes must get a layman summary in that strategy's STRATEGY-LOG.md**
+(e.g. `signal_engine/pinescripts/intraday/breaking-trade/STRATEGY-LOG.md`) — any change to
+entry, exit, stop-loss, take-profit, or filters that decide which signals become trades.
+Dated entry (`### YYYY-MM-DD HH:MM — Title`, from `git log --format="%ad" --date=format:"%Y-%m-%d %H:%M"`
+if already committed), five fields, one to two sentences each, no financial/technical jargon
+(define a term in one clause if it can't be avoided):
+
+- **What changed**
+- **Entry** — does this change how or when a position opens?
+- **Exit (SL)** — does this change the stop-loss?
+- **Exit (TP)** — does this change how profit is taken?
+- **Consideration** — anything a trader should watch for or weigh
+
+Say "Not affected" for a field the change doesn't touch — don't omit it. A fuller technical
+explanation (file/function names, formulas, edge cases) goes in a trailing **NOTE:** block, kept
+out of the five fields above.
+
 ## Frontend build
 
 `frontend/dist/` is in `.gitignore` so contributors cannot commit half-built
