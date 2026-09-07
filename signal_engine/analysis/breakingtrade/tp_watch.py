@@ -13,13 +13,15 @@ multipliers) - built for ORB/BREAKOUT, which are PineScript strategies watching 
 their own chart and firing a "TP HIT" alert the instant a level crosses. This module is the
 BreakingTrade-side equivalent of that PineScript alert, driven from Python instead.
 
-THE ONE THING THAT IS DIFFERENT FROM ORB/BREAKOUT, AND MATTERS: POLL CADENCE.
-PineScript watches every tick. This only checks on the scheduled poll cadence (5-15 minutes
-during market hours - see POLL_WINDOWS in __main__.py). A level can be crossed and price can
-run well past it, or reverse entirely, before the next check. This is materially LESS precise
-than ORB/BREAKOUT's tick-level execution, and is a real, unavoidable limitation of building
-this in Python against a scanner rather than in Pine against the live chart - not a bug to fix,
-just a fact to know before trusting the fills this produces the way ORB's are trusted.
+CADENCE: NOT TIED TO THE SCANNER'S 5-15 MINUTE SCHEDULE
+check() needs nothing from a scan poll - only an open position (trades.db) and a live quote
+(OpenAlgo's own /api/v1/quotes, via eod_summary.fetch_ltp - never the scanner's own scraped
+price, which can be a poll cycle old). __main__.py's _watch() calls it on the poller's own
+outer loop, which already runs every ~20s all day regardless of whether a scan poll is due -
+so this checks roughly as often as that loop iterates, not once per 5-15 minute scan window.
+Still not tick-level like PineScript watching its own chart - a level can still be crossed and
+run past, or reverse, within a ~20s gap - but the gap is the loop's own cadence, not the much
+coarser scanner schedule it happened to inherit at first.
 
 WHY THE SPLIT IS A FIXED DEFAULT, NOT DAY-TYPE-AWARE (YET)
 trigger.py computes a different split for trend days (ride more of the position) vs normal

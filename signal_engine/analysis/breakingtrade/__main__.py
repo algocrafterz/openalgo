@@ -279,18 +279,6 @@ def _fetch_and_report(
         except Exception as exc:
             print(f"  flip watch failed: {type(exc).__name__}: {exc}")
 
-        # Staged TP + runner-SL trailing for open BREAKINGTRADE positions - the Python-side
-        # equivalent of ORB/BREAKOUT's PineScript "TP HIT" alerts. Also runs every poll; a
-        # target can be reached at any time of day, not just the late-day BTST window.
-        try:
-            from signal_engine.analysis.breakingtrade import tp_watch
-
-            tp_hits = tp_watch.check(captured_at)
-            if tp_hits:
-                print(f"  {tp_hits} TP-hit exit signal(s) sent")
-        except Exception as exc:
-            print(f"  tp watch failed: {type(exc).__name__}: {exc}")
-
     if btst_mode:
         print()
         _print_btst(mp_snapshot.frame, vol_snapshot.frame if vol_snapshot else None, captured_at)
@@ -588,6 +576,23 @@ def _watch(args) -> int:
             if current >= AUTO_STOP_TIME:
                 logger.info(f"auto-stop: {AUTO_STOP_TIME:%H:%M} reached, nothing left on today's schedule")
                 raise KeyboardInterrupt
+
+            # Staged TP + runner-SL trailing for open BREAKINGTRADE positions, checked on THIS
+            # loop's own ~20s cadence rather than the scan schedule's 5-15 minute one. It needs
+            # nothing from a scan poll - only OpenAlgo's own live quote (already used, see
+            # eod_summary.fetch_ltp) - so tying it to the scanner's slower cadence was leaving
+            # real accuracy on the table for no reason. Market hours only, so a poller left
+            # running before the open or after the close isn't spending OpenAlgo API calls on
+            # nothing.
+            if time(9, 15) <= current <= time(15, 30):
+                try:
+                    from signal_engine.analysis.breakingtrade import tp_watch
+
+                    tp_hits = tp_watch.check(now)
+                    if tp_hits:
+                        logger.info(f"{tp_hits} TP-hit exit signal(s) sent")
+                except Exception as exc:
+                    logger.warning(f"tp watch failed: {type(exc).__name__}: {exc}")
 
             # A mark is due if it is this minute, or was up to a few minutes ago and nothing was
             # stored for it - which is what makes a restart resume rather than skip.
