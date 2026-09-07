@@ -294,10 +294,16 @@ def _fetch_and_report(
 
             watchlist = btst.candidates(mp_snapshot.frame, vol_snapshot.frame)
             alerts.alert_btst(watchlist, captured_at)
-            # Paper-trade it rather than risking capital on an unproven list. Settlement
-            # happens automatically once the next session is captured.
+            # Paper-trade it rather than risking capital on an unproven list.
             opened = paper.record_entries(watchlist, captured_at)
             print(f"  paper: opened {opened} hypothetical positions")
+            # Settle anything still open from an earlier day now that this poll's snapshot
+            # gives settle_open_trades() a next-session close to settle against. Only called
+            # from the 14:45+ block (not every poll) so an early-morning read of the new day
+            # never gets locked in as if it were the close.
+            settled = paper.settle_open_trades()
+            if settled:
+                print(f"  paper: settled {settled} previously open position(s)")
         except Exception as exc:
             print(f"  BTST alert failed: {type(exc).__name__}: {exc}")
     elif store_it and new_by_scan:
@@ -367,6 +373,15 @@ HEARTBEAT_STALE_MINUTES = 35
 # A poll may still be taken this many minutes after its scheduled mark - covers a restart that
 # lands just after a due time, so a bounced process does not silently skip the slot.
 CATCH_UP_GRACE_MINUTES = 4
+
+# The process self-terminates at this time rather than idling forever waiting for something
+# external (a cron job, poller.sh stop, a manually-typed Ctrl-C) to notice the day is over.
+# Nothing is ever scheduled this late - POLL_WINDOWS' last mark is 15:10, continuous F&O
+# trading itself ends at 15:15 - so this is pure safety margin, not a real cutoff. Without it,
+# a forgotten `--watch` process holds a browser session open indefinitely; it would not poll or
+# alert again (nothing matches _due_marks past 15:10), but there is no reason to leave a headless
+# Chromium and a login session running unattended overnight when the day's work is done.
+AUTO_STOP_TIME = time(15, 20)
 
 
 def _setup_logging():
@@ -544,6 +559,10 @@ def _watch(args) -> int:
         while True:
             now = _dt.now()
             current = now.time()
+
+            if current >= AUTO_STOP_TIME:
+                logger.info(f"auto-stop: {AUTO_STOP_TIME:%H:%M} reached, nothing left on today's schedule")
+                raise KeyboardInterrupt
 
             # A mark is due if it is this minute, or was up to a few minutes ago and nothing was
             # stored for it - which is what makes a restart resume rather than skip.

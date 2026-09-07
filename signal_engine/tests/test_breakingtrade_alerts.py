@@ -10,7 +10,12 @@ import pandas as pd
 import pytest
 
 from signal_engine.analysis.breakingtrade import alerts, store
-from signal_engine.analysis.breakingtrade.__main__ import _due_marks, _within_poll_hours
+from signal_engine.analysis.breakingtrade.__main__ import (
+    AUTO_STOP_TIME,
+    POLL_WINDOWS,
+    _due_marks,
+    _within_poll_hours,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -147,3 +152,10 @@ def test_heartbeat_buffer_covers_a_failure_right_at_a_windows_close():
     from datetime import time as _time
 
     assert _within_poll_hours(_time(13, 2)) is True  # 2 min past the 13:00 window close
+
+
+def test_auto_stop_is_safely_after_the_last_scheduled_window():
+    """The self-stop time must never cut off a mark that could still be due - it exists to end
+    the day, not to shorten it."""
+    last_window_end = max(end for _start, end, _minutes in POLL_WINDOWS)
+    assert AUTO_STOP_TIME > last_window_end

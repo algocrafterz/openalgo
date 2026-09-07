@@ -82,3 +82,33 @@ def test_missing_exit_price_voids_rather_than_guesses():
 def test_cost_assumption_is_not_silently_zero():
     """A gross figure that ignores costs flatters every result; the constant must be real."""
     assert paper.ROUND_TRIP_COST_PCT > 0
+
+
+def _store_intraday_poll(day: str, hhmm: str, symbol: str, price: float):
+    """Write one snapshot at an arbitrary time of day - what the live --watch poller writes,
+    as opposed to _store_session's single 15:30 --backfill-style row."""
+    frame = pd.DataFrame([{"symbol": symbol, "price": price, "day_type": "Normal Var"}])
+    store.save_snapshot(
+        extractor.Snapshot(
+            kind="market_profile",
+            captured_at=datetime.strptime(f"{day} {hhmm}", "%Y-%m-%d %H:%M"),
+            frame=frame,
+        )
+    )
+
+
+def test_settles_against_the_live_pollers_data_with_no_1530_snapshot():
+    """The bug this fixes: a position opened while --watch (not --backfill) was the only data
+    source never settled, because settlement required a snapshot stamped exactly 15:30 and
+    --watch's schedule stops at 15:10. Friday's whole BTST list sat 'open' forever as a result."""
+    paper.record_entries(_watchlist(price=100.0), datetime(2026, 9, 4, 14, 50))
+    _store_intraday_poll("2026-09-07", "09:20", "SWIGGY", 90.0)
+    _store_intraday_poll("2026-09-07", "14:50", "SWIGGY", 110.0)  # closest to the close
+
+    assert paper.settle_open_trades() == 1
+    trade = paper.ledger().iloc[0]
+    assert trade["status"] == "closed"
+    # Must use the LATEST poll of the day (14:50), not the earliest (09:20) - an early read is
+    # the open, not the close, and would misprice the exit.
+    assert trade["exit_price"] == 110.0
+    assert trade["return_pct"] == pytest.approx(10.0)

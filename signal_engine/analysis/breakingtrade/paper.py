@@ -77,11 +77,21 @@ def record_entries(watchlist: pd.DataFrame, captured_at: datetime, strategy: str
 
 
 def settle_open_trades(strategy: str = "BTST") -> int:
-    """Close every open paper trade against the first stored session AFTER its entry.
+    """Close every open paper trade against the LATEST stored session on the first day AFTER
+    its entry.
 
     The exit price comes from the same snapshot table the entry did, so both sides of the trade
     share one source - a few paise off the exchange's official close, but internally consistent,
     which is what matters for measuring the strategy rather than the broker.
+
+    Originally required a snapshot stamped exactly '%15:30:00' - which only `--backfill`
+    produces (the vendor's own single end-of-day read). The live `--watch` poller writes many
+    snapshots a day (09:20 through 14:50/15:05) and none at 15:30, so a position opened while
+    `--watch` was the only data source could never settle - it just sat 'open' forever, which is
+    what happened to the whole 2026-09-04 BTST list. Using the latest snapshot of the next
+    trading day instead works with either source: it's exactly right for `--backfill`'s single
+    15:30 row, and for `--watch` it picks the read closest to the close (14:50, minutes before
+    continuous F&O trading actually ends at 15:15) rather than the day's opening read.
     """
     with _connect() as conn:
         open_rows = conn.execute(
@@ -96,16 +106,19 @@ def settle_open_trades(strategy: str = "BTST") -> int:
             r[0]
             for r in conn.execute(
                 "SELECT DISTINCT captured_at FROM snapshots WHERE kind = 'market_profile' "
-                "AND captured_at LIKE '%15:30:00' ORDER BY captured_at"
+                "ORDER BY captured_at"
             ).fetchall()
         ]
+        # Ascending order means the last write for a given calendar day is that day's latest -
+        # exactly the "closest to the close" read wanted for settlement.
+        latest_by_day = {s[:10]: s for s in sessions}
 
         settled = 0
         for symbol, entry_at, entry_price in open_rows:
-            later = [s for s in sessions if s[:10] > entry_at[:10]]
-            if not later:
+            later_days = sorted(day for day in latest_by_day if day > entry_at[:10])
+            if not later_days:
                 continue  # the next session has not been captured yet
-            exit_session = later[0]
+            exit_session = latest_by_day[later_days[0]]
             row = conn.execute(
                 "SELECT price FROM snapshots WHERE kind = 'market_profile' "
                 "AND captured_at = ? AND symbol = ?",
