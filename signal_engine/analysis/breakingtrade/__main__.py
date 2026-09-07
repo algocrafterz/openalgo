@@ -279,6 +279,18 @@ def _fetch_and_report(
         except Exception as exc:
             print(f"  flip watch failed: {type(exc).__name__}: {exc}")
 
+        # Staged TP + runner-SL trailing for open BREAKINGTRADE positions - the Python-side
+        # equivalent of ORB/BREAKOUT's PineScript "TP HIT" alerts. Also runs every poll; a
+        # target can be reached at any time of day, not just the late-day BTST window.
+        try:
+            from signal_engine.analysis.breakingtrade import tp_watch
+
+            tp_hits = tp_watch.check(captured_at)
+            if tp_hits:
+                print(f"  {tp_hits} TP-hit exit signal(s) sent")
+        except Exception as exc:
+            print(f"  tp watch failed: {type(exc).__name__}: {exc}")
+
     if btst_mode:
         print()
         _print_btst(mp_snapshot.frame, vol_snapshot.frame if vol_snapshot else None, captured_at)
