@@ -96,6 +96,29 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-08 09:17 — Telegram messages were rendering misaligned; end-of-day summaries now grouped by outcome
+
+**What changed:** Every table-style Telegram message (the watchlist digest, the BTST list, both
+end-of-day summaries) was being sent as plain text, which Telegram displays in a font where
+columns don't line up — so the neat-looking spacing in the code never actually looked neat on a
+phone. These now render in a fixed-width font so the columns actually align. The two end-of-day
+summaries were also reorganized to group stocks by whether the call was right or wrong, instead
+of one mixed list, so the day's hit rate is visible at a glance.
+
+**Entry:** Not affected.
+
+**Exit (SL):** Not affected.
+
+**Exit (TP):** Not affected.
+
+**Consideration:** Purely a readability fix — no numbers, prices, or decisions changed, only how
+the messages display.
+
+NOTE: `alerts.send()` gained a `monospace: bool` parameter that wraps the message in a Markdown
+code block and sets `parse_mode: "Markdown"`; applied to `alert_transitions`, `alert_btst`, and
+both `eod_summary.py` functions. The EOD summaries now build `RIGHT`/`WRONG` (intraday) and
+`WINNERS`/`LOSERS` (BTST) sections instead of a single list sorted by return.
+
 ### 2026-09-08 01:47 — TP checks now happen every ~20 seconds, not every 5-15 minutes
 
 **What changed:** The system now checks stock prices against profit targets much more often —
