@@ -111,8 +111,24 @@ def _already_sent_today(day: str, scan: str) -> bool:
     return row is not None
 
 
+def _row(c: dict, width: int) -> str:
+    if c["pct"] is None:
+        return f"  {c['symbol']:<{width}} price unavailable ({c['scan']})"
+    return (
+        f"  {c['symbol']:<{width}} {c['entry']:>9,.2f} -> {c['ltp']:>9,.2f}  "
+        f"{c['pct']:+.2f}%  {c['side']}"
+    )
+
+
 def alert_intraday_eod_summary(day: str, captured_at: datetime) -> bool:
-    """Score every symbol first flagged today against its closing price. Sends once per day."""
+    """Score every symbol first flagged today against its closing price. Sends once per day.
+
+    Grouped by outcome (right/wrong/no price) rather than one interleaved list sorted by
+    return, since "how many of today's calls actually worked" is the question this answers and
+    a reader shouldn't have to tally right/wrong marks down a mixed list to see it. Sent as a
+    monospace block (see alerts.send(monospace=True)) so the column alignment actually renders
+    on the phone instead of collapsing under Telegram's default proportional font.
+    """
     if _already_sent_today(day, "INTRADAY"):
         return False
     calls = _first_seen_watchlist_calls(day)
@@ -129,27 +145,29 @@ def alert_intraday_eod_summary(day: str, captured_at: datetime) -> bool:
         worked = (pct > 0) == (call["side"] == "long")
         scored.append({**call, "ltp": ltp, "pct": pct, "worked": worked})
 
-    resolved = [c for c in scored if c["worked"] is not None]
-    right = sum(1 for c in resolved if c["worked"])
-
+    right = sorted((c for c in scored if c["worked"] is True), key=lambda c: -c["pct"])
+    wrong = sorted((c for c in scored if c["worked"] is False), key=lambda c: c["pct"])
+    unresolved = [c for c in scored if c["worked"] is None]
     width = max((len(c["symbol"]) for c in scored), default=8)
-    lines = [
-        f"BT EOD SUMMARY {day} | {len(scored)} stocks called, "
-        + (f"{right}/{len(resolved)} moved as called" if resolved else "no closing prices available")
-    ]
-    for c in sorted(scored, key=lambda c: (c["pct"] is None, -(c["pct"] or 0))):
-        if c["pct"] is None:
-            lines.append(f"{c['side']:<5} {c['symbol']:<{width}} price unavailable ({c['scan']})")
-            continue
-        mark = "right" if c["worked"] else "wrong"
-        lines.append(
-            f"{c['side']:<5} {c['symbol']:<{width}} {c['entry']:>9,.2f} -> {c['ltp']:>9,.2f} "
-            f"{c['pct']:+.2f}%  {mark}  ({c['scan']})"
-        )
-    lines.append("Informational only - most of these were never real trades, see the channel above.")
+
+    date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
+    lines = [f"BT EOD SUMMARY {date_label}"]
+    if right or wrong:
+        lines.append(f"{len(scored)} called | {len(right)} right, {len(wrong)} wrong")
+    else:
+        lines.append(f"{len(scored)} called | no closing prices available")
+
+    if right:
+        lines += ["", f"RIGHT ({len(right)})"] + [_row(c, width) for c in right]
+    if wrong:
+        lines += ["", f"WRONG ({len(wrong)})"] + [_row(c, width) for c in wrong]
+    if unresolved:
+        lines += ["", f"NO PRICE ({len(unresolved)})"] + [_row(c, width) for c in unresolved]
+
+    lines += ["", "Informational only - most of these were never real trades."]
     message = "\n".join(lines)
 
-    delivered, message_id = alerts.send(message, "intraday_transition")
+    delivered, message_id = alerts.send(message, "intraday_transition", monospace=True)
     alerts.record(
         "eod_summary",
         message,
@@ -191,17 +209,26 @@ def alert_btst_eod_summary(day: str) -> bool:
     if not settled:
         return False
 
-    wins = sum(1 for t in settled if t["pct"] > 0)
+    wins = [t for t in settled if t["pct"] > 0]
+    losses = [t for t in settled if t["pct"] <= 0]
     width = max(len(t["symbol"]) for t in settled)
-    lines = [f"BTST EOD SUMMARY {day} | {len(settled)} settled, {wins}/{len(settled)} winners"]
-    for t in settled:
-        lines.append(
-            f"{t['symbol']:<{width}} {t['entry']:>9,.2f} -> {t['exit']:>9,.2f}  {t['pct']:+.2f}%"
-        )
-    lines.append("Paper only - no real capital was ever at risk. Kept for tracking, not action.")
+    date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
+
+    def _btst_row(t: dict) -> str:
+        return f"  {t['symbol']:<{width}} {t['entry']:>9,.2f} -> {t['exit']:>9,.2f}  {t['pct']:+.2f}%"
+
+    lines = [
+        f"BTST EOD SUMMARY {date_label}",
+        f"{len(settled)} settled | {len(wins)} winners, {len(losses)} losers",
+    ]
+    if wins:
+        lines += ["", f"WINNERS ({len(wins)})"] + [_btst_row(t) for t in sorted(wins, key=lambda t: -t["pct"])]
+    if losses:
+        lines += ["", f"LOSERS ({len(losses)})"] + [_btst_row(t) for t in sorted(losses, key=lambda t: t["pct"])]
+    lines += ["", "Paper only - no real capital was ever at risk. Kept for tracking, not action."]
     message = "\n".join(lines)
 
-    delivered, message_id = alerts.send(message, "btst")
+    delivered, message_id = alerts.send(message, "btst", monospace=True)
     alerts.record(
         "eod_summary", message, scan="BTST", deliver=False, delivered=delivered,
         message_id=message_id,

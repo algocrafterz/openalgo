@@ -185,13 +185,20 @@ def _credentials(kind: str = None) -> tuple:
     return token, (chat.strip() if chat else chat)
 
 
-def send(text: str, kind: str = None) -> tuple[bool, int | None]:
+def send(text: str, kind: str = None, monospace: bool = False) -> tuple[bool, int | None]:
     """Deliver one message to the channel that `kind` belongs to.
 
     Returns (delivered, message_id). Never raises - a failed alert must not take the collector
     down - so both are (False, None) when unconfigured, refused, or unreachable. message_id is
     Telegram's own id for the sent message, kept so a later alert can link straight back to it
     (see telegram_link()).
+
+    monospace=True wraps the whole message in a Markdown code block. Every column-aligned
+    message here (padded with f"{x:<10}" etc.) was being sent as plain text with no parse_mode -
+    Telegram renders that in a PROPORTIONAL font, so the padding spaces do nothing and every
+    "aligned" table was actually ragged on the phone. Safe to always escape-free here: inside a
+    Markdown code block only a literal backtick or backslash needs escaping, and none of this
+    module's generated text (numbers, symbols, arrows) ever contains either.
     """
     global _warned_missing_config
     token, chat_id = _credentials(kind)
@@ -204,10 +211,16 @@ def send(text: str, kind: str = None) -> tuple[bool, int | None]:
             )
             _warned_missing_config = True
         return False, None
+    payload = {"chat_id": chat_id, "disable_web_page_preview": True}
+    if monospace:
+        payload["text"] = f"```\n{text}\n```"
+        payload["parse_mode"] = "Markdown"
+    else:
+        payload["text"] = text
     try:
         response = httpx.post(
             _TELEGRAM_API.format(token=token),
-            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+            json=payload,
             timeout=15,
         )
         if response.status_code == 200:
@@ -368,7 +381,7 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     message = "\n".join(lines)
 
     # one message covering every new name
-    delivered, message_id = send(message, "intraday_transition")
+    delivered, message_id = send(message, "intraday_transition", monospace=True)
     for scan_name, symbols in new_by_scan.items():
         for symbol in symbols:
             record(
@@ -408,7 +421,8 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     lines.append("Size for a gap, not a stop. No edge established - paper first.")
     message = "\n".join(lines)
 
-    delivered, message_id = send(message, "btst")  # one message listing the whole watchlist
+    # one message listing the whole watchlist
+    delivered, message_id = send(message, "btst", monospace=True)
     for row in watchlist.itertuples():
         record(
             "btst",

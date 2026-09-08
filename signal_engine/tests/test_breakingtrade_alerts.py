@@ -17,12 +17,67 @@ from signal_engine.analysis.breakingtrade.__main__ import (
     _within_poll_hours,
 )
 
+# Captured at import time, before the autouse fixture below replaces alerts.send with a mock -
+# TestSendMonospace needs the REAL implementation to test its actual HTTP payload construction.
+_real_send = alerts.send
+
 
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
     # Never attempt a real network call from a test.
-    monkeypatch.setattr(alerts, "send", lambda text, kind=None: (False, None))
+    monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (False, None))
+
+
+class _FakeResponse:
+    status_code = 200
+
+    def json(self):
+        return {"result": {"message_id": 1}}
+
+
+class TestSendMonospace:
+    """send()'s own HTTP payload - the actual bug this fixed: every column-padded message
+    (f"{x:<10}") was sent as plain text with no parse_mode, and Telegram renders that in a
+    proportional font where the padding does nothing - so every 'aligned' table was ragged on
+    the phone. monospace=True must wrap in a code block and set parse_mode; the default must
+    not, so a short conversational alert doesn't get an unnecessary grey box."""
+
+    def test_monospace_wraps_in_a_markdown_code_block(self, monkeypatch):
+        monkeypatch.setattr(
+            alerts, "_env",
+            lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc", "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100X"},
+        )
+        captured = {}
+
+        def fake_post(url, json, timeout):
+            captured.update(json)
+            return _FakeResponse()
+
+        monkeypatch.setattr(alerts.httpx, "post", fake_post)
+
+        _real_send("col1  col2", kind="intraday_transition", monospace=True)
+
+        assert captured["text"] == "```\ncol1  col2\n```"
+        assert captured["parse_mode"] == "Markdown"
+
+    def test_default_sends_plain_text_with_no_parse_mode(self, monkeypatch):
+        monkeypatch.setattr(
+            alerts, "_env",
+            lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc", "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100X"},
+        )
+        captured = {}
+
+        def fake_post(url, json, timeout):
+            captured.update(json)
+            return _FakeResponse()
+
+        monkeypatch.setattr(alerts.httpx, "post", fake_post)
+
+        _real_send("a short note", kind="intraday_transition")
+
+        assert captured["text"] == "a short note"
+        assert "parse_mode" not in captured
 
 
 def test_alert_is_recorded_even_when_delivery_fails():

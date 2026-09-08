@@ -12,7 +12,7 @@ from signal_engine.analysis.breakingtrade import alerts, eod_summary, extractor,
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
-    monkeypatch.setattr(alerts, "send", lambda text, kind=None: (False, None))
+    monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (False, None))
 
 
 def _store_snapshot(captured_at: str, symbol: str, price: float):
@@ -55,8 +55,8 @@ class TestIntradaySummary:
                 "SELECT message FROM alerts WHERE kind = 'eod_summary' AND scan = 'INTRADAY'"
             ).fetchone()[0]
         assert "PNBHOUSING" in message
-        assert "right" in message
-        assert "1/1 moved as called" in message
+        assert "RIGHT (1)" in message
+        assert "1 right, 0 wrong" in message
 
     def test_scores_a_short_call_that_failed(self, monkeypatch):
         _store_snapshot("2026-09-07 09:20", "MARUTI", 12694.0)
@@ -69,8 +69,8 @@ class TestIntradaySummary:
             message = conn.execute(
                 "SELECT message FROM alerts WHERE kind = 'eod_summary' AND scan = 'INTRADAY'"
             ).fetchone()[0]
-        assert "wrong" in message
-        assert "0/1 moved as called" in message
+        assert "WRONG (1)" in message
+        assert "0 right, 1 wrong" in message
 
     def test_missing_quote_is_reported_not_skipped(self, monkeypatch):
         _store_snapshot("2026-09-07 09:20", "TCS", 2283.1)
@@ -142,7 +142,8 @@ class TestBtstSummary:
                 "SELECT message FROM alerts WHERE kind = 'eod_summary' AND scan = 'BTST'"
             ).fetchone()[0]
         assert "SWIGGY" in message
-        assert "1 settled, 1/1 winners" in message
+        assert "1 settled | 1 winners, 0 losers" in message
+        assert "WINNERS (1)" in message
 
     def test_only_sends_once_per_day(self):
         # See the equivalent note in TestIntradaySummary.test_only_sends_once_per_day: the

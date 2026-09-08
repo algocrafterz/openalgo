@@ -17,7 +17,7 @@ def isolated_dbs(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
     monkeypatch.setattr(flip_watch, "_TRADES_DB", str(tmp_path / "trades.db"))
     # Never attempt a real network call from a test.
-    monkeypatch.setattr(alerts, "send", lambda text, kind=None: (False, None))
+    monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (False, None))
 
 
 def _make_trades_db(path, rows):

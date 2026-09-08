@@ -20,7 +20,7 @@ def isolated_dbs(tmp_path, monkeypatch):
     # Delivery must succeed by default here, unlike other test files - _last_level_hit's dedup
     # is gated on delivered=1 (see its docstring), so a permanently-undelivered mock would make
     # every "does it dedup" test re-fire forever regardless of whether the logic is correct.
-    monkeypatch.setattr(alerts, "send", lambda text, kind=None: (True, 999))
+    monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (True, 999))
 
 
 def _make_trades_db(path, rows):
@@ -196,7 +196,7 @@ class TestCheck:
         next poll must try again, not treat the failed attempt as done."""
         entry, sl, tp1 = _open_long()
         monkeypatch.setattr(eod_summary, "fetch_ltp", lambda symbol, exchange="NSE": tp1)
-        monkeypatch.setattr(alerts, "send", lambda text, kind=None: (False, None))
+        monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (False, None))
 
         first = tp_watch.check(datetime(2026, 9, 7, 10, 25))
         second = tp_watch.check(datetime(2026, 9, 7, 10, 30))
