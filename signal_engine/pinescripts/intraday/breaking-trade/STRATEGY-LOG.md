@@ -96,6 +96,44 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-08 13:52 — Found and fixed why not one real trade signal had ever fired
+
+**What changed:** A bug in how price history was read meant the system could never actually
+confirm a trade, no matter how good the setup looked — every single stock the scanner ever
+flagged was structurally unable to become a real trade. That is now fixed.
+
+**Entry:** Real entries can now happen. The underlying check ("did price actually break out and
+hold, not just look like it might") had been comparing today's price history against the wrong
+clock — off by exactly 5 hours 30 minutes, India's offset from world clock time — so the
+morning-session check that opening range breakouts rely on could never find any data to look at,
+and the whole process quietly gave up before it ever got to the "has price confirmed the move"
+step. Checked this against today's real scanner picks: 16 of 19 stocks flagged today would now
+correctly produce a trade plan, versus zero before the fix.
+
+**Exit (SL):** Not affected directly, but follows from the fix — a stop-loss can only be set once
+a trade actually opens, and trades were never opening.
+
+**Exit (TP):** Same as above — not affected directly, but profit targets can only be set once a
+trade opens.
+
+**Consideration:** This has been broken since this scanner started emitting entries — every past
+"why no signal" observation this week is now explained by this one bug, not by the market simply
+not offering good setups. The live scanning process needs to be restarted to pick up this fix;
+until it is, it is still running on the old, broken logic.
+
+NOTE: `validate.fetch_bars()` parses OpenAlgo's history endpoint, which returns UNIX epoch
+seconds (a UTC instant), into a naive pandas `Timestamp` — but never shifted it to IST, while
+every consumer (`trigger.initial_balance()`'s `IB_START=09:15`/`IB_END=10:15` window,
+`entry_trigger()`'s `signal_time` comparison) is written in naive IST on the assumption the bars
+already were too. A bar genuinely stamped 09:15 IST arrived as 03:45, so the Initial Balance
+window never matched a single row, `initial_balance()` returned `(None, None)` for every symbol
+every day, and `plan_trade()` returned `None` before it ever reached the entry-confirmation
+check. `fetch_bars()` had no direct test coverage — every other test in the suite builds
+synthetic bars with already-correct IST timestamps by hand, bypassing this function entirely,
+which is how the bug stayed invisible. Fixed with a single `+ 5:30` shift in `fetch_bars()`
+itself, and added regression tests (mocking the HTTP response with real epoch seconds) plus an
+end-to-end proof against `trigger.initial_balance()`.
+
 ### 2026-09-08 09:17 — Telegram messages were rendering misaligned; end-of-day summaries now grouped by outcome
 
 **What changed:** Every table-style Telegram message (the watchlist digest, the BTST list, both

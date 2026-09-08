@@ -218,6 +218,24 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-08)
 
+**Critical: `fetch_bars()` UTC/IST bug fixed — this is why zero BreakingTrade trade signals had
+ever fired** (`validate.py`). OpenAlgo's history endpoint returns UTC epoch seconds; `fetch_bars`
+converted to a naive `Timestamp` without shifting to IST, while every consumer
+(`trigger.initial_balance()`'s 09:15-10:15 IB window, `entry_trigger()`'s `signal_time`
+comparison) assumes naive-IST input. `initial_balance()` returned `(None, None)` for every
+symbol every day; `plan_trade()` returned `None` before reaching entry confirmation. Verified
+against live data: 16/19 of today's watchlist symbols now produce a valid plan, versus 0 before.
+No prior test coverage of `fetch_bars()` itself (other tests bypass it with hand-built IST bars)
+— added regression tests mocking the HTTP response with real epoch seconds. **The running
+poller process needs restarting to pick up this fix.**
+
+**Tabular Telegram messages render correctly now; EOD summaries grouped by outcome**
+(`alerts.py`, `eod_summary.py`). `send()` gained `monospace: bool`, wrapping the message in a
+Markdown code block — every column-padded message (watchlist digest, BTST list, both EOD
+summaries) was previously plain text, which Telegram renders in a proportional font, so the
+alignment never actually rendered. EOD summaries restructured into RIGHT/WRONG
+(intraday) and WINNERS/LOSERS (BTST) sections instead of one list sorted by return.
+
 Full plain-language writeups with entry/SL/TP/consideration summaries are in
 `STRATEGY-LOG.md`; this is the technical index.
 
