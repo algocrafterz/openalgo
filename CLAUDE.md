@@ -270,6 +270,20 @@ Say "Not affected" for a field the change doesn't touch — don't omit it. A ful
 explanation (file/function names, formulas, edge cases) goes in a trailing **NOTE:** block, kept
 out of the five fields above.
 
+**All strategy and analysis timestamps are IST — this platform trades only Indian NSE/BSE
+markets, never anything else.** Convert any external timestamp (broker/data API responses, raw
+epoch seconds, an ISO datetime carrying its own offset) to IST the moment it is parsed, at the
+boundary where it enters the codebase — never assume an API already returns IST, and never
+compare a value that might not be IST against a naive-IST constant (session cutoffs, market-hour
+windows, `IB_START`/`IB_END`-style literals) without converting first. Prefer
+`signal_engine/timeutils.py`'s `IST` timezone object over redefining the offset locally. This is
+not theoretical: `validate.fetch_bars()` silently left OpenAlgo's epoch-second bar timestamps in
+UTC instead of shifting to IST, and every BreakingTrade trade-confirmation check compared
+against them — so the confirmation step was structurally incapable of succeeding, for every
+symbol, every day, from when the strategy was built until the bug was found (2026-09-08). No
+exception, no error, nothing to search logs for — it just never worked, silently. See
+`signal_engine/pinescripts/intraday/breaking-trade/STRATEGY-LOG.md`'s 2026-09-08 13:52 entry.
+
 ## Frontend build
 
 `frontend/dist/` is in `.gitignore` so contributors cannot commit half-built
