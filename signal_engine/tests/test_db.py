@@ -6,14 +6,14 @@ import sqlite3
 
 import pytest
 
-from signal_engine.db import save, _get_connection
-from signal_engine.strategies import ORB
+from signal_engine.db import _get_connection, fetch_all_open_positions, save, save_reconciled_exit
 from signal_engine.models import (
     Action,
     Order,
     OrderStatus,
     TradeResult,
 )
+from signal_engine.strategies import ORB
 from signal_engine.tests.conftest import make_signal as _make_signal
 
 
@@ -153,3 +153,63 @@ class TestContextPersistence:
         (ctx,) = conn.execute("SELECT context FROM trades").fetchone()
         conn.close()
         assert json.loads(ctx) == {"score": "7"}
+
+
+class TestOpenPositionReconciliation:
+    """fetch_all_open_positions() / save_reconciled_exit() - startup.reconcile_open_positions()
+    uses these to find and backfill a position the broker closed while the engine was down."""
+
+    def test_open_entry_with_no_exit_is_returned(self):
+        save(_make_signal(symbol="HINDALCO"), _make_order(symbol="HINDALCO"), _make_result())
+        open_positions = fetch_all_open_positions()
+        assert len(open_positions) == 1
+        assert open_positions[0]["symbol"] == "HINDALCO"
+        assert open_positions[0]["direction"] == "LONG"
+
+    def test_entry_followed_by_exit_is_not_open(self):
+        from signal_engine.models import Direction
+
+        save(_make_signal(symbol="HINDALCO"), _make_order(symbol="HINDALCO"), _make_result())
+        save(
+            _make_signal(symbol="HINDALCO", direction=Direction.EXIT),
+            _make_order(symbol="HINDALCO"),
+            _make_result(),
+        )
+        assert fetch_all_open_positions() == []
+
+    def test_only_todays_entries_are_considered(self, monkeypatch):
+        """A position genuinely opened on an earlier day (should never happen for MIS, but the
+        query must not silently reach back regardless) is out of scope for today's reconciliation."""
+        conn = _get_connection()
+        conn.execute(
+            "INSERT INTO trades (strategy, direction, symbol, status, executed_at) "
+            "VALUES ('ORB', 'LONG', 'OLDSYM', 'SUCCESS', '2020-01-01T09:20:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+        assert fetch_all_open_positions() == []
+
+    def test_save_reconciled_exit_writes_a_success_exit_row(self):
+        save_reconciled_exit(
+            "BREAKOUT", "HINDALCO", 1022.4, 1019.43, 1026.85, 107, 1019.4, -363.8,
+            "Reconciled at startup",
+        )
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT strategy, direction, symbol, status, fill_price FROM trades"
+        ).fetchone()
+        conn.close()
+        assert row == ("BREAKOUT", "EXIT", "HINDALCO", "SUCCESS", 1019.4)
+
+    def test_save_reconciled_exit_removes_the_position_from_open_positions(self):
+        # Same strategy tag (ORB, _make_signal's default) as the reconciled exit below - the
+        # two rows must be recognised as the SAME (strategy, symbol) position for this to prove
+        # anything.
+        save(_make_signal(symbol="HINDALCO"), _make_order(symbol="HINDALCO"), _make_result())
+        assert len(fetch_all_open_positions()) == 1
+
+        save_reconciled_exit(
+            "ORB", "HINDALCO", 1022.4, 1019.43, 1026.85, 107, 1019.4, -363.8,
+            "Reconciled at startup",
+        )
+        assert fetch_all_open_positions() == []

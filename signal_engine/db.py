@@ -191,6 +191,105 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
         logger.error(f"Failed to save trade: {e}")
 
 
+def fetch_all_open_positions() -> list:
+    """Every (strategy, symbol) pair whose latest SUCCESS trade today is an unclosed entry
+    (a LONG/SHORT row with no later EXIT row) - the LOCAL, trades.db-only view of "what do we
+    think is open". Used by startup.reconcile_open_positions() to find positions the broker may
+    have already closed while the engine was down (e.g. mid crash-loop) - a case the existing
+    reconciliation (which only walks the broker's currently-NONZERO positions) cannot see,
+    since a closed position simply never appears there. HINDALCO incident, 2026-09-08: a
+    stopped-out position was correctly flat at the broker but stayed 'open' in trades.db and
+    in the risk engine's counters indefinitely, because nothing ever looked from this direction.
+    """
+    try:
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        conn = _get_connection()
+        rows = conn.execute(
+            """
+            SELECT strategy, symbol, direction, entry, sl, tp, quantity, order_id, executed_at
+            FROM trades
+            WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT', 'EXIT')
+              AND date(executed_at) = ?
+            ORDER BY id
+            """,
+            (today,),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"fetch_all_open_positions failed: {e}")
+        return []
+
+    latest = {}
+    for strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at in rows:
+        latest[(strategy, symbol)] = {
+            "strategy": strategy,
+            "symbol": symbol,
+            "direction": direction,
+            "entry": float(entry or 0.0),
+            "sl": float(sl or 0.0),
+            "tp": float(tp or 0.0),
+            "quantity": int(qty or 0),
+            "order_id": str(order_id or ""),
+            "executed_at": str(executed_at or ""),
+        }
+    return [v for v in latest.values() if v["direction"] in ("LONG", "SHORT")]
+
+
+#: order_id written for a position backfilled by reconciliation rather than a real order.
+RECONCILED_ORDER_ID = "-RECONCILED-"
+
+
+def save_reconciled_exit(
+    strategy: str,
+    symbol: str,
+    entry: float,
+    sl: float,
+    tp: float,
+    quantity: int,
+    fill_price: float,
+    pnl: float,
+    note: str,
+) -> None:
+    """Backfill an EXIT row for a position the broker had already closed by the time the engine
+    restarted - see startup.reconcile_open_positions(). The exact fill time, and whether it
+    closed in one shot or several partial exits, are not knowable from a single flat-position
+    snapshot - this records ONE full-quantity exit with what IS known (realized P&L from the
+    broker's own position book, current LTP as a fill-price estimate) and says so plainly in
+    the message. An approximate record beats a silently missing one, but must never be read as
+    a precisely-timed fill. Never raises: this is bookkeeping and must not break startup.
+    """
+    try:
+        conn = _get_connection()
+        now = datetime.now(IST).isoformat()
+        conn.execute(
+            _INSERT,
+            (
+                strategy,
+                "EXIT",
+                symbol,
+                entry,
+                sl,
+                tp,
+                quantity,
+                RECONCILED_ORDER_ID,
+                "SUCCESS",
+                note,
+                "",
+                now,
+                now,
+                note,
+                json.dumps({"reconciled": True, "realized_pnl": pnl}),
+                fill_price,
+                None,
+                _TRADE_MODE,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to save reconciled exit for {symbol}: {e}")
+
+
 def fetch_last_entry_trade(symbol: str, strategy: str) -> Optional[dict]:
     """Look up the most recent SUCCESS entry trade for symbol+strategy on today (IST).
 

@@ -164,8 +164,20 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
     subsequent TP HIT alert hits the fallback path with EXIT-signal zeroes
     (entry=sl=tp=0) and the partial-exit SL re-placement is skipped, leaving the
     runner qty un-protected. RBLBANK incident, 2026-05-04.
+
+    Also detects the OPPOSITE gap: a position trades.db still shows as open, but the broker
+    already closed it (e.g. a stop-loss filled while the engine was crash-looping). The
+    original version of this function only ever walked the broker's currently-NONZERO
+    positions, so a closed position simply never appeared anywhere in it - trades.db and the
+    risk engine's realised-loss counters stayed wrong indefinitely, silently, with nothing to
+    point at. HINDALCO incident, 2026-09-08: a stopped-out BREAKOUT position was correctly flat
+    at the broker (realized loss -363.80) while trades.db and the daily-loss counter both still
+    thought it was open.
     """
-    if risk_engine.open_positions <= 0:
+    from signal_engine import db
+
+    locally_open = db.fetch_all_open_positions()
+    if risk_engine.open_positions <= 0 and not locally_open:
         return
 
     from signal_engine.api_client import fetch_positionbook
@@ -182,6 +194,41 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         if int(p.get("quantity", 0)) != 0
         and p.get("product", "").upper() in (configured_product, broker_product)
     ]
+    open_broker_symbols = {p.get("symbol", "") for p in open_broker_positions}
+    by_symbol = {p.get("symbol", ""): p for p in positions}
+
+    for pos in locally_open:
+        symbol = pos["symbol"]
+        if symbol in open_broker_symbols:
+            continue  # still genuinely open - handled by the restore path below
+        broker_row = by_symbol.get(symbol)
+        if broker_row is None:
+            logger.warning(
+                f"Reconciliation: {symbol} ({pos['strategy']}) is open in trades.db but the "
+                "broker has no record of it at all - cannot recover a P&L, leaving as-is"
+            )
+            continue
+        pnl = float(broker_row.get("today_realized_pnl", broker_row.get("pnl", 0)) or 0)
+        fill_price = float(broker_row.get("ltp", 0) or 0)
+        note = (
+            f"Reconciled at startup: broker shows {symbol} flat with realized P&L {pnl:+.2f}, "
+            "but trades.db had no EXIT recorded - likely closed while the engine was down."
+        )
+        logger.warning(note)
+        db.save_reconciled_exit(
+            pos["strategy"], symbol, pos["entry"], pos["sl"], pos["tp"],
+            pos["quantity"], fill_price, pnl, note,
+        )
+        risk_engine.record_close(pnl, symbol)
+        try:
+            await notifier.notify_position_closed(
+                symbol, pnl, strategy=pos["strategy"], exit_price=fill_price,
+                entry_price=pos["entry"],
+                day_context="(reconciled after restart - exact fill time unknown)",
+            )
+        except Exception:
+            logger.warning(f"Could not send reconciliation notification for {symbol}")
+
     actual_open = len(open_broker_positions)
     if actual_open != risk_engine.open_positions:
         logger.warning(
