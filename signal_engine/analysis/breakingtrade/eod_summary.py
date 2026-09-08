@@ -184,14 +184,14 @@ def _btst_settled_today(day: str) -> list[dict]:
 
     with paper._connect() as conn:
         rows = conn.execute(
-            "SELECT symbol, entry_price, exit_price, return_pct FROM paper_trades "
+            "SELECT symbol, entry_at, entry_price, exit_price, return_pct FROM paper_trades "
             "WHERE strategy = 'BTST' AND status = 'closed' AND date(exit_at) = ? "
             "ORDER BY return_pct DESC",
             (day,),
         ).fetchall()
     return [
-        {"symbol": s, "entry": e, "exit": x, "pct": r}
-        for s, e, x, r in rows
+        {"symbol": s, "recommended_on": a[:10], "entry": e, "exit": x, "pct": r}
+        for s, a, e, x, r in rows
     ]
 
 
@@ -202,6 +202,12 @@ def alert_btst_eod_summary(day: str) -> bool:
     entry/exit/return_pct, so this is purely a formatting and delivery step, not a new
     calculation. Sends once per day; callers should call this right after
     paper.settle_open_trades() in the same poll that performed the settling.
+
+    Every row states BOTH dates explicitly (recommended on / evaluated on) - a stock in a
+    "settled today" report was picked on an EARLIER day (the evening before, per the BTST
+    "buy today, sell tomorrow" design) and only closes out today, so "today's report" and
+    "today's recommendation" are two different things about two different days. Leaving that
+    implicit was confusing to read back later - see STRATEGY-LOG.md, 2026-09-08.
     """
     if _already_sent_today(day, "BTST"):
         return False
@@ -215,7 +221,11 @@ def alert_btst_eod_summary(day: str) -> bool:
     date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
 
     def _btst_row(t: dict) -> str:
-        return f"  {t['symbol']:<{width}} {t['entry']:>9,.2f} -> {t['exit']:>9,.2f}  {t['pct']:+.2f}%"
+        rec = datetime.strptime(t["recommended_on"], "%Y-%m-%d").strftime("%d-%b")
+        return (
+            f"  {t['symbol']:<{width}} (rec {rec})  {t['entry']:>9,.2f} -> {t['exit']:>9,.2f}  "
+            f"{t['pct']:+.2f}%"
+        )
 
     lines = [
         f"BTST EOD SUMMARY {date_label}",

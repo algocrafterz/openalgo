@@ -144,6 +144,9 @@ class TestBtstSummary:
         assert "SWIGGY" in message
         assert "1 settled | 1 winners, 0 losers" in message
         assert "WINNERS (1)" in message
+        # Recommended 2026-09-04, settled/evaluated 2026-09-07 - both dates must be explicit so
+        # a reader can never confuse "in this report" with "recommended today".
+        assert "(rec 04-Sep)" in message
 
     def test_only_sends_once_per_day(self):
         # See the equivalent note in TestIntradaySummary.test_only_sends_once_per_day: the
