@@ -82,7 +82,18 @@ def fetch_bars(symbol: str, day: datetime, exchange: str = "NSE") -> pd.DataFram
 
     frame = pd.DataFrame(rows)
     if "timestamp" in frame.columns:
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="s", errors="coerce")
+        # OpenAlgo's history endpoint returns UNIX epoch seconds - a UTC instant. Every caller
+        # of fetch_bars (initial_balance's IB_START/IB_END window, entry_trigger's signal_time
+        # comparison, this module's own captured_at) is written in NAIVE IST, on the assumption
+        # bars already were too. They were not: a bar genuinely stamped 09:15 IST arrived here
+        # as 03:45 (09:15 minus the 5:30 offset), so the 09:15-10:15 Initial Balance window
+        # never matched a single row, initial_balance() returned (None, None) for every symbol
+        # on every day, and plan_trade() returned None before it ever reached the entry trigger
+        # check - the reason NO BreakingTrade signal has ever fired despite dozens of watchlist
+        # calls. Shifted here, once, rather than at each naive-IST comparison site.
+        frame["timestamp"] = pd.to_datetime(
+            frame["timestamp"], unit="s", errors="coerce"
+        ) + pd.Timedelta(hours=5, minutes=30)
     frame = frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     return frame
 

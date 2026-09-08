@@ -4,10 +4,89 @@ No network: the part that can silently be wrong is the excursion and first-touch
 and that is pure over a bar frame.
 """
 
+from datetime import datetime
+
 import pandas as pd
 import pytest
 
 from signal_engine.analysis.breakingtrade import validate
+
+
+class _FakeHistoryResponse:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": self._rows}
+
+
+class TestFetchBarsTimezone:
+    """fetch_bars() is the one place OpenAlgo history data enters BreakingTrade - and the one
+    place a real bug lived for as long as this module has existed: OpenAlgo's history endpoint
+    returns UNIX epoch seconds (a UTC instant), but every consumer (initial_balance's
+    IB_START/IB_END window, entry_trigger's signal_time comparison) is written in naive IST.
+    A bar genuinely stamped 09:15 IST arrived as 03:45, so the 09:15-10:15 Initial Balance
+    window never matched a single row and plan_trade() returned None before it ever reached the
+    entry-confirmation check - for every symbol, every day. No trade signal had ever fired.
+    """
+
+    def test_epoch_seconds_are_converted_to_ist_not_left_as_utc(self, monkeypatch):
+        # 2026-09-08 09:15:00 IST == 2026-09-08 03:45:00 UTC == this epoch second.
+        epoch_0915_ist = 1788839100
+        monkeypatch.setattr(
+            validate.httpx, "post",
+            lambda url, json, timeout: _FakeHistoryResponse(
+                [{"timestamp": epoch_0915_ist, "open": 100, "high": 101, "low": 99, "close": 100.5}]
+            ),
+        )
+        bars = validate.fetch_bars("TCS", datetime(2026, 9, 8))
+        assert bars["timestamp"].iloc[0] == pd.Timestamp("2026-09-08 09:15:00")
+
+    def test_a_full_days_bars_land_inside_market_hours(self, monkeypatch):
+        """The regression case directly: a day's worth of 5-minute bars, converted, must fall
+        inside 09:15-15:30 IST - not the 03:45-10:00 UTC range they'd occupy unconverted."""
+        base_epoch = 1788839100  # 2026-09-08 09:15:00 IST
+        rows = [
+            {
+                "timestamp": base_epoch + i * 300,
+                "open": 100, "high": 101, "low": 99, "close": 100.5,
+            }
+            for i in range(12)  # one hour of 5-minute bars
+        ]
+        monkeypatch.setattr(
+            validate.httpx, "post",
+            lambda url, json, timeout: _FakeHistoryResponse(rows),
+        )
+        bars = validate.fetch_bars("TCS", datetime(2026, 9, 8))
+        from datetime import time as _time
+
+        assert (bars["timestamp"].dt.time >= _time(9, 15)).all()
+        assert (bars["timestamp"].dt.time <= _time(10, 15)).all()
+
+    def test_initial_balance_finds_the_window_after_conversion(self, monkeypatch):
+        """End-to-end proof against trigger.py's own consumer: initial_balance() must find a
+        real IB window, not (None, None), once the timestamps are actually in IST."""
+        from signal_engine.analysis.breakingtrade import trigger
+
+        base_epoch = 1788839100  # 2026-09-08 09:15:00 IST
+        rows = [
+            {
+                "timestamp": base_epoch + i * 300,
+                "open": 100 + i, "high": 101 + i, "low": 99 + i, "close": 100.5 + i,
+            }
+            for i in range(13)  # 09:15 through 10:15
+        ]
+        monkeypatch.setattr(
+            validate.httpx, "post",
+            lambda url, json, timeout: _FakeHistoryResponse(rows),
+        )
+        bars = validate.fetch_bars("TCS", datetime(2026, 9, 8))
+        ib_high, ib_low = trigger.initial_balance(bars)
+        assert ib_high is not None
+        assert ib_low is not None
 
 
 def _bars(rows):
