@@ -1,0 +1,696 @@
+//@version=6
+// ============================================================================
+// EMA9 x VWAP - NSE India Equity Intraday, 5-minute
+// ============================================================================
+//
+// THE IDEA
+//   Price respects the 9 EMA relative to session VWAP. The 9 EMA crossing UNDER
+//   VWAP is a short, crossing OVER it is a long. No candlestick confirmation -
+//   the observation is that waiting for confirmation gives the move away.
+//
+// ----------------------------------------------------------------------------
+// MEASURED VERDICT - READ THIS BEFORE RISKING MONEY
+// ----------------------------------------------------------------------------
+// Tested by signal_engine/backtest/strategies/ema9_vwap.py over 208 NSE F&O
+// names, 5-minute bars, 2026-06-04 to 2026-08-26 (59 sessions, 35 IS / 24 OOS).
+//
+//   Plain cross, 11,815 trades:   gross +1.36 bps IS,  -0.41 bps OOS
+//   Cost line for NSE intraday:   ~10 bps round trip (charges + slippage)
+//
+// The entry is worth roughly ZERO before costs and is a loser after them. That
+// is not a tuning problem. Measured directly, without any stop or target model,
+// across 29,492 crossings:
+//
+//   move 0.5 ATR in the cross direction before 0.5 ATR against:  44.5%  t=-18.76
+//   move 1.0 ATR before 1.0 ATR against:                         48.3%  t= -5.78
+//   move 1.5 ATR before 1.5 ATR against:                         49.1%  t= -3.01
+//
+// A driftless walk gives 50%. The cross follows through LESS often than random,
+// significantly so, and converges to random as the horizon widens. The 9 EMA
+// meeting VWAP marks price STRETCHED AND SNAPPING BACK, not a trend starting.
+//
+// Fading the cross was tested too (same costs, ATR and swing stops, 0.75R/1R/1.5R
+// targets): best gross was +0.65 bps. The asymmetry is real but far too small to
+// pay a 10 bps round trip. NEITHER DIRECTION IS TRADEABLE.
+//
+// Every proposed refinement was priced separately by ablation(). None helped in
+// both windows, which is the only result that counts:
+//
+//   variant                        bps IS   bps OOS   helps
+//   base (plain cross)               1.36     -0.41   -
+//   anticipate, 1-2 bars early       0.64     -1.47   neither
+//   near key level                   0.99     -1.16   neither
+//   anticipate + key level           3.14     -4.04   IS only
+//   200 EMA trend filter             2.04     -4.02   IS only
+//   TP 3R                            1.88     -0.44   IS only
+//
+// The two that look best in-sample are the worst out-of-sample. That is the
+// signature of fitting noise, not of finding an edge.
+//
+// Widening the anticipation band, which is what "enter a candle or two early"
+// means in code, has a clean and damning gradient (bps IS / OOS):
+//
+//   0.15 ATR   0.64 / -1.47      0.35 ATR   2.33 / -2.86
+//   0.25 ATR   1.95 / -2.86      0.50 ATR   2.32 / -3.53
+//
+// In-sample rises monotonically, out-of-sample falls monotonically. The earlier
+// the entry, the better it looks on data you already know and the worse it does
+// on data you do not.
+//
+// WORKED SESSION, TCS 2026-09-09 (the one this was eyeballed on). The whole day
+// contains exactly TWO 9 EMA x VWAP crossings: 10:55 (down, short) and 12:30
+// (up, long). A 12:30 close signal fills at the 12:35 open. Note what is NOT
+// there: no cross at 10:30 or 10:35, where the eye reads one - at 10:35 the EMA
+// was still 1.84 above VWAP (0.31 ATR), and it did not reach VWAP until 10:55,
+// after the move had largely happened. Reproducing the 10:35 read needs the
+// anticipation band at ~0.31 ATR, which is exactly the region the sweep above
+// shows collapsing out-of-sample.
+//
+// TCS specifically, which is where the observation came from: 51 trades,
+// gross +7.14 bps but t = -0.60, and IS +13.87 against OOS -2.48. Fifty-one
+// trades cannot separate a 7 bps edge from luck - roughly 1,600 are needed.
+// The IT basket (TCS, INFY, HCLTECH, WIPRO, TECHM) gives 242 trades at
+// -8.97 bps OOS, t = -3.15. TCS is not special; it is a small sample.
+//
+// SO WHY DOES THIS FILE EXIST
+//   As a measurement instrument and a paper-trading harness. Run it forward on
+//   TCS, let it log its own signals, and compare what it actually produces
+//   against what the eye remembers. The defaults below are the PLAIN cross
+//   because that is the only version whose numbers were not chosen in-sample.
+//   The refinements are inputs, defaulted OFF, with their ablation result in
+//   each tooltip so a toggle can never be flipped without seeing the evidence.
+//
+//   Do not wire this to live money on the strength of the chart looking right.
+//
+// ----------------------------------------------------------------------------
+// PIPELINE
+//   alert() on a CLOSED bar -> TradingView webhook -> Telegram -> signal_engine
+//   -> OpenAlgo /api/v1/placesmartorder -> broker
+//   Alert condition must be "Any alert() function call".
+//   Tag EMA9VWAP must exist in signal_engine/strategies.py and config.yaml
+//   strategy_profiles, or every signal is rejected or mis-routed.
+// ============================================================================
+
+strategy("intraday-ema9-vwap", shorttitle="EMA9xVWAP", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     initial_capital=100000, currency=currency.INR,
+     commission_type=strategy.commission.percent, commission_value=0.06,
+     slippage=2, calc_on_every_tick=false, process_orders_on_close=false,
+     pyramiding=0, max_labels_count=500, max_lines_count=500, max_boxes_count=100,
+     max_bars_back=1000)
+
+STRAT_TAG = "EMA9VWAP"
+IST       = "Asia/Kolkata"
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+grpSig = "Signal"
+emaLen = input.int(9, "EMA length", minval=2, maxval=200, group=grpSig)
+useAnticipate = input.bool(false, "Anticipate the cross", group=grpSig,
+     tooltip="Fire while the EMA is still approaching VWAP and the gap is narrowing, " +
+       "instead of waiting for the cross itself. ABLATION: 0.64 bps IS / -1.47 OOS " +
+       "against a 1.36 / -0.41 base. Worse in BOTH windows. Off by default.")
+anticipateAtr = input.float(0.15, "Anticipation band (x ATR)", minval=0.02, maxval=1.0,
+     step=0.01, group=grpSig,
+     tooltip="How close the EMA must get to VWAP to count as approaching. " +
+       "SWEEP (bps IS / OOS): 0.15 -> 0.64/-1.47, 0.25 -> 1.95/-2.86, " +
+       "0.35 -> 2.33/-2.86, 0.50 -> 2.32/-3.53. Widening it makes the in-sample " +
+       "number monotonically BETTER and the out-of-sample number monotonically " +
+       "WORSE. That gradient is the clearest overfit signal in this whole study - " +
+       "a wider band is the setting that most reliably fools the eye.")
+
+grpFilt = "Filters (all measured, all off by default)"
+useKeyLevel = input.bool(false, "Only near a key level", group=grpFilt,
+     tooltip="Require the cross to happen within reach of PDH/PDL/PDC/ORH/ORL. " +
+       "ABLATION: 0.99 bps IS / -1.16 OOS. Worse in BOTH windows.")
+keyLevelAtr = input.float(0.35, "Key-level proximity (x ATR)", minval=0.05, maxval=2.0,
+     step=0.05, group=grpFilt)
+ibMinutes = input.int(60, "Initial Balance (minutes)", minval=15, maxval=120, group=grpFilt,
+     tooltip="IB high/low is the range of the first N minutes. 60 is the conventional " +
+       "Market Profile definition.")
+useIb = input.bool(true, "Include IBH / IBL in the level set", group=grpFilt)
+usePrevWeek = input.bool(true, "Include PWH / PWL", group=grpFilt)
+usePrevMonth = input.bool(true, "Include PMH / PML", group=grpFilt)
+useTrend = input.bool(false, "200 EMA trend filter", group=grpFilt,
+     tooltip="Longs only above the 200 EMA, shorts only below. " +
+       "ABLATION: 2.04 bps IS / -4.02 OOS. Best-looking in-sample, worst out. " +
+       "This is what fitting noise looks like.")
+trendLen = input.int(200, "Trend EMA length", minval=20, group=grpFilt)
+
+grpRisk = "Risk"
+slMode = input.string("Swing", "Stop placement", options=["Swing", "ATR", "VWAP"],
+     group=grpRisk,
+     tooltip="Swing: beyond the recent swing extreme. ATR: a fixed multiple. " +
+       "VWAP: on the far side of VWAP, which matches the premise most closely - " +
+       "if price stops respecting VWAP the reason for the trade is gone.")
+swingLen = input.int(8, "Swing lookback (bars)", minval=2, maxval=50, group=grpRisk)
+slBufAtr = input.float(0.10, "Stop buffer (x ATR)", minval=0.0, maxval=1.0, step=0.05,
+     group=grpRisk)
+slAtrMult = input.float(1.0, "ATR stop multiple", minval=0.2, maxval=5.0, step=0.1,
+     group=grpRisk)
+tpR = input.float(2.0, "Target (R multiple)", minval=0.5, maxval=10.0, step=0.5,
+     group=grpRisk,
+     tooltip="Swept 1R / 1.5R / 2R / 3R out-of-sample: -0.70 / -0.61 / -0.41 / -0.44 bps. " +
+       "All negative. 2R is the least bad, which is not the same as good.")
+atrLen = input.int(14, "ATR length", minval=2, group=grpRisk)
+minSlPct = input.float(0.20, "Minimum stop (% of price)", minval=0.01, maxval=5.0,
+     step=0.01, group=grpRisk,
+     tooltip="Mirrors signal_engine's validator. A stop tighter than this is " +
+       "rejected downstream, so the signal is suppressed here rather than sent to die.")
+exitOnRecross = input.bool(false, "Exit when the EMA crosses back", group=grpRisk,
+     tooltip="ABLATION: 0.13 bps IS / -0.33 OOS. Off by default.")
+
+grpSess = "Session (IST)"
+skipOpenMin = input.int(15, "Skip first N minutes", minval=0, maxval=120, group=grpSess,
+     tooltip="The opening auction print distorts VWAP badly for the first few bars.")
+entryCutHour = input.int(14, "No new entries after (hour)", minval=9, maxval=15, group=grpSess)
+entryCutMin = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group=grpSess)
+timeExitHour = input.int(14, "Time exit (hour)", minval=9, maxval=15, group=grpSess,
+     tooltip="MUST match config.yaml time_exit (14:45 IST). The engine runs its own " +
+       "clock; if the two disagree whichever fires first wins and the logs stop " +
+       "making sense.")
+timeExitMin = input.int(45, "Time exit (minute)", minval=0, maxval=59, group=grpSess)
+maxTradesDay = input.int(3, "Max trades per day", minval=1, maxval=20, group=grpSess)
+oneEachWay = input.bool(true, "One trade per direction per day", group=grpSess)
+allowLongs = input.bool(true, "Allow longs", group=grpSess)
+allowShorts = input.bool(true, "Allow shorts", group=grpSess)
+orMinutes = input.int(15, "Opening range (minutes)", minval=5, maxval=60, group=grpSess)
+
+grpViz = "Visuals"
+// Defaults are deliberately MINIMAL: the 9 EMA, VWAP, and the cross markers, and
+// nothing else. Everything below is additive and off, so the chart stays readable
+// when Initial Balance, Volume Profile and the rest are layered on top from other
+// indicators. Turn a row on only when you are actively looking at it.
+showLines = input.bool(true, "9 EMA and VWAP", group=grpViz)
+showCross = input.bool(true, "Cross markers", group=grpViz)
+showFill = input.bool(false, "Shade between EMA and VWAP", group=grpViz,
+     tooltip="Reads the side at a glance, but it tints the whole pane. Off by default.")
+showSkipped = input.bool(false, "Mark crosses the filters rejected", group=grpViz,
+     tooltip="Only meaningful while a filter is on - it shows what was NOT taken, " +
+       "which is how a filter earns or loses its place.")
+showLevels = input.bool(false, "Live entry / SL / TP levels", group=grpViz)
+showKeyLevels = input.bool(false, "Key levels (PDH/PDL/PDC/ORH/ORL/IB/PW/PM)", group=grpViz,
+     tooltip="Off by default on the assumption you plot your own IB and Volume Profile. " +
+       "These are the levels the optional key-level FILTER tests against.")
+showZones = input.bool(false, "Session shading", group=grpViz)
+showLabels = input.bool(false, "Entry and exit labels", group=grpViz)
+showBand = input.bool(false, "Anticipation band around VWAP", group=grpViz)
+showTable = input.bool(false, "Dashboard", group=grpViz)
+tablePos = input.string("Top Right", "Dashboard position", group=grpViz,
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"])
+
+grpTg = "Telegram"
+telegramChatId = input.string("", "Telegram Chat ID", group=grpTg)
+telegramChatIdObs = input.string("", "Observation Chat ID", group=grpTg,
+     tooltip="Point this at a channel the engine does NOT listen on, so observation " +
+       "traffic can never reach the trade pipeline.")
+
+// ============================================================================
+// INDICATORS
+//   Every ta.* call is unconditional and at global scope. Calling one inside an
+//   if produces different values on a history reload than it did live.
+// ============================================================================
+
+float ema9 = ta.ema(close, emaLen)
+float vwapV = ta.vwap(hlc3)
+float atrV = ta.atr(atrLen)
+float emaTrend = ta.ema(close, trendLen)
+float swingHi = ta.highest(high, swingLen)
+float swingLo = ta.lowest(low, swingLen)
+
+float gap = ema9 - vwapV
+bool crossUp = ta.crossover(ema9, vwapV)
+bool crossDn = ta.crossunder(ema9, vwapV)
+
+// ---- previous day levels, confirmed-bar idiom -------------------------------
+float pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+float pdl = request.security(syminfo.tickerid, "D", low[1], lookahead=barmerge.lookahead_on)
+float pdc = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+float pwh = request.security(syminfo.tickerid, "W", high[1], lookahead=barmerge.lookahead_on)
+float pwl = request.security(syminfo.tickerid, "W", low[1], lookahead=barmerge.lookahead_on)
+float pmh = request.security(syminfo.tickerid, "M", high[1], lookahead=barmerge.lookahead_on)
+float pml = request.security(syminfo.tickerid, "M", low[1], lookahead=barmerge.lookahead_on)
+
+// ---- session bookkeeping ----------------------------------------------------
+bool newSession = ta.change(time("D")) != 0
+int nowMins = hour(time, IST) * 60 + minute(time, IST)
+int cutMins = entryCutHour * 60 + entryCutMin
+int exitMins = timeExitHour * 60 + timeExitMin
+
+var int sessionStartMins = na
+if newSession
+    sessionStartMins := nowMins
+int fromOpen = na(sessionStartMins) ? 0 : nowMins - sessionStartMins
+
+// ---- opening range ----------------------------------------------------------
+var float orH = na
+var float orL = na
+if newSession
+    orH := high
+    orL := low
+else if fromOpen < orMinutes
+    orH := math.max(nz(orH, high), high)
+    orL := math.min(nz(orL, low), low)
+
+// Initial Balance: the same construction over a longer window (60 min by convention).
+var float ibH = na
+var float ibL = na
+if newSession
+    ibH := high
+    ibL := low
+else if fromOpen < ibMinutes
+    ibH := math.max(nz(ibH, high), high)
+    ibL := math.min(nz(ibL, low), low)
+
+// ============================================================================
+// SIGNAL
+// ============================================================================
+
+// NaN fails every naive comparison in BOTH directions, so warmup is guarded
+// explicitly with na() rather than left to `atrV <= 0` to catch.
+bool warm = not na(atrV) and atrV > 0 and not na(ema9) and not na(vwapV) and not na(gap[1])
+
+bool rawLong = useAnticipate
+     ? (gap <= 0 and math.abs(gap) < anticipateAtr * atrV and gap > gap[1] and close > ema9)
+     : crossUp
+bool rawShort = useAnticipate
+     ? (gap >= 0 and math.abs(gap) < anticipateAtr * atrV and gap < gap[1] and close < ema9)
+     : crossDn
+
+// ---- key level proximity ----------------------------------------------------
+float klTol = keyLevelAtr * atrV
+nearLevel(float lvl) => not na(lvl) and math.abs(close - lvl) <= klTol
+bool nearAnyLevel = nearLevel(pdh) or nearLevel(pdl) or nearLevel(pdc) or
+     nearLevel(orH) or nearLevel(orL) or
+     (useIb and (nearLevel(ibH) or nearLevel(ibL))) or
+     (usePrevWeek and (nearLevel(pwh) or nearLevel(pwl))) or
+     (usePrevMonth and (nearLevel(pmh) or nearLevel(pml)))
+
+bool klOk = not useKeyLevel or nearAnyLevel
+bool trendLongOk = not useTrend or (not na(emaTrend) and close > emaTrend)
+bool trendShortOk = not useTrend or (not na(emaTrend) and close < emaTrend)
+
+// ---- position state --------------------------------------------------------
+// Declared BEFORE the session gates because Pine is single-pass and the newSession
+// reset below assigns posDir. A var used above its declaration is an "Undeclared
+// identifier" compile error, not a warning.
+var int posDir = 0                 // +1 long, -1 short, 0 flat
+var float posEntry = na
+var float posSL = na
+var float posTP = na
+var float posRisk = na
+var string posSetup = ""
+
+// ---- session gates ----------------------------------------------------------
+var int tradesToday = 0
+var bool longTaken = false
+var bool shortTaken = false
+if newSession
+    tradesToday := 0
+    longTaken := false
+    shortTaken := false
+    // Belt and braces: the 14:45 time exit should already have flattened, but a
+    // mid-day chart load or a data gap can strand posDir, and a stale non-zero
+    // value blocks every entry for the rest of the session with no visible error.
+    posDir := 0
+
+bool inWindow = fromOpen >= skipOpenMin and nowMins < cutMins and nowMins < exitMins
+bool capOk = tradesToday < maxTradesDay
+bool longSlotOk = allowLongs and (not oneEachWay or not longTaken)
+bool shortSlotOk = allowShorts and (not oneEachWay or not shortTaken)
+
+// ---- stop geometry, computed on the SIGNAL bar ------------------------------
+calcStop(int dir) =>
+    float buf = slBufAtr * atrV
+    float s = na
+    if slMode == "ATR"
+        s := close - dir * slAtrMult * atrV
+    else if slMode == "VWAP"
+        float structural = dir == 1 ? swingLo : swingHi
+        float lvl = dir == 1 ? math.min(vwapV, structural) : math.max(vwapV, structural)
+        s := (na(lvl) ? vwapV : lvl) - dir * buf
+    else
+        float structural = dir == 1 ? swingLo : swingHi
+        s := structural - dir * buf
+    s
+
+float slLongCand = calcStop(1)
+float slShortCand = calcStop(-1)
+
+validStop(int dir, float s) =>
+    bool ok = false
+    if not na(s)
+        float risk = math.abs(close - s)
+        bool sideOk = dir == 1 ? s < close : s > close
+        bool wideOk = risk > 0 and (risk / close) * 100.0 >= minSlPct
+        ok := sideOk and wideOk
+    ok
+
+bool canLong = warm and inWindow and capOk and longSlotOk and posDir == 0 and
+     rawLong and klOk and trendLongOk and validStop(1, slLongCand)
+bool canShort = warm and inWindow and capOk and shortSlotOk and posDir == 0 and
+     rawShort and klOk and trendShortOk and validStop(-1, slShortCand)
+
+// ---- exits on an open position ----------------------------------------------
+bool hitSL = posDir == 1 ? (low <= posSL) : posDir == -1 ? (high >= posSL) : false
+bool hitTP = posDir == 1 ? (high >= posTP) : posDir == -1 ? (low <= posTP) : false
+bool recross = exitOnRecross and (posDir == 1 ? crossDn : posDir == -1 ? crossUp : false)
+bool timeUp = posDir != 0 and nowMins >= exitMins
+
+// ============================================================================
+// ALERT BUILDERS
+//   Single-word keys, one field per line. The compact "LONG | Entry: 123" form
+//   yields NO entry field because ^(\w+)\s*: cannot match past the pipe.
+// ============================================================================
+
+getChartUrl() =>
+    "https://www.tradingview.com/chart/?symbol=" + syminfo.prefix + ":" + syminfo.ticker +
+      "&interval=" + timeframe.period
+
+getTimeIST() => str.format_time(time, "HH:mm", IST) + " IST"
+
+wrapTelegram(string msg, bool observation) =>
+    string cid = observation and telegramChatIdObs != "" ? telegramChatIdObs : telegramChatId
+    '{"chat_id": "' + cid + '", "text": "' + msg + '", "parse_mode": "Markdown"}'
+
+buildEntryAlert(bool isLong, float entryPx, float slPx, float tpPx, string setup) =>
+    float riskVal = math.abs(entryPx - slPx)
+    float rr = riskVal > 0 ? math.abs(tpPx - entryPx) / riskVal : 0.0
+    string msg = STRAT_TAG + " " + (isLong ? "LONG" : "SHORT") + " | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Setup: " + (setup == "" ? "-" : setup) + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Target: " + str.tostring(tpPx, format.mintick) + "\\n"
+    msg += "SL: " + str.tostring(slPx, format.mintick) + "\\n"
+    msg += "RR: 1:" + str.tostring(rr, "0.0") + "\\n"
+    // Context fields: each becomes a column in the trade log at no engine cost.
+    msg += "AtrPct: " + str.tostring(atrV / close * 100.0, "0.00") + "\\n"
+    msg += "SlAtr: " + str.tostring(riskVal / atrV, "0.00") + "\\n"
+    msg += "GapAtr: " + str.tostring(gap / atrV, "0.00") + "\\n"
+    msg += "Vwap: " + str.tostring(vwapV, format.mintick) + "\\n"
+    msg += "NearLevel: " + (nearAnyLevel ? "yes" : "no") + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+buildTPAlert(bool isLong, float entryPx, float exitPx, string lvl, int qtyPct) =>
+    string msg = STRAT_TAG + " " + lvl + " HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "ExitQtyPct: " + str.tostring(qtyPct) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+buildSLAlert(bool isLong, float entryPx, float exitPx) =>
+    string msg = STRAT_TAG + " SL HIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// Side and Entry on SEPARATE lines, and the tag leads. A header like
+// "TIME EXIT | SYM" parses as a strategy literally named "TIME".
+buildExitAlert(bool isLong, float entryPx, float slPx, float tpPx, float exitPx,
+     string reason) =>
+    string msg = STRAT_TAG + " EXIT | " + syminfo.ticker + "\\n"
+    msg += "------------------------\\n"
+    msg += "Reason: " + reason + "\\n"
+    msg += "Side: " + (isLong ? "LONG" : "SHORT") + "\\n"
+    msg += "Entry: " + str.tostring(entryPx, format.mintick) + "\\n"
+    msg += "Exit: " + str.tostring(exitPx, format.mintick) + "\\n"
+    msg += "SL: " + str.tostring(slPx, format.mintick) + "\\n"
+    msg += "TP: " + str.tostring(tpPx, format.mintick) + "\\n"
+    msg += "------------------------\\n"
+    msg += getTimeIST() + "\\n"
+    msg += getChartUrl()
+    wrapTelegram(msg, false)
+
+// ============================================================================
+// EXECUTION - every branch gated on a CONFIRMED bar
+// ============================================================================
+
+var string lastExitReason = ""
+bool didEnterLong = false
+bool didEnterShort = false
+bool didExit = false
+
+if barstate.isconfirmed
+    // 1. manage an open position first. Stop before target: when one bar spans
+    //    both, the sequence is unknowable at 5-minute resolution and the
+    //    optimistic read is how a backtest flatters itself.
+    if posDir != 0
+        bool isLong = posDir == 1
+        if hitSL
+            strategy.close(isLong ? "L" : "S", comment="SL")
+            alert(buildSLAlert(isLong, posEntry, posSL), alert.freq_once_per_bar)
+            lastExitReason := "SL"
+            posDir := 0
+            didExit := true
+        else if hitTP
+            strategy.close(isLong ? "L" : "S", comment="TP")
+            alert(buildTPAlert(isLong, posEntry, posTP, "TP1", 100), alert.freq_once_per_bar)
+            lastExitReason := "TP"
+            posDir := 0
+            didExit := true
+        else if timeUp
+            strategy.close(isLong ? "L" : "S", comment="TIME")
+            alert(buildExitAlert(isLong, posEntry, posSL, posTP, close, "TIME_EXIT"),
+                 alert.freq_once_per_bar)
+            lastExitReason := "TIME"
+            posDir := 0
+            didExit := true
+        else if recross
+            strategy.close(isLong ? "L" : "S", comment="RECROSS")
+            alert(buildExitAlert(isLong, posEntry, posSL, posTP, close, "EMA_RECROSS"),
+                 alert.freq_once_per_bar)
+            lastExitReason := "RECROSS"
+            posDir := 0
+            didExit := true
+
+    // 2. new entry, only if the manage step left us flat
+    if posDir == 0 and not didExit
+        if canLong
+            posDir := 1
+            posEntry := close
+            posSL := slLongCand
+            posRisk := math.abs(close - slLongCand)
+            posTP := close + tpR * posRisk
+            posSetup := useAnticipate ? "approach" : "cross"
+            posSetup := useKeyLevel ? posSetup + "+keylevel" : posSetup
+            tradesToday += 1
+            longTaken := true
+            didEnterLong := true
+            strategy.entry("L", strategy.long)
+            strategy.exit("L", from_entry="L", stop=posSL, limit=posTP)
+            alert(buildEntryAlert(true, posEntry, posSL, posTP, posSetup),
+                 alert.freq_once_per_bar)
+        else if canShort
+            posDir := -1
+            posEntry := close
+            posSL := slShortCand
+            posRisk := math.abs(close - slShortCand)
+            posTP := close - tpR * posRisk
+            posSetup := useAnticipate ? "approach" : "cross"
+            posSetup := useKeyLevel ? posSetup + "+keylevel" : posSetup
+            tradesToday += 1
+            shortTaken := true
+            didEnterShort := true
+            strategy.entry("S", strategy.short)
+            strategy.exit("S", from_entry="S", stop=posSL, limit=posTP)
+            alert(buildEntryAlert(false, posEntry, posSL, posTP, posSetup),
+                 alert.freq_once_per_bar)
+
+// ============================================================================
+// VISUALS
+//   plot() with style_linebr for live levels: nothing to allocate, track or
+//   clean up, and it cannot hit max_lines_count on a long history.
+// ============================================================================
+
+color cUp = color.new(#26a69a, 0)
+color cDn = color.new(#ef5350, 0)
+color cVwap = color.new(#ff9800, 0)
+color cNeutral = color.new(#787b86, 0)
+
+bool emaAbove = ema9 > vwapV
+color cSide = emaAbove ? cUp : cDn
+
+plot(showLines ? ema9 : na, "9 EMA", color=cSide, linewidth=2)
+plot(showLines ? vwapV : na, "VWAP", color=cVwap, linewidth=2)
+
+// The fill IS the signal: its colour flips exactly where the cross happens, and
+// its thickness is how stretched price is from value.
+pEma = plot(showFill ? ema9 : na, "ema fill anchor", color=color.new(color.black, 100),
+     display=display.none)
+pVwap = plot(showFill ? vwapV : na, "vwap fill anchor", color=color.new(color.black, 100),
+     display=display.none)
+fill(pEma, pVwap, color=emaAbove ? color.new(#26a69a, 82) : color.new(#ef5350, 82),
+     title="EMA vs VWAP")
+
+// Anticipation band - where an "approaching" signal is allowed to fire.
+plot(showBand and useAnticipate ? vwapV + anticipateAtr * atrV : na, "Band upper",
+     color=color.new(cVwap, 55), style=plot.style_circles)
+plot(showBand and useAnticipate ? vwapV - anticipateAtr * atrV : na, "Band lower",
+     color=color.new(cVwap, 55), style=plot.style_circles)
+
+plot(showLines and useTrend ? emaTrend : na, "Trend EMA", color=color.new(#2962ff, 30),
+     linewidth=1)
+
+// ---- cross markers ----------------------------------------------------------
+plotshape(showCross and crossUp and barstate.isconfirmed, "Cross up",
+     shape.triangleup, location.belowbar, color=cUp, size=size.tiny)
+plotshape(showCross and crossDn and barstate.isconfirmed, "Cross down",
+     shape.triangledown, location.abovebar, color=cDn, size=size.tiny)
+
+// A cross the filters rejected. Seeing what was SKIPPED is how a filter earns or
+// loses its place - a chart that only shows takes always looks good.
+bool skippedLong = crossUp and barstate.isconfirmed and posDir == 0 and not canLong
+bool skippedShort = crossDn and barstate.isconfirmed and posDir == 0 and not canShort
+plotshape(showSkipped and skippedLong, "Cross skipped long",
+     shape.xcross, location.belowbar, color=color.new(cNeutral, 40), size=size.tiny)
+plotshape(showSkipped and skippedShort, "Cross skipped short",
+     shape.xcross, location.abovebar, color=color.new(cNeutral, 40), size=size.tiny)
+
+plotshape(didEnterLong, "Entry long", shape.labelup, location.belowbar, color=cUp,
+     text="L", textcolor=color.white, size=size.small)
+plotshape(didEnterShort, "Entry short", shape.labeldown, location.abovebar, color=cDn,
+     text="S", textcolor=color.white, size=size.small)
+
+// ---- live trade levels ------------------------------------------------------
+bool inTrade = posDir != 0
+plot(showLevels and inTrade ? posEntry : na, "Entry", color=color.new(#2962ff, 0),
+     style=plot.style_linebr, linewidth=1)
+plot(showLevels and inTrade ? posSL : na, "Stop", color=cDn,
+     style=plot.style_linebr, linewidth=1)
+plot(showLevels and inTrade ? posTP : na, "Target", color=cUp,
+     style=plot.style_linebr, linewidth=1)
+
+// ---- key levels -------------------------------------------------------------
+plot(showKeyLevels ? pdh : na, "PDH", color=color.new(#9c27b0, 35),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels ? pdl : na, "PDL", color=color.new(#9c27b0, 35),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels ? pdc : na, "PDC", color=color.new(#9c27b0, 60),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels ? orH : na, "OR high", color=color.new(#00bcd4, 40),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels ? orL : na, "OR low", color=color.new(#00bcd4, 40),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels and useIb ? ibH : na, "IB high", color=color.new(#ffeb3b, 40),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels and useIb ? ibL : na, "IB low", color=color.new(#ffeb3b, 40),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels and usePrevWeek ? pwh : na, "PWH", color=color.new(#4caf50, 45),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels and usePrevWeek ? pwl : na, "PWL", color=color.new(#4caf50, 45),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels and usePrevMonth ? pmh : na, "PMH", color=color.new(#795548, 45),
+     style=plot.style_linebr, linewidth=1)
+plot(showKeyLevels and usePrevMonth ? pml : na, "PML", color=color.new(#795548, 45),
+     style=plot.style_linebr, linewidth=1)
+
+// ---- session shading --------------------------------------------------------
+bool preWindow = fromOpen < skipOpenMin
+bool postCut = nowMins >= cutMins and nowMins < exitMins
+bool postExit = nowMins >= exitMins
+bgcolor(showZones and preWindow ? color.new(#787b86, 92) : na, title="Opening skip")
+bgcolor(showZones and postCut ? color.new(#787b86, 95) : na, title="No new entries")
+bgcolor(showZones and postExit ? color.new(#ef5350, 93) : na, title="Flat by time exit")
+bgcolor(showZones and useKeyLevel and nearAnyLevel ? color.new(#9c27b0, 90) : na,
+     title="Near key level")
+
+// ---- entry / exit labels ----------------------------------------------------
+if showLabels and barstate.isconfirmed
+    if didEnterLong
+        label.new(bar_index, low, "LONG " + str.tostring(posEntry, format.mintick) +
+             "\nSL " + str.tostring(posSL, format.mintick) +
+             "\nTP " + str.tostring(posTP, format.mintick),
+             style=label.style_label_up, color=color.new(cUp, 20),
+             textcolor=color.white, size=size.small)
+    if didEnterShort
+        label.new(bar_index, high, "SHORT " + str.tostring(posEntry, format.mintick) +
+             "\nSL " + str.tostring(posSL, format.mintick) +
+             "\nTP " + str.tostring(posTP, format.mintick),
+             style=label.style_label_down, color=color.new(cDn, 20),
+             textcolor=color.white, size=size.small)
+    if didExit
+        label.new(bar_index, lastExitReason == "TP" ? high : low, lastExitReason,
+             style=lastExitReason == "TP" ? label.style_label_down : label.style_label_up,
+             color=color.new(lastExitReason == "TP" ? cUp : cNeutral, 25),
+             textcolor=color.white, size=size.tiny)
+
+// ============================================================================
+// DASHBOARD
+//   Created once, cells refilled. Rebuilding it every realtime tick churns
+//   objects for no benefit. The position ternary is computed INLINE because a
+//   user function's return degrades to series and table.new rejects that.
+// ============================================================================
+
+var table dash = na
+if showTable and na(dash)
+    dash := table.new(
+         tablePos == "Top Right" ? position.top_right :
+         tablePos == "Top Left" ? position.top_left :
+         tablePos == "Bottom Right" ? position.bottom_right : position.bottom_left,
+         2, 9, border_width=1, border_color=color.new(color.gray, 60))
+
+if showTable and barstate.islast and not na(dash)
+    color hdr = color.new(#1e222d, 10)
+    color cellBg = color.new(#1e222d, 35)
+    table.cell(dash, 0, 0, "EMA9 x VWAP", text_color=color.white, bgcolor=hdr,
+         text_size=size.small)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=hdr,
+         text_size=size.small)
+
+    table.cell(dash, 0, 1, "Side", text_color=color.gray, bgcolor=cellBg, text_size=size.tiny)
+    table.cell(dash, 1, 1, emaAbove ? "EMA above VWAP" : "EMA below VWAP",
+         text_color=emaAbove ? cUp : cDn, bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 2, "Gap (ATR)", text_color=color.gray, bgcolor=cellBg,
+         text_size=size.tiny)
+    table.cell(dash, 1, 2, na(atrV) or atrV == 0 ? "-" : str.tostring(gap / atrV, "0.00"),
+         text_color=color.white, bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 3, "Position", text_color=color.gray, bgcolor=cellBg,
+         text_size=size.tiny)
+    table.cell(dash, 1, 3, posDir == 1 ? "LONG" : posDir == -1 ? "SHORT" : "flat",
+         text_color=posDir == 1 ? cUp : posDir == -1 ? cDn : color.gray,
+         bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 4, "Entry / SL / TP", text_color=color.gray, bgcolor=cellBg,
+         text_size=size.tiny)
+    table.cell(dash, 1, 4, posDir == 0 ? "-" :
+         str.tostring(posEntry, format.mintick) + " / " +
+         str.tostring(posSL, format.mintick) + " / " +
+         str.tostring(posTP, format.mintick),
+         text_color=color.white, bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 5, "Trades today", text_color=color.gray, bgcolor=cellBg,
+         text_size=size.tiny)
+    table.cell(dash, 1, 5, str.tostring(tradesToday) + " / " + str.tostring(maxTradesDay),
+         text_color=color.white, bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 6, "Window", text_color=color.gray, bgcolor=cellBg, text_size=size.tiny)
+    table.cell(dash, 1, 6, postExit ? "past time exit" : postCut ? "no new entries" :
+         preWindow ? "opening skip" : "open",
+         text_color=inWindow ? cUp : color.gray, bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 7, "Mode", text_color=color.gray, bgcolor=cellBg, text_size=size.tiny)
+    table.cell(dash, 1, 7, (useAnticipate ? "approach" : "cross") +
+         (useKeyLevel ? " + KL" : "") + (useTrend ? " + trend" : "") + " | " + slMode,
+         text_color=color.white, bgcolor=cellBg, text_size=size.tiny)
+
+    table.cell(dash, 0, 8, "Evidence", text_color=color.gray, bgcolor=cellBg,
+         text_size=size.tiny)
+    table.cell(dash, 1, 8, "OOS -0.41 bps vs 10 bps cost",
+         text_color=color.new(#ef5350, 0), bgcolor=cellBg, text_size=size.tiny)

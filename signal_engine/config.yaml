@@ -279,6 +279,11 @@ blacklist:
     hard: []             # No history yet. Review monthly from the trade log, same as ORB.
     soft: []
     soft_multiplier: 0.5
+  EMA9VWAP:
+    hard: []             # No history yet. Review monthly from the trade log, same as ORB.
+    soft: []
+    soft_multiplier: 0.5
+
 
 # ── Time Exit ────────────────────────────────────────────
 # [tune] Close all open positions before broker auto square-off (typically 15:10-15:20 IST).
@@ -547,6 +552,22 @@ strategy_profiles:
     # 0.20% sits ~19% below the tightest observed stop, which keeps the headroom without
     # admitting noise: on a Rs 300 stock it is Rs 0.60, still several ticks wide.
     # Do NOT raise to 0.25% — that rejects VEDL at 0.2465%, the best trade of the day (+4.57R).
+    min_sl_pct: 0.002
+  EMA9VWAP:
+    product: MIS
+    # tp_levels absent — ema9-vwap.pine sends ExitQtyPct (100) in its TP1 HIT alert.
+    #
+    # NOT VALIDATED AS PROFITABLE. Measured at -0.41 bps gross out-of-sample against a
+    # ~10 bps cost line over 11,815 trades, and the crossover itself follows through LESS
+    # often than a coin flip (44.5% at 0.5 ATR, t = -18.76, n = 29,492). The profile exists
+    # so the script can run through the real pipeline and log its own signals; keep the
+    # symbol blacklist or sandbox mode in front of it until forward data says otherwise.
+    # See signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md.
+    #
+    # min_sl_pct 0.20%, matching BREAKOUT/EMA9 rather than the 0.50% global. The stop is the
+    # recent swing extreme plus a 0.10 x ATR buffer; the measured median across the backtest
+    # was 0.64% of price, but the tighter tail sits well inside 0.50% and the 0.20% floor is
+    # what the backtest itself modelled, so the two agree.
     min_sl_pct: 0.002
   EMA9:
     product: MIS
