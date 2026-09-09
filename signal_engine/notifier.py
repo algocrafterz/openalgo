@@ -74,26 +74,48 @@ def should_notify(event: str, level: str) -> bool:
     return configured >= _LEVEL_RANK[required]
 
 
-async def notify_event(event: str, text: str) -> None:
-    """notify() with the event name first, so call sites read as `notify_event(\"x\", msg)`."""
-    await notify(text, event=event)
+async def notify_event(event: str, text: str) -> bool:
+    """notify() with the event name first, so call sites read as `notify_event(\"x\", msg)`.
+
+    Returns what notify() returns - see its docstring for why callers that mark something as
+    "done" (e.g. tracker.py's day-summary marker) need to check this rather than assume a call
+    that didn't raise means a message actually went out.
+    """
+    return await notify(text, event=event)
 
 
-async def notify(text: str, event: str = "") -> None:
-    """Send a message to the notify_channel. No-op if not configured or client not ready."""
+async def notify(text: str, event: str = "") -> bool:
+    """Send a message to the notify_channel. No-op if not configured or client not ready.
+
+    Returns True only when a send was actually attempted against Telegram - False for every
+    silent no-op (no channel configured, notify_level filtered it, client not ready yet).
+
+    2026-09-09: tracker.py's send_day_summary() used to mark itself "sent" the moment this
+    coroutine returned, regardless of which branch it took. On 2026-09-09 the Telegram client
+    was not ready when the 14:45 time-exit fired send_day_summary() - this returned via the
+    `_client is None` branch, logged only at DEBUG (invisible at the file's INFO level), and the
+    day summary was silently never delivered - but the "already sent today" marker was written
+    anyway, permanently blocking any retry for the rest of the day. `_client is None` is now
+    logged at WARNING (this is not a routine, expected state the way "no channel configured" or
+    "filtered by notify_level" are) and the caller can check this return value to skip marking
+    itself done.
+    """
     if not settings.notify_channel:
-        return
+        return False
     if event and not should_notify(event, getattr(settings, "notify_level", "normal")):
-        return
+        return False
     if _client is None:
-        logger.debug("Notifier: client not ready, skipping")
-        return
+        logger.warning("Notifier: client not ready, skipping (message dropped, not queued)")
+        return False
     try:
         await _client.send_message(settings.notify_channel.id, text)
+        return True
     except asyncio.CancelledError:
         logger.debug("Notifier: send cancelled (event loop shutting down)")
+        return False
     except Exception as e:
         logger.warning(f"Notifier: failed to send message: {e}")
+        return False
 
 
 # ── Format helpers ─────────────────────────────────────────────────────────────
@@ -411,12 +433,13 @@ async def notify_day_summary(
     capital: float,
     time_exits: int = 0,
     trade_records=None,
-) -> None:
+) -> bool:
+    """Returns whether the summary actually reached Telegram - see notify()'s docstring.
+    tracker.py's send_day_summary() uses this to decide whether it may mark the day done."""
     today = datetime.now(IST).strftime("%d-%b-%Y")
 
     if trades == 0:
-        await notify_event("day_summary", f"📊 DAY SUMMARY | {today}\nNo trades taken today.")
-        return
+        return await notify_event("day_summary", f"📊 DAY SUMMARY | {today}\nNo trades taken today.")
 
     lines = _day_summary_header(today, trades, wins, losses, net_pnl, capital, time_exits, trade_records)
     if trade_records:
@@ -424,7 +447,7 @@ async def notify_day_summary(
         # Best trade first
         lines += [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
 
-    await notify_event("day_summary", "\n".join(lines))
+    return await notify_event("day_summary", "\n".join(lines))
 
 
 def _day_summary_header(

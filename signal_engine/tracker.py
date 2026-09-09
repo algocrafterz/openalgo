@@ -325,7 +325,7 @@ class PositionTracker:
         if self._day_summary_date == today or _summary_already_sent_today():
             return
         capital = self._risk_engine._last_known_capital or 0.0
-        await notifier.notify_day_summary(
+        sent = await notifier.notify_day_summary(
             trades=self._day_trades,
             wins=self._day_wins,
             losses=self._day_losses,
@@ -334,6 +334,14 @@ class PositionTracker:
             time_exits=self._day_time_exits,
             trade_records=self._completed_trades,
         )
+        if not sent:
+            # 2026-09-09: this used to mark itself done unconditionally, so a Telegram
+            # client that wasn't ready yet (transient - the client connects moments after
+            # the listener starts) silently ate the day summary for good, with nothing to
+            # retry against for the rest of the day. Leave both markers unset so the next
+            # caller (poll cycle, restart) tries again.
+            logger.warning("Day summary NOT delivered (notifier not ready) - will retry")
+            return
         self._day_summary_date = today
         _mark_summary_sent()
 
