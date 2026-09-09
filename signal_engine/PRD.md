@@ -265,6 +265,31 @@ BreakingTrade), plus a genuine IST/UTC bug found along the way.**
   (`uv run python upgrade/init_db.py` to see which applies). Not touched here - rotating it
   destroys the existing password hash/tokens if done wrong, an explicit user decision.
 
+**Follow-up same day: data-model review + repo cleanup.**
+
+- `trades.db` schema reviewed for analysis-depth: adequate (entry/SL/TP, fill price, full
+  signal context as JSON, trade_mode, data_quality). Deliberately NOT adding a stored
+  P&L/R-multiple column - `analysis/ledger.py` computes those on read, which is correct
+  (a cached column would go stale the moment sizing/exit logic changes). Found 221 historical
+  trades (2026-03-09 - 2026-08-23, all before the trade_mode column existed) still untagged -
+  left alone per the existing "NULL beats a guess" design decision rather than backfilled
+  unilaterally.
+- Cost calculator (per-trade brokerage/STT, intraday vs delivery) considered and deliberately
+  deferred - it would only produce a meaningful number once a strategy clears the 5-day/
+  one-of-each-exit-path minimum window from the 2026-09-09 policy above; applying it to today's
+  first day of the now-fixed pipeline would just add false precision to noise. Revisit once
+  that window is cleared.
+- Repo cleanup: removed 3 untracked, superseded rotated `log/openalgo_*.log.*` files (~30MB,
+  already fully diagnosed and documented above/in breakout.md), this session's own scratch
+  `openalgoctl_manual_restart.log`, and `breaking-trade/claude_chrome_extension_session_summary.md`
+  (a superseded one-off manual research session from 2026-09-03; the "periodic export" action
+  item it describes as blocked was resolved differently by the automated fetcher.py/store.py
+  pipeline built the next day, and the actual scan logic in scans.py doesn't follow this
+  document's ad-hoc classification method). Checked and kept: `db/*-test.db` (referenced by
+  `test/conftest.py`), `breaking-trade/excel/*.xlsx` (referenced by
+  `test_breakingtrade_extractor.py`/`test_breakingtrade_scans.py`), `db/health.db`/`logs.db`
+  (OpenAlgo's own live databases, out of scope).
+
 Tests: 4 new (`test_logger_setup.py` mode-routing, `test_db.py` midnight-boundary regression).
 Full suite green except 3 pre-existing unrelated failures (`test_flattrade_transform.py`,
 `test_main_entry.py::TestBracketOrderFlow` - fixture gaps, not touched by any change this
