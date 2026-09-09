@@ -12,6 +12,31 @@ _LOG_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss} | {level: <7} | {extra[symbol]: <12} | {module} | {message}"
 )
 
+#: Which mode's log file new lines route to. "unknown" until startup.py resolves the real
+#: mode (fetch_trading_mode() runs after config/DB init, so a startup window genuinely has no
+#: mode yet - see set_mode()'s docstring). A separate module-level flag rather than reading
+#: db._TRADE_MODE, since logger_setup is imported very early and needs to stay a leaf module.
+_current_mode = "unknown"
+
+
+def set_mode(mode: str) -> None:
+    """Route subsequent log lines to that mode's own file.
+
+    2026-09-10: analyze (paper) and live trading used to share one signal_engine_{date}.log,
+    which meant a day running paper strategies alongside a live one interleaved both in the
+    same file - exactly the "which rows are comparable" problem trades.db's trade_mode column
+    already exists to solve, just for logs instead of trade rows. Call this from the SAME call
+    site as db.set_trade_mode() (startup.py, right after fetch_trading_mode() resolves the
+    mode) so both stay in sync.
+
+    Uses a loguru `filter` evaluated per log LINE, not per sink creation, so a mode learned
+    after some lines were already written doesn't need the sinks rebuilt - anything logged
+    before the mode is known lands in signal_engine_unknown_{date}.log, which should be a very
+    short, rarely-read file (just the startup window before the mode resolves).
+    """
+    global _current_mode
+    _current_mode = (mode or "unknown").strip().lower() or "unknown"
+
 
 def setup_logger() -> logger.__class__:
     # File sink defaults to INFO (keeps logs readable).
@@ -21,8 +46,8 @@ def setup_logger() -> logger.__class__:
     # Default for the symbol column so lines logged outside any symbol context still format.
     logger.configure(extra={"symbol": "-"})
     logger.add(sys.stderr, level="INFO", format=_LOG_FORMAT)
-    logger.add(
-        "signal_engine/logs/signal_engine_{time:YYYY-MM-DD}.log",
+
+    _file_kwargs = dict(
         level=file_level,
         format=_LOG_FORMAT,
         rotation="1 day",
@@ -33,10 +58,31 @@ def setup_logger() -> logger.__class__:
         backtrace=True,
         diagnose=False,
     )
-    # Errors only, one JSON object per line. The full log above is a whole trading day of
-    # polls and fills; after a bad session the first question is "what broke", and that should
-    # be a short file, not a grep. Mirrors the house convention in the root CLAUDE.md, where
-    # log/errors.jsonl is the documented first place to look when debugging.
+    logger.add(
+        "signal_engine/logs/signal_engine_live_{time:YYYY-MM-DD}.log",
+        filter=lambda record: _current_mode == "live",
+        **_file_kwargs,
+    )
+    logger.add(
+        "signal_engine/logs/signal_engine_analyze_{time:YYYY-MM-DD}.log",
+        filter=lambda record: _current_mode == "analyze",
+        **_file_kwargs,
+    )
+    # Startup window before fetch_trading_mode() resolves which mode this session is - and the
+    # fallback if it never does (a crash before that point). Should stay a short file; a large
+    # one is itself a sign the mode never got set.
+    logger.add(
+        "signal_engine/logs/signal_engine_unknown_{time:YYYY-MM-DD}.log",
+        filter=lambda record: _current_mode not in ("live", "analyze"),
+        **_file_kwargs,
+    )
+
+    # Errors only, one JSON object per line - kept as ONE combined stream across modes
+    # deliberately, unlike the file sinks above: after a bad session the first question is
+    # "what broke", full stop, not "what broke in which mode" - splitting this one would cost
+    # the one-glance view of everything that went wrong today for a distinction that matters
+    # far less for errors than for routine trade activity. Mirrors the house convention in the
+    # root CLAUDE.md, where log/errors.jsonl is the documented first place to look.
     logger.add(
         "signal_engine/logs/errors_{time:YYYY-MM-DD}.jsonl",
         level="ERROR",

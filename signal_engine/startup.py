@@ -14,6 +14,7 @@ from loguru import logger
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
 from signal_engine.db import set_trade_mode
+from signal_engine.logger_setup import set_mode as set_log_mode
 from signal_engine.runtime import apply_trade_mode
 from signal_engine.db import fetch_last_entry_trade
 from signal_engine.listener import start_listener
@@ -350,6 +351,8 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
     # Stamp every trades.db row with the mode that produced it, so a paper week and a live
     # week never have to be told apart by date.
     set_trade_mode(trade_mode)
+    # Same distinction, for the log files - see logger_setup.set_mode()'s docstring.
+    set_log_mode(trade_mode)
 
     await reconcile_open_positions(risk_engine, tracker)
 
