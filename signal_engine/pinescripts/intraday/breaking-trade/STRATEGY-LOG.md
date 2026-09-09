@@ -96,6 +96,65 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-09 16:10 — Found the real reason almost no trade signal had ever fired: the system only ever checked once, at the wrong moment
+
+**What changed:** The scanner flags a stock, then waits for price to actually follow through
+before calling it a real trade — that part was always correct. The bug was in *when* the system
+looked: it only checked once, at the exact instant a stock was first flagged, when price
+essentially never has had time to follow through yet. It then never looked again. The system now
+keeps checking a flagged stock on every scan for up to 2 hours, the same way a person watching a
+chart would keep watching rather than glancing once and looking away.
+
+**Entry:** Real entries can now happen far more often. Replayed today's actual scanner output
+(31 stocks flagged) with this fix applied and found 22 of them would have genuinely confirmed a
+real trade if the system had just kept watching — versus the single real signal this scanner has
+ever produced across its entire history before today. The bar for calling something a real trade
+is unchanged: price still has to genuinely follow through, closing beyond the level the scanner
+flagged, not just touch it. Nothing about what counts as "confirmed" was loosened — the system
+is just now allowed to see confirmations that happen a few minutes to a couple of hours later
+instead of only the ones that happen in the same instant.
+
+**Exit (SL):** Not affected.
+
+**Exit (TP):** Not affected.
+
+**Consideration:** A flagged stock now has a 2-hour window to confirm before the system gives up
+on it — chosen from today's data, where the slowest real confirmation took 94 minutes. A stock
+that takes longer than that to follow through is treated as a different, staler setup not worth
+chasing, not as a missed trade. This does not guarantee signals every day — it only removes a
+mechanical bug that was silently preventing almost all of them; some days the market genuinely
+won't offer a qualifying setup.
+
+NOTE: Technical detail in `signal_engine/analysis/breakingtrade/entry_watch.py`'s module
+docstring and `signal_engine/PRD.md`'s 2026-09-09 Recent Changes.
+
+### 2026-09-09 15:20 — Yesterday's fix was live all day, but still zero real signals — traced to a dead broker connection, not the scanner
+
+**What changed:** Nothing in this scanner's own logic. Yesterday's fix (below, 13:52 entry) was
+confirmed working, but the broker connection everything runs through was down for most of today,
+so the fix never got a fair test until late afternoon.
+
+**Entry:** Not affected — the entry-confirmation logic itself was not touched today.
+
+**Exit (SL):** Not affected.
+
+**Exit (TP):** Not affected.
+
+**Consideration:** The system that connects this platform to the stock exchange lost its
+connection sometime before this morning's market open and did not reconnect on its own — nobody
+was told, so it silently affected every part of today's trading for about six hours, until the
+whole system was restarted by hand mid-afternoon. During that window this scanner could not pull
+the price history it needs to confirm any trade, so every stock it flagged stayed a watchlist
+entry with nothing wrong in the flagging itself. Checked right after the connection came back:
+pulling price history worked correctly and returned properly time-stamped data, which confirms
+yesterday's fix is genuinely working — today's silence was the broken connection, not the fix
+failing. The connection issue itself now has an automatic check that runs every 15 minutes and
+reconnects on its own the next time this happens, so tomorrow should not repeat this.
+
+NOTE: See `signal_engine/pinescripts/intraday/orb/breakout.md`'s 2026-09-09 15:20 entry for the
+full technical postmortem (this outage also affected BREAKOUT/sandbox order execution) and
+`signal_engine/PRD.md`'s 2026-09-09 Recent Changes for the fix summary across both.
+
 ### 2026-09-08 13:52 — Found and fixed why not one real trade signal had ever fired
 
 **What changed:** A bug in how price history was read meant the system could never actually

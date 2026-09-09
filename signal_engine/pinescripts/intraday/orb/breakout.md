@@ -9,6 +9,98 @@ extended so the Opening Range is one key level among several rather than the onl
 
 ---
 
+## 2026-09-09 15:20 IST — Broker session was dead for 6 hours; sandbox filled a HINDALCO trade 4 hours late at a stale price
+
+### What happened
+
+`log/openalgoctl.log` shows 3,122 `"Session Expired : Invalid Session Key"` errors from
+Flattrade between 09:15 and 15:05 IST today — the broker session was invalid essentially the
+entire trading session, recovering only when the stack was manually restarted at 15:05. This
+broke every quote-dependent operation for six hours:
+
+- **BANKBARODA, TATASTEEL declined** — correct, unrelated: entry price too expensive for the
+  ₹35,000 test account's 1% risk budget. Not a symptom of the outage.
+- **SBIN, NATIONALUM rejected** — `sandbox/order_manager.py`'s synchronous quote check at
+  order-placement time failed 3 retries in <2s and correctly refused to place a MARKET order
+  blind. Working as designed.
+- **HINDALCO "phantom fill"** — entry (10:50 IST) and two partial TP exits (10:55, 11:05) all
+  got *placed* successfully (order accepted, SL confirmed) but never got a quote to actually fill
+  against, so they sat in the sandbox order book with `order_status='open'`. `signal_engine`'s
+  own 30-min-unresolved-order guard (`tracker.py:_resolve_stuck_order`) gave up at 11:20, cancelled
+  the resting SL, and released the risk slot — correct given what it could see, but it has no way
+  to reach into the sandbox and cancel the underlying entry/exit orders themselves, so those kept
+  sitting there. At 15:05:28 IST, the instant the broker session recovered, OpenAlgo's background
+  execution engine (`sandbox/execution_engine.py`) finally got a quote and filled all three orders
+  in the same instant, at whatever the price happened to be then (1021.1) — four and a half hours
+  after the signal, and after the strategy's own alerts had already declared TP1 (+2.96), TP2
+  (+4.45), and TP3 (+8.89) hits against a position that, in the sandbox's own order book, had not
+  existed yet. Net effect: a paper trade with no relationship to the moment it was supposedly
+  taken. The leftover 38 qty (SL cancelled at 11:20, never replaced, engine no longer tracking it)
+  sat as a real, un-managed margin-blocking position until `sandbox/catch_up_processor.py`'s
+  stale-MIS sweep force-closed it at pnl=0 at 15:11:51.
+- **BreakingTrade scanner: zero `trade_signal` alerts all day**, despite the 2026-09-08 13:52
+  `fetch_bars()` fix (see `STRATEGY-LOG.md`) being live in the running poller since 09:14 this
+  morning. `validate.fetch_bars()` calls the same `/api/v1/history` endpoint, so every
+  confirmation check failed for the same six hours — every watchlist call that morning was
+  structurally unable to become a trade signal for the same reason SBIN/NATIONALUM were rejected.
+  Verified after recovery: called `fetch_bars('RELIANCE', ...)` directly at ~15:2x IST and got
+  back correctly IST-shifted bars ending at 15:25 — the fix is confirmed working; today's silence
+  was the outage, not a residual bug.
+
+### Why the session stayed dead for 6 hours instead of minutes
+
+`signal_engine/scripts/openalgoctl.sh`'s `run()` supervisor performs the daily broker login
+(`bootstrap()`) exactly **once**, when the stack is started. It only watches for app.py or
+signal_engine *crashing* afterwards — nothing in the long-running loop re-checks whether the
+broker session is still valid. Indian broker tokens expire daily at ~03:00 IST regardless of
+when the process started (see CLAUDE.md), so any deployment that starts once and is kept alive
+across days (the normal, intended way to run this) silently drifts onto a dead session at the
+next rollover and stays there until someone notices and restarts everything by hand. Today's
+process had started at 00:29 IST — before the rollover — so it was never re-authenticated after
+that boundary until the 15:05 manual restart.
+
+### Fixes
+
+1. **`openalgoscheduler.py` gained a `healthcheck` subcommand** (`_run_healthcheck()`). It calls
+   the existing `auto_login()`, which already checks the stored token with `verify_broker_auth()`
+   first and only performs a real TOTP re-login when that check fails — so this is a single
+   cheap funds-API call in the common case (session still valid) and a real, self-healing
+   re-login only when the session is actually dead. Alerts to Telegram only on a genuine state
+   change (session found dead and recovered, or re-login failing) — never every cycle.
+2. **`openalgoctl.sh`'s `run()` loop now calls `healthcheck` every 15 minutes**
+   (`_SESSION_HEALTH_EVERY=900`), gated by the same `AUTH_COOLDOWN_FILE` escalating-cooldown
+   mechanism `bootstrap()` already uses, so a genuinely broken broker doesn't get hammered with
+   login attempts.
+3. **`sandbox/execution_engine.py`'s `check_and_execute_pending_orders()` now auto-cancels a
+   `MARKET` order still `open` after `SANDBOX_MAX_MARKET_ORDER_AGE_SECONDS` (default 300s) with
+   no valid quote**, via `OrderManager.cancel_order()` (which already releases margin correctly).
+   This is defense-in-depth independent of fix #1/#2 — it stops *any* future data-feed gap
+   (not just a dead broker session) from producing a multi-hour-late fill at a meaningless price.
+   `LIMIT`/`SL`/`SL-M` orders are explicitly exempt: resting for hours waiting on a trigger price
+   is their normal, correct behaviour, not a stuck order.
+4. `OrderManager.cancel_order()` gained an optional `reason` param (recorded as
+   `rejection_reason` on the order, passed through the existing order-update event) so an
+   auto-cancel is diagnosable from the orderbook without reading logs.
+
+Tests: `test/sandbox/test_stale_market_order_cancel.py` (new, 4 cases — stale MARKET cancelled,
+fresh MARKET left alone, stale LIMIT/SL-M left alone). `signal_engine/tests/
+test_openalgoscheduler.py::TestHealthcheck` (new, 5 cases covering quiet-reuse, alert-on-recovery,
+alert-and-exit-on-failure, and the OAuth-only-broker no-op path). Full sandbox suite (137 tests,
+10 skipped needing a live broker) and full openalgoscheduler suite (53 tests) green.
+
+### What this does not fix
+
+The BreakingTrade scanner's entry-confirmation logic itself was not touched — testing
+`trigger.plan_trade()` against three of today's actual watchlist symbols (HDFCLIFE, TIINDIA,
+OIL) post-recovery still returned `None` for all three. That is expected, not a bug: most
+watchlist calls are meant to *not* become trades (see `alerts.py`'s WATCHLIST vs `trade_signal`
+distinction) — there is no evidence today's specific symbols would have triggered even with a
+healthy broker session all day. What this session confirms is that the scanner is no longer
+*structurally* prevented from ever emitting a trade_signal — whether it does on any given day
+still depends on the market actually producing a qualifying setup.
+
+---
+
 ## 2026-09-06 17:03 IST — trades.db now records which mode produced each row
 
 `risk.db` has keyed its counters on `(mode, date)` since it was written, because mixing paper

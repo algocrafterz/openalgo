@@ -216,6 +216,114 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-09)
+
+**Root cause found for a full day of broken paper trading: the Flattrade broker session was
+dead from before market open until 15:05 IST, and nothing was checking.** `openalgoctl.sh`'s
+`run()` supervisor logs in exactly once, at process start (`bootstrap()`); it only watches for
+app.py/signal_engine *crashing*, never for the daily ~03:00 IST token expiry. A stack started
+before that rollover (the normal case — started once, kept alive for days) runs the rest of the
+day on a dead session with every quote call failing silently. Confirmed via
+`log/openalgoctl.log`: 3,122 `"Session Expired : Invalid Session Key"` errors between 09:15 and
+15:05 IST today, none after. Two paper-trading symptoms traced to this one cause:
+
+- **Orders rejected with "unable to fetch current price"** (SBIN, NATIONALUM) — the sandbox's
+  synchronous quote check at order-placement time failed, correctly refused to guess, and
+  rejected. Working as designed; nothing to fix here.
+- **HINDALCO "phantom fill"** — entry + two partial exits placed 10:50-11:10 IST all stayed
+  `open` (no quote to fill against) while `signal_engine`'s 30-min orphan-timeout gave up on the
+  position at 11:20 and released the risk slot. The underlying sandbox orders sat unfilled
+  regardless, then all filled in one instant at 15:05:28 IST once the session recovered — at
+  1021.1, the first live tick in 4+ hours — producing a paper trade with zero relationship to
+  the TP1/TP2/TP3 hits the strategy had already announced. The leftover 38-qty position (SL
+  cancelled at 11:20, never replaced, `signal_engine` no longer tracking it) was later
+  force-settled at pnl=0 by `catch_up_processor.py`'s stale-MIS sweep.
+- **BreakingTrade scanner emitted zero trade_signals all day, despite yesterday's fetch_bars fix
+  being live** — `validate.fetch_bars()` calls the same `/api/v1/history` endpoint, so every
+  confirmation check failed for the same 6 hours. Verified post-recovery: `fetch_bars()` now
+  returns correctly-shifted IST bars (checked live at 15:2x IST), so the 2026-09-08 fix is
+  confirmed working — today's watchlist-only outcome was the broker outage, not a residual bug.
+
+**Fixes** (see `sandbox/execution_engine.py`, `sandbox/order_manager.py`,
+`signal_engine/scripts/openalgoscheduler.py`, `signal_engine/scripts/openalgoctl.sh`, and
+`signal_engine/pinescripts/intraday/orb/breakout.md` for the full writeup):
+
+1. **Broker session self-heals now.** New `openalgoscheduler.py healthcheck` subcommand:
+   cheap when the session is valid (one funds-API call via the existing `verify_broker_auth()`),
+   performs a real re-login when it isn't. `openalgoctl.sh`'s `run()` loop calls it every 15
+   minutes, reusing the existing auth-cooldown mechanism so a genuinely broken broker doesn't
+   get hammered. Alerts to Telegram only on a state change (session found dead + recovered, or
+   re-login failing) — not every cycle.
+2. **Stuck MARKET orders auto-cancel instead of filling hours later at a stale price.**
+   `ExecutionEngine.check_and_execute_pending_orders()` now cancels (via `OrderManager.
+   cancel_order()`, which already handles margin release correctly) any `MARKET` order still
+   `open` after `SANDBOX_MAX_MARKET_ORDER_AGE_SECONDS` (default 300s) with no valid quote.
+   `LIMIT`/`SL`/`SL-M` orders are exempt — resting for hours on their trigger price is normal for
+   them. Defense-in-depth: this protects against *any* future data-feed outage, not just today's.
+   4 new tests: `test/sandbox/test_stale_market_order_cancel.py`.
+3. `OrderManager.cancel_order()` gained an optional `reason` param, recorded on the order and
+   passed through the existing order-update event, so a stale-cancel is diagnosable from the
+   orderbook itself.
+
+Tests: `signal_engine/tests/test_openalgoscheduler.py` (5 new, `TestHealthcheck`),
+`test/sandbox/test_stale_market_order_cancel.py` (4 new). Full sandbox suite (137 tests) and
+full openalgoscheduler suite (53 tests) green.
+
+**Second finding the same day: BreakingTrade's real signal rate was never actually about signal
+quality — `_emit_trade_signals()` only checks a scan pick on the single poll it first appears
+on, and `trigger.entry_trigger()` needs a LATER bar to close beyond the signal bar's level, which
+essentially never exists yet at that exact moment.** Once a symbol drops out of `new_by_scan` on
+the next poll it is never re-examined, confirmed or not. Replayed the day's real scan output
+(31 symbols flagged) against the full day's bars: 22 would have genuinely confirmed if simply
+rechecked on a later poll (delay 3-94 min, median ~14). **New `entry_watch.py`**: re-checks every
+still-pending scan pick (read from `store.py`'s existing `scan_hits` table, cross-checked against
+`alerts` for `kind='trade_signal'` to avoid re-emitting) on every regular poll, not just the poll
+it was born on, bounded by `CONFIRMATION_WINDOW` (2h, sized off the 94-minute slowest genuine
+confirmation in the sample) so a stale pick eventually stops being retried. Wired into
+`__main__.py`'s `_watch()` — runs unconditionally on every non-BTST poll, independent of whether
+that poll had new hits. No change to `trigger.py`'s actual confirmation rule (still requires a
+real bar CLOSE beyond the signal-bar level) — this gives that existing rule the multiple chances
+across time it needed, it does not loosen it. 12 new tests: `signal_engine/tests/
+test_breakingtrade_entry_watch.py`. Full breakingtrade suite (195 tests) green.
+
+**Third round: BTST retrospective (K+L+M) comparison list, message-format unification, pinned
+strategy cards.**
+
+- `btst.candidates()` gained `full_session: bool` — skips straight to the K+L+M
+  (`closing_ramp_full`, new `volume_shapes.SHAPES` entry) read. `btst.retrospective_candidates()`
+  wraps it: never actionable same-day (M doesn't trade until the 15:15-15:30 auction, after the
+  BTST order deadline), exists purely to measure whether the fuller read beats the live one once
+  enough day-pairs accumulate — the prior K-vs-K+L+M backtest (11 day-pairs, both t<1.1) was too
+  thin to trust either way. Both the live and retrospective lists are now saved daily to a new
+  `btst_candidates` table (`store.save_btst_candidates()` / `btst_candidates_for()`) for that
+  future comparison — no scoring built yet, intentionally (not enough data to make it worth
+  reading; see `retrospective_candidates()`'s docstring).
+- `alerts.alert_trade_signal()` gained an `R:R: 1:N` line (matches ORB/BREAKOUT's own alerts;
+  not a parser.py-consumed field, so no effect on execution). `alert_transitions()` (watchlist)
+  and `alert_btst()` headers now share one shape — `LABEL timestamp | N noun | context` — instead
+  of two different orderings of the same three pieces of information.
+- New `signal_engine/strategy_cards.py`: a short what/when/how-to-act reference card per
+  strategy channel (ORB, BREAKOUT, BreakingTrade), sent and re-pinned to that channel on every
+  engine startup via `listener.py`'s `_connect()`. Update a strategy's `CARDS` entry in the same
+  change that alters what it does/when it runs/how to react — this is the Telegram-facing
+  counterpart to the STRATEGY-LOG.md discipline CLAUDE.md already requires.
+- Scope note: ORB and BREAKOUT's raw entry/exit alerts are authored directly in
+  `breakout.pine`/`orb.pine` and posted straight from TradingView to Telegram — nothing on the
+  Python side can reformat them. Left untouched this round by explicit choice; matching them to
+  the same layout needs a separate PineScript edit.
+- **Performance-analysis policy adopted:** trades from before a strategy's most recent
+  STRATEGY-LOG.md-dated change must not be pooled with trades after it — same reasoning already
+  applied to live-vs-analyze mode in `trades.db`'s `trade_mode` column (a blended average is true
+  of neither period). Minimum window before drawing even a preliminary "does this look broken"
+  conclusion: **5 trading days, or until every exit path (TP hit, SL hit, time exit) has been
+  observed at least once, whichever is later** — sized for catching execution/plumbing bugs fast
+  (the actual goal of the daily EOD review), not for validating edge, which needs far more data
+  (see the BTST 11-day-pair result above, t<1.1 on both readings).
+
+Tests: 27 new (`test_breakingtrade_store.py` BTST persistence, `test_breakingtrade_btst.py`
+retrospective/fallback cases, `test_strategy_cards.py`, `test_breakingtrade_alerts.py` R:R).
+Full breakingtrade suite (205 tests) and full sandbox+openalgoscheduler suites still green.
+
 ## Recent Changes (2026-09-08)
 
 **Critical: `fetch_bars()` UTC/IST bug fixed — this is why zero BreakingTrade trade signals had
