@@ -216,6 +216,60 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-10)
+
+**Pre-market-open readiness check for all 3 paper-trading strategies (ORB, BREAKOUT,
+BreakingTrade), plus a genuine IST/UTC bug found along the way.**
+
+- **Capital mismatch fixed.** `sizing.sandbox_capital` was 35000, stale against OpenAlgo's
+  actual sandbox account (`db/sandbox.db`'s `sandbox_config.starting_capital = 100000`, set
+  since account creation 2025-12-29). Every paper trade had been sized as if capital were 35k
+  while the real dummy account held ~80-100k. Raised to 100000 to match.
+- **Log files split by mode.** New `logger_setup.set_mode()`, called from `startup.py`
+  alongside `db.set_trade_mode()`. Two file sinks (`signal_engine_live_*.log`,
+  `signal_engine_analyze_*.log`) each gated by a loguru `filter` checking the current mode at
+  log time, plus `signal_engine_unknown_*.log` for the pre-mode-resolution startup window.
+  Verified live: analyze-mode lines correctly routed, live file stayed empty.
+- **Found and fixed a real IST/UTC bug** while investigating why a test only failed after
+  midnight IST: `TradeResult.timestamp`/`Signal.received_at` defaulted to
+  `datetime.now(timezone.utc)`, and `db.fetch_all_open_positions()` /
+  `fetch_last_entry_trade()` filter `date(executed_at) = <today, IST>`. SQLite's `date()`
+  converts ANY offset-bearing timestamp to UTC before extracting the date - true of a raw UTC
+  value and of a timezone-AWARE IST one alike (confirmed: `date('...+05:30')` returns the
+  PREVIOUS day). Only a naive-IST timestamp (tzinfo stripped) round-trips correctly, matching
+  the rest of the codebase's established "naive datetime means IST" convention. Fixed at the
+  source in `models.py`, plus the same anti-pattern in three `db.py` call sites
+  (`save_declined`, `save_reconciled_exit`, `set_strategy_version`). Same bug class as
+  `fetch_bars()`'s 2026-09-08 incident (see breaking-trade/STRATEGY-LOG.md) - invisible during
+  actual market hours (09:15-15:30 IST = 03:45-10:00 UTC, both zones agree), only bites a
+  restart landing in the ~5.5 hour post-midnight window. This session's own restarts tonight
+  were in exactly that window, which is how it surfaced.
+- Prerequisites verified clean before market open: broker session healthcheck confirmed firing
+  reliably every 15 minutes overnight (should catch the ~03:00 IST token rollover well before
+  09:15), zero stuck sandbox orders, risk state clean, all 4 Telegram channels watching,
+  strategy cards re-pinned.
+- **Trade storage, for the record:** every real order (all 3 strategies) lands in
+  `signal_engine/data/trades.db`'s `trades` table via `db.save()`/`save_declined()` - one
+  shared table, `strategy` column distinguishes them. BTST paper positions are separate
+  (`signal_engine/data/breakingtrade.db`'s `paper_trades` table - a simulated overnight hold,
+  never a real OpenAlgo order). Access: `sqlite3 signal_engine/data/trades.db` directly, or
+  `db.fetch_clean_trades(strategy, since)` from Python for analysis-ready rows.
+- Noted but not fixed (pre-existing, unrelated to today's changes): `openalgoctl.sh`'s
+  supervisor mislabels its own deliberate `cmd_stop` as `app_crash`/"exited unexpectedly" in
+  the log, and Telethon's session sqlite occasionally throws "database is locked" on a rapid
+  back-to-back restart (its own session file, not trades.db) - cosmetic, not correctness bugs.
+- **Security finding, unrelated to today's work, surfaced by reading full startup output**:
+  `.env`'s `API_KEY_PEPPER` is still the public `.sample.env` placeholder - every broker
+  token/API key/TOTP secret in `db/openalgo.db` is encrypted with a publicly-known value.
+  OpenAlgo's own startup check prints full remediation steps
+  (`uv run python upgrade/init_db.py` to see which applies). Not touched here - rotating it
+  destroys the existing password hash/tokens if done wrong, an explicit user decision.
+
+Tests: 4 new (`test_logger_setup.py` mode-routing, `test_db.py` midnight-boundary regression).
+Full suite green except 3 pre-existing unrelated failures (`test_flattrade_transform.py`,
+`test_main_entry.py::TestBracketOrderFlow` - fixture gaps, not touched by any change this
+session) and one flaky live-network integration test.
+
 ## Recent Changes (2026-09-09)
 
 **Root cause found for a full day of broken paper trading: the Flattrade broker session was
