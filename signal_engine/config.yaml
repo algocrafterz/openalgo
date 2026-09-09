@@ -19,13 +19,19 @@ telegram:
   channels:
     - name: "smidestn"           # test channel
       id: -1002773559154
-    # Stood down 2026-09-06 so BREAKOUT runs alone. Two live strategies sharing 4 slots on
-    # Rs35k of capital is not two experiments, it is one contaminated one — whichever fires
-    # first takes the margin and the other's rejections look like signal quality. Nothing
-    # about ORB changed; flip back to true to resume it.
+    # Stood down 2026-09-06 so BREAKOUT ran alone in LIVE mode - two live strategies sharing
+    # 4 slots on Rs35k of real capital would have been one contaminated experiment, not two,
+    # since whichever fired first took the margin and the other's rejections read like signal
+    # quality. RE-ENABLED 2026-09-09 for the ANALYZE (paper) phase specifically: OpenAlgo's
+    # sandbox has no such capital contention concern (mode_profiles.analyze below sizes
+    # max_open_positions/max_trades_per_day for three strategies sharing the sandbox, exactly
+    # like it already did for two), and the whole point of the paper phase is to observe all
+    # three strategies' real signal flow side by side. Set back to false before ever flipping
+    # OpenAlgo to live mode with more than one strategy enabled - the original contamination
+    # reasoning still applies to real money.
     - name: "intraday-orb"
       id: -1003518225740
-      enabled: false
+      enabled: true
 
     # PAPER TRADING from 2026-09-07, one week, reviewed EOD daily. The engine subscribes and
     # runs the FULL pipeline — validate, size, order, SL-M, staged TPs, tracker, time exit —
@@ -494,15 +500,18 @@ mode_profiles:
   # generated and no amount of later analysis recovers them. Loose paper limits are strictly
   # more information, not less discipline.
   #
-  # Sized for TWO strategies sharing the sandbox (intraday-breakout + intraday-breakingtrade)
-  # so neither starves the other of slots — with live limits they would compete, and every
-  # BREAKOUT decline would have to be disentangled from "BreakingTrade got there first".
+  # Sized for THREE strategies sharing the sandbox (intraday-breakout + intraday-orb +
+  # intraday-breakingtrade, since 2026-09-09) so none starves the others of slots — with live
+  # limits they would compete, and every decline would have to be disentangled from "another
+  # strategy got there first". 3 slots/strategy x 3 strategies = 9; trades/day scaled the same
+  # proportion as the original 6->24 (2 strategies) ratio. Was 6/24 for two strategies
+  # (2026-09-06 - 2026-09-09); raise further only if a fourth strategy joins the sandbox.
   #
   # Loss limits at 1.0 = off. There is no capital to protect and a mid-week lockout would
   # truncate the observation. The live profile above is what protects the account.
   analyze:
-    max_open_positions: 6
-    max_trades_per_day: 24
+    max_open_positions: 9
+    max_trades_per_day: 36
     daily_loss_limit: 1.0
     weekly_loss_limit: 1.0
     monthly_loss_limit: 1.0
