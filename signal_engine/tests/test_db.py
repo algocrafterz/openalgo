@@ -252,6 +252,32 @@ class TestOpenPositionReconciliation:
         assert open_positions[0]["symbol"] == "HINDALCO"
         assert open_positions[0]["direction"] == "LONG"
 
+    def test_entry_logged_just_after_midnight_ist_is_still_found_today(self):
+        """2026-09-10 regression: TradeResult.timestamp used to default to UTC (then briefly
+        to offset-aware IST, "+05:30") and db's date(executed_at) = <today, IST> filter
+        compares against it. SQLite's date() converts any offset-bearing input to UTC before
+        extracting the date, so a row genuinely logged at, say, 00:15 IST today read as
+        yesterday under either of those - exactly the window a post-midnight engine restart
+        lands in. Writes the row directly (bypassing TradeResult's default) to pin the exact
+        boundary regardless of what time this test itself happens to run."""
+        from datetime import datetime
+
+        from signal_engine.timeutils import IST
+
+        just_after_midnight_ist = datetime.now(IST).replace(
+            hour=0, minute=15, second=0, microsecond=0, tzinfo=None
+        )
+        save(
+            _make_signal(symbol="HINDALCO"),
+            _make_order(symbol="HINDALCO"),
+            _make_result(timestamp=just_after_midnight_ist),
+        )
+
+        open_positions = fetch_all_open_positions()
+
+        assert len(open_positions) == 1
+        assert open_positions[0]["symbol"] == "HINDALCO"
+
     def test_entry_followed_by_exit_is_not_open(self):
         from signal_engine.models import Direction
 

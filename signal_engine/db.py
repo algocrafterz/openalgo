@@ -152,7 +152,7 @@ def save_declined(signal: Signal, stage: str, reason: str) -> None:
     """
     try:
         conn = _get_connection()
-        now = datetime.now(IST).isoformat()
+        now = datetime.now(IST).replace(tzinfo=None).isoformat()  # naive IST - see models.py TradeResult.timestamp
         conn.execute(
             _INSERT,
             (
@@ -284,7 +284,7 @@ def save_reconciled_exit(
     """
     try:
         conn = _get_connection()
-        now = datetime.now(IST).isoformat()
+        now = datetime.now(IST).replace(tzinfo=None).isoformat()  # naive IST - see models.py TradeResult.timestamp
         conn.execute(
             _INSERT,
             (
@@ -447,7 +447,7 @@ def set_strategy_version(strategy: str, effective_from: str, reason: str = "") -
     """
     try:
         conn = _get_connection()
-        now = datetime.now(IST).isoformat()
+        now = datetime.now(IST).replace(tzinfo=None).isoformat()  # naive IST - see models.py TradeResult.timestamp
         conn.execute(
             "INSERT INTO strategy_versions (strategy, effective_from, reason, updated_at) "
             "VALUES (?, ?, ?, ?) "
