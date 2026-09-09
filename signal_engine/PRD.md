@@ -320,6 +320,15 @@ strategy cards.**
   (the actual goal of the daily EOD review), not for validating edge, which needs far more data
   (see the BTST 11-day-pair result above, t<1.1 on both readings).
 
+  **Now implemented**: `db.flag_data_quality(order_id, reason)` marks a trades.db row
+  execution-corrupted (auto-called from `tracker.py`'s `_release_orphan()`) without deleting
+  it; `db.fetch_clean_trades(strategy, since)` is the read side analysis should use instead of
+  querying `trades` directly. `db.set_strategy_version(strategy, effective_from, reason)` /
+  `get_strategy_version()` record the machine-readable half of a STRATEGY-LOG.md cutover — bump
+  it in the same change as the log entry. Backfilled today's HINDALCO phantom-fill rows; set
+  BREAKINGTRADE's cutover to 2026-09-09 (entry_watch.py changed what counts as a confirmed
+  signal). ORB/BREAKOUT untouched, no strategy-logic change today.
+
 Tests: 27 new (`test_breakingtrade_store.py` BTST persistence, `test_breakingtrade_btst.py`
 retrospective/fallback cases, `test_strategy_cards.py`, `test_breakingtrade_alerts.py` R:R).
 Full breakingtrade suite (205 tests) and full sandbox+openalgoscheduler suites still green.
