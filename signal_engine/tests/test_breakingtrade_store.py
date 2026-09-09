@@ -83,6 +83,55 @@ def test_history_filters_by_symbol():
 
 
 # ---------------------------------------------------------------------------
+# BTST candidate persistence (live vs retrospective comparison)
+# ---------------------------------------------------------------------------
+
+
+def _candidates_frame(rows):
+    """rows: list of (symbol, delivery_pct, change_pct), already in rank order."""
+    return pd.DataFrame(
+        [{"symbol": s, "delivery_pct": d, "change_pct": c} for s, d, c in rows]
+    )
+
+
+def test_save_and_read_back_a_candidate_list():
+    frame = _candidates_frame([("TCS", 0.8, 2.1), ("INFY", 0.7, 1.5)])
+    written = store.save_btst_candidates("2026-09-09", "live", frame)
+
+    assert written == 2
+    read_back = store.btst_candidates_for("2026-09-09", "live")
+    assert list(read_back["symbol"]) == ["TCS", "INFY"]
+    assert list(read_back["rank"]) == [0, 1]
+
+
+def test_live_and_retrospective_are_independent():
+    store.save_btst_candidates("2026-09-09", "live", _candidates_frame([("TCS", 0.8, 2.1)]))
+    store.save_btst_candidates(
+        "2026-09-09", "retrospective",
+        _candidates_frame([("TCS", 0.8, 2.1), ("WIPRO", 0.6, 1.1)]),
+    )
+
+    assert len(store.btst_candidates_for("2026-09-09", "live")) == 1
+    assert len(store.btst_candidates_for("2026-09-09", "retrospective")) == 2
+
+
+def test_saving_again_for_the_same_day_replaces_not_appends():
+    store.save_btst_candidates("2026-09-09", "live", _candidates_frame([("TCS", 0.8, 2.1)]))
+    store.save_btst_candidates("2026-09-09", "live", _candidates_frame([("WIPRO", 0.6, 1.1)]))
+
+    read_back = store.btst_candidates_for("2026-09-09", "live")
+    assert list(read_back["symbol"]) == ["WIPRO"]
+
+
+def test_empty_candidate_list_clears_any_previous_save():
+    store.save_btst_candidates("2026-09-09", "live", _candidates_frame([("TCS", 0.8, 2.1)]))
+    written = store.save_btst_candidates("2026-09-09", "live", pd.DataFrame())
+
+    assert written == 0
+    assert store.btst_candidates_for("2026-09-09", "live").empty
+
+
+# ---------------------------------------------------------------------------
 # Transition detection - the reason snapshots are stored at all
 # ---------------------------------------------------------------------------
 

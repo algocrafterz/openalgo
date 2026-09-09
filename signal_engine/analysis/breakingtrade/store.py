@@ -80,6 +80,22 @@ CREATE TABLE IF NOT EXISTS scan_hits (
     PRIMARY KEY (captured_at, scan, symbol)
 );
 CREATE INDEX IF NOT EXISTS idx_scan_hits_new ON scan_hits (is_new, captured_at);
+
+-- One row per (day, mode, symbol) BTST qualifier - mode is "live" (candidates(), what was
+-- actually actionable that day) or "retrospective" (retrospective_candidates(), the K+L+M
+-- read taken after full close - never actionable, exists to compare against "live" once
+-- enough day-pairs accumulate). See btst.retrospective_candidates()'s docstring.
+CREATE TABLE IF NOT EXISTS btst_candidates (
+    trade_day   TEXT NOT NULL,
+    mode        TEXT NOT NULL,
+    symbol      TEXT NOT NULL,
+    delivery_pct REAL,
+    change_pct  REAL,
+    rank        INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (trade_day, mode, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_btst_candidates_day ON btst_candidates (trade_day, mode);
 """
 
 
@@ -205,6 +221,52 @@ def record_hits(results, captured_at: datetime) -> dict:
                 rows,
             )
     return new_by_scan
+
+
+def save_btst_candidates(trade_day: str, mode: str, candidates: pd.DataFrame) -> int:
+    """Persist one day's BTST qualifier list under `mode` ("live" or "retrospective") so a
+    later comparison can read both without re-running the scan. Replaces any existing rows for
+    this (day, mode) - idempotent if called twice for the same day.
+
+    Returns the number of rows written.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM btst_candidates WHERE trade_day = ? AND mode = ?", (trade_day, mode)
+        )
+        if candidates is None or candidates.empty:
+            return 0
+        recorded_at = datetime.now().replace(microsecond=0).isoformat(sep=" ")
+        rows = [
+            (
+                trade_day,
+                mode,
+                str(row["symbol"]),
+                float(row["delivery_pct"]) if pd.notna(row.get("delivery_pct")) else None,
+                float(row["change_pct"]) if pd.notna(row.get("change_pct")) else None,
+                rank,
+                recorded_at,
+            )
+            for rank, (_, row) in enumerate(candidates.iterrows())
+        ]
+        conn.executemany(
+            "INSERT OR REPLACE INTO btst_candidates "
+            "(trade_day, mode, symbol, delivery_pct, change_pct, rank, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    return len(rows)
+
+
+def btst_candidates_for(trade_day: str, mode: str) -> pd.DataFrame:
+    """Symbols saved for one (day, mode) - the read side of save_btst_candidates()."""
+    with _connect() as conn:
+        return pd.read_sql_query(
+            "SELECT symbol, delivery_pct, change_pct, rank FROM btst_candidates "
+            "WHERE trade_day = ? AND mode = ? ORDER BY rank",
+            conn,
+            params=(trade_day, mode),
+        )
 
 
 def history(symbol: str = None, since: datetime = None) -> pd.DataFrame:

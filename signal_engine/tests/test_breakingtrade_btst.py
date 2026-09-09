@@ -152,3 +152,86 @@ def test_snapshot_time_gate():
     assert not btst.is_snapshot_late_enough(datetime(2026, 9, 3, 12, 31))
     assert btst.is_snapshot_late_enough(datetime(2026, 9, 3, 15, 20))
     assert not btst.is_snapshot_late_enough(None)
+
+
+# ---------------------------------------------------------------------------
+# K/L coverage-aware fallback (2026-09-09: live 14:50 polls found K barely
+# published minutes after the session closed - see the long comment at
+# candidates()'s ramp_column selection).
+# ---------------------------------------------------------------------------
+
+
+def _qualifying_row(symbol, **volume_overrides):
+    profile = {
+        "symbol": symbol, "sector": "IT", "price": 100.0, "change_pct": 2.0,
+        "day_type": "Trend", "day_type_dir": "up", "tpo_pos": "above_va",
+    }
+    volume = {"symbol": symbol, "delivery_pct": 0.8, "change_pct": 2.0}
+    for letter in volume_shapes.SESSION_LETTERS:
+        volume[f"vol_{letter}"] = float("nan")
+    volume.update(volume_overrides)
+    return profile, volume
+
+
+def _many(rows: list) -> tuple:
+    """rows: list of (profile_dict, volume_dict) - build a multi-symbol snapshot pair, needed
+    because coverage is a FRACTION across the universe, not a single-row property."""
+    profiles, volumes = zip(*rows)
+    return pd.DataFrame(list(profiles)), pd.DataFrame(list(volumes))
+
+
+def test_sparse_k_falls_back_to_late_when_late_has_more_data():
+    """K published for only 1/6 names (well under MIN_EXECUTABLE_COVERAGE), L+M published for
+    all 6 - the wider read must be used, and the qualifying name (real L/M ramp) must appear."""
+    rows = [_qualifying_row(f"FILLER{i}", vol_k=float("nan"), vol_l=1.4, vol_m=1.5) for i in range(5)]
+    rows.append(_qualifying_row("TESTCO", vol_k=1.4, vol_l=1.3, vol_m=1.6))
+    market_profile, volume = _many(rows)
+
+    result = btst.candidates(market_profile, volume)
+
+    assert "TESTCO" in list(result["symbol"])
+
+
+def test_sparse_k_and_sparse_late_prefers_k_on_a_tie_or_better():
+    """Both reads thin, but K still has at least as much data as L+M (the 2026-09-09 case at
+    14:50) - must NOT fall back, since that made the real incident strictly worse (L+M was
+    even sparser than K, 0% vs 3%)."""
+    rows = [
+        _qualifying_row(f"FILLER{i}", vol_k=1.4, vol_l=float("nan"), vol_m=float("nan"))
+        for i in range(1)
+    ]
+    rows += [_qualifying_row(f"EMPTY{i}") for i in range(10)]  # no late-session data at all
+    market_profile, volume = _many(rows)
+
+    result = btst.candidates(market_profile, volume)
+
+    # The one name with K data and a real ramp must still be findable via the K read.
+    assert list(result["symbol"]) == ["FILLER0"]
+
+
+def test_healthy_k_coverage_never_falls_back():
+    """Above MIN_EXECUTABLE_COVERAGE, the executable (K-only) read is used exactly as before -
+    this must not regress the common, healthy case."""
+    rows = [_qualifying_row(f"FILLER{i}", vol_k=1.4, vol_l=float("nan")) for i in range(9)]
+    rows.append(_qualifying_row("TESTCO", vol_k=1.4, vol_l=1.3, vol_m=1.6))
+    market_profile, volume = _many(rows)
+
+    result = btst.candidates(market_profile, volume)
+
+    assert "TESTCO" in list(result["symbol"])
+    assert "FILLER0" in list(result["symbol"])  # K-qualified names still included
+
+
+def test_retrospective_candidates_uses_the_full_k_l_m_read():
+    """A name with no K data but a real L+M ramp must still surface - retrospective_candidates()
+    is meant to see everything the live/executable read structurally cannot."""
+    market_profile, volume = _pair(volume={"vol_k": float("nan"), "vol_l": 1.4, "vol_m": 1.6})
+    assert list(btst.retrospective_candidates(market_profile, volume)["symbol"]) == ["TESTCO"]
+
+
+def test_non_executable_mode_is_unaffected_by_the_fallback():
+    """executable=False already means 'use the wide read' - the coverage comparison only
+    applies to the executable=True path."""
+    market_profile, volume = _pair()
+    result_default = btst.candidates(market_profile, volume, executable=False)
+    assert list(result_default["symbol"]) == ["TESTCO"]

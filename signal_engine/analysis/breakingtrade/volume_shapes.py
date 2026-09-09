@@ -135,6 +135,12 @@ SHAPES = {
     "lunch_anomaly": is_lunch_anomaly,
     "closing_ramp": is_closing_ramp,
     "closing_ramp_executable": lambda row: is_closing_ramp(row, EXECUTABLE_LETTERS),
+    # All three closing sessions together (K+L+M). Not tradeable same-day - M does not even
+    # trade until the 15:15-15:30 auction, well after the 15:15 continuous-trading cutoff a
+    # BTST delivery order needs - so this exists purely for btst.retrospective_candidates()'s
+    # comparison against the executable (K-only, or K/L-whichever-has-data) live read. See
+    # that function's docstring for why this is a measurement tool, not a second trade feed.
+    "closing_ramp_full": lambda row: is_closing_ramp(row, CLOSING_LETTERS),
     "ghost_rally": is_ghost_rally,
 }
 

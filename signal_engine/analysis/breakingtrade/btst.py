@@ -48,6 +48,14 @@ EARLIEST_USEFUL_TIME = time(14, 45)
 # Absolute floor under the relative delivery bar - see delivery_threshold().
 DELIVERY_FLOOR = 0.45
 
+# Below this fraction of names carrying a non-null K-session (vol_k) factor, the K-only
+# "executable" ramp read is judged too thin to trust and candidates() falls back to the wider
+# L+M read instead - see the long comment at its call site (2026-09-09 finding: live polls saw
+# 3-4% K coverage minutes after the session closed, versus the ~100% this module's design
+# assumed from backfilled data). Set well below a healthy day's expected coverage so this only
+# fires on a genuine publishing-lag day, not routine noise.
+MIN_EXECUTABLE_COVERAGE = 0.5
+
 # Structural readings that say buyers held the day - any one of these qualifies.
 BULLISH_TPO_POS = {"above_va", "near_day_high", "tpo_ext_high", "near_va_high"}
 
@@ -99,11 +107,17 @@ def candidates(
     volume: pd.DataFrame,
     min_delivery_pct: float = None,
     executable: bool = True,
+    full_session: bool = False,
 ) -> pd.DataFrame:
     """Rank tomorrow's carry candidates from a closing-hour snapshot pair.
 
     A name qualifies on four independent legs: it closed green, structure says buyers held,
     delivery says the buying was real ownership, and the volume row shows a closing ramp.
+
+    full_session=True skips straight to the K+L+M read (see "closing_ramp_full" in
+    volume_shapes.py) instead of the coverage-aware K-vs-L+M choice below - use
+    retrospective_candidates() rather than passing this directly; see its docstring for why
+    this reading is a measurement tool, not a second live feed.
     """
     if volume is None or volume.empty:
         raise ValueError("BTST needs the volume snapshot - Del% and the K/L/M sessions live there")
@@ -125,8 +139,39 @@ def candidates(
     #   K only (actionable at 14:45) excess +0.134%, t=+0.65
     # and L/M are reported for only 74% of names against 100% for K - the old rule silently
     # discarded about 53 names every session.
-    ramp_column = "closing_ramp_executable" if executable else "closing_ramp"
-    ramp_letters = volume_shapes.EXECUTABLE_LETTERS if executable else volume_shapes.LATE_LETTERS
+    #
+    # THAT "100% FOR K" WAS MEASURED AGAINST BACKFILLED, END-OF-DAY DATA, NOT A LIVE 14:50 POLL.
+    # 2026-09-08 and 2026-09-09 both produced only 0-1 BTST candidates from ~210 names live,
+    # versus 3-6/day typical of backfilled sessions. Traced to vol_k itself: at the live 14:50
+    # poll only 6/214 (2026-09-09) and 9/211 (2026-09-08) names had a non-null K-session factor
+    # at all - the vendor had not finished publishing K (14:15-14:45) barely five minutes after
+    # it closed, contradicting the "100% for K" figure this comment used to justify K-only. vol_i
+    # and vol_j (sessions that closed well before 14:50) were 100% populated in the SAME
+    # snapshot, so this is a vendor publishing-lag specific to the just-closed session, not a
+    # scraper problem.
+    #
+    # Falling back to L+M unconditionally turned out to make this WORSE at 14:50 specifically:
+    # L (14:45-15:15) had only just started and M (the 15:15-15:30 auction) had not happened at
+    # all, so vol_l/vol_m were 0/214 populated - even sparser than K's 6/214. There is no single
+    # "wider" fallback that is safe at every poll time; which session has usable data depends on
+    # how far into the close the snapshot was actually taken. So: measure coverage for both reads
+    # and use whichever the vendor has actually published more of, K preferred on a tie since it
+    # carries less look-ahead - not a relaxation of what counts as a "ramp", just using whichever
+    # data genuinely exists yet instead of scoring a column that is mostly absent.
+    exec_columns = [f"vol_{letter}" for letter in volume_shapes.EXECUTABLE_LETTERS
+                    if f"vol_{letter}" in shaped.columns]
+    late_columns = [f"vol_{letter}" for letter in volume_shapes.LATE_LETTERS
+                    if f"vol_{letter}" in shaped.columns]
+    exec_coverage = shaped[exec_columns].notna().any(axis=1).mean() if exec_columns else 0.0
+    late_coverage = shaped[late_columns].notna().any(axis=1).mean() if late_columns else 0.0
+
+    if full_session:
+        ramp_column, ramp_letters = "closing_ramp_full", volume_shapes.CLOSING_LETTERS
+    elif executable and exec_coverage < MIN_EXECUTABLE_COVERAGE and late_coverage > exec_coverage:
+        ramp_column, ramp_letters = "closing_ramp", volume_shapes.LATE_LETTERS
+    else:
+        ramp_column = "closing_ramp_executable" if executable else "closing_ramp"
+        ramp_letters = volume_shapes.EXECUTABLE_LETTERS if executable else volume_shapes.LATE_LETTERS
     required = [f"vol_{letter}" for letter in ramp_letters if f"vol_{letter}" in shaped.columns]
 
     # Only judge names carrying the data the judgement needs - scoring a name whose sessions are
@@ -177,6 +222,35 @@ def candidates(
         if c in qualified.columns
     ]
     return qualified[columns]
+
+
+def retrospective_candidates(market_profile: pd.DataFrame, volume: pd.DataFrame) -> pd.DataFrame:
+    """The SAME qualification rules, read against the full K+L+M closing picture.
+
+    WHY THIS EXISTS: not to trade, to MEASURE. `candidates()` picks whichever of K-only or L+M
+    the vendor has actually published by poll time (see its docstring for the 2026-09-09
+    publishing-lag finding) - a compromise forced by needing a decision before the 15:15
+    continuous-trading cutoff. This function has no such deadline: it exists to ask, once a day
+    is fully over, "if we had waited for the complete picture instead of racing the clock,
+    would the call have been different?" M does not even trade until the 15:15-15:30 closing
+    auction, so a result from this function is never same-day actionable - it can only ever be
+    a retrospective comparison point.
+
+    HOW TO USE IT: call this against a snapshot pair taken well after 15:30 (a `--backfill`
+    read, or a live poll extended past the close) for the SAME day `candidates()` was called
+    against live, and compare the two symbol sets. The code's own 2026-09-04 backtest found K+L+M
+    barely ahead of K-only (+0.188% vs +0.134% excess, both t<1.1 on 11 day-pairs) - too thin a
+    sample to trust either way. That comparison was also confounded: it never controlled for
+    whether K-only was reading complete or lagging data on any given day. This function, run
+    consistently against fully-settled data, is what lets that be measured cleanly going
+    forward instead of asserted from one small backtest.
+
+    Returns the same qualified/ranked DataFrame shape as candidates() - store and compare its
+    `symbol` set against the same day's live candidates() output; there is no scoring or
+    win-rate computation here yet. Build that once there are enough day-pairs to make it worth
+    reading (the whole point of the 2026-09-04 finding above is that eleven was not enough).
+    """
+    return candidates(market_profile, volume, full_session=True)
 
 
 def is_snapshot_late_enough(captured_at: datetime) -> bool:
