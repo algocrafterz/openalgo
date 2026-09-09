@@ -131,9 +131,16 @@ sizing:
   # The lower capital utilisation on wide-SL days is the CORRECT consequence of 1% risk mgmt.
   max_sl_pct_for_sizing: 0.0
 
-  # [tune] Capital override in analyze (sandbox) mode. Set to match live capital for realistic sizing.
-  # Has no effect in live mode — live capital is fetched from broker API.
-  sandbox_capital: 35000
+  # [tune] Capital override in analyze (sandbox) mode. Has no effect in live mode — live capital
+  # is fetched from broker API.
+  #
+  # 2026-09-10: was 35000, mismatched against OpenAlgo's actual sandbox account, which has been
+  # configured with starting_capital=100000 (db/sandbox.db's sandbox_config table) since it was
+  # created 2025-12-29. Every paper trade since then was sized as if capital were 35k while the
+  # real dummy account backing margin checks held ~80-100k - not a failure (undersizing is
+  # safe), but every position was smaller than the capital actually being tested implied, and
+  # the two numbers should agree. Raised to match.
+  sandbox_capital: 100000
 
   # [tune] Cache capital at first signal of the day; use same value for all trades.
   # Ensures equal risk per trade regardless of intra-day capital fluctuations from open positions.
