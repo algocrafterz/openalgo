@@ -58,21 +58,26 @@ from signal_engine.analysis.breakingtrade.scorer import rank
 #                all live here. This is where the confirmed trend entries actually appear.
 #   13:00-15:00  Off. Lunch trap, and the guide warns against chasing a breakout once the
 #                day's range is already spent.
-#   14:50/15:05  The BTST decision window. Since 2026-08-03 the NSE runs a Closing Auction
-#                Session and continuous trading in F&O stocks ENDS AT 15:15, so a delivery
-#                order has to be placed before then. The K session (14:15-14:45) is complete at
-#                14:45 and is reported for 100% of names, which leaves roughly 25 minutes to
-#                act. Polling at 15:20 - as this schedule first did - produces a list that
-#                can no longer be traded that day.
+#   14:50/15:05/15:10  The BTST decision window. Since 2026-08-03 the NSE runs a Closing
+#                Auction Session and continuous trading in F&O stocks ENDS AT 15:15, so a
+#                delivery order has to be placed before then. The K session (14:15-14:45) is
+#                complete at 14:45 and, per the vendor's own reporting, is EVENTUALLY published
+#                for 100% of names - but not immediately: 2026-09-08/09-09 both found K barely
+#                populated (2-4%) at a live 14:50 poll, minutes after the session closed, and L
+#                (14:45-15:15) even sparser that early. A 15:10 mark was added so the vendor has
+#                a full 25 minutes of L-session time to publish before the read is taken, versus
+#                5 minutes at 14:50 - still 5 minutes clear of the 15:15 cutoff. Polling at
+#                15:20 - as this schedule first did - produces a list that can no longer be
+#                traded that day.
 # The volume scanner's columns are half-hour buckets plus a cumulative Surge x, so polling it
 # every five minutes re-reads numbers that have not changed. These marks straddle each bucket
-# close, and 15:05/15:20 carry the K/L/M accumulation read the BTST list needs.
-VOLUME_FETCH_MINUTES = (5, 16, 46, 50)
+# close, and 15:05/15:10 carry the K/L/M accumulation read the BTST list needs.
+VOLUME_FETCH_MINUTES = (5, 10, 16, 46, 50)
 
 POLL_WINDOWS = (
     (time(9, 20), time(10, 30), (0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)),
     (time(10, 30), time(13, 0), (1, 16, 31, 46)),
-    (time(14, 50), time(15, 10), (50, 5)),
+    (time(14, 50), time(15, 10), (50, 5, 10)),
 )
 
 
@@ -297,6 +302,16 @@ def _fetch_and_report(
             # Paper-trade it rather than risking capital on an unproven list.
             opened = paper.record_entries(watchlist, captured_at)
             print(f"  paper: opened {opened} hypothetical positions")
+
+            # Save both reads for later comparison - "live" is what was actually actionable,
+            # "retrospective" is the K+L+M measurement-only read (never tradeable same-day, M
+            # has not traded yet at this poll time either - this captures whatever of it exists
+            # so far; a --backfill re-run the next day, once M has fully settled, overwrites
+            # this with the complete picture). See btst.retrospective_candidates()'s docstring.
+            trade_day = captured_at.strftime("%Y-%m-%d")
+            store.save_btst_candidates(trade_day, "live", watchlist)
+            retrospective = btst.retrospective_candidates(mp_snapshot.frame, vol_snapshot.frame)
+            store.save_btst_candidates(trade_day, "retrospective", retrospective)
             # Settle anything still open from an earlier day now that this poll's snapshot
             # gives settle_open_trades() a next-session close to settle against. Only called
             # from the 14:45+ block (not every poll) so an early-morning read of the new day
@@ -314,9 +329,23 @@ def _fetch_and_report(
                 print("  paper: intraday EOD summary sent")
         except Exception as exc:
             print(f"  BTST alert failed: {type(exc).__name__}: {exc}")
-    elif store_it and new_by_scan:
-        alerts.alert_transitions(new_by_scan, captured_at, mp_snapshot.frame)
-        _emit_trade_signals(new_by_scan, mp_snapshot.frame, captured_at)
+    elif store_it:
+        if new_by_scan:
+            alerts.alert_transitions(new_by_scan, captured_at, mp_snapshot.frame)
+            _emit_trade_signals(new_by_scan, mp_snapshot.frame, captured_at)
+
+        # Re-check EVERY still-pending scan pick from earlier polls, not just symbols new to
+        # this one - entry_trigger() waits for a later bar to close beyond the signal bar's
+        # level, which almost never exists yet on the same poll a symbol is first flagged. See
+        # entry_watch.py's docstring for why this was the reason real signals almost never fired.
+        try:
+            from signal_engine.analysis.breakingtrade import entry_watch
+
+            confirmed = entry_watch.check(captured_at, mp_snapshot.frame)
+            if confirmed:
+                print(f"  entry_watch confirmed {confirmed} pending pick(s)")
+        except Exception as exc:
+            print(f"  entry watch failed: {type(exc).__name__}: {exc}")
 
     for result in results:
         if result.matches.empty:
