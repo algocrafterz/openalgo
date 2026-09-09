@@ -708,6 +708,75 @@ def _run_shutdown(reason: str = "scheduled"):
         logger.exception("Telegram notification failed (non-fatal)")
 
 
+def _run_healthcheck():
+    """Periodic check: is the stored broker session still alive?
+
+    openalgoctl.sh's run() supervisor only calls _run_startup() (a real login)
+    once, at process start. Indian broker tokens expire daily at ~03:00 IST
+    regardless of when the process started, so a stack started before that
+    rollover and kept running (the normal case) drifts onto a dead session for
+    the rest of the day with nothing to notice or recover — every quote call
+    fails silently until someone restarts the stack. That is exactly what
+    happened on 2026-09-09: session died before market open, stayed dead until
+    a manual restart at 15:05 IST, ~6 hours in which paper orders were
+    rejected or stuck unfilled (see breakout.md's 2026-09-09 postmortem).
+
+    auto_login() is already safe to call repeatedly: _totp_session_token()
+    checks the existing token with verify_broker_auth() first and only
+    performs a fresh TOTP login when that check fails, so calling it every
+    few minutes costs one cheap funds-API call in the common case (session
+    still valid) and only pays for a real login when the session is actually
+    dead. This wraps it with quiet-by-default logging and alerts only on a
+    genuine state change — session found dead, recovered, or re-login
+    failing — not a message every cycle.
+
+    Exit code 0 = session confirmed alive or recovered.
+    Exit code 1 = session dead AND auto re-login also failed — the caller
+    (openalgoctl.sh) is expected to alert/cooldown same as a bootstrap
+    failure, so a repeatedly-dead broker doesn't get hammered with logins.
+    """
+    logger = _log()
+
+    try:
+        validate_auto_login_env()
+    except EnvironmentError:
+        # OAuth-only broker (no TOTP secret configured) — auto_login() can't
+        # self-heal this path (see architecture note in project memory), so
+        # there is nothing for a periodic check to do beyond what the human
+        # who did the manual browser login already knows.
+        logger.debug("Healthcheck: TOTP auto-login not configured, skipping")
+        return
+
+    try:
+        success, message, auth_token = auto_login()
+    except EnvironmentError as e:
+        logger.error("Healthcheck: configuration error: %s", e)
+        notify_failure("healthcheck", str(e))
+        sys.exit(1)
+
+    if not success:
+        logger.error("Healthcheck: broker session dead and re-login FAILED: %s", message)
+        notify_failure("healthcheck", str(message))
+        sys.exit(1)
+
+    if message and "reused" in message.lower():
+        logger.debug("Healthcheck: %s", message)
+        return
+
+    # Non-reuse success means _totp_session_token() actually performed a
+    # fresh TOTP login just now — the stored session was dead until this
+    # check caught it.
+    logger.warning("Healthcheck: broker session had expired — auto re-login succeeded")
+    try:
+        asyncio.run(send_telegram_notification(
+            "Broker session had expired and was auto re-authenticated by the periodic "
+            "health check. Signals during the outage window may have been rejected, "
+            "delayed, or filled late at a stale price — check today's orderbook."
+        ))
+    except Exception:
+        logger.exception("Recovery notification failed (non-fatal)")
+
+
 def _run_squareoff():
     """3:02 PM failsafe: cancel all pending orders and close all MIS positions.
 
@@ -765,6 +834,8 @@ if __name__ == "__main__":
         _run_shutdown(reason=reason)
     elif command == "squareoff":
         _run_squareoff()
+    elif command == "healthcheck":
+        _run_healthcheck()
     elif command == "notify":
         # Lets openalgoctl.sh raise an alert from shell without duplicating
         # Telegram wiring. Arg 2 is the stage, the rest is the detail.
@@ -773,5 +844,5 @@ if __name__ == "__main__":
         sys.exit(0 if notify_failure(stage, detail) else 1)
     else:
         print("Usage: python -m signal_engine.scripts.openalgoscheduler "
-              "[startup|shutdown|squareoff|notify] [reason|stage] [detail...]")
+              "[startup|shutdown|squareoff|healthcheck|notify] [reason|stage] [detail...]")
         sys.exit(1)

@@ -360,6 +360,20 @@ cmd_run() {
     local _last_probe=$SECONDS
     local _app_wedged=false
 
+    # Broker-session health check. bootstrap() logs in ONCE, at process start.
+    # Indian broker tokens expire daily at ~03:00 IST regardless of when this
+    # process started, so a long-running `run` (the normal case — started
+    # once, kept alive for days) drifts onto a dead session after the next
+    # rollover with nothing to notice or recover: every quote call fails
+    # silently until someone restarts the stack. On 2026-09-09 that cost
+    # ~6 hours of the trading day (session died before market open, found
+    # only by a manual restart at 15:05 IST — see breakout.md's postmortem).
+    # `openalgoscheduler.py healthcheck` is cheap when the session is still
+    # valid (one funds-API call) and only performs a real re-login when it
+    # isn't, so checking every 15 minutes costs nothing most cycles.
+    local _SESSION_HEALTH_EVERY=900   # seconds between broker-session checks
+    local _last_session_check=$SECONDS
+
     while true; do
         # Wait while both processes are alive
         while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$SIGNAL_PID" 2>/dev/null; do
@@ -384,6 +398,21 @@ cmd_run() {
                         _app_wedged=true
                         break
                     fi
+                fi
+            fi
+
+            # Periodic broker-session check — see comment above this loop.
+            # Respects the same auth cooldown as bootstrap() so a broker that
+            # keeps rejecting login doesn't get hammered every 15 minutes.
+            if (( SECONDS - _last_session_check >= _SESSION_HEALTH_EVERY )); then
+                _last_session_check=$SECONDS
+                if check_auth_cooldown; then
+                    log "Session healthcheck skipped (auth cooldown active)"
+                elif "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler healthcheck; then
+                    rm -f "$AUTH_COOLDOWN_FILE"
+                else
+                    log "ERROR: Session healthcheck re-login failed — writing auth cooldown"
+                    record_auth_failure
                 fi
             fi
         done

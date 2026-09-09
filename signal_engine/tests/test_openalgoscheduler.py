@@ -653,3 +653,93 @@ class TestStartupAlertsOnFailure:
             sched._run_startup()
         assert calls, "no alert was sent on configuration error"
         assert "BROKER_NAME missing" in calls[0][1]
+
+
+class TestHealthcheck:
+    """_run_healthcheck must self-heal a dead broker session, quietly when
+    nothing changed, loudly when it does.
+
+    Regression guard for 2026-09-09: openalgoctl.sh's run() supervisor only
+    logs in once, at process start. The Flattrade session expired before
+    market open and stayed dead for ~6 hours until a manual restart, because
+    nothing was periodically re-checking it. _run_healthcheck() is what
+    openalgoctl.sh now calls on a timer to catch that automatically.
+    """
+
+    def _patch(self, monkeypatch, **attrs):
+        import signal_engine.scripts.openalgoscheduler as sched
+        for k, v in attrs.items():
+            monkeypatch.setattr(sched, k, v)
+        return sched
+
+    def test_skips_quietly_when_auto_login_not_configured(self, monkeypatch):
+        """OAuth-only brokers (no TOTP secret) have nothing for this check to
+        do - it must not raise or exit."""
+        def _boom():
+            raise EnvironmentError("BROKER_TOTP_SECRET is not set")
+
+        sched = self._patch(monkeypatch, validate_auto_login_env=_boom)
+        sched._run_healthcheck()  # must not raise
+
+    def test_session_still_valid_sends_no_alert(self, monkeypatch):
+        """auto_login() reusing an existing valid session must not trigger a
+        Telegram alert - that would fire every cycle, all day."""
+        calls = []
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
+            auto_login=lambda: (True, "Session reused (no TOTP needed) for user: anand123hai", "tok"),
+            notify_failure=lambda stage, detail: calls.append(("fail", stage, detail)),
+        )
+        sched._run_healthcheck()
+        assert not calls, "no alert should fire when the session was already valid"
+
+    def test_recovered_session_alerts_once(self, monkeypatch):
+        """A fresh login performed by this check (session was dead) must send
+        exactly one recovery notification."""
+        sent = []
+
+        async def _send(msg):
+            sent.append(msg)
+            return True
+
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
+            auto_login=lambda: (True, "Auto-login successful for anand123hai", "tok"),
+            send_telegram_notification=_send,
+        )
+        sched._run_healthcheck()
+        assert len(sent) == 1
+        assert "expired" in sent[0].lower()
+
+    def test_relogin_failure_alerts_and_exits_nonzero(self, monkeypatch):
+        """A dead session that auto re-login can't fix must alert and signal
+        failure via exit code, so openalgoctl.sh's cooldown kicks in."""
+        calls = []
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
+            auto_login=lambda: (False, "Invalid credentials", None),
+            notify_failure=lambda stage, detail: calls.append((stage, detail)),
+        )
+        with pytest.raises(SystemExit):
+            sched._run_healthcheck()
+        assert calls, "no alert was sent when re-login failed"
+        assert "Invalid credentials" in calls[0][1]
+
+    def test_configuration_error_during_relogin_alerts_and_exits(self, monkeypatch):
+        def _boom():
+            raise EnvironmentError("BROKER_PASSWORD missing")
+
+        calls = []
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
+            auto_login=_boom,
+            notify_failure=lambda stage, detail: calls.append((stage, detail)),
+        )
+        with pytest.raises(SystemExit):
+            sched._run_healthcheck()
+        assert calls, "no alert was sent on configuration error during re-login"
+        assert "BROKER_PASSWORD missing" in calls[0][1]

@@ -15,7 +15,7 @@ import os
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytz
@@ -75,6 +75,21 @@ class ExecutionEngine:
         self.order_rate_limit = int(os.getenv("ORDER_RATE_LIMIT", "10 per second").split()[0])
         self.api_rate_limit = int(os.getenv("API_RATE_LIMIT", "50 per second").split()[0])
         self.batch_delay = 1.0  # 1 second between batches
+        # A MARKET order is meant to fill against the current tick. One that
+        # is still "open" after this many seconds isn't waiting on a price
+        # level (that's what LIMIT/SL/SL-M are for) - it's stuck behind a
+        # broken quote feed. Left unbounded, it fills whenever the feed
+        # recovers, at whatever price happens to be current then, which can
+        # be hours later and has nothing to do with the moment the signal
+        # fired (see 2026-09-09 HINDALCO incident in breakout.md: entered
+        # 10:50 IST, sat unfilled through a broker-session outage, filled at
+        # 15:05 IST at a stale price after the strategy had already declared
+        # TP1/TP2 hits against it). LIMIT and SL/SL-M orders are exempt -
+        # resting for hours waiting on their trigger price is their normal,
+        # intended behaviour.
+        self.max_market_order_age_seconds = int(
+            os.getenv("SANDBOX_MAX_MARKET_ORDER_AGE_SECONDS", "300")
+        )
 
     def check_and_execute_pending_orders(self):
         """
@@ -91,6 +106,44 @@ class ExecutionEngine:
 
             if not pending_orders:
                 logger.debug("No pending orders to process")
+                return
+
+            # Stale-MARKET-order guard: cancel instead of leaving open indefinitely.
+            stale_cutoff = datetime.now(pytz.timezone("Asia/Kolkata")) - timedelta(
+                seconds=self.max_market_order_age_seconds
+            )
+            still_pending = []
+            for order in pending_orders:
+                if order.price_type == "MARKET" and order.order_status == "open" and order.order_timestamp:
+                    order_ts = order.order_timestamp
+                    if order_ts.tzinfo is None:
+                        order_ts = pytz.timezone("Asia/Kolkata").localize(order_ts)
+                    if order_ts < stale_cutoff:
+                        age_min = (datetime.now(pytz.timezone("Asia/Kolkata")) - order_ts).total_seconds() / 60
+                        logger.error(
+                            f"Auto-cancelling stale MARKET order {order.orderid} "
+                            f"({order.symbol} {order.action} {order.quantity}) - "
+                            f"unfilled for {age_min:.0f}min, no valid quote available "
+                            f"(likely a broker/data-feed outage)"
+                        )
+                        try:
+                            from sandbox.order_manager import OrderManager
+
+                            OrderManager(order.user_id).cancel_order(
+                                order.orderid,
+                                reason=(
+                                    f"Auto-cancelled: no valid quote for "
+                                    f"{age_min:.0f}min (MAX={self.max_market_order_age_seconds // 60}min)"
+                                ),
+                            )
+                        except Exception as e:
+                            logger.exception(f"Failed to auto-cancel stale order {order.orderid}: {e}")
+                        continue
+                still_pending.append(order)
+            pending_orders = still_pending
+
+            if not pending_orders:
+                logger.debug("No pending orders to process after stale-order cleanup")
                 return
 
             logger.info(f"Processing {len(pending_orders)} pending orders")

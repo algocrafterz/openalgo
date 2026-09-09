@@ -905,12 +905,15 @@ class OrderManager:
                 500,
             )
 
-    def cancel_order(self, orderid):
+    def cancel_order(self, orderid, reason=""):
         """
         Cancel an existing open order
 
         Args:
             orderid: str - Order ID to cancel
+            reason: str - optional rejection_reason to record (e.g. auto-cancel
+                by the execution engine's stale-order guard), surfaced to
+                callers via the order record and the order-update event.
 
         Returns:
             tuple: (success: bool, response: dict, status_code: int)
@@ -944,6 +947,8 @@ class OrderManager:
             # Update order status
             order.order_status = "cancelled"
             order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+            if reason:
+                order.rejection_reason = reason
 
             # Release blocked margin using the exact amount that was blocked
             if (
@@ -1023,9 +1028,9 @@ class OrderManager:
 
             db_session.commit()
 
-            logger.info(f"Order cancelled: {orderid}")
+            logger.info(f"Order cancelled: {orderid}" + (f" ({reason})" if reason else ""))
 
-            self._publish_order_update_event(order, order_status="cancelled")
+            self._publish_order_update_event(order, order_status="cancelled", rejection_reason=reason)
 
             return (
                 True,
