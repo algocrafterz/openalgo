@@ -530,11 +530,23 @@ class PositionTracker:
         return _FILL_ORPHANED
 
     async def _release_orphan(self, key: str, pos, reason: str) -> None:
-        """Cancel any orphaned SL, release the risk slot, and alert — no trade recorded."""
+        """Cancel any orphaned SL, release the risk slot, flag the trade record, and alert.
+
+        "No trade recorded" here means the tracker stops managing the position - but
+        db.save() already wrote an entry row optimistically at order-placement time, and this
+        is the exact moment the engine learns that row's outcome cannot be trusted (2026-09-09:
+        this is precisely how HINDALCO's phantom fill happened - a broker outage left the order
+        stuck, this path fired, and nothing marked the already-written row as suspect). Flag it
+        so fetch_clean_trades() excludes it from analysis without deleting the record itself.
+        """
         if pos.sl_order_id:
             await cancel_order(pos.sl_order_id, pos.strategy)
             logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
         self._risk_engine.record_rejection(symbol=pos.symbol)
+        if pos.entry_order_id:
+            from signal_engine import db
+
+            db.flag_data_quality(pos.entry_order_id, db.DATA_QUALITY_EXECUTION_ISSUE, reason)
         await notifier.notify_orphaned_position(
             pos.symbol, pos.strategy, pos.direction.value,
             pos.entry_order_id, reason,

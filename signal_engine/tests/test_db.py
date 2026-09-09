@@ -107,6 +107,92 @@ class TestDatabaseOperations:
         save(_make_signal(), _make_order(), _make_result())
 
 
+class TestDataQualityFlag:
+    """2026-09-09: HINDALCO's phantom fill wrote a clean-looking SUCCESS row while the actual
+    execution was corrupted by a broker-session outage. flag_data_quality()/fetch_clean_trades()
+    are what let analysis exclude a row like that without deleting the audit trail."""
+
+    def test_flagged_row_is_excluded_from_clean_trades(self):
+        from signal_engine.db import DATA_QUALITY_EXECUTION_ISSUE, fetch_clean_trades, flag_data_quality
+
+        save(_make_signal(), _make_order(), _make_result(order_id="ORD1"))
+        flagged = flag_data_quality("ORD1", DATA_QUALITY_EXECUTION_ISSUE, "orphaned position")
+
+        assert flagged == 1
+        assert fetch_clean_trades() == []
+
+    def test_unflagged_rows_still_appear(self):
+        from signal_engine.db import fetch_clean_trades
+
+        save(_make_signal(), _make_order(), _make_result(order_id="ORD2"))
+
+        clean = fetch_clean_trades()
+        assert len(clean) == 1
+        assert clean[0]["order_id"] == "ORD2"
+        assert clean[0]["data_quality"] is None
+
+    def test_flag_with_no_matching_order_id_flags_nothing(self):
+        from signal_engine.db import DATA_QUALITY_EXECUTION_ISSUE, flag_data_quality
+
+        assert flag_data_quality("DOES-NOT-EXIST", DATA_QUALITY_EXECUTION_ISSUE, "x") == 0
+
+    def test_flag_with_blank_order_id_is_a_no_op(self):
+        from signal_engine.db import DATA_QUALITY_EXECUTION_ISSUE, flag_data_quality
+
+        assert flag_data_quality("", DATA_QUALITY_EXECUTION_ISSUE, "x") == 0
+
+    def test_fetch_clean_trades_filters_by_strategy(self):
+        from signal_engine.db import fetch_clean_trades
+
+        save(_make_signal(strategy="BREAKOUT"), _make_order(strategy_tag="BREAKOUT"),
+             _make_result(order_id="A"))
+        save(_make_signal(strategy="ORB"), _make_order(strategy_tag="ORB"),
+             _make_result(order_id="B"))
+
+        assert [r["order_id"] for r in fetch_clean_trades(strategy="orb")] == ["B"]
+
+    def test_fetch_clean_trades_filters_by_since(self):
+        from signal_engine.db import fetch_clean_trades
+
+        save(_make_signal(), _make_order(), _make_result(order_id="OLD"))
+
+        # Nothing executed at/after a date far in the future - must be excluded.
+        assert fetch_clean_trades(since="2099-01-01") == []
+        # Everything executed at/after a date far in the past - must be included.
+        assert len(fetch_clean_trades(since="2000-01-01")) == 1
+
+
+class TestStrategyVersion:
+    def test_unset_strategy_returns_none(self):
+        from signal_engine.db import get_strategy_version
+
+        assert get_strategy_version("BREAKINGTRADE") is None
+
+    def test_set_then_get_round_trips(self):
+        from signal_engine.db import get_strategy_version, set_strategy_version
+
+        set_strategy_version("BREAKINGTRADE", "2026-09-09", "entry_watch.py retry fix")
+
+        version = get_strategy_version("BREAKINGTRADE")
+        assert version["effective_from"] == "2026-09-09"
+        assert version["reason"] == "entry_watch.py retry fix"
+
+    def test_setting_again_overwrites_not_appends(self):
+        from signal_engine.db import get_strategy_version, set_strategy_version
+
+        set_strategy_version("BREAKOUT", "2026-09-01", "first cutover")
+        set_strategy_version("BREAKOUT", "2026-09-09", "second cutover")
+
+        assert get_strategy_version("BREAKOUT")["effective_from"] == "2026-09-09"
+
+    def test_strategy_name_is_case_insensitive(self):
+        from signal_engine.db import get_strategy_version, set_strategy_version
+
+        set_strategy_version("breakout", "2026-09-09", "x")
+
+        assert get_strategy_version("BREAKOUT") is not None
+
+
 class TestContextPersistence:
     """The trade log is the only durable record of why a signal fired. Entry criteria must
     survive to it or a 30-day attribution study has nothing to group by."""

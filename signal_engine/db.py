@@ -50,7 +50,30 @@ _ADDED_COLUMNS = (
     # switch, so some pre-existing rows may not be live trades, and nothing in the data
     # distinguishes them. A NULL that analysis can see and exclude beats a guess it cannot.
     ("trade_mode", "TEXT"),
+    # 2026-09-09: NULL means clean/unflagged - a trade whose OUTCOME is corrupted by something
+    # other than the strategy's own logic (broker session dead mid-trade, an order stuck for
+    # hours then filled at a stale price, a since-fixed config bug) rather than a genuine call
+    # the strategy made. Set via flag_data_quality() when such an issue is discovered - see
+    # DATA_QUALITY_EXECUTION_ISSUE below and fetch_clean_trades(), the read side analysis should
+    # use instead of querying `trades` directly. Deliberately NOT auto-inferred from status/PnL -
+    # a losing trade is not the same thing as a corrupted one, and guessing which is which from
+    # the numbers alone would silently discard real losses along with real bugs.
+    ("data_quality", "TEXT"),
 )
+
+#: A trade whose recorded outcome cannot be trusted because of an infrastructure/execution
+#: problem (stuck order filled late, broker session outage, orphaned position) rather than the
+#: strategy's own decision-making. See fetch_clean_trades().
+DATA_QUALITY_EXECUTION_ISSUE = "execution_issue"
+
+_CREATE_STRATEGY_VERSIONS = """
+CREATE TABLE IF NOT EXISTS strategy_versions (
+    strategy      TEXT PRIMARY KEY,
+    effective_from TEXT NOT NULL,
+    reason        TEXT,
+    updated_at    TEXT NOT NULL
+)
+"""
 
 _INSERT = """
 INSERT INTO trades (
@@ -67,6 +90,7 @@ def _get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(_CREATE_TABLE)
+    conn.execute(_CREATE_STRATEGY_VERSIONS)
     _add_missing_columns(conn)
     conn.commit()
     return conn
@@ -332,4 +356,127 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> Optional[dict]:
         }
     except Exception as e:
         logger.warning(f"fetch_last_entry_trade failed for {symbol}:{strategy}: {e}")
+        return None
+
+
+def flag_data_quality(order_id: str, quality: str, reason: str = "") -> int:
+    """Mark every trades.db row for `order_id` (entry and any partial/full exits share it) as
+    not trustworthy for performance analysis, without deleting or altering the row itself - the
+    record of what actually happened stays intact, only a read-side filter changes.
+
+    Called from tracker.py's orphan-release path the moment an execution problem is confirmed,
+    so the flag lands within the same session the problem was found rather than requiring a
+    human to remember to backfill it later. Never raises: this is bookkeeping, not something
+    that should be able to break position tracking.
+
+    Returns the number of rows flagged (0 if order_id is blank or matched nothing).
+    """
+    if not order_id:
+        return 0
+    try:
+        conn = _get_connection()
+        cur = conn.execute(
+            "UPDATE trades SET data_quality = ? WHERE order_id = ?",
+            (quality, order_id),
+        )
+        conn.commit()
+        conn.close()
+        if cur.rowcount:
+            logger.warning(
+                f"data_quality={quality!r} flagged on {cur.rowcount} row(s) for order_id="
+                f"{order_id!r}: {reason}"
+            )
+        return cur.rowcount
+    except Exception as e:
+        logger.error(f"flag_data_quality failed for order_id={order_id!r}: {e}")
+        return 0
+
+
+def fetch_clean_trades(strategy: str = None, since: str = None) -> list:
+    """Trades safe to use for performance analysis - excludes anything flag_data_quality()
+    marked, and (when `since` is given) anything before a strategy-logic change.
+
+    This is the function analysis should call instead of querying `trades` directly - see
+    set_strategy_version()'s docstring for why `since` matters independently of data_quality.
+
+    Args:
+        strategy: restrict to one strategy tag (case-insensitive), or None for all.
+        since: ISO date/datetime string - only rows with executed_at >= this. Pass
+            get_strategy_version(strategy)["effective_from"] to apply the current version
+            cutoff automatically.
+
+    Returns a list of dicts, newest first.
+    """
+    try:
+        conn = _get_connection()
+        clauses = ["data_quality IS NULL"]
+        params: list = []
+        if strategy:
+            clauses.append("upper(strategy) = upper(?)")
+            params.append(strategy)
+        if since:
+            clauses.append("executed_at >= ?")
+            params.append(since)
+        cur = conn.execute(
+            f"SELECT * FROM trades WHERE {' AND '.join(clauses)} ORDER BY id DESC",
+            params,
+        )
+        columns = [d[0] for d in cur.description]
+        rows = [dict(zip(columns, row, strict=False)) for row in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"fetch_clean_trades failed: {e}")
+        return []
+
+
+def set_strategy_version(strategy: str, effective_from: str, reason: str = "") -> None:
+    """Record that trades before `effective_from` were produced by a DIFFERENT version of this
+    strategy's logic and should not be pooled with trades after it.
+
+    This is distinct from flag_data_quality(): that marks individual trades corrupted by an
+    infrastructure problem; this marks a whole PERIOD as belonging to a superseded ruleset (an
+    entry-trigger change, a new confirmation window, a relaxed/tightened filter - anything that
+    changes what counts as a signal in the first place). Bump this in the same change as the
+    corresponding STRATEGY-LOG.md entry - this is the machine-readable half of that same
+    discipline, not a replacement for it.
+
+    One row per strategy - calling this again for the same strategy overwrites the previous
+    cutover, it does not keep history (STRATEGY-LOG.md is the durable history; this is only
+    "what does 'current' mean right now").
+    """
+    try:
+        conn = _get_connection()
+        now = datetime.now(IST).isoformat()
+        conn.execute(
+            "INSERT INTO strategy_versions (strategy, effective_from, reason, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(strategy) DO UPDATE SET "
+            "effective_from = excluded.effective_from, reason = excluded.reason, "
+            "updated_at = excluded.updated_at",
+            (strategy.upper(), effective_from, reason, now),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"set_strategy_version failed for {strategy}: {e}")
+
+
+def get_strategy_version(strategy: str) -> Optional[dict]:
+    """The current effective_from/reason for `strategy`, or None if never set (meaning: no
+    known cutover, all history for this strategy is comparable)."""
+    try:
+        conn = _get_connection()
+        cur = conn.execute(
+            "SELECT effective_from, reason, updated_at FROM strategy_versions "
+            "WHERE upper(strategy) = upper(?)",
+            (strategy,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {"effective_from": row[0], "reason": row[1], "updated_at": row[2]}
+    except Exception as e:
+        logger.error(f"get_strategy_version failed for {strategy}: {e}")
         return None
