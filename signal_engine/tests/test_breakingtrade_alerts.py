@@ -152,6 +152,23 @@ def test_trade_signal_omits_the_reason_line_when_no_scan_name_is_given():
     assert "Reason:" not in message
 
 
+def test_trade_signal_shows_r_r_for_a_real_trade_plan():
+    """The R:R quick-glance line (matching ORB/BREAKOUT's own alerts) must appear for a real
+    TradePlan, which always has reward_risk - the SimpleNamespace test double above omits it
+    on purpose (see alert_trade_signal()'s getattr) but production plans never do."""
+    from signal_engine.analysis.breakingtrade.trigger import TradePlan
+
+    plan = TradePlan(
+        symbol="TCS", direction="up", day_type="Trend", entry=2283.1, stop=2270.0,
+        targets=[2296.1, 2302.6, 2309.1], split=(0.5, 0.3, 0.2), ib_high=2290.0,
+        ib_low=2270.0, atr=13.1, risk_per_share=13.1,
+    )
+    alerts.alert_trade_signal(plan)
+    with alerts._connect() as conn:
+        message = conn.execute("SELECT message FROM alerts LIMIT 1").fetchone()[0]
+    assert "R:R: 1:1.98" in message  # (2309.1 - 2283.1) / 13.1, rounded
+
+
 def test_trade_signal_with_a_reason_still_parses_as_a_valid_signal():
     """Reason: is not one of parser.py's mandatory fields - it must not break parsing."""
     from signal_engine import parser

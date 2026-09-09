@@ -373,7 +373,10 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
             count += 1
 
     width = max((len(r[1]) for r in rows), default=8)
-    lines = [f"BT WATCHLIST {captured_at:%H:%M} | {count} new -- no action, not a trade signal"]
+    # Header shape matches alert_btst()'s below: "LABEL timestamp | N noun | context" - same
+    # three pipe-delimited sections in the same order in both channels, so a trader scanning
+    # either one always finds "how many" in the same place before reading further.
+    lines = [f"BT WATCHLIST {captured_at:%H:%M} | {count} new | no action, not a trade signal"]
     lines += [
         f"{side:<5} {sym:<{width}} {px:>9} - {reason} ({tag})"
         for side, sym, px, reason, tag in rows
@@ -403,7 +406,8 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
         return 0
 
     width = max(len(str(r.symbol)) for r in watchlist.itertuples())
-    lines = [f"BTST {captured_at:%d-%b} | BUY CNC before 15:15 | {len(watchlist)} names"]
+    # Header shape matches alert_transitions() above: "LABEL timestamp | N noun | context".
+    lines = [f"BTST {captured_at:%d-%b} | {len(watchlist)} names | BUY CNC before 15:15"]
     for row in watchlist.itertuples():
         delivery = (
             f"del{row.delivery_pct * 100:.0f}" if row.delivery_pct == row.delivery_pct else "del-"
@@ -463,6 +467,12 @@ def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE", scan_name: str = N
         f"Entry: {plan.entry}",
         f"SL: {plan.stop}",
         f"TP: {plan.targets[0]}",
+        # Same "R:R 1:N" quick-glance field ORB/BREAKOUT's PineScript alerts already carry -
+        # not one of parser.py's consumed fields, purely for a trader scanning the channel.
+        # getattr, not plan.reward_risk: some callers pass a lightweight stand-in without the
+        # full TradePlan property set (e.g. this module's own tests), and a missing R:R is a
+        # cosmetic omission, not a reason to fail the whole signal.
+        f"R:R: 1:{getattr(plan, 'reward_risk', None)}" if getattr(plan, "reward_risk", None) else "",
         f"Time: {plan.triggered_at:%H:%M}" if plan.triggered_at else "",
     ]
     if scan_name:
