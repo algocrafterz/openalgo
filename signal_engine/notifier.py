@@ -160,8 +160,9 @@ def format_day_context(
 
 
 def format_slot_context(open_positions: int, max_positions: int) -> str:
-    """Compact slot usage line: 'Slot 2/3 used'."""
-    return f"Slot {open_positions}/{max_positions} used"
+    """Compact slot usage line: 'Slot 2/3 used'. 0 = unlimited (no cap configured)."""
+    cap = max_positions if max_positions > 0 else "unlimited"
+    return f"Slot {open_positions}/{cap} used"
 
 
 # ── Order placement ────────────────────────────────────────────────────────────

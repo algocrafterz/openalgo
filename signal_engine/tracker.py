@@ -324,7 +324,7 @@ class PositionTracker:
         today = datetime.now(IST).date()
         if self._day_summary_date == today or _summary_already_sent_today():
             return
-        capital = self._risk_engine._last_known_capital or 0.0
+        capital = self._risk_engine.total_last_known_capital() or 0.0
         sent = await notifier.notify_day_summary(
             trades=self._day_trades,
             wins=self._day_wins,
@@ -542,7 +542,7 @@ class PositionTracker:
         if pos.sl_order_id:
             await cancel_order(pos.sl_order_id, pos.strategy)
             logger.info(f"check_positions: cancelled orphaned SL {pos.sl_order_id} for {key}")
-        self._risk_engine.record_rejection(symbol=pos.symbol)
+        self._risk_engine.record_rejection(strategy=pos.strategy, symbol=pos.symbol)
         if pos.entry_order_id:
             from signal_engine import db
 
@@ -575,7 +575,7 @@ class PositionTracker:
             await self._release_orphan(key, pos, "zero PnL delta with unconfirmed fill")
             return True
 
-        self._risk_engine.record_close(pnl_delta, symbol=pos.symbol)
+        self._risk_engine.record_close(pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
         await self._record_closed_trade(key, pos, age, pnl_delta, _settings)
         return True
 
@@ -973,7 +973,7 @@ class PositionTracker:
             r_multiple=r,
             exit_types=pos.exit_types[:] + ["TIME"],
         ))
-        self._risk_engine.record_close(pnl=total_pnl, symbol=pos.symbol)
+        self._risk_engine.record_close(pnl=total_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
         await notifier.notify_time_exit(

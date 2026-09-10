@@ -17,15 +17,14 @@ import pytest
 
 from signal_engine.main import _handle_entry, _handle_exit
 from signal_engine.models import (
+    Action,
     Direction,
     Order,
     OrderStatus,
-    Action,
     Signal,
     TradeResult,
 )
 from signal_engine.tracker import PositionTracker, TrackedPosition
-
 
 # --------------------------------------------------------------------------
 # Harness
@@ -244,7 +243,7 @@ class TestExitGuards:
             await _handle_exit(_exit_signal(tp_level="TP1"))
             h.send_order.assert_not_awaited()
             h.cancel_order.assert_awaited_once_with("SL1", "ORB")
-            h.risk.record_rejection.assert_called_once_with(symbol="RELIANCE")
+            h.risk.record_rejection.assert_called_once_with(strategy="ORB", symbol="RELIANCE")
             h.notifier.notify_orphaned_position.assert_awaited_once()
         assert tracker.find_position("RELIANCE", "ORB") is None
 
@@ -314,7 +313,7 @@ class TestSlHitReconcile:
 
             h.send_order.assert_not_awaited()
             h.cancel_order.assert_awaited_once_with("SL1", "ORB")
-            h.risk.record_close.assert_called_once_with(pnl=-750.0, symbol="RELIANCE")
+            h.risk.record_close.assert_called_once_with(pnl=-750.0, strategy="ORB", symbol="RELIANCE")
             h.notifier.notify_position_closed.assert_awaited_once()
 
         assert tracker.find_position("RELIANCE", "ORB") is None
@@ -378,7 +377,7 @@ class TestExitOrderPlacement:
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
             h.notifier.notify_exit_failed.assert_not_awaited()
-            h.risk.record_close.assert_called_once_with(pnl=0.0, symbol="RELIANCE")
+            h.risk.record_close.assert_called_once_with(pnl=0.0, strategy="ORB", symbol="RELIANCE")
         assert tracker.find_position("RELIANCE", "ORB") is None
 
     @pytest.mark.asyncio
@@ -802,7 +801,7 @@ class TestPartialExitDefensiveGuard:
                 await _handle_exit(_exit_signal(tp_level="TP1"))
             h.notifier.notify_position_closed.assert_awaited_once()
             h.notifier.notify_partial_exit.assert_not_awaited()
-            h.risk.record_close.assert_called_once_with(pnl=400.0, symbol="RELIANCE")
+            h.risk.record_close.assert_called_once_with(pnl=400.0, strategy="ORB", symbol="RELIANCE")
         assert tracker.find_position("RELIANCE", "ORB") is None
         assert tracker._day_trades == 1
 

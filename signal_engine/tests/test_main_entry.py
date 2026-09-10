@@ -1,7 +1,8 @@
 """Entry pipeline: dispatch, risk gates, bracket placement, fill handling."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from signal_engine.main import handle_message
 from signal_engine.models import (
@@ -17,7 +18,6 @@ from signal_engine.tests.pipeline_fixtures import (
     _valid_message,
     tracker_mock,
 )
-from signal_engine.tests.pipeline_fixtures import tracker_mock
 
 
 class TestPipelineFlow:
@@ -89,12 +89,13 @@ class TestPipelineFlow:
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.max_open_positions = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             await handle_message(_valid_message())
 
             # Capital flows through get_sizing_capital before calculate_quantity
-            mock_risk.get_sizing_capital.assert_called_once_with(200_000.0)
+            mock_risk.get_sizing_capital.assert_called_once_with(200_000.0, "ORB")
             mock_risk.calculate_quantity.assert_called_once_with(mock_signal, capital=200_000.0)
             mock_risk.record_trade.assert_called_once()
             mock_tracker.register.assert_called_once()
@@ -273,6 +274,7 @@ class TestCncBracketSkip:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.max_open_positions = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -315,6 +317,7 @@ class TestCncBracketSkip:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.max_open_positions = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -356,6 +359,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.max_open_positions = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -392,10 +396,13 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.max_open_positions = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = False
             mock_settings.risk_per_trade = 0.01
+            mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
@@ -430,6 +437,8 @@ class TestBracketOrderFlow:
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
             mock_settings.risk_per_trade = 0.01
+            mock_settings.slippage_factor = 0.10
+            mock_settings.max_sl_pct_for_sizing = 0.0
             mock_settings.sizing_mode = "fixed_fractional"
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
@@ -464,6 +473,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_risk.check_exposure.return_value = True
+            mock_risk.max_open_positions = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -558,7 +568,7 @@ class TestFillOvershotTP:
         # Tracker must NOT have a new position registered
         mock_tracker.register.assert_not_called()
         # risk_engine.record_close must be called to free the slot
-        mock_risk.record_close.assert_called_once_with(0.0, symbol="VBL")
+        mock_risk.record_close.assert_called_once_with(0.0, strategy="ORB", symbol="VBL")
 
     @pytest.mark.asyncio
     async def test_short_fill_below_tp_auto_closes(self):
@@ -606,7 +616,7 @@ class TestFillOvershotTP:
             await handle_message("ORB SHORT\nSymbol: POONAWALLA\nEntry: 413.5\nSL: 421.91\nTP: 408.75")
 
         mock_tracker.register.assert_not_called()
-        mock_risk.record_close.assert_called_once_with(0.0, symbol="VBL")
+        mock_risk.record_close.assert_called_once_with(0.0, strategy="ORB", symbol="VBL")
 
     @pytest.mark.asyncio
     async def test_normal_fill_within_tp_registers_in_tracker(self):

@@ -140,6 +140,18 @@ sizing:
   # real dummy account backing margin checks held ~80-100k - not a failure (undersizing is
   # safe), but every position was smaller than the capital actually being tested implied, and
   # the two numbers should agree. Raised to match.
+  #
+  # 2026-09-10 (later same day): PFC sized 909 qty off this value the first time it took effect
+  # - correct per the formula (risk.py's day-start-capital cache means EVERY trade a strategy
+  # takes today gets the same risk budget, not just the first one; the loss that followed was
+  # one ordinary 1R stop-out, not a sizing bug).
+  #
+  # Also 2026-09-10: RiskEngine now caches day-start capital PER STRATEGY (risk.py), so this one
+  # value is no longer a shared total split three ways - each of the three sandbox strategies
+  # (ORB, BREAKOUT, BreakingTrade) gets its OWN independent Rs100,000 (~Rs1L) sizing pool, sized
+  # and risk-limited completely independently of what the other two are doing. Previously all
+  # three drew down the same day-start figure and competed for the same max_open_positions /
+  # max_trades_per_day counters (see mode_profiles.analyze below).
   sandbox_capital: 100000
 
   # [tune] Cache capital at first signal of the day; use same value for all trades.
@@ -513,17 +525,31 @@ mode_profiles:
   # more information, not less discipline.
   #
   # Sized for THREE strategies sharing the sandbox (intraday-breakout + intraday-orb +
-  # intraday-breakingtrade, since 2026-09-09) so none starves the others of slots — with live
-  # limits they would compete, and every decline would have to be disentangled from "another
-  # strategy got there first". 3 slots/strategy x 3 strategies = 9; trades/day scaled the same
-  # proportion as the original 6->24 (2 strategies) ratio. Was 6/24 for two strategies
-  # (2026-09-06 - 2026-09-09); raise further only if a fourth strategy joins the sandbox.
+  # intraday-breakingtrade, since 2026-09-09) so none starves the others of slots.
+  #
+  # 2026-09-10: these numbers used to be a SHARED TOTAL (9 = "3 slots/strategy x 3
+  # strategies", 36 the equivalent trades/day) enforced by one global counter — so in
+  # practice whichever strategy fired most could still eat the other two's slots, exactly
+  # the contention this profile exists to avoid. RiskEngine now tracks open_positions and
+  # trades_today PER STRATEGY (risk.py), briefly fixed at a per-strategy 3/12.
+  #
+  # 2026-09-10 (later same day): removed entirely. User wants the paper-trading dataset as
+  # large as possible ("more trades = better dataset for testing"), and an artificial slot
+  # cap is exactly what throws signals away instead of recording them — declined entries do
+  # get logged (db.save_declined) but a cap-driven decline tells you nothing about the
+  # STRATEGY, only about capacity, which paper trading has no reason to ration (there is no
+  # real capital being protected — see sizing.sandbox_capital's per-strategy note above).
+  # 0 = unlimited, same convention risk.max_positions_per_symbol/sector already use — each
+  # strategy now takes every signal its own rules pass, with no artificial ceiling. No
+  # capital increase needed to support this: sizing uses each strategy's cached day-start
+  # capital for every trade regardless of how many are open (see sandbox_capital comment),
+  # so 1 trade or 50 that day all size identically off the same Rs1L.
   #
   # Loss limits at 1.0 = off. There is no capital to protect and a mid-week lockout would
   # truncate the observation. The live profile above is what protects the account.
   analyze:
-    max_open_positions: 9
-    max_trades_per_day: 36
+    max_open_positions: 0
+    max_trades_per_day: 0
     daily_loss_limit: 1.0
     weekly_loss_limit: 1.0
     monthly_loss_limit: 1.0

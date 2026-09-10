@@ -407,7 +407,7 @@ async def _abort_exit_on_rejected_entry(signal, pos) -> bool:
     if pos.sl_order_id:
         await cancel_order(pos.sl_order_id, pos.strategy)
         logger.info(f"EXIT: cancelled orphaned SL {pos.sl_order_id} for {pos.symbol}")
-    risk_engine.record_rejection(symbol=pos.symbol)
+    risk_engine.record_rejection(strategy=pos.strategy, symbol=pos.symbol)
     tracker.unregister(signal.symbol, signal.strategy)
     await notifier.notify_orphaned_position(
         pos.symbol, pos.strategy, pos.direction.value,
@@ -435,7 +435,7 @@ async def _reconcile_sl_hit(signal, pos) -> None:
         new_realised_pnl=current_realised,
     )
     tracker.unregister(signal.symbol, signal.strategy)
-    risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+    risk_engine.record_close(pnl=pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
     await tracker.maybe_send_day_summary()
 
 
@@ -567,7 +567,7 @@ async def _finalize_full_exit(
         new_realised_pnl=current_realised,
     )
     tracker.unregister(signal.symbol, signal.strategy)
-    risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+    risk_engine.record_close(pnl=pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
     # exit_pending does not need clearing — position is unregistered
 
 
@@ -590,7 +590,7 @@ async def _finalize_invalid_partial(
         new_realised_pnl=current_realised,
     )
     tracker.unregister(signal.symbol, signal.strategy)
-    risk_engine.record_close(pnl=pnl_delta, symbol=pos.symbol)
+    risk_engine.record_close(pnl=pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
     await tracker.maybe_send_day_summary()
 
 
@@ -811,7 +811,7 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
             "— SL likely fired. Cleaning up tracker."
         )
         tracker.unregister(pos.symbol, pos.strategy)
-        risk_engine.record_close(pnl=0.0, symbol=pos.symbol)
+        risk_engine.record_close(pnl=0.0, strategy=pos.strategy, symbol=pos.symbol)
     else:
         # Position still open (broker_qty > 0 for LONG, < 0 for SHORT, -1 for API error).
         # Clear exit_pending so the next TP/EXIT signal can retry.
@@ -846,8 +846,9 @@ async def _handle_entry(signal) -> None:
     if capital is None:
         return
 
-    # Use day-start capital for equal risk per trade (cached on first fetch of day)
-    sizing_capital = risk_engine.get_sizing_capital(capital)
+    # Use day-start capital for equal risk per trade (cached per-strategy on first
+    # fetch of day — each strategy gets its own isolated capital pool)
+    sizing_capital = risk_engine.get_sizing_capital(capital, signal.strategy)
     logger.info(f"Capital: live={capital:,.2f} sizing={sizing_capital:,.2f} INR")
 
     sized = await _resolve_entry_quantity(signal, capital, sizing_capital)
@@ -902,8 +903,8 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
 
 async def _entry_passes_risk_gates(signal) -> bool:
     """Exposure, symbol-concentration and sector-concentration limits."""
-    if not risk_engine.check_exposure():
-        reason = risk_engine.exposure_block_reason()
+    if not risk_engine.check_exposure(signal.strategy):
+        reason = risk_engine.exposure_block_reason(signal.strategy)
         logger.warning(f"Risk limit reached, skipping {signal.symbol}: {reason}")
         await notifier.notify_risk_limit_hit(reason)
         await _decline(signal, stage="risk_gates", reason=reason)
@@ -1044,7 +1045,7 @@ async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
         # +1 because risk_engine.record_trade runs below — this slot is now taken.
         slot_context = notifier.format_slot_context(
-            risk_engine.open_positions + 1, risk_engine.max_open_positions
+            risk_engine.open_positions_for(signal.strategy) + 1, risk_engine.max_open_positions
         )
         await notifier.notify_order_placed(
             signal.symbol, signal.direction.value,
@@ -1063,8 +1064,8 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
     Returns False when the fill overshot TP and the position was auto-closed — the
     caller must then skip the DB save.
     """
-    risk_engine.record_trade(symbol=signal.symbol)
-    logger.info(f"Capacity: {risk_engine.capacity_status()}")
+    risk_engine.record_trade(strategy=signal.strategy, symbol=signal.symbol)
+    logger.info(f"Capacity: {risk_engine.capacity_status(signal.strategy)}")
 
     sl_order_id = await _place_entry_bracket(signal, quantity, trade_result.order_id)
     entry_fill_price = await _fetch_entry_fill(signal, trade_result.order_id)
@@ -1173,7 +1174,7 @@ async def _auto_close_on_tp_overshoot(
         direction=signal.direction,
     )
     await send_order(close_order)
-    risk_engine.record_close(0.0, symbol=signal.symbol)
+    risk_engine.record_close(0.0, strategy=signal.strategy, symbol=signal.symbol)
     await notifier.notify_order_rejected(
         signal.symbol,
         f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} — auto-closed",

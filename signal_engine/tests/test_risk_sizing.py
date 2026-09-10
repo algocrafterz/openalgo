@@ -5,7 +5,6 @@ import pytest
 from signal_engine.models import Direction
 from signal_engine.risk import RiskEngine
 from signal_engine.tests.conftest import make_signal as _make_signal
-
 from signal_engine.tests.risk_fixtures import _engine
 
 
@@ -47,7 +46,8 @@ class TestRiskFullyHonored:
         # qty = floor(100/5.74) = 17, actual_risk = 17*5.74 = 97.58 (~1%)
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=1187.9, sl=1182.16, tp=1194.79), capital=10_000,
+            _make_signal(entry=1187.9, sl=1182.16, tp=1194.79),
+            capital=10_000,
         )
         assert qty == 17
         actual_risk = qty * abs(1187.9 - 1182.16)
@@ -60,7 +60,8 @@ class TestRiskFullyHonored:
         # actual_risk = 50*2 = 100 = exactly 1%
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=50, sl=48, tp=56), capital=10_000,
+            _make_signal(entry=50, sl=48, tp=56),
+            capital=10_000,
         )
         assert qty == 50
         actual_risk = qty * 2
@@ -74,7 +75,8 @@ class TestRiskFullyHonored:
         # Broker margin requirements are the external constraint.
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=500, sl=498, tp=506), capital=10_000,
+            _make_signal(entry=500, sl=498, tp=506),
+            capital=10_000,
         )
         assert qty == 50
         position_value = qty * 500
@@ -88,7 +90,8 @@ class TestRiskFullyHonored:
         # position_value = 2*500 = 1000 (10% of capital)
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=500, sl=450, tp=600), capital=10_000,
+            _make_signal(entry=500, sl=450, tp=600),
+            capital=10_000,
         )
         assert qty == 2
         actual_risk = qty * 50
@@ -99,7 +102,8 @@ class TestRiskFullyHonored:
         # risk_amount = 5000, qty = floor(5000/5.74) = 871
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=1187.9, sl=1182.16, tp=1194.79), capital=500_000,
+            _make_signal(entry=1187.9, sl=1182.16, tp=1194.79),
+            capital=500_000,
         )
         assert qty == 871
         actual_risk = qty * 5.74
@@ -130,19 +134,21 @@ class TestPctOfCapitalSizing:
 class TestDayStartCapital:
     """use_day_start_capital: caches first capital fetch for equal risk per trade."""
 
+    STRATEGY = "ORB"
+
     def test_caches_first_capital(self):
         engine = _engine(use_day_start_capital=True)
         # First call caches 100K
-        assert engine.get_sizing_capital(100_000) == 100_000
+        assert engine.get_sizing_capital(100_000, self.STRATEGY) == 100_000
         # Second call with different live capital returns cached value
-        assert engine.get_sizing_capital(80_000) == 100_000
-        assert engine.get_sizing_capital(50_000) == 100_000
+        assert engine.get_sizing_capital(80_000, self.STRATEGY) == 100_000
+        assert engine.get_sizing_capital(50_000, self.STRATEGY) == 100_000
 
     def test_disabled_returns_live_capital(self):
         engine = _engine(use_day_start_capital=False)
-        assert engine.get_sizing_capital(100_000) == 100_000
-        assert engine.get_sizing_capital(80_000) == 80_000
-        assert engine.get_sizing_capital(50_000) == 50_000
+        assert engine.get_sizing_capital(100_000, self.STRATEGY) == 100_000
+        assert engine.get_sizing_capital(80_000, self.STRATEGY) == 80_000
+        assert engine.get_sizing_capital(50_000, self.STRATEGY) == 50_000
 
     def test_equal_sizing_across_trades(self):
         # With day-start capital, all trades get same qty
@@ -152,7 +158,7 @@ class TestDayStartCapital:
         capitals = [100_000, 80_000, 60_000, 40_000, 20_000]
         quantities = []
         for cap in capitals:
-            sizing_cap = engine.get_sizing_capital(cap)
+            sizing_cap = engine.get_sizing_capital(cap, self.STRATEGY)
             qty = engine.calculate_quantity(signal, capital=sizing_cap)
             quantities.append(qty)
         # All should be identical (using cached 100K)
@@ -162,25 +168,25 @@ class TestDayStartCapital:
 
     def test_resets_on_new_day(self):
         engine = _engine(use_day_start_capital=True)
-        engine.get_sizing_capital(100_000)
-        assert engine._day_start_capital == 100_000
+        engine.get_sizing_capital(100_000, self.STRATEGY)
+        assert engine._state(self.STRATEGY).day_start_capital == 100_000
 
         # Simulate new day
-        engine._day_start_capital = 0.0
+        engine._state(self.STRATEGY).day_start_capital = 0.0
 
         # New day, new capital
-        engine.get_sizing_capital(120_000)
-        assert engine._day_start_capital == 120_000
+        engine.get_sizing_capital(120_000, self.STRATEGY)
+        assert engine._state(self.STRATEGY).day_start_capital == 120_000
 
     def test_different_capital_levels(self):
         # 15K capital: risk=150, risk_per_share=15, qty=10
         e1 = _engine(use_day_start_capital=True)
-        cap1 = e1.get_sizing_capital(15_000)
+        cap1 = e1.get_sizing_capital(15_000, self.STRATEGY)
         assert e1.calculate_quantity(_make_signal(entry=2500, sl=2485), capital=cap1) == 10
 
         # 1L capital: risk=1000, qty=66
         e2 = _engine(use_day_start_capital=True)
-        cap2 = e2.get_sizing_capital(100_000)
+        cap2 = e2.get_sizing_capital(100_000, self.STRATEGY)
         assert e2.calculate_quantity(_make_signal(entry=2500, sl=2485), capital=cap2) == 66
 
 
@@ -190,21 +196,24 @@ class TestPriceFilter:
     def test_reject_below_min_price(self):
         engine = _engine(min_entry_price=50, max_entry_price=1500)
         qty = engine.calculate_quantity(
-            _make_signal(entry=30, sl=28, tp=35), capital=100_000,
+            _make_signal(entry=30, sl=28, tp=35),
+            capital=100_000,
         )
         assert qty == 0
 
     def test_reject_above_max_price(self):
         engine = _engine(min_entry_price=50, max_entry_price=1500)
         qty = engine.calculate_quantity(
-            _make_signal(entry=2000, sl=1990, tp=2030), capital=100_000,
+            _make_signal(entry=2000, sl=1990, tp=2030),
+            capital=100_000,
         )
         assert qty == 0
 
     def test_allow_within_range(self):
         engine = _engine(min_entry_price=50, max_entry_price=1500)
         qty = engine.calculate_quantity(
-            _make_signal(entry=500, sl=490, tp=520), capital=100_000,
+            _make_signal(entry=500, sl=490, tp=520),
+            capital=100_000,
         )
         assert qty == 100  # floor(1000/10) = 100
 
@@ -212,12 +221,14 @@ class TestPriceFilter:
         engine = _engine(min_entry_price=50, max_entry_price=1500)
         # At min boundary
         qty = engine.calculate_quantity(
-            _make_signal(entry=50, sl=48, tp=55), capital=100_000,
+            _make_signal(entry=50, sl=48, tp=55),
+            capital=100_000,
         )
         assert qty == 500  # floor(1000/2) = 500
         # At max boundary
         qty = engine.calculate_quantity(
-            _make_signal(entry=1500, sl=1490, tp=1530), capital=100_000,
+            _make_signal(entry=1500, sl=1490, tp=1530),
+            capital=100_000,
         )
         assert qty == 100  # floor(1000/10) = 100
 
@@ -225,7 +236,8 @@ class TestPriceFilter:
         # Default: both 0 = no filter
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=5000, sl=4990, tp=5030), capital=100_000,
+            _make_signal(entry=5000, sl=4990, tp=5030),
+            capital=100_000,
         )
         assert qty == 100  # floor(1000/10) = 100
 
@@ -233,12 +245,14 @@ class TestPriceFilter:
         engine = _engine(min_entry_price=100, max_entry_price=0)
         # Below min -> reject
         qty = engine.calculate_quantity(
-            _make_signal(entry=50, sl=48, tp=55), capital=100_000,
+            _make_signal(entry=50, sl=48, tp=55),
+            capital=100_000,
         )
         assert qty == 0
         # Above min -> allow (no max)
         qty = engine.calculate_quantity(
-            _make_signal(entry=5000, sl=4990, tp=5030), capital=100_000,
+            _make_signal(entry=5000, sl=4990, tp=5030),
+            capital=100_000,
         )
         assert qty == 100
 
@@ -246,12 +260,14 @@ class TestPriceFilter:
         engine = _engine(min_entry_price=0, max_entry_price=500)
         # Below max -> allow
         qty = engine.calculate_quantity(
-            _make_signal(entry=200, sl=190, tp=220), capital=100_000,
+            _make_signal(entry=200, sl=190, tp=220),
+            capital=100_000,
         )
         assert qty == 100
         # Above max -> reject
         qty = engine.calculate_quantity(
-            _make_signal(entry=600, sl=590, tp=620), capital=100_000,
+            _make_signal(entry=600, sl=590, tp=620),
+            capital=100_000,
         )
         assert qty == 0
 
@@ -265,14 +281,13 @@ class TestPerStrategyPriceBand:
         engine = _engine(
             min_entry_price=300,
             max_entry_price=5000,
-            strategy_profiles={
-                "BREAKINGTRADE": {"min_entry_price": 0, "max_entry_price": 0}
-            },
+            strategy_profiles={"BREAKINGTRADE": {"min_entry_price": 0, "max_entry_price": 0}},
         )
         # Global band would reject this (above 5000); the strategy override disables it.
         qty = engine.calculate_quantity(
-            _make_signal(strategy="BREAKINGTRADE", entry=12694, sl=12750, tp=12600,
-                         direction=Direction.SHORT),
+            _make_signal(
+                strategy="BREAKINGTRADE", entry=12694, sl=12750, tp=12600, direction=Direction.SHORT
+            ),
             capital=100_000,
         )
         assert qty > 0
@@ -281,13 +296,12 @@ class TestPerStrategyPriceBand:
         engine = _engine(
             min_entry_price=300,
             max_entry_price=5000,
-            strategy_profiles={
-                "BREAKINGTRADE": {"min_entry_price": 0, "max_entry_price": 0}
-            },
+            strategy_profiles={"BREAKINGTRADE": {"min_entry_price": 0, "max_entry_price": 0}},
         )
         # ORB has no override - the global band still applies to it.
         qty = engine.calculate_quantity(
-            _make_signal(strategy="ORB", entry=12694, sl=12650, tp=12750), capital=100_000,
+            _make_signal(strategy="ORB", entry=12694, sl=12650, tp=12750),
+            capital=100_000,
         )
         assert qty == 0
 
@@ -298,7 +312,8 @@ class TestPerStrategyPriceBand:
             strategy_profiles={"CUSTOM": {"min_entry_price": 50, "max_entry_price": 100}},
         )
         qty = engine.calculate_quantity(
-            _make_signal(strategy="CUSTOM", entry=200, sl=190, tp=220), capital=100_000,
+            _make_signal(strategy="CUSTOM", entry=200, sl=190, tp=220),
+            capital=100_000,
         )
         assert qty == 0
 
@@ -318,7 +333,8 @@ class TestZeroRiskPerShareReturnsZero:
         # entry == sl -> risk_per_share = 0 -> should skip, not force 1 share
         engine = _engine()
         qty = engine.calculate_quantity(
-            _make_signal(entry=100, sl=100, tp=110), capital=100_000,
+            _make_signal(entry=100, sl=100, tp=110),
+            capital=100_000,
         )
         assert qty == 0
 
@@ -326,7 +342,8 @@ class TestZeroRiskPerShareReturnsZero:
         # entry = 0 -> division by zero -> should skip
         engine = _engine(sizing_mode="pct_of_capital")
         qty = engine.calculate_quantity(
-            _make_signal(entry=0, sl=0, tp=0), capital=100_000,
+            _make_signal(entry=0, sl=0, tp=0),
+            capital=100_000,
         )
         assert qty == 0
 
@@ -339,7 +356,8 @@ class TestSlippageBuffer:
         # With 5% slippage: adj_risk=10*1.05=10.5, qty=floor(1000/10.5)=95
         engine = _engine(slippage_factor=0.05)
         qty = engine.calculate_quantity(
-            _make_signal(entry=500, sl=490, tp=520), capital=100_000,
+            _make_signal(entry=500, sl=490, tp=520),
+            capital=100_000,
         )
         assert qty == 95
 
@@ -347,7 +365,8 @@ class TestSlippageBuffer:
         # slippage_factor=0 -> same as before
         engine = _engine(slippage_factor=0)
         qty = engine.calculate_quantity(
-            _make_signal(entry=500, sl=490, tp=520), capital=100_000,
+            _make_signal(entry=500, sl=490, tp=520),
+            capital=100_000,
         )
         assert qty == 100
 
@@ -357,7 +376,8 @@ class TestSlippageBuffer:
         # qty = floor(100/6.027) = 16 (was 17 without slippage)
         engine = _engine(slippage_factor=0.05)
         qty = engine.calculate_quantity(
-            _make_signal(entry=1187.9, sl=1182.16, tp=1194.79), capital=10_000,
+            _make_signal(entry=1187.9, sl=1182.16, tp=1194.79),
+            capital=10_000,
         )
         assert qty == 16
 
@@ -365,7 +385,8 @@ class TestSlippageBuffer:
         # pct_of_capital mode is not risk-based, slippage doesn't apply
         engine = _engine(sizing_mode="pct_of_capital", slippage_factor=0.05)
         qty = engine.calculate_quantity(
-            _make_signal(entry=2500, sl=2485, tp=2540), capital=100_000,
+            _make_signal(entry=2500, sl=2485, tp=2540),
+            capital=100_000,
         )
         assert qty == 2  # same as without slippage
 
@@ -418,13 +439,16 @@ class TestMaxSlPctForSizing:
         engine_cap0 = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.0)
         engine_default = _engine(risk_per_trade=0.01, slippage_factor=0.0)
         sig = _make_signal(entry=490.8, sl=470.29, tp=505.2)
-        assert engine_cap0.calculate_quantity(sig, capital=15_000) == \
-               engine_default.calculate_quantity(sig, capital=15_000)
+        assert engine_cap0.calculate_quantity(
+            sig, capital=15_000
+        ) == engine_default.calculate_quantity(sig, capital=15_000)
 
     def test_cap_improves_capital_utilisation(self):
         # With cap: wide-SL stock should produce more shares than without
         sig = _make_signal(entry=490.8, sl=470.29, tp=505.2)  # 4.18% SL
-        engine_capped = _engine(risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015)
+        engine_capped = _engine(
+            risk_per_trade=0.01, slippage_factor=0.0, max_sl_pct_for_sizing=0.015
+        )
         engine_uncapped = _engine(risk_per_trade=0.01, slippage_factor=0.0)
         qty_capped = engine_capped.calculate_quantity(sig, capital=15_000)
         qty_uncapped = engine_uncapped.calculate_quantity(sig, capital=15_000)

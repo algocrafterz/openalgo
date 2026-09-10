@@ -17,9 +17,13 @@ from signal_engine.tests.risk_fixtures import _engine
 
 def _engine_with_open(open_positions: int, **overrides):
     """_engine() builds a RiskEngine with fresh counters; open_positions is runtime state set
-    after construction (normally restored from RiskStore), not a constructor argument."""
+    after construction (normally restored from RiskStore), not a constructor argument.
+
+    Counters are per-strategy (2026-09-10) - every test in this file reconciles against
+    _local_position()'s default strategy "BREAKOUT", so that is the counter seeded here.
+    """
     engine = _engine(**overrides)
-    engine.open_positions = open_positions
+    engine._state("BREAKOUT").open_positions = open_positions
     return engine
 
 
@@ -47,13 +51,20 @@ class TestClosedWhileDown:
         risk_engine = _engine_with_open(1)
         tracker = AsyncMock()
         closed_row = {
-            "symbol": "HINDALCO", "quantity": 0, "product": "MIS",
-            "today_realized_pnl": -363.8, "pnl": -363.8, "ltp": 1019.4,
+            "symbol": "HINDALCO",
+            "quantity": 0,
+            "product": "MIS",
+            "today_realized_pnl": -363.8,
+            "pnl": -363.8,
+            "ltp": 1019.4,
         }
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[_local_position()]),
-            patch("signal_engine.api_client.fetch_positionbook", new=AsyncMock(return_value=[closed_row])),
+            patch(
+                "signal_engine.api_client.fetch_positionbook",
+                new=AsyncMock(return_value=[closed_row]),
+            ),
             patch("signal_engine.db.save_reconciled_exit") as mock_save,
             patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()) as mock_notify,
         ):
@@ -75,20 +86,26 @@ class TestClosedWhileDown:
         risk_engine = _engine_with_open(1)
         tracker = AsyncMock()
         closed_row = {
-            "symbol": "HINDALCO", "quantity": 0, "product": "MIS",
-            "today_realized_pnl": -363.8, "ltp": 1019.4,
+            "symbol": "HINDALCO",
+            "quantity": 0,
+            "product": "MIS",
+            "today_realized_pnl": -363.8,
+            "ltp": 1019.4,
         }
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[_local_position()]),
-            patch("signal_engine.api_client.fetch_positionbook", new=AsyncMock(return_value=[closed_row])),
+            patch(
+                "signal_engine.api_client.fetch_positionbook",
+                new=AsyncMock(return_value=[closed_row]),
+            ),
             patch("signal_engine.db.save_reconciled_exit"),
             patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()),
         ):
             await reconcile_open_positions(risk_engine, tracker)
 
-        assert risk_engine.daily_realised_loss == pytest.approx(363.8)
-        assert risk_engine.open_positions == 0
+        assert risk_engine._state("BREAKOUT").daily_realised_loss == pytest.approx(363.8)
+        assert risk_engine.open_positions_for("BREAKOUT") == 0
 
     @pytest.mark.asyncio
     async def test_runs_even_when_stored_open_positions_is_already_zero(self):
@@ -98,13 +115,19 @@ class TestClosedWhileDown:
         risk_engine = _engine_with_open(0)
         tracker = AsyncMock()
         closed_row = {
-            "symbol": "HINDALCO", "quantity": 0, "product": "MIS",
-            "today_realized_pnl": -363.8, "ltp": 1019.4,
+            "symbol": "HINDALCO",
+            "quantity": 0,
+            "product": "MIS",
+            "today_realized_pnl": -363.8,
+            "ltp": 1019.4,
         }
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[_local_position()]),
-            patch("signal_engine.api_client.fetch_positionbook", new=AsyncMock(return_value=[closed_row])),
+            patch(
+                "signal_engine.api_client.fetch_positionbook",
+                new=AsyncMock(return_value=[closed_row]),
+            ),
             patch("signal_engine.db.save_reconciled_exit") as mock_save,
             patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()),
         ):
@@ -121,7 +144,10 @@ class TestClosedWhileDown:
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[_local_position()]),
-            patch("signal_engine.api_client.fetch_positionbook", new=AsyncMock(return_value=[still_open_row])),
+            patch(
+                "signal_engine.api_client.fetch_positionbook",
+                new=AsyncMock(return_value=[still_open_row]),
+            ),
             patch("signal_engine.db.save_reconciled_exit") as mock_save,
             patch("signal_engine.db.fetch_last_entry_trade", return_value=None),
         ):

@@ -1,8 +1,9 @@
 """Close detection: the three guards, batch polling, orphan handling, OCO."""
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from signal_engine.strategies import ORB
 from signal_engine.tracker import PositionTracker, TrackedPosition
@@ -17,7 +18,7 @@ class TestTrackerCheckPositions:
     @pytest.mark.asyncio
     async def test_position_still_open(self):
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position())
 
@@ -25,12 +26,12 @@ class TestTrackerCheckPositions:
         with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book):
             await tracker.check_positions()
             assert tracker.tracked_count == 1
-            assert engine.open_positions == 1
+            assert engine.open_positions_for(ORB) == 1
 
     @pytest.mark.asyncio
     async def test_position_closed_with_profit(self):
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0
         tracker.register(_make_position())
@@ -41,13 +42,13 @@ class TestTrackerCheckPositions:
         ):
             await tracker.check_positions()
             assert tracker.tracked_count == 0
-            assert engine.open_positions == 0
-            assert engine.daily_realised_loss == 0.0  # profit, no loss recorded
+            assert engine.open_positions_for(ORB) == 0
+            assert engine._state(ORB).daily_realised_loss == 0.0  # profit, no loss recorded
 
     @pytest.mark.asyncio
     async def test_position_closed_with_loss(self):
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0
         tracker.register(_make_position())
@@ -58,20 +59,20 @@ class TestTrackerCheckPositions:
         ):
             await tracker.check_positions()
             assert tracker.tracked_count == 0
-            assert engine.open_positions == 0
-            assert engine.daily_realised_loss == 500.0  # lost 500
+            assert engine.open_positions_for(ORB) == 0
+            assert engine._state(ORB).daily_realised_loss == 500.0  # lost 500
 
     @pytest.mark.asyncio
     async def test_api_error_skips_cycle(self):
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position())
 
         with patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=None):
             await tracker.check_positions()
             assert tracker.tracked_count == 1  # not removed
-            assert engine.open_positions == 1  # unchanged
+            assert engine.open_positions_for(ORB) == 1  # unchanged
 
     @pytest.mark.asyncio
     async def test_ghost_close_mid_morning_does_not_send_day_summary(self):
@@ -85,7 +86,7 @@ class TestTrackerCheckPositions:
         entry_time = fake_now - timedelta(hours=1)  # entered at 09:46
 
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0
         tracker.register(_make_position(entry_time=entry_time))
@@ -109,7 +110,7 @@ class TestTrackerCheckPositions:
         entry_time = fake_now - timedelta(hours=4)  # entered at ~10:45
 
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0
         tracker.register(_make_position(entry_time=entry_time))
@@ -213,7 +214,7 @@ class TestOCOCancellation:
     async def test_sl_triggered_position_closed(self):
         """When position closes with loss (SL triggered), position is removed from tracker."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         pos = self._make_bracket_position()
@@ -226,13 +227,13 @@ class TestOCOCancellation:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 0
-        assert engine.open_positions == 0
+        assert engine.open_positions_for(ORB) == 0
 
     @pytest.mark.asyncio
     async def test_tp_triggered_position_closed(self):
         """When position closes with profit (TP hit), position is removed from tracker."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         pos = self._make_bracket_position()
@@ -245,13 +246,13 @@ class TestOCOCancellation:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 0
-        assert engine.open_positions == 0
+        assert engine.open_positions_for(ORB) == 0
 
     @pytest.mark.asyncio
     async def test_cancel_fails_gracefully(self):
         """Cancel failure must not raise; position still removed."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         pos = self._make_bracket_position()
@@ -271,7 +272,7 @@ class TestOCOCancellation:
     async def test_no_bracket_ids_no_cancel(self):
         """Position without bracket IDs should not attempt cancellation."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         pos = _make_position()  # no bracket IDs
@@ -290,7 +291,7 @@ class TestOCOCancellation:
     async def test_cancel_exception_does_not_propagate(self):
         """Exception in cancel_order must be caught gracefully."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         pos = self._make_bracket_position()
@@ -314,7 +315,7 @@ class TestBatchPositionCheck:
     async def test_batch_check_detects_closed_position(self):
         """Positionbook returns qty=0 for a tracked symbol -> position closed."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
@@ -328,13 +329,13 @@ class TestBatchPositionCheck:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 0
-        assert engine.open_positions == 0
+        assert engine.open_positions_for(ORB) == 0
 
     @pytest.mark.asyncio
     async def test_batch_check_position_still_open(self):
         """Positionbook returns qty>0 for tracked symbol -> still open."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
 
@@ -345,13 +346,13 @@ class TestBatchPositionCheck:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 1
-        assert engine.open_positions == 1
+        assert engine.open_positions_for(ORB) == 1
 
     @pytest.mark.asyncio
     async def test_batch_check_multiple_positions_mixed(self):
         """Mix of open and closed positions in a single positionbook call."""
         engine = _make_engine()
-        engine.open_positions = 2
+        engine._state(ORB).open_positions = 2
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
@@ -368,13 +369,13 @@ class TestBatchPositionCheck:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 1  # only TCS remains
-        assert engine.open_positions == 1
+        assert engine.open_positions_for(ORB) == 1
 
     @pytest.mark.asyncio
     async def test_batch_check_api_error_skips_cycle(self):
         """If positionbook returns None (API error), skip entire cycle."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position())
 
@@ -382,13 +383,13 @@ class TestBatchPositionCheck:
             await tracker.check_positions()
 
         assert tracker.tracked_count == 1  # nothing removed
-        assert engine.open_positions == 1
+        assert engine.open_positions_for(ORB) == 1
 
     @pytest.mark.asyncio
     async def test_batch_check_zero_qty_in_book_means_closed(self):
         """Positionbook may return the symbol with qty=0 (explicitly closed)."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
@@ -408,7 +409,7 @@ class TestBatchPositionCheck:
     async def test_single_api_call_for_all_positions(self):
         """Verify only 1 positionbook call is made regardless of position count."""
         engine = _make_engine()
-        engine.open_positions = 3
+        engine._state(ORB).open_positions = 3
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
         tracker.register(_make_position(symbol="TCS", strategy=ORB))
@@ -434,7 +435,7 @@ class TestOrphanSlCancel:
     async def test_guard2_immediate_rejection_cancels_sl(self):
         """Guard 2: broker returns 'rejected' -> slot released AND orphaned SL cancelled."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_REJ")
         pos.sl_order_id = "SL_ORPHAN_REJ"
@@ -455,7 +456,7 @@ class TestOrphanSlCancel:
     async def test_guard3_zero_pnl_cancels_sl(self):
         """Guard 3: zero PnL with unconfirmed fill -> orphan released AND orphaned SL cancelled."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_G3")
@@ -478,7 +479,7 @@ class TestOrphanSlCancel:
     async def test_no_sl_order_id_no_cancel_on_orphan(self):
         """Orphan release with no sl_order_id should not attempt cancel."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_NOSL")
         pos.sl_order_id = ""
@@ -503,7 +504,7 @@ class TestGuard2Timeout:
     async def test_guard2_waits_when_young_and_status_unknown(self):
         """Position younger than guard2_timeout should keep waiting on unknown order status."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
         # entry_time = 5 min ago (passes Guard 1, but < 30 min guard2_timeout)
@@ -523,7 +524,7 @@ class TestGuard2Timeout:
         """Position older than guard2_timeout with still-unknown orderstatus is treated as
         orphaned rejection (not 'assumed complete'). Slot released, SL cancelled."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0
         old_entry = datetime.now(_IST) - timedelta(minutes=35)  # > 30 min guard2_timeout
@@ -551,7 +552,7 @@ class TestGuard2Timeout:
         the slot as an orphan rejection, leaving live unmanaged broker positions.
         """
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 1000.0  # baseline
         old_entry = datetime.now(_IST) - timedelta(minutes=35)  # > 30 min guard2_timeout

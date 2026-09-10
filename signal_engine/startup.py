@@ -180,7 +180,7 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
     from signal_engine import db
 
     locally_open = db.fetch_all_open_positions()
-    if risk_engine.open_positions <= 0 and not locally_open:
+    if risk_engine.total_open_positions() <= 0 and not locally_open:
         return
 
     from signal_engine.api_client import fetch_positionbook
@@ -222,7 +222,7 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
             pos["strategy"], symbol, pos["entry"], pos["sl"], pos["tp"],
             pos["quantity"], fill_price, pnl, note,
         )
-        risk_engine.record_close(pnl, symbol)
+        risk_engine.record_close(pnl, strategy=pos["strategy"], symbol=symbol)
         try:
             await notifier.notify_position_closed(
                 symbol, pnl, strategy=pos["strategy"], exit_price=fill_price,
@@ -232,16 +232,38 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         except Exception:
             logger.warning(f"Could not send reconciliation notification for {symbol}")
 
-    actual_open = len(open_broker_positions)
-    if actual_open != risk_engine.open_positions:
+    # Broker positions don't carry a strategy tag — attribute each one to the strategy
+    # of the matching still-open LOCAL position (locally_open rows do carry it), so the
+    # per-strategy open_positions counter can be corrected independently for each strategy.
+    open_by_strategy: dict = {}
+    unattributed = 0
+    locally_open_by_symbol = {pos["symbol"]: pos for pos in locally_open}
+    for p in open_broker_positions:
+        local = locally_open_by_symbol.get(p.get("symbol", ""))
+        if local is None:
+            unattributed += 1
+            continue
+        open_by_strategy[local["strategy"]] = open_by_strategy.get(local["strategy"], 0) + 1
+    if unattributed:
         logger.warning(
-            f"Position mismatch: stored open_positions={risk_engine.open_positions}, "
-            f"broker reports {actual_open} open — correcting and persisting"
+            f"Position reconciliation: {unattributed} broker position(s) have no local "
+            "record at all — cannot attribute to a strategy, excluded from per-strategy correction"
         )
-        risk_engine.open_positions = actual_open
-        risk_engine._persist()
-    else:
-        logger.info(f"Position reconciliation: stored={risk_engine.open_positions} matches broker={actual_open}")
+
+    known_strategies = set(open_by_strategy) | {pos["strategy"] for pos in locally_open}
+    for strategy in known_strategies:
+        actual = open_by_strategy.get(strategy, 0)
+        stored = risk_engine.open_positions_for(strategy)
+        if actual != stored:
+            logger.warning(
+                f"[{strategy}] Position mismatch: stored open_positions={stored}, "
+                f"broker reports {actual} open — correcting and persisting"
+            )
+            risk_engine.set_open_positions(strategy, actual)
+        else:
+            logger.info(f"[{strategy}] Position reconciliation: stored={stored} matches broker={actual}")
+
+    actual_open = len(open_broker_positions)
 
     restored = _restore_tracker_positions(tracker, open_broker_positions, configured_product)
     if restored > 0:

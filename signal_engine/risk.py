@@ -1,7 +1,15 @@
-"""Risk engine — position sizing and exposure limit enforcement."""
+"""Risk engine — position sizing and exposure limit enforcement.
+
+Capital, position-count, trade-count and loss counters are tracked PER STRATEGY
+(2026-09-10) — see _StrategyState / _state(). Symbol/sector concentration limits
+stay global across strategies: if two strategies both pile into the same stock
+that is still correlated risk regardless of which one triggered it, so those two
+counters are the one thing NOT split out below.
+"""
 
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -14,26 +22,46 @@ from signal_engine.models import Signal
 from signal_engine.timeutils import IST
 
 
+@dataclass
+class _StrategyState:
+    """Per-strategy counters — one instance per strategy tag, per trading day."""
+
+    open_positions: int = 0
+    trades_today: int = 0
+    daily_realised_loss: float = 0.0
+    weekly_realised_loss: float = 0.0
+    monthly_realised_loss: float = 0.0
+    unrealised_loss: float = 0.0
+    day_start_capital: float = 0.0
+    last_known_capital: float = 0.0
+
+
 class RiskEngine:
-    """Manages position sizing and risk exposure limits.
+    """Manages position sizing and risk exposure limits, per strategy.
 
     Supports two sizing modes:
     - fixed_fractional: Risk a fixed % of capital per trade, sized by SL distance
     - pct_of_capital: Allocate a fixed % of capital per trade position
 
-    Capital is fetched from OpenAlgo funds API (live or sandbox).
-    When use_day_start_capital is enabled, the first capital fetch of each
-    trading day is cached and used for all subsequent trades — ensuring equal
-    risk per trade regardless of how many positions are open.
+    Capital is fetched from OpenAlgo funds API (live or sandbox). Each strategy
+    caches its OWN first-fetch-of-the-day capital (use_day_start_capital) and
+    tracks its own open_positions/trades_today/loss counters — one strategy's
+    trades never shrink another's capital or eat its position/trade slots.
+    max_open_positions/max_trades_per_day/loss-limit fractions remain single
+    config values, but are now applied as a PER-STRATEGY cap, not a shared total.
 
     Optional RiskStore integration provides restart-safe counters: on init,
-    today's counters are restored from the store; on every mutation, counters
-    are persisted back.
+    every strategy with a row for today is restored from the store; a strategy
+    seen for the first time today is created lazily on first touch.
     """
 
     # Default soft-blacklist multiplier when a strategy has soft symbols configured
     # but the per-strategy multiplier is missing. 0.5 = half size.
     DEFAULT_SOFT_MULTIPLIER: float = 0.5
+
+    # Bucket for signals with no/blank strategy tag — should not happen in practice
+    # (parser always fills it from the alert header) but keeps counters well-defined.
+    _UNSPECIFIED = "UNSPECIFIED"
 
     def __init__(
         self,
@@ -96,67 +124,96 @@ class RiskEngine:
             for sym in symbols:
                 self._symbol_to_sector[sym] = sector_name
 
-        # Counters
-        self.open_positions: int = 0
-        self.trades_today: int = 0
-        self.daily_realised_loss: float = 0.0
-        self.weekly_realised_loss: float = 0.0
-        self.monthly_realised_loss: float = 0.0
-        self._last_known_capital: float = 0.0
         self._current_day: int = datetime.now(IST).timetuple().tm_yday
 
-        # Unrealised drawdown
-        self.unrealised_loss: float = 0.0
+        # Per-strategy counters — see _StrategyState. Populated lazily on first touch
+        # (calculate_quantity, get_sizing_capital, ...) and preloaded at __init__/mode
+        # switch for any strategy that already has a row for today (restart recovery).
+        self._by_strategy: Dict[str, _StrategyState] = {}
 
-        # Day-start capital: cached on first fetch of each trading day
-        self._day_start_capital: float = 0.0
-
-        # Correlation risk: per-symbol and per-sector position counts
+        # Correlation risk: per-symbol and per-sector position counts — GLOBAL,
+        # shared across all strategies. Not part of the per-strategy split.
         self._positions_by_symbol: Dict[str, int] = defaultdict(int)
         self._positions_by_sector: Dict[str, int] = defaultdict(int)
 
-        # Restore counters from store if provided
-        if self._store is not None:
-            self._restore()
+        self._restore()
+
+    @classmethod
+    def _key(cls, strategy: str) -> str:
+        strategy = (strategy or "").strip().upper()
+        return strategy or cls._UNSPECIFIED
+
+    def _state(self, strategy: str) -> _StrategyState:
+        key = self._key(strategy)
+        state = self._by_strategy.get(key)
+        if state is None:
+            state = self._load_strategy_state(key)
+            self._by_strategy[key] = state
+        return state
+
+    def _load_strategy_state(self, key: str) -> _StrategyState:
+        if self._store is None:
+            return _StrategyState()
+        today = datetime.now(IST).date()
+        row = self._store.load(key, self._trade_mode, today)
+        return _StrategyState(
+            open_positions=row["open_positions"],
+            trades_today=row["trades_today"],
+            daily_realised_loss=row["daily_loss"],
+            day_start_capital=row["day_start_capital"],
+            weekly_realised_loss=self._store.weekly_loss(key, self._trade_mode, today),
+            monthly_realised_loss=self._store.monthly_loss(key, self._trade_mode, today),
+        )
 
     def _restore(self) -> None:
-        """Load today's counters from the persistent store."""
-        today = datetime.now(IST).date()
-        row = self._store.load(self._trade_mode, today)
-        self.trades_today = row["trades_today"]
-        self.daily_realised_loss = row["daily_loss"]
-        self.open_positions = row["open_positions"]
-        self._day_start_capital = row["day_start_capital"]
+        """Load every strategy with a persisted row for today (restart recovery).
 
-        # Load weekly/monthly losses
-        self.weekly_realised_loss = self._store.weekly_loss(self._trade_mode, today)
-        self.monthly_realised_loss = self._store.monthly_loss(self._trade_mode, today)
+        A strategy the store has never seen today is not created here — it is
+        created lazily, the first time a signal for it is processed.
+        """
+        self._by_strategy = {}
+        if self._store is None:
+            return
+        today = datetime.now(IST).date()
+        for key in self._store.strategies_for(self._trade_mode, today):
+            self._by_strategy[key] = self._load_strategy_state(key)
 
     def log_startup_summary(self, capital: float) -> None:
-        """Log risk state summary on startup for visibility after restarts."""
-        self._last_known_capital = capital
-        daily_limit = self.daily_loss_limit * capital
-        weekly_limit = self.weekly_loss_limit * capital
-        monthly_limit = self.monthly_loss_limit * capital
+        """Log risk state summary on startup for visibility after restarts.
 
+        `capital` is the value OpenAlgo reports right now (broker funds, or the
+        sandbox override) — used only to DISPLAY where each restored strategy's
+        loss counters sit relative to its limits. Each strategy's own cached
+        day-start sizing capital (if any) is shown separately.
+        """
         logger.info("--- Risk State (restored from DB) ---")
-        if self._day_start_capital > 0:
+        if not self._by_strategy:
+            logger.info(f"No strategy has traded yet today ({self._trade_mode} mode).")
+        open_cap = self.max_open_positions if self.max_open_positions > 0 else "unlimited"
+        trades_cap = self.max_trades_per_day if self.max_trades_per_day > 0 else "unlimited"
+        for key in sorted(self._by_strategy):
+            state = self._by_strategy[key]
+            daily_limit = self.daily_loss_limit * capital
+            weekly_limit = self.weekly_loss_limit * capital
+            monthly_limit = self.monthly_loss_limit * capital
+            if state.day_start_capital > 0:
+                logger.info(
+                    f"[{key}] Day-start capital: {state.day_start_capital:,.2f} INR "
+                    f"(risk={self.risk_per_trade:.1%}="
+                    f"{state.day_start_capital * self.risk_per_trade:,.0f}/trade)"
+                )
             logger.info(
-                f"Day-start capital restored: {self._day_start_capital:,.2f} INR "
-                f"(risk={self.risk_per_trade:.1%}={self._day_start_capital * self.risk_per_trade:,.0f}/trade)"
+                f"[{key}] Positions: {state.open_positions}/{open_cap} | "
+                f"Trades today: {state.trades_today}/{trades_cap}"
             )
-        logger.info(
-            f"Positions: {self.open_positions}/{self.max_open_positions} | "
-            f"Trades today: {self.trades_today}/{self.max_trades_per_day}"
-        )
-        logger.info(
-            f"Daily loss: {self.daily_realised_loss:,.2f} / {daily_limit:,.2f} "
-            f"({abs(self.daily_realised_loss / daily_limit * 100) if daily_limit else 0:.0f}%)"
-        )
-        logger.info(
-            f"Weekly loss: {self.weekly_realised_loss:,.2f} / {weekly_limit:,.2f} | "
-            f"Monthly loss: {self.monthly_realised_loss:,.2f} / {monthly_limit:,.2f}"
-        )
+            logger.info(
+                f"[{key}] Daily loss: {state.daily_realised_loss:,.2f} / {daily_limit:,.2f} "
+                f"({abs(state.daily_realised_loss / daily_limit * 100) if daily_limit else 0:.0f}%)"
+            )
+            logger.info(
+                f"[{key}] Weekly loss: {state.weekly_realised_loss:,.2f} / {weekly_limit:,.2f} | "
+                f"Monthly loss: {state.monthly_realised_loss:,.2f} / {monthly_limit:,.2f}"
+            )
         sl_cap_str = (
             f"{self.max_sl_pct_for_sizing:.1%}" if self.max_sl_pct_for_sizing > 0 else "off"
         )
@@ -166,71 +223,71 @@ class RiskEngine:
         )
         logger.info("-------------------------------------")
 
-    def get_sizing_capital(self, live_capital: float) -> float:
-        """Return the capital to use for position sizing.
+    def get_sizing_capital(self, live_capital: float, strategy: str) -> float:
+        """Return the capital to use for sizing THIS strategy's position.
 
         When use_day_start_capital is enabled, caches the first capital value
-        of each trading day and returns it for all subsequent calls. This
-        ensures every trade gets equal risk regardless of how many positions
-        are currently open (margin blocked doesn't shrink the sizing capital).
+        of each trading day PER STRATEGY and returns it for all of that
+        strategy's subsequent calls this day — every trade for a given strategy
+        gets equal risk regardless of how many of ITS OWN positions are open,
+        and regardless of what any other strategy is doing.
 
         When disabled, returns live_capital as-is (original behavior).
         """
         if not self.use_day_start_capital:
             return live_capital
 
-        if self._day_start_capital <= 0:
-            self._day_start_capital = live_capital
+        state = self._state(strategy)
+        if state.day_start_capital <= 0:
+            state.day_start_capital = live_capital
             logger.info(
-                f"Day-start capital cached: {live_capital:,.2f} INR "
+                f"[{strategy}] Day-start capital cached: {live_capital:,.2f} INR "
                 f"(risk={self.risk_per_trade:.1%}={live_capital * self.risk_per_trade:,.0f}/trade)"
             )
-            self._persist()
-        return self._day_start_capital
+            self._persist(strategy)
+        return state.day_start_capital
 
-    def _persist(self) -> None:
-        """Save current counters to the persistent store."""
+    def _persist(self, strategy: str) -> None:
+        """Save one strategy's current counters to the persistent store."""
         if self._store is None:
             return
+        state = self._state(strategy)
         today = datetime.now(IST).date()
         self._store.save(
+            self._key(strategy),
             self._trade_mode,
             today,
-            trades_today=self.trades_today,
-            daily_loss=self.daily_realised_loss,
-            open_positions=self.open_positions,
-            day_start_capital=self._day_start_capital,
+            trades_today=state.trades_today,
+            daily_loss=state.daily_realised_loss,
+            open_positions=state.open_positions,
+            day_start_capital=state.day_start_capital,
         )
 
     def _maybe_reset_daily(self) -> None:
         today = datetime.now(IST).timetuple().tm_yday
         if today != self._current_day:
-            logger.info("New trading day detected, resetting daily counters")
+            logger.info("New trading day detected, resetting daily counters for all strategies")
             self._current_day = today
-            self.trades_today = 0
-            self.daily_realised_loss = 0.0
-            self.open_positions = 0
-            self.unrealised_loss = 0.0
-            self._day_start_capital = 0.0
+            self._by_strategy = {}
             self._positions_by_symbol.clear()
             self._positions_by_sector.clear()
-            self._persist()
 
-    def update_unrealised(self, loss: float) -> None:
-        """Update mark-to-market unrealised loss (replace, not accumulate)."""
-        self.unrealised_loss = loss
+    def update_unrealised(self, loss: float, strategy: str) -> None:
+        """Update mark-to-market unrealised loss for this strategy (replace, not accumulate)."""
+        self._state(strategy).unrealised_loss = loss
 
     def calculate_quantity(self, signal: Signal, capital: float) -> int:
         """Calculate position size based on the configured sizing mode.
 
         Args:
-            signal: The parsed signal with entry, sl, target.
-            capital: Available capital from OpenAlgo funds API.
+            signal: The parsed signal with entry, sl, target, strategy.
+            capital: Capital to size THIS strategy's trade off (sizing_capital,
+                already resolved via get_sizing_capital for signal.strategy).
 
         Returns 0 if the trade should be skipped (price filter, unaffordable).
         Raises ValueError for unknown sizing mode.
         """
-        self._last_known_capital = capital
+        self._state(signal.strategy).last_known_capital = capital
 
         # Price filter — reject stocks outside the configured price band. Per-strategy first:
         # a fixed-universe strategy's band is calibrated to that universe's tick-cost economics
@@ -367,69 +424,106 @@ class RiskEngine:
             return 0
         return math.floor(allocation / signal.entry)
 
-    def check_exposure(self) -> bool:
-        """Check if a new trade is allowed under current exposure limits.
+    def check_exposure(self, strategy: str) -> bool:
+        """Check if a new trade for THIS strategy is allowed under its own exposure limits.
 
-        Uses last known capital for limit calculations. Loss counters are
+        Uses the strategy's last known capital for limit calculations. Loss counters are
         updated by the position tracker when trades close.
         Combines realised and unrealised loss for the daily limit check.
         """
         self._maybe_reset_daily()
+        state = self._state(strategy)
 
-        capital = self._last_known_capital
+        capital = state.last_known_capital
         if capital > 0:
-            combined_daily = self.daily_realised_loss + self.unrealised_loss
+            combined_daily = state.daily_realised_loss + state.unrealised_loss
             if combined_daily >= capital * self.daily_loss_limit:
-                logger.warning("Daily loss limit breached")
+                logger.warning(f"[{strategy}] Daily loss limit breached")
                 return False
 
-            if self.weekly_realised_loss >= capital * self.weekly_loss_limit:
-                logger.warning("Weekly loss limit breached")
+            if state.weekly_realised_loss >= capital * self.weekly_loss_limit:
+                logger.warning(f"[{strategy}] Weekly loss limit breached")
                 return False
 
-            if self.monthly_realised_loss >= capital * self.monthly_loss_limit:
-                logger.warning("Monthly loss limit breached")
+            if state.monthly_realised_loss >= capital * self.monthly_loss_limit:
+                logger.warning(f"[{strategy}] Monthly loss limit breached")
                 return False
 
-        if self.open_positions >= self.max_open_positions:
-            logger.warning("Max open positions reached")
+        # 0 = unlimited, matching the same convention already used by
+        # max_positions_per_symbol/sector, min_capital_for_entry and test_qty_cap.
+        if self.max_open_positions > 0 and state.open_positions >= self.max_open_positions:
+            logger.warning(f"[{strategy}] Max open positions reached")
             return False
 
-        if self.trades_today >= self.max_trades_per_day:
-            logger.warning("Max trades per day reached")
+        if self.max_trades_per_day > 0 and state.trades_today >= self.max_trades_per_day:
+            logger.warning(f"[{strategy}] Max trades per day reached")
             return False
 
         return True
 
-    def exposure_block_reason(self) -> str:
+    def exposure_block_reason(self, strategy: str) -> str:
         """Return a human-readable reason why check_exposure() returned False."""
-        capital = self._last_known_capital
+        state = self._state(strategy)
+        capital = state.last_known_capital
         if capital > 0:
-            combined_daily = self.daily_realised_loss + self.unrealised_loss
+            combined_daily = state.daily_realised_loss + state.unrealised_loss
             if combined_daily >= capital * self.daily_loss_limit:
                 return f"Daily loss limit hit ({combined_daily:,.0f} >= {capital * self.daily_loss_limit:,.0f})"
-            if self.weekly_realised_loss >= capital * self.weekly_loss_limit:
+            if state.weekly_realised_loss >= capital * self.weekly_loss_limit:
                 return f"Weekly loss limit hit"
-            if self.monthly_realised_loss >= capital * self.monthly_loss_limit:
+            if state.monthly_realised_loss >= capital * self.monthly_loss_limit:
                 return f"Monthly loss limit hit"
-        if self.open_positions >= self.max_open_positions:
-            return f"Max positions ({self.open_positions}/{self.max_open_positions})"
-        if self.trades_today >= self.max_trades_per_day:
-            return f"Max trades/day ({self.trades_today}/{self.max_trades_per_day})"
+        if self.max_open_positions > 0 and state.open_positions >= self.max_open_positions:
+            return f"Max positions ({state.open_positions}/{self.max_open_positions})"
+        if self.max_trades_per_day > 0 and state.trades_today >= self.max_trades_per_day:
+            return f"Max trades/day ({state.trades_today}/{self.max_trades_per_day})"
         return "Unknown"
 
-    def capacity_status(self) -> str:
-        """Return a formatted capacity summary string."""
-        return f"{self.open_positions}/{self.max_open_positions} positions open"
+    def capacity_status(self, strategy: str) -> str:
+        """Return a formatted capacity summary string for this strategy."""
+        state = self._state(strategy)
+        cap = self.max_open_positions if self.max_open_positions > 0 else "unlimited"
+        return f"{state.open_positions}/{cap} positions open"
+
+    def open_positions_for(self, strategy: str) -> int:
+        return self._state(strategy).open_positions
+
+    def trades_today_for(self, strategy: str) -> int:
+        return self._state(strategy).trades_today
+
+    def last_known_capital_for(self, strategy: str) -> float:
+        return self._state(strategy).last_known_capital
+
+    def total_open_positions(self) -> int:
+        """Open positions across every strategy — cheap existence check only
+        (e.g. "is there anything to reconcile at all"), not a limit."""
+        return sum(s.open_positions for s in self._by_strategy.values())
+
+    def total_last_known_capital(self) -> float:
+        """Sum of every strategy's own last-known capital — for the aggregate
+        day-summary notification, which reports across all strategies at once."""
+        return sum(s.last_known_capital for s in self._by_strategy.values())
+
+    def set_open_positions(self, strategy: str, count: int) -> None:
+        """Force-correct one strategy's open_positions counter (startup reconciliation
+        against the broker's actual positionbook) and persist it."""
+        self._state(strategy).open_positions = max(0, count)
+        self._persist(strategy)
 
     def can_trade_symbol(self, symbol: str) -> bool:
-        """Return True if opening another position in this symbol is allowed."""
+        """Return True if opening another position in this symbol is allowed.
+
+        Global across strategies — see module docstring.
+        """
         if self.max_positions_per_symbol == 0:
             return True
         return self._positions_by_symbol.get(symbol, 0) < self.max_positions_per_symbol
 
     def can_trade_sector(self, symbol: str) -> bool:
-        """Return True if opening another position in this symbol's sector is allowed."""
+        """Return True if opening another position in this symbol's sector is allowed.
+
+        Global across strategies — see module docstring.
+        """
         if self.max_positions_per_sector == 0:
             return True
         sector = self._symbol_to_sector.get(symbol)
@@ -437,37 +531,40 @@ class RiskEngine:
             return True
         return self._positions_by_sector.get(sector, 0) < self.max_positions_per_sector
 
-    def record_trade(self, symbol: str = "") -> None:
-        """Record a new trade entry, incrementing counters."""
-        self.trades_today += 1
-        self.open_positions += 1
+    def record_trade(self, strategy: str, symbol: str = "") -> None:
+        """Record a new trade entry for this strategy, incrementing its counters."""
+        state = self._state(strategy)
+        state.trades_today += 1
+        state.open_positions += 1
         if symbol:
             self._positions_by_symbol[symbol] += 1
             sector = self._symbol_to_sector.get(symbol)
             if sector:
                 self._positions_by_sector[sector] += 1
-        self._persist()
+        self._persist(strategy)
 
-    def record_rejection(self, symbol: str = "") -> None:
+    def record_rejection(self, strategy: str, symbol: str = "") -> None:
         """Release an open-position slot for a rejected/phantom entry.
 
         Called when the tracker detects that an order was never filled (broker rejection,
         cancelled, or zero-PnL orphan). Frees the slot AND un-counts the trade —
         the position never existed at the broker so it should not consume a daily slot.
         """
-        self.open_positions = max(0, self.open_positions - 1)
-        self.trades_today = max(0, self.trades_today - 1)
+        state = self._state(strategy)
+        state.open_positions = max(0, state.open_positions - 1)
+        state.trades_today = max(0, state.trades_today - 1)
         if symbol:
             self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
             sector = self._symbol_to_sector.get(symbol)
             if sector:
                 self._positions_by_sector[sector] = max(0, self._positions_by_sector.get(sector, 0) - 1)
-        logger.info(f"Position slot released (rejection): {symbol or 'unknown'}")
-        self._persist()
+        logger.info(f"[{strategy}] Position slot released (rejection): {symbol or 'unknown'}")
+        self._persist(strategy)
 
-    def record_close(self, pnl: float, symbol: str = "") -> None:
-        """Record a position close. Negative pnl = loss."""
-        self.open_positions = max(0, self.open_positions - 1)
+    def record_close(self, pnl: float, strategy: str, symbol: str = "") -> None:
+        """Record a position close for this strategy. Negative pnl = loss."""
+        state = self._state(strategy)
+        state.open_positions = max(0, state.open_positions - 1)
         if symbol:
             self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
             sector = self._symbol_to_sector.get(symbol)
@@ -475,10 +572,10 @@ class RiskEngine:
                 self._positions_by_sector[sector] = max(0, self._positions_by_sector.get(sector, 0) - 1)
         if pnl < 0:
             realized_loss = abs(pnl)
-            self.daily_realised_loss += realized_loss
-            self.weekly_realised_loss += realized_loss
-            self.monthly_realised_loss += realized_loss
-            logger.info(f"Position closed with loss: {realized_loss:,.2f}")
+            state.daily_realised_loss += realized_loss
+            state.weekly_realised_loss += realized_loss
+            state.monthly_realised_loss += realized_loss
+            logger.info(f"[{strategy}] Position closed with loss: {realized_loss:,.2f}")
         else:
-            logger.info(f"Position closed with profit: {pnl:,.2f}")
-        self._persist()
+            logger.info(f"[{strategy}] Position closed with profit: {pnl:,.2f}")
+        self._persist(strategy)

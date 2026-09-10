@@ -210,13 +210,15 @@ def check_risk_engine_state() -> str:
 
     store = RiskStore(RISK_DB_PATH)
     engine = build_risk_engine(store)
-    open_pos = engine.open_positions
-    trades_today = engine.trades_today
-    realised_loss = engine.daily_realised_loss
-    can_trade = engine.check_exposure()
-    limit_info = "" if can_trade else f" | BLOCKED: {engine.exposure_block_reason()}"
+    # Per-strategy counters (2026-09-10) — ORB is the smoke test's own signal's strategy tag.
+    strategy = "ORB"
+    open_pos = engine.open_positions_for(strategy)
+    trades_today = engine.trades_today_for(strategy)
+    realised_loss = engine._state(strategy).daily_realised_loss
+    can_trade = engine.check_exposure(strategy)
+    limit_info = "" if can_trade else f" | BLOCKED: {engine.exposure_block_reason(strategy)}"
     return (
-        f"OK — open={open_pos}/{settings.max_open_positions} "
+        f"OK — [{strategy}] open={open_pos}/{settings.max_open_positions} "
         f"trades_today={trades_today}/{settings.max_trades_per_day} "
         f"daily_loss={realised_loss:.2f}{limit_info}"
     )
@@ -229,11 +231,14 @@ def check_db() -> str:
     store = RiskStore(RISK_DB_PATH)
     today = datetime.date.today()
     # Read current value for today
-    row = store.load("smoke_test", today)
+    row = store.load("SMOKE_TEST", "smoke_test", today)
     val_before = row["trades_today"]
     # Write same value back (no-op round-trip to confirm DB write path works)
-    store.save("smoke_test", today, trades_today=val_before, daily_loss=0.0, open_positions=0)
-    row_after = store.load("smoke_test", today)
+    store.save(
+        "SMOKE_TEST", "smoke_test", today,
+        trades_today=val_before, daily_loss=0.0, open_positions=0,
+    )
+    row_after = store.load("SMOKE_TEST", "smoke_test", today)
     assert row_after["trades_today"] == val_before, f"DB round-trip mismatch"
     return f"OK — risk.db accessible (smoke_test row={row_after})"
 
@@ -279,7 +284,7 @@ async def dry_run_entry_pipeline() -> str:
     # Real sizing
     store = RiskStore(RISK_DB_PATH)
     engine = build_risk_engine(store)
-    sizing_capital = engine.get_sizing_capital(capital)
+    sizing_capital = engine.get_sizing_capital(capital, signal.strategy)
     quantity = engine.calculate_quantity(signal, capital=sizing_capital)
 
     # Apply test qty cap

@@ -1,8 +1,9 @@
 """Time exit: CNC awareness and broker close verification."""
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from signal_engine.strategies import ORB, RSI_TP_MR
 from signal_engine.tracker import PositionTracker
@@ -19,7 +20,7 @@ class TestTimeExitCncAwareness:
     @pytest.mark.asyncio
     async def test_time_exit_skips_cnc_positions(self):
         engine = _make_engine()
-        engine.open_positions = 2
+        engine._state(ORB).open_positions = 2
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
         tracker.register(_make_position(symbol="HDFCBANK", strategy=RSI_TP_MR, product="CNC"))
@@ -41,7 +42,7 @@ class TestTimeExitCncAwareness:
     @pytest.mark.asyncio
     async def test_time_exit_closes_all_mis_positions(self):
         engine = _make_engine()
-        engine.open_positions = 2
+        engine._state(ORB).open_positions = 2
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
         tracker.register(_make_position(symbol="TCS", strategy=ORB, product="MIS"))
@@ -68,7 +69,7 @@ class TestTimeExitCncAwareness:
         limit circuit breaker could not see it.
         """
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
@@ -82,8 +83,8 @@ class TestTimeExitCncAwareness:
         ):
             await tracker.time_exit_all()
 
-        assert engine.daily_realised_loss == pytest.approx(500.0)
-        assert engine.open_positions == 0
+        assert engine._state(ORB).daily_realised_loss == pytest.approx(500.0)
+        assert engine.open_positions_for(ORB) == 0
 
 
 class TestTimeExitVerification:
@@ -93,7 +94,7 @@ class TestTimeExitVerification:
     async def test_confirmed_closed_first_attempt(self):
         """Position confirmed closed on first verification — no retry needed."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
@@ -116,7 +117,7 @@ class TestTimeExitVerification:
     async def test_retries_when_position_still_open(self):
         """Close retried when broker still shows open position on first check."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
@@ -142,7 +143,7 @@ class TestTimeExitVerification:
     async def test_alert_sent_when_all_retries_fail(self):
         """Telegram alert sent when position remains open after all retry attempts."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
@@ -169,7 +170,7 @@ class TestTimeExitVerification:
     async def test_api_error_does_not_block_cleanup(self):
         """Verification API error (-1) does not count as still-open; cleanup proceeds."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 

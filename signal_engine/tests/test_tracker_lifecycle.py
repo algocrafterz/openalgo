@@ -1,8 +1,9 @@
 """Tracker bookkeeping: register, find, unregister, record_exit, stop."""
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from signal_engine.strategies import ORB, RSI_TP_MR
 from signal_engine.tracker import PositionTracker
@@ -105,7 +106,7 @@ class TestTPMonitoringRemoved:
     async def test_check_positions_does_not_exit_when_ltp_crosses_tp(self):
         """Tracker must NOT exit a position when LTP > TP — that's TP HIT signal's job."""
         engine = _make_engine()
-        engine.open_positions = 1
+        engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         pos = _make_position(symbol="RELIANCE", strategy=ORB, tp=2540.0)
         tracker.register(pos)
