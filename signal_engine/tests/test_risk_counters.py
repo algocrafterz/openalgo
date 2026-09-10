@@ -149,9 +149,12 @@ class TestRestartSafeCounters:
 
         _IST = timezone(timedelta(hours=5, minutes=30))
         today = datetime.now(_IST).date()
-        store.save(STRATEGY, "live", today, trades_today=3, daily_loss=1500.0, open_positions=2)
+        store.save(STRATEGY, "analyze", today, trades_today=3, daily_loss=1500.0, open_positions=2)
 
-        engine = _engine(store=store, trade_mode="live")
+        # ANALYZE isolates per-strategy (LIVE pools — see TestLivePooling below); this
+        # test is about restart-safe persistence keyed by strategy, not mode-specific
+        # pooling, so it exercises the isolated side.
+        engine = _engine(store=store, trade_mode="analyze")
         assert engine.trades_today_for(STRATEGY) == 3
         assert engine._state(STRATEGY).daily_realised_loss == 1500.0
         assert engine.open_positions_for(STRATEGY) == 2
@@ -164,7 +167,7 @@ class TestRestartSafeCounters:
     def test_record_trade_persists_to_store(self, tmp_path):
         db_path = str(tmp_path / "risk.db")
         store = RiskStore(db_path)
-        engine = _engine(store=store, trade_mode="live")
+        engine = _engine(store=store, trade_mode="analyze")
         engine._state(STRATEGY).last_known_capital = 100_000
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
 
@@ -172,14 +175,14 @@ class TestRestartSafeCounters:
 
         _IST = timezone(timedelta(hours=5, minutes=30))
         today = datetime.now(_IST).date()
-        row = store.load(STRATEGY, "live", today)
+        row = store.load(STRATEGY, "analyze", today)
         assert row["trades_today"] == 1
         assert row["open_positions"] == 1
 
     def test_record_close_persists_to_store(self, tmp_path):
         db_path = str(tmp_path / "risk.db")
         store = RiskStore(db_path)
-        engine = _engine(store=store, trade_mode="live")
+        engine = _engine(store=store, trade_mode="analyze")
         engine._state(STRATEGY).open_positions = 1
         engine.record_close(pnl=-400.0, strategy=STRATEGY, symbol="RELIANCE")
 
@@ -187,7 +190,7 @@ class TestRestartSafeCounters:
 
         _IST = timezone(timedelta(hours=5, minutes=30))
         today = datetime.now(_IST).date()
-        row = store.load(STRATEGY, "live", today)
+        row = store.load(STRATEGY, "analyze", today)
         assert row["daily_loss"] == 400.0
         assert row["open_positions"] == 0
 
@@ -197,7 +200,7 @@ class TestRestartSafeCounters:
         store_sandbox = RiskStore(db_path)
 
         engine_live = _engine(store=store_live, trade_mode="live")
-        engine_sandbox = _engine(store=store_sandbox, trade_mode="sandbox")
+        engine_sandbox = _engine(store=store_sandbox, trade_mode="analyze")
 
         engine_live.record_trade(strategy=STRATEGY, symbol="RELIANCE")
         engine_live.record_trade(strategy=STRATEGY, symbol="TCS")
@@ -208,8 +211,11 @@ class TestRestartSafeCounters:
 
         _IST = timezone(timedelta(hours=5, minutes=30))
         today = datetime.now(_IST).date()
-        live_row = store_live.load(STRATEGY, "live", today)
-        sandbox_row = store_sandbox.load(STRATEGY, "sandbox", today)
+        # LIVE pools every strategy into one shared bucket (RiskEngine._LIVE_POOLED_KEY);
+        # ANALYZE isolates per-strategy. Both still land under the correct MODE, which is
+        # what this test verifies — they must never cross-contaminate each other's rows.
+        live_row = store_live.load(engine_live._LIVE_POOLED_KEY, "live", today)
+        sandbox_row = store_sandbox.load(STRATEGY, "analyze", today)
 
         assert live_row["trades_today"] == 2
         assert sandbox_row["trades_today"] == 1
@@ -246,7 +252,7 @@ class TestRestartSafeCounters:
     def test_day_start_capital_persists_and_restores_across_restart(self, tmp_path):
         db_path = str(tmp_path / "risk.db")
         store1 = RiskStore(db_path)
-        engine1 = _engine(store=store1, trade_mode="live", use_day_start_capital=True)
+        engine1 = _engine(store=store1, trade_mode="analyze", use_day_start_capital=True)
 
         # First trade of the day: caches and persists day-start capital
         engine1.get_sizing_capital(14_400.0, STRATEGY)
@@ -256,12 +262,12 @@ class TestRestartSafeCounters:
 
         _IST = timezone(timedelta(hours=5, minutes=30))
         today = datetime.now(_IST).date()
-        row = store1.load(STRATEGY, "live", today)
+        row = store1.load(STRATEGY, "analyze", today)
         assert row["day_start_capital"] == 14_400.0
 
         # Simulate restart: new engine with same DB, live capital depleted by open positions
         store2 = RiskStore(db_path)
-        engine2 = _engine(store=store2, trade_mode="live", use_day_start_capital=True)
+        engine2 = _engine(store=store2, trade_mode="analyze", use_day_start_capital=True)
         assert engine2._state(STRATEGY).day_start_capital == 14_400.0
 
         # Subsequent sizing uses restored value, not the depleted live capital

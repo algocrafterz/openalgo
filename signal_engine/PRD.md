@@ -269,6 +269,48 @@ enabled in live mode), but a gap to close first if a second one ever is.
 the risk/tracker/startup test suites. Full suite green (1011/1011, excluding 4 pre-existing
 live-network telegram tests). Commit `23fb0c608`.
 
+**15:48 IST — LIVE mode pools every strategy's counters; closes the gap flagged above.**
+
+The 14:55 entry above deliberately left LIVE mode using the same per-strategy isolation as
+ANALYZE, flagging it as a gap to close before ever enabling a second live strategy — a real
+account has exactly one pot of money, so two live strategies each believing they have the FULL
+Rs35,000 independently would double-count it, relying entirely on the broker's margin rejection
+to catch the overcount after the fact (confusing, and exactly what the original 2026-09-06
+2-slot design was built to prevent).
+
+New `RiskEngine.isolates_per_strategy` property (`self._trade_mode == "analyze"`) — `_key()`
+now routes every strategy to one shared bucket (`_LIVE_POOLED_KEY = "PORTFOLIO"`) whenever this
+is False, i.e. in LIVE mode and any other/unrecognised mode (real money defaults to the SAFER,
+shared behaviour rather than guessing). This is a one-line branch inside `_key()`, so every
+existing call site (`main.py`, `tracker.py`) needed NO changes — they still pass
+`signal.strategy`/`pos.strategy` exactly as before, unaware of which mode they're resolving
+into. Pooling applies uniformly: sizing capital, `open_positions`, `trades_today`, and
+daily/weekly/monthly realised loss ALL pool in LIVE — not just capital. Example: if ORB already
+holds a position and BREAKOUT's next signal checks in, it sees ORB's real remaining
+capital/slot/loss numbers, not a second imaginary full account. Symbol/sector concentration
+limits were already global in both modes and are unaffected.
+
+`startup.py`'s broker-position reconciliation branches on `isolates_per_strategy`: ANALYZE
+keeps correcting each strategy's own counter independently (attributed via the matching local
+position's `strategy` field, as before); LIVE now corrects the ONE shared counter against the
+broker's TOTAL open count in a single call — looping per known strategy name would have been
+wrong here (each call would overwrite the shared total with that strategy's own partial count,
+last one winning).
+
+`mode_profiles.live`'s five numbers (`max_open_positions: 2`, `max_trades_per_day: 10`,
+daily/weekly/monthly loss 4%/8%/15%) are consequently a POOLED total across every enabled live
+strategy, same as they always implicitly meant before per-strategy isolation existed — this
+restores that, explicitly, rather than by accident of only one strategy being live. Moot today
+(BREAKOUT is still the only live strategy) but no longer a landmine for whenever a second one is
+turned on.
+
+11 new tests (`test_risk_live_pooling.py`) plus 5 existing restart-safety tests in
+`test_risk_counters.py` switched from an incidental `trade_mode="live"` to `"analyze"` (their
+actual purpose — restart-safe persistence keyed by one named strategy — was never about live
+pooling; `risk_fixtures._engine()`'s default `trade_mode` is now `"analyze"` for the same
+reason, since that was always the implicit assumption of the tests that don't set it
+explicitly). Full suite green (1022/1022, excluding 4 pre-existing live-network telegram tests).
+
 **11:27 IST — Fixed silent startup notification, consolidated into one Telegram message.**
 `notify_startup_result(True, ...)` and `notify_engine_started()` both fired before
 `start_listener()` ever calls `notifier.set_client()` — `notify()`'s module-level `_client`

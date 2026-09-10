@@ -20,6 +20,10 @@ def _engine(**overrides) -> RiskEngine:
         "max_positions_per_symbol": 1,
         "max_positions_per_sector": 2,
         "sectors": {"BANKING": ["HDFCBANK", "SBIN"], "IT": ["TCS", "INFY"]},
+        # ANALYZE isolates per-strategy counters (RiskEngine.isolates_per_strategy) — the
+        # default this whole test module was written against. Tests exercising LIVE's
+        # pooled-across-strategies behaviour override this explicitly per call.
+        "trade_mode": "analyze",
     }
     defaults.update(overrides)
     return RiskEngine(**defaults)

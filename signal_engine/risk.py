@@ -1,10 +1,23 @@
 """Risk engine — position sizing and exposure limit enforcement.
 
 Capital, position-count, trade-count and loss counters are tracked PER STRATEGY
-(2026-09-10) — see _StrategyState / _state(). Symbol/sector concentration limits
-stay global across strategies: if two strategies both pile into the same stock
-that is still correlated risk regardless of which one triggered it, so those two
-counters are the one thing NOT split out below.
+in ANALYZE mode (2026-09-10) — see _StrategyState / _state(). Paper money has no
+real contention: three strategies each get their own full-size sizing pool and
+slot count, so none starves another and every trade is judged on its own signal
+quality, not on which strategy happened to trade first that day.
+
+In LIVE mode (2026-09-10, same day) every strategy's counters POOL into one
+shared bucket instead — see _key(). There is exactly one real broker account:
+if BREAKOUT already has a position open, ORB's next signal must size and gate
+against what is ACTUALLY left, not against a second imaginary copy of the full
+account. Pooling applies uniformly to sizing capital, open_positions,
+trades_today, and daily/weekly/monthly realised loss — a loss in any live
+strategy counts against the same daily/weekly/monthly limit as every other, so
+one combined loss ceiling protects the whole account, not one per strategy.
+
+Symbol/sector concentration limits stay global in BOTH modes, always did —
+correlated risk from two strategies piling into the same stock is real
+regardless of which one triggered it or which mode is active.
 """
 
 import math
@@ -37,21 +50,22 @@ class _StrategyState:
 
 
 class RiskEngine:
-    """Manages position sizing and risk exposure limits, per strategy.
+    """Manages position sizing and risk exposure limits.
 
     Supports two sizing modes:
     - fixed_fractional: Risk a fixed % of capital per trade, sized by SL distance
     - pct_of_capital: Allocate a fixed % of capital per trade position
 
-    Capital is fetched from OpenAlgo funds API (live or sandbox). Each strategy
-    caches its OWN first-fetch-of-the-day capital (use_day_start_capital) and
-    tracks its own open_positions/trades_today/loss counters — one strategy's
-    trades never shrink another's capital or eat its position/trade slots.
-    max_open_positions/max_trades_per_day/loss-limit fractions remain single
-    config values, but are now applied as a PER-STRATEGY cap, not a shared total.
+    Capital is fetched from OpenAlgo funds API (live or sandbox). ANALYZE mode
+    isolates every strategy's counters (its own day-start capital, open
+    positions, trades, and loss) — see the module docstring for why. LIVE mode
+    POOLS every strategy into one shared set of counters instead, because a
+    live account is one real pot of money, not one per strategy — see _key().
+    max_open_positions/max_trades_per_day/loss-limit fractions are the same
+    config values either way; only what they're measured against changes.
 
     Optional RiskStore integration provides restart-safe counters: on init,
-    every strategy with a row for today is restored from the store; a strategy
+    every counter bucket with a row for today is restored from the store; one
     seen for the first time today is created lazily on first touch.
     """
 
@@ -62,6 +76,12 @@ class RiskEngine:
     # Bucket for signals with no/blank strategy tag — should not happen in practice
     # (parser always fills it from the alert header) but keeps counters well-defined.
     _UNSPECIFIED = "UNSPECIFIED"
+
+    # LIVE mode's shared counter bucket — every strategy's calls resolve to this same
+    # key (see _key()), because live money is one real account, not one per strategy.
+    # Distinct from any real strategy tag (those are things like "ORB"/"BREAKOUT") and
+    # from RiskStore.LEGACY_STRATEGY ("_LEGACY", pre-2026-09-10 rows).
+    _LIVE_POOLED_KEY = "PORTFOLIO"
 
     def __init__(
         self,
@@ -138,10 +158,20 @@ class RiskEngine:
 
         self._restore()
 
-    @classmethod
-    def _key(cls, strategy: str) -> str:
+    @property
+    def isolates_per_strategy(self) -> bool:
+        """True when each strategy has its own counters (ANALYZE), False when every
+        strategy pools into one shared bucket (LIVE and any other/unrecognised mode —
+        real money defaults to the safer, shared behaviour). Startup reconciliation
+        uses this to decide whether to correct one strategy's counter at a time or
+        the one shared total."""
+        return self._trade_mode == "analyze"
+
+    def _key(self, strategy: str) -> str:
+        if not self.isolates_per_strategy:
+            return self._LIVE_POOLED_KEY
         strategy = (strategy or "").strip().upper()
-        return strategy or cls._UNSPECIFIED
+        return strategy or self._UNSPECIFIED
 
     def _state(self, strategy: str) -> _StrategyState:
         key = self._key(strategy)

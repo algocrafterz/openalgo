@@ -146,16 +146,21 @@ sizing:
   # takes today gets the same risk budget, not just the first one; the loss that followed was
   # one ordinary 1R stop-out, not a sizing bug).
   #
-  # Also 2026-09-10: RiskEngine now caches day-start capital PER STRATEGY (risk.py), so this one
-  # value is no longer a shared total split three ways - each of the three sandbox strategies
-  # (ORB, BREAKOUT, BreakingTrade) gets its OWN independent Rs100,000 (~Rs1L) sizing pool, sized
-  # and risk-limited completely independently of what the other two are doing. Previously all
-  # three drew down the same day-start figure and competed for the same max_open_positions /
-  # max_trades_per_day counters (see mode_profiles.analyze below).
+  # Also 2026-09-10: RiskEngine now caches day-start capital PER STRATEGY in ANALYZE mode
+  # (risk.py) - each of the three sandbox strategies (ORB, BREAKOUT, BreakingTrade) gets its
+  # OWN independent Rs100,000 (~Rs1L) sizing pool, sized and risk-limited completely
+  # independently of what the other two are doing. This value has no effect in LIVE mode
+  # either way (see the note above) - live capital always comes from the broker funds API,
+  # and since 2026-09-10 (later same day) every live strategy POOLS into the same shared
+  # day-start figure instead of each getting its own copy - see mode_profiles.live's note.
   sandbox_capital: 100000
 
   # [tune] Cache capital at first signal of the day; use same value for all trades.
   # Ensures equal risk per trade regardless of intra-day capital fluctuations from open positions.
+  #
+  # 2026-09-10: the cache itself is now per-strategy in ANALYZE, pooled across all strategies
+  # in LIVE (RiskEngine._key) - this flag just turns the caching behaviour on/off, the same
+  # either way; which counter it caches INTO differs by mode.
   use_day_start_capital: true
 
   # [tune] Hard cap on qty per order (0 = disabled). Set to 1 when testing pipeline live
@@ -507,6 +512,17 @@ mode_profiles:
   # Real money. These are the numbers derived on 2026-09-06: one position needs ~60% of a
   # Rs35k account at 20% MIS margin, so 2 concurrent is the ceiling; 4% daily is four full
   # stops; the Rs300 price floor keeps one tick under ~0.05R.
+  #
+  # 2026-09-10: RiskEngine.isolates_per_strategy is False for any mode other than "analyze"
+  # (risk.py), so in LIVE mode every one of these five numbers is a POOLED total shared by
+  # ALL enabled live strategies, not a per-strategy allowance. There is one real broker
+  # account, so max_open_positions=2 means 2 TOTAL across every live strategy combined, and
+  # a loss in any one of them counts against the same daily/weekly/monthly ceiling as every
+  # other. Same day-start capital number too (sizing.sandbox_capital's per-strategy note is
+  # ANALYZE-only) — a strategy sizing a trade after another already holds a position checks
+  # what OpenAlgo's funds API says is ACTUALLY left, not a second imaginary full account.
+  # Currently moot (only BREAKOUT is enabled live), but this is what makes it safe to ever
+  # enable a second live strategy without re-deriving these numbers from scratch.
   live:
     max_open_positions: 2
     max_trades_per_day: 10
