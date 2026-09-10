@@ -218,6 +218,28 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-10)
 
+**11:27 IST — Fixed silent startup notification, consolidated into one Telegram message.**
+`notify_startup_result(True, ...)` and `notify_engine_started()` both fired before
+`start_listener()` ever calls `notifier.set_client()` — `notify()`'s module-level `_client`
+was still `None`, so a passing startup silently dropped both messages (only a WARNING/DEBUG
+log recorded it; on failure it worked, since that path already used a one-shot client).
+Replaced both with a single `notifier.notify_startup_summary()`, sent via the same one-shot
+Telegram client pattern `notify_startup_result` already used for failures, so it doesn't
+depend on the listener being connected yet. `run_startup_health_checks()` now returns the
+`SmokeTestReport` (or `None` on critical failure, having already sent the failure alert)
+instead of sending its own success message. The one message groups checks into `-- OpenAlgo
+--` (reachability, broker auth/capital, quote API) and `-- Signal Engine --` (config load,
+signal pipeline, risk engine state, DB) sections, plus broker name, mode, capital, config
+summary, and channel list — verified live via `openalgoctl.sh restart`, message confirmed
+received. 7 new tests in `test_startup_notification.py`; full suite green except the 2
+pre-existing unrelated `test_main_entry.py::TestBracketOrderFlow` failures.
+
+**09:52 IST — Pre-session smoke test.** Ran `PYTHONPATH=. uv run python -m signal_engine.main
+--smoke-test`. All 7/7 checks passed: config load, OpenAlgo reachable (HTTP 200), broker auth
+(funds API, available capital 80,313.62 INR), quote API (SBIN LTP=1009.0), signal pipeline
+(normalize/parse/validate), risk engine state (open=0/2, trades_today=0/10, daily_loss=0.00),
+risk-store DB round-trip. No dry-run order placed. Engine clear to start the session.
+
 **Pre-market-open readiness check for all 3 paper-trading strategies (ORB, BREAKOUT,
 BreakingTrade), plus a genuine IST/UTC bug found along the way.**
 

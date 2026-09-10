@@ -508,22 +508,18 @@ def _trade_line(rec) -> str:
     )
 
 
-async def notify_engine_started(capital: float, mode: str) -> None:
-    await notify_event("engine_started",
-        f"🟢 Engine started | {mode} | Capital: ₹{capital:,.0f} | {_now_ist()}"
-    )
-
-
 async def notify_engine_stopped() -> None:
     await notify_event("engine_stopped", f"🔴 Engine stopped | {_now_ist()}")
 
 
-async def notify_startup_result(all_passed: bool, summary: str) -> None:
-    """Send startup check result via a one-shot Telegram client.
+async def _send_oneshot(msg: str) -> None:
+    """Send a single message via a fresh, disposable Telegram client.
 
-    Called before the main listener connects, so creates its own client
-    using the same session file. Used for both pass and fail notifications
-    so the user knows the engine state before market open.
+    Startup notifications fire before start_listener() calls set_client(), so the
+    module-level _client is always None at this point — notify() would silently
+    drop them. Used only for the startup path (notify_startup_result,
+    notify_startup_summary), which is why it opens and tears down its own client
+    against the same session file instead of reusing the long-lived one.
     """
     if not settings.notify_channel:
         return
@@ -542,9 +538,79 @@ async def notify_startup_result(all_passed: bool, summary: str) -> None:
             logger.warning("Startup notifier: Telegram not authorized, skipping notification")
             await client.disconnect()
             return
-        icon = "🟢 READY" if all_passed else "🔴 STARTUP FAILED"
-        msg = f"{icon} | Signal Engine | {_now_ist()}\n{summary}"
         await client.send_message(settings.notify_channel.id, msg)
         await client.disconnect()
     except Exception as e:
         logger.warning(f"Startup notifier: could not send Telegram message: {e}")
+
+
+async def notify_startup_result(all_passed: bool, summary: str) -> None:
+    """Send a startup-failure alert via a one-shot Telegram client.
+
+    Only used on the critical-failure path — a successful startup sends the
+    single consolidated notify_startup_summary() instead, so the user never
+    gets two overlapping startup messages.
+    """
+    icon = "READY" if all_passed else "STARTUP FAILED"
+    await _send_oneshot(f"{icon} | Signal Engine | {_now_ist()}\n{summary}")
+
+
+#: Checks that report on OpenAlgo/broker availability rather than the signal engine's
+#: own modules — kept in their own message section so the two failure domains (an
+#: OpenAlgo outage vs a signal_engine bug) are never conflated.
+_OPENALGO_CHECK_NAMES = {
+    "2. OpenAlgo reachable",
+    "3. Broker auth (funds API)",
+    "4. Quote API (SBIN LTP)",
+}
+
+
+def _check_line(check) -> str:
+    label = check.name.split(". ", 1)[-1]
+    status = "OK" if check.passed else "FAIL"
+    return f"  {status} — {label}: {check.message}"
+
+
+def build_startup_summary_message(report, mode: str, capital: float, broker_name: str) -> str:
+    """Build the one consolidated startup/smoke-test message for Telegram.
+
+    Splits checks into an OpenAlgo section (broker connectivity, auth, market data)
+    and a Signal Engine section (own config, pipeline, risk state, storage) so a
+    reader can tell at a glance which side of the integration is unavailable.
+    """
+    by_name = {c.name: c for c in report.checks}
+    openalgo_lines = [_check_line(by_name[n]) for n in sorted(_OPENALGO_CHECK_NAMES) if n in by_name]
+    engine_checks = sorted(
+        (c for c in report.checks if c.name not in _OPENALGO_CHECK_NAMES),
+        key=lambda c: c.name,
+    )
+    engine_lines = [_check_line(c) for c in engine_checks]
+
+    status = "READY" if report.all_passed else f"READY WITH WARNINGS ({report.fail_count} check(s) failed)"
+    ch_list = ", ".join(ch.name for ch in settings.telegram_channels) or "none"
+    now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+    lines = [
+        f"Signal Engine Startup — {status}",
+        f"Time: {now}",
+        f"Broker: {broker_name} | Mode: {mode} | Capital: ₹{capital:,.0f}",
+        "",
+        "-- OpenAlgo --",
+        *openalgo_lines,
+        "",
+        "-- Signal Engine --",
+        *engine_lines,
+        f"  Config: {settings.exchange}/{settings.product}/{settings.order_type} | "
+        f"sizing={settings.sizing_mode} | risk/trade={settings.risk_per_trade * 100:.1f}% | "
+        f"max_positions={settings.max_open_positions} | "
+        f"daily_loss_limit={settings.daily_loss_limit * 100:.1f}%",
+        "",
+        f"Channels: {ch_list}",
+    ]
+    return "\n".join(lines)
+
+
+async def notify_startup_summary(report, mode: str, capital: float, broker_name: str) -> None:
+    """Send the one consolidated startup/smoke-test summary — fires once per engine
+    start/restart, replacing the separate startup-result and engine-started messages."""
+    await _send_oneshot(build_startup_summary_message(report, mode, capital, broker_name))

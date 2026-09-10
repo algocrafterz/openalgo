@@ -122,11 +122,17 @@ def log_startup_banner() -> None:
 # Startup health checks
 # ---------------------------------------------------------------------------
 
-async def run_startup_health_checks() -> bool:
+async def run_startup_health_checks():
     """Run pre-flight checks before accepting any signals.
 
-    Critical failures abort startup and notify via Telegram. Warning failures are
-    logged but allow startup. Returns True if the engine may start.
+    A critical failure aborts startup and sends the failure alert here, immediately.
+    A passing (or warning-only) result sends nothing itself — the caller still needs
+    trading mode and capital to build the one consolidated startup message
+    (notifier.notify_startup_summary), so it folds this report into that instead of
+    this function sending its own separate message.
+
+    Returns the SmokeTestReport if the engine may start, or None if startup must
+    abort (the failure notification has already been sent).
     """
     from signal_engine.smoke_test import run_startup_checks, _CRITICAL_CHECKS, _WARNING_CHECKS
 
@@ -145,13 +151,9 @@ async def run_startup_health_checks() -> bool:
         logger.critical(f"Startup checks FAILED — aborting:\n{fail_lines}")
         summary = "\n".join(f"FAIL: {c.name}\n  {c.message}" for c in failed_critical)
         await notifier.notify_startup_result(all_passed=False, summary=summary)
-        return False
+        return None
 
-    warn_note = ""
-    if failed_warnings:
-        warn_note = "\nWarnings:\n" + "\n".join(f"  {c.name}" for c in failed_warnings)
-    await notifier.notify_startup_result(all_passed=True, summary=f"All critical checks passed.{warn_note}")
-    return True
+    return startup_report
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +315,15 @@ def _lookup_entry_trade(bsymbol: str):
 # Engine lifecycle
 # ---------------------------------------------------------------------------
 
+def _resolve_broker_name() -> str:
+    """Best-effort broker name for the startup message — never blocks startup."""
+    try:
+        from signal_engine.scripts.openalgoscheduler import get_broker_name
+        return get_broker_name()
+    except Exception:
+        return "unknown"
+
+
 def start_engine(risk_engine, tracker, handle_message) -> None:
     """Run the engine event loop until shutdown."""
     try:
@@ -333,7 +344,8 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
     for sig in (signal_module.SIGINT, signal_module.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
-    if not await run_startup_health_checks():
+    startup_report = await run_startup_health_checks()
+    if startup_report is None:
         shutdown_event.set()
         return
 
@@ -360,8 +372,11 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
     startup_capital = await fetch_available_capital()
     if startup_capital > 0:
         risk_engine.log_startup_summary(startup_capital)
-        mode_label = "ANALYZE" if is_analyze else "LIVE"
-        await notifier.notify_engine_started(startup_capital, mode_label)
+
+    mode_label = "ANALYZE" if is_analyze else "LIVE"
+    await notifier.notify_startup_summary(
+        startup_report, mode_label, startup_capital, _resolve_broker_name()
+    )
 
     tracker_task = asyncio.create_task(tracker.start())
     time_exit_scheduler, time_exit_task = _start_time_exit_scheduler(tracker)
