@@ -5,14 +5,16 @@ channels: paper-phase chatter must never sit in the same admin channel as a real
 
 import pytest
 
-from signal_engine import notifier
+from signal_engine import api_client, mode_guard, notifier
 
 
 @pytest.fixture(autouse=True)
 def reset_mode_cache():
-    notifier._mode_cache["checked_at"] = 0.0
+    # notifier._current_phase() delegates to mode_guard, which owns the single process-wide
+    # cache these three modules used to keep three copies of (2026-09-11).
+    mode_guard.reset()
     yield
-    notifier._mode_cache["checked_at"] = 0.0
+    mode_guard.reset()
 
 
 def _async_returns(value):
@@ -27,17 +29,27 @@ class TestCurrentPhase:
 
     @pytest.mark.asyncio
     async def test_analyze_mode_maps_to_the_analyze_phase(self, monkeypatch):
-        monkeypatch.setattr(notifier.api_client, "fetch_trading_mode", _async_returns(("analyze", True)))
+        monkeypatch.setattr(api_client, "fetch_trading_mode", _async_returns(("analyze", True)))
         assert await notifier._current_phase() == "analyze"
 
     @pytest.mark.asyncio
     async def test_live_mode_maps_to_the_live_phase(self, monkeypatch):
-        monkeypatch.setattr(notifier.api_client, "fetch_trading_mode", _async_returns(("live", False)))
+        monkeypatch.setattr(api_client, "fetch_trading_mode", _async_returns(("live", False)))
         assert await notifier._current_phase() == "live"
 
     @pytest.mark.asyncio
-    async def test_unreachable_openalgo_defaults_to_the_analyze_phase(self, monkeypatch):
-        monkeypatch.setattr(notifier.api_client, "fetch_trading_mode", _async_returns(("unknown", False)))
+    async def test_unreachable_openalgo_falls_back_to_the_last_known_phase(self, monkeypatch):
+        """Was "always analyze", which routed a live-money SL-FAILED alert into the paper
+        channel whenever the API blipped. The last real answer is both safer and stabler."""
+        monkeypatch.setattr(api_client, "fetch_trading_mode", _async_returns(("live", False)))
+        assert await notifier._current_phase() == "live"
+        mode_guard._cache["checked_at"] = 0.0
+        monkeypatch.setattr(api_client, "fetch_trading_mode", _async_returns(("unknown", False)))
+        assert await notifier._current_phase() == "live"
+
+    @pytest.mark.asyncio
+    async def test_unreachable_with_nothing_known_yet_defaults_to_analyze(self, monkeypatch):
+        monkeypatch.setattr(api_client, "fetch_trading_mode", _async_returns(("unknown", False)))
         assert await notifier._current_phase() == "analyze"
 
     @pytest.mark.asyncio
@@ -48,7 +60,7 @@ class TestCurrentPhase:
             calls.append(1)
             return ("live", False)
 
-        monkeypatch.setattr(notifier.api_client, "fetch_trading_mode", fake)
+        monkeypatch.setattr(api_client, "fetch_trading_mode", fake)
         await notifier._current_phase()
         await notifier._current_phase()
         assert len(calls) == 1

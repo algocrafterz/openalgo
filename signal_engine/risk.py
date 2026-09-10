@@ -15,9 +15,15 @@ trades_today, and daily/weekly/monthly realised loss — a loss in any live
 strategy counts against the same daily/weekly/monthly limit as every other, so
 one combined loss ceiling protects the whole account, not one per strategy.
 
-Symbol/sector concentration limits stay global in BOTH modes, always did —
-correlated risk from two strategies piling into the same stock is real
-regardless of which one triggered it or which mode is active.
+Symbol/sector concentration limits follow the SAME split (2026-09-11). In LIVE
+they pool: two strategies in one real name is genuine correlated exposure no
+matter which one triggered it. In ANALYZE they isolate, for the same reason
+every other counter does — BREAKINGTRADE and BREAKINGTRADE-WATCHLIST are built
+to hold the same name at the same time so paper P&L can compare the two entry
+philosophies, and a shared max_positions_per_symbol=1 meant the watchlist (which
+fires on the scan-hit poll, before the confirming close exists) always took the
+slot and the confirmed signal was declined "symbol concentration limit". The
+comparison the design exists to produce could not run.
 """
 
 import math
@@ -41,9 +47,19 @@ class _StrategyState:
 
     open_positions: int = 0
     trades_today: int = 0
+    #: GROSS realised loss today — losing trades only, wins never offset. This is what the
+    #: DAILY limit measures, on purpose: "4% daily = four full stops" is a loss-streak gate,
+    #: and a four-stop-out day is worth halting on whatever the winners did (config.yaml).
     daily_realised_loss: float = 0.0
     weekly_realised_loss: float = 0.0
     monthly_realised_loss: float = 0.0
+    #: NET realised P&L (signed, wins included) for the day/week/month. The WEEKLY and
+    #: MONTHLY limits measure these — see check_exposure(). Gross over those horizons is
+    #: not a drawdown at all: at Rs 350/trade on Rs 35k the gross weekly limit was 8 losing
+    #: trades and the monthly 15, both reachable in days on a net-profitable account.
+    daily_net_pnl: float = 0.0
+    weekly_net_pnl: float = 0.0
+    monthly_net_pnl: float = 0.0
     unrealised_loss: float = 0.0
     day_start_capital: float = 0.0
     last_known_capital: float = 0.0
@@ -151,10 +167,11 @@ class RiskEngine:
         # switch for any strategy that already has a row for today (restart recovery).
         self._by_strategy: Dict[str, _StrategyState] = {}
 
-        # Correlation risk: per-symbol and per-sector position counts — GLOBAL,
-        # shared across all strategies. Not part of the per-strategy split.
-        self._positions_by_symbol: Dict[str, int] = defaultdict(int)
-        self._positions_by_sector: Dict[str, int] = defaultdict(int)
+        # Correlation risk: per-symbol and per-sector position counts, keyed
+        # (counter_key, name) where counter_key is _key(strategy) — so they pool in LIVE
+        # and isolate in ANALYZE, exactly like every other counter. See module docstring.
+        self._positions_by_symbol: Dict[tuple, int] = defaultdict(int)
+        self._positions_by_sector: Dict[tuple, int] = defaultdict(int)
 
         self._restore()
 
@@ -190,9 +207,12 @@ class RiskEngine:
             open_positions=row["open_positions"],
             trades_today=row["trades_today"],
             daily_realised_loss=row["daily_loss"],
+            daily_net_pnl=row["daily_net_pnl"],
             day_start_capital=row["day_start_capital"],
             weekly_realised_loss=self._store.weekly_loss(key, self._trade_mode, today),
             monthly_realised_loss=self._store.monthly_loss(key, self._trade_mode, today),
+            weekly_net_pnl=self._store.weekly_net_pnl(key, self._trade_mode, today),
+            monthly_net_pnl=self._store.monthly_net_pnl(key, self._trade_mode, today),
         )
 
     def _restore(self) -> None:
@@ -205,7 +225,14 @@ class RiskEngine:
         if self._store is None:
             return
         today = datetime.now(IST).date()
-        for key in self._store.strategies_for(self._trade_mode, today):
+        for stored_key in self._store.strategies_for(self._trade_mode, today):
+            # Through _key(): in LIVE every stored per-strategy row resolves to the one
+            # pooled PORTFOLIO bucket. Loading them under their own tags instead left rows
+            # _state() could never read but total_open_positions()/total_last_known_capital()
+            # still summed, and log_startup_summary() still printed as phantom strategies.
+            key = self._key(stored_key)
+            if key in self._by_strategy:
+                continue
             self._by_strategy[key] = self._load_strategy_state(key)
 
     def log_startup_summary(self, capital: float) -> None:
@@ -240,9 +267,13 @@ class RiskEngine:
                 f"[{key}] Daily loss: {state.daily_realised_loss:,.2f} / {daily_limit:,.2f} "
                 f"({abs(state.daily_realised_loss / daily_limit * 100) if daily_limit else 0:.0f}%)"
             )
+            # Weekly/monthly limits measure NET drawdown; gross is shown alongside because
+            # it is the "how many stop-outs" figure the daily gate uses.
             logger.info(
-                f"[{key}] Weekly loss: {state.weekly_realised_loss:,.2f} / {weekly_limit:,.2f} | "
-                f"Monthly loss: {state.monthly_realised_loss:,.2f} / {monthly_limit:,.2f}"
+                f"[{key}] Weekly net drawdown: {max(0.0, -state.weekly_net_pnl):,.2f} / "
+                f"{weekly_limit:,.2f} (gross losses {state.weekly_realised_loss:,.2f}) | "
+                f"Monthly net drawdown: {max(0.0, -state.monthly_net_pnl):,.2f} / "
+                f"{monthly_limit:,.2f} (gross losses {state.monthly_realised_loss:,.2f})"
             )
         sl_cap_str = (
             f"{self.max_sl_pct_for_sizing:.1%}" if self.max_sl_pct_for_sizing > 0 else "off"
@@ -289,6 +320,7 @@ class RiskEngine:
             today,
             trades_today=state.trades_today,
             daily_loss=state.daily_realised_loss,
+            daily_net_pnl=state.daily_net_pnl,
             open_positions=state.open_positions,
             day_start_capital=state.day_start_capital,
         )
@@ -301,6 +333,19 @@ class RiskEngine:
             self._by_strategy = {}
             self._positions_by_symbol.clear()
             self._positions_by_sector.clear()
+
+    @staticmethod
+    def _limit_capital(state: _StrategyState) -> float:
+        """The capital figure the loss limits are measured against.
+
+        last_known_capital is stamped only inside calculate_quantity() and is NOT persisted,
+        so on a fresh process it is 0.0 for every strategy — and main._handle_entry runs the
+        risk gates BEFORE it resolves capital. Gating the loss checks on that alone meant the
+        first signal after any restart skipped all three limits, even with the day's realised
+        loss correctly restored from risk.db. day_start_capital IS persisted, so it is the
+        fallback; a fresher in-session figure still wins when present.
+        """
+        return state.last_known_capital or state.day_start_capital
 
     def update_unrealised(self, loss: float, strategy: str) -> None:
         """Update mark-to-market unrealised loss for this strategy (replace, not accumulate)."""
@@ -464,18 +509,20 @@ class RiskEngine:
         self._maybe_reset_daily()
         state = self._state(strategy)
 
-        capital = state.last_known_capital
+        capital = self._limit_capital(state)
         if capital > 0:
+            # DAILY is gross (losing trades only) — a loss-streak gate. WEEKLY and MONTHLY
+            # are NET drawdown. See _StrategyState's field comments.
             combined_daily = state.daily_realised_loss + state.unrealised_loss
             if combined_daily >= capital * self.daily_loss_limit:
                 logger.warning(f"[{strategy}] Daily loss limit breached")
                 return False
 
-            if state.weekly_realised_loss >= capital * self.weekly_loss_limit:
+            if -state.weekly_net_pnl >= capital * self.weekly_loss_limit:
                 logger.warning(f"[{strategy}] Weekly loss limit breached")
                 return False
 
-            if state.monthly_realised_loss >= capital * self.monthly_loss_limit:
+            if -state.monthly_net_pnl >= capital * self.monthly_loss_limit:
                 logger.warning(f"[{strategy}] Monthly loss limit breached")
                 return False
 
@@ -494,15 +541,21 @@ class RiskEngine:
     def exposure_block_reason(self, strategy: str) -> str:
         """Return a human-readable reason why check_exposure() returned False."""
         state = self._state(strategy)
-        capital = state.last_known_capital
+        capital = self._limit_capital(state)
         if capital > 0:
             combined_daily = state.daily_realised_loss + state.unrealised_loss
             if combined_daily >= capital * self.daily_loss_limit:
                 return f"Daily loss limit hit ({combined_daily:,.0f} >= {capital * self.daily_loss_limit:,.0f})"
-            if state.weekly_realised_loss >= capital * self.weekly_loss_limit:
-                return f"Weekly loss limit hit"
-            if state.monthly_realised_loss >= capital * self.monthly_loss_limit:
-                return f"Monthly loss limit hit"
+            if -state.weekly_net_pnl >= capital * self.weekly_loss_limit:
+                return (
+                    f"Weekly net drawdown limit hit ({-state.weekly_net_pnl:,.0f} >= "
+                    f"{capital * self.weekly_loss_limit:,.0f})"
+                )
+            if -state.monthly_net_pnl >= capital * self.monthly_loss_limit:
+                return (
+                    f"Monthly net drawdown limit hit ({-state.monthly_net_pnl:,.0f} >= "
+                    f"{capital * self.monthly_loss_limit:,.0f})"
+                )
         if self.max_open_positions > 0 and state.open_positions >= self.max_open_positions:
             return f"Max positions ({state.open_positions}/{self.max_open_positions})"
         if self.max_trades_per_day > 0 and state.trades_today >= self.max_trades_per_day:
@@ -540,37 +593,52 @@ class RiskEngine:
         self._state(strategy).open_positions = max(0, count)
         self._persist(strategy)
 
-    def can_trade_symbol(self, symbol: str) -> bool:
+    def can_trade_symbol(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol is allowed.
 
-        Global across strategies — see module docstring.
+        Pooled across strategies in LIVE, isolated per strategy in ANALYZE — see module
+        docstring.
         """
         if self.max_positions_per_symbol == 0:
             return True
-        return self._positions_by_symbol.get(symbol, 0) < self.max_positions_per_symbol
+        held = self._positions_by_symbol.get((self._key(strategy), symbol), 0)
+        return held < self.max_positions_per_symbol
 
-    def can_trade_sector(self, symbol: str) -> bool:
+    def can_trade_sector(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol's sector is allowed.
 
-        Global across strategies — see module docstring.
+        Same pooled/isolated split as can_trade_symbol — see module docstring.
         """
         if self.max_positions_per_sector == 0:
             return True
         sector = self._symbol_to_sector.get(symbol)
         if sector is None:
             return True
-        return self._positions_by_sector.get(sector, 0) < self.max_positions_per_sector
+        held = self._positions_by_sector.get((self._key(strategy), sector), 0)
+        return held < self.max_positions_per_sector
+
+    def _adjust_concentration(self, strategy: str, symbol: str, delta: int) -> None:
+        """Move this strategy's symbol/sector position counts by delta, never below zero."""
+        if not symbol:
+            return
+        key = self._key(strategy)
+        sym_key = (key, symbol)
+        self._positions_by_symbol[sym_key] = max(
+            0, self._positions_by_symbol.get(sym_key, 0) + delta
+        )
+        sector = self._symbol_to_sector.get(symbol)
+        if sector:
+            sec_key = (key, sector)
+            self._positions_by_sector[sec_key] = max(
+                0, self._positions_by_sector.get(sec_key, 0) + delta
+            )
 
     def record_trade(self, strategy: str, symbol: str = "") -> None:
         """Record a new trade entry for this strategy, incrementing its counters."""
         state = self._state(strategy)
         state.trades_today += 1
         state.open_positions += 1
-        if symbol:
-            self._positions_by_symbol[symbol] += 1
-            sector = self._symbol_to_sector.get(symbol)
-            if sector:
-                self._positions_by_sector[sector] += 1
+        self._adjust_concentration(strategy, symbol, +1)
         self._persist(strategy)
 
     def record_rejection(self, strategy: str, symbol: str = "") -> None:
@@ -583,11 +651,7 @@ class RiskEngine:
         state = self._state(strategy)
         state.open_positions = max(0, state.open_positions - 1)
         state.trades_today = max(0, state.trades_today - 1)
-        if symbol:
-            self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
-            sector = self._symbol_to_sector.get(symbol)
-            if sector:
-                self._positions_by_sector[sector] = max(0, self._positions_by_sector.get(sector, 0) - 1)
+        self._adjust_concentration(strategy, symbol, -1)
         logger.info(f"[{strategy}] Position slot released (rejection): {symbol or 'unknown'}")
         self._persist(strategy)
 
@@ -595,11 +659,13 @@ class RiskEngine:
         """Record a position close for this strategy. Negative pnl = loss."""
         state = self._state(strategy)
         state.open_positions = max(0, state.open_positions - 1)
-        if symbol:
-            self._positions_by_symbol[symbol] = max(0, self._positions_by_symbol.get(symbol, 0) - 1)
-            sector = self._symbol_to_sector.get(symbol)
-            if sector:
-                self._positions_by_sector[sector] = max(0, self._positions_by_sector.get(sector, 0) - 1)
+        self._adjust_concentration(strategy, symbol, -1)
+        # NET counters take every close, both signs — these are what the weekly/monthly
+        # drawdown limits measure. The gross counters below stay losses-only for the daily
+        # loss-streak gate and for reporting.
+        state.daily_net_pnl += pnl
+        state.weekly_net_pnl += pnl
+        state.monthly_net_pnl += pnl
         if pnl < 0:
             realized_loss = abs(pnl)
             state.daily_realised_loss += realized_loss

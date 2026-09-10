@@ -21,7 +21,7 @@ from signal_engine.parser import parse
 from signal_engine.runtime import build_risk_engine
 from signal_engine.risk_store import RiskStore, RISK_DB_PATH
 from signal_engine import startup
-from signal_engine.tracker import PositionTracker, TrackedPosition, TradeRecord, _compute_r
+from signal_engine.tracker import PositionTracker, TrackedPosition, _compute_r
 from signal_engine.validator import validate
 from signal_engine.timeutils import IST
 
@@ -837,6 +837,8 @@ async def _handle_entry(signal) -> None:
     Pipeline: symbol rules -> risk gates -> capital -> size -> build_order -> send ->
     bracket -> fill check -> track -> save
     """
+    if await _entry_halted(signal):
+        return
     if await _entry_rejected_by_symbol_rules(signal):
         return
     if not await _entry_passes_risk_gates(signal):
@@ -868,6 +870,31 @@ async def _handle_entry(signal) -> None:
             return
 
     save(signal, order, trade_result)
+
+
+async def _entry_halted(signal) -> bool:
+    """True if the engine has stopped accepting NEW risk — see mode_guard.
+
+    Two things set the halt, and both mean the same thing for an entry: the conditions this
+    trade would be sized and managed under are no longer the ones the engine is configured
+    for. A mid-session OpenAlgo mode flip (mode_guard.check_for_flip) leaves the risk
+    profile, counter isolation and audit labels pointing at the wrong mode. A dead Telegram
+    listener (startup._enter_degraded_mode) means no TP or EXIT alert can arrive either, so
+    a new position would be one the engine has no way to be told to close.
+
+    Runs FIRST, before the symbol and risk gates: nothing about a halted engine is worth
+    evaluating further. EXIT signals never come through here — closing an open position must
+    always stay possible.
+    """
+    from signal_engine import mode_guard
+
+    if not mode_guard.is_halted():
+        return False
+    reason = mode_guard.halt_reason()
+    logger.critical(f"ENTRY REFUSED (engine halted), skipping {signal.symbol}: {reason}")
+    await notifier.notify_risk_limit_hit(reason)
+    await _decline(signal, stage="halted", reason=reason)
+    return True
 
 
 async def _entry_rejected_by_symbol_rules(signal) -> bool:
@@ -910,12 +937,12 @@ async def _entry_passes_risk_gates(signal) -> bool:
         await _decline(signal, stage="risk_gates", reason=reason)
         return False
 
-    if not risk_engine.can_trade_symbol(signal.symbol):
+    if not risk_engine.can_trade_symbol(signal.symbol, signal.strategy):
         logger.warning(f"Symbol concentration limit reached for {signal.symbol}")
         await _decline(signal, stage="risk_gates", reason="symbol concentration limit")
         return False
 
-    if not risk_engine.can_trade_sector(signal.symbol):
+    if not risk_engine.can_trade_sector(signal.symbol, signal.strategy):
         logger.warning(f"Sector concentration limit reached for {signal.symbol}")
         await _decline(signal, stage="risk_gates", reason="sector concentration limit")
         return False

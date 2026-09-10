@@ -19,7 +19,7 @@ from signal_engine.runtime import apply_trade_mode
 from signal_engine.db import fetch_last_entry_trade
 from signal_engine.listener import start_listener
 from signal_engine.models import Direction
-from signal_engine import notifier
+from signal_engine import mode_guard, notifier
 from signal_engine.tracker import TimeExitScheduler, TrackedPosition
 
 
@@ -284,16 +284,97 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
                 f"broker={actual_open}"
             )
 
-    restored = _restore_tracker_positions(tracker, open_broker_positions, configured_product)
+    sl_orders = await _recover_sl_order_ids(open_broker_positions)
+    restored = _restore_tracker_positions(
+        tracker, open_broker_positions, configured_product, sl_orders
+    )
     if restored > 0:
         logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
 
 
-def _restore_tracker_positions(tracker, open_broker_positions, configured_product) -> int:
+#: Order types that ARE the bracket stop. A working LIMIT order is something else entirely
+#: and must never be cancelled as if it were the stop.
+_SL_ORDER_TYPES = ("SL-M", "SL", "SLM", "SL-LIMIT")
+
+#: Order statuses that mean the order is still working at the broker. Anything else
+#: (complete, cancelled, rejected) is not a stop that needs cancelling before an exit.
+_WORKING_STATUSES = ("open", "trigger pending", "trigger_pending", "pending", "placed")
+
+
+async def _recover_sl_order_ids(open_broker_positions) -> dict:
+    """Live stop-order ids for the symbols still open, from the broker orderbook.
+
+    Best-effort: an unreachable orderbook leaves every restored position without a stop id,
+    which is exactly the pre-2026-09-11 behaviour — worse than knowing, but not worse than
+    failing startup over it. It is logged loudly because the consequence (a rejected exit)
+    shows up much later and looks like something else.
+    """
+    if not open_broker_positions:
+        return {}
+    from signal_engine.api_client import fetch_orderbook
+
+    orderbook = await fetch_orderbook()
+    if orderbook is None:
+        logger.warning(
+            "SL recovery: could not fetch the orderbook — restored positions will have no "
+            "stop-order id, so an exit signal may be rejected as a new short "
+            "(FUND LIMIT INSUFFICIENT). Verify open stops manually."
+        )
+        return {}
+    matched = _match_open_sl_orders(orderbook)
+    open_symbols = {str(p.get("symbol", "")).upper() for p in open_broker_positions}
+    recovered = {sym: oid for sym, oid in matched.items() if sym in open_symbols}
+    missing = open_symbols - set(recovered)
+    if recovered:
+        logger.info(f"SL recovery: matched working stop orders for {sorted(recovered)}")
+    if missing:
+        logger.warning(
+            f"SL recovery: no working stop order found for {sorted(missing)} — these "
+            "positions are restored WITHOUT broker-side stop protection recorded."
+        )
+    return recovered
+
+
+def _match_open_sl_orders(orderbook) -> dict:
+    """symbol -> order id of the WORKING stop order for that symbol.
+
+    A restored position with no sl_order_id makes main._cancel_sl_before_exit() a no-op, so
+    the next TP/EXIT places a SELL while the broker's SL-M is still live — which an Indian
+    broker reads as a new SHORT and rejects with FUND LIMIT INSUFFICIENT. Recovering the id
+    from the broker's own orderbook is what makes a restart safe.
+
+    Later orders win: after a partial exit the stop is cancelled and re-placed, so the last
+    working one for a symbol is the live one.
+    """
+    matched: dict = {}
+    for order in orderbook or []:
+        if not isinstance(order, dict):
+            continue
+        order_type = str(order.get("pricetype") or order.get("price_type") or "").upper()
+        if order_type not in _SL_ORDER_TYPES:
+            continue
+        status = str(order.get("order_status") or order.get("status") or "").lower()
+        if status not in _WORKING_STATUSES:
+            continue
+        symbol = str(order.get("symbol") or "").upper()
+        order_id = str(order.get("orderid") or order.get("order_id") or "")
+        if symbol and order_id:
+            matched[symbol] = order_id
+    return matched
+
+
+def _restore_tracker_positions(
+    tracker, open_broker_positions, configured_product, sl_orders: dict = None
+) -> int:
     """Rebuild tracker entries from trades.db so exit paths see real entry/sl/tp values.
+
+    `sl_orders` is _match_open_sl_orders()'s symbol -> live stop id map; a symbol missing
+    from it keeps the old blank, which is honest — the engine simply does not know of a stop
+    for it.
 
     Returns the number of positions restored.
     """
+    sl_orders = sl_orders or {}
     restored = 0
     for bp in open_broker_positions:
         bsymbol = bp.get("symbol", "")
@@ -325,14 +406,19 @@ def _restore_tracker_positions(tracker, open_broker_positions, configured_produc
             tp=found["tp"],
             direction=bdir,
             entry_order_id=found["order_id"],
-            sl_order_id="",  # unknown after restart; new SL placed only on partial-exit
+            sl_order_id=sl_orders.get(bsymbol.upper(), ""),
             fill_price=float(bp.get("average_price", 0) or 0),
             ever_seen_nonzero_qty=True,
         ))
         restored += 1
+        recovered_sl = sl_orders.get(bsymbol.upper(), "")
+        sl_note = (
+            f" sl_order={recovered_sl}" if recovered_sl
+            else " sl_order=UNKNOWN (no working stop found in the orderbook)"
+        )
         logger.info(
             f"Tracker restored [{bsymbol}:{strategy_for_pos}]: qty={bqty} "
-            f"entry={found['entry']} sl={found['sl']} tp={found['tp']}"
+            f"entry={found['entry']} sl={found['sl']} tp={found['tp']}{sl_note}"
         )
     return restored
 
@@ -401,6 +487,10 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
     # limits apply and its losses land in the mode's own risk_store row.
     trade_mode = "analyze" if is_analyze else "live"
     apply_trade_mode(risk_engine, trade_mode)
+    # Arm the guard against this phase. The tracker's poll loop re-checks OpenAlgo from here
+    # on and halts new entries if the mode changes underneath a session configured for the
+    # old one — see mode_guard's module docstring for what diverges when it does.
+    mode_guard.set_startup_phase(trade_mode)
     # Stamp every trades.db row with the mode that produced it, so a paper week and a live
     # week never have to be told apart by date.
     set_trade_mode(trade_mode)
@@ -448,17 +538,58 @@ def _start_time_exit_scheduler(tracker):
 
 
 async def _serve_until_shutdown(handle_message, shutdown_event) -> None:
-    """Run the Telegram listener until it finishes or a shutdown signal arrives."""
+    """Run until a shutdown signal arrives — NOT until the Telegram listener stops.
+
+    A listener that exhausts its reconnect budget used to end the session: this function
+    returned, and _run_engine()'s finally block stopped the tracker and the time-exit
+    scheduler with it. On 2026-09-08 that happened sixteen times between 11:15 and 11:39
+    IST, each time leaving open positions with no close detection, no no-progress gate and
+    no 14:45 square-off (see logs/errors_2026-09-08.jsonl and listener.py's flood-wait
+    handling).
+
+    Losing the signal feed is bad; abandoning open risk because the signal feed died is
+    worse. A dead listener now degrades the session to "manage what is already open, accept
+    no new signals" and says so loudly, and only an actual shutdown signal ends it.
+    """
     listener_task = asyncio.create_task(start_listener(handle_message))
-    _, pending = await asyncio.wait(
-        [listener_task, asyncio.create_task(shutdown_event.wait())],
-        return_when=asyncio.FIRST_COMPLETED,
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+    done, _ = await asyncio.wait(
+        [listener_task, shutdown_task], return_when=asyncio.FIRST_COMPLETED
     )
+
+    if listener_task in done and not shutdown_event.is_set():
+        await _enter_degraded_mode()
+        await shutdown_task
+
     # Send stopped notification while the Telethon client is still alive
     # (listener_task not yet cancelled — must happen before task.cancel())
     try:
         await asyncio.wait_for(notifier.notify_engine_stopped(), timeout=5.0)
     except Exception:
         logger.debug("Could not send engine stopped notification")
-    for task in pending:
-        task.cancel()
+    for task in (listener_task, shutdown_task):
+        if not task.done():
+            task.cancel()
+
+
+async def _enter_degraded_mode() -> None:
+    """Announce that no further signals will arrive, and block new entries.
+
+    Open positions keep their tracker, their stop-losses and their time exit. What stops is
+    NEW risk: with no signal feed the engine cannot see a TP or EXIT alert either, so taking
+    a fresh position would mean opening something it has no way to be told to close.
+    """
+    reason = (
+        "Telegram listener exhausted its reconnect budget - NO NEW SIGNALS will be received. "
+        "Open positions keep their stop-loss, no-progress gates and time exit; new entries "
+        "are blocked. Restart the stack to restore the feed."
+    )
+    logger.critical(f"DEGRADED MODE: {reason}")
+    mode_guard.halt(reason)
+    try:
+        await asyncio.wait_for(
+            notifier.notify_event("listener_degraded", f"DEGRADED MODE\n{reason}"), timeout=5.0
+        )
+    except Exception:
+        logger.warning("Could not send degraded-mode alert")

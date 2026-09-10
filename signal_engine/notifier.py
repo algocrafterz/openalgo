@@ -11,13 +11,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from signal_engine import api_client
 from signal_engine.config import settings
 from signal_engine.timeutils import IST
 
@@ -33,23 +31,18 @@ def set_client(client: TelegramClient) -> None:
     _client = client
 
 
-# How long a checked OpenAlgo mode is trusted before re-checking - same reasoning and same TTL
-# as signal_engine/analysis/breakingtrade/alerts.py's identical mechanism: long enough that a
-# burst of notifications doesn't hammer OpenAlgo's API, short enough that a mid-day mode flip
-# reaches the right channel without an engine restart.
-_MODE_CACHE_TTL_SECONDS = 60
-_mode_cache = {"is_analyze": True, "checked_at": 0.0}
-
-
 async def _current_phase() -> str:
-    """"analyze" or "live", from OpenAlgo's live analyze/live state, cached briefly. Defaults
-    to "analyze" - the lower-stakes destination - when OpenAlgo can't be reached."""
-    now = time.monotonic()
-    if now - _mode_cache["checked_at"] > _MODE_CACHE_TTL_SECONDS:
-        mode, is_analyze = await api_client.fetch_trading_mode()
-        _mode_cache["is_analyze"] = True if mode == "unknown" else is_analyze
-        _mode_cache["checked_at"] = now
-    return "analyze" if _mode_cache["is_analyze"] else "live"
+    """"analyze" or "live", from OpenAlgo's live analyze/live state.
+
+    Delegates to mode_guard, which owns the single cached answer for the whole process.
+    This module used to keep its own 60s cache, one of three near-identical copies; the
+    listener's phase gate would have made it four. An unreachable OpenAlgo now returns the
+    LAST KNOWN phase rather than always "analyze" - a safety-critical alert during live
+    trading must not land in the paper channel because the API blipped.
+    """
+    from signal_engine import mode_guard
+
+    return await mode_guard.current_phase()
 
 
 def _channel_for_phase(phase: str):

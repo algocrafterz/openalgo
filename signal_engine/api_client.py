@@ -193,6 +193,35 @@ async def fetch_positionbook():
     return None
 
 
+async def fetch_orderbook():
+    """Fetch the day's orders in a single call. Returns a list on success, None on failure.
+
+    Used by startup reconciliation to recover the live SL order id for each restored
+    position — see startup._match_open_sl_orders(). Same retry shape as fetch_positionbook.
+    """
+    max_retries = 3
+    retry_delay = 2.0
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            data = await _post_json("orderbook", _auth())
+            if data.get("status") != "success":
+                logger.warning(f"Orderbook API returned non-success: {data}")
+                return None
+            payload = data.get("data", [])
+            # OpenAlgo returns either a bare list or {"orders": [...]} depending on broker.
+            if isinstance(payload, dict):
+                return payload.get("orders", [])
+            return payload
+        except Exception as e:
+            logger.warning(f"Orderbook fetch attempt {attempt}/{max_retries}: {e}")
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+
+    logger.error(f"Failed to fetch orderbook after {max_retries} attempts")
+    return None
+
+
 async def close_all_positions(strategy: str) -> bool:
     """Close all open positions for a strategy via OpenAlgo API.
 

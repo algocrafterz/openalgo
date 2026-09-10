@@ -22,14 +22,14 @@ class TestExposureChecks:
         engine = _engine()
         state = engine._state(STRATEGY)
         state.last_known_capital = 100_000
-        state.weekly_realised_loss = 6100
+        state.weekly_net_pnl = -6100
         assert engine.check_exposure(STRATEGY) is False
 
     def test_monthly_loss_limit_breached(self):
         engine = _engine()
         state = engine._state(STRATEGY)
         state.last_known_capital = 100_000
-        state.monthly_realised_loss = 10100
+        state.monthly_net_pnl = -10100
         assert engine.check_exposure(STRATEGY) is False
 
     def test_max_open_positions_breached(self):
@@ -56,94 +56,94 @@ class TestExposureChecks:
 class TestSectorCorrelation:
     def test_can_trade_sector_initially_true(self):
         engine = _engine(max_positions_per_sector=2)
-        assert engine.can_trade_sector("HDFCBANK") is True
+        assert engine.can_trade_sector("HDFCBANK", STRATEGY) is True
 
     def test_blocks_third_banking_stock(self):
         engine = _engine(max_positions_per_sector=2)
         engine.record_trade(strategy=STRATEGY, symbol="HDFCBANK")
         engine.record_trade(strategy=STRATEGY, symbol="SBIN")
-        assert engine.can_trade_sector("SBIN") is False
+        assert engine.can_trade_sector("SBIN", STRATEGY) is False
 
     def test_allows_different_sector(self):
         engine = _engine(max_positions_per_sector=2)
         engine.record_trade(strategy=STRATEGY, symbol="HDFCBANK")
         engine.record_trade(strategy=STRATEGY, symbol="SBIN")
         # IT sector should still be open
-        assert engine.can_trade_sector("TCS") is True
+        assert engine.can_trade_sector("TCS", STRATEGY) is True
 
     def test_unmapped_symbol_allowed(self):
         engine = _engine(max_positions_per_sector=1)
         engine.record_trade(strategy=STRATEGY, symbol="HDFCBANK")
         # UNKNOWN is not in any sector -> allowed
-        assert engine.can_trade_sector("UNKNOWN") is True
+        assert engine.can_trade_sector("UNKNOWN", STRATEGY) is True
 
     def test_disabled_when_zero(self):
         engine = _engine(max_positions_per_sector=0)
         engine.record_trade(strategy=STRATEGY, symbol="HDFCBANK")
         engine.record_trade(strategy=STRATEGY, symbol="SBIN")
         # limit disabled -> always True
-        assert engine.can_trade_sector("HDFCBANK") is True
+        assert engine.can_trade_sector("HDFCBANK", STRATEGY) is True
 
     def test_close_reopens_sector_slot(self):
         engine = _engine(max_positions_per_sector=1)
         engine.record_trade(strategy=STRATEGY, symbol="HDFCBANK")
-        assert engine.can_trade_sector("SBIN") is False
+        assert engine.can_trade_sector("SBIN", STRATEGY) is False
         engine._state(STRATEGY).open_positions = 1
         engine.record_close(pnl=100.0, strategy=STRATEGY, symbol="HDFCBANK")
-        assert engine.can_trade_sector("SBIN") is True
+        assert engine.can_trade_sector("SBIN", STRATEGY) is True
 
     def test_reset_clears_sector_counts(self):
         engine = _engine(max_positions_per_sector=1)
         engine.record_trade(strategy=STRATEGY, symbol="HDFCBANK")
-        assert engine.can_trade_sector("SBIN") is False
+        assert engine.can_trade_sector("SBIN", STRATEGY) is False
         engine._current_day = -1
         engine.check_exposure(STRATEGY)
-        assert engine.can_trade_sector("SBIN") is True
+        assert engine.can_trade_sector("SBIN", STRATEGY) is True
 
 
 class TestCorrelationRisk:
     def test_can_trade_symbol_initially_true(self):
         engine = _engine(max_positions_per_symbol=1)
-        assert engine.can_trade_symbol("RELIANCE") is True
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is True
 
     def test_blocks_duplicate_symbol(self):
         engine = _engine(max_positions_per_symbol=1)
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("RELIANCE") is False
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is False
 
     def test_allows_different_symbol(self):
         engine = _engine(max_positions_per_symbol=1)
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("TCS") is True
+        assert engine.can_trade_symbol("TCS", STRATEGY) is True
 
     def test_close_reopens_slot(self):
         engine = _engine(max_positions_per_symbol=1)
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
         engine._state(STRATEGY).open_positions = 1
-        assert engine.can_trade_symbol("RELIANCE") is False
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is False
         engine.record_close(pnl=100.0, strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("RELIANCE") is True
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is True
 
     def test_disabled_when_zero(self):
         engine = _engine(max_positions_per_symbol=0)
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("RELIANCE") is True
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is True
 
     def test_multiple_allowed_when_configured(self):
         engine = _engine(max_positions_per_symbol=2)
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("RELIANCE") is True
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is True
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("RELIANCE") is False
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is False
 
     def test_reset_clears_symbol_counts(self):
         engine = _engine(max_positions_per_symbol=1)
         engine.record_trade(strategy=STRATEGY, symbol="RELIANCE")
-        assert engine.can_trade_symbol("RELIANCE") is False
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is False
         engine._current_day = -1
         engine.check_exposure(STRATEGY)
-        assert engine.can_trade_symbol("RELIANCE") is True
+        assert engine.can_trade_symbol("RELIANCE", STRATEGY) is True
 
 
 class TestCapacityStatus:

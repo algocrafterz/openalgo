@@ -1,17 +1,86 @@
 """Telegram client connection and message polling."""
 
 import asyncio
+import random
 from datetime import datetime, timezone
 from typing import Callable, Coroutine
 
 from loguru import logger
 
 from signal_engine.config import settings
-from signal_engine import notifier
+from signal_engine import mode_guard, notifier
 
-# Ping Telegram every 90s to detect stale connections (common in WSL2 where
-# TCP keepalives across the NAT bridge can silently die without triggering a reconnect).
+# Check the connection every 90s so a stale one is noticed (common in WSL2, where TCP
+# keepalives across the NAT bridge can silently die without triggering a reconnect).
+#
+# This used to call client.get_me(), which issues a real GetUsersRequest. On 2026-09-08 that
+# was the source of 64 of the 80 FLOOD_WAIT errors in errors_2026-09-08.jsonl — the keepalive
+# triggered the throttle it exists to detect. client.is_connected() is a local state read
+# and costs no API call.
 _KEEPALIVE_INTERVAL = 90
+
+# Cap on how long a single FLOOD_WAIT is honoured before giving up on this connect attempt.
+# Telegram's waits are usually seconds to minutes; anything beyond this is better surfaced
+# to the operator than slept through in silence.
+_MAX_FLOOD_WAIT_SECONDS = 900
+
+# Jitter added on top of Telegram's stated wait, so a reconnect never lands on the exact
+# tick the ban lifts (and so two processes sharing a session don't retry in lockstep).
+_FLOOD_WAIT_JITTER_SECONDS = 5
+
+# Consecutive FLOOD_WAITs tolerated before giving up. A flood wait is not a connection
+# failure — the wait IS the remedy — so it must not consume the reconnect budget meant for
+# genuine failures. It still needs its own bound, or a permanent throttle loops forever.
+_MAX_CONSECUTIVE_FLOOD_WAITS = 5
+
+# Waits shorter than this are absorbed by Telethon itself rather than surfacing as an
+# exception. Default is 60s; raising it means only the genuinely long bans reach our loop.
+_FLOOD_SLEEP_THRESHOLD = 120
+
+#: Phase suffixes a channel name may carry. A channel without one (smidestn, or any ad-hoc
+#: channel) is phase-agnostic and always processed — the suffix encodes the promotion
+#: workflow, and a channel outside that workflow should not be forced into it.
+_PHASE_SUFFIXES = ("analyze", "live")
+
+
+def _channel_phase(name: str) -> str | None:
+    """"analyze" / "live" from the channel's own name suffix, or None if it has neither."""
+    lowered = (name or "").strip().lower()
+    for phase in _PHASE_SUFFIXES:
+        if lowered.endswith(f"-{phase}"):
+            return phase
+    return None
+
+
+def _flood_wait_error():
+    """Telethon's FloodWaitError class, imported lazily so this module stays importable
+    (and testable) without telethon present."""
+    from telethon.errors import FloodWaitError
+
+    return FloodWaitError
+
+
+def _flood_wait_seconds(exc) -> float:
+    """How long to actually sleep for a FLOOD_WAIT: Telegram's own stated wait plus jitter,
+    capped. The old loop backed off 2/4/8/16/32s against a stated 349 seconds, so every
+    retry landed inside the ban and extended it."""
+    seconds = getattr(exc, "seconds", None)
+    if not isinstance(seconds, (int, float)):
+        return _MAX_FLOOD_WAIT_SECONDS
+    return min(seconds + random.uniform(1, _FLOOD_WAIT_JITTER_SECONDS), _MAX_FLOOD_WAIT_SECONDS)
+
+
+def _build_client():
+    """Construct the Telethon client. Separated so the retry loop is testable without it."""
+    from telethon import TelegramClient
+
+    client = TelegramClient(
+        "signal_engine/data/telegram",
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    client.flood_sleep_threshold = _FLOOD_SLEEP_THRESHOLD
+    return client
 
 
 def _split_by_enabled(channels) -> tuple:
@@ -46,6 +115,44 @@ def _is_stale(msg) -> float | None:
     return age if age > settings.stale_signal_seconds else None
 
 
+def _record_phase_decline(text: str, source: str, reason: str) -> None:
+    """Write a DECLINED row for a signal refused before it ever reached the pipeline.
+
+    A signal that vanishes with nothing in the ledger is unauditable — which is exactly the
+    gap save_declined() exists to close for every other refusal stage. Parsing can fail (the
+    message may not be a signal at all); that is not an error here, just nothing to record.
+    """
+    try:
+        from signal_engine.db import save_declined
+        from signal_engine.models import Direction
+        from signal_engine.parser import parse
+
+        signal = parse(text)
+        if signal is None or signal.direction not in (Direction.LONG, Direction.SHORT):
+            return
+        save_declined(signal, stage="channel_phase", reason=f"[{source}] {reason}")
+    except Exception as e:
+        logger.warning(f"Could not record declined signal from [{source}]: {e}")
+
+
+async def _phase_mismatch(channel_phase: str | None) -> str | None:
+    """The refusal reason if this channel's phase does not match OpenAlgo's mode, else None.
+
+    Checked PER MESSAGE, not at subscribe time: subscriptions are fixed once the client
+    connects, so a subscribe-time check would miss a mid-session flip entirely.
+    """
+    if channel_phase is None:
+        return None
+    running = await mode_guard.current_phase()
+    if channel_phase == running:
+        return None
+    return (
+        f"channel is a {channel_phase.upper()} channel but OpenAlgo is in {running.upper()} "
+        f"mode — refusing. Point this strategy's alert at its -{running} channel and enable "
+        f"that channel in config.yaml, or put OpenAlgo back into {channel_phase.upper()}."
+    )
+
+
 def _make_handler(on_message, channel_names: dict):
     """Build the NewMessage handler bound to this run's channel-name lookup."""
 
@@ -59,7 +166,20 @@ def _make_handler(on_message, channel_names: dict):
 
         stale_age = _is_stale(msg)
         if stale_age is not None:
-            logger.debug(f"Skipping stale message from [{source}] ({stale_age:.0f}s old)")
+            # WARNING, not DEBUG, and recorded: after the 2026-09-08 Telegram outage there
+            # was no way to answer "what did we miss" — the drops left no trace at all.
+            reason = f"stale by {stale_age:.0f}s (limit {settings.stale_signal_seconds}s)"
+            logger.warning(f"[{source}] Skipping stale message: {reason}")
+            _record_phase_decline(msg.text, source, reason)
+            return
+
+        # Gate 2 of config.yaml's two-gate rule. Gate 1 is `enabled:` (see
+        # _split_by_enabled); this one is the half that used not to exist.
+        reason = await _phase_mismatch(_channel_phase(source))
+        if reason is not None:
+            logger.critical(f"[{source}] SIGNAL REFUSED: {reason}")
+            _record_phase_decline(msg.text, source, reason)
+            await _notify_phase_mismatch(source, reason)
             return
 
         clean_text = " | ".join(line.strip() for line in msg.text.strip().splitlines() if line.strip())
@@ -69,18 +189,42 @@ def _make_handler(on_message, channel_names: dict):
     return handler
 
 
-async def _keepalive(client) -> None:
-    """Periodically ping Telegram to detect and surface stale connections.
+#: Channels already alerted about a phase mismatch this session. A mode mismatch affects
+#: every message from that channel for as long as it lasts; one alert per channel says what
+#: the operator needs to know without turning a config mistake into a message storm.
+_phase_alerted: set = set()
 
-    On failure, disconnect so run_until_disconnected returns and triggers a retry.
+
+async def _notify_phase_mismatch(source: str, reason: str) -> None:
+    if source in _phase_alerted:
+        return
+    _phase_alerted.add(source)
+    try:
+        await notifier.notify_event(
+            "channel_phase_mismatch",
+            f"SIGNALS REFUSED from {source}\n{reason}",
+        )
+    except Exception as e:
+        logger.warning(f"Could not send phase-mismatch alert for [{source}]: {e}")
+
+
+async def _keepalive(client) -> None:
+    """Periodically check the connection is still up, WITHOUT making an API call.
+
+    On a dropped connection, disconnect so run_until_disconnected returns and triggers a
+    retry. See _KEEPALIVE_INTERVAL for why this no longer calls get_me().
     """
     while True:
         await asyncio.sleep(_KEEPALIVE_INTERVAL)
         try:
-            await client.get_me()
-            logger.debug("Keepalive ping OK")
+            if client.is_connected():
+                logger.debug("Keepalive: connection up")
+                continue
+            logger.warning("Keepalive: client reports disconnected — forcing a reconnect")
+            await client.disconnect()
+            return
         except Exception as e:
-            logger.warning(f"Keepalive ping failed: {e} — connection may be stale")
+            logger.warning(f"Keepalive check failed: {e} — connection may be stale")
             await client.disconnect()
             return
 
@@ -127,7 +271,7 @@ async def start_listener(
     on_message: Callable[[str], Coroutine],
 ) -> None:
     """Connect to Telegram and listen for signals on all configured channels."""
-    from telethon import TelegramClient, events
+    from telethon import events
 
     if not settings.telegram_channels:
         logger.error("No Telegram channels configured in config.yaml (telegram.channels)")
@@ -142,24 +286,32 @@ async def start_listener(
         )
         return
 
-    client = TelegramClient(
-        "signal_engine/data/telegram",
-        settings.telegram_api_id,
-        settings.telegram_api_hash,
-    )
+    client = _build_client()
     chat_ids = [ch.id for ch in watching]
     channel_names = _channel_names()
     client.on(events.NewMessage(chats=chat_ids))(
         _make_handler(on_message, channel_names)
     )
 
+    flood_error = _flood_wait_error()
     retries = 0
-    while retries < settings.listener_max_retries:
+    floods = 0
+    while retries < settings.listener_max_retries and floods < _MAX_CONSECUTIVE_FLOOD_WAITS:
         try:
             await _connect(client)
-            # Only a successful connect clears the backoff counter.
+            # Only a successful connect clears either counter.
             retries = 0
+            floods = 0
             await _serve(client)
+        except flood_error as e:
+            floods += 1
+            wait = _flood_wait_seconds(e)
+            logger.warning(
+                f"Telegram FLOOD_WAIT: {e}. Honouring the stated wait — sleeping {wait:.0f}s "
+                f"(flood {floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}). This does not consume the "
+                "reconnect budget."
+            )
+            await asyncio.sleep(wait)
         except Exception as e:
             retries += 1
             wait = settings.listener_base_backoff * (2 ** (retries - 1))
@@ -169,4 +321,10 @@ async def start_listener(
             )
             await asyncio.sleep(wait)
 
-    logger.critical("Max retries exceeded, listener shutting down")
+    logger.critical(
+        "Telegram listener giving up "
+        f"(retries={retries}/{settings.listener_max_retries}, "
+        f"floods={floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}). No NEW signals will be received. "
+        "The tracker and time exit keep running so open positions stay managed — see "
+        "startup._serve_until_shutdown()."
+    )

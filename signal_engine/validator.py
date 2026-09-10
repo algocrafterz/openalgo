@@ -7,8 +7,8 @@ from typing import Dict, Tuple
 from signal_engine.config import settings
 from signal_engine.models import Direction, Signal, ValidationResult, ValidationStatus
 
-# In-memory duplicate tracker: (symbol, direction, entry) -> timestamp
-_recent_signals: Dict[Tuple[str, str, object], float] = {}
+# In-memory duplicate tracker: (strategy, symbol, direction, tp_level or entry) -> timestamp
+_recent_signals: Dict[Tuple[str, str, str, object], float] = {}
 
 
 def _cleanup_stale_entries() -> None:
@@ -150,13 +150,24 @@ def _min_sl_pct_for(strategy: str) -> float:
 
 
 def _check_duplicate(signal: Signal):
-    """Suppress a repeat of the same symbol/direction/entry inside the dedup window.
+    """Suppress a repeat of the same strategy/symbol/direction/entry inside the dedup window.
 
     For EXIT signals entry is always the synthesized 0.0, so the TP level stands in as the
     discriminator — otherwise TP1 and the TP1.5 that follows it would collide.
+
+    STRATEGY is part of the key (2026-09-11). Without it an EXIT reduced to
+    (SYMBOL, "EXIT", "TP1"), shared by every strategy holding that name — and
+    BREAKINGTRADE / BREAKINGTRADE-WATCHLIST are built to hold the same symbol at the same
+    time with the same TP math. Two simultaneous "TP1 HIT" alerts meant the second was
+    dropped and that position never exited; it rode to the 14:45 time exit instead.
     """
     _cleanup_stale_entries()
-    sig_key = (signal.symbol, signal.direction.value, signal.tp_level or signal.entry)
+    sig_key = (
+        signal.strategy.upper(),
+        signal.symbol,
+        signal.direction.value,
+        signal.tp_level or signal.entry,
+    )
     if sig_key in _recent_signals:
         return ValidationResult(
             status=ValidationStatus.IGNORED,

@@ -168,6 +168,10 @@ class PositionTracker:
         # Per-(key, log-kind) throttle to suppress repeated debug lines on every 5s poll.
         # Value = last time we emitted that log line for the position/kind pair.
         self._last_debug_log: Dict[tuple[str, str], datetime] = {}
+        #: Strategies whose unrealised loss was reported on the last poll — so one whose
+        #: positions have all closed gets an explicit 0.0 rather than keeping a stale figure
+        #: that would go on throttling it. See _push_unrealised().
+        self._reported_unrealised: set = set()
 
     def day_context_line(self, max_trades: int | None = None) -> str:
         """Compact per-day running context used in Telegram close notifications."""
@@ -389,6 +393,55 @@ class PositionTracker:
         if (time_exit_today - now).total_seconds() / 60 <= 30:
             await self.send_day_summary()
 
+    def _push_unrealised(self, book_data: dict) -> None:
+        """Report each strategy's mark-to-market unrealised LOSS to the risk engine.
+
+        check_exposure() has always added this to the day's realised loss before testing the
+        daily limit — but nothing ever called update_unrealised(), so the term was
+        permanently 0.0 and the "combined" gate was only ever the realised half. The poll
+        loop is the natural place: it already has every open position and a fresh LTP for
+        each from the same positionbook call.
+
+        Only losses count. A position in profit reports 0.0 rather than a negative loss —
+        the daily limit ADDS this figure to realised losses, so letting a winner credit
+        against it would let one open runner mask a day of stop-outs. Every strategy with a
+        tracked position is reported each cycle, and a strategy whose positions have all
+        closed is explicitly zeroed, so a stale figure can never keep throttling it.
+        """
+        losses: Dict[str, float] = {strategy: 0.0 for strategy in self._reported_unrealised}
+        for pos in self._positions.values():
+            losses.setdefault(pos.strategy, 0.0)
+            _qty, ltp = book_data.get(pos.symbol, (0, 0.0))
+            base = pos.fill_price or pos.entry_price
+            if not ltp or not base:
+                continue  # no usable mark - skip this leg rather than invent one
+            move = (ltp - base) if pos.direction == Direction.LONG else (base - ltp)
+            if move < 0:
+                losses[pos.strategy] += abs(move) * abs(pos.quantity)
+
+        for strategy, loss in losses.items():
+            self._risk_engine.update_unrealised(loss, strategy)
+        self._reported_unrealised = {s for s in losses if s in
+                                     {p.strategy for p in self._positions.values()}}
+
+    async def _check_mode_flip(self) -> None:
+        """Notice a mid-session OpenAlgo mode change and alert on it.
+
+        The poll loop is the only thing running continuously all session, so it is where
+        this belongs. mode_guard does the comparing and the halting (and reports a flip
+        exactly once); this only has to raise the alarm — see mode_guard's module docstring
+        for what silently diverges when the mode changes underneath a running engine.
+        """
+        from signal_engine import mode_guard
+
+        new_phase = await mode_guard.check_for_flip()
+        if new_phase is None:
+            return
+        try:
+            await notifier.notify_event("mode_flip_halt", f"ENTRIES HALTED\n{mode_guard.halt_reason()}")
+        except Exception as e:
+            logger.warning(f"Could not send mode-flip alert: {e}")
+
     async def check_positions(self) -> None:
         """Poll all tracked positions with a single positionbook call.
 
@@ -409,6 +462,8 @@ class PositionTracker:
             return
 
         book_data = _index_positionbook(book)
+        self._push_unrealised(book_data)
+        await self._check_mode_flip()
         closed_keys = []
 
         # Snapshot the position list so concurrent _handle_exit_locked unregisters
@@ -1086,7 +1141,7 @@ class TimeExitScheduler:
                         f"Running tracker cleanup."
                     )
                 else:
-                    logger.info(f"Time exit: past configured time, firing catch-up exit")
+                    logger.info("Time exit: past configured time, firing catch-up exit")
                 await self._tracker.time_exit_all()
                 self._fired_today = True
 

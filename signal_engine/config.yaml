@@ -28,10 +28,20 @@ telegram:
   # posts there automatically based on OpenAlgo's live analyze/live state - nothing to edit
   # anywhere when that flips.
   #
-  # THE SAFETY GATE IS UNCHANGED BY THE SPLIT: a channel only ever trades when BOTH (1) this
-  # entry's `enabled: true` AND (2) OpenAlgo is actually in that phase's mode. A `-live` entry
-  # stays `enabled: false` until a strategy is deliberately promoted - flipping it is the one
-  # and only step that lets that strategy touch real money, so do it last, not first.
+  # THE SAFETY GATE: a channel only ever trades when BOTH (1) this entry's `enabled: true`
+  # AND (2) OpenAlgo is actually in that phase's mode. A `-live` entry stays `enabled: false`
+  # until a strategy is deliberately promoted - flipping it is the one and only step that lets
+  # that strategy touch real money, so do it last, not first.
+  #
+  # 2026-09-11: gate (2) IS NOW ENFORCED IN CODE. It was documented here from the day of the
+  # split but never actually existed - listener._split_by_enabled() filtered on `enabled`
+  # alone and nothing anywhere compared a channel's -analyze/-live suffix to the mode the
+  # engine was running in. Flipping OpenAlgo to LIVE (exactly what promoting a strategy
+  # requires) would have put all four enabled -analyze channels onto real money, silently.
+  # listener._phase_mismatch() now refuses any message whose channel suffix disagrees with
+  # OpenAlgo's current mode, PER MESSAGE (so a mid-session flip is caught too - subscriptions
+  # are fixed once the client connects), logs it CRITICAL, records a DECLINED row, and alerts
+  # once per channel. A channel with NO -analyze/-live suffix (smidestn) stays phase-agnostic.
   channels:
     - name: "smidestn"           # test channel
       id: -1002773559154
@@ -273,7 +283,26 @@ sizing:
 # ── Risk Management ──────────────────────────────────────
 risk:
   # [tune] Daily/weekly/monthly loss limits as fraction of capital. Engine locks out new entries
-  # when cumulative loss hits the limit. Resets automatically at the start of each period.
+  # when the limit is hit. Resets automatically at the start of each period.
+  #
+  # WHAT EACH ONE MEASURES (2026-09-11 - these were not the same thing before, and the
+  # difference decided whether the engine could trade past its first bad week):
+  #
+  #   daily   - GROSS realised loss: losing trades only, wins do NOT offset. This is a
+  #             loss-streak gate, and it is deliberate - "4% = four full stops" below is
+  #             exactly that reading. Four stop-outs is a signal about the DAY, whatever the
+  #             winners did, so a net-positive day can still halt. That is the intent.
+  #   weekly  - NET realised drawdown: wins offset losses.
+  #   monthly - NET realised drawdown: wins offset losses.
+  #
+  # Weekly and monthly used to be gross too, which made them trade COUNTERS wearing the
+  # costume of a drawdown percentage. At Rs 350 risk/trade on Rs 35k that was 8 losing trades
+  # for the week and 15 for the month - at max_trades_per_day 10 and a ~50% loss rate, roughly
+  # two sessions and four. The engine would have locked itself out for the rest of the week,
+  # then the month, on an account that was making money. A month of 60 wins and 40 losses was
+  # halted in week one. RiskEngine now tracks signed net P&L per period (risk.py's
+  # _StrategyState.daily/weekly/monthly_net_pnl, persisted in risk.db's daily_net_pnl column)
+  # and the weekly/monthly gates measure that.
   # RE-ARMED 2026-09-06 for the live BREAKOUT launch. These sat at 1.0 (i.e. disabled) for
   # paper testing, where there was nothing to protect. Going live with them off means a bad
   # day has no floor at all: max_trades_per_day is 10, so 10 full stops is a 10% account loss
@@ -316,10 +345,23 @@ risk:
   # for parser edge cases only — no valid ORB signal should be rejected by this threshold.
   min_rr: 0.75
 
-  # [tune] Suppress duplicate signals for the same symbol+strategy within this window.
+  # [tune] Suppress duplicate signals for the same strategy+symbol+direction+level within
+  # this window.
+  #
+  # 2026-09-11: the STRATEGY is now genuinely part of that key. It was not, despite what this
+  # comment already claimed - validator._check_duplicate() keyed on
+  # (symbol, direction, tp_level or entry), and an EXIT synthesizes entry 0.0, so the key
+  # reduced to (SYMBOL, "EXIT", "TP1"), shared by every strategy holding that name. Two
+  # strategies hitting TP1 on the same stock within this window meant the second alert was
+  # dropped as a duplicate and THAT POSITION NEVER EXITED - it rode to the 14:45 time exit.
+  # BREAKINGTRADE / BREAKINGTRADE-WATCHLIST collide by design; ORB / BREAKOUT share the same
+  # NSE universe and the same 5-min bars and can collide the same way.
   duplicate_window_seconds: 60
 
   # [tune] Reject signals with a timestamp older than this (catches stale Telegram deliveries).
+  # 2026-09-11: a drop is now logged at WARNING and written to trades.db as a DECLINED row
+  # (stage "channel_phase"). It used to be a DEBUG line and nothing else, so after the
+  # 2026-09-08 Telegram outage there was no way at all to answer "what did we miss".
   stale_signal_seconds: 60
 
   # [tune] Reject SL tighter than this fraction of entry price (0 = disabled).
@@ -347,10 +389,21 @@ risk:
   min_sl_pct: 0.005
 
   # [tune] Max concurrent positions in the same symbol (0 = no limit).
+  #
+  # 2026-09-11: this follows the same LIVE-pools / ANALYZE-isolates split as every other
+  # counter (risk.py's _key). It used to be global in both modes, which quietly broke the
+  # BreakingTrade experiment: BREAKINGTRADE and BREAKINGTRADE-WATCHLIST are BUILT to hold
+  # the same name at the same time so paper P&L can compare the two entry philosophies, and
+  # the watchlist fires on the scan-hit poll - before plan_trade()'s confirming close exists
+  # - so it always took the one symbol slot and the confirmed signal was declined "symbol
+  # concentration limit". BREAKINGTRADE showing near-zero trades would have read as "the
+  # confirmation filter is too strict" rather than "the cap blocked it". In LIVE it still
+  # pools: two strategies in one real name is genuine correlated exposure.
   max_positions_per_symbol: 1
 
   # [tune] Max concurrent positions in the same sector (0 = disabled).
   # Disabled: stock universe spans the same sectors (FINANCE: PFC, JIOFIN, RECLTD etc.)
+  # Same LIVE-pools / ANALYZE-isolates split as max_positions_per_symbol above.
   max_positions_per_sector: 0
 
 # ── Symbol Blacklist ─────────────────────────────────────
