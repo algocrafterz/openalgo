@@ -96,6 +96,38 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-10 18:37 — Now also trading the watchlist call itself, as a second, separately-tracked outcome
+
+**What changed:** Until today, a scanner call only ever became a real trade after price PROVED
+it right - closing beyond the level the scanner flagged. The watchlist notice itself ("this
+name just matched a scan") was explicitly informational, never a trade. Starting today, the
+system ALSO takes a trade on the watchlist call itself, the moment it fires - a second, fully
+separate strategy running side by side with the original one, on its own Telegram channel and
+its own slice of paper capital, so the two can be compared honestly rather than blended into
+one number. Neither can affect the other's results.
+
+**Entry:** Two entry styles now run in parallel. The original ("confirmed") still waits for
+price to prove the call right first. The new one ("watchlist") enters immediately, at whatever
+price the stock was trading when the scanner flagged it - no waiting, no confirmation. This
+tests the belief that the scanner's own selection is already good enough on its own, without
+needing price to agree first.
+
+**Exit (SL):** Not affected - same stop-loss placement logic as the confirmed strategy already
+used (just beyond the level that would prove the setup wrong).
+
+**Exit (TP):** Not affected - same profit targets as the confirmed strategy already used.
+
+**Consideration:** This new watchlist strategy has ZERO track record yet - it starts today with
+no history, same as the confirmed strategy started with none in its first days. Both currently
+run in PAPER mode only (simulated money, no real capital at risk). Going live on either one
+later still requires reviewing its own results first, the same discipline already applied
+before any other strategy here went live - and only one of the two should ever run with real
+money at a time, not both together.
+
+NOTE: Technical detail in `signal_engine/analysis/breakingtrade/trigger.py`'s
+`plan_trade_watchlist()` docstring and `signal_engine/PRD.md`'s 2026-09-10 18:37 Recent
+Changes entry.
+
 ### 2026-09-09 16:10 — Found the real reason almost no trade signal had ever fired: the system only ever checked once, at the wrong moment
 
 **What changed:** The scanner flags a stock, then waits for price to actually follow through

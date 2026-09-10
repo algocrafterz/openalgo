@@ -218,6 +218,55 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-10)
 
+**18:37 IST — BreakingTrade now trades its WATCHLIST call directly, as a second outcome
+separate from the existing CONFIRMED signal.**
+
+Until now the scanner only ever traded a CONFIRMED entry: `trigger.plan_trade()` waits for
+`entry_trigger()` to see a later 5-minute bar CLOSE beyond the signal bar's extreme before it
+will emit anything, and the BT WATCHLIST notice it sends the moment a symbol first matches a
+scan is explicitly "no action, not a trade signal" (`alerts.alert_transitions()`). That
+confirmation requirement is why real signals stayed rare even after 2026-09-09's entry_watch.py
+fix (see that date's entry below) — a genuine belief that the scanner's own selection is
+already decent quality, independent of whether price goes on to confirm it, was never testable.
+
+New `trigger.plan_trade_watchlist()` builds the same stop/target plan (`stop_level`,
+`target_levels`, `target_split` all unchanged) but enters at the SCAN-HIT PRICE itself, with no
+confirming-close wait. Wired into `__main__.py`'s `_emit_trade_signals()` alongside the existing
+confirmed path (one shared bars/ATR fetch per symbol, not two separate OpenAlgo history calls),
+and emitted under a wholly separate strategy tag/channel — `BREAKINGTRADE-WATCHLIST` on
+`intraday-breakingtrade-watchlist` — rather than folded into `BREAKINGTRADE`. Deliberately kept
+apart in `config.yaml` (own `strategy_profiles`/`blacklist` blocks, own risk slots since
+`RiskEngine` isolates per-strategy in analyze mode, see 14:55 entry below) so a losing streak on
+one outcome can never throttle the other via a shared limit, and so paper P&L answers "which
+entry style (if either) is worth taking live" as a clean two-way comparison rather than a
+blended number. Both `BREAKINGTRADE` and `BREAKINGTRADE-WATCHLIST` channels currently `enabled:
+true` under OpenAlgo ANALYZE (paper) mode only — going live on either follows the same
+one-strategy-at-a-time discipline BREAKOUT already established (disable the other before
+flipping OpenAlgo to live), since `mode_profiles.live`'s risk numbers are a POOLED total across
+whatever is enabled live, not per-strategy.
+
+Also fixed in the same change: `alert_trade_signal()` gained a `kind` parameter so a caller can
+route to either channel; `alerts.py`'s `_env()`/`_CHANNEL_BY_KIND` and `.env` gained
+`BREAKINGTRADE_CHAT_ID_WATCHLIST`; the informal "BT WATCHLIST" header was spelled out to
+"BREAKINGTRADE WATCHLIST" (project convention: no abbreviations in Telegram text, so the three
+message shapes - `BREAKINGTRADE WATCHLIST` notice, `BREAKINGTRADE LONG/SHORT` confirmed trade,
+`BREAKINGTRADE-WATCHLIST LONG/SHORT` watchlist trade - stay visually distinct at a glance).
+`.env`'s `BREAKINGTRADE_CHAT_ID_INTRADAY` also had a stray `lets` suffix corrupting the chat id
+(`-1004379472313lets`), found and fixed while wiring this up - it would have silently broken
+delivery to the confirmed-trade channel.
+
+Separately, `strategy_cards.py`'s per-channel pinned reference card used to be re-sent and
+re-pinned on every listener startup (daily, and after every code change) - harmless in intent
+but it meant a fresh pinned message, and channel clutter Telegram never fully cleans up, on
+every restart that changed nothing. `send_and_pin_cards()` now hashes each rendered card and
+persists the hash of whatever it last pinned per channel
+(`signal_engine/data/strategy_card_state.json`); a channel is only touched again when that hash
+differs (first-ever pin, or the CARDS entry was actually edited), and the stale previous pin is
+unpinned at the same time. Applies to every strategy's card, not just BreakingTrade's two.
+
+See `signal_engine/pinescripts/intraday/breaking-trade/STRATEGY-LOG.md`'s 2026-09-10 entry for
+the layman version.
+
 **14:55 IST — Per-strategy capital isolation; analyze-mode trade/position caps removed.**
 
 `RiskEngine` (`risk.py`) previously tracked open_positions/trades_today/day-start capital/

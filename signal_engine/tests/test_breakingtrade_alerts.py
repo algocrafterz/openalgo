@@ -237,6 +237,44 @@ def test_each_strategy_routes_to_its_own_channel(monkeypatch):
     assert alerts.chat_id_for("health") == "-100INTRA"
 
 
+def test_watchlist_trade_signal_routes_to_its_own_channel(monkeypatch):
+    """The two outcomes must never land in the same channel, or the whole point of comparing
+    them side by side on separate paper P&L is lost."""
+    monkeypatch.setattr(
+        alerts,
+        "_env",
+        lambda: {
+            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
+            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100CONFIRMED",
+            "BREAKINGTRADE_CHAT_ID_WATCHLIST": "-100WATCHLIST",
+        },
+    )
+    assert alerts.chat_id_for("trade_signal") == "-100CONFIRMED"
+    assert alerts.chat_id_for("trade_signal_watchlist") == "-100WATCHLIST"
+
+
+def test_watchlist_trade_signal_uses_the_full_unabbreviated_strategy_name():
+    """No short forms - a trader scanning two channels needs the full name at a glance, and
+    parser.py's strategy tag must match config.yaml's strategy_profiles/blacklist keys."""
+    alerts.alert_trade_signal(
+        _plan(), strategy="BREAKINGTRADE-WATCHLIST", kind="trade_signal_watchlist"
+    )
+    with alerts._connect() as conn:
+        message, kind = conn.execute("SELECT message, kind FROM alerts LIMIT 1").fetchone()
+    assert message.startswith("BREAKINGTRADE-WATCHLIST LONG")
+    assert kind == "trade_signal_watchlist"
+
+
+def test_confirmed_trade_signal_still_defaults_to_the_original_strategy_and_kind():
+    """Existing CONFIRMED callers (entry_watch.py, _emit_trade_signals) must keep working
+    unchanged - the new kind/strategy params are additive, not a breaking rename."""
+    alerts.alert_trade_signal(_plan())
+    with alerts._connect() as conn:
+        message, kind = conn.execute("SELECT message, kind FROM alerts LIMIT 1").fetchone()
+    assert message.startswith("BREAKINGTRADE LONG")
+    assert kind == "trade_signal"
+
+
 def test_missing_channel_never_falls_back_to_another(monkeypatch):
     """An earlier single-channel setup delivered these into the channel breakout.pine uses.
     Falling back on a missing key would silently repeat that, so it must not deliver at all."""

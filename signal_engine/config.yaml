@@ -63,6 +63,25 @@ telegram:
       id: -1004379472313
       enabled: true
 
+    # WATCHLIST outcome of the same scanner, kept on its OWN channel/strategy tag
+    # (BREAKINGTRADE-WATCHLIST) rather than folded into intraday-breakingtrade above, on
+    # purpose: "intraday-breakingtrade" only ever trades a CONFIRMED signal (trigger.py's
+    # entry_trigger() has seen price close beyond the signal bar's extreme, which is what
+    # made real signals rare - see entry_watch.py's 2026-09-09 fix). This channel trades the
+    # WATCHLIST call itself, entered at the scan-hit price the moment it fires, with no
+    # confirmation wait - see trigger.plan_trade_watchlist(). Same scanner, two different
+    # entry philosophies, run side by side on separate risk slots so paper P&L answers which
+    # one (if either) is worth taking live, without either strategy's losing streak throttling
+    # the other via a shared daily-loss limit.
+    #
+    # PAPER PHASE from 2026-09-10, alongside intraday-breakingtrade. Enabled so the engine
+    # takes every signal end to end - sizing, entry, SL-M, staged TPs, time exit - but
+    # OpenAlgo must be in ANALYZE mode, exactly the same safety statement as above: enabled
+    # channel + live mode = real orders on a strategy with ZERO scored samples yet.
+    - name: "intraday-breakingtrade-watchlist"
+      id: -1003902599946
+      enabled: true
+
   # [tune] How much routine traffic reaches notify_channel.
   #   quiet   - outcomes only: fills, closes, time exits, the day summary
   #   normal  - the above plus order-placed / SL-placed / partial-exit steps  (default)
@@ -279,6 +298,12 @@ blacklist:
   BREAKINGTRADE:
     # Scanner-selected names change daily, so a per-symbol blacklist is less useful here than
     # for the fixed-universe strategies. YESBANK is already blocked globally.
+    hard: []
+    soft: []
+    soft_multiplier: 0.5
+
+  BREAKINGTRADE-WATCHLIST:
+    # Same scanner, same daily-changing universe as BREAKINGTRADE above - same reasoning.
     hard: []
     soft: []
     soft_multiplier: 0.5
@@ -639,6 +664,16 @@ strategy_profiles:
     # F&O list daily. Inheriting that band silently declined real candidates (MARUTI ~12,694,
     # PERSISTENT ~5,575, GMRAIRPORT ~98, VMM ~104 all seen in one day - 2026-09-07) with nobody
     # having decided that was wanted. 0 = no filter, so every scan match can be analysed.
+    min_entry_price: 0
+    max_entry_price: 0
+  BREAKINGTRADE-WATCHLIST:
+    product: MIS
+    # tp_levels absent - alert_trade_signal() sends a single flat TP, same as BREAKINGTRADE.
+    #
+    # Same min_sl_pct/price-band reasoning as BREAKINGTRADE directly above: identical
+    # trigger.stop_level() math (just fed the scan-hit price as entry instead of a confirmed
+    # close - see trigger.plan_trade_watchlist()), same daily-changing NSE F&O universe.
+    min_sl_pct: 0.002
     min_entry_price: 0
     max_entry_price: 0
   RSI-TP-MR:

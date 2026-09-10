@@ -199,3 +199,63 @@ def plan_trade(
         triggered_at=triggered_at,
         notes=notes,
     )
+
+
+def plan_trade_watchlist(
+    symbol: str,
+    direction: str,
+    day_type: str | None,
+    bars: pd.DataFrame,
+    captured_at: datetime,
+    atr: float,
+    price: float,
+) -> TradePlan | None:
+    """Build the proposed plan for the WATCHLIST outcome - entered at the scan-hit price
+    itself, with NO entry_trigger() wait for a confirming close.
+
+    Same stop/target math as plan_trade() above (stop_level, target_levels, target_split are
+    shared unchanged), only the entry-determination step differs. plan_trade() asks "did price
+    go on to PROVE the call right" before it will trade; this asks nothing further - it trades
+    the scanner's own call the instant it fires, on the belief the scan selection alone is
+    already decent quality. Kept as a separate function (not a mode flag on plan_trade) so each
+    entry philosophy stays independently testable and neither can silently change the other's
+    behaviour.
+
+    Emitted under the BREAKINGTRADE-WATCHLIST strategy tag, its own Telegram channel and its
+    own risk slots (see config.yaml) - specifically so this can be measured against plan_trade's
+    CONFIRMED outcome on real paper P&L before either is trusted with live capital.
+    """
+    ib_high, ib_low = initial_balance(bars)
+    if ib_high is None or not atr or not price:
+        return None
+
+    ib_range = ib_high - ib_low
+    if ib_range <= 0:
+        return None
+
+    stop = stop_level(direction, ib_high, ib_low, atr)
+    risk_per_share = abs(price - stop)
+    if risk_per_share <= 0:
+        return None
+
+    notes = ["watchlist entry - no confirming close, entry is the scan-hit price"]
+    if day_type in RUNNER_DAY_TYPES:
+        notes.append("trend day: most of the position rides the runner, trail rather than book")
+    if risk_per_share > 2 * atr:
+        notes.append("stop is wider than 2 ATR - the IB is far away, so size will be small")
+
+    return TradePlan(
+        symbol=symbol,
+        direction=direction,
+        day_type=day_type,
+        entry=round(price, 2),
+        stop=round(stop, 2),
+        targets=target_levels(price, ib_range, direction),
+        split=target_split(day_type),
+        ib_high=round(ib_high, 2),
+        ib_low=round(ib_low, 2),
+        atr=round(atr, 2),
+        risk_per_share=round(risk_per_share, 2),
+        triggered_at=captured_at,
+        notes=notes,
+    )

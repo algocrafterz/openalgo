@@ -148,3 +148,53 @@ def test_plan_needs_an_atr():
         "TESTCO", "up", "Trend", bars, pd.Timestamp("2026-09-03 10:10"), atr=0
     )
     assert plan is None
+
+
+# ---------------------------------------------------------------------------
+# Watchlist plan - entry at the scan-hit price, no entry_trigger wait
+# ---------------------------------------------------------------------------
+
+
+def test_watchlist_plan_enters_at_the_given_price_not_a_confirmed_close():
+    """The whole point of the watchlist outcome: no waiting for entry_trigger()."""
+    bars = _session_bars()  # flat after the IB - plan_trade() would return None for this
+    plan = trigger.plan_trade_watchlist(
+        "TESTCO", "up", "Trend", bars, pd.Timestamp("2026-09-03 10:15"), atr=4.0, price=101.5
+    )
+    assert plan is not None
+    assert plan.entry == 101.5
+    assert plan.action == "BUY"
+
+
+def test_watchlist_plan_uses_the_same_stop_and_target_math_as_the_confirmed_plan():
+    bars = _session_bars()
+    plan = trigger.plan_trade_watchlist(
+        "TESTCO", "up", "Normal Var", bars, pd.Timestamp("2026-09-03 10:15"), atr=4.0, price=100.0
+    )
+    assert plan.stop == pytest.approx(94.0)  # 95 - 0.25*4, same as trigger.stop_level()
+    assert plan.targets == [110.0, 115.0, 120.0]  # IB range 10 -> 1x/1.5x/2x, same ladder
+    assert plan.split == trigger.DEFAULT_SPLIT
+
+
+def test_watchlist_plan_none_without_a_price():
+    bars = _session_bars()
+    plan = trigger.plan_trade_watchlist(
+        "TESTCO", "up", "Trend", bars, pd.Timestamp("2026-09-03 10:15"), atr=4.0, price=None
+    )
+    assert plan is None
+
+
+def test_watchlist_plan_none_without_an_ib():
+    plan = trigger.plan_trade_watchlist(
+        "TESTCO", "up", "Trend", _bars("11:00", [(105, 95, 100)]),
+        pd.Timestamp("2026-09-03 11:00"), atr=4.0, price=100.0
+    )
+    assert plan is None
+
+
+def test_watchlist_plan_notes_it_skipped_confirmation():
+    bars = _session_bars()
+    plan = trigger.plan_trade_watchlist(
+        "TESTCO", "up", "Trend", bars, pd.Timestamp("2026-09-03 10:15"), atr=4.0, price=100.0
+    )
+    assert any("no confirming close" in note for note in plan.notes)

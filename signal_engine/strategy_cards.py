@@ -8,13 +8,18 @@ Telegram's pin feature puts the answer at the top of the exact channel it applie
 without leaving the app or remembering a filename. A doc lives in the repo; a pin lives where
 the question actually comes up.
 
-WHY RE-SENT AND RE-PINNED ON EVERY STARTUP RATHER THAN ONCE
+WHY PINNED ONCE, NOT RE-SENT ON EVERY START/RESTART/STOP
 
-The engine restarts routinely (daily, and after every code change), and that restart is already
-the natural point where "did the strategy's behaviour change" is freshest. Re-pinning here means
-the card can never silently drift out of date the way a doc page can - if CARDS below wasn't
-updated to match a real change, the NEXT restart re-displays the stale text, which is a visible
-prompt to go fix CARDS, not a silent gap.
+The engine restarts routinely (daily, and after every code change), and an earlier version of
+this module re-sent and re-pinned every card on every one of those restarts. That meant a new
+pinned message - and a channel-clutter entry Telegram never lets you fully clean up - for a
+restart that changed nothing about the strategy, which trained the reader to stop looking at
+pin notifications at all. What actually needs to reach the channel is a CONTENT change, not a
+process lifecycle event, so `send_and_pin_cards` now hashes each rendered card and persists the
+hash of whatever it last successfully pinned (`signal_engine/data/strategy_card_state.json`).
+A channel is touched again only when that hash differs - first ever pin, or CARDS below was
+actually edited - and the previous pinned message is unpinned at the same time so exactly one
+card stays pinned per channel, never a growing stack of stale ones.
 
 HOW TO KEEP THIS CURRENT
 
@@ -22,11 +27,16 @@ Whenever a change to a strategy alters what it does, when it runs, or how a trad
 to its signals, update that strategy's entry in CARDS below in the SAME change - this is the
 Telegram-facing equivalent of the STRATEGY-LOG.md entry CLAUDE.md already requires for
 BreakingTrade strategy-logic changes, and should be treated as part of that same discipline for
-every strategy, not just BreakingTrade.
+every strategy, not just BreakingTrade. Editing CARDS is what makes the next restart re-pin -
+skip it, and the channel keeps showing the OLD, now-inaccurate card indefinitely instead of a
+silent gap.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from dataclasses import dataclass
 
 
@@ -80,13 +90,37 @@ CARDS: dict[str, StrategyCard] = {
             "13:00-14:50 by design (lunch trap - no scanning). BTST read at 14:50/15:05/15:10."
         ),
         action=(
-            "WATCHLIST messages ('no action, not a trade signal') need nothing from you. "
-            "A BREAKINGTRADE LONG/SHORT message with Entry/SL/TP is a real trade - the engine "
-            "acts on it automatically, same as ORB/BREAKOUT. The system now keeps re-checking "
-            "a flagged stock for up to 2 hours after it's first flagged, so a watchlist entry "
-            "can still turn into a real trade signal well after you first saw it."
+            "BREAKINGTRADE WATCHLIST messages ('no action, not a trade signal') need nothing "
+            "from you. A BREAKINGTRADE LONG/SHORT message with Entry/SL/TP is a real trade - "
+            "the engine acts on it automatically, same as ORB/BREAKOUT. This is the CONFIRMED "
+            "outcome: the system keeps re-checking a flagged stock for up to 2 hours after "
+            "it's first flagged, so a watchlist entry can still turn into a real trade signal "
+            "well after you first saw it. See intraday-breakingtrade-watchlist for the other "
+            "outcome of the same scanner."
         ),
-        updated="2026-09-09",
+        updated="2026-09-10",
+    ),
+    "intraday-breakingtrade-watchlist": StrategyCard(
+        title="BREAKINGTRADE-WATCHLIST - Immediate Scanner Entries",
+        what=(
+            "The SAME Python scanner as intraday-breakingtrade, run side by side as a second, "
+            "separately tracked outcome: this one trades the scanner's own watchlist call the "
+            "moment it fires, at that price, with no confirming-close wait. The two channels "
+            "exist so paper trading can measure which entry style (if either) is worth taking "
+            "live, on separate risk slots so one never throttles the other."
+        ),
+        when=(
+            "Scans 09:20-10:30 (every 5 min), 10:30-13:00 (every 15 min), then OFF "
+            "13:00-14:50 by design (lunch trap - no scanning)."
+        ),
+        action=(
+            "A BREAKINGTRADE-WATCHLIST LONG/SHORT message with Entry/SL/TP is a real trade - "
+            "the engine acts on it automatically, same as every other strategy. This is the "
+            "WATCHLIST outcome: entry is the scan-hit price itself, nothing to confirm and "
+            "nothing for you to do but watch. Zero scored samples yet - see this strategy's "
+            "STRATEGY-LOG.md for when that changes."
+        ),
+        updated="2026-09-10",
     ),
 }
 
@@ -103,24 +137,82 @@ def render(card: StrategyCard) -> str:
     )
 
 
-async def send_and_pin_cards(client, channels) -> int:
-    """Send (or refresh) each channel's reference card and pin it. Best-effort per channel -
-    one failure (e.g. bot lacks pin rights in that channel) must not block the others or the
-    engine's own startup.
+#: Where the hash of the last successfully pinned card, per channel, is persisted - see the
+#: module docstring's "WHY PINNED ONCE" section. Not trading data, so a plain JSON file rather
+#: than one of the sqlite databases; tests monkeypatch this path to keep runs isolated.
+_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "strategy_card_state.json")
 
-    Returns how many cards were successfully pinned.
+
+def _load_state() -> dict:
+    """Channel name -> {"hash", "message_id"} of the last card successfully pinned there.
+
+    Never raises - a missing, first-run, or corrupted state file must fall back to "nothing
+    pinned yet" (every card gets (re)pinned) rather than blocking the engine's startup.
+    """
+    try:
+        with open(_STATE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    """Best-effort persist - a failed write means the NEXT restart re-pins unnecessarily, which
+    is a cosmetic regression to the old always-re-pin behaviour, not a reason to fail startup."""
+    from loguru import logger
+
+    try:
+        os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
+        with open(_STATE_PATH, "w") as f:
+            json.dump(state, f)
+    except OSError as e:
+        logger.warning(f"Strategy card: could not persist pin state: {e}")
+
+
+def _content_hash(card: StrategyCard) -> str:
+    return hashlib.sha256(render(card).encode()).hexdigest()
+
+
+async def send_and_pin_cards(client, channels) -> int:
+    """Send and pin each channel's reference card ONLY if its content is new or has changed
+    since the last successful pin - see the module docstring's "WHY PINNED ONCE" section.
+    Best-effort per channel - one failure (e.g. bot lacks pin rights in that channel) must not
+    block the others or the engine's own startup.
+
+    Returns how many cards were freshly (re)pinned this call - 0 on an ordinary restart where
+    nothing changed.
     """
     from loguru import logger
 
+    state = _load_state()
+    state_changed = False
     pinned = 0
     for ch in channels:
         card = CARDS.get(ch.name)
         if card is None:
             continue
+
+        content_hash = _content_hash(card)
+        previous = state.get(ch.name)
+        if previous and previous.get("hash") == content_hash:
+            continue  # already pinned, content unchanged - nothing to do
+
         try:
             message = await client.send_message(ch.id, render(card), parse_mode="markdown")
             await client.pin_message(ch.id, message, notify=False)
+            if previous and previous.get("message_id"):
+                # Best-effort: an old pin left behind if this fails is cosmetic clutter, not
+                # worth losing the new pin over.
+                try:
+                    await client.unpin_message(ch.id, previous["message_id"])
+                except Exception as e:
+                    logger.debug(f"Strategy card: could not unpin stale card for {ch.name}: {e}")
+            state[ch.name] = {"hash": content_hash, "message_id": getattr(message, "id", None)}
+            state_changed = True
             pinned += 1
         except Exception as e:
             logger.warning(f"Strategy card: could not pin card for {ch.name}: {e}")
+
+    if state_changed:
+        _save_state(state)
     return pinned

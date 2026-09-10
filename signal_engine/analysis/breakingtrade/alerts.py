@@ -152,6 +152,11 @@ _CHANNEL_BY_KIND = {
     "trade_signal": "BREAKINGTRADE_CHAT_ID_INTRADAY",
     "structure_flip": "BREAKINGTRADE_CHAT_ID_INTRADAY",
     "health": "BREAKINGTRADE_CHAT_ID_INTRADAY",
+    # WATCHLIST outcome (trigger.plan_trade_watchlist - entry at the scan-hit price, no
+    # confirming-close wait) gets its OWN channel, deliberately separate from the CONFIRMED
+    # "trade_signal" above - see config.yaml's intraday-breakingtrade-watchlist channel and
+    # __main__.py's _emit_trade_signals() for why the two are kept apart end to end.
+    "trade_signal_watchlist": "BREAKINGTRADE_CHAT_ID_WATCHLIST",
 }
 _DEFAULT_CHANNEL_KEY = "BREAKINGTRADE_CHAT_ID_INTRADAY"
 
@@ -162,6 +167,7 @@ def _env() -> dict:
         "BREAKINGTRADE_BOT_TOKEN",
         "BREAKINGTRADE_CHAT_ID_BTST",
         "BREAKINGTRADE_CHAT_ID_INTRADAY",
+        "BREAKINGTRADE_CHAT_ID_WATCHLIST",
     ):
         env.setdefault(key, os.getenv(key))
     return env
@@ -339,12 +345,16 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     reader to ignore the channel. The transition is the event.
 
     This is a WATCHLIST notice, not a trade signal - it just says a symbol newly matched a scan
-    condition. `alert_trade_signal` is the only message the engine will ever act on, and its
-    format ("STRATEGY LONG"/"STRATEGY SHORT" as the exact first line, parsed by parser.py) can't
-    share a first-line shape with this one without becoming parseable as a real signal. So the
-    two are kept visually apart instead: this one is headed "BT WATCHLIST" and says "no action"
-    up front, and its per-row side tag is lowercase ("long"/"short") rather than the upper-case
-    LONG/SHORT that only ever appears in an actual entry signal.
+    condition. `alert_trade_signal` is the only kind of message the engine will ever act on, and
+    its format ("STRATEGY LONG"/"STRATEGY SHORT" as the exact first line, parsed by parser.py)
+    can't share a first-line shape with this one without becoming parseable as a real signal. So
+    the two are kept visually apart instead: this one is headed "BREAKINGTRADE WATCHLIST" (never
+    abbreviated - see alert_trade_signal()'s own docstring for why short forms are avoided
+    throughout) and says "no action" up front, and its per-row side tag is lowercase
+    ("long"/"short") rather than the upper-case LONG/SHORT that only ever appears in an actual
+    entry signal. Note this is a DIFFERENT message from the "BREAKINGTRADE-WATCHLIST LONG/SHORT"
+    trade signal alert_trade_signal() sends on the intraday-breakingtrade-watchlist channel -
+    that one IS a real trade the engine acts on; this one never is.
     """
     if not new_by_scan:
         return 0
@@ -376,7 +386,10 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     # Header shape matches alert_btst()'s below: "LABEL timestamp | N noun | context" - same
     # three pipe-delimited sections in the same order in both channels, so a trader scanning
     # either one always finds "how many" in the same place before reading further.
-    lines = [f"BT WATCHLIST {captured_at:%H:%M} | {count} new | no action, not a trade signal"]
+    lines = [
+        f"BREAKINGTRADE WATCHLIST {captured_at:%H:%M} | {count} new | "
+        "no action, not a trade signal"
+    ]
     lines += [
         f"{side:<5} {sym:<{width}} {px:>9} - {reason} ({tag})"
         for side, sym, px, reason, tag in rows
@@ -441,7 +454,9 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     return len(watchlist)
 
 
-def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE", scan_name: str = None) -> bool:
+def alert_trade_signal(
+    plan, strategy: str = "BREAKINGTRADE", scan_name: str = None, kind: str = "trade_signal"
+) -> bool:
     """Emit ONE trade in the exact shape signal_engine's parser accepts, so the engine can take
     it end to end - sizing, entry, stop placement, staged exits and the time exit.
 
@@ -454,11 +469,24 @@ def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE", scan_name: str = N
         TP: 1203.0
         Reason: Gapped down but buyers stepped in and bought it back...
 
+    `strategy` is written verbatim as the first token of the first line - parser.py splits on
+    whitespace, so it must never contain a space, and it must never be shortened. Two full-name
+    values are used across this codebase: "BREAKINGTRADE" for the CONFIRMED outcome (waits for
+    entry_trigger's closing confirmation) and "BREAKINGTRADE-WATCHLIST" for the WATCHLIST
+    outcome (entered at the scan-hit price - see trigger.plan_trade_watchlist()). Never "BT" or
+    any other abbreviation - a trader scanning two channels side by side needs the full name to
+    tell them apart at a glance, and a shortened tag would also silently diverge from the
+    strategy_profiles/blacklist config keys in config.yaml, which are keyed on the full name.
+
     `Reason:` is not one of parser.py's mandatory fields - it is kept in Signal.context rather
     than dropped, so it survives into the trade log without the engine needing to know what it
-    means. Sent to the intraday channel. Whether it actually TRADES is decided by that
-    channel's `enabled` flag in config.yaml, not by anything here - which is what lets the same
-    message stream be recorded, read and scored long before it is allowed to touch money.
+    means.
+
+    `kind` selects which Telegram channel this goes to (see _CHANNEL_BY_KIND) - "trade_signal"
+    for the intraday-breakingtrade channel (CONFIRMED), "trade_signal_watchlist" for
+    intraday-breakingtrade-watchlist (WATCHLIST). Whether either actually TRADES is decided by
+    that channel's `enabled` flag in config.yaml, not by anything here - which is what lets the
+    same message stream be recorded, read and scored long before it is allowed to touch money.
     """
     side = "LONG" if plan.direction == "up" else "SHORT"
     lines = [
@@ -478,9 +506,7 @@ def alert_trade_signal(plan, strategy: str = "BREAKINGTRADE", scan_name: str = N
     if scan_name:
         lines.append(f"Reason: {scan_reason(scan_name)}")
     message = "\n".join(lines).strip()
-    return record(
-        "trade_signal", message, symbol=plan.symbol, direction=plan.direction, scan=strategy
-    )
+    return record(kind, message, symbol=plan.symbol, direction=plan.direction, scan=strategy)
 
 
 def alert_health(text: str) -> None:

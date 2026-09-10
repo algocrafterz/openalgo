@@ -98,14 +98,14 @@ async def _connect(client) -> None:
             "— set enabled: true in config.yaml to go live on it"
         )
 
-    # Refresh each strategy's pinned reference card on every startup - see
-    # strategy_cards.py's module docstring for why this runs every time rather than once.
+    # Checked on every startup, but only actually (re)pins a channel whose card content is new
+    # or changed since the last successful pin - see strategy_cards.py's module docstring.
     try:
         from signal_engine import strategy_cards
 
         pinned = await strategy_cards.send_and_pin_cards(client, watching)
         if pinned:
-            logger.info(f"Strategy reference cards pinned: {pinned}")
+            logger.info(f"Strategy reference cards (re)pinned: {pinned}")
     except Exception as e:
         logger.warning(f"Strategy card refresh failed (non-fatal): {e}")
 

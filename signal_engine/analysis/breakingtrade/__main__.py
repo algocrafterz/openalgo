@@ -497,12 +497,24 @@ def _signals_sent_today() -> int:
 
 
 def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
-    """Turn each newly-selected name into a signal the engine can act on.
+    """Turn each newly-selected name into up to TWO signals the engine can act on - the two
+    outcomes this scanner now trades side by side:
 
-    The scan says WHICH symbol; entry, stop and targets come from trigger.py using OpenAlgo
-    bars. If the bars are unavailable, or the entry trigger has not fired yet, no signal is
-    emitted - a selection without levels is not a trade, and inventing levels to fill the gap
-    would be worse than staying silent.
+      CONFIRMED   (strategy BREAKINGTRADE, channel intraday-breakingtrade) - only once
+                  trigger.plan_trade()'s entry_trigger has seen a bar CLOSE beyond the signal
+                  bar's extreme. Real signals are rarer, but each one has already been proven
+                  right once before money moves.
+      WATCHLIST   (strategy BREAKINGTRADE-WATCHLIST, channel intraday-breakingtrade-watchlist)
+                  - trigger.plan_trade_watchlist(), entered at the scan-hit price itself, no
+                  confirmation wait. Trades the scanner's own call on the belief the selection
+                  alone is already decent quality.
+
+    Both plans are built from the SAME bars/ATR fetch per symbol (one OpenAlgo history call,
+    not two). The scan says WHICH symbol; entry, stop and targets come from trigger.py. If the
+    bars are unavailable, neither signal is emitted for that symbol - a selection without
+    levels is not a trade, and inventing levels to fill the gap would be worse than staying
+    silent. See config.yaml's BREAKINGTRADE / BREAKINGTRADE-WATCHLIST strategy_profiles blocks
+    for why the two are kept on separate risk slots rather than sharing one.
     """
     from signal_engine.analysis.breakingtrade import alerts, trigger, validate
 
@@ -517,29 +529,50 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
             scan_names.setdefault(symbol, result_scan)
 
     day_types = {}
-    if snapshot is not None and "day_type" in snapshot.columns:
-        day_types = dict(zip(snapshot["symbol"], snapshot["day_type"], strict=False))
+    prices = {}
+    if snapshot is not None:
+        if "day_type" in snapshot.columns:
+            day_types = dict(zip(snapshot["symbol"], snapshot["day_type"], strict=False))
+        if "price" in snapshot.columns:
+            prices = dict(zip(snapshot["symbol"], snapshot["price"], strict=False))
 
-    emitted = 0
+    confirmed_emitted = 0
+    watchlist_emitted = 0
     for symbol, direction in directions.items():
+        scan_name = scan_names.get(symbol)
         try:
             bars = validate.fetch_bars(symbol, captured_at)
             if bars.empty:
                 continue
             before = bars[pd.to_datetime(bars["timestamp"]) <= captured_at]
             atr = validate.average_true_range(before) if not before.empty else None
-            plan = trigger.plan_trade(
-                symbol, direction, day_types.get(symbol), bars, captured_at, atr
-            )
-            if plan is None:
-                continue
-            alerts.alert_trade_signal(plan, scan_name=scan_names.get(symbol))
-            emitted += 1
+            day_type = day_types.get(symbol)
+
+            confirmed_plan = trigger.plan_trade(symbol, direction, day_type, bars, captured_at, atr)
+            if confirmed_plan is not None:
+                alerts.alert_trade_signal(confirmed_plan, scan_name=scan_name)
+                confirmed_emitted += 1
+
+            price = prices.get(symbol)
+            if price:
+                watchlist_plan = trigger.plan_trade_watchlist(
+                    symbol, direction, day_type, bars, captured_at, atr, price
+                )
+                if watchlist_plan is not None:
+                    alerts.alert_trade_signal(
+                        watchlist_plan,
+                        strategy="BREAKINGTRADE-WATCHLIST",
+                        scan_name=scan_name,
+                        kind="trade_signal_watchlist",
+                    )
+                    watchlist_emitted += 1
         except Exception as exc:
             print(f"  signal for {symbol} skipped: {type(exc).__name__}: {exc}")
-    if emitted:
-        print(f"  emitted {emitted} trade signal(s)")
-    return emitted
+    if confirmed_emitted:
+        print(f"  emitted {confirmed_emitted} confirmed trade signal(s)")
+    if watchlist_emitted:
+        print(f"  emitted {watchlist_emitted} watchlist trade signal(s)")
+    return confirmed_emitted + watchlist_emitted
 
 
 def _is_bearish(scan_name: str) -> bool:
