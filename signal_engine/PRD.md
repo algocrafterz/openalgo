@@ -218,6 +218,57 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-10)
 
+**14:55 IST — Per-strategy capital isolation; analyze-mode trade/position caps removed.**
+
+`RiskEngine` (`risk.py`) previously tracked open_positions/trades_today/day-start capital/
+realised loss in ONE shared set of counters across all three sandbox strategies (ORB, BREAKOUT,
+BreakingTrade) — so all three sized every trade off the SAME cached capital figure and competed
+for the same `max_open_positions`/`max_trades_per_day` slots. A busy strategy could starve the
+other two of slots regardless of signal quality (surfaced while investigating a 909-qty PFC
+trade — the sizing itself was correct, `capital=100,000 x risk 1% / SL Rs1.10 = 909`, but it
+exposed the shared-pool design underneath it).
+
+New `_StrategyState` dataclass gives each strategy its own `open_positions`, `trades_today`,
+`daily/weekly/monthly_realised_loss`, `unrealised_loss`, `day_start_capital`,
+`last_known_capital`, keyed lazily by strategy tag (`RiskEngine._state(strategy)`). Example: ORB
+and BREAKOUT both call `get_sizing_capital(100_000, strategy)` the same morning — each caches its
+OWN Rs100,000 independently; ORB opening 3 positions does not touch BREAKOUT's counters at all.
+Symbol/sector concentration limits (`max_positions_per_symbol/sector`) stay GLOBAL on purpose —
+correlated risk from two strategies piling into the same stock is real regardless of which one
+triggered it.
+
+`RiskStore`'s `risk_counters` table migrated `(mode, trade_date)` -> `(strategy, mode,
+trade_date)` primary key (`risk_store.py`); pre-migration rows preserved under a `_LEGACY`
+strategy sentinel, migration runs transparently in `RiskStore.__init__` (renames old table to
+`risk_counters_pre_strategy_split`, copies rows forward — no manual step needed). New
+`RiskStore.strategies_for(mode, date)` lets `RiskEngine._restore()` reload every strategy active
+today after a restart without needing to know the strategy set up front (strategy names are free
+text parsed from the Telegram alert header, not a fixed enum).
+
+**Same session: `mode_profiles.analyze.max_open_positions`/`max_trades_per_day` removed
+entirely** (0 = unlimited — `check_exposure()` now treats 0 the same way
+`max_positions_per_symbol`/`sector` already did; previously a shared 9/36 across all three
+strategies, see the "Mode profiles" table below, now superseded). Paper trading records every
+signal a strategy's own entry rules pass instead of discarding some to an artificial slot
+ceiling — more data for comparing strategies fairly.
+
+**Trade-off worth knowing, not fixed today:** `adjust_qty_for_margin` was already skipped in
+analyze mode (sandbox has no real margin to check), and every trade sizes off the same cached
+day-start capital regardless of how many others are open — so a busy day can now show more
+simultaneous "at risk" exposure across concurrent trades than a real Rs1L account could ever
+actually fund at once. Each individual trade's own numbers (entry/SL/qty/result) stay honest;
+the SUM across many concurrent trades on a busy day is not something a real capital-constrained
+account could reproduce. Deliberate trade-off for the data-maximizing goal of this paper phase —
+revisit before ever running more than one LIVE strategy at a time: the `live` mode_profile keeps
+its real slot caps (2/10, calibrated to actual Rs35k MIS margin — see "BREAKOUT paper week"
+below), but per-strategy isolation means nothing currently caps TOTAL exposure across multiple
+concurrently-enabled LIVE strategies. Not an active risk today (BREAKOUT is the only strategy
+enabled in live mode), but a gap to close first if a second one ever is.
+
+19 files changed, 13 new tests (`test_risk_strategy_isolation.py`) plus signature fixes across
+the risk/tracker/startup test suites. Full suite green (1011/1011, excluding 4 pre-existing
+live-network telegram tests). Commit `23fb0c608`.
+
 **11:27 IST — Fixed silent startup notification, consolidated into one Telegram message.**
 `notify_startup_result(True, ...)` and `notify_engine_started()` both fired before
 `start_listener()` ever calls `notifier.set_client()` — `notify()`'s module-level `_client`
@@ -584,15 +635,25 @@ this removes), and an unknown mode falls through to base rather than guessing.
 
 | | live | analyze |
 |---|---|---|
-| max_open_positions | 2 | 6 |
-| max_trades_per_day | 10 | 24 |
+| max_open_positions | 2 | 0 (unlimited) |
+| max_trades_per_day | 10 | 0 (unlimited) |
 | daily / weekly / monthly loss | 4% / 8% / 15% | off |
+
+**Updated 2026-09-10, twice the same day — see that date's entries above for the full story.**
+This table originally read 2/10 vs 6/24 (a SHARED total across the two live-in-sandbox
+strategies at the time), then per-strategy isolation briefly made it 2/10 vs 3/12 (a real
+per-strategy cap, no longer shared), then the analyze side was removed entirely (0 = unlimited)
+once `max_open_positions`/`max_trades_per_day` stopped needing to protect anything real — see
+`sizing.sandbox_capital`'s per-strategy note in `config.yaml` for why more concurrent paper
+trades doesn't need more capital. `live` keeps its real 2/10, calibrated to actual Rs35k MIS
+margin and still the only thing protecting real money.
 
 Analyze is deliberately looser: with `save_declined` recording refusals, loose paper limits mean
 every signal is taken, so the outcome of a signal live would have refused is observable and the
 live limits can be replayed offline from the ledger. Tight paper limits never generate those
-outcomes. Six slots also stops `intraday-breakout` and `intraday-breakingtrade` starving each
-other in the shared sandbox.
+outcomes. Per-strategy isolation (2026-09-10) means `intraday-breakout` and
+`intraday-breakingtrade` no longer compete for slots in the shared sandbox at all — each has its
+own counters now, not just a bigger shared number.
 
 Fixes a pre-existing bug: `risk_engine` is built at import with `trade_mode="live"` and was
 never corrected, so paper losses would have been written into the LIVE row of `risk_store` —
@@ -2498,8 +2559,8 @@ telegram:
 | `max_entry_price` | Skip stocks above this price |
 | `slippage_factor` | Widens SL distance before sizing |
 | `max_sl_pct_for_sizing` | SL cap for qty calc (0=off). Wide-SL stock qty computed as if SL = entry × cap. Real SL order unchanged. |
-| `sandbox_capital` | Capital override in analyze mode |
-| `use_day_start_capital` | Cache first fetch of day for equal risk per trade |
+| `sandbox_capital` | Capital override in analyze mode. Per-strategy since 2026-09-10 — each strategy caches this SAME value independently, not a total split between them |
+| `use_day_start_capital` | Cache first fetch of day for equal risk per trade. Cached per-strategy since 2026-09-10 — see `RiskEngine._StrategyState` |
 | `test_qty_cap` | Max qty per order in `--test` mode (0 = disabled) |
 | `min_capital_for_entry` | Skip new entries if live capital below this floor (INR) |
 
@@ -2508,8 +2569,8 @@ telegram:
 |-----|-------------|
 | `daily/weekly/monthly_loss_limit` | Loss lockout thresholds (fraction of capital) |
 | `max_portfolio_heat` | Max open risk fraction |
-| `max_open_positions` | Concurrent slot cap |
-| `max_trades_per_day` | Daily order cap |
+| `max_open_positions` | Concurrent slot cap. 0 = unlimited (2026-09-10 convention, matching `max_positions_per_symbol`/`sector`). Enforced per-strategy since 2026-09-10 — each strategy gets its own counter, not a shared total |
+| `max_trades_per_day` | Daily order cap. 0 = unlimited. Per-strategy since 2026-09-10, same as above |
 | `min_rr` | Min reward:risk ratio |
 | `duplicate_window_seconds` | Dedup window |
 | `stale_signal_seconds` | Max signal age |
@@ -2808,23 +2869,23 @@ PYTHONPATH=. uv run python -m signal_engine.main --test --test-file signal_engin
 
 | DB | Path | Table | Contents |
 |----|------|-------|----------|
-| Risk store | `signal_engine/data/risk.db` | `risk_counters` | Daily counters: trades, loss, open_positions, portfolio_heat — keyed (mode, date) |
+| Risk store | `signal_engine/data/risk.db` | `risk_counters` | Daily counters: trades, loss, open_positions, day_start_capital — keyed (strategy, mode, date) since 2026-09-10 (was (mode, date); pre-migration rows carry strategy=`_LEGACY`) |
 | Trade audit | `signal_engine/data/trades.db` | `trades` | Every order: symbol, qty, entry/sl/tp, order_id, status, timestamps |
 
 ### Key SQL Commands
 
 ```bash
-# Today's risk state
+# Today's risk state, every strategy (one row per strategy since 2026-09-10)
 sqlite3 signal_engine/data/risk.db \
-  "SELECT mode, trade_date, trades_today, daily_loss, open_positions, portfolio_heat, day_start_capital FROM risk_counters WHERE trade_date=date('now');"
+  "SELECT strategy, mode, trade_date, trades_today, daily_loss, open_positions, day_start_capital FROM risk_counters WHERE trade_date=date('now');"
 
-# Last 7 trading days
+# Last 7 trading days for one strategy
 sqlite3 signal_engine/data/risk.db \
-  "SELECT trade_date, trades_today, printf('%.2f',daily_loss) loss, open_positions, printf('%.2f',portfolio_heat) heat FROM risk_counters WHERE mode='live' ORDER BY trade_date DESC LIMIT 7;"
+  "SELECT trade_date, trades_today, printf('%.2f',daily_loss) loss, open_positions FROM risk_counters WHERE strategy='BREAKOUT' AND mode='live' ORDER BY trade_date DESC LIMIT 7;"
 
-# Fix stale state after broker auto-squareoff
+# Fix stale state for one strategy after broker auto-squareoff
 sqlite3 signal_engine/data/risk.db \
-  "UPDATE risk_counters SET open_positions=0, portfolio_heat=0.0, daily_loss=0.0 WHERE mode='live' AND trade_date=date('now');"
+  "UPDATE risk_counters SET open_positions=0, daily_loss=0.0 WHERE strategy='BREAKOUT' AND mode='live' AND trade_date=date('now');"
 
 # Today's trades
 sqlite3 signal_engine/data/trades.db \
