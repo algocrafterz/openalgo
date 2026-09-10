@@ -610,6 +610,10 @@ def _watch(args) -> int:
         from signal_engine.analysis.breakingtrade import review as _review
 
         mode, is_analyze = _review.trading_mode()
+        # Seed alerts.py's own mode cache from the check we just made, so alert_started()'s
+        # send below doesn't immediately repeat the identical OpenAlgo API call from a cold
+        # cache.
+        alerts.prime_mode_cache(mode, is_analyze)
         windows = " | ".join(f"{a:%H:%M}-{b:%H:%M}" for a, b, _ in POLL_WINDOWS)
         alerts.alert_started(mode, is_analyze, windows, len(already_polls))
         if is_analyze:

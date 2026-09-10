@@ -63,6 +63,32 @@ def _channel_for_phase(phase: str):
     return settings.notify_channel.get(phase) or next(iter(settings.notify_channel.values()), None)
 
 
+#: Strategy tag (as it appears on the Telegram alert / TradeRecord.strategy) -> config.yaml
+#: telegram.channels base name, for the per-strategy EOD summary (see
+#: _send_per_strategy_day_summaries()). Deliberately explicit rather than derived from the
+#: strategy string, since the two live in different namespaces (a free-text alert header vs a
+#: channel name) and a guessed transform would silently misroute the day a new strategy is
+#: added. A strategy tag with no entry here (or none of this session's four are trading yet)
+#: simply gets no per-strategy send - it still appears in the consolidated comparison.
+_STRATEGY_CHANNEL_BASE = {
+    "ORB": "intraday-orb",
+    "BREAKOUT": "intraday-breakout",
+    "BREAKINGTRADE": "intraday-breakingtrade",
+    "BREAKINGTRADE-WATCHLIST": "intraday-breakingtrade-watchlist",
+}
+
+
+def _channel_for_strategy(strategy: str, phase: str):
+    """The strategy's own -analyze/-live channel from settings.telegram_channels, by name - or
+    None if the strategy isn't in _STRATEGY_CHANNEL_BASE or that phase's channel doesn't exist
+    yet. Mirrors alerts.py's identical per-strategy lookup for the BreakingTrade family."""
+    base = _STRATEGY_CHANNEL_BASE.get((strategy or "").upper())
+    if base is None:
+        return None
+    name = f"{base}-{phase}"
+    return next((ch for ch in settings.telegram_channels if ch.name == name), None)
+
+
 #: Lowest notify_level at which each event is delivered. Events absent from this map are
 #: ALWAYS delivered: a notify_* added later must show up until someone deliberately
 #: classifies it, rather than disappearing because nobody remembered this table.
@@ -551,15 +577,40 @@ async def notify_day_summary(
     capital: float,
     time_exits: int = 0,
     trade_records=None,
+    strategy_capital: dict | None = None,
 ) -> bool:
-    """Returns whether the summary actually reached Telegram - see notify()'s docstring.
-    tracker.py's send_day_summary() uses this to decide whether it may mark the day done."""
+    """Send today's summary three ways: one per-strategy summary to each strategy's OWN
+    channel (best-effort, see _send_per_strategy_day_summaries()), plus ONE consolidated
+    summary - a pooled total and, when more than one strategy traded today, a side-by-side
+    comparison table - to notify_channel.
+
+    Why split at all: each strategy sizes off its OWN cached day-start capital (RiskEngine's
+    per-strategy isolation) and has its own edge, sample size, and promotion decision riding
+    on it. A single blended win-rate/P&L/capital-trajectory number answers "how did everything
+    combined do", which is not the question a trader asks when deciding whether a SPECIFIC
+    strategy is working - it can hide one strategy's losses behind another's wins, and its
+    capital-trajectory line does not correspond to any real account once more than one
+    strategy is pooled into it.
+
+    Returns whether the CONSOLIDATED summary reached Telegram - see notify()'s docstring.
+    tracker.py's send_day_summary() uses this to decide whether it may mark the day done; a
+    per-strategy send failing does not block that, or any other strategy's own send.
+    """
     today = datetime.now(IST).strftime("%d-%b-%Y")
 
     if trades == 0:
         return await _send_and_pin_day_summary(f"DAY SUMMARY | {today}\nNo trades taken today.")
 
+    trade_records = trade_records or []
+    by_strategy = _group_by_strategy(trade_records)
+    phase = await _current_phase()
+    await _send_per_strategy_day_summaries(by_strategy, today, strategy_capital or {}, phase)
+
     lines = _day_summary_header(today, trades, wins, losses, net_pnl, capital, time_exits, trade_records)
+    if len(by_strategy) > 1:
+        lines.append("")
+        lines.append("By strategy (best to worst avg R):")
+        lines += _comparison_rows(by_strategy)
     if trade_records:
         lines.append("─" * 36)
         # Best trade first
@@ -568,9 +619,98 @@ async def notify_day_summary(
     return await _send_and_pin_day_summary("\n".join(lines))
 
 
+def _group_by_strategy(trade_records) -> dict:
+    groups: dict = {}
+    for r in trade_records:
+        groups.setdefault(r.strategy or "UNKNOWN", []).append(r)
+    return groups
+
+
+def _aggregate_strategy_stats(records) -> dict:
+    """trades/wins/losses/time_exits for one strategy's slice of today's trade_records - same
+    win/loss classification tracker.py's own day counters use: a TIME exit is counted as a
+    trade but excluded from wins/losses (it was force-closed by the clock, not decided by the
+    strategy's own exit rule)."""
+    time_exits = sum(1 for r in records if "TIME" in (r.exit_types or []))
+    decided = [r for r in records if "TIME" not in (r.exit_types or [])]
+    wins = sum(1 for r in decided if r.total_pnl >= 0)
+    losses = sum(1 for r in decided if r.total_pnl < 0)
+    return {"trades": len(records), "wins": wins, "losses": losses, "time_exits": time_exits}
+
+
+def _best_worst_line(records) -> str:
+    """One-line callout for the best and worst R-multiple trade, so a reader doesn't have to
+    scan the whole per-trade table to find them."""
+    scored = [r for r in records if r.r_multiple is not None]
+    if not scored:
+        return ""
+    best = max(scored, key=lambda r: r.r_multiple)
+    worst = min(scored, key=lambda r: r.r_multiple)
+    if best is worst:
+        return f"Only scored trade: {best.symbol} ({best.r_multiple:+.1f}R)"
+    return f"Best: {best.symbol} ({best.r_multiple:+.1f}R) | Worst: {worst.symbol} ({worst.r_multiple:+.1f}R)"
+
+
+def _comparison_rows(by_strategy: dict) -> list:
+    """One row per strategy, ranked best-to-worst by avg R - not net ₹, since avg R is the
+    fair comparison: it is agnostic to how much notional/risk-% each strategy happened to be
+    sized with, which net ₹ is not."""
+    rows = []
+    for strategy, records in by_strategy.items():
+        stats = _aggregate_strategy_stats(records)
+        decided = stats["wins"] + stats["losses"]
+        win_rate = stats["wins"] / decided * 100 if decided > 0 else 0.0
+        avg_r = _average_r(records)
+        net_pnl = sum(r.total_pnl for r in records)
+        rows.append((strategy, stats["trades"], stats["wins"], stats["losses"], win_rate, avg_r, net_pnl))
+
+    rows.sort(key=lambda row: row[5] if row[5] is not None else float("-inf"), reverse=True)
+    width = max(len(row[0]) for row in rows)
+    lines = []
+    for strategy, trade_count, wins, losses, win_rate, avg_r, net_pnl in rows:
+        r_str = f"{avg_r:+.1f}R" if avg_r is not None else "  —  "
+        lines.append(
+            f"{strategy:<{width}}  {trade_count}T  W{wins} L{losses}  {win_rate:>3.0f}%  "
+            f"{r_str:>6}  {_pnl(net_pnl)}"
+        )
+    return lines
+
+
+async def _send_per_strategy_day_summaries(
+    by_strategy: dict, today: str, strategy_capital: dict, phase: str,
+) -> None:
+    """One summary per strategy, to that strategy's OWN -analyze/-live channel - best-effort:
+    an unconfigured channel, or one strategy's send failing, must never block another
+    strategy's summary or the consolidated admin one (see notify_day_summary())."""
+    if _client is None:
+        return
+    if not should_notify("day_summary", getattr(settings, "notify_level", "normal")):
+        return
+    for strategy, records in by_strategy.items():
+        channel = _channel_for_strategy(strategy, phase)
+        if channel is None:
+            continue
+        stats = _aggregate_strategy_stats(records)
+        net_pnl = sum(r.total_pnl for r in records)
+        capital = strategy_capital.get(strategy, 0.0)
+        lines = _day_summary_header(
+            today, stats["trades"], stats["wins"], stats["losses"],
+            net_pnl, capital, stats["time_exits"], records, title=f"{strategy} DAY SUMMARY",
+        )
+        best_worst = _best_worst_line(records)
+        if best_worst:
+            lines.append(best_worst)
+        lines.append("─" * 36)
+        lines += [_trade_line(rec) for rec in sorted(records, key=lambda r: r.total_pnl, reverse=True)]
+        try:
+            await _client.send_message(channel.id, "\n".join(lines))
+        except Exception as e:
+            logger.warning(f"Day summary: could not send {strategy}'s summary: {e}")
+
+
 def _day_summary_header(
     today: str, trades: int, wins: int, losses: int, net_pnl: float,
-    capital: float, time_exits: int, trade_records,
+    capital: float, time_exits: int, trade_records, title: str = "DAY SUMMARY",
 ) -> list:
     """Headline block: counts, win rate, net P&L, average R, capital trajectory."""
     decided = wins + losses
@@ -590,7 +730,7 @@ def _day_summary_header(
     closing_capital = capital + net_pnl
 
     return [
-        f"DAY SUMMARY | {today}",
+        f"{title} | {today}",
         f"Trades: {trades} | W: {wins}  L: {losses}{t_str} | Win Rate: {win_rate:.0f}%",
         f"Net: {_pnl(net_pnl)} ({pct_str})" + (f" | Avg R: {avg_r:+.1f}R" if avg_r is not None else ""),
         f"Capital: ₹{capital:,.0f} → ₹{closing_capital:,.0f}",

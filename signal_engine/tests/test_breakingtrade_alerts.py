@@ -365,6 +365,43 @@ class TestCurrentPhase:
         assert len(calls) == 1
 
 
+class TestPrimeModeCache:
+    """__main__.py's _watch() already calls review.trading_mode() once at startup for its own
+    log line and the alert_started() banner - prime_mode_cache() seeds _current_phase()'s
+    cache from that result so alert_started()'s first send doesn't immediately repeat the
+    identical OpenAlgo API call from a cold cache."""
+
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        alerts._mode_cache["checked_at"] = 0.0
+        yield
+        alerts._mode_cache["checked_at"] = 0.0
+
+    def test_priming_with_analyze_avoids_a_refetch(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            alerts.review, "trading_mode",
+            lambda: (calls.append(1), ("analyze", True))[1],
+        )
+        alerts.prime_mode_cache("analyze", True)
+        assert alerts._current_phase() == "analyze"
+        assert calls == []
+
+    def test_priming_with_live_avoids_a_refetch(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            alerts.review, "trading_mode",
+            lambda: (calls.append(1), ("live", False))[1],
+        )
+        alerts.prime_mode_cache("live", False)
+        assert alerts._current_phase() == "live"
+        assert calls == []
+
+    def test_priming_with_unknown_mode_still_defaults_to_analyze(self):
+        alerts.prime_mode_cache("unknown", False)
+        assert alerts._current_phase() == "analyze"
+
+
 def test_watchlist_trade_signal_uses_the_full_unabbreviated_strategy_name():
     """No short forms - a trader scanning two channels needs the full name at a glance, and
     parser.py's strategy tag must match config.yaml's strategy_profiles/blacklist keys."""

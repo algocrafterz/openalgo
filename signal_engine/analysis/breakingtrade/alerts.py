@@ -223,6 +223,20 @@ def _current_phase() -> str:
     return "analyze" if _mode_cache["is_analyze"] else "live"
 
 
+def prime_mode_cache(mode: str, is_analyze: bool) -> None:
+    """Seed the mode cache from a trading_mode() call the CALLER already made.
+
+    __main__.py's _watch() fetches mode once at startup for its own log line and the
+    alert_started() banner - without this, alert_started()'s first send would immediately
+    trigger a SECOND, redundant OpenAlgo API call from chat_id_for()'s cold cache to answer
+    the exact same question. Priming also avoids a (rare) inconsistency where the banner text
+    and the channel the banner is actually delivered to could disagree, if OpenAlgo's mode
+    flipped in the gap between two independent checks.
+    """
+    _mode_cache["is_analyze"] = True if mode == "unknown" else is_analyze
+    _mode_cache["checked_at"] = time.monotonic()
+
+
 def _env() -> dict:
     """The bot token only - every channel id lives in config.yaml, not here. See the module
     docstring's Setup section for why."""
@@ -557,7 +571,7 @@ def alert_trade_signal(
     than dropped, so it survives into the trade log without the engine needing to know what it
     means.
 
-    `kind` selects which Telegram channel this goes to (see _CHANNEL_BY_KIND) - "trade_signal"
+    `kind` selects which Telegram channel this goes to (see _CHANNEL_GROUP_BY_KIND) - "trade_signal"
     for the intraday-breakingtrade channel (CONFIRMED), "trade_signal_watchlist" for
     intraday-breakingtrade-watchlist (WATCHLIST). Whether either actually TRADES is decided by
     that channel's `enabled` flag in config.yaml, not by anything here - which is what lets the

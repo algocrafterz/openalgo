@@ -72,6 +72,7 @@ class TradeRecord:
     """Completed trade summary — one record per position lifecycle, appended to _completed_trades."""
     symbol: str
     direction: str          # "LONG" / "SHORT"
+    strategy: str           # e.g. "ORB" — lets the EOD summary group/compare by strategy
     entry_price: float      # fill_price if available, else signal entry
     exit_price: float | None  # final exit price (None for time/force exits)
     original_qty: int
@@ -289,6 +290,7 @@ class PositionTracker:
         record = TradeRecord(
             symbol=pos.symbol,
             direction=pos.direction.value,
+            strategy=pos.strategy,
             entry_price=base_price,
             exit_price=exit_price,
             original_qty=pos.original_quantity or pos.quantity,
@@ -325,6 +327,14 @@ class PositionTracker:
         if self._day_summary_date == today or _summary_already_sent_today():
             return
         capital = self._risk_engine.total_last_known_capital() or 0.0
+        # Per-strategy opening capital, for the per-strategy EOD summaries notifier.py sends
+        # alongside the consolidated one — each strategy sizes off its OWN cached day-start
+        # capital (see RiskEngine's per-strategy isolation), so the consolidated Capital: X -> Y
+        # line is only ever meaningful per strategy, never pooled across them.
+        strategy_capital = {
+            r.strategy: self._risk_engine.last_known_capital_for(r.strategy)
+            for r in self._completed_trades
+        }
         sent = await notifier.notify_day_summary(
             trades=self._day_trades,
             wins=self._day_wins,
@@ -333,6 +343,7 @@ class PositionTracker:
             capital=capital,
             time_exits=self._day_time_exits,
             trade_records=self._completed_trades,
+            strategy_capital=strategy_capital,
         )
         if not sent:
             # 2026-09-09: this used to mark itself done unconditionally, so a Telegram
@@ -966,6 +977,7 @@ class PositionTracker:
         self._completed_trades.append(TradeRecord(
             symbol=pos.symbol,
             direction=pos.direction.value,
+            strategy=pos.strategy,
             entry_price=base_price,
             exit_price=None,
             original_qty=pos.original_quantity or pos.quantity,

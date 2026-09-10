@@ -218,6 +218,52 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-11)
 
+**EOD summary split per strategy, plus a consolidated cross-strategy comparison.**
+
+`notifier.notify_day_summary()` used to pool every strategy's closed trades into ONE blended
+report (`tracker.py`'s `_day_trades`/`_day_wins`/`_day_pnl` are, and remain, single global
+counters) — a strategy's individual win rate, avg R and capital trajectory were not
+recoverable from it, and `TradeRecord` did not even carry a `strategy` field to make that
+possible. This mattered specifically because each strategy already sizes off its OWN cached
+day-start capital (per-strategy risk isolation, 2026-09-10) — a single pooled capital-
+trajectory line doesn't correspond to any real account once more than one strategy is
+blended into it, and a blended win-rate hides one strategy's losses behind another's wins.
+
+`TradeRecord` (`tracker.py`) now carries `strategy` (from `pos.strategy`, already available at
+both places a trade closes — `book_close()` and `_book_one_time_exit()`). `notify_day_summary()`
+groups `trade_records` by strategy and sends THREE things every day trades happen:
+
+1. One summary per strategy, to that strategy's OWN `-analyze`/`-live` channel (new
+   `_channel_for_strategy()`, matching alerts.py's identical per-strategy channel lookup) —
+   trades, W/L, win rate, net ₹, avg R, capital trajectory (per-strategy, via
+   `RiskEngine.last_known_capital_for()`), a `Best: X (+1.8R) | Worst: Y (-0.6R)` callout, and
+   the usual per-trade table.
+2. ONE consolidated summary to `notify_channel`, unchanged in its pooled top-line stats, but
+   — when more than one strategy traded — followed by a comparison table, one row per
+   strategy, ranked **best to worst by avg R, not net ₹**: avg R is agnostic to how much
+   notional/risk-% a strategy happened to be sized with, so it is the fair basis for comparing
+   ORB against BREAKINGTRADE-WATCHLIST against BREAKOUT, which raw ₹ P&L is not. A single
+   strategy trading alone gets no comparison table — nothing to compare yet.
+3. Both are best-effort and independent: an unconfigured per-strategy channel, or one
+   strategy's send failing, never blocks another strategy's summary or the consolidated one,
+   and `notify_day_summary()`'s return value (which gates tracker.py's "day is done" marker)
+   reflects only the consolidated send.
+
+**Obsolete config removed.** `.env`'s `BREAKINGTRADE_CHAT_ID_BTST`/`_INTRADAY`/`_WATCHLIST` —
+dead since alerts.py moved to reading every channel id from `config.yaml` — deleted; only
+`BREAKINGTRADE_BOT_TOKEN` remains in `.env`. Repo-wide sweep (code, tests, scripts, docs) found
+no other leftover reference to the pre-split single-channel names or config shapes.
+
+**BreakingTrade poller: one redundant OpenAlgo API call removed at every startup.**
+`__main__.py`'s `_watch()` already fetches OpenAlgo's mode once at startup for its own log line
+and the `alert_started()` banner; `alert_started()`'s first Telegram send used to immediately
+repeat the identical `/api/v1/analyzer` call from `alerts.py`'s cold mode cache to answer the
+same question a few lines later. New `alerts.prime_mode_cache(mode, is_analyze)`, called right
+after `_watch()`'s own check, seeds the cache so the redundant call never happens — and closes
+a theoretical race where the banner text and the channel it's actually delivered to could
+disagree if OpenAlgo's mode flipped in the gap between two independent checks. Also fixed a
+stale docstring reference to the renamed `_CHANNEL_GROUP_BY_KIND` dict.
+
 **Every Telegram channel split ANALYZE/LIVE — config.yaml is now the single source of truth
 for every channel id in the engine.**
 
