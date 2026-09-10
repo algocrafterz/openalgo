@@ -9,7 +9,9 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+import signal_engine.config as se_config
 from signal_engine.analysis.breakingtrade import alerts, flip_watch, store
+from signal_engine.config import TelegramChannel
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +20,26 @@ def isolated_dbs(tmp_path, monkeypatch):
     monkeypatch.setattr(flip_watch, "_TRADES_DB", str(tmp_path / "trades.db"))
     # Never attempt a real network call from a test.
     monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (False, None))
+    # chat_id_for()/telegram_link() call _current_phase(), which otherwise hits OpenAlgo over
+    # HTTP - fake the underlying call and reset its cache so tests stay offline and
+    # deterministic (see TestCurrentPhase in test_breakingtrade_alerts.py for direct coverage
+    # of the phase logic itself).
+    monkeypatch.setattr(alerts.review, "trading_mode", lambda: ("analyze", True))
+    alerts._mode_cache["checked_at"] = 0.0
+    # chat_id_for() reads channel ids from config.yaml (settings), not .env - see alerts.py's
+    # module docstring. Matches the real production id so telegram_link()'s t.me URL below is
+    # exactly what production would produce.
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        se_config, "settings",
+        SimpleNamespace(
+            telegram_channels=(
+                TelegramChannel(name="intraday-breakingtrade-analyze", id=-1004379472313),
+            ),
+            breakingtrade_btst_channels={},
+        ),
+    )
 
 
 def _make_trades_db(path, rows):
@@ -114,14 +136,6 @@ def test_short_position_flips_on_up_read(tmp_path):
 
 def test_flip_message_links_back_to_the_original_signal(monkeypatch, tmp_path):
     """The whole point of the reference: a reader should not have to search the channel."""
-    monkeypatch.setattr(
-        alerts,
-        "_env",
-        lambda: {
-            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
-            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-1004379472313",
-        },
-    )
     # The original trade_signal alert, as alert_trade_signal() would have recorded it.
     alerts.record(
         "trade_signal",
@@ -156,27 +170,11 @@ def test_flip_message_links_back_to_the_original_signal(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_telegram_link_strips_the_100_prefix(monkeypatch):
-    monkeypatch.setattr(
-        alerts,
-        "_env",
-        lambda: {
-            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
-            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-1004379472313",
-        },
-    )
+def test_telegram_link_strips_the_100_prefix():
     assert alerts.telegram_link("trade_signal", 555) == "https://t.me/c/4379472313/555"
 
 
-def test_telegram_link_none_without_a_message_id(monkeypatch):
-    monkeypatch.setattr(
-        alerts,
-        "_env",
-        lambda: {
-            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
-            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-1004379472313",
-        },
-    )
+def test_telegram_link_none_without_a_message_id():
     assert alerts.telegram_link("trade_signal", None) is None
 
 

@@ -122,13 +122,58 @@ CARDS: dict[str, StrategyCard] = {
         ),
         updated="2026-09-10",
     ),
+    "intraday-breakingtrade-btst": StrategyCard(
+        title="BREAKINGTRADE-BTST - Buy Today, Sell Tomorrow",
+        what=(
+            "The SAME Python scanner as intraday-breakingtrade, read for an overnight carry "
+            "candidate instead of an intraday one: names with strong delivery volume and a "
+            "trending Market Profile day type near the close."
+        ),
+        when="Read at 14:50, 15:05, and 15:10 IST only - never during the intraday session.",
+        action=(
+            "This is NOT auto-traded - the engine never acts on this channel. A BTST message "
+            "is a manual call: BUY CNC yourself before 15:15 if you're taking it, using the "
+            "stated disaster stop. Silence (or a 'no candidates' message) means skip the day."
+        ),
+        updated="2026-09-11",
+    ),
 }
 
 
-def render(card: StrategyCard) -> str:
+def _base_name(channel_name: str) -> str:
+    """Strip a channel's "-analyze"/"-live" phase suffix to find its CARDS key - both phases
+    of a strategy show the identical reference card (what/when/action don't change with mode),
+    just with a different safety line from render() below."""
+    for suffix in ("-analyze", "-live"):
+        if channel_name.endswith(suffix):
+            return channel_name[: -len(suffix)]
+    return channel_name
+
+
+def _phase(channel_name: str) -> str | None:
+    if channel_name.endswith("-analyze"):
+        return "analyze"
+    if channel_name.endswith("-live"):
+        return "live"
+    return None
+
+
+#: Appended to every card, keyed by which physical channel it is pinned in. This is the second,
+#: redundant confirmation of a fact the channel split already makes structurally true (separate
+#: channels for separate money) - worth stating anyway, since it is the one line a trader glances
+#: at before reacting to whatever is pinned below it.
+_PHASE_LINE = {
+    "analyze": "PAPER CHANNEL - every signal here is simulated. No real order is ever placed.",
+    "live": "LIVE CHANNEL - every signal here places a REAL order with real money.",
+}
+
+
+def render(card: StrategyCard, phase: str | None = None) -> str:
     """Plain-text card, no icons/emoji (project convention) - Telegram renders bold/monospace
     from Markdown, so structure comes from that, not symbols."""
+    phase_line = f"{_PHASE_LINE[phase]}\n" if phase in _PHASE_LINE else ""
     return (
+        f"{phase_line}"
         f"**{card.title}**\n"
         f"What: {card.what}\n"
         f"When: {card.when}\n"
@@ -169,8 +214,8 @@ def _save_state(state: dict) -> None:
         logger.warning(f"Strategy card: could not persist pin state: {e}")
 
 
-def _content_hash(card: StrategyCard) -> str:
-    return hashlib.sha256(render(card).encode()).hexdigest()
+def _content_hash(card: StrategyCard, phase: str | None = None) -> str:
+    return hashlib.sha256(render(card, phase).encode()).hexdigest()
 
 
 async def send_and_pin_cards(client, channels) -> int:
@@ -188,17 +233,18 @@ async def send_and_pin_cards(client, channels) -> int:
     state_changed = False
     pinned = 0
     for ch in channels:
-        card = CARDS.get(ch.name)
+        card = CARDS.get(_base_name(ch.name))
         if card is None:
             continue
 
-        content_hash = _content_hash(card)
+        phase = _phase(ch.name)
+        content_hash = _content_hash(card, phase)
         previous = state.get(ch.name)
         if previous and previous.get("hash") == content_hash:
             continue  # already pinned, content unchanged - nothing to do
 
         try:
-            message = await client.send_message(ch.id, render(card), parse_mode="markdown")
+            message = await client.send_message(ch.id, render(card, phase), parse_mode="markdown")
             await client.pin_message(ch.id, message, notify=False)
             if previous and previous.get("message_id"):
                 # Best-effort: an old pin left behind if this fails is cosmetic clutter, not

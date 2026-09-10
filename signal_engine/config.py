@@ -106,8 +106,17 @@ class Settings:
 
     # Telegram channels (from yaml)
     telegram_channels: Tuple[TelegramChannel, ...]
-    # Optional: dedicated channel for system notifications (startup/shutdown)
-    notify_channel: TelegramChannel | None
+    #: Admin/system channel (startup, shutdown, risk halts, order lifecycle, day summary) -
+    #: keyed "analyze"/"live", same split and same reasoning as breakingtrade_btst_channels
+    #: below: system chatter from the paper phase must never sit in the same channel as a
+    #: real-money alert. notifier.py picks the entry matching OpenAlgo's current mode.
+    notify_channel: Dict[str, TelegramChannel]
+    #: BTST destinations for signal_engine/analysis/breakingtrade/alerts.py - keyed "analyze"/
+    #: "live". Not part of telegram_channels because BTST is a manual daily decision with no
+    #: engine-listener counterpart (see alerts.py's chat_id_for()). A phase missing from
+    #: config.yaml is simply absent from this dict, not an error - alerts.py treats that as
+    #: "record, don't deliver", same as any other unconfigured channel.
+    breakingtrade_btst_channels: Dict[str, TelegramChannel]
     #: quiet | normal | verbose — how much routine traffic reaches notify_channel.
     #: Failure events ignore it entirely; see notifier.EVENT_LEVELS.
     notify_level: str
@@ -466,13 +475,25 @@ def _secret_fields(env: dict) -> dict:
     )
 
 
+def _parse_phase_channels(raw: dict) -> Dict[str, TelegramChannel]:
+    """{"analyze": {...}, "live": {...}} -> {"analyze": TelegramChannel, "live": TelegramChannel},
+    keeping only whichever phase is actually present - a phase not yet configured (a strategy
+    not yet promoted to live) is simply absent from the result, not an error."""
+    raw = raw or {}
+    return {
+        phase: _parse_channel(raw[phase])
+        for phase in ("analyze", "live")
+        if isinstance(raw.get(phase), dict)
+    }
+
+
 def _telegram_fields(telegram: dict) -> dict:
-    """Signal channels to listen on, plus the optional system-alert channel."""
-    raw_notify = telegram.get("notify_channel")
+    """Signal channels to listen on, plus the admin/system and BTST channel pairs."""
     return dict(
         telegram_channels=tuple(_parse_channel(ch) for ch in telegram.get("channels", [])),
-        notify_channel=_parse_channel(raw_notify) if isinstance(raw_notify, dict) and raw_notify else None,
+        notify_channel=_parse_phase_channels(telegram.get("notify_channel")),
         notify_level=str(telegram.get("notify_level", "normal")).strip().lower(),
+        breakingtrade_btst_channels=_parse_phase_channels(telegram.get("breakingtrade_btst_channels")),
     )
 
 

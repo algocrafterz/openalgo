@@ -9,11 +9,15 @@ Uses the same TelegramClient as the listener (set via set_client once connected)
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from signal_engine import api_client
 from signal_engine.config import settings
 from signal_engine.timeutils import IST
 
@@ -27,6 +31,36 @@ def set_client(client: TelegramClient) -> None:
     """Called by listener once the Telegram client is connected."""
     global _client
     _client = client
+
+
+# How long a checked OpenAlgo mode is trusted before re-checking - same reasoning and same TTL
+# as signal_engine/analysis/breakingtrade/alerts.py's identical mechanism: long enough that a
+# burst of notifications doesn't hammer OpenAlgo's API, short enough that a mid-day mode flip
+# reaches the right channel without an engine restart.
+_MODE_CACHE_TTL_SECONDS = 60
+_mode_cache = {"is_analyze": True, "checked_at": 0.0}
+
+
+async def _current_phase() -> str:
+    """"analyze" or "live", from OpenAlgo's live analyze/live state, cached briefly. Defaults
+    to "analyze" - the lower-stakes destination - when OpenAlgo can't be reached."""
+    now = time.monotonic()
+    if now - _mode_cache["checked_at"] > _MODE_CACHE_TTL_SECONDS:
+        mode, is_analyze = await api_client.fetch_trading_mode()
+        _mode_cache["is_analyze"] = True if mode == "unknown" else is_analyze
+        _mode_cache["checked_at"] = now
+    return "analyze" if _mode_cache["is_analyze"] else "live"
+
+
+def _channel_for_phase(phase: str):
+    """settings.notify_channel[phase], falling back to whichever phase IS configured.
+
+    Unlike a per-strategy channel, an admin alert can be safety-critical (SL failed, risk
+    halted, startup failure) - silently dropping it because only one phase's channel has been
+    set up would be worse than delivering it to the "wrong" (but real) channel."""
+    if not settings.notify_channel:
+        return None
+    return settings.notify_channel.get(phase) or next(iter(settings.notify_channel.values()), None)
 
 
 #: Lowest notify_level at which each event is delivered. Events absent from this map are
@@ -107,8 +141,11 @@ async def notify(text: str, event: str = "") -> bool:
     if _client is None:
         logger.warning("Notifier: client not ready, skipping (message dropped, not queued)")
         return False
+    channel = _channel_for_phase(await _current_phase())
+    if channel is None:
+        return False
     try:
-        await _client.send_message(settings.notify_channel.id, text)
+        await _client.send_message(channel.id, text)
         return True
     except asyncio.CancelledError:
         logger.debug("Notifier: send cancelled (event loop shutting down)")
@@ -184,7 +221,7 @@ async def notify_order_placed(
     price_str = f"Signal: {signal_price:.2f}" if signal_price is not None else "Signal: —"
     slot_line = f"\n{slot_context}" if slot_context else ""
     await notify_event("order_placed",
-        f"📤 ENTRY SENT | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
+        f"ENTRY SENT | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"{price_str}{sl_str}{tp_str}{rr_str}{slot_line}"
     )
 
@@ -204,14 +241,17 @@ async def notify_entry_filled(
     sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
     tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
     await notify_event("entry_filled",
-        f"💰 LIVE | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
+        # "FILLED", not "LIVE" - since the ANALYZE/LIVE channel split, "LIVE" reads as a phase
+        # claim (real money) rather than a fill-status one, and this message posts unchanged
+        # in the analyze channel too.
+        f"FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"Fill: {fill_price:.2f} (slip {slip:+.2f}) | Qty: {qty}{sl_str}{tp_str}"
     )
 
 
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
     await notify_event("order_rejected",
-        f"🚫 ENTRY REJECTED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
+        f"ENTRY REJECTED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"No trade taken. Reason: {reason}"
     )
 
@@ -224,14 +264,14 @@ async def notify_sl_placed(
     logger.info(f"SL confirmed | {symbol} [{strategy}]{price_str} id={order_id}")
     sl_line = f"SL: {sl_price:.2f}" if sl_price is not None else "SL: —"
     await notify_event("sl_placed",
-        f"🛡️ SL PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
+        f"SL PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"{sl_line} | Order: {order_id}"
     )
 
 
 async def notify_sl_failed(symbol: str, reason: str, strategy: str = "") -> None:
     await notify_event("sl_failed",
-        f"🚨 SL NOT PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
+        f"SL NOT PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"Position UNPROTECTED. Reason: {reason}\n"
         f"Place SL manually or close position."
     )
@@ -272,7 +312,7 @@ async def notify_partial_exit(
         else ""
     )
     await notify_event("partial_exit",
-        f"✅ {tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
+        f"{tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
         f"Booked: {exit_qty} | Remaining: {remaining_qty}\n"
         f"{_pnl(pnl)}{_r(r_multiple)}{sl_str}{next_str}"
     )
@@ -284,7 +324,7 @@ async def notify_exit_no_position(symbol: str, strategy: str) -> None:
 
 async def notify_exit_failed(symbol: str, reason: str, strategy: str = "") -> None:
     await notify_event("exit_failed",
-        f"❌ EXIT FAILED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
+        f"EXIT FAILED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"Reason: {reason}"
     )
 
@@ -308,14 +348,14 @@ async def notify_position_closed(
         f"CLOSED | {symbol} [{strategy}] {last_exit} entry={entry_price} exit={exit_price} "
         f"pnl={_pnl(pnl)}{_r(r_multiple)} held={hold_minutes}min"
     )
-    icon = "✅" if pnl >= 0 else "❌"
+    outcome = "WIN" if pnl >= 0 else "LOSS"
     dir_str = f" {_dir(direction)}" if direction else ""
     dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
     entry_str = f"{entry_price:.2f}" if entry_price is not None else "—"
     exit_str = f"{exit_price:.2f}" if exit_price is not None else "—"
     ctx_str = f"\n{day_context}" if day_context else ""
     await notify_event("position_closed",
-        f"{icon} CLOSED [{last_exit}] | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
+        f"{outcome} CLOSED [{last_exit}] | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
         f"{entry_str} → {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
     )
 
@@ -338,7 +378,7 @@ async def notify_be_stop_applied(
     dir_str = f" {_dir(direction)}" if direction else ""
     sl_move = f"{original_sl:.2f} → {be_price:.2f}" if original_sl is not None else f"→ {be_price:.2f}"
     await notify_event("be_stop_applied",
-        f"⚠️ STOP → BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
+        f"STOP → BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
         f"SL: {sl_move} | LTP: {ltp:.2f} | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
 
@@ -359,7 +399,7 @@ async def notify_no_progress_exit(
     )
     dir_str = f" {_dir(direction)}" if direction else ""
     await notify_event("no_progress_exit",
-        f"🚪 NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
+        f"NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
         f"{entry:.2f} → {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
 
@@ -383,7 +423,7 @@ async def notify_orphaned_position(
         plain_reason = reason
 
     await notify_event("orphaned_position",
-        f"⚠️ ORDER NOT FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
+        f"ORDER NOT FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"No position taken. {plain_reason}\n"
         f"Check broker terminal: order {order_id}"
     )
@@ -410,7 +450,7 @@ async def notify_time_exit(
 
     ctx_str = f"\n{day_context}" if day_context else ""
     await notify_event("time_exit",
-        f"⏰ TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}"
+        f"TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}"
     )
 
 
@@ -418,13 +458,90 @@ async def notify_time_exit(
 
 async def notify_risk_limit_hit(reason: str) -> None:
     await notify_event("risk_limit_hit",
-        f"🛑 TRADING HALTED | {_now_ist()}\n"
+        f"TRADING HALTED | {_now_ist()}\n"
         f"Risk limit: {reason}\n"
         f"New entries blocked. Existing positions monitored normally."
     )
 
 
 # ── Daily summary ──────────────────────────────────────────────────────────────
+
+#: Where the id of whichever day summary is currently pinned in each notify_channel chat is
+#: persisted, keyed by chat id (as a string) - see _send_and_pin_day_summary()'s docstring.
+#: Same JSON-file idiom as strategy_cards.py's _STATE_PATH, for the same reason: this is UI
+#: bookkeeping, not trading data.
+_DAY_SUMMARY_PIN_STATE_PATH = os.path.join(
+    os.path.dirname(__file__), "data", "day_summary_pin_state.json"
+)
+
+
+def _load_day_summary_pin_state() -> dict:
+    try:
+        with open(_DAY_SUMMARY_PIN_STATE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_day_summary_pin_state(state: dict) -> None:
+    """Best-effort persist - a failed write only means tomorrow's summary fails to find
+    yesterday's pin to replace, leaving two pinned (a cosmetic annoyance), not a reason to
+    fail the send."""
+    try:
+        os.makedirs(os.path.dirname(_DAY_SUMMARY_PIN_STATE_PATH), exist_ok=True)
+        with open(_DAY_SUMMARY_PIN_STATE_PATH, "w") as f:
+            json.dump(state, f)
+    except OSError as e:
+        logger.warning(f"Day summary pin: could not persist pin state: {e}")
+
+
+async def _send_and_pin_day_summary(text: str) -> bool:
+    """Send the day summary exactly like any other notify_event(), then ALSO pin it, replacing
+    yesterday's pin in the same channel - so "how did today go" is always one tap away without
+    scrolling, while every day's summary still stays in the channel's ordinary history too.
+
+    Pinning is strictly additive: the return value reflects only whether the SEND succeeded
+    (same contract notify() already has, which tracker.py's day-done marker depends on) - a
+    pin/unpin failure (bot lost admin rights, message too old to pin, etc.) is logged and
+    swallowed, never turned into "the summary wasn't delivered".
+    """
+    if not settings.notify_channel:
+        return False
+    if not should_notify("day_summary", getattr(settings, "notify_level", "normal")):
+        return False
+    if _client is None:
+        logger.warning("Notifier: client not ready, skipping (message dropped, not queued)")
+        return False
+    channel = _channel_for_phase(await _current_phase())
+    if channel is None:
+        return False
+
+    try:
+        message = await _client.send_message(channel.id, text)
+    except asyncio.CancelledError:
+        logger.debug("Notifier: send cancelled (event loop shutting down)")
+        return False
+    except Exception as e:
+        logger.warning(f"Notifier: failed to send message: {e}")
+        return False
+
+    try:
+        state = _load_day_summary_pin_state()
+        key = str(channel.id)
+        previous_message_id = state.get(key)
+        await _client.pin_message(channel.id, message, notify=False)
+        if previous_message_id:
+            try:
+                await _client.unpin_message(channel.id, previous_message_id)
+            except Exception as e:
+                logger.debug(f"Day summary pin: could not unpin yesterday's summary: {e}")
+        state[key] = getattr(message, "id", None)
+        _save_day_summary_pin_state(state)
+    except Exception as e:
+        logger.warning(f"Day summary pin: could not pin today's summary (non-fatal): {e}")
+
+    return True
+
 
 async def notify_day_summary(
     trades: int,
@@ -440,7 +557,7 @@ async def notify_day_summary(
     today = datetime.now(IST).strftime("%d-%b-%Y")
 
     if trades == 0:
-        return await notify_event("day_summary", f"📊 DAY SUMMARY | {today}\nNo trades taken today.")
+        return await _send_and_pin_day_summary(f"DAY SUMMARY | {today}\nNo trades taken today.")
 
     lines = _day_summary_header(today, trades, wins, losses, net_pnl, capital, time_exits, trade_records)
     if trade_records:
@@ -448,7 +565,7 @@ async def notify_day_summary(
         # Best trade first
         lines += [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
 
-    return await notify_event("day_summary", "\n".join(lines))
+    return await _send_and_pin_day_summary("\n".join(lines))
 
 
 def _day_summary_header(
@@ -473,7 +590,7 @@ def _day_summary_header(
     closing_capital = capital + net_pnl
 
     return [
-        f"📊 DAY SUMMARY | {today}",
+        f"DAY SUMMARY | {today}",
         f"Trades: {trades} | W: {wins}  L: {losses}{t_str} | Win Rate: {win_rate:.0f}%",
         f"Net: {_pnl(net_pnl)} ({pct_str})" + (f" | Avg R: {avg_r:+.1f}R" if avg_r is not None else ""),
         f"Capital: ₹{capital:,.0f} → ₹{closing_capital:,.0f}",
@@ -502,7 +619,7 @@ def _trade_line(rec) -> str:
         and rec.exit_price is not None
         and abs(rec.entry_price - rec.exit_price) < 0.01
     ):
-        orphan_flag = "  ⚠️"
+        orphan_flag = "  [CHECK]"
     return (
         f"{dir_icon} {rec.symbol:<12} {rec.entry_price:.2f}→{exit_str:<8} "
         f"{pnl_str:<10}{r_str}  {types_str}{orphan_flag}"
@@ -510,7 +627,7 @@ def _trade_line(rec) -> str:
 
 
 async def notify_engine_stopped() -> None:
-    await notify_event("engine_stopped", f"🔴 Engine stopped | {_now_ist()}")
+    await notify_event("engine_stopped", f"Engine stopped | {_now_ist()}")
 
 
 async def _send_oneshot(msg: str) -> None:
@@ -523,6 +640,9 @@ async def _send_oneshot(msg: str) -> None:
     against the same session file instead of reusing the long-lived one.
     """
     if not settings.notify_channel:
+        return
+    channel = _channel_for_phase(await _current_phase())
+    if channel is None:
         return
 
     from telethon import TelegramClient
@@ -539,7 +659,7 @@ async def _send_oneshot(msg: str) -> None:
             logger.warning("Startup notifier: Telegram not authorized, skipping notification")
             await client.disconnect()
             return
-        await client.send_message(settings.notify_channel.id, msg)
+        await client.send_message(channel.id, msg)
         await client.disconnect()
     except Exception as e:
         logger.warning(f"Startup notifier: could not send Telegram message: {e}")
@@ -575,10 +695,23 @@ def _check_line(check) -> str:
 def build_startup_summary_message(report, mode: str, capital: float, broker_name: str) -> str:
     """Build the one consolidated startup/smoke-test message for Telegram.
 
-    Splits checks into an OpenAlgo section (broker connectivity, auth, market data)
-    and a Signal Engine section (own config, pipeline, risk state, storage) so a
-    reader can tell at a glance which side of the integration is unavailable.
+    A routine, fully-green restart gets ONE line - the engine restarts daily (and after every
+    code change), so a full checklist that never changes just trains the reader to stop
+    looking at it. The moment there is something to troubleshoot - a warning-level check
+    failed; a critical failure never reaches here, see run_startup_health_checks()'s docstring
+    - the full breakdown returns: an OpenAlgo section (broker connectivity, auth, market data)
+    and a Signal Engine section (own config, pipeline, risk state, storage), so a reader can
+    tell at a glance which side of the integration is unavailable.
     """
+    now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+    if report.all_passed:
+        return (
+            f"Signal Engine Startup — READY | {now}\n"
+            f"Broker: {broker_name} | Mode: {mode} | Capital: ₹{capital:,.0f}\n"
+            f"All {len(report.checks)} checks passed."
+        )
+
     by_name = {c.name: c for c in report.checks}
     openalgo_lines = [_check_line(by_name[n]) for n in sorted(_OPENALGO_CHECK_NAMES) if n in by_name]
     engine_checks = sorted(
@@ -587,9 +720,8 @@ def build_startup_summary_message(report, mode: str, capital: float, broker_name
     )
     engine_lines = [_check_line(c) for c in engine_checks]
 
-    status = "READY" if report.all_passed else f"READY WITH WARNINGS ({report.fail_count} check(s) failed)"
+    status = f"READY WITH WARNINGS ({report.fail_count} check(s) failed)"
     ch_list = ", ".join(ch.name for ch in settings.telegram_channels) or "none"
-    now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
     lines = [
         f"Signal Engine Startup — {status}",

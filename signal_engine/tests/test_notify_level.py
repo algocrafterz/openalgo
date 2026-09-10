@@ -62,7 +62,7 @@ class TestWiring:
             "send_message": staticmethod(lambda *a, **k: sent.append(a))})())
         monkeypatch.setattr(
             notifier, "settings",
-            type("S", (), {"notify_channel": type("N", (), {"id": -1})(),
+            type("S", (), {"notify_channel": {"analyze": type("N", (), {"id": -1})()},
                            "notify_level": "quiet"})(),
         )
         await notifier.notify("ack", event="exit_signal_received")
@@ -79,11 +79,17 @@ class TestWiring:
             async def send_message(chat_id, text):
                 sent.append(text)
 
+        async def _fake_phase():
+            return "analyze"
+
         monkeypatch.setattr(notifier, "_client", _Client())
         monkeypatch.setattr(
             notifier, "settings",
-            type("S", (), {"notify_channel": type("N", (), {"id": -1})(),
+            type("S", (), {"notify_channel": {"analyze": type("N", (), {"id": -1})()},
                            "notify_level": "quiet"})(),
         )
+        # notify() resolves the channel via _current_phase(), which otherwise calls OpenAlgo
+        # over HTTP - bypass it directly so this test stays offline and deterministic.
+        monkeypatch.setattr(notifier, "_current_phase", _fake_phase)
         await notifier.notify("filled", event="entry_filled")
         assert sent == ["filled"]

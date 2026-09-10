@@ -100,10 +100,14 @@ async def _connect(client) -> None:
 
     # Checked on every startup, but only actually (re)pins a channel whose card content is new
     # or changed since the last successful pin - see strategy_cards.py's module docstring.
+    # Includes BTST's channels even though they're outside `channels:` above (never subscribed
+    # to - BTST is a manual daily call, not auto-traded) because they still need the same
+    # ANALYZE/LIVE reference card as everything else.
     try:
         from signal_engine import strategy_cards
 
-        pinned = await strategy_cards.send_and_pin_cards(client, watching)
+        card_channels = list(watching) + list(settings.breakingtrade_btst_channels.values())
+        pinned = await strategy_cards.send_and_pin_cards(client, card_channels)
         if pinned:
             logger.info(f"Strategy reference cards (re)pinned: {pinned}")
     except Exception as e:

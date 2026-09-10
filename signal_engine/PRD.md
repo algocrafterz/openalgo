@@ -216,6 +216,87 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-11)
+
+**Every Telegram channel split ANALYZE/LIVE — config.yaml is now the single source of truth
+for every channel id in the engine.**
+
+Until today every strategy had ONE Telegram channel carrying both paper-phase and (once
+promoted) real-money signals, and BreakingTrade's chat ids lived in `.env` while everything
+else lived in `config.yaml` — two places to keep in sync, with no enforcement that they
+agreed. Both problems compound the same failure mode: a channel's own scrollback mixes
+unrelated phases, making after-the-fact performance review unreliable, and a config split
+across two files invites drift.
+
+`config.yaml`'s `telegram.channels` list now carries an `-analyze`/`-live` pair per strategy —
+`intraday-orb`, `intraday-breakout`, `intraday-breakingtrade`,
+`intraday-breakingtrade-watchlist` — each pair sharing the SAME two-gate safety rule the
+single-channel design already had: a channel only ever trades when both (1) `enabled: true`
+here AND (2) OpenAlgo is actually in that phase's mode. A `-live` entry ships `enabled: false`
+until a strategy is deliberately promoted. For ORB/BREAKOUT (PineScript, TradingView-driven)
+the existing channel became `-analyze` unchanged (same id, so paper history isn't lost) and a
+new `-live` channel was created; both ran a brief real stretch before 2026-09-07 mixed into
+what is now paper history — cosmetic only, since the actual trade record is `trades.db`, never
+the Telegram channel itself. BreakingTrade/watchlist have been paper-only since inception, so
+their split carries no such caveat.
+
+BTST (`signal_engine/analysis/breakingtrade`'s overnight carry call) got its own
+`telegram.breakingtrade_btst_channels.{analyze,live}` mapping instead of a `telegram.channels`
+entry — it is a manual daily decision with no engine-listener counterpart, so it was never
+part of the execution-safety surface and doesn't belong in the list that gates trading.
+
+`alerts.py` (the BreakingTrade family's own outbound bot) no longer reads ANY chat id from
+`.env` — `chat_id_for()` now resolves the destination by name from
+`settings.telegram_channels` (or `settings.breakingtrade_btst_channels` for BTST), picking
+`-analyze` or `-live` from OpenAlgo's live `/api/v1/analyzer` state via a new `_current_phase()`
+(60s cache, defaults to `analyze` if OpenAlgo is unreachable — never assume live). Only
+`BREAKINGTRADE_BOT_TOKEN`, an actual secret, remains in `.env`.
+
+`notify_channel` (the admin/system channel — startup, shutdown, risk halts, order lifecycle,
+day summary) got the identical split: `config.yaml`'s `telegram.notify_channel` is now
+`{analyze: {...}, live: {...}}`, and `notifier.py` picks the phase the same way `alerts.py`
+does (its own `_current_phase()`/`_channel_for_phase()`, 60s-cached via
+`api_client.fetch_trading_mode()`). One difference from the strategy channels: since an admin
+alert can be safety-critical (a failed SL, a risk halt, a startup failure), `_channel_for_phase`
+falls back to whichever phase IS configured rather than silently dropping the message if the
+current phase's channel isn't set up yet — a mislabeled alert beats a missing one.
+`openalgoscheduler.py`'s broker-login notice (mode-independent, unrelated to trading mode) now
+broadcasts to every configured phase instead of picking one.
+
+Real regression caught in the same change: `strategy_cards.py`'s pinned per-channel reference
+card was keyed by the OLD unsuffixed channel name (`"intraday-orb"`); after the rename every
+channel would have silently stopped getting its pinned card. Fixed by stripping the
+`-analyze`/`-live` suffix before the `CARDS` lookup, and each card now states inline whether
+it's pinned in the paper or live channel. Added a card for BTST too, pinned via the same
+mechanism (`listener.py`'s `_connect()` now also pins `breakingtrade_btst_channels`, which
+sits outside the engine's normal subscription list).
+
+**Smoke-test startup message trimmed to one line on a routine green restart.**
+
+`notifier.build_startup_summary_message()` used to print the full OpenAlgo/Signal-Engine
+checklist on EVERY restart, including a fully-passing one — the engine restarts daily (and
+after every code change), so an unchanging seven-line checklist just trained the reader to
+stop looking at it. Now: all-passed gets one line (`READY | mode | capital | "All N checks
+passed."`); the full section-by-section breakdown returns the moment there is something to
+troubleshoot (a warning-level check failed — a critical failure never reaches this function at
+all, see `run_startup_health_checks()`'s docstring).
+
+**Day summary is now pinned, replacing the previous day's pin.**
+
+New `notifier._send_and_pin_day_summary()` sends the day summary exactly as before, then pins
+it in the notify_channel and unpins whatever was pinned there the day before (state persisted
+in `signal_engine/data/day_summary_pin_state.json`, same JSON-state idiom as
+`strategy_cards.py`). "How did today go" is now one tap away without scrolling, while every
+day's summary still lands in the channel's ordinary history too — pinning is additive, never a
+replacement for delivery, and a pin/unpin failure (bot lost admin rights, etc.) is logged and
+swallowed rather than reported as a failed send.
+
+**`notifier.py` emoji removed — project convention (CLAUDE.md: no icons/emoji anywhere) was
+being violated in every trade-lifecycle message** (📤💰🛡️🚨✅❌⏰🛑⚠️🚪📊🔴), while
+`alerts.py`/`strategy_cards.py` already correctly avoided them. Also renamed the fill
+confirmation's "💰 LIVE" label to "FILLED" — now that ANALYZE/LIVE means channel phase, a
+message literally saying "LIVE" inside the paper channel was actively misleading.
+
 ## Recent Changes (2026-09-10)
 
 **18:37 IST — BreakingTrade now trades its WATCHLIST call directly, as a second outcome

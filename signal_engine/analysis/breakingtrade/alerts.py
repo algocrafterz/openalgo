@@ -14,27 +14,48 @@ and this poller is a separate long-running process. Two processes sharing one Te
 file is a good way to corrupt it. A bot token is independent, stateless, and safe to call from
 anywhere.
 
-Setup (one time): create a bot with @BotFather, create TWO channels, add the bot to each as an
-administrator, then put in signal_engine/.env
+Setup (one time): create a bot with @BotFather, create one Telegram channel per (strategy,
+phase) pair - ANALYZE and LIVE are always separate channels, never shared - add the bot to
+each as an administrator, then:
 
-    BREAKINGTRADE_BOT_TOKEN=123456:ABC...
-    BREAKINGTRADE_CHAT_ID_INTRADAY=-1001234567890   # intraday-breakingtrade
-    BREAKINGTRADE_CHAT_ID_BTST=-1009876543210       # btst-breakingtrade
+  - Put ONLY the bot token in signal_engine/.env (a real secret):
 
-Without those, alerts are still recorded, just not delivered - and the module says so once
-rather than failing repeatedly.
+        BREAKINGTRADE_BOT_TOKEN=123456:ABC...
+
+  - Put every channel id in signal_engine/config.yaml (not a secret, and this is the ONE place
+    all of this project's Telegram channel ids live - see config.yaml's `telegram:` block):
+
+        telegram.channels: entries named "intraday-breakingtrade-analyze" / "-live" and
+        "intraday-breakingtrade-watchlist-analyze" / "-live" (these are ALSO what the engine's
+        own listener subscribes to - the id here and the id the engine watches must be the
+        SAME channel, since this bot posts and the engine's Telethon listener reads back from
+        it) - see chat_id_for() below.
+
+        telegram.breakingtrade_btst_channels.analyze / .live: BTST has no engine counterpart
+        (it is a manual daily decision, never auto-traded - see alert_btst()'s docstring), so
+        it gets its own small config.yaml mapping instead of a telegram.channels entry.
+
+Which one a message goes to is decided HERE, automatically, from OpenAlgo's live analyze/live
+state (see `_current_phase()`) - never configured per call. Leave a strategy's `-live` channel
+out of config.yaml (or its `breakingtrade_btst_channels.live` key unset) until that strategy is
+actually promoted: alerts still record to the database, just aren't delivered (see `send()`),
+exactly like an unconfigured channel always has.
+
+Without a configured channel, alerts are still recorded, just not delivered - and the module
+says so once rather than failing repeatedly.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from datetime import datetime
 
 import httpx
 from dotenv import dotenv_values
 
-from signal_engine.analysis.breakingtrade import store
+from signal_engine.analysis.breakingtrade import review, store
 
 _SIGNAL_ENGINE_DIR = os.path.dirname(os.path.dirname(store._DB_PATH))
 _ENV_PATH = os.path.join(_SIGNAL_ENGINE_DIR, ".env")
@@ -145,49 +166,97 @@ def _clean_token(token: str) -> str:
 # 25 minutes competes with a scroll of "here is something interesting", which is precisely how a
 # deadline gets missed. Analysis separation is already handled by the `kind` column, so channels
 # exist purely to keep the urgent thing visible.
-_CHANNEL_BY_KIND = {
-    "btst": "BREAKINGTRADE_CHAT_ID_BTST",
-    "btst_empty": "BREAKINGTRADE_CHAT_ID_BTST",
-    "intraday_transition": "BREAKINGTRADE_CHAT_ID_INTRADAY",
-    "trade_signal": "BREAKINGTRADE_CHAT_ID_INTRADAY",
-    "structure_flip": "BREAKINGTRADE_CHAT_ID_INTRADAY",
-    "health": "BREAKINGTRADE_CHAT_ID_INTRADAY",
+#
+# Each of these is further split ANALYZE/LIVE by _current_phase() below - a strategy's
+# paper-phase chatter must never sit in the same channel as its live fills, or a performance
+# review can no longer tell which trades were real. See the module docstring.
+#
+# "intraday"/"watchlist" name config.yaml's telegram.channels entries (same physical channel
+# the engine's own listener subscribes to); "btst" names config.yaml's
+# telegram.breakingtrade_btst_channels mapping instead, since BTST has no engine counterpart.
+_CHANNEL_GROUP_BY_KIND = {
+    "btst": "btst",
+    "btst_empty": "btst",
+    "intraday_transition": "intraday",
+    "trade_signal": "intraday",
+    "structure_flip": "intraday",
+    "health": "intraday",
     # WATCHLIST outcome (trigger.plan_trade_watchlist - entry at the scan-hit price, no
     # confirming-close wait) gets its OWN channel, deliberately separate from the CONFIRMED
     # "trade_signal" above - see config.yaml's intraday-breakingtrade-watchlist channel and
     # __main__.py's _emit_trade_signals() for why the two are kept apart end to end.
-    "trade_signal_watchlist": "BREAKINGTRADE_CHAT_ID_WATCHLIST",
+    "trade_signal_watchlist": "watchlist",
 }
-_DEFAULT_CHANNEL_KEY = "BREAKINGTRADE_CHAT_ID_INTRADAY"
+_DEFAULT_CHANNEL_GROUP = "intraday"
+
+# config.yaml telegram.channels NAME for each (group, phase) pair - not the BTST group, which
+# has no engine-subscribed channel and is looked up via settings.breakingtrade_btst_channels
+# instead (see chat_id_for()).
+_CHANNEL_NAME_BY_GROUP = {
+    "intraday": "intraday-breakingtrade",
+    "watchlist": "intraday-breakingtrade-watchlist",
+}
+
+# How long a checked OpenAlgo mode is trusted before re-checking. Long enough that a burst of
+# alerts (several signals on one poll) doesn't hammer OpenAlgo's API once per message; short
+# enough that flipping OpenAlgo's mode mid-day - exactly what happens when a strategy is
+# promoted to live - is picked up without needing to restart the poller.
+_MODE_CACHE_TTL_SECONDS = 60
+_mode_cache = {"is_analyze": True, "checked_at": 0.0}
+
+
+def _current_phase() -> str:
+    """"analyze" or "live", from OpenAlgo's live analyze/live state, cached briefly.
+
+    Defaults to "analyze" - the lower-stakes destination - whenever OpenAlgo can't be reached,
+    so a network hiccup routes a message to the paper channel rather than the live one. This
+    only decides which Telegram channel a message is POSTED to for human review; it carries no
+    trading authority of its own - whether the engine ever acts on the underlying signal is
+    still decided entirely by that channel's `enabled` flag in config.yaml (see
+    alert_trade_signal()'s docstring).
+    """
+    now = time.monotonic()
+    if now - _mode_cache["checked_at"] > _MODE_CACHE_TTL_SECONDS:
+        mode, is_analyze = review.trading_mode()
+        _mode_cache["is_analyze"] = True if mode == "unknown" else is_analyze
+        _mode_cache["checked_at"] = now
+    return "analyze" if _mode_cache["is_analyze"] else "live"
 
 
 def _env() -> dict:
+    """The bot token only - every channel id lives in config.yaml, not here. See the module
+    docstring's Setup section for why."""
     env = dict(dotenv_values(_ENV_PATH)) if os.path.exists(_ENV_PATH) else {}
-    for key in (
-        "BREAKINGTRADE_BOT_TOKEN",
-        "BREAKINGTRADE_CHAT_ID_BTST",
-        "BREAKINGTRADE_CHAT_ID_INTRADAY",
-        "BREAKINGTRADE_CHAT_ID_WATCHLIST",
-    ):
-        env.setdefault(key, os.getenv(key))
+    env.setdefault("BREAKINGTRADE_BOT_TOKEN", os.getenv("BREAKINGTRADE_BOT_TOKEN"))
     return env
 
 
 def chat_id_for(kind: str) -> str | None:
-    """Which channel a given alert kind belongs in.
+    """Which channel a given alert kind belongs in, for the CURRENT OpenAlgo mode.
 
     There is deliberately NO fallback to a generic chat id. An earlier single-channel setup sent
     these into the channel breakout.pine already uses, mixing two unrelated strategies' signals.
     Silently reverting to that on a missing key would repeat the mistake, so an unconfigured
-    channel means "record it, do not deliver it".
+    channel means "record it, do not deliver it" - which is also what happens here for as long
+    as a strategy's `-live` channel is left out of config.yaml during its paper phase.
     """
-    return _env().get(_CHANNEL_BY_KIND.get(kind, _DEFAULT_CHANNEL_KEY))
+    from signal_engine.config import settings
+
+    group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
+    phase = _current_phase()
+
+    if group == "btst":
+        ch = settings.breakingtrade_btst_channels.get(phase)
+        return str(ch.id) if ch else None
+
+    name = f"{_CHANNEL_NAME_BY_GROUP[group]}-{phase}"
+    return next((str(ch.id) for ch in settings.telegram_channels if ch.name == name), None)
 
 
 def _credentials(kind: str = None) -> tuple:
     env = _env()
     token = _clean_token(env.get("BREAKINGTRADE_BOT_TOKEN"))
-    chat = chat_id_for(kind) if kind else env.get(_DEFAULT_CHANNEL_KEY)
+    chat = chat_id_for(kind)
     return token, (chat.strip() if chat else chat)
 
 
@@ -210,10 +279,16 @@ def send(text: str, kind: str = None, monospace: bool = False) -> tuple[bool, in
     token, chat_id = _credentials(kind)
     if not token or not chat_id:
         if not _warned_missing_config:
-            key = _CHANNEL_BY_KIND.get(kind, _DEFAULT_CHANNEL_KEY)
+            group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
+            phase = _current_phase()
+            where = (
+                f"telegram.breakingtrade_btst_channels.{phase}"
+                if group == "btst"
+                else f"telegram.channels ({_CHANNEL_NAME_BY_GROUP[group]}-{phase})"
+            )
             print(
-                f"  [alerts] BREAKINGTRADE_BOT_TOKEN / {key} not set - "
-                "alerts are being recorded but not delivered"
+                f"  [alerts] BREAKINGTRADE_BOT_TOKEN not set, or no {where} channel in "
+                "config.yaml - alerts are being recorded but not delivered"
             )
             _warned_missing_config = True
         return False, None

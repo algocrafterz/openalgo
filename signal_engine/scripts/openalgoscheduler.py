@@ -522,9 +522,12 @@ async def send_telegram_notification(message: str, _client=None) -> bool:
     try:
         from signal_engine.config import settings
 
-        # Use dedicated notify_channel if configured, else fall back to signal channels
+        # Use dedicated notify_channel if configured, else fall back to signal channels.
+        # notify_channel is now {"analyze": ..., "live": ...} - broker-login status is
+        # mode-independent (it happens once a day regardless of analyze/live), so broadcast
+        # to every configured phase rather than picking one.
         if settings.notify_channel:
-            notify_targets = [settings.notify_channel]
+            notify_targets = list(settings.notify_channel.values())
         elif settings.telegram_channels:
             notify_targets = list(settings.telegram_channels)
         else:

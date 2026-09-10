@@ -27,6 +27,13 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
     # Never attempt a real network call from a test.
     monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (False, None))
+    # chat_id_for() calls _current_mode_suffix(), which calls OpenAlgo over HTTP - fake the
+    # underlying review.trading_mode() call (never _current_mode_suffix itself, or
+    # TestCurrentModeSuffix below couldn't exercise the real function) so tests are
+    # deterministic and never touch the network, and reset its cache so no test leaks state
+    # into the next one.
+    monkeypatch.setattr(alerts.review, "trading_mode", lambda: ("analyze", True))
+    alerts._mode_cache["checked_at"] = 0.0
 
 
 class _FakeResponse:
@@ -44,9 +51,10 @@ class TestSendMonospace:
     not, so a short conversational alert doesn't get an unnecessary grey box."""
 
     def test_monospace_wraps_in_a_markdown_code_block(self, monkeypatch):
+        monkeypatch.setattr(alerts, "_env", lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc"})
         monkeypatch.setattr(
-            alerts, "_env",
-            lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc", "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100X"},
+            _se_config, "settings",
+            _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)]),
         )
         captured = {}
 
@@ -62,9 +70,10 @@ class TestSendMonospace:
         assert captured["parse_mode"] == "Markdown"
 
     def test_default_sends_plain_text_with_no_parse_mode(self, monkeypatch):
+        monkeypatch.setattr(alerts, "_env", lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc"})
         monkeypatch.setattr(
-            alerts, "_env",
-            lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc", "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100X"},
+            _se_config, "settings",
+            _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)]),
         )
         captured = {}
 
@@ -217,40 +226,143 @@ def test_empty_btst_list_is_still_recorded():
 
 
 # ---------------------------------------------------------------------------
-# Channel routing - two strategies must never share a channel
+# Channel routing - every chat id now comes from config.yaml (settings), never .env - see
+# alerts.py's module docstring. `_fake_settings` stands in for the real Settings singleton.
 # ---------------------------------------------------------------------------
+
+import signal_engine.config as _se_config
+from signal_engine.config import TelegramChannel
+
+
+def _fake_settings(channels=(), btst=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        telegram_channels=tuple(channels),
+        breakingtrade_btst_channels=dict(btst or {}),
+    )
 
 
 def test_each_strategy_routes_to_its_own_channel(monkeypatch):
+    monkeypatch.setattr(alerts, "_env", lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc"})
     monkeypatch.setattr(
-        alerts,
-        "_env",
-        lambda: {
-            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
-            "BREAKINGTRADE_CHAT_ID_BTST": "-100BTST",
-            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100INTRA",
-        },
+        _se_config,
+        "settings",
+        _fake_settings(
+            channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)],
+            btst={"analyze": TelegramChannel(name="intraday-breakingtrade-btst-analyze", id=-200)},
+        ),
     )
-    assert alerts.chat_id_for("btst") == "-100BTST"
-    assert alerts.chat_id_for("btst_empty") == "-100BTST"
-    assert alerts.chat_id_for("intraday_transition") == "-100INTRA"
-    assert alerts.chat_id_for("health") == "-100INTRA"
+    assert alerts.chat_id_for("btst") == "-200"
+    assert alerts.chat_id_for("btst_empty") == "-200"
+    assert alerts.chat_id_for("intraday_transition") == "-100"
+    assert alerts.chat_id_for("health") == "-100"
 
 
 def test_watchlist_trade_signal_routes_to_its_own_channel(monkeypatch):
     """The two outcomes must never land in the same channel, or the whole point of comparing
     them side by side on separate paper P&L is lost."""
     monkeypatch.setattr(
-        alerts,
-        "_env",
-        lambda: {
-            "BREAKINGTRADE_BOT_TOKEN": "123:abc",
-            "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100CONFIRMED",
-            "BREAKINGTRADE_CHAT_ID_WATCHLIST": "-100WATCHLIST",
-        },
+        _se_config,
+        "settings",
+        _fake_settings(channels=[
+            TelegramChannel(name="intraday-breakingtrade-analyze", id=-100),
+            TelegramChannel(name="intraday-breakingtrade-watchlist-analyze", id=-200),
+        ]),
     )
-    assert alerts.chat_id_for("trade_signal") == "-100CONFIRMED"
-    assert alerts.chat_id_for("trade_signal_watchlist") == "-100WATCHLIST"
+    assert alerts.chat_id_for("trade_signal") == "-100"
+    assert alerts.chat_id_for("trade_signal_watchlist") == "-200"
+
+
+# ---------------------------------------------------------------------------
+# Channel routing - the SAME strategy must never mix its paper and live channels
+# ---------------------------------------------------------------------------
+
+
+def test_chat_id_for_uses_the_analyze_channel_in_analyze_mode(monkeypatch):
+    monkeypatch.setattr(alerts, "_current_phase", lambda: "analyze")
+    monkeypatch.setattr(
+        _se_config,
+        "settings",
+        _fake_settings(channels=[
+            TelegramChannel(name="intraday-breakingtrade-analyze", id=-100),
+            TelegramChannel(name="intraday-breakingtrade-live", id=-200),
+        ]),
+    )
+    assert alerts.chat_id_for("trade_signal") == "-100"
+
+
+def test_chat_id_for_uses_the_live_channel_in_live_mode(monkeypatch):
+    monkeypatch.setattr(alerts, "_current_phase", lambda: "live")
+    monkeypatch.setattr(
+        _se_config,
+        "settings",
+        _fake_settings(channels=[
+            TelegramChannel(name="intraday-breakingtrade-analyze", id=-100),
+            TelegramChannel(name="intraday-breakingtrade-live", id=-200),
+        ]),
+    )
+    assert alerts.chat_id_for("trade_signal") == "-200"
+
+
+def test_chat_id_for_does_not_deliver_to_live_until_the_live_channel_is_configured(monkeypatch):
+    """A strategy still in its paper phase has no -live entry in config.yaml yet - flipping
+    OpenAlgo to live (e.g. testing) must not accidentally fall back to the analyze channel; it
+    must simply not deliver, exactly like any other unconfigured channel."""
+    monkeypatch.setattr(alerts, "_current_phase", lambda: "live")
+    monkeypatch.setattr(
+        _se_config,
+        "settings",
+        _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)]),
+    )
+    assert alerts.chat_id_for("trade_signal") is None
+
+
+def test_btst_chat_id_for_does_not_deliver_to_live_until_configured(monkeypatch):
+    """Same rule as above, for BTST's separate breakingtrade_btst_channels mapping."""
+    monkeypatch.setattr(alerts, "_current_phase", lambda: "live")
+    monkeypatch.setattr(
+        _se_config,
+        "settings",
+        _fake_settings(btst={"analyze": TelegramChannel(name="btst-analyze", id=-100)}),
+    )
+    assert alerts.chat_id_for("btst") is None
+
+
+class TestCurrentPhase:
+    """_current_phase() reads OpenAlgo's live analyze/live state via review.trading_mode() -
+    these tests fake that call rather than hitting the network."""
+
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        alerts._mode_cache["checked_at"] = 0.0
+        yield
+        alerts._mode_cache["checked_at"] = 0.0
+
+    def test_analyze_mode_maps_to_the_analyze_phase(self, monkeypatch):
+        monkeypatch.setattr(alerts.review, "trading_mode", lambda: ("analyze", True))
+        assert alerts._current_phase() == "analyze"
+
+    def test_live_mode_maps_to_the_live_phase(self, monkeypatch):
+        monkeypatch.setattr(alerts.review, "trading_mode", lambda: ("live", False))
+        assert alerts._current_phase() == "live"
+
+    def test_unreachable_openalgo_defaults_to_the_analyze_phase(self, monkeypatch):
+        """An unreachable OpenAlgo must never be treated as license to post to the live
+        channel - default to the lower-stakes destination, same reasoning as
+        alert_started()'s three-state mode banner."""
+        monkeypatch.setattr(alerts.review, "trading_mode", lambda: ("unknown", False))
+        assert alerts._current_phase() == "analyze"
+
+    def test_mode_is_cached_within_the_ttl(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            alerts.review, "trading_mode",
+            lambda: (calls.append(1), ("live", False))[1],
+        )
+        alerts._current_phase()
+        alerts._current_phase()
+        assert len(calls) == 1
 
 
 def test_watchlist_trade_signal_uses_the_full_unabbreviated_strategy_name():
@@ -279,9 +391,9 @@ def test_missing_channel_never_falls_back_to_another(monkeypatch):
     """An earlier single-channel setup delivered these into the channel breakout.pine uses.
     Falling back on a missing key would silently repeat that, so it must not deliver at all."""
     monkeypatch.setattr(
-        alerts,
-        "_env",
-        lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc", "BREAKINGTRADE_CHAT_ID_INTRADAY": "-100X"},
+        _se_config,
+        "settings",
+        _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)]),
     )
     assert alerts.chat_id_for("btst") is None
 

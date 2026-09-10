@@ -32,6 +32,34 @@ class TestCardsRegistry:
         for card in strategy_cards.CARDS.values():
             assert card.title and card.what and card.when and card.action and card.updated
 
+    def test_btst_has_a_card_even_though_it_is_never_auto_traded(self):
+        assert "intraday-breakingtrade-btst" in strategy_cards.CARDS
+
+
+class TestBaseNameAndPhase:
+    """Every channel in production is now named "<strategy>-analyze" or "<strategy>-live" (see
+    config.yaml's 2026-09-11 split) - CARDS is still keyed by the bare strategy name, so
+    send_and_pin_cards must strip the suffix before looking a card up, or every channel
+    silently stops getting its pinned card (exactly what shipped, briefly, before this test)."""
+
+    def test_strips_the_analyze_suffix(self):
+        assert strategy_cards._base_name("intraday-orb-analyze") == "intraday-orb"
+
+    def test_strips_the_live_suffix(self):
+        assert strategy_cards._base_name("intraday-orb-live") == "intraday-orb"
+
+    def test_leaves_an_unsuffixed_name_alone(self):
+        assert strategy_cards._base_name("smidestn") == "smidestn"
+
+    def test_phase_of_analyze_channel(self):
+        assert strategy_cards._phase("intraday-orb-analyze") == "analyze"
+
+    def test_phase_of_live_channel(self):
+        assert strategy_cards._phase("intraday-orb-live") == "live"
+
+    def test_phase_of_unsuffixed_channel_is_none(self):
+        assert strategy_cards._phase("smidestn") is None
+
 
 class TestRender:
     def test_render_includes_every_field(self):
@@ -49,6 +77,24 @@ class TestRender:
         for card in strategy_cards.CARDS.values():
             text = strategy_cards.render(card)
             assert text.isascii(), f"non-ASCII content (likely emoji) in card: {card.title}"
+
+    def test_analyze_phase_states_no_real_order_is_placed(self):
+        card = strategy_cards.CARDS["intraday-orb"]
+        text = strategy_cards.render(card, "analyze")
+        assert "simulated" in text
+        assert "No real order" in text
+
+    def test_live_phase_states_a_real_order_is_placed(self):
+        card = strategy_cards.CARDS["intraday-orb"]
+        text = strategy_cards.render(card, "live")
+        assert "REAL order" in text
+
+    def test_no_phase_omits_the_phase_line_entirely(self):
+        """Back-compat: callers that don't know the phase (or a non-split channel) get exactly
+        the old rendering, with no phase line at all."""
+        card = strategy_cards.CARDS["intraday-orb"]
+        assert strategy_cards.render(card) == strategy_cards.render(card, None)
+        assert "CHANNEL" not in strategy_cards.render(card)
 
 
 class _FakeMessage:
@@ -93,6 +139,24 @@ class TestSendAndPinCards:
 
         assert pinned == 3
         assert set(client.pinned) == {-100, -200, -300}
+
+    @pytest.mark.asyncio
+    async def test_analyze_and_live_channels_both_pin_the_same_strategys_card(self):
+        """The real config.yaml shape: two physical channels per strategy, "-analyze" and
+        "-live", each must resolve to that strategy's ONE card (with a different phase line)."""
+        client = _FakeClient()
+        channels = [
+            TelegramChannel(name="intraday-orb-analyze", id=-101),
+            TelegramChannel(name="intraday-orb-live", id=-102),
+        ]
+
+        pinned = await strategy_cards.send_and_pin_cards(client, channels)
+
+        assert pinned == 2
+        assert set(client.pinned) == {-101, -102}
+        sent_by_chat = dict(client.sent)
+        assert "simulated" in sent_by_chat[-101]
+        assert "REAL order" in sent_by_chat[-102]
 
     @pytest.mark.asyncio
     async def test_unknown_channel_name_is_skipped_not_errored(self):
