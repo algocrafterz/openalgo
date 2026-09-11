@@ -124,6 +124,21 @@ def reset_connection() -> None:
     _local.path = None
 
 
+#: The table carried no indexes at all, which was survivable while it was read twice a day at
+#: startup. fetch_day_trades() now backs both the EOD summary and the day-context line on
+#: EVERY close notification, and the audit trail is deliberately never pruned - so the scans
+#: only get longer. Both are EXPRESSION indexes: the queries filter on date(executed_at) and
+#: upper(symbol), which a plain column index cannot serve.
+_CREATE_INDEXES = (
+    # fetch_day_trades() and fetch_all_open_positions(): mode + day, then status/direction.
+    "CREATE INDEX IF NOT EXISTS idx_trades_day ON trades "
+    "(trade_mode, date(executed_at), status, direction)",
+    # fetch_last_entry_trade(): case-insensitive symbol+strategy on a given day.
+    "CREATE INDEX IF NOT EXISTS idx_trades_symbol_lookup ON trades "
+    "(upper(symbol), upper(strategy), date(executed_at))",
+)
+
+
 def _get_connection() -> sqlite3.Connection:
     """This thread's trades.db connection, building the schema on first use only.
 
@@ -159,6 +174,8 @@ def _get_connection() -> sqlite3.Connection:
         conn.execute(_CREATE_TABLE)
         conn.execute(_CREATE_STRATEGY_VERSIONS)
         _add_missing_columns(conn)
+        for statement in _CREATE_INDEXES:
+            conn.execute(statement)
         conn.commit()
         _local.conn, _local.path = conn, _DB_PATH
         _all_connections.append(conn)
@@ -450,22 +467,28 @@ def fetch_day_trades(trade_mode: str, day: str = None) -> list:
         (trade_mode, day),
     ).fetchall()
 
+    # One query for the day's entries, keyed for lookup - not a sub-query per exit row. At
+    # four trades a day the difference is nothing; this runs on every close notification and
+    # the table never shrinks.
+    entries = {}
+    for row in conn.execute(
+        """
+        SELECT upper(symbol), upper(strategy), entry, sl, quantity FROM trades
+        WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
+          AND trade_mode = ? AND date(executed_at) = ?
+        ORDER BY id
+        """,
+        (trade_mode, day),
+    ):
+        entries[(row[0], row[1])] = row[2:]  # later entry wins, matching ORDER BY id DESC
+
     trades = []
     for strategy, symbol, entry, sl, qty, exit_price, context, _at in exits:
         try:
             payload = json.loads(context) if context else {}
         except (TypeError, ValueError):
             payload = {}
-        entry_row = conn.execute(
-            """
-            SELECT entry, sl, quantity FROM trades
-            WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
-              AND upper(symbol) = upper(?) AND upper(strategy) = upper(?)
-              AND trade_mode = ? AND date(executed_at) = ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (symbol, strategy, trade_mode, day),
-        ).fetchone()
+        entry_row = entries.get((symbol.upper(), strategy.upper()))
         base_entry = entry_row[0] if entry_row else entry
         base_sl = entry_row[1] if entry_row else sl
         base_qty = entry_row[2] if entry_row else qty
