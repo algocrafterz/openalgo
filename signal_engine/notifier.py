@@ -574,6 +574,7 @@ async def notify_day_summary(
     time_exits: int = 0,
     trade_records=None,
     strategy_capital: dict | None = None,
+    degraded: bool = False,
 ) -> bool:
     """Send today's summary three ways: one per-strategy summary to each strategy's OWN
     channel (best-effort, see _send_per_strategy_day_summaries()), plus ONE consolidated
@@ -604,7 +605,7 @@ async def notify_day_summary(
 
     lines = _day_summary_header(
         today, trades, wins, losses, net_pnl, capital, time_exits, trade_records,
-        pooled_strategies=len(by_strategy),
+        pooled_strategies=len(by_strategy), degraded=degraded,
     )
     if len(by_strategy) > 1:
         lines.append("")
@@ -747,6 +748,7 @@ def _day_summary_header(
     today: str, trades: int, wins: int, losses: int, net_pnl: float,
     capital: float, time_exits: int, trade_records, title: str = "DAY SUMMARY",
     pooled_strategies: int = 1,
+    degraded: bool = False,
 ) -> list:
     """Headline block: counts, win rate, net P&L, average R, capital trajectory.
 
@@ -783,12 +785,19 @@ def _day_summary_header(
     if is_pooled:
         capital_line += f"  (sum of {pooled_strategies} strategy pools, not one account)"
 
-    return [
+    header = [
         f"{title} | {today}",
         f"Trades: {trades} | W: {wins}  L: {losses}{t_str} | Win Rate: {win_rate:.0f}%",
         net_line,
         capital_line,
     ]
+    if degraded:
+        # trades.db could not be read, so these numbers are this SESSION's in-memory tally -
+        # everything before the last restart is missing. Saying so is better than a stale
+        # figure presented as the day.
+        header.insert(1, "INCOMPLETE: trades.db unreadable - counts cover only the period "
+                         "since the engine last started")
+    return header
 
 
 def _average_r(trade_records) -> float | None:

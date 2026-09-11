@@ -200,12 +200,18 @@ class PositionTracker:
         self._positionbook_outage_alerted = False
 
     def day_context_line(self, max_trades: int | None = None) -> str:
-        """Compact per-day running context used in Telegram close notifications."""
+        """Compact per-day running context, from trades.db - carried on EVERY close message.
+
+        This read the in-memory counters, which __init__ sets to zero, so after a restart
+        every close notification understated the day. The engine restarted twice on
+        2026-09-11. Nothing user-facing is sourced from memory any more.
+        """
+        _records, counts = self._day_from_db()
         return notifier.format_day_context(
-            day_trades=self._day_trades,
-            day_wins=self._day_wins,
-            day_losses=self._day_losses,
-            day_pnl=self._day_pnl,
+            day_trades=counts["trades"],
+            day_wins=counts["wins"],
+            day_losses=counts["losses"],
+            day_pnl=counts["net_pnl"],
             max_trades=max_trades,
         )
 
@@ -374,7 +380,7 @@ class PositionTracker:
         today = datetime.now(IST).date()
         if self._day_summary_date == today or _summary_already_sent_today():
             return
-        records, counts = self._day_from_db()
+        records, counts, degraded = self._day_from_db(want_degraded=True)
         capital = self._risk_engine.total_last_known_capital() or 0.0
         # Per-strategy opening capital, for the per-strategy EOD summaries notifier.py sends
         # alongside the consolidated one — each strategy sizes off its OWN cached day-start
@@ -393,6 +399,7 @@ class PositionTracker:
             time_exits=counts["time_exits"],
             trade_records=records,
             strategy_capital=strategy_capital,
+            degraded=degraded,
         )
         if not sent:
             # 2026-09-09: this used to mark itself done unconditionally, so a Telegram
@@ -405,7 +412,7 @@ class PositionTracker:
         self._day_summary_date = today
         _mark_summary_sent()
 
-    def _day_from_db(self) -> tuple:
+    def _day_from_db(self, *, want_degraded: bool = False):
         """(trade_records, counts) for today, read from trades.db.
 
         The in-memory counters are only what happened since the engine last started, so a
@@ -421,11 +428,12 @@ class PositionTracker:
                 f"Day summary: could not read trades.db ({e}) - falling back to this "
                 "session's in-memory counters, which exclude anything before the last restart"
             )
-            return self._completed_trades, {
+            memory = self._completed_trades, {
                 "trades": self._day_trades, "wins": self._day_wins,
                 "losses": self._day_losses, "net_pnl": self._day_pnl,
                 "time_exits": self._day_time_exits,
             }
+            return (*memory, True) if want_degraded else memory
 
         records = [
             TradeRecord(
@@ -440,13 +448,14 @@ class PositionTracker:
         # Same classification the day counters use: a TIME exit is a trade but not a decided
         # win or loss - the clock closed it, not the strategy's own rule.
         decided = [r for r in records if "TIME" not in (r.exit_types or [])]
-        return records, {
+        counts = {
             "trades": len(records),
             "wins": sum(1 for r in decided if r.total_pnl >= 0),
             "losses": sum(1 for r in decided if r.total_pnl < 0),
             "net_pnl": sum(r.total_pnl for r in records),
             "time_exits": sum(1 for r in records if "TIME" in (r.exit_types or [])),
         }
+        return (records, counts, False) if want_degraded else (records, counts)
 
     @staticmethod
     def _trade_mode_for_db() -> str:
