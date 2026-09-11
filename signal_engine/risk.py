@@ -15,19 +15,22 @@ trades_today, and daily/weekly/monthly realised loss — a loss in any live
 strategy counts against the same daily/weekly/monthly limit as every other, so
 one combined loss ceiling protects the whole account, not one per strategy.
 
-Symbol/sector concentration limits are GLOBAL in both modes. They were briefly
-made per-strategy in ANALYZE (2026-09-11) so the BREAKINGTRADE vs
-BREAKINGTRADE-WATCHLIST comparison could run, since the two are built to call
-the same names. That is reverted: a trader holds ONE position in a stock, and
-analyze has to mirror live or it is not evidence. Two strategies both long the
-same name is one position with two labels — counting it twice overstates the
-sample, doubles the real exposure to that name, and produces a paper result live
-could never reproduce.
+Symbol/sector concentration limits are PER STRATEGY, and identically so in both
+modes — unlike the capital and slot counters above, which pool in LIVE.
 
-The cost is real and is stated rather than hidden: confirmed-vs-watchlist cannot
-be compared by letting both trade the same stock. Answer it from the DECLINED
-rows instead (both signals are recorded either way — main._decline), or run the
-two in separate phases.
+A strategy must never take a second position in a name it already holds: that is
+averaging into a position its own rules already sized once, doubling that
+strategy's exposure with no second decision behind it.
+
+Two DIFFERENT strategies may both hold the same name. They reached it by
+different logic, each with its own stop and target, and each is a position a
+trader would genuinely have taken. It is also what lets BREAKINGTRADE and
+BREAKINGTRADE-WATCHLIST be compared on the names they both call.
+
+Deliberately the same rule in LIVE: analyze has to mirror live to be evidence.
+The exposure that creates is real — two strategies long one stock is double the
+position in that name — and max_positions_per_sector is the control for it
+(currently 0, off).
 """
 
 import math
@@ -186,6 +189,17 @@ class RiskEngine:
         uses this to decide whether to correct one strategy's counter at a time or
         the one shared total."""
         return self._trade_mode == "analyze"
+
+    @staticmethod
+    def _concentration_key(strategy: str) -> str:
+        """The real strategy tag, used to scope the symbol/sector caps.
+
+        Deliberately NOT _key(): capital and slot counters pool into one bucket in LIVE
+        because there is one account, but "has THIS strategy already got a position in this
+        name" is a question about the strategy either way. Pooling it would stop a second
+        strategy taking a name the first already holds, which is allowed.
+        """
+        return (strategy or "").strip().upper() or RiskEngine._UNSPECIFIED
 
     def _key(self, strategy: str) -> str:
         if not self.isolates_per_strategy:
@@ -620,36 +634,41 @@ class RiskEngine:
     def can_trade_symbol(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol is allowed.
 
-        Global across strategies in both modes — one position per stock. `strategy` is kept
-        in the signature for call-site symmetry and logging, not to scope the count.
+        Per strategy, in both modes: a strategy may not re-enter a name it already holds,
+        but a DIFFERENT strategy may take it. See module docstring.
         """
         if self.max_positions_per_symbol == 0:
             return True
-        return self._positions_by_symbol.get(symbol, 0) < self.max_positions_per_symbol
+        held = self._positions_by_symbol.get((self._concentration_key(strategy), symbol), 0)
+        return held < self.max_positions_per_symbol
 
     def can_trade_sector(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol's sector is allowed.
 
-        Global across strategies in both modes — see can_trade_symbol.
+        Per strategy, in both modes — see can_trade_symbol.
         """
         if self.max_positions_per_sector == 0:
             return True
         sector = self._symbol_to_sector.get(symbol)
         if sector is None:
             return True
-        return self._positions_by_sector.get(sector, 0) < self.max_positions_per_sector
+        held = self._positions_by_sector.get((self._concentration_key(strategy), sector), 0)
+        return held < self.max_positions_per_sector
 
     def _adjust_concentration(self, strategy: str, symbol: str, delta: int) -> None:
-        """Move the GLOBAL symbol/sector position counts by delta, never below zero."""
+        """Move this STRATEGY's symbol/sector position counts by delta, never below zero."""
         if not symbol:
             return
-        self._positions_by_symbol[symbol] = max(
-            0, self._positions_by_symbol.get(symbol, 0) + delta
+        key = self._concentration_key(strategy)
+        sym_key = (key, symbol)
+        self._positions_by_symbol[sym_key] = max(
+            0, self._positions_by_symbol.get(sym_key, 0) + delta
         )
         sector = self._symbol_to_sector.get(symbol)
         if sector:
-            self._positions_by_sector[sector] = max(
-                0, self._positions_by_sector.get(sector, 0) + delta
+            sec_key = (key, sector)
+            self._positions_by_sector[sec_key] = max(
+                0, self._positions_by_sector.get(sec_key, 0) + delta
             )
 
     def record_trade(self, strategy: str, symbol: str = "") -> None:

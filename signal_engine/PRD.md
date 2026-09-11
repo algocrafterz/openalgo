@@ -218,6 +218,22 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-11)
 
+**Concentration caps are PER STRATEGY, in both modes.** A strategy may not re-enter a name it
+already holds - that is averaging into a position its own rules already sized once, doubling
+that strategy's exposure with no second decision behind it. A DIFFERENT strategy may take the
+same name: the two reached it by different logic, each with its own stop and target, and each
+is a position a trader would genuinely have taken. Deliberately identical in LIVE, unlike the
+capital and slot counters which pool there - "has THIS strategy already got a position in this
+name" is a question about the strategy either way. The exposure it creates is real and
+`max_positions_per_sector` is the control for it (currently off).
+
+**Outcome mirroring covers every channelled strategy.** It is driven by `strategies.REGISTRY`
+rather than a hardcoded list, so ORB, BREAKOUT, BREAKINGTRADE and BREAKINGTRADE-WATCHLIST all
+get their outcomes in their own channel automatically; EMA9, EMA9VWAP and RSI-TP-MR have no
+channel by design. All nine mirrored events pass the strategy tag through.
+
+---
+
 **One position per stock, globally, in both modes.** The symbol/sector caps were briefly made
 per-strategy in ANALYZE so the BREAKINGTRADE vs BREAKINGTRADE-WATCHLIST comparison could run -
 the two are built to call the same names. Reverted: a trader holds ONE position in a stock,

@@ -388,22 +388,26 @@ risk:
   # NSE ticks. It would only bite below Rs 125.
   min_sl_pct: 0.005
 
-  # [tune] Max concurrent positions in the same symbol (0 = no limit).
+  # [tune] Max concurrent positions in the same symbol, PER STRATEGY (0 = no limit).
   #
-  # 2026-09-11: this follows the same LIVE-pools / ANALYZE-isolates split as every other
-  # counter (risk.py's _key). It used to be global in both modes, which quietly broke the
-  # BreakingTrade experiment: BREAKINGTRADE and BREAKINGTRADE-WATCHLIST are BUILT to hold
-  # the same name at the same time so paper P&L can compare the two entry philosophies, and
-  # the watchlist fires on the scan-hit poll - before plan_trade()'s confirming close exists
-  # - so it always took the one symbol slot and the confirmed signal was declined "symbol
-  # concentration limit". BREAKINGTRADE showing near-zero trades would have read as "the
-  # confirmation filter is too strict" rather than "the cap blocked it". In LIVE it still
-  # pools: two strategies in one real name is genuine correlated exposure.
+  # Scoped to the strategy, and identically in BOTH modes - unlike the capital and slot
+  # counters, which pool into one bucket in LIVE. A strategy must never take a second
+  # position in a name it already holds: that is averaging into a position its own rules
+  # already sized once, doubling that strategy's exposure with no second decision behind it.
+  #
+  # A DIFFERENT strategy may take the same name. The two reached it by different logic, each
+  # with its own stop and target, and each is a position a trader would genuinely have taken.
+  # It is also what lets BREAKINGTRADE and BREAKINGTRADE-WATCHLIST be compared on the names
+  # they both call.
+  #
+  # The exposure this creates is real - two strategies long one stock is double the position
+  # in that name - and max_positions_per_sector below is the control for it. It is currently
+  # off; turn it on if several strategies start converging on the same sector.
   max_positions_per_symbol: 1
 
   # [tune] Max concurrent positions in the same sector (0 = disabled).
   # Disabled: stock universe spans the same sectors (FINANCE: PFC, JIOFIN, RECLTD etc.)
-  # Same LIVE-pools / ANALYZE-isolates split as max_positions_per_symbol above.
+  # Per strategy in both modes, same as max_positions_per_symbol above.
   max_positions_per_sector: 0
 
 # ── Symbol Blacklist ─────────────────────────────────────
