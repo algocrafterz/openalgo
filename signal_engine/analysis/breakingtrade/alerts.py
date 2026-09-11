@@ -247,6 +247,21 @@ def _env() -> dict:
     return env
 
 
+#: SQL fragment for "this alert is at or after `since`", parsing BOTH sides.
+#:
+#: A raw string comparison is WRONG here and was wrong in three separate places. trades.db
+#: writes timestamps with datetime.isoformat() ("2026-09-11T11:46:43.327851"); this database
+#: writes them with a space ("2026-09-11 14:52:16"). At index 10 ' ' (0x20) sorts BELOW 'T'
+#: (0x54), so a LATER alert always compared as SMALLER and every such filter matched nothing.
+#:
+#: The cost was three "have I already done this?" checks that always answered no:
+#:   tp_watch._last_level_hit   - re-sent TP1 every poll (5x AXISBANK on 2026-09-11)
+#:   flip_watch._already_warned - re-warned every poll (4x ADANIENSOL, 4x ADANIENT)
+#:   entry_watch                - same shape
+#: Use this constant rather than writing the comparison again.
+SINCE_CLAUSE = "datetime(created_at) >= datetime(?)"
+
+
 def chat_id_for(kind: str) -> str | None:
     """Which channel a given alert kind belongs in, for the CURRENT OpenAlgo mode.
 

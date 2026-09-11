@@ -26,10 +26,42 @@ if TYPE_CHECKING:
 _client: TelegramClient | None = None
 
 
+#: Messages raised before the Telegram client exists, flushed on connect. Bounded: a
+#: startup burst is a handful of messages, and an unbounded queue in a process that may never
+#: connect is a leak.
+_PENDING_LIMIT = 50
+_pending: list = []
+
+
+def _queue_until_connected(text: str, event: str) -> None:
+    if len(_pending) >= _PENDING_LIMIT:
+        logger.warning(f"Notifier: pending queue full, dropping {event or 'message'}")
+        return
+    _pending.append((event, text))
+    logger.info(f"Notifier: client not ready, queued {event or 'message'} for delivery")
+
+
 def set_client(client: TelegramClient) -> None:
     """Called by listener once the Telegram client is connected."""
     global _client
     _client = client
+
+
+async def flush_pending() -> int:
+    """Deliver anything raised before the client existed. Returns how many were sent."""
+    if _client is None or not _pending:
+        return 0
+    queued, _pending[:] = list(_pending), []
+    sent = 0
+    for event, text in queued:
+        try:
+            if await notify(text, event=event):
+                sent += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Notifier: could not flush queued {event}: {e}")
+    if sent:
+        logger.info(f"Notifier: delivered {sent} message(s) queued before startup")
+    return sent
 
 
 async def _current_phase() -> str:
@@ -156,7 +188,11 @@ async def notify(text: str, event: str = "") -> bool:
     if event and not should_notify(event, getattr(settings, "notify_level", "normal")):
         return False
     if _client is None:
-        logger.warning("Notifier: client not ready, skipping (message dropped, not queued)")
+        # Startup reconciliation runs BEFORE listener.set_client(), so its close
+        # notifications were dropped outright - on 2026-09-11 that was all four of the day's
+        # closes, which is why nothing appeared in the admin channel. Queue instead: the
+        # listener flushes on connect (see set_client()).
+        _queue_until_connected(text, event)
         return False
     channel = _channel_for_phase(await _current_phase())
     if channel is None:
@@ -532,7 +568,11 @@ async def _send_and_pin_day_summary(text: str) -> bool:
     if not should_notify("day_summary", getattr(settings, "notify_level", "normal")):
         return False
     if _client is None:
-        logger.warning("Notifier: client not ready, skipping (message dropped, not queued)")
+        # Startup reconciliation runs BEFORE listener.set_client(), so its close
+        # notifications were dropped outright - on 2026-09-11 that was all four of the day's
+        # closes, which is why nothing appeared in the admin channel. Queue instead: the
+        # listener flushes on connect (see set_client()).
+        _queue_until_connected(text, "day_summary")
         return False
     channel = _channel_for_phase(await _current_phase())
     if channel is None:

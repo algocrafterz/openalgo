@@ -233,6 +233,8 @@ async def _connect(client) -> None:
     """Authenticate and register the client as the notification transport."""
     await client.start(phone=settings.telegram_phone)
     notifier.set_client(client)
+    # Startup reconciliation ran before this point; deliver whatever it raised.
+    await notifier.flush_pending()
     watching, skipped = _split_by_enabled(settings.telegram_channels)
     for ch in watching:
         logger.info(f"Watching channel: {ch.name} ({ch.id})")

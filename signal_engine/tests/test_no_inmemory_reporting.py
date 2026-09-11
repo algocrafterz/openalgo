@@ -107,3 +107,54 @@ class TestADegradedSummarySaysSo:
             time_exits=0, trade_records=[], degraded=True,
         )
         assert any("INCOMPLETE" in ln for ln in lines)
+
+
+class TestStartupMessagesAreNotDropped:
+    """Startup reconciliation runs before listener.set_client(), so its close notifications
+    went straight to the floor - all four of 2026-09-11's closes, which is why nothing
+    appeared in the admin channel for the day's trades."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        from signal_engine import notifier
+
+        notifier._pending.clear()
+        notifier._client = None
+        yield
+        notifier._pending.clear()
+        notifier._client = None
+
+    @pytest.mark.asyncio
+    async def test_a_message_raised_before_connect_is_queued(self):
+        from signal_engine import notifier
+
+        await notifier.notify_event("position_closed", "CLOSED | SBIN")
+        assert len(notifier._pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_queue_is_delivered_on_connect(self):
+        from signal_engine import notifier
+
+        await notifier.notify_event("position_closed", "CLOSED | SBIN")
+        with patch.object(notifier, "notify", AsyncMock(return_value=True)) as send:
+            notifier._client = MagicMock()
+            assert await notifier.flush_pending() == 1
+        send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_flushing_twice_does_not_resend(self):
+        from signal_engine import notifier
+
+        await notifier.notify_event("position_closed", "CLOSED | SBIN")
+        with patch.object(notifier, "notify", AsyncMock(return_value=True)):
+            notifier._client = MagicMock()
+            await notifier.flush_pending()
+            assert await notifier.flush_pending() == 0
+
+    @pytest.mark.asyncio
+    async def test_the_queue_is_bounded(self):
+        from signal_engine import notifier
+
+        for i in range(notifier._PENDING_LIMIT + 20):
+            await notifier.notify_event("position_closed", f"msg {i}")
+        assert len(notifier._pending) == notifier._PENDING_LIMIT

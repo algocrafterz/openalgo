@@ -412,6 +412,16 @@ class PositionTracker:
         self._day_summary_date = today
         _mark_summary_sent()
 
+        # The canary, right after the day is reported: does trades.db agree with the broker?
+        # Nothing compared the two before, which is how 2026-09-11 reported +986.41 on a real
+        # +119.31 with full confidence. See signal_engine/reconcile.py.
+        try:
+            from signal_engine import reconcile
+
+            await reconcile.check_and_alert()
+        except Exception as e:  # noqa: BLE001 - the canary must never break the summary
+            logger.warning(f"Day summary: reconciliation check failed: {e}")
+
     def _day_from_db(self, *, want_degraded: bool = False):
         """(trade_records, counts) for today, read from trades.db.
 

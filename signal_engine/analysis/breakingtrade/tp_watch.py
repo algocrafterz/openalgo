@@ -108,8 +108,8 @@ def _last_level_hit(symbol: str, since: str) -> str | None:
     # so against a live position that is half the remainder exited, five times over.
     with alerts._connect() as conn:
         rows = conn.execute(
-            "SELECT scan FROM alerts WHERE kind = 'tp_hit' AND symbol = ? "
-            "AND datetime(created_at) >= datetime(?) AND delivered = 1",
+            f"SELECT scan FROM alerts WHERE kind = 'tp_hit' AND symbol = ? "
+            f"AND {alerts.SINCE_CLAUSE} AND delivered = 1",
             (symbol, since),
         ).fetchall()
     hit = {r[0] for r in rows}

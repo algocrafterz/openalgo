@@ -85,8 +85,8 @@ def _already_warned(symbol: str, since: str) -> bool:
     warning per open position, not one per poll."""
     with alerts._connect() as conn:
         row = conn.execute(
-            "SELECT 1 FROM alerts WHERE kind = 'structure_flip' AND symbol = ? "
-            "AND created_at >= ? LIMIT 1",
+            f"SELECT 1 FROM alerts WHERE kind = 'structure_flip' AND symbol = ? "
+            f"AND {alerts.SINCE_CLAUSE} LIMIT 1",
             (symbol, since),
         ).fetchone()
     return row is not None

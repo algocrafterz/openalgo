@@ -860,12 +860,17 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
 async def _decline(signal, stage: str, reason: str) -> None:
     """Record a signal the engine refused before sending an order.
 
-    Entry directions only: an EXIT that fails validation is a reconciliation problem, not a
-    trade that did not happen, and recording it as a declined entry would corrupt the count
-    the review depends on.
+    EXITs are recorded too (2026-09-11). They used to be skipped on the reasoning that an
+    unmatched EXIT is "a reconciliation problem, not a trade that did not happen" - true, but
+    it meant a signal could arrive in a Telegram channel, be acted on by nobody, and leave NO
+    TRACE ANYWHERE. Both of that day's BREAKOUT signals were exactly this: an SL HIT for BPCL
+    and a TP1 HIT for INDUSINDBK, for positions the engine never held. A strategy-by-strategy
+    review built from trades.db reported BREAKOUT as having produced zero signals.
+
+    Counting is protected by the stage/direction on the row, not by dropping the row: a
+    review that wants entries only filters `direction IN ('LONG','SHORT')`, which it must do
+    anyway to separate entries from exits.
     """
-    if signal.direction not in (Direction.LONG, Direction.SHORT):
-        return
     save_declined(signal, stage=stage, reason=reason)
 
 
