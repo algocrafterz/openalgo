@@ -86,8 +86,33 @@ class TradePlan:
 
     @property
     def reward_risk(self) -> float | None:
-        """R:R to the FINAL target - what the plan is worth if the runner runs."""
+        """R:R to the TP THAT IS ACTUALLY SENT AND TRADED - targets[0].
+
+        This used to measure to targets[-1] (the 2.0x IB target) while alert_trade_signal()
+        sent `TP: targets[0]` (the 1.0x one), so every alert advertised an R:R for a
+        different trade than the one on the lines above it. Since TARGET_IB_MULTIPLES is
+        (1.0, 1.5, 2.0), the overstatement was exactly 2.00x - confirmed against all 25 of
+        2026-09-11's alerts, every one of them.
+
+        The staged ladder is computed here but NOT wired through: BreakingTrade's TP HIT
+        exits 100% at targets[0] (config.yaml's BREAKINGTRADE profile), so the old figure
+        described an exit sequence the engine never performs. The sharp case that day was
+        UNIONBANK - the channel showed "R:R: 1:1.2" and the engine then IGNORED the same
+        signal for falling under the 0.75 minimum, at its real 1:0.60.
+
+        See reward_risk_runner for the ladder's own number, which is real information and is
+        reported separately rather than folded into this one.
+        """
         if not self.risk_per_share or not self.targets:
+            return None
+        return round(abs(self.targets[0] - self.entry) / self.risk_per_share, 2)
+
+    @property
+    def reward_risk_runner(self) -> float | None:
+        """R:R to the FINAL target - what the plan would be worth IF the staged ladder were
+        wired through and the runner ran. None when there is no ladder beyond the first
+        target. Reported under its own label, never as `R:R` - see reward_risk."""
+        if not self.risk_per_share or len(self.targets) < 2:
             return None
         return round(abs(self.targets[-1] - self.entry) / self.risk_per_share, 2)
 

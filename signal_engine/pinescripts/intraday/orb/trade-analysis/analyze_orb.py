@@ -23,7 +23,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ def match_trades(entries: list[dict], exits: list[dict]) -> list[dict]:
     # Determine final exit for each trade
     tp_order = {"TP1": 1, "TP1.5": 2, "TP2": 3, "TP3": 4}
     trades = []
-    for key, trade in entry_map.items():
+    for _key, trade in entry_map.items():
         ex_list = trade["exits"]
         if not ex_list:
             # Entry with no exit — could be end of data
@@ -676,7 +676,7 @@ def generate_report(
     q2_metrics = compute_overall_metrics(q2_trades)
 
     # Date range
-    dates = sorted(set(t["date"] for t in trades))
+    dates = sorted({t["date"] for t in trades})
     first_date = dates[0] if dates else "N/A"
     last_date = dates[-1] if dates else "N/A"
 
@@ -857,7 +857,7 @@ def generate_report(
     w()
     w("| Day | Q1 WR% | Q2 WR% | Q1 PnL | Q2 PnL |")
     w("|-----|--------|--------|--------|--------|")
-    for q1d, q2d in zip(q1_dow, q2_dow):
+    for q1d, q2d in zip(q1_dow, q2_dow, strict=False):
         w(f"| {q1d['day']} | {q1d['wr']:.1f}% | {q2d['wr']:.1f}% | {q1d['pnl']:+.2f}% | {q2d['pnl']:+.2f}% |")
     w()
 
@@ -926,7 +926,7 @@ def generate_report(
     if slippage:
         w("## Execution Quality (Live Trade Cross-Reference)")
         w()
-        w(f"**Period:** Mar 12 - Apr 6, 2026 (live broker data)")
+        w("**Period:** Mar 12 - Apr 6, 2026 (live broker data)")
         w(f"**Matched trades:** {slippage['matched_trades']}")
         w()
         w("| Metric | Value |")
@@ -964,8 +964,8 @@ def generate_report(
             tp1_only_pnl += t["final_pnl_pct"]
             multi_tp_pnl += t["final_pnl_pct"]
 
-    w(f"| Strategy | Gross PnL% | Per Trade |")
-    w(f"|----------|-----------|-----------|")
+    w("| Strategy | Gross PnL% | Per Trade |")
+    w("|----------|-----------|-----------|")
     w(f"| TP1 only (cap at 1R) | {tp1_only_pnl:+.2f}% | {tp1_only_pnl/len(completed):+.3f}% |")
     w(f"| Multi-TP (actual) | {multi_tp_pnl:+.2f}% | {multi_tp_pnl/len(completed):+.3f}% |")
     w(f"| Multi-TP uplift | {multi_tp_pnl - tp1_only_pnl:+.2f}% | — |")
@@ -1046,7 +1046,7 @@ def generate_report(
 
     # Friday handling
     if fri and fri["wr"] < 55:
-        recs.append(f"2. **Reduce Friday exposure**: Consider halving max_open_positions on Fridays or tightening entry filters")
+        recs.append("2. **Reduce Friday exposure**: Consider halving max_open_positions on Fridays or tightening entry filters")
 
     # Direction bias
     if dir_metrics["LONG"]["wr"] < 55:
@@ -1101,7 +1101,7 @@ def _derive_output_name(export_path: Path, trades: list) -> str:
 
     # Fallback: derive period from first/last trade date
     if trades:
-        dates = sorted(set(t["date"] for t in trades))
+        dates = sorted({t["date"] for t in trades})
         return f"orb-performance-{dates[0]}-to-{dates[-1]}.md"
 
     return "orb-performance.md"
@@ -1160,8 +1160,8 @@ def main():
 
     # Also print summary
     m = compute_overall_metrics(trades)
-    print(f"\n=== SUMMARY ===")
-    print(f"Period: {sorted(set(t['date'] for t in trades))[0]} to {sorted(set(t['date'] for t in trades))[-1]}")
+    print("\n=== SUMMARY ===")
+    print(f"Period: {sorted({t['date'] for t in trades})[0]} to {sorted({t['date'] for t in trades})[-1]}")
     print(f"Trades: {m['total_completed']} | WR: {m['win_rate']:.1f}% | PnL: {m['total_pnl']:+.2f}%")
     print(f"Avg PnL: {m['avg_pnl']:+.3f}% | W/L: {m['wl_ratio']:.2f}")
 

@@ -4,10 +4,10 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Set
 
 from loguru import logger
 
+from signal_engine import notifier
 from signal_engine.api_client import (
     cancel_all_orders,
     cancel_order,
@@ -20,9 +20,7 @@ from signal_engine.api_client import (
 from signal_engine.executor import build_exit_order, place_sl_order, send_order
 from signal_engine.models import Direction, OrderStatus
 from signal_engine.risk import RiskEngine
-from signal_engine import notifier
 from signal_engine.timeutils import IST
-
 
 
 def _compute_r(total_pnl: float, qty: int, entry: float, sl: float) -> float | None:
@@ -78,7 +76,7 @@ class TradeRecord:
     original_qty: int
     total_pnl: float        # cumulative P&L across all exit legs (partial + final)
     r_multiple: float | None
-    exit_types: List[str]   # e.g. ["TP1", "TP2"], ["SL"], ["TIME"], ["EXIT"]
+    exit_types: list[str]   # e.g. ["TP1", "TP2"], ["SL"], ["TIME"], ["EXIT"]
 
 
 @dataclass
@@ -98,7 +96,7 @@ class TrackedPosition:
     fill_price: float = 0.0     # Actual broker fill price for the entry order (0 = unknown)
     original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
     realized_pnl: float = 0.0   # P&L accumulated from partial exits (for W/L classification at full close)
-    exit_types: List[str] = field(default_factory=list)  # labels appended at each exit leg
+    exit_types: list[str] = field(default_factory=list)  # labels appended at each exit leg
     entry_time: datetime = field(default_factory=lambda: datetime.now(IST))
     be_stop_applied: bool = False  # True after no-progress detection moved SL to break-even
     ever_seen_nonzero_qty: bool = False  # True once positionbook confirmed qty > 0 (fill proof)
@@ -146,7 +144,7 @@ class PositionTracker:
     """
 
     def __init__(self, risk_engine: RiskEngine, poll_interval: int = 30):
-        self._positions: Dict[str, TrackedPosition] = {}
+        self._positions: dict[str, TrackedPosition] = {}
         self._risk_engine = risk_engine
         self._poll_interval = poll_interval
         self._running = False
@@ -164,14 +162,18 @@ class PositionTracker:
         # Date whose summary has been sent in THIS process. Paired with the on-disk
         # marker above, which covers restarts.
         self._day_summary_date = None
-        self._completed_trades: List[TradeRecord] = []  # one record per closed position
+        self._completed_trades: list[TradeRecord] = []  # one record per closed position
         # Per-(key, log-kind) throttle to suppress repeated debug lines on every 5s poll.
         # Value = last time we emitted that log line for the position/kind pair.
-        self._last_debug_log: Dict[tuple[str, str], datetime] = {}
+        self._last_debug_log: dict[tuple[str, str], datetime] = {}
         #: Strategies whose unrealised loss was reported on the last poll — so one whose
         #: positions have all closed gets an explicit 0.0 rather than keeping a stale figure
         #: that would go on throttling it. See _push_unrealised().
         self._reported_unrealised: set = set()
+        #: Consecutive failed positionbook polls, and whether the outage has been reported.
+        #: See _POSITIONBOOK_OUTAGE_POLLS.
+        self._positionbook_failures = 0
+        self._positionbook_outage_alerted = False
 
     def day_context_line(self, max_trades: int | None = None) -> str:
         """Compact per-day running context used in Telegram close notifications."""
@@ -222,6 +224,14 @@ class PositionTracker:
         # Purge stale throttle entries for this key so a later re-entry starts fresh
         for kind in ("age", "poll_wait"):
             self._last_debug_log.pop((key, kind), None)
+        # ... and the position's exit lock, for the same reason (see main._release_exit_lock).
+        # Imported here rather than at module scope: main imports tracker, not the reverse.
+        try:
+            from signal_engine.main import _release_exit_lock
+
+            _release_exit_lock(symbol, strategy)
+        except Exception as e:  # noqa: BLE001 - bookkeeping must not break unregister
+            logger.debug(f"Could not release exit lock for {key}: {e}")
         return pos
 
     def record_exit(
@@ -393,6 +403,53 @@ class PositionTracker:
         if (time_exit_today - now).total_seconds() / 60 <= 30:
             await self.send_day_summary()
 
+    #: Consecutive failed positionbook polls before the outage is escalated. One failure is
+    #: noise - the next cycle is tracking.poll_interval away. Six at 5s is ~30 seconds of the
+    #: tracker being BLIND: no close detection, no no-progress gate, no time-exit trigger.
+    #: On 2026-09-11 a 403 burst produced 16 in a row (11:50-11:52 IST) and the only trace
+    #: was one WARNING per cycle, found afterwards in OpenAlgo's traffic log rather than the
+    #: engine's own.
+    _POSITIONBOOK_OUTAGE_POLLS = 6
+
+    async def _note_positionbook_failure(self) -> None:
+        """Count a failed poll and escalate once the tracker has been blind long enough."""
+        self._positionbook_failures += 1
+        logger.warning(
+            f"check_positions: positionbook fetch failed "
+            f"({self._positionbook_failures} in a row) - skipping this poll cycle"
+        )
+        if (
+            self._positionbook_failures < self._POSITIONBOOK_OUTAGE_POLLS
+            or self._positionbook_outage_alerted
+        ):
+            return
+        self._positionbook_outage_alerted = True
+        message = (
+            f"POSITION TRACKING BLIND\n{self._positionbook_failures} consecutive positionbook "
+            f"failures. Close detection, no-progress gates and the time exit are all stalled "
+            f"for {len(self._positions)} open position(s) until OpenAlgo answers again."
+        )
+        logger.critical(message.replace("\n", " "))
+        try:
+            await notifier.notify_event("positionbook_outage", message)
+        except Exception as e:  # noqa: BLE001 - alerting must not break the poll loop
+            logger.warning(f"Could not send positionbook outage alert: {e}")
+
+    async def _note_positionbook_success(self) -> None:
+        """Clear the outage counter, announcing recovery if one was reported."""
+        if self._positionbook_outage_alerted:
+            self._positionbook_outage_alerted = False
+            failures = self._positionbook_failures
+            logger.info(f"Positionbook recovered after {failures} failed polls")
+            try:
+                await notifier.notify_event(
+                    "positionbook_recovered",
+                    f"Position tracking RESUMED after {failures} failed polls.",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Could not send positionbook recovery alert: {e}")
+        self._positionbook_failures = 0
+
     def _push_unrealised(self, book_data: dict) -> None:
         """Report each strategy's mark-to-market unrealised LOSS to the risk engine.
 
@@ -408,7 +465,7 @@ class PositionTracker:
         tracked position is reported each cycle, and a strategy whose positions have all
         closed is explicitly zeroed, so a stale figure can never keep throttling it.
         """
-        losses: Dict[str, float] = {strategy: 0.0 for strategy in self._reported_unrealised}
+        losses: dict[str, float] = dict.fromkeys(self._reported_unrealised, 0.0)
         for pos in self._positions.values():
             losses.setdefault(pos.strategy, 0.0)
             _qty, ltp = book_data.get(pos.symbol, (0, 0.0))
@@ -458,8 +515,9 @@ class PositionTracker:
 
         book = await fetch_positionbook()
         if book is None:
-            logger.warning("check_positions: positionbook fetch failed — skipping this poll cycle")
+            await self._note_positionbook_failure()
             return
+        await self._note_positionbook_success()
 
         book_data = _index_positionbook(book)
         self._push_unrealised(book_data)
@@ -716,7 +774,7 @@ class PositionTracker:
             with logger.contextualize(symbol=pos.symbol):
                 await self._apply_no_progress_action(pos, now, fired, _settings)
 
-    def _no_progress_gates(self, _settings) -> "List[tuple]":
+    def _no_progress_gates(self, _settings) -> "list[tuple]":
         """Build the ordered gate list: (age_threshold, progress_threshold, label).
 
         Chop tightener: if today already hit `trigger_count` no-progress firings, the
@@ -740,7 +798,7 @@ class PositionTracker:
             )
             self._chop_tightener_logged = True
 
-        gates: List[tuple] = []
+        gates: list[tuple] = []
         if _settings.no_progress_loss_cut_enabled:
             gates.append((
                 timedelta(minutes=_settings.no_progress_loss_cut_min_age_minutes),
@@ -944,7 +1002,7 @@ class PositionTracker:
         await self.send_day_summary()
         self._reset_day_counters()
 
-    async def _square_off_strategies(self, strategies: Set[str]) -> None:
+    async def _square_off_strategies(self, strategies: set[str]) -> None:
         """Cancel pending orders then close all positions, per strategy."""
         self._time_exit_active = True
         try:

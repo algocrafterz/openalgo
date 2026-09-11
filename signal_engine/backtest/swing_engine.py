@@ -56,7 +56,7 @@ class SwingRunConfig:
     #: trade dominates the sample.
     max_hold_bars: int = 120
 
-    def with_(self, **kw) -> "SwingRunConfig":
+    def with_(self, **kw) -> SwingRunConfig:
         return replace(self, **kw)
 
 

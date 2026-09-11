@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from signal_engine import strategies
 from signal_engine.config import settings
 from signal_engine.timeutils import IST
 
@@ -58,17 +59,14 @@ def _channel_for_phase(phase: str):
 
 #: Strategy tag (as it appears on the Telegram alert / TradeRecord.strategy) -> config.yaml
 #: telegram.channels base name, for the per-strategy EOD summary (see
-#: _send_per_strategy_day_summaries()). Deliberately explicit rather than derived from the
-#: strategy string, since the two live in different namespaces (a free-text alert header vs a
-#: channel name) and a guessed transform would silently misroute the day a new strategy is
-#: added. A strategy tag with no entry here (or none of this session's four are trading yet)
-#: simply gets no per-strategy send - it still appears in the consolidated comparison.
-_STRATEGY_CHANNEL_BASE = {
-    "ORB": "intraday-orb",
-    "BREAKOUT": "intraday-breakout",
-    "BREAKINGTRADE": "intraday-breakingtrade",
-    "BREAKINGTRADE-WATCHLIST": "intraday-breakingtrade-watchlist",
-}
+#: _send_per_strategy_day_summaries()). Still an explicit mapping rather than a guessed
+#: transform of the strategy string - the two live in different namespaces (a free-text alert
+#: header vs a channel name) and a guessed transform would silently misroute the day a new
+#: strategy is added - but it now comes from strategies.REGISTRY rather than being a fourth
+#: hand-maintained copy of the same table. A strategy with no channel there (RSI-TP-MR, EMA9,
+#: EMA9VWAP - all deliberate) simply gets no per-strategy send; it still appears in the
+#: consolidated comparison.
+_STRATEGY_CHANNEL_BASE = strategies.channelled()
 
 
 def _channel_for_strategy(strategy: str, phase: str):
@@ -176,8 +174,13 @@ async def notify(text: str, event: str = "") -> bool:
 
 # ── Format helpers ─────────────────────────────────────────────────────────────
 
+def _side(direction: str) -> str:
+    """Fixed-width LONG/SHORT column for the per-trade table."""
+    return "LONG " if str(direction).upper() == "LONG" else "SHORT"
+
+
 def _dir(direction: str) -> str:
-    return "LONG ▲" if direction.upper() == "LONG" else "SHORT ▼"
+    return "LONG" if direction.upper() == "LONG" else "SHORT"
 
 
 def _pnl(amount: float) -> str:
@@ -237,7 +240,7 @@ async def notify_order_placed(
     rr_str = f" | R:R 1:{rr:.1f}" if rr is not None else ""
     sl_str = f" | SL: {sl:.2f}" if sl is not None else ""
     tp_str = f" | TP: {tp:.2f}" if tp is not None else ""
-    price_str = f"Signal: {signal_price:.2f}" if signal_price is not None else "Signal: —"
+    price_str = f"Signal: {signal_price:.2f}" if signal_price is not None else "Signal: -"
     slot_line = f"\n{slot_context}" if slot_context else ""
     await notify_event("order_placed",
         f"ENTRY SENT | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
@@ -281,7 +284,7 @@ async def notify_sl_placed(
 ) -> None:
     price_str = f" sl={sl_price:.2f}" if sl_price is not None else ""
     logger.info(f"SL confirmed | {symbol} [{strategy}]{price_str} id={order_id}")
-    sl_line = f"SL: {sl_price:.2f}" if sl_price is not None else "SL: —"
+    sl_line = f"SL: {sl_price:.2f}" if sl_price is not None else "SL: -"
     await notify_event("sl_placed",
         f"SL PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"{sl_line} | Order: {order_id}"
@@ -370,12 +373,12 @@ async def notify_position_closed(
     outcome = "WIN" if pnl >= 0 else "LOSS"
     dir_str = f" {_dir(direction)}" if direction else ""
     dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
-    entry_str = f"{entry_price:.2f}" if entry_price is not None else "—"
-    exit_str = f"{exit_price:.2f}" if exit_price is not None else "—"
+    entry_str = f"{entry_price:.2f}" if entry_price is not None else "-"
+    exit_str = f"{exit_price:.2f}" if exit_price is not None else "-"
     ctx_str = f"\n{day_context}" if day_context else ""
     await notify_event("position_closed",
         f"{outcome} CLOSED [{last_exit}] | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
-        f"{entry_str} → {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
+        f"{entry_str} -> {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
     )
 
 
@@ -395,9 +398,9 @@ async def notify_be_stop_applied(
         f"progress={progress:.0%} age={age_minutes}min"
     )
     dir_str = f" {_dir(direction)}" if direction else ""
-    sl_move = f"{original_sl:.2f} → {be_price:.2f}" if original_sl is not None else f"→ {be_price:.2f}"
+    sl_move = f"{original_sl:.2f} -> {be_price:.2f}" if original_sl is not None else f"-> {be_price:.2f}"
     await notify_event("be_stop_applied",
-        f"STOP → BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
+        f"STOP -> BREAK-EVEN | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
         f"SL: {sl_move} | LTP: {ltp:.2f} | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
 
@@ -419,7 +422,7 @@ async def notify_no_progress_exit(
     dir_str = f" {_dir(direction)}" if direction else ""
     await notify_event("no_progress_exit",
         f"NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
-        f"{entry:.2f} → {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min"
+        f"{entry:.2f} -> {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min"
     )
 
 
@@ -435,9 +438,9 @@ async def notify_orphaned_position(
     if "rejected" in reason.lower() or "cancel" in reason.lower():
         plain_reason = "Entry order was rejected by the broker."
     elif "unresolved" in reason.lower() or "status" in reason.lower():
-        plain_reason = "Entry order status could not be confirmed — assumed not filled."
+        plain_reason = "Entry order status could not be confirmed - assumed not filled."
     elif "zero pnl" in reason.lower() or "unconfirmed fill" in reason.lower():
-        plain_reason = "No fill detected — order likely did not execute."
+        plain_reason = "No fill detected - order likely did not execute."
     else:
         plain_reason = reason
 
@@ -461,7 +464,7 @@ async def notify_time_exit(
     dir_str = f" {_dir(direction)}" if direction else ""
     dur_str = f" | held {_dur(hold_minutes)}" if hold_minutes > 0 else ""
 
-    traj = f"{entry_price:.2f} → —" if entry_price is not None else "—"
+    traj = f"{entry_price:.2f} -> -" if entry_price is not None else "-"
 
     pnl_str = ""
     if pnl is not None:
@@ -599,13 +602,16 @@ async def notify_day_summary(
     phase = await _current_phase()
     await _send_per_strategy_day_summaries(by_strategy, today, strategy_capital or {}, phase)
 
-    lines = _day_summary_header(today, trades, wins, losses, net_pnl, capital, time_exits, trade_records)
+    lines = _day_summary_header(
+        today, trades, wins, losses, net_pnl, capital, time_exits, trade_records,
+        pooled_strategies=len(by_strategy),
+    )
     if len(by_strategy) > 1:
         lines.append("")
         lines.append("By strategy (best to worst avg R):")
         lines += _comparison_rows(by_strategy)
     if trade_records:
-        lines.append("─" * 36)
+        lines.append("-" * 36)
         # Best trade first
         lines += [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
 
@@ -661,7 +667,7 @@ def _comparison_rows(by_strategy: dict) -> list:
     width = max(len(row[0]) for row in rows)
     lines = []
     for strategy, trade_count, wins, losses, win_rate, avg_r, net_pnl in rows:
-        r_str = f"{avg_r:+.1f}R" if avg_r is not None else "  —  "
+        r_str = f"{avg_r:+.1f}R" if avg_r is not None else "   -  "
         lines.append(
             f"{strategy:<{width}}  {trade_count}T  W{wins} L{losses}  {win_rate:>3.0f}%  "
             f"{r_str:>6}  {_pnl(net_pnl)}"
@@ -693,7 +699,7 @@ async def _send_per_strategy_day_summaries(
         best_worst = _best_worst_line(records)
         if best_worst:
             lines.append(best_worst)
-        lines.append("─" * 36)
+        lines.append("-" * 36)
         lines += [_trade_line(rec) for rec in sorted(records, key=lambda r: r.total_pnl, reverse=True)]
         try:
             await _client.send_message(channel.id, "\n".join(lines))
@@ -704,10 +710,19 @@ async def _send_per_strategy_day_summaries(
 def _day_summary_header(
     today: str, trades: int, wins: int, losses: int, net_pnl: float,
     capital: float, time_exits: int, trade_records, title: str = "DAY SUMMARY",
+    pooled_strategies: int = 1,
 ) -> list:
-    """Headline block: counts, win rate, net P&L, average R, capital trajectory."""
+    """Headline block: counts, win rate, net P&L, average R, capital trajectory.
+
+    `pooled_strategies` > 1 means `capital` is a SUM of that many independent per-strategy
+    pools, not one account's balance — which is what RiskEngine.total_last_known_capital()
+    returns in ANALYZE, where each strategy sizes off its own cached Rs 1L. Net-over-that-sum
+    is a return on nothing, so the percentage is dropped and the capital line says what the
+    figure actually is. The per-strategy summaries pass 1 and keep both.
+    """
     decided = wins + losses
     win_rate = wins / decided * 100 if decided > 0 else 0
+    is_pooled = pooled_strategies > 1
     pct = net_pnl / capital * 100 if capital > 0 else 0
     pct_str = f"+{pct:.1f}%" if pct >= 0 else f"{pct:.1f}%"
 
@@ -722,11 +737,21 @@ def _day_summary_header(
     # WAS the opening, shifting both ends of the line down by net_pnl.
     closing_capital = capital + net_pnl
 
+    net_line = f"Net: {_pnl(net_pnl)}"
+    if not is_pooled:
+        net_line += f" ({pct_str})"
+    if avg_r is not None:
+        net_line += f" | Avg R: {avg_r:+.1f}R"
+
+    capital_line = f"Capital: ₹{capital:,.0f} -> ₹{closing_capital:,.0f}"
+    if is_pooled:
+        capital_line += f"  (sum of {pooled_strategies} strategy pools, not one account)"
+
     return [
         f"{title} | {today}",
         f"Trades: {trades} | W: {wins}  L: {losses}{t_str} | Win Rate: {win_rate:.0f}%",
-        f"Net: {_pnl(net_pnl)} ({pct_str})" + (f" | Avg R: {avg_r:+.1f}R" if avg_r is not None else ""),
-        f"Capital: ₹{capital:,.0f} → ₹{closing_capital:,.0f}",
+        net_line,
+        capital_line,
     ]
 
 
@@ -740,8 +765,7 @@ def _average_r(trade_records) -> float | None:
 
 def _trade_line(rec) -> str:
     """One row of the per-trade table in the day summary."""
-    dir_icon = "▲" if rec.direction == "LONG" else "▼"
-    exit_str = f"{rec.exit_price:.2f}" if rec.exit_price is not None else "—"
+    exit_str = f"{rec.exit_price:.2f}" if rec.exit_price is not None else "-"
     pnl_str = _pnl(rec.total_pnl) if rec.total_pnl != 0 else "₹0"
     r_str = f"  ({rec.r_multiple:+.1f}R)" if rec.r_multiple is not None else ""
     types_str = "+".join(rec.exit_types) if rec.exit_types else ""
@@ -754,7 +778,7 @@ def _trade_line(rec) -> str:
     ):
         orphan_flag = "  [CHECK]"
     return (
-        f"{dir_icon} {rec.symbol:<12} {rec.entry_price:.2f}→{exit_str:<8} "
+        f"{_side(rec.direction)} {rec.symbol:<12} {rec.entry_price:.2f}->{exit_str:<8} "
         f"{pnl_str:<10}{r_str}  {types_str}{orphan_flag}"
     )
 

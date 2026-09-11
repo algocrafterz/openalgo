@@ -28,11 +28,11 @@ def db(tmp_path, monkeypatch):
 
 
 def _signal(**over):
-    base = dict(
-        strategy="BREAKOUT", direction=Direction.LONG, symbol="LICHSGFIN",
-        entry=564.2, sl=562.61, tp=566.59, sig_id="LICHSGFIN-20260904-1045",
-        raw_message="BREAKOUT LONG | LICHSGFIN", context={"trigger": "IBH-RT", "score": "10"},
-    )
+    base = {
+        "strategy": "BREAKOUT", "direction": Direction.LONG, "symbol": "LICHSGFIN",
+        "entry": 564.2, "sl": 562.61, "tp": 566.59, "sig_id": "LICHSGFIN-20260904-1045",
+        "raw_message": "BREAKOUT LONG | LICHSGFIN", "context": {"trigger": "IBH-RT", "score": "10"},
+    }
     base.update(over)
     return Signal(**base)
 

@@ -9,22 +9,37 @@ from datetime import datetime
 
 from loguru import logger
 
-from signal_engine.api_client import cancel_order, fetch_available_capital, fetch_open_position, fetch_order_fill_price, fetch_order_status, fetch_realised_pnl, fetch_trading_mode, fetch_margin, MarginAPIError
+from signal_engine import notifier, startup
+from signal_engine.api_client import (
+    MarginAPIError,
+    cancel_order,
+    fetch_available_capital,
+    fetch_funds_available,
+    fetch_margin,
+    fetch_open_position,
+    fetch_order_fill_price,
+    fetch_order_status,
+    fetch_realised_pnl,
+    fetch_trading_mode,
+)
 from signal_engine.config import settings
 from signal_engine.db import fetch_last_entry_trade, save, save_declined
-from signal_engine.executor import build_exit_order, build_order, place_sl_order, send_bracket_legs, send_order
+from signal_engine.executor import (
+    build_exit_order,
+    build_order,
+    place_sl_order,
+    send_bracket_legs,
+    send_order,
+)
 from signal_engine.logger_setup import setup_logger
 from signal_engine.models import Direction, OrderStatus, TradeResult, ValidationStatus
-from signal_engine import notifier
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
+from signal_engine.risk_store import RISK_DB_PATH, RiskStore
 from signal_engine.runtime import build_risk_engine
-from signal_engine.risk_store import RiskStore, RISK_DB_PATH
-from signal_engine import startup
+from signal_engine.timeutils import IST
 from signal_engine.tracker import PositionTracker, TrackedPosition, _compute_r
 from signal_engine.validator import validate
-from signal_engine.timeutils import IST
-
 
 _OPENALGO_DB = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "db", "openalgo.db")
@@ -70,11 +85,34 @@ tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
 _exit_locks: dict[str, asyncio.Lock] = {}
 
 
+def _exit_lock_key(symbol: str, strategy: str) -> str:
+    return f"{symbol}:{strategy}"
+
+
 def _get_exit_lock(symbol: str, strategy: str) -> asyncio.Lock:
-    key = f"{symbol}:{strategy}"
+    key = _exit_lock_key(symbol, strategy)
     if key not in _exit_locks:
         _exit_locks[key] = asyncio.Lock()
     return _exit_locks[key]
+
+
+def _release_exit_lock(symbol: str, strategy: str) -> None:
+    """Drop a closed position's lock.
+
+    Nothing used to remove these, and the key space is "any NSE symbol" - BreakingTrade
+    scans the whole F&O list, so a long session accumulates one Lock per name it ever
+    touched. Small each, but unbounded is unbounded, and sessions now survive failures that
+    used to end the process.
+
+    A HELD lock is never dropped: another task is inside it, and removing the entry would let
+    the next exit for that position take a fresh lock and run concurrently - exactly the
+    duplicate-order race the lock exists to prevent. It is released on the next call instead.
+    """
+    key = _exit_lock_key(symbol, strategy)
+    lock = _exit_locks.get(key)
+    if lock is None or lock.locked():
+        return
+    del _exit_locks[key]
 
 
 async def adjust_qty_for_margin(signal, raw_qty: int, live_capital: float) -> int:
@@ -856,9 +894,9 @@ async def _handle_entry(signal) -> None:
     sized = await _resolve_entry_quantity(signal, capital, sizing_capital)
     if sized is None:
         return
-    quantity, is_analyze = sized
+    quantity, is_analyze, risk_based_quantity = sized
 
-    rr = _log_entry_sizing(signal, quantity, sizing_capital)
+    rr = _log_entry_sizing(signal, quantity, sizing_capital, risk_based_quantity)
     order = _build_entry_order(signal, quantity, is_analyze)
 
     # Send to OpenAlgo (routes to live broker or sandbox automatically)
@@ -981,9 +1019,12 @@ async def _resolve_entry_quantity(
 ) -> "tuple[int, bool] | None":
     """Size the position and fit it to broker margin.
 
-    Returns (quantity, is_analyze) or None if the trade cannot be taken.
+    Returns (quantity, is_analyze, risk_based_quantity) or None if the trade cannot be
+    taken. risk_based_quantity is the pre-margin figure, kept so the sizing log can say when
+    the two differ — see _log_entry_sizing().
     """
     quantity = risk_engine.calculate_quantity(signal, capital=sizing_capital)
+    risk_based_quantity = quantity
     if quantity <= 0:
         msg = f"Sizing returned 0 for {signal.symbol} — entry price too high for risk budget ({signal.entry:.2f} vs capital={sizing_capital:,.0f})"
         logger.info(msg)
@@ -995,6 +1036,8 @@ async def _resolve_entry_quantity(
     # Skip in analyze mode: sandbox has fixed virtual capital, broker margin API is not available
     _, is_analyze = await fetch_trading_mode()
     if is_analyze:
+        if not await _sandbox_can_fund(signal, quantity):
+            return None
         logger.info(f"Analyze mode: skipping margin check for {signal.symbol}, using risk-based qty={quantity}")
     else:
         try:
@@ -1016,11 +1059,42 @@ async def _resolve_entry_quantity(
         logger.info(f"Test qty cap: {quantity} -> {settings.test_qty_cap} for {signal.symbol}")
         quantity = settings.test_qty_cap
 
-    return quantity, is_analyze
+    return quantity, is_analyze, risk_based_quantity
 
 
-def _log_entry_sizing(signal, quantity: int, sizing_capital: float) -> float:
-    """Emit the one-line sizing audit trail. Returns the reward:risk ratio."""
+def _max_leverage() -> float:
+    """Broker-funded leverage ceiling from broker.mis_margin_pct, or 0.0 for "unknown".
+
+    Defensive about the value: this is only used to decide whether to ADD a warning to a log
+    line, so a missing or non-numeric setting must degrade to "say nothing" rather than
+    raise inside the entry path.
+    """
+    try:
+        margin_pct = float(settings.mis_margin_pct)
+    except (TypeError, ValueError):
+        return 0.0
+    return 1 / margin_pct if margin_pct > 0 else 0.0
+
+
+def _log_entry_sizing(
+    signal, quantity: int, sizing_capital: float, risk_based_quantity: int = 0
+) -> float:
+    """Emit the one-line sizing audit trail. Returns the reward:risk ratio.
+
+    `risk_based_quantity` is the qty BEFORE adjust_qty_for_margin() scaled it to fit live
+    capital. When the two differ the line says so, because the difference silently changes
+    what a trade actually risks: the R-multiple stays comparable (it is per-share) but the
+    rupee P&L, and therefore every loss-limit counter, stops corresponding to "N full stops"
+    — which is the mental model those limits are written in. Defaults to `quantity` for
+    callers that never scaled.
+
+    The line also carries implied leverage. Under fixed_fractional the notional is
+    risk_per_trade / (sl_pct x (1 + slippage)) and the ENTRY PRICE CANCELS OUT, so at the
+    0.20% min_sl_pct BREAKOUT/EMA9/BREAKINGTRADE use it is 4.55x regardless of the stock —
+    and at 20% MIS margin one such position needs ~91% of a Rs 35k account. Derivable, but
+    nobody derives it mid-session, so it goes in the line and is warned about when the broker
+    could not fund it.
+    """
     risk_per_share = abs(signal.entry - signal.sl)
     risk_amount = sizing_capital * settings.risk_per_trade
     # Effective SL used for sizing — may be capped if max_sl_pct_for_sizing is set
@@ -1038,15 +1112,89 @@ def _log_entry_sizing(signal, quantity: int, sizing_capital: float) -> float:
         f" [SL capped {risk_per_share:.2f}->{effective_sl:.2f} for sizing]"
         if effective_sl < risk_per_share else ""
     )
+    # Margin scaling drift (T1) — only mentioned when it actually happened.
+    risk_based_quantity = risk_based_quantity or quantity
+    scale_note = (
+        f" [margin-scaled {risk_based_quantity} -> {quantity}, "
+        f"actual risk {risk_total / sizing_capital:.2%} vs intended "
+        f"{settings.risk_per_trade:.2%}]"
+        if risk_based_quantity != quantity else ""
+    )
+
+    # Implied leverage, and whether the product's margin can fund it at all.
+    leverage = pos_value / sizing_capital if sizing_capital > 0 else 0.0
+    max_leverage = _max_leverage()
+    lev_note = ""
+    if max_leverage and leverage > max_leverage:
+        lev_note = (
+            f" WARNING: notional {pos_value:,.0f} is {leverage:.1f}x capital and exceeds "
+            f"the {max_leverage:.0f}x allowance at mis_margin_pct={1 / max_leverage:.0%}"
+            " - the margin API will cut this order"
+        )
+
     logger.info(
         f"Sizing [{signal.symbol}]: capital={sizing_capital:,.0f} risk={settings.risk_per_trade:.1%}={risk_amount:,.0f} "
         f"entry={signal.entry} sl={signal.sl} tp={signal.tp} "
         f"risk/sh={risk_per_share:.2f}(+{settings.slippage_factor:.0%}slip={adjusted_rps:.2f}){cap_note} "
         f"reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
         f"qty=floor({risk_amount:,.0f}/{adjusted_rps:.2f})={quantity} "
-        f"value={pos_value:,.0f} total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"
+        f"value={pos_value:,.0f} leverage={leverage:.1f}x "
+        f"total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"
+        f"{scale_note}{lev_note}"
     )
     return rr
+
+
+def _is_number(value) -> bool:
+    """True for a real numeric reading. Excludes bool (True would pass as 1) and any
+    stand-in object that merely defines __float__."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+async def _sandbox_can_fund(signal, quantity: int) -> bool:
+    """False (and a DECLINED row) when the sandbox plainly cannot fund this order.
+
+    Analyze mode skips the Margin API - the sandbox has no broker to ask - and sizes off the
+    fixed sizing.sandbox_capital pool, so nothing in the entry path knew what the sandbox
+    actually had left. On 2026-09-11 that meant 14 of 26 validated signals were sent and
+    bounced with "Insufficient funds", each landing in trades.db as a broker REJECTION.
+
+    The distinction matters for the paper experiment, not just for tidiness. config.yaml's
+    analyze profile removed max_open_positions specifically so a decline would say something
+    about the STRATEGY; a drained sandbox put a capacity cap back silently, and labelled its
+    refusals as broker errors. Declining here records the real reason and leaves the sizing
+    model (equal risk off a fixed pool) untouched.
+
+    An unreadable balance is NOT a refusal - see fetch_funds_available().
+    """
+    available = await fetch_funds_available()
+    # getattr: the gate must degrade to "unknown, allow" on any missing config rather than
+    # raising inside the entry path - see _is_number() below.
+    margin_pct = getattr(settings, "mis_margin_pct", None)
+    sizing_pool = getattr(settings, "sandbox_capital", None)
+
+    # isinstance, not float(): "unknown" must not be mistaken for a real balance. A
+    # transient funds-API blip (or a missing config value) must not throw away signals for a
+    # reason that has nothing to do with the sandbox being empty - and float() would happily
+    # coerce a stand-in object into a plausible-looking number.
+    if not all(_is_number(v) for v in (available, margin_pct, sizing_pool)):
+        return True
+
+    required = quantity * signal.entry * margin_pct
+    if required <= available:
+        return True
+
+    msg = (
+        f"Sandbox cannot fund this order: needs ~{required:,.0f} INR margin "
+        f"({quantity} x {float(signal.entry):,.2f} x {margin_pct:.0%}) but the sandbox has "
+        f"{available:,.2f} INR left. Sizing still uses the {sizing_pool:,.0f} sandbox_capital "
+        "pool, so this is a CAPACITY limit, not a signal-quality one - top the sandbox up to "
+        "keep the paper sample complete."
+    )
+    logger.warning(f"{signal.symbol}: {msg}")
+    await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+    await _decline(signal, stage="sandbox_margin", reason=msg)
+    return False
 
 
 def _build_entry_order(signal, quantity: int, is_analyze: bool):

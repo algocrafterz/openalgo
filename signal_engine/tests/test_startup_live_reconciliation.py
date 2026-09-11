@@ -13,11 +13,13 @@ import pytest
 from signal_engine import startup
 
 
-def _risk(isolates: bool, stored: int):
+def _risk(isolates: bool, stored: int, known=None):
     risk = MagicMock()
     risk.isolates_per_strategy = isolates
     risk.total_open_positions.return_value = stored
     risk.open_positions_for.return_value = stored
+    # Reconciliation unions this in so idle strategies get corrected too (M6).
+    risk.known_strategies.return_value = set(known or ())
     return risk
 
 

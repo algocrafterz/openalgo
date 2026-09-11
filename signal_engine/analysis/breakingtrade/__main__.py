@@ -722,6 +722,11 @@ def _watch(args) -> int:
                 pass
 
 
+#: Mirrors maintenance.DEFAULT_RETENTION_DAYS for the --help text without importing the
+#: module (and the browser stack behind it) just to build the parser.
+_DEFAULT_RETENTION_DAYS = 120
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -798,7 +803,32 @@ def main() -> int:
         action="store_true",
         help="Closing-hour accumulation watchlist for the next session (needs a volume snapshot)",
     )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Trim old snapshot history and clear the browser cache (see maintenance.py)",
+    )
+    parser.add_argument(
+        "--prune-days",
+        type=int,
+        default=None,
+        help=f"Retention window for --prune (default {_DEFAULT_RETENTION_DAYS})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --prune: report what would be removed, remove nothing",
+    )
     args = parser.parse_args()
+
+    if args.prune:
+        from signal_engine.analysis.breakingtrade import maintenance
+
+        print(maintenance.run(
+            retention_days=args.prune_days or maintenance.DEFAULT_RETENTION_DAYS,
+            dry_run=args.dry_run,
+        ))
+        return 0
 
     if args.set_analyze is not None:
         from signal_engine.analysis.breakingtrade import review

@@ -176,7 +176,7 @@ def _qualifying_row(symbol, **volume_overrides):
 def _many(rows: list) -> tuple:
     """rows: list of (profile_dict, volume_dict) - build a multi-symbol snapshot pair, needed
     because coverage is a FRACTION across the universe, not a single-row property."""
-    profiles, volumes = zip(*rows)
+    profiles, volumes = zip(*rows, strict=False)
     return pd.DataFrame(list(profiles)), pd.DataFrame(list(volumes))
 
 

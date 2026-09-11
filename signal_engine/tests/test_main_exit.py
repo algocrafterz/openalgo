@@ -1,7 +1,8 @@
 """Exit pipeline: TP HIT flow, day summary, duplicate-signal guards."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from signal_engine.main import handle_message
 from signal_engine.models import (
@@ -36,7 +37,7 @@ class TestExitPipelineDaySummary:
             patch("signal_engine.main.parse", return_value=mock_signal),
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
-            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.risk_engine") as _mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -384,7 +385,7 @@ class TestExitPendingGuard:
     @pytest.mark.asyncio
     async def test_exit_pending_blocks_duplicate_signal(self):
         """When exit_pending=True, a second EXIT signal for the same position is dropped."""
-        from signal_engine.main import _handle_exit, _exit_locks
+        from signal_engine.main import _exit_locks, _handle_exit
         from signal_engine.tracker import TrackedPosition
 
         _exit_locks.clear()
@@ -404,7 +405,7 @@ class TestExitPendingGuard:
             return sig
 
         exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
-        send_count = [0]
+        _unused_send_count = [0]
 
         with (
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
@@ -441,9 +442,9 @@ class TestExitPendingGuard:
     @pytest.mark.asyncio
     async def test_short_exit_places_buy_order(self):
         """EXIT signal for a SHORT position must place a BUY (cover), not a SELL."""
-        from signal_engine.main import _handle_exit, _exit_locks
-        from signal_engine.tracker import TrackedPosition
+        from signal_engine.main import _exit_locks, _handle_exit
         from signal_engine.models import Action
+        from signal_engine.tracker import TrackedPosition
 
         _exit_locks.clear()
 
@@ -517,7 +518,8 @@ class TestConcurrentTPSignals:
         no position and skip — it must NOT place a second exit order or a phantom SL.
         """
         import asyncio
-        from signal_engine.main import _handle_exit, _exit_locks
+
+        from signal_engine.main import _exit_locks, _handle_exit
 
         # Clear any stale locks from other tests
         _exit_locks.clear()
@@ -544,7 +546,7 @@ class TestConcurrentTPSignals:
 
         with (
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
-            patch("signal_engine.main.risk_engine") as mock_risk,
+            patch("signal_engine.main.risk_engine") as _mock_risk,
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -596,7 +598,8 @@ class TestConcurrentTPSignals:
     async def test_concurrent_tp_same_symbol_serialized(self):
         """Two simultaneous EXIT signals for same symbol must not place duplicate SL orders."""
         import asyncio
-        from signal_engine.main import _handle_exit, _exit_locks
+
+        from signal_engine.main import _exit_locks, _handle_exit
 
         _exit_locks.clear()
 

@@ -30,11 +30,10 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional
 
 # Indian Standard Time — all daily counters use IST so the "day" resets at
 # midnight IST (18:30 UTC), not UTC midnight (05:30 IST next morning).
-
 from loguru import logger
 
 from signal_engine.models import Signal
@@ -117,11 +116,11 @@ class RiskEngine:
         trade_mode: str = "live",
         max_positions_per_symbol: int = 0,
         max_positions_per_sector: int = 0,
-        sectors: Dict[str, List[str]] = None,
+        sectors: dict[str, list[str]] = None,
         use_day_start_capital: bool = False,
-        soft_blacklist: Optional[Dict[str, frozenset]] = None,
-        soft_blacklist_multipliers: Optional[Dict[str, float]] = None,
-        strategy_profiles: Optional[Dict[str, dict]] = None,
+        soft_blacklist: dict[str, frozenset] | None = None,
+        soft_blacklist_multipliers: dict[str, float] | None = None,
+        strategy_profiles: dict[str, dict] | None = None,
     ):
         self.risk_per_trade = risk_per_trade
         self.use_day_start_capital = use_day_start_capital
@@ -144,18 +143,18 @@ class RiskEngine:
         # Soft blacklist — per-strategy qty scaling for regime-flipped stocks.
         # Copy into immutable form so callers can't mutate engine state via the input.
         raw_soft = soft_blacklist if soft_blacklist is not None else {}
-        self._soft_blacklist: Dict[str, frozenset] = {
+        self._soft_blacklist: dict[str, frozenset] = {
             k.upper(): frozenset(v) for k, v in raw_soft.items()
         }
         raw_mult = soft_blacklist_multipliers if soft_blacklist_multipliers is not None else {}
-        self._soft_blacklist_multipliers: Dict[str, float] = {
+        self._soft_blacklist_multipliers: dict[str, float] = {
             k.upper(): float(v) for k, v in raw_mult.items()
         }
-        self._strategy_profiles: Dict[str, dict] = strategy_profiles or {}
+        self._strategy_profiles: dict[str, dict] = strategy_profiles or {}
 
         # Build reverse lookup: symbol -> sector
-        raw_sectors: Dict[str, List[str]] = sectors if sectors is not None else {}
-        self._symbol_to_sector: Dict[str, str] = {}
+        raw_sectors: dict[str, list[str]] = sectors if sectors is not None else {}
+        self._symbol_to_sector: dict[str, str] = {}
         for sector_name, symbols in raw_sectors.items():
             for sym in symbols:
                 self._symbol_to_sector[sym] = sector_name
@@ -165,13 +164,13 @@ class RiskEngine:
         # Per-strategy counters — see _StrategyState. Populated lazily on first touch
         # (calculate_quantity, get_sizing_capital, ...) and preloaded at __init__/mode
         # switch for any strategy that already has a row for today (restart recovery).
-        self._by_strategy: Dict[str, _StrategyState] = {}
+        self._by_strategy: dict[str, _StrategyState] = {}
 
         # Correlation risk: per-symbol and per-sector position counts, keyed
         # (counter_key, name) where counter_key is _key(strategy) — so they pool in LIVE
         # and isolate in ANALYZE, exactly like every other counter. See module docstring.
-        self._positions_by_symbol: Dict[tuple, int] = defaultdict(int)
-        self._positions_by_sector: Dict[tuple, int] = defaultdict(int)
+        self._positions_by_symbol: dict[tuple, int] = defaultdict(int)
+        self._positions_by_sector: dict[tuple, int] = defaultdict(int)
 
         self._restore()
 
@@ -295,6 +294,13 @@ class RiskEngine:
 
         When disabled, returns live_capital as-is (original behavior).
         """
+        # Rollover FIRST: this is the earliest counter touch on the entry path
+        # (main._handle_entry calls it before check_exposure), and smoke_test calls it
+        # without ever calling check_exposure at all. Checking only in check_exposure meant
+        # the first signal after a midnight-IST rollover read - and re-cached - yesterday's
+        # day-start capital.
+        self._maybe_reset_daily()
+
         if not self.use_day_start_capital:
             return live_capital
 
@@ -362,6 +368,7 @@ class RiskEngine:
         Returns 0 if the trade should be skipped (price filter, unaffordable).
         Raises ValueError for unknown sizing mode.
         """
+        self._maybe_reset_daily()  # see get_sizing_capital() - same reason
         self._state(signal.strategy).last_known_capital = capital
 
         # Price filter — reject stocks outside the configured price band. Per-strategy first:
@@ -576,6 +583,19 @@ class RiskEngine:
 
     def last_known_capital_for(self, strategy: str) -> float:
         return self._state(strategy).last_known_capital
+
+    def known_strategies(self) -> set:
+        """Every counter bucket currently loaded — the strategies that traded today plus any
+        restored from risk.db at startup.
+
+        Startup reconciliation needs this to visit a strategy carrying a stale non-zero
+        open_positions with NO local open rows to attribute against: iterating only the
+        strategies present in the position book leaves that phantom slot in place all day,
+        and at max_open_positions=2 one phantom slot is half the account's capacity.
+
+        In LIVE this is the single pooled bucket (_LIVE_POOLED_KEY), not the real tags.
+        """
+        return set(self._by_strategy)
 
     def total_open_positions(self) -> int:
         """Open positions across every strategy — cheap existence check only

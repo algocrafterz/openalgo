@@ -16,7 +16,7 @@ _NUMERIC_FIELDS = {"entry", "sl", "tp"}
 _CONSUMED_FIELDS = _MANDATORY_FIELDS | {"exchange", "product", "time", "tplevel", "exitqtypct", "sigid"}
 
 
-def parse(text: str) -> Optional[Signal]:
+def parse(text: str) -> Signal | None:
     """Parse a signal message into a Signal object.
 
     Standardized format:
@@ -68,7 +68,7 @@ def parse(text: str) -> Optional[Signal]:
         return None
 
 
-def _parse_header(first_line: str) -> Optional[tuple]:
+def _parse_header(first_line: str) -> tuple | None:
     """Read "STRATEGY DIRECTION" off the first line. None if it is not one."""
     parts = first_line.strip().split()
     if len(parts) < 2:
@@ -79,7 +79,7 @@ def _parse_header(first_line: str) -> Optional[tuple]:
     return parts[0].upper(), direction_str
 
 
-def _parse_fields(body_lines) -> Optional[dict]:
+def _parse_fields(body_lines) -> dict | None:
     """Read the Key: Value body. None if a mandatory or numeric field is unusable."""
     fields = {}
     for line in body_lines:
@@ -117,7 +117,7 @@ def _upper_or_none(value):
     return value.upper() if value else value
 
 
-def _nonblank_or_none(raw) -> Optional[str]:
+def _nonblank_or_none(raw) -> str | None:
     """Trimmed string, or None when the field is missing or blank.
 
     A blank SigID must read as "no key", not as the empty-string key — otherwise every
@@ -129,7 +129,7 @@ def _nonblank_or_none(raw) -> Optional[str]:
     return value or None
 
 
-def _parse_exit_qty_pct(raw) -> Optional[float]:
+def _parse_exit_qty_pct(raw) -> float | None:
     """Convert PineScript's ExitQtyPct (0-100) to a 0.0-1.0 fraction.
 
     None means full exit (backward compatible with alerts that omit the field).

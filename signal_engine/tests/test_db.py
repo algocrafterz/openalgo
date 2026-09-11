@@ -113,7 +113,11 @@ class TestDataQualityFlag:
     are what let analysis exclude a row like that without deleting the audit trail."""
 
     def test_flagged_row_is_excluded_from_clean_trades(self):
-        from signal_engine.db import DATA_QUALITY_EXECUTION_ISSUE, fetch_clean_trades, flag_data_quality
+        from signal_engine.db import (
+            DATA_QUALITY_EXECUTION_ISSUE,
+            fetch_clean_trades,
+            flag_data_quality,
+        )
 
         save(_make_signal(), _make_order(), _make_result(order_id="ORD1"))
         flagged = flag_data_quality("ORD1", DATA_QUALITY_EXECUTION_ISSUE, "orphaned position")

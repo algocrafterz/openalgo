@@ -81,6 +81,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=mock_trade_result),
@@ -115,6 +116,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=50_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=10),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
@@ -139,6 +141,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.send_order") as mock_send,
         ):
             mock_risk.check_exposure.return_value = True
@@ -157,6 +160,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=800.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.send_order") as mock_send,
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
             patch("signal_engine.main.settings") as mock_settings,
@@ -183,6 +187,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=5000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=10),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result) as mock_send,
@@ -265,6 +270,7 @@ class TestCncBracketSkip:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
@@ -308,6 +314,7 @@ class TestCncBracketSkip:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
@@ -350,6 +357,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
@@ -388,6 +396,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock) as mock_bracket,
@@ -425,6 +434,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_entry),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock) as mock_bracket,
@@ -464,6 +474,7 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=200_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.adjust_qty_for_margin", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.build_order", return_value=mock_order),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
@@ -534,6 +545,7 @@ class TestFillOvershotTP:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=15_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.build_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, side_effect=[entry_result, close_result]),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock,
@@ -577,7 +589,7 @@ class TestFillOvershotTP:
             direction=Direction.SHORT, entry=413.5, sl=421.91, tp=408.75
         )
         valid_result = ValidationResult(status=ValidationStatus.VALID)
-        entry_result = TradeResult(order_id="E_SHORT", status=OrderStatus.SUCCESS, message="ok")
+        _unused_entry_result = TradeResult(order_id="E_SHORT", status=OrderStatus.SUCCESS, message="ok")
         sl_result = TradeResult(order_id="SL_SHORT", status=OrderStatus.SUCCESS, message="ok")
 
         with (
@@ -585,6 +597,7 @@ class TestFillOvershotTP:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=15_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.build_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock,
                   return_value=TradeResult(order_id="E_SHORT", status=OrderStatus.SUCCESS, message="ok")),
@@ -631,6 +644,7 @@ class TestFillOvershotTP:
             patch("signal_engine.main.validate", return_value=valid_result),
             patch("signal_engine.main.risk_engine") as mock_risk,
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=15_000.0),
+            patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.build_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=entry_result),
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock,

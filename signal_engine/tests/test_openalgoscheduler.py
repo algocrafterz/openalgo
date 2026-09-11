@@ -642,7 +642,7 @@ class TestStartupAlertsOnFailure:
         calls = []
 
         def _boom():
-            raise EnvironmentError("BROKER_NAME missing")
+            raise OSError("BROKER_NAME missing")
 
         sched = self._patch(
             monkeypatch,
@@ -676,7 +676,7 @@ class TestHealthcheck:
         """OAuth-only brokers (no TOTP secret) have nothing for this check to
         do - it must not raise or exit."""
         def _boom():
-            raise EnvironmentError("BROKER_TOTP_SECRET is not set")
+            raise OSError("BROKER_TOTP_SECRET is not set")
 
         sched = self._patch(monkeypatch, validate_auto_login_env=_boom)
         sched._run_healthcheck()  # must not raise
@@ -730,7 +730,7 @@ class TestHealthcheck:
 
     def test_configuration_error_during_relogin_alerts_and_exits(self, monkeypatch):
         def _boom():
-            raise EnvironmentError("BROKER_PASSWORD missing")
+            raise OSError("BROKER_PASSWORD missing")
 
         calls = []
         sched = self._patch(

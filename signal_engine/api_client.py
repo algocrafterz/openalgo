@@ -12,7 +12,6 @@ Every call goes through one of two transports:
 """
 
 import asyncio
-from typing import Tuple
 
 import httpx
 from loguru import logger
@@ -45,12 +44,37 @@ def _json_or_empty(response) -> dict:
     return {}
 
 
+#: One shared client for the process, so connections are kept alive between calls. Every
+#: request used to build and tear down its own AsyncClient: at tracking.poll_interval of 5s
+#: that is roughly 700 TCP handshakes an hour against OpenAlgo for the position poll alone,
+#: each one a socket opened and closed. Created lazily on first use because there is no
+#: event loop at import time.
+_client: "httpx.AsyncClient | None" = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=settings.api_timeout)
+    return _client
+
+
+async def close_client() -> None:
+    """Close the shared client. Called on engine shutdown; idempotent."""
+    global _client
+    if _client is not None and not _client.is_closed:
+        try:
+            await _client.aclose()
+        except Exception:  # noqa: BLE001 - a close failure must not break shutdown
+            pass
+    _client = None
+
+
 async def _post_json(path: str, payload: dict) -> dict:
     """POST and return the parsed body. Raises on connection failure or HTTP >= 400."""
-    async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-        response = await client.post(_url(path), json=payload)
-        response.raise_for_status()
-        return response.json()
+    response = await _get_client().post(_url(path), json=payload)
+    response.raise_for_status()
+    return response.json()
 
 
 async def _post_tolerant(path: str, payload: dict):
@@ -59,15 +83,14 @@ async def _post_tolerant(path: str, payload: dict):
     Returns the raw response so callers can reach `status_code` and, when the body is
     not JSON, `text` for the failure reason.
     """
-    async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
-        return await client.post(_url(path), json=payload)
+    return await _get_client().post(_url(path), json=payload)
 
 
 # ---------------------------------------------------------------------------
 # Account state
 # ---------------------------------------------------------------------------
 
-async def fetch_trading_mode() -> Tuple[str, bool]:
+async def fetch_trading_mode() -> tuple[str, bool]:
     """Check if OpenAlgo is in live or analyze mode.
 
     Returns (mode_str, is_analyze) e.g. ("analyze", True) or ("live", False).
@@ -130,6 +153,33 @@ async def fetch_available_capital() -> float:
 
     logger.error(f"Failed to fetch capital after {max_retries} attempts")
     return 0.0
+
+
+async def fetch_funds_available() -> float | None:
+    """The broker/sandbox's REAL available cash. Returns None when it cannot be read.
+
+    Deliberately separate from fetch_available_capital(), which substitutes
+    sizing.sandbox_capital in analyze mode and so can never answer "what is actually left".
+    That gap cost 14 of 2026-09-11's 26 validated signals: the engine sized every one off the
+    Rs 1,00,000 override while the sandbox held Rs 3,073, and each order bounced at the
+    broker as "Insufficient funds" - recorded as a broker REJECTION rather than as the
+    capacity limit it was.
+
+    None, not 0.0, on failure: "unknown" must never be read as "broke", or a transient funds
+    API blip would block every entry.
+    """
+    try:
+        data = await _post_json("funds", _auth())
+    except Exception as e:
+        logger.warning(f"Funds API unreadable: {e}")
+        return None
+    if data.get("status") != "success":
+        logger.warning(f"Funds API non-success: {data}")
+        return None
+    try:
+        return float(data.get("data", {}).get("availablecash", 0))
+    except (TypeError, ValueError):
+        return None
 
 
 async def fetch_realised_pnl() -> float:
@@ -315,6 +365,7 @@ async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int
     Returns None if order is not yet filled, was rejected, or on API error.
     """
     payload = _auth(strategy=strategy, orderid=order_id)
+    last_error = None
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -330,11 +381,26 @@ async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int
                 return None
             # pending/open — wait and retry
         except Exception as e:
+            last_error = e
             logger.debug(f"Fill price fetch attempt {attempt}/{max_attempts} for {order_id}: {e}")
 
         if attempt < max_attempts:
             await asyncio.sleep(1)
 
+    # Every attempt failed or the order never reached "complete". Say so ONCE, at WARNING.
+    #
+    # This used to return None with nothing above DEBUG, which hid a dependency that had
+    # stopped working: on 2026-09-11 `/api/v1/orderstatus` answered 404 ("Order not found in
+    # orderbook") to 564 of 568 calls and errors_*.jsonl recorded none of it. The engine then
+    # falls back to the SIGNAL's entry price, which silently disables
+    # no_progress.use_fill_price_for_progress and makes every R-multiple and day-summary
+    # entry a quote rather than a fill - the fetch_bars UTC failure mode, again.
+    detail = f": {last_error}" if last_error else " (order never reported complete)"
+    logger.warning(
+        f"Could not read the fill price for order {order_id} after {max_attempts} attempts"
+        f"{detail}. Falling back to the signal's entry price - progress, R-multiples and the "
+        "day summary will use the quoted entry, not the actual fill."
+    )
     return None
 
 

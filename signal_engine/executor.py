@@ -2,14 +2,13 @@
 
 import asyncio
 import math
-from typing import Optional, Tuple
+from typing import Optional
 
 import httpx
 from loguru import logger
 
 from signal_engine.config import settings
 from signal_engine.models import Action, Direction, Order, OrderStatus, Signal, TradeResult
-
 
 # NSE equity tick size is 0.05
 _TICK_SIZE = 0.05
@@ -208,7 +207,7 @@ async def send_bracket_legs(
     signal: Signal,
     quantity: int,
     entry_order_id: str,
-) -> Tuple[TradeResult, Optional[TradeResult]]:
+) -> tuple[TradeResult, TradeResult | None]:
     """Place SL leg only for a bracket order.
 
     Indian brokers treat the first SELL as an exit from the long, and any second

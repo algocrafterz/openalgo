@@ -39,7 +39,7 @@ def get_broker_name() -> str:
         if path_parts:
             return path_parts[0].lower()
 
-    raise EnvironmentError(
+    raise OSError(
         "Cannot determine broker name. Set BROKER_NAME in .env, "
         "or ensure REDIRECT_URL follows the pattern http://host/BROKER/callback"
     )
@@ -73,14 +73,14 @@ def validate_auto_login_env() -> dict:
     """
     broker_password = os.environ.get("BROKER_PASSWORD")
     if not broker_password:
-        raise EnvironmentError(
+        raise OSError(
             "BROKER_PASSWORD is not set. "
             "Add it to your .env file for auto-login."
         )
 
     totp_secret = os.environ.get("BROKER_TOTP_SECRET")
     if not totp_secret:
-        raise EnvironmentError(
+        raise OSError(
             "BROKER_TOTP_SECRET is not set. "
             "Add your TOTP seed (from authenticator setup) to .env."
         )
@@ -212,7 +212,7 @@ def _totp_session_token(
 
     try:
         env = validate_auto_login_env()
-    except EnvironmentError as e:
+    except OSError as e:
         return False, str(e), None
 
     totp_code = generate_totp(env["totp_secret"])
@@ -627,7 +627,7 @@ def _run_startup():
     # 1. Auto-login
     try:
         login_result = auto_login()
-    except EnvironmentError as e:
+    except OSError as e:
         logger.error("Configuration error: %s", e)
         notify_failure("configuration", str(e))
         sys.exit(1)
@@ -742,7 +742,7 @@ def _run_healthcheck():
 
     try:
         validate_auto_login_env()
-    except EnvironmentError:
+    except OSError:
         # OAuth-only broker (no TOTP secret configured) — auto_login() can't
         # self-heal this path (see architecture note in project memory), so
         # there is nothing for a periodic check to do beyond what the human
@@ -752,7 +752,7 @@ def _run_healthcheck():
 
     try:
         success, message, auth_token = auto_login()
-    except EnvironmentError as e:
+    except OSError as e:
         logger.error("Healthcheck: configuration error: %s", e)
         notify_failure("healthcheck", str(e))
         sys.exit(1)
@@ -788,9 +788,9 @@ def _run_squareoff():
     engine already closed positions. Acts as the safety net when the engine is crashed,
     frozen, or the system woke from sleep after 3:00 PM.
     """
-    from utils.logging import get_logger
-    from signal_engine.config import settings
     from signal_engine.api_client import cancel_all_orders, close_all_positions
+    from signal_engine.config import settings
+    from utils.logging import get_logger
 
     logger = get_logger(__name__)
     logger.info("Squareoff 15:02: failsafe close of all MIS positions")

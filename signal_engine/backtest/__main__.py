@@ -23,11 +23,11 @@ REGISTRY: dict = {}
 
 
 def _register():
+    from signal_engine.backtest.strategies.dhb import Dhb, DhbParams
     from signal_engine.backtest.strategies.ema9 import Ema9, Ema9Params
     from signal_engine.backtest.strategies.ema9_pdf import Ema9Pdf, Ema9PdfParams
     from signal_engine.backtest.strategies.ema9_vwap import Ema9Vwap, Ema9VwapParams
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
-    from signal_engine.backtest.strategies.dhb import Dhb, DhbParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
@@ -88,8 +88,8 @@ def main() -> None:
 
     if swing:
         print("\n=== by direction (full period) ===")
-        for lbl, kw in (("longs only", dict(allow_shorts=False)),
-                        ("shorts only", dict(allow_longs=False))):
+        for lbl, kw in (("longs only", {"allow_shorts": False}),
+                        ("shorts only", {"allow_longs": False})):
             print(pd.DataFrame([metrics.summary(
                 bt.trades(p, "all", run=bt.run.with_(**kw)), lbl)]).to_string(index=False))
 

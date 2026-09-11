@@ -164,7 +164,11 @@ def test_trade_signal_omits_the_reason_line_when_no_scan_name_is_given():
 def test_trade_signal_shows_r_r_for_a_real_trade_plan():
     """The R:R quick-glance line (matching ORB/BREAKOUT's own alerts) must appear for a real
     TradePlan, which always has reward_risk - the SimpleNamespace test double above omits it
-    on purpose (see alert_trade_signal()'s getattr) but production plans never do."""
+    on purpose (see alert_trade_signal()'s getattr) but production plans never do.
+
+    2026-09-11: the expected value changed from 1:1.98 to 1:0.99 because it was WRONG. It
+    measured to targets[-1] while the alert's TP line carries targets[0], overstating every
+    alert by exactly 2.00x. See TradePlan.reward_risk."""
     from signal_engine.analysis.breakingtrade.trigger import TradePlan
 
     plan = TradePlan(
@@ -175,7 +179,9 @@ def test_trade_signal_shows_r_r_for_a_real_trade_plan():
     alerts.alert_trade_signal(plan)
     with alerts._connect() as conn:
         message = conn.execute("SELECT message FROM alerts LIMIT 1").fetchone()[0]
-    assert "R:R: 1:1.98" in message  # (2309.1 - 2283.1) / 13.1, rounded
+    assert "R:R: 1:0.99" in message  # (2296.1 - 2283.1) / 13.1 - the TP actually sent
+    # The ladder is still reported, under its own label rather than as R:R.
+    assert "Runner target (not traded yet): 2309.1 = 1:1.98" in message
 
 
 def test_trade_signal_with_a_reason_still_parses_as_a_valid_signal():

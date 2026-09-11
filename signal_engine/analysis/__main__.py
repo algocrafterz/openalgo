@@ -19,9 +19,8 @@ import asyncio
 import glob
 import json
 import os
-from datetime import date, datetime
-
 from collections import defaultdict
+from datetime import date, datetime
 
 from signal_engine.analysis.ledger import (
     FLAG_NO_FILL,

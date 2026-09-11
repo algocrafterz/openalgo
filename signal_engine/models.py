@@ -40,16 +40,16 @@ class Signal(BaseModel):
     entry: float
     sl: float
     tp: float
-    exchange: Optional[str] = None
-    product: Optional[str] = None
-    time: Optional[str] = None
+    exchange: str | None = None
+    product: str | None = None
+    time: str | None = None
     # Stable per-trade key emitted by the PineScript on the entry alert and repeated on every
     # TP/SL/EXIT alert for the same trade. Exists BEFORE any order is sent, so it threads a
     # signal that was rejected or never filled — which order_id, the ledger's other bridge,
     # cannot. None on any alert predating the field.
-    sig_id: Optional[str] = None
-    tp_level: Optional[str] = None          # e.g. "TP1", "TP1.5" — set by TP HIT normalizer
-    exit_qty_pct: Optional[float] = None    # 0.0-1.0 fraction of position to exit; from PineScript ExitQtyPct field
+    sig_id: str | None = None
+    tp_level: str | None = None          # e.g. "TP1", "TP1.5" — set by TP HIT normalizer
+    exit_qty_pct: float | None = None    # 0.0-1.0 fraction of position to exit; from PineScript ExitQtyPct field
     # Every "Key: value" line the pipeline does not consume, lower-cased key -> raw string.
     # Carries the PineScript's entry criteria (Score/RVOL/VF/Auction/AdrUsed/...) through to
     # the trade log untouched, so adding a field to the alert needs no change here.

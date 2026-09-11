@@ -32,7 +32,7 @@ class RunConfig:
     # Modelling it here keeps the backtest honest about what would actually trade.
     min_sl_pct: float = 0.002
 
-    def with_(self, **kw) -> "RunConfig":
+    def with_(self, **kw) -> RunConfig:
         return replace(self, **kw)
 
 

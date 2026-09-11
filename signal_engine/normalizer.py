@@ -75,7 +75,7 @@ _SL_HIT_RE = re.compile(
 )
 
 
-def normalize(text: Optional[str]) -> str:
+def normalize(text: str | None) -> str:
     """Preprocess a raw signal message into canonical parser format.
 
     Args:
@@ -99,7 +99,7 @@ def normalize(text: Optional[str]) -> str:
     return "\n".join(lines)
 
 
-def _clean_lines(text: Optional[str]) -> list:
+def _clean_lines(text: str | None) -> list:
     """Strip emoji decorations, whitespace, and separator-only lines."""
     if not text or not text.strip():
         return []
@@ -108,7 +108,7 @@ def _clean_lines(text: Optional[str]) -> list:
     return [line for line in lines if line and not _SEPARATOR_RE.match(line)]
 
 
-def _rewrite_tp_hit(lines: list) -> Optional[str]:
+def _rewrite_tp_hit(lines: list) -> str | None:
     """Rewrite "[STRATEGY] TP1 HIT | SYMBOL" into the canonical EXIT format.
 
     Group 1: optional strategy prefix; Group 2: TP level; Group 3: symbol.
@@ -163,7 +163,7 @@ def _read_tp_hit_body(body_lines: list) -> tuple:
     return exit_qty_pct_line, exit_tp
 
 
-def _rewrite_sl_hit(lines: list) -> Optional[str]:
+def _rewrite_sl_hit(lines: list) -> str | None:
     """Rewrite "[STRATEGY] SL HIT | SYMBOL" into the canonical EXIT format.
 
     TradingView sends this when the strategy's SL level is breached on the chart.

@@ -16,26 +16,26 @@ class TestCapitalTrajectory:
     the trajectory line down by the day's P&L."""
 
     def _line(self, **kw):
-        args = dict(today="25-Aug-2026", trades=2, wins=2, losses=0,
-                    net_pnl=500.0, capital=15000.0, time_exits=0, trade_records=None)
+        args = {"today": "25-Aug-2026", "trades": 2, "wins": 2, "losses": 0,
+                    "net_pnl": 500.0, "capital": 15000.0, "time_exits": 0, "trade_records": None}
         args.update(kw)
-        return [l for l in _day_summary_header(**args) if l.startswith("Capital:")][0]
+        return [ln for ln in _day_summary_header(**args) if ln.startswith("Capital:")][0]
 
     def test_profitable_day_counts_up_from_opening(self):
-        assert self._line() == "Capital: ₹15,000 → ₹15,500"
+        assert self._line() == "Capital: ₹15,000 -> ₹15,500"
 
     def test_losing_day_counts_down_from_opening(self):
-        assert self._line(net_pnl=-450.0, wins=0, losses=2) == "Capital: ₹15,000 → ₹14,550"
+        assert self._line(net_pnl=-450.0, wins=0, losses=2) == "Capital: ₹15,000 -> ₹14,550"
 
     def test_flat_day_shows_no_movement(self):
-        assert self._line(net_pnl=0.0, wins=1, losses=1) == "Capital: ₹15,000 → ₹15,000"
+        assert self._line(net_pnl=0.0, wins=1, losses=1) == "Capital: ₹15,000 -> ₹15,000"
 
 
 class TestReturnPct:
     def test_pct_is_measured_against_opening_capital(self):
-        net = [l for l in _day_summary_header(
+        net = [ln for ln in _day_summary_header(
             today="25-Aug-2026", trades=1, wins=1, losses=0, net_pnl=750.0,
-            capital=15000.0, time_exits=0, trade_records=None) if l.startswith("Net:")][0]
+            capital=15000.0, time_exits=0, trade_records=None) if ln.startswith("Net:")][0]
         assert "(+5.0%)" in net   # 750 / 15000, not 750 / 15750
 
     def test_zero_capital_does_not_divide_by_zero(self):

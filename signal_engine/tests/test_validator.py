@@ -4,11 +4,11 @@ import dataclasses
 
 import pytest
 
+from signal_engine.config import settings
 from signal_engine.models import Direction, ValidationStatus
 from signal_engine.strategies import ORB, RSI_TP_MR
-from signal_engine.config import settings
-from signal_engine.validator import validate, _recent_signals
 from signal_engine.tests.conftest import make_signal as _make_signal
+from signal_engine.validator import _recent_signals, validate
 
 
 def _with(monkeypatch, **overrides):

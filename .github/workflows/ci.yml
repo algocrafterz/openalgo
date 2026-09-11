@@ -32,6 +32,28 @@ jobs:
         run: uv run ruff format --check .
         continue-on-error: true  # Pre-existing formatting in broker modules
 
+  # signal_engine is held to a stricter bar than the repo default: it is the code that
+  # places real orders, it was written with its own test suite from the start, and it has no
+  # pre-existing lint debt to grandfather in. Both steps are hard gates - no
+  # continue-on-error - so a regression fails the build instead of scrolling past.
+  signal-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --dev
+      - name: Ruff lint (signal_engine, strict)
+        run: uv run ruff check signal_engine/
+      - name: Tests
+        # No .env in CI: config.py falls back to empty secrets, and the Telegram integration
+        # tests skip themselves when there is no session file. Everything else runs.
+        run: uv run pytest signal_engine/tests/ -q --timeout=120
+        env:
+          PYTHONPATH: .
+
   # Backend tests (CI-safe subset - no broker credentials needed)
   backend-test:
     runs-on: ubuntu-latest

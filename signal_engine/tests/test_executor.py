@@ -1,11 +1,17 @@
 """Tests for order executor — RED phase first."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
-from signal_engine.executor import build_order, build_exit_order, place_sl_order, send_bracket_legs, send_order
+from signal_engine.executor import (
+    build_exit_order,
+    build_order,
+    place_sl_order,
+    send_bracket_legs,
+    send_order,
+)
 from signal_engine.models import Action, Direction, OrderStatus, TradeResult
 from signal_engine.tests.conftest import make_signal as _make_signal
 

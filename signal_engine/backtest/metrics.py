@@ -20,26 +20,26 @@ import pandas as pd
 
 def summary(trades, label: str = "") -> dict:
     if not trades:
-        return dict(label=label, n=0, win=np.nan, gross_bps=np.nan, net_R=np.nan,
-                    t=np.nan, total_R=0.0, payoff=np.nan, stop_pct=np.nan, max_dd_R=np.nan)
+        return {"label": label, "n": 0, "win": np.nan, "gross_bps": np.nan, "net_R": np.nan,
+                    "t": np.nan, "total_R": 0.0, "payoff": np.nan, "stop_pct": np.nan, "max_dd_R": np.nan}
     r = np.array([t.r_net for t in trades])
     g = np.array([t.r_gross for t in trades])
     rp = np.array([t.risk_pct for t in trades])
     wins, losses = r[r > 0], r[r <= 0]
     eq = np.cumsum(r)
     t_stat = r.mean() / (r.std(ddof=1) / np.sqrt(len(r))) if len(r) > 2 and r.std() > 0 else np.nan
-    return dict(
-        label=label,
-        n=len(r),
-        win=round(100 * float((r > 0).mean()), 1),
-        gross_bps=round(float((g * rp).mean() * 100), 2),
-        net_R=round(float(r.mean()), 3),
-        t=round(float(t_stat), 2),
-        total_R=round(float(r.sum()), 1),
-        payoff=round(float(wins.mean() / abs(losses.mean())), 2) if len(wins) and len(losses) else np.nan,
-        stop_pct=round(float(np.median(rp)), 3),
-        max_dd_R=round(float(np.max(np.maximum.accumulate(eq) - eq)) if len(eq) else 0.0, 1),
-    )
+    return {
+        "label": label,
+        "n": len(r),
+        "win": round(100 * float((r > 0).mean()), 1),
+        "gross_bps": round(float((g * rp).mean() * 100), 2),
+        "net_R": round(float(r.mean()), 3),
+        "t": round(float(t_stat), 2),
+        "total_R": round(float(r.sum()), 1),
+        "payoff": round(float(wins.mean() / abs(losses.mean())), 2) if len(wins) and len(losses) else np.nan,
+        "stop_pct": round(float(np.median(rp)), 3),
+        "max_dd_R": round(float(np.max(np.maximum.accumulate(eq) - eq)) if len(eq) else 0.0, 1),
+    }
 
 
 def by_symbol(trades) -> pd.DataFrame:

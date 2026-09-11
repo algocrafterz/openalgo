@@ -20,10 +20,36 @@ LEGACY_STRATEGY = "_LEGACY"
 
 
 class RiskStore:
+    """One long-lived connection for the process, safe to touch from any thread.
+
+    check_same_thread=False because risk counters are written from the asyncio loop AND
+    from tracker paths that may run in a worker thread; sqlite3.threadsafety is 3
+    (SERIALIZED) on this build, so SQLite serialises the shared handle itself. Supports the
+    context-manager protocol so a script can close it deterministically instead of relying
+    on interpreter teardown.
+    """
+
     def __init__(self, db_path: str):
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
+
+    def close(self) -> None:
+        """Close the connection. Idempotent."""
+        if self._conn is None:
+            return
+        try:
+            self._conn.close()
+        except Exception:  # noqa: BLE001 - a close failure must not break teardown
+            pass
+        self._conn = None
+
+    def __enter__(self) -> "RiskStore":
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        self.close()
+        return False
 
     def _migrate(self) -> None:
         cur = self._conn.execute("PRAGMA table_info(risk_counters)")

@@ -1,9 +1,9 @@
 """Tests for OpenAlgo API client."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from signal_engine.api_client import (
     cancel_order,

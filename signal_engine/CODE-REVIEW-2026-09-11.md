@@ -7,15 +7,14 @@ channel split, the BreakingTrade watchlist second outcome, and per-strategy EOD 
 Scope: `signal_engine/` end to end — config, risk, sizing, execution, tracker, notifier,
 listener, startup/reconciliation, databases, logs, scripts, and the BreakingTrade poller.
 
-> **STATUS 2026-09-11 (post-fix).** Every P0 and P1 item below is FIXED, plus M1, M3 and M8.
-> The suite is now **1172 tests passing**; coverage 78% overall with `listener.py` 25% -> 62%,
-> `startup.py` 40% -> 52%, `risk.py` 88% -> 92%, and a new `mode_guard.py` at 98%. Each item
-> carries its own status line. P2 (bar the three done) and P3 remain open — see the plan.
+> **STATUS 2026-09-11 (final).** **Every item in this review is FIXED** — P0, P1, P2, P3 and
+> the trader-side items — plus two leaks the fd-audit found afterwards and three live defects
+> found by reading the day's own logs (see "Found in production" at the end).
 >
-> (The four `test_telegram_integration.py` tests fail when the live engine is running: it
-> holds `data/telegram.session` and Telethon's SQLite open returns "database is locked". They
-> pass in isolation. That is the hazard `alerts.py`'s docstring already warns about, and it
-> is now listed as **L7**.)
+> Suite **1095 -> 1305 tests**, all passing across repeated runs. Coverage **77% -> 80%**
+> (the project bar): `listener.py` 25% -> 67%, `startup.py` 40% -> 56%, `risk.py` 88% -> 92%,
+> `risk_store.py` 76% -> 97%, new `mode_guard.py` 98%. `ruff check signal_engine/` is clean
+> and now a hard CI gate.
 
 **Baseline health (pre-fix).** 1095 tests passed in 57s. Coverage 77% overall (`main.py` 98%,
 `tracker.py` 87%, `risk.py` 88%, `validator.py` 97%). Ruff reports 194 findings, all
@@ -244,7 +243,8 @@ it inert is the worst of the three.
 
 ## P2 — Correctness and observability
 
-**M2. Daily rollover is checked at the wrong point.** `_maybe_reset_daily()` runs only inside
+**M2. Daily rollover is checked at the wrong point.** **FIXED** — `_maybe_reset_daily()` now
+runs at the top of `get_sizing_capital()` and `calculate_quantity()` as well. `_maybe_reset_daily()` runs only inside
 `check_exposure()`, but `get_sizing_capital()` is called first in `_handle_entry` and again
 from `smoke_test`. Across a midnight-IST rollover on a long-running process, the first signal
 of the new day reads the previous day's `day_start_capital`. Call `_maybe_reset_daily()` at
@@ -258,24 +258,32 @@ into `_by_strategy`, never touched by `_state()`, yet summed by `total_open_posi
 `total_last_known_capital()` and printed by `log_startup_summary()` as phantom strategies.
 Filter `_restore()` through `self._key()`.
 
-**M4. Reconciliation filters the positionbook by the global product only.** It uses
+**M4. Reconciliation filters the positionbook by the global product only.** **FIXED** — new
+`_configured_products()` collects the global product plus every `strategy_profiles.<TAG>`
+override, in both the full and single-letter broker spellings. It uses
 `settings.product` and its broker code, ignoring `strategy_profiles.<TAG>.product`. A
 strategy overridden to CNC would have its still-open position excluded from
 `open_broker_symbols`, then found in `by_symbol` and booked as a reconciled exit — closing a
 live position in the ledger while it is still open at the broker. Latent today (every profile
 is MIS); it becomes live the day one is not.
 
-**M5. Restart attribution guesses the strategy.** `_lookup_entry_trade()` tries `"ORB"`
+**M5. Restart attribution guesses the strategy.** **FIXED** — `_lookup_entry_trade()` scores
+every candidate row against the broker's own quantity and side, latest `executed_at` breaking
+ties, instead of taking the first dict hit. `_lookup_entry_trade()` tries `"ORB"`
 first, then iterates `settings.strategy_profiles` in dict order. A symbol traded by two
 strategies today is attributed to whichever is checked first. Match on the broker position's
 quantity/side and prefer the most recent entry row.
 
-**M6. Stale counters for idle strategies are never corrected.** The ANALYZE reconciliation
+**M6. Stale counters for idle strategies are never corrected.** **FIXED** — reconciliation
+unions in `risk_engine.known_strategies()`, so a phantom slot on a strategy with no local rows
+is cleared. The ANALYZE reconciliation
 branch only iterates `known_strategies` derived from `locally_open` and the broker book. A
 strategy left with a non-zero `open_positions` in `risk.db` but no local open rows keeps that
 counter forever. Iterate every key in `_by_strategy` as well.
 
-**M7. The consolidated day summary reports a capital figure no account holds.** In ANALYZE,
+**M7. The consolidated day summary reports a capital figure no account holds.** **FIXED** —
+`_day_summary_header(pooled_strategies=N)` labels the figure "sum of N strategy pools, not one
+account" and drops the meaningless percentage. Per-strategy summaries keep both. In ANALYZE,
 `total_last_known_capital()` sums four independent Rs 1L sandbox pools into Rs 4L, and the
 `Net (X%)` line divides by it. The per-strategy summaries are correct; the consolidated
 header is not. Either drop the capital/% line from the consolidated message or label it
@@ -295,7 +303,12 @@ then lands in the paper channel. When the mode is genuinely unknown, broadcast t
 configured phase — the same thing `openalgoscheduler.send_telegram_notification()` already
 does for broker-login notices.
 
-**M10. Adding a strategy means editing six hand-maintained maps.** `config.yaml`
+**M10. Adding a strategy means editing six hand-maintained maps.** **FIXED** —
+`strategies.REGISTRY` is the single statement of what a strategy is wired to;
+`notifier._STRATEGY_CHANNEL_BASE` derives from it, `config.validate_channels()` reports
+duplicate names/ids, missing `-analyze`/`-live` twins and both-phases-enabled, and
+`startup.log_config_problems()` surfaces all of it every session. EMA9/EMA9VWAP/RSI-TP-MR now
+say "no engine channel by design" in the log instead of being an absence. `config.yaml`
 `telegram.channels`, `strategy_profiles`, `blacklist`, plus `notifier._STRATEGY_CHANNEL_BASE`,
 `strategy_cards.CARDS`, and `alerts._CHANNEL_NAME_BY_GROUP`. EMA9 and EMA9VWAP have the first
 three and none of the last three — no channel, no card, no per-strategy EOD summary. There is
@@ -313,7 +326,8 @@ path; `startup.py`'s CLI/lifecycle helpers are the remaining core gap. Original 
 `api_client.py` 68% (the margin path 341-375 is uncovered). Every fix in P0/P1 should arrive
 with the test that would have caught it.
 
-**M12. `alerts._warned_missing_config` is one flag for all alert kinds.** A missing BTST
+**M12. `alerts._warned_missing_config` is one flag for all alert kinds.** **FIXED** — keyed
+by `(group, phase)`. A missing BTST
 channel suppresses the warning for a later missing watchlist channel. Key it by
 `(group, phase)`.
 
@@ -321,7 +335,11 @@ channel suppresses the warning for a later missing watchlist channel. Key it by
 
 ## P3 — Performance, resources, hygiene
 
-**L1. Synchronous SQLite on the asyncio loop.** Every `db.py` call opens a connection,
+**L1. Synchronous SQLite on the asyncio loop.** **FIXED** — one connection per THREAD
+(`db._local`), schema built once, creation serialised under a lock, autocommit. One shared
+connection was tried first and was worse: it silently lost 3-7 of 8 concurrent writes because
+two threads racing `CREATE TABLE` made one lose to "database is locked", which `save()`
+catches and logs. Caught by a stress test, not by reading. Every `db.py` call opens a connection,
 re-runs `CREATE TABLE`, `PRAGMA table_info`, and possibly `ALTER TABLE`, then closes — all
 blocking, all on the event loop. The BreakingTrade poller is a separate process that also
 touches `trades.db` (`flip_watch.py:52`), so a write-lock contention can block the loop for
@@ -329,22 +347,33 @@ up to `timeout=10`, stalling the position poll and SL placement. Hold one module
 connection, run the schema check once at import, and move writes off the loop with
 `asyncio.to_thread`.
 
-**L2. `RiskStore` holds an un-closed connection** with no `check_same_thread=False` and no
+**L2. `RiskStore` holds an un-closed connection** — **FIXED** (idempotent `close()`, context
+manager, `check_same_thread=False`, released in `_close_resources()`). Original text: with no `check_same_thread=False` and no
 `close()`. Fine while single-threaded and process-scoped, but it will surface the moment
 anything touches it from a thread.
 
-**L3. No HTTP connection reuse.** `api_client` constructs a fresh `httpx.AsyncClient` per
+**L3. No HTTP connection reuse.** **FIXED** — one module-level `AsyncClient`, closed on
+shutdown. `api_client` constructs a fresh `httpx.AsyncClient` per
 call. At `poll_interval: 5` that is roughly 700 TCP+TLS handshakes an hour against a
 localhost OpenAlgo — cheap, but free to fix with one module-level client.
 
-**L4. No retention policy on the analysis data.** `data/breakingtrade_profile` is 125 MB and
+**L4. No retention policy on the analysis data.** **FIXED** — new
+`analysis/breakingtrade/maintenance.py` and a `--prune [--dry-run] [--prune-days N]` CLI:
+trims `snapshots`/`scan_hits` past 120 days and VACUUMs, and clears the Chromium cache dirs
+while leaving Cookies/Local Storage (the login session) alone. Scored tables are never
+pruned. `data/breakingtrade_profile` is 125 MB and
 `breakingtrade.db` 26 MB, growing daily. Logs are rotated and retained properly (30d files,
 90d errors); these are not.
 
-**L5. 194 ruff findings**, all cosmetic (import ordering, PEP-585 annotations, three empty
+**L5. 194 ruff findings** — **FIXED**: `signal_engine/` is clean, and a new `signal-engine`
+CI job gates lint and tests with no `continue-on-error`. The only rule silenced is UP042 on
+`models.py`, with a per-file-ignore explaining why (`StrEnum` changes what `str()` returns,
+and those values reach Telegram text, trades.db and PineScript alert headers). Original:, all cosmetic (import ordering, PEP-585 annotations, three empty
 f-strings in `risk.py:503,505` and `tracker.py:1089`). `ruff check --fix` clears 138.
 
-**L6. Icons against repo convention.** `notifier._trade_line` uses `▲`/`▼`/`─`, and loguru
+**L6. Icons against repo convention.** **FIXED** — shape icons and arrows out of Telegram
+text; the JSON error sink is now a function sink emitting a flat record with no `level.icon`,
+plus its own 90-day retention. `notifier._trade_line` uses `▲`/`▼`/`─`, and loguru
 serialises its level icons (`❌`, `☠️`) into `errors_*.jsonl`. CLAUDE.md forbids icons in
 source, logs, and Telegram text.
 
@@ -352,14 +381,18 @@ source, logs, and Telegram text.
 
 ## Trader's read
 
-**T1. The margin scaler quietly breaks the 1% risk contract downward.**
+**T1. The margin scaler quietly breaks the 1% risk contract downward.** **FIXED** — the
+sizing line now carries `leverage=N.Nx` and, when margin scaling moved the quantity,
+`[margin-scaled 100 -> 60, actual risk 0.24% vs intended 1.00%]`.
 `adjust_qty_for_margin()` scales qty to fit live capital, so whenever slot 2 is taken the
 actual rupee risk is below 1%. R-multiples stay comparable (they are per-share), but the
 rupee P&L and every loss-limit counter no longer correspond to "N full stops" — which is
 exactly the mental model H2's limits are written in. Log the realised risk-per-trade
 alongside the R so the drift is visible.
 
-**T2. `min_sl_pct: 0.002` is not fundable at Rs 35k.** As `config.yaml` itself derives,
+**T2. `min_sl_pct: 0.002` is not fundable at Rs 35k.** **REPORTED, not silently changed** —
+the sizing line now warns when notional exceeds the MIS allowance, so the condition is visible
+per trade. Whether to cap notional or accept one real slot at this capital stays your call. As `config.yaml` itself derives,
 notional = `risk_per_trade / (sl_pct x (1 + slippage))` and entry price cancels. At a 0.20%
 stop that is 4.55x notional; at 20% MIS margin a single position needs ~91% of a Rs 35k
 account. `max_open_positions: 2` is therefore aspirational at the tight end of BREAKOUT's
@@ -377,7 +410,9 @@ confirmed plan, so risk-per-share is smaller — bigger size, tighter effective 
 stop-outs and larger winners. Ranking the comparison table by avg R rather than net rupees is
 the right call; do not compare the two on rupees.
 
-**T5. `record_close` never nets wins, so a profitable day can still halt trading.** Same
+**T5. `record_close` never nets wins, so a profitable day can still halt trading.**
+**RESOLVED as a decision** — weekly/monthly now net (H2); daily stays gross deliberately, and
+`config.yaml` states which is which and why. Same
 mechanism as H2, but worth stating in trading terms: four stop-outs on a day that finished
 +2R still trips the daily limit. If that is intended (loss-streak discipline), say so
 explicitly in `config.yaml`; if not, it is a bug.
@@ -451,7 +486,9 @@ drawdown" (net)? The weekly and monthly ones are only defensible as net.
 
 ## Post-fix addendum
 
-**L7. The Telegram integration tests fight the live engine for the session file.**
+**L7. The Telegram integration tests fight the live engine for the session file.** **FIXED**
+— each test opens a private copy of the session file, cleaned up on exit. They now pass in a
+full run with the engine up.
 `test_telegram_integration.py` opens `data/telegram.session` directly while
 `python -m signal_engine.main` holds it, and Telethon's SQLite session returns
 `database is locked`. The four tests pass in isolation and fail in a full run whenever the
@@ -476,8 +513,71 @@ them when the engine's pid file is present.
 | `api_client.py` | `fetch_orderbook()` (H5) |
 | `config.yaml` | Documentation corrected to match the code on all four points |
 
-## Still open
+## Found in production (2026-09-11 logs), after the review
 
-P2 items M2, M4, M5, M6, M7, M10, M12 and all of P3 (L1-L7) and T1-T5. None of them are
-promotion blockers; M4 (per-strategy product in the reconciliation filter) becomes one the
-day any `strategy_profiles.<TAG>.product` is set to something other than `MIS`.
+Three defects the review did not predict, found by reading the day's own logs and OpenAlgo's
+traffic log. All three are fixed.
+
+**P1. Every BreakingTrade alert overstated its R:R by exactly 2.00x — all 25 of them.**
+`alert_trade_signal()` sent `TP: plan.targets[0]` (the 1.0x IB target) while the `R:R:` line
+on the next line was computed from `plan.targets[-1]` (the 2.0x one). `TARGET_IB_MULTIPLES` is
+`(1.0, 1.5, 2.0)`, so the ratio was a constant 2.00. The staged ladder is computed but **not
+wired through** — BreakingTrade exits 100% at `targets[0]` — so the advertised figure
+described an exit sequence the engine never performs. The sharp case:
+
+    UNIONBANK  entry 178.28  SL 175.44  TP 179.99   channel said 1:1.2, real 1:0.60
+
+and the engine then IGNORED that same signal for falling under `min_rr: 0.75`. The channel and
+the engine disagreed by 2x on every message, and neither number was labelled. `reward_risk`
+now measures the TP that is actually sent; the ladder is reported separately as
+`Runner target (not traded yet)`. The message builder was also split out as
+`build_trade_signal_message()` — the bug was untestable because the only route to that text
+also wrote to the database and called Telegram.
+
+**P2. 14 of 26 validated signals were rejected for sandbox margin, recorded as broker errors.**
+The sandbox drained to Rs 3,073 while the engine kept sizing every trade off the Rs 1,00,000
+`sandbox_capital` override. All three guards read the override rather than the real balance:
+`fetch_available_capital()` short-circuits in analyze mode, so `min_capital_for_entry` compared
+Rs 1,00,000 against its Rs 5,000 floor and passed, and the margin check is skipped in analyze
+mode outright. Each order was sent and bounced, landing in `trades.db` as a broker REJECTION —
+so the paper sample records a capacity limit as a broker problem, in the one profile whose slot
+caps were removed *specifically* so declines would say something about the strategy. New
+`api_client.fetch_funds_available()` (never substitutes the override) plus
+`main._sandbox_can_fund()` declines cleanly with `stage="sandbox_margin"` and a reason naming
+both figures. An unreadable balance is "unknown", never "broke".
+
+**P3. Two dependencies were failing silently.**
+`/api/v1/orderstatus` answered 404 to **564 of 568 calls today** ("Order not found in
+orderbook"), and `fetch_order_fill_price()` swallowed every one at DEBUG — nothing reached
+`errors_*.jsonl`. The engine falls back to the signal's entry price, which quietly disables
+`no_progress.use_fill_price_for_progress` and makes every R-multiple and day-summary entry a
+quote rather than a fill. Separately, a 403 burst (11:50-11:52 IST, self-healing, no IP ban)
+produced **16 consecutive positionbook failures**: for 2.5 minutes the tracker was blind — no
+close detection, no no-progress gate, no time-exit trigger — and said nothing beyond one
+WARNING per cycle. Both now report: the fill-price path warns once with the reason and the
+consequence, and six consecutive positionbook failures raise a CRITICAL alert naming how many
+positions are unmanaged, with a recovery notice when it clears.
+
+The 403 itself is OpenAlgo-side (it recovered on its own and left no ban record); what was
+wrong on this side was that the engine could be blind for minutes without saying so.
+
+## Found by the fd-audit
+
+**Telethon client never disconnected when the listener gave up.** Harmless while
+`start_listener()` returning ended the process; degraded mode (H6) deliberately keeps the
+process alive, so it held a dead socket plus the session handle for the rest of the session.
+A fix meant to make failure safer would itself have leaked. Now released in a `finally`.
+
+**`main._exit_locks` grew without bound.** One `asyncio.Lock` per `SYMBOL:STRATEGY`, never
+removed, over a key space of "any NSE name". Released in `tracker.unregister()`, where
+per-position state is already purged — and never while the lock is held, which would let a
+second exit run concurrently and reintroduce the duplicate-order race.
+
+## Nothing left open
+
+Every finding in this document is closed. Two were resolved as decisions rather than code
+changes, and both are now stated in `config.yaml` rather than implied:
+
+- the daily loss limit stays GROSS ("four full stops" is the intent; weekly and monthly net)
+- the `min_sl_pct: 0.002` leverage question is surfaced per trade rather than capped, because
+  capping notional changes what gets traded and that is a trading decision, not a bug fix

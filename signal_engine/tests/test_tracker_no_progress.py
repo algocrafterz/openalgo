@@ -1,8 +1,9 @@
 """No-progress gates: profit lock, chop tightener, loss cut."""
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from signal_engine.tracker import PositionTracker
 
@@ -39,7 +40,7 @@ class TestNoProgressProfitLock:
             patch("signal_engine.tracker.place_sl_order") as mock_place,
             patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         ):
-            from signal_engine.models import TradeResult, OrderStatus
+            from signal_engine.models import OrderStatus, TradeResult
             mock_place.return_value = TradeResult(
                 status=OrderStatus.SUCCESS, order_id="NEW_SL", message=""
             )
@@ -89,7 +90,7 @@ class TestNoProgressProfitLock:
             patch("signal_engine.tracker.place_sl_order") as mock_place,
             patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         ):
-            from signal_engine.models import TradeResult, OrderStatus
+            from signal_engine.models import OrderStatus, TradeResult
             mock_place.return_value = TradeResult(
                 status=OrderStatus.SUCCESS, order_id="NEW_SL", message=""
             )
@@ -122,7 +123,7 @@ class TestNoProgressProfitLock:
         Rate = 0.312/150 = 0.00208/min. Minutes needed = 0.688/0.00208 = 331min.
         With time exit 60min away: 331 > 60 → market exit fires.
         """
-        from signal_engine.models import Direction, TradeResult, OrderStatus
+        from signal_engine.models import Direction, OrderStatus, TradeResult
 
         engine = _make_engine()
         tracker = PositionTracker(engine)
@@ -201,7 +202,7 @@ class TestChopTightener:
     @pytest.mark.asyncio
     async def test_counter_increments_when_gate_fires(self):
         """Each gate firing must bump _day_no_progress_exits."""
-        from signal_engine.models import Direction, TradeResult, OrderStatus
+        from signal_engine.models import Direction, OrderStatus, TradeResult
 
         engine = _make_engine()
         tracker = PositionTracker(engine)
@@ -266,7 +267,7 @@ class TestChopTightener:
     @pytest.mark.asyncio
     async def test_early_gate_tightens_at_trigger(self):
         """With counter >= trigger, early gate fires on a 32min-old stalled trade (tightened to 30min)."""
-        from signal_engine.models import Direction, TradeResult, OrderStatus
+        from signal_engine.models import Direction, OrderStatus, TradeResult
 
         engine = _make_engine()
         tracker = PositionTracker(engine)
@@ -416,7 +417,7 @@ class TestLossCutGate:
     @pytest.mark.asyncio
     async def test_fires_when_progress_below_threshold_after_min_age(self):
         """Gate fires when deeply negative progress AND age >= min_age."""
-        from signal_engine.models import Direction, TradeResult, OrderStatus
+        from signal_engine.models import Direction, OrderStatus, TradeResult
 
         engine = _make_engine()
         tracker = PositionTracker(engine)
@@ -439,7 +440,7 @@ class TestLossCutGate:
             patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
             patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
         ):
-            from signal_engine.models import TradeResult, OrderStatus
+            from signal_engine.models import OrderStatus, TradeResult
             mock_exit.return_value = TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT", message="")
             with patch("signal_engine.config.settings") as mock_settings:
                 self._apply_settings(mock_settings, enabled=True, min_age=20, threshold=-0.80)
@@ -506,7 +507,7 @@ class TestLossCutGate:
     @pytest.mark.asyncio
     async def test_disabled_does_not_affect_main_gate(self):
         """When loss_cut disabled, main gate still fires normally at 90min."""
-        from signal_engine.models import Direction, TradeResult, OrderStatus
+        from signal_engine.models import Direction, OrderStatus, TradeResult
 
         engine = _make_engine()
         tracker = PositionTracker(engine)
@@ -527,7 +528,7 @@ class TestLossCutGate:
             patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
             patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
         ):
-            from signal_engine.models import TradeResult, OrderStatus
+            from signal_engine.models import OrderStatus, TradeResult
             mock_exit.return_value = TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT", message="")
             with patch("signal_engine.config.settings") as mock_settings:
                 self._apply_settings(mock_settings, enabled=False)  # loss-cut OFF

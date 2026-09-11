@@ -32,26 +32,26 @@ from signal_engine.tracker import PositionTracker, TrackedPosition
 
 def _settings_stub(**overrides):
     """Stand-in for signal_engine.config.settings with every attribute main.py reads."""
-    base = dict(
-        exchange="NSE",
-        product="MIS",
-        mis_margin_pct=0.20,
-        strategy_profiles={"ORB": {"tp_levels": {"TP1": 1.0}}},
-        bracket_tp_exit_retries=1,
-        bracket_retry_delay=0.0,
-        bracket_enabled=True,
-        bracket_cnc_sl_enabled=False,
-        max_trades_per_day=8,
-        tp1_runner_sl_buffer=0.1,
-        use_extended_runner_tiers=False,
-        broker_mis_rejected=set(),
-        min_capital_for_entry=0.0,
-        risk_per_trade=0.01,
-        max_sl_pct_for_sizing=0.0,
-        slippage_factor=0.10,
-        test_qty_cap=0,
-        allow_off_hours_testing=False,
-    )
+    base = {
+        "exchange": "NSE",
+        "product": "MIS",
+        "mis_margin_pct": 0.20,
+        "strategy_profiles": {"ORB": {"tp_levels": {"TP1": 1.0}}},
+        "bracket_tp_exit_retries": 1,
+        "bracket_retry_delay": 0.0,
+        "bracket_enabled": True,
+        "bracket_cnc_sl_enabled": False,
+        "max_trades_per_day": 8,
+        "tp1_runner_sl_buffer": 0.1,
+        "use_extended_runner_tiers": False,
+        "broker_mis_rejected": set(),
+        "min_capital_for_entry": 0.0,
+        "risk_per_trade": 0.01,
+        "max_sl_pct_for_sizing": 0.0,
+        "slippage_factor": 0.10,
+        "test_qty_cap": 0,
+        "allow_off_hours_testing": False,
+    }
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -92,30 +92,30 @@ def _real_tracker():
 
 
 def _position(**overrides) -> TrackedPosition:
-    defaults = dict(
-        symbol="RELIANCE", strategy="ORB", exchange="NSE", product="MIS",
-        entry_price=2500.0, quantity=50, sl=2485.0, tp=2540.0,
-        direction=Direction.LONG, entry_order_id="E1", sl_order_id="SL1",
-        fill_price=2500.0,
-    )
+    defaults = {
+        "symbol": "RELIANCE", "strategy": "ORB", "exchange": "NSE", "product": "MIS",
+        "entry_price": 2500.0, "quantity": 50, "sl": 2485.0, "tp": 2540.0,
+        "direction": Direction.LONG, "entry_order_id": "E1", "sl_order_id": "SL1",
+        "fill_price": 2500.0,
+    }
     defaults.update(overrides)
     return TrackedPosition(**defaults)
 
 
 def _exit_signal(**overrides) -> Signal:
-    defaults = dict(
-        strategy="ORB", direction=Direction.EXIT, symbol="RELIANCE",
-        entry=0.0, sl=0.0, tp=0.0, raw_message="exit",
-    )
+    defaults = {
+        "strategy": "ORB", "direction": Direction.EXIT, "symbol": "RELIANCE",
+        "entry": 0.0, "sl": 0.0, "tp": 0.0, "raw_message": "exit",
+    }
     defaults.update(overrides)
     return Signal(**defaults)
 
 
 def _entry_signal(**overrides) -> Signal:
-    defaults = dict(
-        strategy="ORB", direction=Direction.LONG, symbol="RELIANCE",
-        entry=2500.0, sl=2485.0, tp=2540.0, raw_message="entry",
-    )
+    defaults = {
+        "strategy": "ORB", "direction": Direction.LONG, "symbol": "RELIANCE",
+        "entry": 2500.0, "sl": 2485.0, "tp": 2540.0, "raw_message": "entry",
+    }
     defaults.update(overrides)
     return Signal(**defaults)
 
@@ -146,24 +146,27 @@ def harness(settings=None, tracker=None, **stubs):
     tracker = tracker if tracker is not None else _real_tracker()
     risk_engine = tracker._risk_engine if isinstance(tracker, PositionTracker) else _risk_stub()
 
-    defaults = dict(
-        cancel_order=AsyncMock(return_value=True),
-        send_order=AsyncMock(return_value=_ok("EX1")),
-        fetch_realised_pnl=AsyncMock(return_value=0.0),
-        fetch_open_position=AsyncMock(return_value=0),
-        fetch_order_status=AsyncMock(return_value="complete"),
-        fetch_order_fill_price=AsyncMock(return_value=2500.0),
-        fetch_available_capital=AsyncMock(return_value=100000.0),
-        fetch_trading_mode=AsyncMock(return_value=("live", False)),
-        fetch_margin=AsyncMock(return_value=10000.0),
-        place_sl_order=AsyncMock(return_value=_ok("SL2")),
-        send_bracket_legs=AsyncMock(return_value=(_ok("SL2"), None)),
-        fetch_last_entry_trade=MagicMock(return_value=None),
-        build_exit_order=MagicMock(return_value=_order_stub()),
-        build_order=MagicMock(return_value=_order_stub()),
-        save=MagicMock(),
-        _is_be_series=MagicMock(return_value=False),
-    )
+    defaults = {
+        "cancel_order": AsyncMock(return_value=True),
+        "send_order": AsyncMock(return_value=_ok("EX1")),
+        "fetch_realised_pnl": AsyncMock(return_value=0.0),
+        "fetch_open_position": AsyncMock(return_value=0),
+        "fetch_order_status": AsyncMock(return_value="complete"),
+        "fetch_order_fill_price": AsyncMock(return_value=2500.0),
+        "fetch_available_capital": AsyncMock(return_value=100000.0),
+        # Analyze-mode affordability gate (main._sandbox_can_fund). Plenty, so the gate is a
+        # no-op here - the tests that exercise it live in test_sandbox_affordability.py.
+        "fetch_funds_available": AsyncMock(return_value=1_000_000.0),
+        "fetch_trading_mode": AsyncMock(return_value=("live", False)),
+        "fetch_margin": AsyncMock(return_value=10000.0),
+        "place_sl_order": AsyncMock(return_value=_ok("SL2")),
+        "send_bracket_legs": AsyncMock(return_value=(_ok("SL2"), None)),
+        "fetch_last_entry_trade": MagicMock(return_value=None),
+        "build_exit_order": MagicMock(return_value=_order_stub()),
+        "build_order": MagicMock(return_value=_order_stub()),
+        "save": MagicMock(),
+        "_is_be_series": MagicMock(return_value=False),
+    }
     defaults.update(stubs)
 
     stack = ExitStack()

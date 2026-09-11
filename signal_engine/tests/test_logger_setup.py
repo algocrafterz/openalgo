@@ -27,28 +27,35 @@ def log_dir(tmp_path, monkeypatch):
 
 class TestErrorSink:
     def test_errors_are_written_as_one_json_object_per_line(self, log_dir):
+        """2026-09-11: the sink is a function, not serialize=True, so the object is FLAT -
+        loguru's own serializer rendered level.icon into every line (a literal emoji, against
+        the project's no-icons rule) and level.name already carries the same information."""
         setup_logger()
         logger.bind(symbol="SBIN").error("order rejected")
         logger.complete()
 
         files = list((log_dir / "signal_engine" / "logs").glob("errors_*.jsonl"))
         assert len(files) == 1, "expected exactly one errors jsonl sink"
-        lines = [ln for ln in files[0].read_text().splitlines() if ln.strip()]
+        text = files[0].read_text()
+        lines = [ln for ln in text.splitlines() if ln.strip()]
         assert len(lines) == 1
-        record = json.loads(lines[0])["record"]
+        record = json.loads(lines[0])
         assert record["message"] == "order rejected"
-        assert record["level"]["name"] == "ERROR"
-        assert record["extra"]["symbol"] == "SBIN"
+        assert record["level"] == "ERROR"
+        assert record["symbol"] == "SBIN"
+        assert "icon" not in text
 
     def test_info_does_not_reach_the_error_sink(self, log_dir):
-        """The point of the sink is that a bad day is a short file, not a long one."""
+        """The point of the sink is that a bad day is a short file, not a long one - and with
+        a function sink, a clean day leaves no errors file at all."""
         setup_logger()
         logger.info("routine poll")
         logger.warning("recoverable")
         logger.complete()
 
         files = list((log_dir / "signal_engine" / "logs").glob("errors_*.jsonl"))
-        assert [ln for ln in files[0].read_text().splitlines() if ln.strip()] == []
+        written = [ln for f in files for ln in f.read_text().splitlines() if ln.strip()]
+        assert written == []
 
     def test_exception_carries_its_traceback(self, log_dir):
         setup_logger()
@@ -60,9 +67,9 @@ class TestErrorSink:
 
         files = list((log_dir / "signal_engine" / "logs").glob("errors_*.jsonl"))
         payload = json.loads(files[0].read_text().splitlines()[0])
-        assert payload["record"]["exception"] is not None
-        assert "ValueError" in payload["text"]
-        assert "margin shortfall" in payload["text"]
+        assert payload["exception"] is not None
+        assert "ValueError" in payload["exception"]
+        assert "margin shortfall" in payload["exception"]
 
     def test_full_log_still_receives_everything(self, log_dir):
         """No mode has been set (set_mode() not called) - lines land in the "unknown" file,

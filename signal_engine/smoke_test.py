@@ -27,9 +27,7 @@ Checks performed:
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import List
 from unittest.mock import patch
-
 
 from signal_engine.risk_store import RISK_DB_PATH, RiskStore
 
@@ -48,7 +46,7 @@ class CheckResult:
 
 @dataclass
 class SmokeTestReport:
-    checks: List[CheckResult] = field(default_factory=list)
+    checks: list[CheckResult] = field(default_factory=list)
 
     def add(self, result: CheckResult) -> None:
         self.checks.append(result)
@@ -118,6 +116,7 @@ def check_config() -> str:
 async def check_openalgo_reachable() -> str:
     """HTTP GET to OpenAlgo base URL — confirms Flask app is up."""
     import httpx
+
     from signal_engine.config import settings
     url = settings.openalgo_base_url
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -130,6 +129,7 @@ async def check_openalgo_reachable() -> str:
 async def check_broker_auth() -> str:
     """Fetch funds from OpenAlgo — confirms broker auth token is valid."""
     import httpx
+
     from signal_engine.config import settings
     url = f"{settings.openalgo_base_url}/api/v1/funds"
     payload = {"apikey": settings.openalgo_api_key}
@@ -152,6 +152,7 @@ async def check_broker_auth() -> str:
 async def check_quote_api() -> str:
     """Fetch a live quote for a known liquid NSE stock — confirms MPP will work."""
     import httpx
+
     from signal_engine.config import settings
     # Use SBIN — highly liquid, always present in NSE symbol DB
     url = f"{settings.openalgo_base_url}/api/v1/quotes"
@@ -173,10 +174,10 @@ async def check_quote_api() -> str:
 
 def check_signal_pipeline() -> str:
     """Run a synthetic ORB LONG signal through normalize -> parse -> validate."""
+    from signal_engine.models import Direction, ValidationStatus
     from signal_engine.normalizer import normalize
     from signal_engine.parser import parse
     from signal_engine.validator import validate
-    from signal_engine.models import Direction, ValidationStatus
 
     raw = (
         "ORB LONG\n"
@@ -205,8 +206,8 @@ def check_signal_pipeline() -> str:
 
 def check_risk_engine_state() -> str:
     """Show current risk engine counters so user can confirm day state is clean."""
-    from signal_engine.runtime import build_risk_engine
     from signal_engine.config import settings
+    from signal_engine.runtime import build_risk_engine
 
     store = RiskStore(RISK_DB_PATH)
     engine = build_risk_engine(store)
@@ -239,7 +240,7 @@ def check_db() -> str:
         trades_today=val_before, daily_loss=0.0, open_positions=0,
     )
     row_after = store.load("SMOKE_TEST", "smoke_test", today)
-    assert row_after["trades_today"] == val_before, f"DB round-trip mismatch"
+    assert row_after["trades_today"] == val_before, "DB round-trip mismatch"
     return f"OK — risk.db accessible (smoke_test row={row_after})"
 
 
@@ -251,13 +252,13 @@ async def dry_run_entry_pipeline() -> str:
     Patches send_order to intercept and inspect the final order before it's sent.
     Confirms: capital fetch, sizing, margin skip (NSE equity), order construction.
     """
-    from signal_engine.normalizer import normalize
-    from signal_engine.parser import parse
-    from signal_engine.models import OrderStatus, TradeResult, ValidationStatus
-    from signal_engine.validator import validate
     from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
     from signal_engine.config import settings
+    from signal_engine.models import OrderStatus, TradeResult, ValidationStatus
+    from signal_engine.normalizer import normalize
+    from signal_engine.parser import parse
     from signal_engine.runtime import build_risk_engine
+    from signal_engine.validator import validate
 
     raw = (
         "ORB LONG\n"

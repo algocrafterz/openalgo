@@ -6,8 +6,9 @@ Validates that Flattrade's transform_data correctly converts:
 (Flattrade, like Shoonya, blocks MKT and SL-MKT order types via API.)
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 def _make_order_data(**overrides):

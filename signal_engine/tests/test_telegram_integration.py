@@ -8,6 +8,8 @@ Skip with: pytest -m "not integration"
 """
 
 import os
+import shutil
+import tempfile
 
 import pytest
 from telethon import TelegramClient
@@ -38,9 +40,43 @@ if skip_reason:
     pytestmark = [pytestmark, pytest.mark.skip(reason=skip_reason)]
 
 
+#: Copies of the live session, one per test process, cleaned up on exit.
+_session_copies = []
+
+
+def _session_copy() -> str:
+    """A private COPY of the live session file, so these tests never open the one the running
+    engine holds.
+
+    Opening it directly meant Telethon's SQLite session raced the engine's own handle:
+    `sqlite3.OperationalError: database is locked` whenever `python -m signal_engine.main`
+    was up, so all four tests failed in a full run and passed in isolation — indistinguishable
+    from a real regression, every time. It is also exactly what alerts.py's docstring warns
+    about ("Two processes sharing one Telethon session file is a good way to corrupt it").
+
+    A copy is read-only in effect: these tests only connect and read, so nothing the copy
+    records needs to survive.
+    """
+    source = os.path.join(os.path.dirname(__file__), "..", "data", "telegram.session")
+    handle, path = tempfile.mkstemp(prefix="telegram_test_", suffix=".session")
+    os.close(handle)
+    shutil.copyfile(source, path)
+    _session_copies.append(path)
+    return path[: -len(".session")]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_session_copies():
+    yield
+    for path in _session_copies:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 async def _get_client():
-    session_path = os.path.join(os.path.dirname(__file__), "..", "data", "telegram")
-    c = TelegramClient(session_path, settings.telegram_api_id, settings.telegram_api_hash)
+    c = TelegramClient(_session_copy(), settings.telegram_api_id, settings.telegram_api_hash)
     await c.connect()
     return c
 

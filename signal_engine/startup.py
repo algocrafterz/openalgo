@@ -11,17 +11,15 @@ import sys
 
 from loguru import logger
 
+from signal_engine import mode_guard, notifier
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
-from signal_engine.db import set_trade_mode
-from signal_engine.logger_setup import set_mode as set_log_mode
-from signal_engine.runtime import apply_trade_mode
-from signal_engine.db import fetch_last_entry_trade
+from signal_engine.db import fetch_last_entry_trade, set_trade_mode
 from signal_engine.listener import start_listener
+from signal_engine.logger_setup import set_mode as set_log_mode
 from signal_engine.models import Direction
-from signal_engine import mode_guard, notifier
+from signal_engine.runtime import apply_trade_mode
 from signal_engine.tracker import TimeExitScheduler, TrackedPosition
-
 
 # ---------------------------------------------------------------------------
 # CLI flag handling
@@ -35,7 +33,7 @@ def run_health_check_cli(argv) -> bool:
     if not ("--smoke-test" in argv or "--dry-run" in argv):
         return False
 
-    from signal_engine.smoke_test import run_smoke_test, run_dry_run
+    from signal_engine.smoke_test import run_dry_run, run_smoke_test
     is_dry = "--dry-run" in argv
 
     async def _run_checks():
@@ -106,9 +104,50 @@ async def process_test_signal(text: str, handle_message) -> None:
     logger.info("Test signal processing complete")
 
 
+def log_config_problems() -> list:
+    """Report config.yaml problems that would otherwise fail silently.
+
+    Warnings, not a refusal: a config with a missing -live twin still trades correctly
+    today, and refusing to start over it would be worse than the gap. What matters is that
+    the gap is SAID OUT LOUD every session instead of being discovered on promotion day.
+
+    Also names every registered strategy that has no engine channel, so "measured, not
+    traded" reads as a decision in the log rather than an absence from it.
+    """
+    from signal_engine import strategies
+    from signal_engine.config import validate_channels
+
+    problems = validate_channels(settings.telegram_channels)
+    for problem in problems:
+        logger.warning(f"Config: {problem}")
+
+    configured = {ch.name.lower() for ch in settings.telegram_channels}
+    for tag, meta in sorted(strategies.REGISTRY.items()):
+        if meta.channel_base is None:
+            logger.info(
+                f"Strategy {tag}: no engine channel by design"
+                + (f" - {meta.note}" if meta.note else "")
+            )
+            continue
+        missing = [
+            f"{meta.channel_base}-{phase}"
+            for phase in ("analyze", "live")
+            if f"{meta.channel_base}-{phase}" not in configured
+        ]
+        if missing:
+            problems.append(f"Strategy {tag} has no {', '.join(missing)} channel")
+            logger.warning(
+                f"Config: strategy {tag} is registered with channel base "
+                f"'{meta.channel_base}' but {', '.join(missing)} is not in "
+                "telegram.channels"
+            )
+    return problems
+
+
 def log_startup_banner() -> None:
     """Log the effective configuration the engine is about to run with."""
     logger.info("Signal Engine starting")
+    log_config_problems()
     logger.info(f"Sizing mode: {settings.sizing_mode}")
     if settings.use_day_start_capital:
         logger.info("Day-start capital: enabled (equal risk per trade)")
@@ -134,7 +173,7 @@ async def run_startup_health_checks():
     Returns the SmokeTestReport if the engine may start, or None if startup must
     abort (the failure notification has already been sent).
     """
-    from signal_engine.smoke_test import run_startup_checks, _CRITICAL_CHECKS, _WARNING_CHECKS
+    from signal_engine.smoke_test import _CRITICAL_CHECKS, _WARNING_CHECKS, run_startup_checks
 
     startup_report = await run_startup_checks()
     startup_report.print()
@@ -159,6 +198,30 @@ async def run_startup_health_checks():
 # ---------------------------------------------------------------------------
 # Position reconciliation
 # ---------------------------------------------------------------------------
+
+#: OpenAlgo reports the product either in full or as the broker's single-letter code,
+#: depending on the broker. Both spellings have to be recognised as "still open".
+_BROKER_PRODUCT_CODES = {"MIS": "I", "CNC": "C", "NRML": "M"}
+
+
+def _configured_products() -> set:
+    """Every product this engine may hold a position under, in both spellings.
+
+    This used to be settings.product alone. A strategy with a
+    strategy_profiles.<TAG>.product override (CNC, say) therefore had its still-open
+    position filtered OUT of open_broker_positions — and the loop below, finding the symbol
+    absent from open_broker_symbols but present in by_symbol, booked it as a reconciled
+    EXIT. That closes a live position in the ledger while it is still open at the broker.
+    Latent while every profile is MIS; a correctness bug the day one is not.
+    """
+    products = {str(settings.product or "").upper()}
+    for profile in (settings.strategy_profiles or {}).values():
+        product = (profile or {}).get("product")
+        if product:
+            products.add(str(product).upper())
+    products.discard("")
+    return products | {_BROKER_PRODUCT_CODES[p] for p in products if p in _BROKER_PRODUCT_CODES}
+
 
 async def reconcile_open_positions(risk_engine, tracker) -> None:
     """Reconcile stored open_positions against the broker and restore tracker state.
@@ -189,13 +252,12 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         logger.warning("Position reconciliation: could not fetch positionbook, skipping")
         return
 
-    configured_product = settings.product  # MIS or CNC
-    product_map = {"MIS": "I", "CNC": "C", "NRML": "M"}
-    broker_product = product_map.get(configured_product, configured_product)
+    configured_product = settings.product  # MIS or CNC — the default for restored positions
+    products = _configured_products()
     open_broker_positions = [
         p for p in positions
         if int(p.get("quantity", 0)) != 0
-        and p.get("product", "").upper() in (configured_product, broker_product)
+        and p.get("product", "").upper() in products
     ]
     open_broker_symbols = {p.get("symbol", "") for p in open_broker_positions}
     by_symbol = {p.get("symbol", ""): p for p in positions}
@@ -253,7 +315,15 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
                 "record at all — cannot attribute to a strategy, excluded from per-strategy correction"
             )
 
-        known_strategies = set(open_by_strategy) | {pos["strategy"] for pos in locally_open}
+        # Every bucket the risk engine has loaded is included, not just the ones with a
+        # position right now — otherwise a strategy carrying a stale non-zero counter and NO
+        # local open rows is never visited and keeps that phantom slot all day. At
+        # max_open_positions=2 one phantom slot is half the account's capacity.
+        known_strategies = (
+            set(open_by_strategy)
+            | {pos["strategy"] for pos in locally_open}
+            | risk_engine.known_strategies()
+        )
         for strategy in known_strategies:
             actual = open_by_strategy.get(strategy, 0)
             stored = risk_engine.open_positions_for(strategy)
@@ -385,7 +455,9 @@ def _restore_tracker_positions(
         bexch = bp.get("exchange", settings.exchange)
         bprod = configured_product
 
-        found, strategy_for_pos = _lookup_entry_trade(bsymbol)
+        found, strategy_for_pos = _lookup_entry_trade(
+            bsymbol, broker_qty=bqty, is_long=(bdir == Direction.LONG)
+        )
         if found is None:
             logger.warning(
                 f"Tracker restore [{bsymbol}]: no entry trade in trades.db today "
@@ -423,19 +495,66 @@ def _restore_tracker_positions(
     return restored
 
 
-def _lookup_entry_trade(bsymbol: str):
-    """Find today's most recent entry trade for a symbol across configured strategies.
+def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True):
+    """Find today's entry trade for a symbol and say which strategy it belongs to.
 
     Returns (trade_row_or_None, strategy_name).
+
+    This used to try "ORB" first and then settings.strategy_profiles in DICT ORDER, taking
+    the first hit — so a symbol traded by two strategies today was attributed to whichever
+    happened to be checked first, and the restored position carried the wrong strategy's
+    entry/SL/TP into every later exit decision. Now every candidate row is collected and
+    scored against what the BROKER actually reports:
+
+      1. quantity and direction both match  - unambiguous, take it
+      2. direction matches                  - the side is right, the size may be a partial
+      3. otherwise                          - most recent executed_at wins
+
+    Ties inside a tier are broken by executed_at, latest first.
     """
-    found = fetch_last_entry_trade(bsymbol, "ORB")
-    if found is not None:
-        return found, "ORB"
-    for sk in settings.strategy_profiles.keys():
-        found = fetch_last_entry_trade(bsymbol, sk)
-        if found is not None:
-            return found, sk
-    return None, "ORB"
+    candidates = []
+    seen = set()
+    for strategy in ["ORB", *settings.strategy_profiles.keys()]:
+        key = strategy.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        row = fetch_last_entry_trade(bsymbol, strategy)
+        if row is not None:
+            candidates.append((strategy, row))
+
+    if not candidates:
+        return None, "ORB"
+
+    wanted_direction = "LONG" if is_long else "SHORT"
+
+    def _sort_key(item):
+        _strategy, row = item
+        direction_ok = str(row.get("direction", "")).upper() == wanted_direction
+        qty_ok = broker_qty > 0 and int(row.get("quantity", 0) or 0) == int(broker_qty)
+        tier = 0 if (direction_ok and qty_ok) else (1 if direction_ok else 2)
+        return (tier, _invert_timestamp(row.get("executed_at")))
+
+    strategy, row = min(candidates, key=_sort_key)
+    if len(candidates) > 1:
+        logger.info(
+            f"Tracker restore [{bsymbol}]: {len(candidates)} strategies traded this symbol "
+            f"today ({', '.join(s for s, _ in candidates)}) - attributed to {strategy} "
+            f"(broker qty={broker_qty}, side={wanted_direction})"
+        )
+    return row, strategy
+
+
+def _invert_timestamp(executed_at) -> tuple:
+    """Sort key that puts the LATEST executed_at first under an ascending sort.
+
+    A missing timestamp sorts last rather than first — an undated row is the weakest
+    evidence available, not the strongest.
+    """
+    if not executed_at:
+        return (1, "")
+    return (0, "".join(chr(0x10FFFF - ord(c)) if ord(c) < 0x10FFFF else c
+                       for c in str(executed_at)))
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +639,37 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
         if time_exit_task is not None:
             time_exit_scheduler.stop()
             time_exit_task.cancel()
+        await _close_resources(risk_engine)
         logger.info("Signal Engine stopped")
+
+
+async def _close_resources(risk_engine) -> None:
+    """Release the process's long-lived handles on the way out.
+
+    All three are shared singletons rather than per-call objects (that is the point - see
+    api_client._get_client and db._get_connection), so nothing reclaims them until the
+    process exits. Closing them explicitly keeps a deliberate shutdown clean and makes the
+    ownership obvious; each is best-effort because a failure here must not mask whatever
+    actually stopped the engine.
+    """
+    from signal_engine import api_client, db
+
+    try:
+        await api_client.close_client()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Shutdown: could not close the HTTP client: {e}")
+
+    try:
+        db.reset_connection()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Shutdown: could not close trades.db: {e}")
+
+    store = getattr(risk_engine, "_store", None)
+    if store is not None and hasattr(store, "close"):
+        try:
+            store.close()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Shutdown: could not close risk.db: {e}")
 
 
 def _start_time_exit_scheduler(tracker):

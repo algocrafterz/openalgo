@@ -198,6 +198,14 @@ ignore = [
     "F401",   # imported but unused (sometimes intentional)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# UP042 wants `class X(StrEnum)` instead of `class X(str, Enum)`. Deliberately NOT taken:
+# the two differ in what str() returns (StrEnum gives "LONG", str+Enum gives
+# "Direction.LONG"), and these values are formatted into Telegram alert text, written to
+# trades.db and compared against PineScript alert headers. A silent change in any of those
+# is a trading bug, not a style upgrade. Revisit only with tests covering the round trip.
+"signal_engine/models.py" = ["UP042"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["broker", "blueprints", "database", "services", "utils", "restx_api", "extensions", "limiter", "cors", "csp"]
 

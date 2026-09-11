@@ -86,18 +86,18 @@ class Backtest:
         rows = []
         b_is = metrics.summary(self.trades(base_p, "is"))
         b_oos = metrics.summary(self.trades(base_p, "oos"))
-        rows.append(dict(variant="base", n_IS=b_is["n"], bps_IS=b_is["gross_bps"],
-                         n_OOS=b_oos["n"], bps_OOS=b_oos["gross_bps"], helps="-"))
+        rows.append({"variant": "base", "n_IS": b_is["n"], "bps_IS": b_is["gross_bps"],
+                         "n_OOS": b_oos["n"], "bps_OOS": b_oos["gross_bps"], "helps": "-"})
         for label, kw in variants.items():
             p = replace(base_p, **kw)
             i = metrics.summary(self.trades(p, "is"))
             o = metrics.summary(self.trades(p, "oos"))
             up_i = i["gross_bps"] > b_is["gross_bps"]
             up_o = o["gross_bps"] > b_oos["gross_bps"]
-            rows.append(dict(variant=label, n_IS=i["n"], bps_IS=i["gross_bps"],
-                             n_OOS=o["n"], bps_OOS=o["gross_bps"],
-                             helps="BOTH" if up_i and up_o else
-                                   "IS only" if up_i else "OOS only" if up_o else "neither"))
+            rows.append({"variant": label, "n_IS": i["n"], "bps_IS": i["gross_bps"],
+                             "n_OOS": o["n"], "bps_OOS": o["gross_bps"],
+                             "helps": "BOTH" if up_i and up_o else
+                                   "IS only" if up_i else "OOS only" if up_o else "neither"})
         return pd.DataFrame(rows)
 
     def sweep(self, base_p, field: str, values, window: str = "is") -> pd.DataFrame:

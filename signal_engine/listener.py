@@ -2,13 +2,13 @@
 
 import asyncio
 import random
-from datetime import datetime, timezone
-from typing import Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime, timezone
 
 from loguru import logger
 
-from signal_engine.config import settings
 from signal_engine import mode_guard, notifier
+from signal_engine.config import settings
 
 # Check the connection every 90s so a stale one is noticed (common in WSL2, where TCP
 # keepalives across the NAT bridge can silently die without triggering a reconnect).
@@ -110,8 +110,8 @@ def _channel_names(channels=None) -> dict:
 
 def _is_stale(msg) -> float | None:
     """Age of a message in seconds if it is too old to act on, else None."""
-    msg_time = msg.date.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - msg_time).total_seconds()
+    msg_time = msg.date.replace(tzinfo=UTC)
+    age = (datetime.now(UTC) - msg_time).total_seconds()
     return age if age > settings.stale_signal_seconds else None
 
 
@@ -296,6 +296,33 @@ async def start_listener(
     flood_error = _flood_wait_error()
     retries = 0
     floods = 0
+    try:
+        retries, floods = await _retry_until_exhausted(client, flood_error)
+    finally:
+        # Release the socket and the session handle. This used not to matter: start_listener()
+        # returning ended the process, so the OS reclaimed both. Degraded mode (see
+        # startup._serve_until_shutdown) deliberately keeps the process alive for the rest of
+        # the session instead, so without this the engine holds a dead connection all day -
+        # a fix meant to make failure safer would itself have leaked.
+        try:
+            await client.disconnect()
+        except Exception as e:  # noqa: BLE001 - teardown must not become the failure
+            logger.debug(f"Listener: client disconnect on shutdown failed: {e}")
+
+    logger.critical(
+        "Telegram listener giving up "
+        f"(retries={retries}/{settings.listener_max_retries}, "
+        f"floods={floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}). No NEW signals will be received. "
+        "The tracker and time exit keep running so open positions stay managed - see "
+        "startup._serve_until_shutdown()."
+    )
+
+
+async def _retry_until_exhausted(client, flood_error) -> tuple:
+    """Connect-and-serve until both budgets are spent. Returns (retries, floods) for the
+    give-up message, so the caller can report WHICH budget ran out."""
+    retries = 0
+    floods = 0
     while retries < settings.listener_max_retries and floods < _MAX_CONSECUTIVE_FLOOD_WAITS:
         try:
             await _connect(client)
@@ -321,10 +348,4 @@ async def start_listener(
             )
             await asyncio.sleep(wait)
 
-    logger.critical(
-        "Telegram listener giving up "
-        f"(retries={retries}/{settings.listener_max_retries}, "
-        f"floods={floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}). No NEW signals will be received. "
-        "The tracker and time exit keep running so open positions stay managed — see "
-        "startup._serve_until_shutdown()."
-    )
+    return retries, floods

@@ -135,7 +135,9 @@ def scan_reason(scan_name: str) -> str:
     poller - just read less helpfully until _SCAN_REASON is updated)."""
     return _SCAN_REASON.get(scan_name, "setup matched (reason not documented yet)")
 
-_warned_missing_config = False
+#: (group, phase) pairs already warned about — one warning per DESTINATION, not one for the
+#: whole module. See send().
+_warned_missing_config: set = set()
 
 
 def _connect() -> sqlite3.Connection:
@@ -289,12 +291,15 @@ def send(text: str, kind: str = None, monospace: bool = False) -> tuple[bool, in
     Markdown code block only a literal backtick or backslash needs escaping, and none of this
     module's generated text (numbers, symbols, arrows) ever contains either.
     """
-    global _warned_missing_config
     token, chat_id = _credentials(kind)
     if not token or not chat_id:
-        if not _warned_missing_config:
-            group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
-            phase = _current_phase()
+        group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
+        phase = _current_phase()
+        # Keyed by (group, phase), not one flag for everything: a missing BTST channel used
+        # to suppress the warning for a later missing WATCHLIST one, so the second gap was
+        # invisible and its alerts silently went undelivered with nothing said about it.
+        warn_key = (group, phase)
+        if warn_key not in _warned_missing_config:
             where = (
                 f"telegram.breakingtrade_btst_channels.{phase}"
                 if group == "btst"
@@ -304,7 +309,7 @@ def send(text: str, kind: str = None, monospace: bool = False) -> tuple[bool, in
                 f"  [alerts] BREAKINGTRADE_BOT_TOKEN not set, or no {where} channel in "
                 "config.yaml - alerts are being recorded but not delivered"
             )
-            _warned_missing_config = True
+            _warned_missing_config.add(warn_key)
         return False, None
     payload = {"chat_id": chat_id, "disable_web_page_preview": True}
     if monospace:
@@ -577,6 +582,18 @@ def alert_trade_signal(
     that channel's `enabled` flag in config.yaml, not by anything here - which is what lets the
     same message stream be recorded, read and scored long before it is allowed to touch money.
     """
+    message = build_trade_signal_message(plan, strategy, scan_name)
+    return record(kind, message, symbol=plan.symbol, direction=plan.direction, scan=strategy)
+
+
+def build_trade_signal_message(plan, strategy: str = "BREAKINGTRADE", scan_name: str = None) -> str:
+    """The alert text for one trade, as a pure function of the plan.
+
+    Split out of alert_trade_signal() so the message can be asserted on directly - the
+    2026-09-11 R:R bug (every alert overstating by 2.00x) was invisible to tests because the
+    only way to reach this text was through a function that also writes to the database and
+    talks to Telegram.
+    """
     side = "LONG" if plan.direction == "up" else "SHORT"
     lines = [
         f"{strategy} {side}",
@@ -589,13 +606,22 @@ def alert_trade_signal(
         # getattr, not plan.reward_risk: some callers pass a lightweight stand-in without the
         # full TradePlan property set (e.g. this module's own tests), and a missing R:R is a
         # cosmetic omission, not a reason to fail the whole signal.
+        # R:R measures the TP on the line above - the one the engine actually trades. It
+        # used to measure to the ladder's FINAL target while TP carried the first, which
+        # overstated every alert by exactly 2.00x (see TradePlan.reward_risk).
         f"R:R: 1:{getattr(plan, 'reward_risk', None)}" if getattr(plan, "reward_risk", None) else "",
+        # The ladder, named rather than folded into R:R. It is what the plan WOULD be worth
+        # if the staged exits were wired through; today they are not, so it is context for a
+        # reader, never a number to size or judge the trade on.
+        (
+            f"Runner target (not traded yet): {plan.targets[-1]} = 1:"
+            f"{getattr(plan, 'reward_risk_runner', None)}"
+        ) if getattr(plan, "reward_risk_runner", None) else "",
         f"Time: {plan.triggered_at:%H:%M}" if plan.triggered_at else "",
     ]
     if scan_name:
         lines.append(f"Reason: {scan_reason(scan_name)}")
-    message = "\n".join(lines).strip()
-    return record(kind, message, symbol=plan.symbol, direction=plan.direction, scan=strategy)
+    return "\n".join(line for line in lines if line).strip()
 
 
 def alert_health(text: str) -> None:

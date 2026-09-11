@@ -131,7 +131,10 @@ def test_plan_assembles_entry_stop_targets():
     assert plan.stop == pytest.approx(94.0)  # 95 - 0.25*4
     assert plan.targets == [121.0, 126.0, 131.0]  # IB range 10 -> 1x/1.5x/2x
     assert plan.split == trigger.TREND_SPLIT
-    assert plan.reward_risk == pytest.approx(20 / 17, abs=0.01)
+    # R:R is to targets[0] - the TP the alert sends and the engine trades. It measured to
+    # targets[-1] until 2026-09-11, overstating every alert by exactly 2.00x.
+    assert plan.reward_risk == pytest.approx(10 / 17, abs=0.01)
+    assert plan.reward_risk_runner == pytest.approx(20 / 17, abs=0.01)
 
 
 def test_plan_warns_when_the_stop_is_unusually_wide():

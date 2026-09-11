@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -10,7 +11,6 @@ from loguru import logger
 
 from signal_engine.models import Direction, Order, Signal, TradeResult
 from signal_engine.timeutils import IST
-
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "data", "trades.db")
 
@@ -85,15 +85,84 @@ INSERT INTO trades (
 """
 
 
+#: ONE CONNECTION PER THREAD, not one per call and not one shared across threads.
+#:
+#: Per call was the original: every function opened a connection, re-ran CREATE TABLE,
+#: PRAGMA table_info and possibly ALTER TABLE, then closed — all synchronously on the
+#: asyncio event loop. The BreakingTrade poller is a SEPARATE PROCESS that also writes
+#: trades.db (flip_watch.py), so a write-lock collision could stall the loop for the full
+#: `timeout=10`: no position poll, no SL placement, for ten seconds of market hours.
+#:
+#: One shared connection fixed that and introduced a worse problem. sqlite3.threadsafety is
+#: 3 (SERIALIZED) so SQLite's own structures are safe, but the Python Connection object's
+#: statement cache is not — two threads executing on one handle intermittently corrupt each
+#: other's cursor state, which is the same failure the root CLAUDE.md records for StaticPool
+#: ("bad parameter or other API misuse"). It showed up as a flaky concurrent-write test.
+#:
+#: Thread-local is the shape that is both cheap and correct: no per-call open, no shared
+#: cursor, and concurrent access across connections is exactly what WAL exists to handle.
+#: The engine's thread count is bounded (the event loop plus asyncio.to_thread workers), so
+#: this is a handful of descriptors, not a leak.
+_local = threading.local()
+
+#: Every connection handed out, so reset_connection() can close the ones belonging to other
+#: threads too — a test's tmp_path connection must not outlive the test that made it.
+_all_connections: list = []
+_CONN_LOCK = threading.RLock()
+
+
+def reset_connection() -> None:
+    """Close and forget every connection this process has opened. Tests, and shutdown."""
+    with _CONN_LOCK:
+        for conn in _all_connections:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - a close failure must not break teardown
+                pass
+        _all_connections.clear()
+    _local.conn = None
+    _local.path = None
+
+
 def _get_connection() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(_CREATE_TABLE)
-    conn.execute(_CREATE_STRATEGY_VERSIONS)
-    _add_missing_columns(conn)
-    conn.commit()
-    return conn
+    """This thread's trades.db connection, building the schema on first use only.
+
+    Re-opens if _DB_PATH has changed since the connection was made — which is what the test
+    suite's autouse tmp_path fixture does, and the one case where silently reusing a stale
+    handle would write to the real audit trail.
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is not None and getattr(_local, "path", None) == _DB_PATH:
+        return conn
+
+    # Creation is serialised, use is not. Two threads opening at once both run CREATE TABLE
+    # / PRAGMA table_info / ALTER TABLE against the same file, and the loser gets
+    # "database is locked" — which save() catches and logs, so the trade row is SILENTLY
+    # LOST rather than erroring. (Found by a concurrent-write test dropping 3-7 of 8 rows,
+    # with an empty error list because save() swallows by design.) The lock costs nothing:
+    # it is held once per thread, for the life of the process.
+    with _CONN_LOCK:
+        conn = getattr(_local, "conn", None)
+        if conn is not None and getattr(_local, "path", None) == _DB_PATH:
+            return conn
+
+        directory = os.path.dirname(_DB_PATH)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        # isolation_level=None -> autocommit. Every function here is a single statement
+        # followed by commit(); autocommit makes those commits harmless no-ops and keeps one
+        # thread's write out of an open transaction while another waits on the file.
+        conn = sqlite3.connect(
+            _DB_PATH, timeout=10, check_same_thread=False, isolation_level=None
+        )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(_CREATE_TABLE)
+        conn.execute(_CREATE_STRATEGY_VERSIONS)
+        _add_missing_columns(conn)
+        conn.commit()
+        _local.conn, _local.path = conn, _DB_PATH
+        _all_connections.append(conn)
+        return conn
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
@@ -177,7 +246,6 @@ def save_declined(signal: Signal, stage: str, reason: str) -> None:
             ),
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Failed to save declined signal for {signal.symbol}: {e}")
 
@@ -210,7 +278,6 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
             ),
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Failed to save trade: {e}")
 
@@ -238,7 +305,6 @@ def fetch_all_open_positions() -> list:
             """,
             (today,),
         ).fetchall()
-        conn.close()
     except Exception as e:
         logger.warning(f"fetch_all_open_positions failed: {e}")
         return []
@@ -309,12 +375,11 @@ def save_reconciled_exit(
             ),
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"Failed to save reconciled exit for {symbol}: {e}")
 
 
-def fetch_last_entry_trade(symbol: str, strategy: str) -> Optional[dict]:
+def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
     """Look up the most recent SUCCESS entry trade for symbol+strategy on today (IST).
 
     Used by the engine-restart recovery path to recover entry/SL/TP context
@@ -341,7 +406,6 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> Optional[dict]:
             (symbol, strategy, today),
         )
         row = cur.fetchone()
-        conn.close()
         if not row:
             return None
         entry, sl, tp, qty, order_id, direction, executed_at = row
@@ -380,7 +444,6 @@ def flag_data_quality(order_id: str, quality: str, reason: str = "") -> int:
             (quality, order_id),
         )
         conn.commit()
-        conn.close()
         if cur.rowcount:
             logger.warning(
                 f"data_quality={quality!r} flagged on {cur.rowcount} row(s) for order_id="
@@ -423,7 +486,6 @@ def fetch_clean_trades(strategy: str = None, since: str = None) -> list:
         )
         columns = [d[0] for d in cur.description]
         rows = [dict(zip(columns, row, strict=False)) for row in cur.fetchall()]
-        conn.close()
         return rows
     except Exception as e:
         logger.error(f"fetch_clean_trades failed: {e}")
@@ -457,12 +519,11 @@ def set_strategy_version(strategy: str, effective_from: str, reason: str = "") -
             (strategy.upper(), effective_from, reason, now),
         )
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.error(f"set_strategy_version failed for {strategy}: {e}")
 
 
-def get_strategy_version(strategy: str) -> Optional[dict]:
+def get_strategy_version(strategy: str) -> dict | None:
     """The current effective_from/reason for `strategy`, or None if never set (meaning: no
     known cutover, all history for this strategy is comparable)."""
     try:
@@ -473,7 +534,6 @@ def get_strategy_version(strategy: str) -> Optional[dict]:
             (strategy,),
         )
         row = cur.fetchone()
-        conn.close()
         if not row:
             return None
         return {"effective_from": row[0], "reason": row[1], "updated_at": row[2]}

@@ -218,6 +218,62 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-11)
 
+**Three defects found in today's own logs, after the review.**
+
+*Every BreakingTrade alert overstated its R:R by exactly 2.00x - all 25 of them.* The message
+sent `TP: targets[0]` (the 1.0x IB target) while the `R:R:` line beneath it was computed from
+`targets[-1]` (2.0x). The staged ladder is computed but not wired through - BreakingTrade
+exits 100% at `targets[0]` - so the advertised number described an exit the engine never
+performs. UNIONBANK is the sharp case: the channel showed 1:1.2 and the engine then IGNORED
+the same signal for falling under `min_rr: 0.75`, at its real 1:0.60. `reward_risk` now
+measures the TP actually sent; the ladder is reported separately as `Runner target (not traded
+yet)`. `build_trade_signal_message()` was split out so the text is testable at all - the bug
+survived because the only route to it also wrote to the database and called Telegram.
+
+*14 of 26 validated signals were rejected for sandbox margin and logged as broker errors.* The
+sandbox drained to Rs 3,073 while the engine sized every trade off the Rs 1,00,000
+`sandbox_capital` override. All three guards read the override rather than the real balance,
+so `min_capital_for_entry` compared Rs 1,00,000 against its Rs 5,000 floor and passed, and the
+margin check is skipped in analyze mode anyway. Every order was sent and bounced, landing in
+trades.db as a broker REJECTION - a capacity limit recorded as a broker problem, in the one
+profile whose slot caps were removed specifically so declines would say something about the
+strategy. New `fetch_funds_available()` reads the real balance and `_sandbox_can_fund()`
+declines with `stage="sandbox_margin"`. An unreadable balance is "unknown", never "broke".
+
+*Two dependencies were failing silently.* `/api/v1/orderstatus` answered 404 to 564 of 568
+calls today and `fetch_order_fill_price()` swallowed all of it at DEBUG, so the engine has
+been falling back to the signal's entry price - quietly disabling
+`no_progress.use_fill_price_for_progress` and making every R-multiple a quote rather than a
+fill. Separately a 403 burst caused 16 consecutive positionbook failures (11:50-11:52 IST):
+the tracker was blind for 2.5 minutes with no close detection, no no-progress gate and no
+time-exit trigger, and said nothing beyond one WARNING per cycle. Both now report.
+
+**P2/P3 review items closed.** Daily rollover checked wherever a counter is first touched
+(M2); reconciliation honours per-strategy `product` overrides (M4) and attributes restored
+positions by broker quantity and side rather than dict order (M5); idle strategies' phantom
+slots are cleared (M6); the consolidated day summary labels its pooled capital figure and
+drops the meaningless percentage (M7); `strategies.REGISTRY` replaces six hand-maintained maps
+and `config.validate_channels()` reports duplicate names/ids, missing phase twins and
+both-phases-enabled at startup (M10); the BreakingTrade alert warning is keyed per destination
+(M12).
+
+**Resources.** trades.db moved to one connection per THREAD with the schema built once - one
+shared connection was tried first and silently lost 3-7 of 8 concurrent writes, because two
+threads racing CREATE TABLE made one lose to "database is locked", which `save()` catches and
+logs (L1). Shared `httpx.AsyncClient` (L3), `RiskStore` lifecycle (L2), and all three released
+on shutdown. New `--prune` for breakingtrade.db and the 125 MB Chromium cache, leaving the
+login session intact (L4). The fd-audit then found two more: the Telethon client was never
+disconnected when the listener gave up - harmless until degraded mode made the process outlive
+the failure - and `_exit_locks` grew one lock per symbol forever.
+
+**Housekeeping.** `signal_engine/` is ruff-clean and gated in CI with no `continue-on-error`
+(L5); icons out of Telegram text and the JSON error sink (L6); the Telegram integration tests
+use a private copy of the session file instead of fighting the running engine for it (L7). The
+sizing line now shows implied leverage and, when margin scaling moved the quantity, the actual
+risk taken against the intended 1% (T1/T2). Suite 1095 -> 1305 tests; coverage 77% -> 80%.
+
+---
+
 **End-to-end review, and every P0/P1 finding fixed.** Full findings and the remaining plan:
 [`CODE-REVIEW-2026-09-11.md`](CODE-REVIEW-2026-09-11.md). Suite 1095 -> 1172 tests.
 

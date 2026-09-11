@@ -1,14 +1,12 @@
 """Signal validation against trading rules and risk constraints."""
 
 import time
-from typing import Dict, Tuple
-
 
 from signal_engine.config import settings
 from signal_engine.models import Direction, Signal, ValidationResult, ValidationStatus
 
 # In-memory duplicate tracker: (strategy, symbol, direction, tp_level or entry) -> timestamp
-_recent_signals: Dict[Tuple[str, str, str, object], float] = {}
+_recent_signals: dict[tuple[str, str, str, object], float] = {}
 
 
 def _cleanup_stale_entries() -> None:
