@@ -20,66 +20,74 @@ def _t(symbol, pct, entry=100.0):
             "exit": entry * (1 + pct / 100), "pct": pct}
 
 
-NOTIONAL = 100_000.0
+CAPITAL = 100_000.0   # the STRATEGY's pot, split across the day's names
 
 
 class TestBasketEconomics:
     def test_net_percent_is_the_average_across_positions(self):
-        m = btst_metrics([_t("A", 2.0), _t("B", -1.0)], NOTIONAL)
+        m = btst_metrics([_t("A", 2.0), _t("B", -1.0)], CAPITAL)
         assert m["net_pct"] == pytest.approx(0.5)
 
-    def test_net_rupees_states_the_result_plainly(self):
-        """Rs 100,000 per position: +2% and -1% is +2,000 - 1,000 = +1,000."""
-        m = btst_metrics([_t("A", 2.0), _t("B", -1.0)], NOTIONAL)
-        assert m["net_rupees"] == pytest.approx(1000.0)
+    def test_net_rupees_splits_the_strategy_capital(self):
+        """Rs 100,000 across TWO names is Rs 50,000 each: +2% and -1% = +1,000 - 500 = +500."""
+        m = btst_metrics([_t("A", 2.0), _t("B", -1.0)], CAPITAL)
+        assert m["net_rupees"] == pytest.approx(500.0)
 
-    def test_deployed_capital_is_reported(self):
-        m = btst_metrics([_t("A", 1.0), _t("B", 1.0), _t("C", 1.0)], NOTIONAL)
-        assert m["deployed"] == pytest.approx(300_000.0)
+    def test_deployed_is_the_strategy_capital_not_a_multiple_of_it(self):
+        """Ten names means smaller positions, not more money at work."""
+        m = btst_metrics([_t("A", 1.0), _t("B", 1.0), _t("C", 1.0)], CAPITAL)
+        assert m["deployed"] == pytest.approx(100_000.0)
+        assert m["per_position"] == pytest.approx(100_000 / 3)
 
     def test_a_losing_basket_reports_a_negative_net(self):
-        m = btst_metrics([_t("A", -1.19), _t("B", -1.04)], NOTIONAL)
+        m = btst_metrics([_t("A", -1.19), _t("B", -1.04)], CAPITAL)
         assert m["net_rupees"] < 0
         assert m["net_pct"] == pytest.approx(-1.115)
 
 
 class TestHitRateAndPayoff:
     def test_hit_rate_counts_winners(self):
-        m = btst_metrics([_t("A", 1.0), _t("B", -1.0), _t("C", 2.0)], NOTIONAL)
+        m = btst_metrics([_t("A", 1.0), _t("B", -1.0), _t("C", 2.0)], CAPITAL)
         assert m["hit_rate"] == pytest.approx(66.67, abs=0.01)
 
     def test_average_winner_and_loser_are_separated(self):
-        m = btst_metrics([_t("A", 2.0), _t("B", 4.0), _t("C", -1.0)], NOTIONAL)
+        m = btst_metrics([_t("A", 2.0), _t("B", 4.0), _t("C", -1.0)], CAPITAL)
         assert m["avg_win"] == pytest.approx(3.0)
         assert m["avg_loss"] == pytest.approx(-1.0)
 
     def test_payoff_is_average_win_over_average_loss(self):
         """Below 1.0 means the winners are smaller than the losers - the thing a column of
         percentages never tells you."""
-        m = btst_metrics([_t("A", 1.0), _t("B", -2.0)], NOTIONAL)
+        m = btst_metrics([_t("A", 1.0), _t("B", -2.0)], CAPITAL)
         assert m["payoff"] == pytest.approx(0.5)
 
     def test_payoff_is_none_when_nothing_lost(self):
-        assert btst_metrics([_t("A", 1.0)], NOTIONAL)["payoff"] is None
+        assert btst_metrics([_t("A", 1.0)], CAPITAL)["payoff"] is None
 
     def test_best_and_worst_are_named(self):
-        m = btst_metrics([_t("A", 1.92), _t("B", -1.19), _t("C", 0.5)], NOTIONAL)
+        m = btst_metrics([_t("A", 1.92), _t("B", -1.19), _t("C", 0.5)], CAPITAL)
         assert m["best"]["symbol"] == "A" and m["worst"]["symbol"] == "B"
 
 
 class TestEdgeCases:
     def test_an_empty_basket_is_all_zeroes_not_a_crash(self):
-        m = btst_metrics([], NOTIONAL)
+        m = btst_metrics([], CAPITAL)
         assert m["net_pct"] == 0.0 and m["net_rupees"] == 0.0 and m["best"] is None
 
     def test_a_flat_position_counts_as_a_loss_not_a_win(self):
         """Zero return after costs is not a win; the existing summary already splits this way."""
-        m = btst_metrics([_t("A", 0.0)], NOTIONAL)
+        m = btst_metrics([_t("A", 0.0)], CAPITAL)
         assert m["hit_rate"] == 0.0
 
     def test_per_position_rupees_are_available_for_each_row(self):
-        m = btst_metrics([_t("A", 2.0)], NOTIONAL)
+        """One name gets the whole pot: 2% of Rs 100,000."""
+        m = btst_metrics([_t("A", 2.0)], CAPITAL)
         assert m["rows"][0]["rupees"] == pytest.approx(2000.0)
+
+    def test_the_same_return_on_more_names_earns_less_per_name(self):
+        one = btst_metrics([_t("A", 2.0)], CAPITAL)["rows"][0]["rupees"]
+        four = btst_metrics([_t(s, 2.0) for s in "ABCD"], CAPITAL)["rows"][0]["rupees"]
+        assert four == pytest.approx(one / 4)
 
 
 class TestOneWatchlistMessagePerDay:

@@ -218,6 +218,40 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-11)
 
+**One position per stock, globally, in both modes.** The symbol/sector caps were briefly made
+per-strategy in ANALYZE so the BREAKINGTRADE vs BREAKINGTRADE-WATCHLIST comparison could run -
+the two are built to call the same names. Reverted: a trader holds ONE position in a stock,
+and analyze has to mirror live or it is not evidence. Two strategies both long the same name
+is one position with two labels; counting it twice overstates the sample, doubles the real
+exposure and produces a paper result live could never reproduce. The cost is stated rather
+than hidden - confirmed-vs-watchlist has to be answered from the DECLINED rows (both signals
+are recorded either way) or by running the two in separate phases.
+
+**BTST is allocated ONE capital, split across the day's names.** It was a fixed notional per
+stock, so the deployed figure grew with the size of the watchlist - six names meant Rs 6,00,000
+at work, which is not how an account behaves. `btst.capital` in config.yaml is now the
+strategy's pot, divided equally: ten names means smaller positions, not more money.
+
+**Trade outcomes are mirrored into the strategy's own channel.** For the PineScript strategies
+the engine acts on the ENTRY alert alone - it sizes, places the SL-M and the TP, and manages
+from there - and IGNORES the script's own "SL HIT"/"TP1 HIT" alerts, which describe what the
+script thinks happened on its chart rather than what the engine did with the order. So a
+trader watching intraday-orb-analyze saw the entry, then messages the engine ignored, and
+nothing about the real outcome: it went to the admin channel, and the only way to learn
+whether the stop or the target actually filled was to open the broker app. Outcomes
+(entry_filled, partial_exit, position_closed, time_exit, no_progress_exit, and the failure
+events) now post to the strategy's channel as well. Intermediate steps deliberately do not -
+the channel already carries the alert that triggered the order.
+
+**Duplication audit across every strategy.** trades.db has never held two entries in the same
+stock on the same day, and BTST's paper book is clean after the de-duplication. The three
+alert-dedupe bugs (tp_hit 5x AXISBANK, structure_flip 4x ADANIENSOL and 4x ADANIENT) all
+traced to the one timestamp-format comparison and are fixed. The remaining repeats are
+GENUINE: MFSL's two "intraday_transition" alerts for the same scan an hour apart correspond to
+it leaving the scan and re-entering, which scan_hits confirms.
+
+---
+
 **Daily reconciliation canary.** New `signal_engine/reconcile.py` runs straight after the day
 summary and compares the engine's day against the broker's: the sum of closed-trade P&L in
 trades.db against OpenAlgo's own realised P&L. A gap beyond Rs 1 is CRITICAL and always

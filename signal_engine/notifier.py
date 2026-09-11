@@ -157,14 +157,55 @@ def should_notify(event: str, level: str) -> bool:
     return configured >= _LEVEL_RANK[required]
 
 
-async def notify_event(event: str, text: str) -> bool:
+#: Events mirrored into the strategy's OWN channel as well as the admin one.
+#:
+#: Only OUTCOMES. For the PineScript strategies the engine acts on the ENTRY alert alone -
+#: it sizes, places the SL-M and the TP, and manages from there - and IGNORES the script's
+#: own "SL HIT"/"TP1 HIT" alerts, which describe what the script thinks happened on its
+#: chart rather than what the engine did with the order. A trader watching
+#: intraday-orb-analyze therefore saw the entry, then messages the engine ignored, and
+#: nothing about the real outcome: the only way to learn whether the stop or the target
+#: actually filled was to open the broker app.
+#:
+#: Intermediate steps stay out. The strategy channel already carries the alert that triggered
+#: the order; mirroring every step as well would drown the outcomes this exists to surface.
+_MIRRORED_TO_STRATEGY = frozenset({
+    "entry_filled",
+    "partial_exit",
+    "position_closed",
+    "time_exit",
+    "no_progress_exit",
+    "order_rejected",
+    "sl_failed",
+    "exit_failed",
+    "orphaned_position",
+})
+
+
+async def _mirror_to_strategy(event: str, text: str, strategy: str) -> None:
+    """Best-effort copy into the strategy's own channel. Never raises, and never affects
+    whether the admin copy is considered delivered."""
+    if event not in _MIRRORED_TO_STRATEGY or not strategy or _client is None:
+        return
+    channel = _channel_for_strategy(strategy, await _current_phase())
+    if channel is None:
+        return
+    try:
+        await _client.send_message(channel.id, text)
+    except Exception as e:
+        logger.warning(f"Could not mirror {event} to {channel.name}: {e}")
+
+
+async def notify_event(event: str, text: str, strategy: str = "") -> bool:
     """notify() with the event name first, so call sites read as `notify_event(\"x\", msg)`.
 
     Returns what notify() returns - see its docstring for why callers that mark something as
     "done" (e.g. tracker.py's day-summary marker) need to check this rather than assume a call
     that didn't raise means a message actually went out.
     """
-    return await notify(text, event=event)
+    delivered = await notify(text, event=event)
+    await _mirror_to_strategy(event, text, strategy)
+    return delivered
 
 
 async def notify(text: str, event: str = "") -> bool:
@@ -303,14 +344,16 @@ async def notify_entry_filled(
         # claim (real money) rather than a fill-status one, and this message posts unchanged
         # in the analyze channel too.
         f"FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
-        f"Fill: {fill_price:.2f} (slip {slip:+.2f}) | Qty: {qty}{sl_str}{tp_str}"
+        f"Fill: {fill_price:.2f} (slip {slip:+.2f}) | Qty: {qty}{sl_str}{tp_str}",
+        strategy=strategy,
     )
 
 
 async def notify_order_rejected(symbol: str, reason: str, strategy: str = "") -> None:
     await notify_event("order_rejected",
         f"ENTRY REJECTED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
-        f"No trade taken. Reason: {reason}"
+        f"No trade taken. Reason: {reason}",
+        strategy=strategy,
     )
 
 
@@ -331,7 +374,8 @@ async def notify_sl_failed(symbol: str, reason: str, strategy: str = "") -> None
     await notify_event("sl_failed",
         f"SL NOT PLACED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
         f"Position UNPROTECTED. Reason: {reason}\n"
-        f"Place SL manually or close position."
+        f"Place SL manually or close position.",
+        strategy=strategy,
     )
 
 
@@ -372,7 +416,8 @@ async def notify_partial_exit(
     await notify_event("partial_exit",
         f"{tp_level} HIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
         f"Booked: {exit_qty} | Remaining: {remaining_qty}\n"
-        f"{_pnl(pnl)}{_r(r_multiple)}{sl_str}{next_str}"
+        f"{_pnl(pnl)}{_r(r_multiple)}{sl_str}{next_str}",
+        strategy=strategy,
     )
 
 
@@ -383,7 +428,8 @@ async def notify_exit_no_position(symbol: str, strategy: str) -> None:
 async def notify_exit_failed(symbol: str, reason: str, strategy: str = "") -> None:
     await notify_event("exit_failed",
         f"EXIT FAILED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
-        f"Reason: {reason}"
+        f"Reason: {reason}",
+        strategy=strategy,
     )
 
 
@@ -414,7 +460,8 @@ async def notify_position_closed(
     ctx_str = f"\n{day_context}" if day_context else ""
     await notify_event("position_closed",
         f"{outcome} CLOSED [{last_exit}] | {symbol}{dir_str}{_tag(strategy)}{dur_str}\n"
-        f"{entry_str} -> {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}"
+        f"{entry_str} -> {exit_str} | {_pnl(pnl)}{_r(r_multiple)}{ctx_str}",
+        strategy=strategy,
     )
 
 
@@ -458,7 +505,8 @@ async def notify_no_progress_exit(
     dir_str = f" {_dir(direction)}" if direction else ""
     await notify_event("no_progress_exit",
         f"NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
-        f"{entry:.2f} -> {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min"
+        f"{entry:.2f} -> {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min",
+        strategy=strategy,
     )
 
 
@@ -483,7 +531,8 @@ async def notify_orphaned_position(
     await notify_event("orphaned_position",
         f"ORDER NOT FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"No position taken. {plain_reason}\n"
-        f"Check broker terminal: order {order_id}"
+        f"Check broker terminal: order {order_id}",
+        strategy=strategy,
     )
 
 
@@ -508,7 +557,8 @@ async def notify_time_exit(
 
     ctx_str = f"\n{day_context}" if day_context else ""
     await notify_event("time_exit",
-        f"TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}"
+        f"TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}",
+        strategy=strategy,
     )
 
 

@@ -195,13 +195,18 @@ def _btst_settled_today(day: str) -> list[dict]:
     ]
 
 
-def btst_metrics(settled: list, notional_per_position: float) -> dict:
+def btst_metrics(settled: list, strategy_capital: float) -> dict:
     """Basket economics for a day's settled BTST positions.
 
-    BTST has no position size - it is a manual call - so the honest framing is the one a
-    trader would actually use: an EQUAL-WEIGHT basket, one position per stock, at a stated
-    notional. That turns a column of percentages into the number the report exists to give,
-    which is whether the day made or lost money.
+    ONE CAPITAL FOR THE STRATEGY, split equally across the day's names - not a fixed amount
+    per stock. Per-stock notional made the deployed figure grow with the size of the
+    watchlist (six names meant Rs 6,00,000 at work), which is not how the account behaves:
+    a trader allocates BTST a pot and divides it across whatever the scan produced that day.
+    Ten names means smaller positions, not more money.
+
+    BTST has no position size of its own - it is a manual call the engine never places - so
+    the basket is the honest framing, and it turns a column of percentages into the number
+    the report exists to give: whether the day made or lost money.
 
     `payoff` (average winner / average loser) is the figure a percentage list hides: a 60%
     hit rate with payoff 0.5 loses money, and nothing in the old summary would have shown it.
@@ -210,10 +215,11 @@ def btst_metrics(settled: list, notional_per_position: float) -> dict:
     """
     if not settled:
         return {"count": 0, "wins": 0, "losses": 0, "hit_rate": 0.0, "net_pct": 0.0,
-                "net_rupees": 0.0, "deployed": 0.0, "avg_win": None, "avg_loss": None,
-                "payoff": None, "best": None, "worst": None, "rows": []}
+                "net_rupees": 0.0, "per_position": 0.0, "deployed": 0.0, "avg_win": None,
+                "avg_loss": None, "payoff": None, "best": None, "worst": None, "rows": []}
 
-    rows = [dict(t, rupees=t["pct"] / 100.0 * notional_per_position) for t in settled]
+    per_position = strategy_capital / len(settled)
+    rows = [dict(t, rupees=t["pct"] / 100.0 * per_position) for t in settled]
     wins = [r for r in rows if r["pct"] > 0]
     losses = [r for r in rows if r["pct"] <= 0]
     avg_win = sum(r["pct"] for r in wins) / len(wins) if wins else None
@@ -226,7 +232,8 @@ def btst_metrics(settled: list, notional_per_position: float) -> dict:
         "hit_rate": len(wins) / len(rows) * 100.0,
         "net_pct": sum(r["pct"] for r in rows) / len(rows),
         "net_rupees": sum(r["rupees"] for r in rows),
-        "deployed": len(rows) * notional_per_position,
+        "per_position": per_position,
+        "deployed": strategy_capital,
         "avg_win": avg_win,
         "avg_loss": avg_loss,
         "payoff": (avg_win / abs(avg_loss)) if (avg_win and avg_loss) else None,
@@ -258,8 +265,8 @@ def alert_btst_eod_summary(day: str) -> bool:
 
     from signal_engine.config import settings
 
-    notional = settings.btst_notional_per_position
-    m = btst_metrics(settled, notional)
+    capital = settings.btst_capital
+    m = btst_metrics(settled, capital)
     width = max(len(t["symbol"]) for t in settled)
     date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
 
@@ -278,8 +285,9 @@ def alert_btst_eod_summary(day: str) -> bool:
         f"{m['count']} positions settled | {m['wins']} won, {m['losses']} lost "
         f"| {m['hit_rate']:.0f}% hit rate",
         "",
-        f"NET  {m['net_pct']:+.2f}% per position  =  Rs {m['net_rupees']:+,.0f} "
-        f"on Rs {notional:,.0f} each (Rs {m['deployed']:,.0f} deployed)",
+        f"NET  {m['net_pct']:+.2f}%  =  Rs {m['net_rupees']:+,.0f} on Rs "
+        f"{m['deployed']:,.0f} strategy capital",
+        f"({m['count']} names, Rs {m['per_position']:,.0f} each - equal weight)",
     ]
     if m["best"] and m["worst"] and m["best"] is not m["worst"]:
         lines.append(

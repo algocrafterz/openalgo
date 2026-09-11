@@ -15,15 +15,19 @@ trades_today, and daily/weekly/monthly realised loss — a loss in any live
 strategy counts against the same daily/weekly/monthly limit as every other, so
 one combined loss ceiling protects the whole account, not one per strategy.
 
-Symbol/sector concentration limits follow the SAME split (2026-09-11). In LIVE
-they pool: two strategies in one real name is genuine correlated exposure no
-matter which one triggered it. In ANALYZE they isolate, for the same reason
-every other counter does — BREAKINGTRADE and BREAKINGTRADE-WATCHLIST are built
-to hold the same name at the same time so paper P&L can compare the two entry
-philosophies, and a shared max_positions_per_symbol=1 meant the watchlist (which
-fires on the scan-hit poll, before the confirming close exists) always took the
-slot and the confirmed signal was declined "symbol concentration limit". The
-comparison the design exists to produce could not run.
+Symbol/sector concentration limits are GLOBAL in both modes. They were briefly
+made per-strategy in ANALYZE (2026-09-11) so the BREAKINGTRADE vs
+BREAKINGTRADE-WATCHLIST comparison could run, since the two are built to call
+the same names. That is reverted: a trader holds ONE position in a stock, and
+analyze has to mirror live or it is not evidence. Two strategies both long the
+same name is one position with two labels — counting it twice overstates the
+sample, doubles the real exposure to that name, and produces a paper result live
+could never reproduce.
+
+The cost is real and is stated rather than hidden: confirmed-vs-watchlist cannot
+be compared by letting both trade the same stock. Answer it from the DECLINED
+rows instead (both signals are recorded either way — main._decline), or run the
+two in separate phases.
 """
 
 import math
@@ -616,41 +620,36 @@ class RiskEngine:
     def can_trade_symbol(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol is allowed.
 
-        Pooled across strategies in LIVE, isolated per strategy in ANALYZE — see module
-        docstring.
+        Global across strategies in both modes — one position per stock. `strategy` is kept
+        in the signature for call-site symmetry and logging, not to scope the count.
         """
         if self.max_positions_per_symbol == 0:
             return True
-        held = self._positions_by_symbol.get((self._key(strategy), symbol), 0)
-        return held < self.max_positions_per_symbol
+        return self._positions_by_symbol.get(symbol, 0) < self.max_positions_per_symbol
 
     def can_trade_sector(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol's sector is allowed.
 
-        Same pooled/isolated split as can_trade_symbol — see module docstring.
+        Global across strategies in both modes — see can_trade_symbol.
         """
         if self.max_positions_per_sector == 0:
             return True
         sector = self._symbol_to_sector.get(symbol)
         if sector is None:
             return True
-        held = self._positions_by_sector.get((self._key(strategy), sector), 0)
-        return held < self.max_positions_per_sector
+        return self._positions_by_sector.get(sector, 0) < self.max_positions_per_sector
 
     def _adjust_concentration(self, strategy: str, symbol: str, delta: int) -> None:
-        """Move this strategy's symbol/sector position counts by delta, never below zero."""
+        """Move the GLOBAL symbol/sector position counts by delta, never below zero."""
         if not symbol:
             return
-        key = self._key(strategy)
-        sym_key = (key, symbol)
-        self._positions_by_symbol[sym_key] = max(
-            0, self._positions_by_symbol.get(sym_key, 0) + delta
+        self._positions_by_symbol[symbol] = max(
+            0, self._positions_by_symbol.get(symbol, 0) + delta
         )
         sector = self._symbol_to_sector.get(symbol)
         if sector:
-            sec_key = (key, sector)
-            self._positions_by_sector[sec_key] = max(
-                0, self._positions_by_sector.get(sec_key, 0) + delta
+            self._positions_by_sector[sector] = max(
+                0, self._positions_by_sector.get(sector, 0) + delta
             )
 
     def record_trade(self, strategy: str, symbol: str = "") -> None:

@@ -117,9 +117,9 @@ class Settings:
     #: config.yaml is simply absent from this dict, not an error - alerts.py treats that as
     #: "record, don't deliver", same as any other unconfigured channel.
     breakingtrade_btst_channels: dict[str, TelegramChannel]
-    #: Notional per position the BTST EOD report converts percentages against.
+    #: Capital the BTST strategy is allocated, split equally across the day's names.
     #: Reporting only - see config.yaml's `btst:` block.
-    btst_notional_per_position: float
+    btst_capital: float
     #: quiet | normal | verbose — how much routine traffic reaches notify_channel.
     #: Failure events ignore it entirely; see notifier.EVENT_LEVELS.
     notify_level: str
@@ -566,7 +566,7 @@ def _btst_fields(yml: dict) -> dict:
     """Optional `btst:` block. Absent means the documented default, not an error - this is a
     reporting knob, and a missing one must not stop the engine starting."""
     block = yml.get("btst") or {}
-    return {"btst_notional_per_position": float(block.get("notional_per_position", 100000))}
+    return {"btst_capital": float(block.get("capital", 100000))}
 
 
 def _telegram_fields(telegram: dict) -> dict:
