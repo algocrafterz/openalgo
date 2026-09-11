@@ -521,15 +521,43 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     return count
 
 
+def _btst_names_sent_today(day: str) -> set | None:
+    """The symbol set of the last BTST watchlist sent today, or None if none was."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT symbol FROM alerts WHERE kind = 'btst' AND date(created_at) = ? "
+            "AND created_at = (SELECT MAX(created_at) FROM alerts WHERE kind = 'btst' "
+            "AND date(created_at) = ?)",
+            (day, day),
+        ).fetchall()
+    return {r[0] for r in rows} if rows else None
+
+
 def alert_btst(watchlist, captured_at: datetime) -> int:
-    """The closing-hour carry list, with its execution deadline stated in the message."""
+    """The closing-hour carry list, with its execution deadline stated in the message.
+
+    ONE MESSAGE PER DAY unless the selection actually changes. The closing scan runs at 14:50
+    and again at 15:10, and each run used to send its own copy - so the channel showed the
+    same list twice, with most names repeated. The paper book now keeps only the FIRST
+    recommendation of the day (one position per stock, enforced by paper.py's unique index),
+    so the second copy is noise. A later run whose SELECTION genuinely differs IS worth
+    seeing, and is marked REVISED so it is not mistaken for the original call.
+    """
     if watchlist is None or watchlist.empty:
         record("btst_empty", f"BTST {captured_at:%d-%b} | no candidates today")
         return 0
 
+    names = {str(r.symbol) for r in watchlist.itertuples()}
+    already = _btst_names_sent_today(f"{captured_at:%Y-%m-%d}")
+    if already is not None and already == names:
+        return 0
+    revised = " (REVISED)" if already is not None else ""
+
     width = max(len(str(r.symbol)) for r in watchlist.itertuples())
     # Header shape matches alert_transitions() above: "LABEL timestamp | N noun | context".
-    lines = [f"BTST {captured_at:%d-%b} | {len(watchlist)} names | BUY CNC before 15:15"]
+    lines = [
+        f"BTST {captured_at:%d-%b}{revised} | {len(watchlist)} names | BUY CNC before 15:15"
+    ]
     for row in watchlist.itertuples():
         delivery = (
             f"del{row.delivery_pct * 100:.0f}" if row.delivery_pct == row.delivery_pct else "del-"

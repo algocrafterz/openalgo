@@ -457,6 +457,20 @@ blacklist:
     soft_multiplier: 0.5
 
 
+# ── BTST ─────────────────────────────────────────────────
+# [tune] BTST is a MANUAL daily call - the engine never sizes or places it - so its EOD
+# report has no position size of its own to work from. This is the notional the report
+# assumes PER POSITION when it converts the day's percentage returns into rupees, on an
+# equal-weight basket (one position per stock, which is what the unique index in paper.py
+# now enforces).
+#
+# It changes REPORTING only. Nothing about which stocks are selected, and nothing the engine
+# trades, depends on it. Set it to what you would actually put into one BTST name so the
+# "NET" line means something to you; Rs 1,00,000 matches the sizing pool the intraday
+# strategies use, which keeps the two comparable.
+btst:
+  notional_per_position: 100000
+
 # ── Time Exit ────────────────────────────────────────────
 # [tune] Close all open positions before broker auto square-off (typically 15:10-15:20 IST).
 # Penalty for broker-forced square-off is Rs 20-50/order.

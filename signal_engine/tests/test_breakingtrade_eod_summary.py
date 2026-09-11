@@ -142,7 +142,11 @@ class TestBtstSummary:
                 "SELECT message FROM alerts WHERE kind = 'eod_summary' AND scan = 'BTST'"
             ).fetchone()[0]
         assert "SWIGGY" in message
-        assert "1 settled | 1 winners, 0 losers" in message
+        # 2026-09-11: the headline now answers "did this make or lose money" up front,
+        # instead of leaving the reader to total a column of percentages.
+        assert "1 positions settled | 1 won, 0 lost | 100% hit rate" in message
+        assert "NET  +1.09% per position" in message
+        assert "Rs 100,000 each" in message
         assert "WINNERS (1)" in message
         # Recommended 2026-09-04, settled/evaluated 2026-09-07 - both dates must be explicit so
         # a reader can never confuse "in this report" with "recommended today".

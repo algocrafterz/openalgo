@@ -195,6 +195,47 @@ def _btst_settled_today(day: str) -> list[dict]:
     ]
 
 
+def btst_metrics(settled: list, notional_per_position: float) -> dict:
+    """Basket economics for a day's settled BTST positions.
+
+    BTST has no position size - it is a manual call - so the honest framing is the one a
+    trader would actually use: an EQUAL-WEIGHT basket, one position per stock, at a stated
+    notional. That turns a column of percentages into the number the report exists to give,
+    which is whether the day made or lost money.
+
+    `payoff` (average winner / average loser) is the figure a percentage list hides: a 60%
+    hit rate with payoff 0.5 loses money, and nothing in the old summary would have shown it.
+    A flat 0.00% counts as a loss, matching how the winners/losers split already worked -
+    after costs it is not a win.
+    """
+    if not settled:
+        return {"count": 0, "wins": 0, "losses": 0, "hit_rate": 0.0, "net_pct": 0.0,
+                "net_rupees": 0.0, "deployed": 0.0, "avg_win": None, "avg_loss": None,
+                "payoff": None, "best": None, "worst": None, "rows": []}
+
+    rows = [dict(t, rupees=t["pct"] / 100.0 * notional_per_position) for t in settled]
+    wins = [r for r in rows if r["pct"] > 0]
+    losses = [r for r in rows if r["pct"] <= 0]
+    avg_win = sum(r["pct"] for r in wins) / len(wins) if wins else None
+    avg_loss = sum(r["pct"] for r in losses) / len(losses) if losses else None
+
+    return {
+        "count": len(rows),
+        "wins": len(wins),
+        "losses": len(losses),
+        "hit_rate": len(wins) / len(rows) * 100.0,
+        "net_pct": sum(r["pct"] for r in rows) / len(rows),
+        "net_rupees": sum(r["rupees"] for r in rows),
+        "deployed": len(rows) * notional_per_position,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "payoff": (avg_win / abs(avg_loss)) if (avg_win and avg_loss) else None,
+        "best": max(rows, key=lambda r: r["pct"]),
+        "worst": min(rows, key=lambda r: r["pct"]),
+        "rows": rows,
+    }
+
+
 def alert_btst_eod_summary(day: str) -> bool:
     """Summarize whatever BTST positions settled (closed against today's session) today.
 
@@ -215,8 +256,10 @@ def alert_btst_eod_summary(day: str) -> bool:
     if not settled:
         return False
 
-    wins = [t for t in settled if t["pct"] > 0]
-    losses = [t for t in settled if t["pct"] <= 0]
+    from signal_engine.config import settings
+
+    notional = settings.btst_notional_per_position
+    m = btst_metrics(settled, notional)
     width = max(len(t["symbol"]) for t in settled)
     date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
 
@@ -224,18 +267,44 @@ def alert_btst_eod_summary(day: str) -> bool:
         rec = datetime.strptime(t["recommended_on"], "%Y-%m-%d").strftime("%d-%b")
         return (
             f"  {t['symbol']:<{width}} (rec {rec})  {t['entry']:>9,.2f} -> {t['exit']:>9,.2f}  "
-            f"{t['pct']:+.2f}%"
+            f"{t['pct']:>+6.2f}%  {t['rupees']:>+10,.0f}"
         )
 
+    # The headline is the question the report exists to answer - did this make or lose money -
+    # not a column of percentages the reader has to total up. Equal-weight basket at a stated
+    # notional, because BTST has no position size of its own (it is a manual call).
     lines = [
         f"BTST EOD SUMMARY {date_label}",
-        f"{len(settled)} settled | {len(wins)} winners, {len(losses)} losers",
+        f"{m['count']} positions settled | {m['wins']} won, {m['losses']} lost "
+        f"| {m['hit_rate']:.0f}% hit rate",
+        "",
+        f"NET  {m['net_pct']:+.2f}% per position  =  Rs {m['net_rupees']:+,.0f} "
+        f"on Rs {notional:,.0f} each (Rs {m['deployed']:,.0f} deployed)",
     ]
+    if m["best"] and m["worst"] and m["best"] is not m["worst"]:
+        lines.append(
+            f"Best  {m['best']['symbol']} {m['best']['pct']:+.2f}%   |   "
+            f"Worst  {m['worst']['symbol']} {m['worst']['pct']:+.2f}%"
+        )
+    if m["avg_win"] is not None and m["avg_loss"] is not None:
+        # Payoff is what a percentage list cannot show: a 60% hit rate at payoff 0.5 loses.
+        lines.append(
+            f"Avg winner {m['avg_win']:+.2f}%  |  Avg loser {m['avg_loss']:+.2f}%  |  "
+            f"Payoff {m['payoff']:.2f}"
+        )
+
+    wins = [r for r in m["rows"] if r["pct"] > 0]
+    losses = [r for r in m["rows"] if r["pct"] <= 0]
     if wins:
         lines += ["", f"WINNERS ({len(wins)})"] + [_btst_row(t) for t in sorted(wins, key=lambda t: -t["pct"])]
     if losses:
         lines += ["", f"LOSERS ({len(losses)})"] + [_btst_row(t) for t in sorted(losses, key=lambda t: t["pct"])]
-    lines += ["", "Paper only - no real capital was ever at risk. Kept for tracking, not action."]
+    lines += [
+        "",
+        "Equal-weight basket, one position per stock. LONG only, bought on the recommended "
+        "date and sold against this session.",
+        "Paper only - no real capital was ever at risk. Kept for tracking, not action.",
+    ]
     message = "\n".join(lines)
 
     delivered, message_id = alerts.send(message, "btst", monospace=True)

@@ -218,6 +218,65 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-11)
 
+**Daily reconciliation canary.** New `signal_engine/reconcile.py` runs straight after the day
+summary and compares the engine's day against the broker's: the sum of closed-trade P&L in
+trades.db against OpenAlgo's own realised P&L. A gap beyond Rs 1 is CRITICAL and always
+reaches Telegram, unfiltered by `notify_level`, because it means every other number that day
+is suspect. Deliberately dumb - it does not care WHY they differ. On 2026-09-11's figures it
+would have fired: engine +986.41, broker +119.31, difference +867.10.
+
+**The same timestamp bug, in three places.** trades.db writes `datetime.isoformat()` with a
+'T'; breakingtrade.db writes a space. At index 10 ' ' (0x20) sorts BELOW 'T' (0x54), so a
+LATER alert always compared as SMALLER and every raw-string `created_at >= ?` filter matched
+nothing. Three "have I already done this?" checks therefore always answered no:
+`tp_watch._last_level_hit` (5x TP1 for AXISBANK), `flip_watch._already_warned` (4x ADANIENSOL,
+4x ADANIENT) and `entry_watch._already_confirmed`. All three now share
+`alerts.SINCE_CLAUSE`, which parses both sides.
+
+**Two gaps the user found in the strategy-by-strategy review.** An EXIT matching no position
+left no row anywhere - both of the day's BREAKOUT signals were exactly this (an SL HIT for
+BPCL, a TP1 HIT for INDUSINDBK, for positions the engine never held), so a review built from
+trades.db reported BREAKOUT as having produced zero signals. `_decline()` records EXITs now.
+And the watchlist strategy's 10 delivered signals never reached the engine because the
+Sep-10-started process was not subscribed to that channel; it is now.
+
+**Notifications raised before Telegram connects are queued, not dropped.** Startup
+reconciliation runs before `listener.set_client()`, so all four of the day's closes went
+straight to the floor - which is why nothing appeared in the admin channel. Queued (bounded
+at 50) and flushed on connect.
+
+**BTST reports a basket result, not a column of percentages.** The EOD summary listed each
+stock's +/-% and nothing else, so "did this make or lose money" had to be totalled in the
+reader's head across ten rows. BTST has no position size of its own (it is a manual call), so
+the report now states the framing a trader would actually use - an EQUAL-WEIGHT BASKET, one
+position per stock, at a notional set in `config.yaml`'s new `btst:` block (reporting only;
+nothing traded depends on it):
+
+    6 positions settled | 1 won, 5 lost | 17% hit rate
+    NET  -0.52% per position  =  Rs -3,147 on Rs 100,000 each (Rs 600,000 deployed)
+    Best  AXISBANK +0.36%   |   Worst  GRASIM -1.04%
+    Avg winner +0.36%  |  Avg loser -0.70%  |  Payoff 0.51
+
+Payoff (average winner over average loser) is the figure a percentage list hides completely -
+a 60% hit rate at payoff 0.5 loses money. Note what de-duplication did to the same day: "10
+settled | 3 winners, 7 losers" became 6 positions, 1 winner. The duplicates were inflating
+the winner count.
+
+**One BTST watchlist message per day.** The closing scan runs at 14:50 and again at 15:10 and
+each run sent its own copy, so the channel showed the same list twice. The paper book now
+keeps only the first recommendation of the day, so the second copy is noise. A later run
+whose SELECTION genuinely differs is still sent, marked REVISED.
+
+**trades.db indexed.** The table carried none, which was survivable while it was read twice a
+day at startup - not now that `fetch_day_trades()` backs both the EOD summary and the
+day-context line on every close notification, on a table that is deliberately never pruned.
+Two expression indexes (the queries filter on `date(executed_at)` and `upper(symbol)`, which
+a plain column index cannot serve) take both hot queries from `SCAN trades` to
+`SEARCH trades USING INDEX`. `fetch_day_trades` also ran one sub-query per exit row; it now
+fetches the day's entries once.
+
+---
+
 **EOD review of the first full day, and ten defects it exposed.** Full write-up:
 [`EOD-ANALYSIS-2026-09-11.md`](EOD-ANALYSIS-2026-09-11.md). The engine that ran today started
 on 10 Sep and never picked up the day's commits, so everything below was the pre-fix system.
