@@ -374,6 +374,7 @@ class PositionTracker:
         today = datetime.now(IST).date()
         if self._day_summary_date == today or _summary_already_sent_today():
             return
+        records, counts = self._day_from_db()
         capital = self._risk_engine.total_last_known_capital() or 0.0
         # Per-strategy opening capital, for the per-strategy EOD summaries notifier.py sends
         # alongside the consolidated one — each strategy sizes off its OWN cached day-start
@@ -381,16 +382,16 @@ class PositionTracker:
         # line is only ever meaningful per strategy, never pooled across them.
         strategy_capital = {
             r.strategy: self._risk_engine.last_known_capital_for(r.strategy)
-            for r in self._completed_trades
+            for r in records
         }
         sent = await notifier.notify_day_summary(
-            trades=self._day_trades,
-            wins=self._day_wins,
-            losses=self._day_losses,
-            net_pnl=self._day_pnl,
+            trades=counts["trades"],
+            wins=counts["wins"],
+            losses=counts["losses"],
+            net_pnl=counts["net_pnl"],
             capital=capital,
-            time_exits=self._day_time_exits,
-            trade_records=self._completed_trades,
+            time_exits=counts["time_exits"],
+            trade_records=records,
             strategy_capital=strategy_capital,
         )
         if not sent:
@@ -403,6 +404,54 @@ class PositionTracker:
             return
         self._day_summary_date = today
         _mark_summary_sent()
+
+    def _day_from_db(self) -> tuple:
+        """(trade_records, counts) for today, read from trades.db.
+
+        The in-memory counters are only what happened since the engine last started, so a
+        mid-day restart used to silently truncate the day - twice on 2026-09-11. The database
+        is complete now that tracker-detected closes write EXIT rows (db.save_tracker_exit),
+        so it is the source. Memory remains the fallback: a reporting failure should leave
+        the summary stale, never empty.
+        """
+        try:
+            rows = db.fetch_day_trades(self._trade_mode_for_db())
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"Day summary: could not read trades.db ({e}) - falling back to this "
+                "session's in-memory counters, which exclude anything before the last restart"
+            )
+            return self._completed_trades, {
+                "trades": self._day_trades, "wins": self._day_wins,
+                "losses": self._day_losses, "net_pnl": self._day_pnl,
+                "time_exits": self._day_time_exits,
+            }
+
+        records = [
+            TradeRecord(
+                symbol=r["symbol"], direction="LONG", strategy=r["strategy"],
+                entry_price=r["entry"], exit_price=r["exit_price"],
+                original_qty=r["quantity"], total_pnl=r["total_pnl"],
+                r_multiple=_compute_r(r["total_pnl"], r["quantity"], r["entry"], r["sl"]),
+                exit_types=r["exit_types"],
+            )
+            for r in rows
+        ]
+        # Same classification the day counters use: a TIME exit is a trade but not a decided
+        # win or loss - the clock closed it, not the strategy's own rule.
+        decided = [r for r in records if "TIME" not in (r.exit_types or [])]
+        return records, {
+            "trades": len(records),
+            "wins": sum(1 for r in decided if r.total_pnl >= 0),
+            "losses": sum(1 for r in decided if r.total_pnl < 0),
+            "net_pnl": sum(r.total_pnl for r in records),
+            "time_exits": sum(1 for r in records if "TIME" in (r.exit_types or [])),
+        }
+
+    @staticmethod
+    def _trade_mode_for_db() -> str:
+        """The mode trades.db is stamping rows with right now - set once by startup."""
+        return db._TRADE_MODE
 
     async def maybe_send_day_summary(self) -> None:
         """Send the day summary now, unless positions remain open or the day could

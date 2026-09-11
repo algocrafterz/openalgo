@@ -405,7 +405,14 @@ def save_reconciled_exit(
                 now,
                 now,
                 note,
-                json.dumps({"reconciled": True, "realized_pnl": pnl}),
+                # Canonical keys, same as save_tracker_exit(): one shape for one fact.
+                # This used to write only {"reconciled", "realized_pnl"}, so the EOD summary
+                # reading `pnl` saw 0.00 for every reconciled close - two writers, two shapes,
+                # and the reader silently agreed with neither.
+                json.dumps({
+                    "pnl": pnl, "exit_types": ["RECONCILED"],
+                    "reconciled": True, "realized_pnl": pnl,
+                }),
                 fill_price,
                 None,
                 _TRADE_MODE,
@@ -414,6 +421,69 @@ def save_reconciled_exit(
         conn.commit()
     except Exception as e:
         logger.error(f"Failed to save reconciled exit for {symbol}: {e}")
+
+
+def fetch_day_trades(trade_mode: str, day: str = None) -> list:
+    """Every CLOSED trade for one mode and day, as the EOD summary's source of truth.
+
+    Pairs each EXIT row with its own entry row (latest entry for that symbol+strategy on the
+    day) so the stop is available and an R-multiple can be computed. DECLINED and REJECTED
+    rows are excluded: they are signals that never became trades.
+
+    The day summary used to be built from PositionTracker's in-memory counters, which
+    __init__ sets to zero - so a restart silently reset the day. On 2026-09-11 the engine
+    restarted at 15:05 and again at 15:49, and any summary after that would have reported
+    only what happened since. trades.db is what every performance report and the ledger
+    already read, and since tracker-detected closes began writing EXIT rows it is finally
+    complete enough to be the one place the day is read from.
+    """
+    day = day or datetime.now(IST).strftime("%Y-%m-%d")
+    conn = _get_connection()
+    exits = conn.execute(
+        """
+        SELECT strategy, symbol, entry, sl, quantity, fill_price, context, executed_at
+        FROM trades
+        WHERE status = 'SUCCESS' AND direction = 'EXIT'
+          AND trade_mode = ? AND date(executed_at) = ?
+        ORDER BY id
+        """,
+        (trade_mode, day),
+    ).fetchall()
+
+    trades = []
+    for strategy, symbol, entry, sl, qty, exit_price, context, _at in exits:
+        try:
+            payload = json.loads(context) if context else {}
+        except (TypeError, ValueError):
+            payload = {}
+        entry_row = conn.execute(
+            """
+            SELECT entry, sl, quantity FROM trades
+            WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
+              AND upper(symbol) = upper(?) AND upper(strategy) = upper(?)
+              AND trade_mode = ? AND date(executed_at) = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (symbol, strategy, trade_mode, day),
+        ).fetchone()
+        base_entry = entry_row[0] if entry_row else entry
+        base_sl = entry_row[1] if entry_row else sl
+        base_qty = entry_row[2] if entry_row else qty
+        # Tolerant of both historical shapes: rows written before the two writers were
+        # unified carry "realized_pnl" instead of "pnl".
+        pnl = payload.get("pnl", payload.get("realized_pnl", 0.0))
+        exit_types = payload.get("exit_types") or (["RECONCILED"] if payload.get("reconciled") else [])
+        trades.append({
+            "strategy": strategy,
+            "symbol": symbol,
+            "entry": base_entry,
+            "sl": base_sl,
+            "quantity": base_qty or qty,
+            "exit_price": exit_price,
+            "total_pnl": float(pnl or 0.0),
+            "exit_types": list(exit_types),
+        })
+    return trades
 
 
 def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
