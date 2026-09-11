@@ -98,10 +98,18 @@ def _last_level_hit(symbol: str, since: str) -> str | None:
     retry and leave that position silently stuck at the previous level forever. An undelivered
     attempt is retried on the next poll instead, exactly like a poll that found nothing to send.
     """
+    # datetime() on BOTH sides, not a raw string compare. trades.db writes executed_at with
+    # datetime.isoformat() ("2026-09-11T11:46:43.327851") while this database writes
+    # created_at with a space ("2026-09-11 14:52:16"), and at index 10 ' ' (0x20) sorts
+    # BELOW 'T' (0x54) - so a LATER alert always compared as smaller, the filter matched
+    # nothing, and this function returned None every time. _next_level(None) is "TP1", so
+    # the watcher re-sent TP1 on every poll for as long as the position stayed open: five
+    # times for AXISBANK on 2026-09-11 between 14:52 and 14:54. Each carries ExitQtyPct 50,
+    # so against a live position that is half the remainder exited, five times over.
     with alerts._connect() as conn:
         rows = conn.execute(
-            "SELECT scan FROM alerts WHERE kind = 'tp_hit' AND symbol = ? AND created_at >= ? "
-            "AND delivered = 1",
+            "SELECT scan FROM alerts WHERE kind = 'tp_hit' AND symbol = ? "
+            "AND datetime(created_at) >= datetime(?) AND delivered = 1",
             (symbol, since),
         ).fetchall()
     hit = {r[0] for r in rows}

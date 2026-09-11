@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from signal_engine.tracker import PositionTracker
+from signal_engine.tracker import BookEntry, PositionTracker
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 _AGED = datetime.now(_IST) - timedelta(minutes=5)  # past Guard 1 (30s min age)
@@ -33,7 +33,7 @@ class TestNoProgressProfitLock:
         )
         tracker.register(pos)
 
-        book_data = {"RELIANCE": (1, 544.70)}
+        book_data = {"RELIANCE": BookEntry(1, 544.70)}
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -83,7 +83,7 @@ class TestNoProgressProfitLock:
         )
         tracker.register(pos)
 
-        book_data = {"RELIANCE": (1, 544.70)}
+        book_data = {"RELIANCE": BookEntry(1, 544.70)}
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -138,7 +138,7 @@ class TestNoProgressProfitLock:
         )
         tracker.register(pos)
 
-        book_data = {"RELIANCE": (1, 544.70)}  # progress = (544.70-541.80)/(551.10-541.80) = 31.2%
+        book_data = {"RELIANCE": BookEntry(1, 544.70)}  # progress = (544.70-541.80)/(551.10-541.80) = 31.2%
         now = datetime.now(_IST)
         exit_time = now + timedelta(minutes=60)  # 331min needed > 60min remaining → market exit
 
@@ -216,7 +216,7 @@ class TestChopTightener:
             entry_time=datetime.now(_IST) - timedelta(minutes=50),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 398.0)}  # progress = (398-400)/(410-400) = -20%
+        book_data = {"RELIANCE": BookEntry(1, 398.0)}  # progress = (398-400)/(410-400) = -20%
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -248,7 +248,7 @@ class TestChopTightener:
             entry_time=datetime.now(_IST) - timedelta(minutes=32),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 398.0)}
+        book_data = {"RELIANCE": BookEntry(1, 398.0)}
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
@@ -281,7 +281,7 @@ class TestChopTightener:
             entry_time=datetime.now(_IST) - timedelta(minutes=32),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 398.0)}
+        book_data = {"RELIANCE": BookEntry(1, 398.0)}
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -313,7 +313,7 @@ class TestChopTightener:
             entry_time=datetime.now(_IST) - timedelta(minutes=32),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 398.0)}
+        book_data = {"RELIANCE": BookEntry(1, 398.0)}
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
@@ -346,7 +346,7 @@ class TestChopTightener:
             entry_time=datetime.now(_IST) - timedelta(minutes=65),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 401.8)}  # progress = 1.8/10 = 18%
+        book_data = {"RELIANCE": BookEntry(1, 401.8)}  # progress = 1.8/10 = 18%
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
@@ -432,7 +432,7 @@ class TestLossCutGate:
             entry_time=datetime.now(_IST) - timedelta(minutes=30),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 391.0)}  # progress = (391-400)/(410-400) = -90%
+        book_data = {"RELIANCE": BookEntry(1, 391.0)}  # progress = (391-400)/(410-400) = -90%
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
@@ -465,7 +465,7 @@ class TestLossCutGate:
             entry_time=datetime.now(_IST) - timedelta(minutes=10),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 388.0)}  # progress = -120%, well below threshold
+        book_data = {"RELIANCE": BookEntry(1, 388.0)}  # progress = -120%, well below threshold
 
         with (
             patch("signal_engine.tracker.send_order", new_callable=AsyncMock) as mock_exit,
@@ -493,7 +493,7 @@ class TestLossCutGate:
         )
         tracker.register(pos)
         # progress = (396 - 400) / (410 - 400) = -40%, above -80% threshold
-        book_data = {"RELIANCE": (1, 396.0)}
+        book_data = {"RELIANCE": BookEntry(1, 396.0)}
 
         with (
             patch("signal_engine.tracker.send_order", new_callable=AsyncMock) as mock_exit,
@@ -520,7 +520,7 @@ class TestLossCutGate:
             entry_time=datetime.now(_IST) - timedelta(minutes=95),
         )
         tracker.register(pos)
-        book_data = {"RELIANCE": (1, 399.0)}  # progress = -10%, below main gate's 20%
+        book_data = {"RELIANCE": BookEntry(1, 399.0)}  # progress = -10%, below main gate's 20%
 
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),

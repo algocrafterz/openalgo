@@ -14,7 +14,7 @@ import pytest
 
 from signal_engine import mode_guard
 from signal_engine.models import Direction
-from signal_engine.tracker import PositionTracker, TrackedPosition
+from signal_engine.tracker import BookEntry, PositionTracker, TrackedPosition
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +38,7 @@ class TestUnrealisedIsPushedToTheRiskEngine:
         tracker = PositionTracker(risk)
         tracker.register(_pos(qty=100, fill=800.0))
         # LTP 790 on 100 shares long = -1,000 unrealised
-        tracker._push_unrealised({"SBIN": (100, 790.0)})
+        tracker._push_unrealised({"SBIN": BookEntry(100, 790.0)})
         risk.update_unrealised.assert_called_once_with(1000.0, "ORB")
 
     def test_short_position_underwater_reports_a_loss(self):
@@ -46,7 +46,7 @@ class TestUnrealisedIsPushedToTheRiskEngine:
         tracker = PositionTracker(risk)
         tracker.register(_pos(qty=100, fill=800.0, direction=Direction.SHORT))
         # LTP 810 on 100 shares short = -1,000 unrealised
-        tracker._push_unrealised({"SBIN": (-100, 810.0)})
+        tracker._push_unrealised({"SBIN": BookEntry(-100, 810.0)})
         risk.update_unrealised.assert_called_once_with(1000.0, "ORB")
 
     def test_a_position_in_profit_reports_zero_not_a_negative_loss(self):
@@ -54,7 +54,7 @@ class TestUnrealisedIsPushedToTheRiskEngine:
         risk = MagicMock()
         tracker = PositionTracker(risk)
         tracker.register(_pos(qty=100, fill=800.0))
-        tracker._push_unrealised({"SBIN": (100, 815.0)})
+        tracker._push_unrealised({"SBIN": BookEntry(100, 815.0)})
         risk.update_unrealised.assert_called_once_with(0.0, "ORB")
 
     def test_losses_are_summed_per_strategy(self):
@@ -64,9 +64,9 @@ class TestUnrealisedIsPushedToTheRiskEngine:
         tracker.register(_pos(symbol="TCS", strategy="ORB", qty=10, fill=4000.0))
         tracker.register(_pos(symbol="INFY", strategy="BREAKOUT", qty=50, fill=1500.0))
         tracker._push_unrealised({
-            "SBIN": (100, 790.0),    # -1,000
-            "TCS": (10, 3950.0),     # -500
-            "INFY": (50, 1480.0),    # -1,000
+            "SBIN": BookEntry(100, 790.0),    # -1,000
+            "TCS": BookEntry(10, 3950.0),     # -500
+            "INFY": BookEntry(50, 1480.0),    # -1,000
         })
         by_strategy = {c.args[1]: c.args[0] for c in risk.update_unrealised.call_args_list}
         assert by_strategy == {"ORB": 1500.0, "BREAKOUT": 1000.0}
@@ -76,7 +76,7 @@ class TestUnrealisedIsPushedToTheRiskEngine:
         risk = MagicMock()
         tracker = PositionTracker(risk)
         tracker.register(_pos(qty=100, fill=800.0))
-        tracker._push_unrealised({"SBIN": (100, 790.0)})
+        tracker._push_unrealised({"SBIN": BookEntry(100, 790.0)})
         risk.update_unrealised.reset_mock()
         tracker.unregister("SBIN", "ORB")
         tracker._push_unrealised({})
@@ -86,7 +86,7 @@ class TestUnrealisedIsPushedToTheRiskEngine:
         risk = MagicMock()
         tracker = PositionTracker(risk)
         tracker.register(_pos(qty=100, fill=800.0))
-        tracker._push_unrealised({"SBIN": (100, 0.0)})
+        tracker._push_unrealised({"SBIN": BookEntry(100, 0.0)})
         risk.update_unrealised.assert_called_once_with(0.0, "ORB")
 
 

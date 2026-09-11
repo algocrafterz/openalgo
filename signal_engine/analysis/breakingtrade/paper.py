@@ -51,9 +51,52 @@ CREATE INDEX IF NOT EXISTS idx_paper_status ON paper_trades (status, entry_at);
 """
 
 
+#: ONE POSITION PER STOCK PER DAY, enforced by the schema rather than by convention.
+#: The primary key is (strategy, symbol, entry_at), so the closing-hour scan running twice
+#: (14:50 and 15:10) opened TWO positions in the same name: AXISBANK on 2026-09-10 was booked
+#: at 1245.50 and again at 1248.00, and both settled into the EOD winners list, so
+#: "10 settled | 3 winners, 7 losers" described about six distinct stocks. A human takes one
+#: position per stock, so the paper book must too - otherwise the win rate is weighted by
+#: which names happened to appear in both runs rather than by how the calls performed.
+_ONE_PER_DAY_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_one_per_day "
+    "ON paper_trades (strategy, symbol, date(entry_at))"
+)
+
+
+def _dedupe_existing(conn: sqlite3.Connection) -> int:
+    """Collapse pre-existing duplicates so the unique index can be created.
+
+    Cannot be part of _SCHEMA: CREATE UNIQUE INDEX raises on a table that already holds
+    duplicates, and this runs on every connect - the live database had 9 such groups when the
+    rule was introduced, so an unguarded index would have broken the poller at startup.
+
+    Keeps the EARLIEST entry per (strategy, symbol, day): the first recommendation is the
+    position a trader acting on the first alert would hold. Idempotent - a clean database
+    deletes nothing.
+    """
+    cur = conn.execute(
+        """DELETE FROM paper_trades WHERE rowid NOT IN (
+               SELECT MIN(rowid) FROM paper_trades GROUP BY strategy, symbol, date(entry_at)
+           )"""
+    )
+    return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(store._DB_PATH, timeout=10)
     conn.executescript(_SCHEMA)
+    try:
+        conn.execute(_ONE_PER_DAY_INDEX)
+    except sqlite3.IntegrityError:
+        removed = _dedupe_existing(conn)
+        conn.execute(_ONE_PER_DAY_INDEX)
+        conn.commit()
+        if removed:
+            print(
+                f"  [paper] collapsed {removed} duplicate BTST position(s) - one stock now "
+                "means one position per day"
+            )
     return conn
 
 
@@ -67,13 +110,29 @@ def record_entries(watchlist: pd.DataFrame, captured_at: datetime, strategy: str
         for row in watchlist.itertuples()
         if row.price and row.price > 0
     ]
+    if not rows:
+        return 0
+
+    # INSERT OR IGNORE against the one-per-day unique index: the FIRST recommendation of the
+    # day wins, which is the position a trader acting on the first alert would actually hold.
+    # A later scan of the same day silently keeps it rather than opening a second one.
+    # Returns how many were really opened, not how many were offered - the difference is the
+    # double-count this used to report as new trades.
     with _connect() as conn:
+        before = conn.execute(
+            "SELECT COUNT(*) FROM paper_trades WHERE strategy = ? AND date(entry_at) = ?",
+            (strategy, stamp[:10]),
+        ).fetchone()[0]
         conn.executemany(
             "INSERT OR IGNORE INTO paper_trades "
             "(strategy, symbol, entry_at, entry_price, status) VALUES (?, ?, ?, ?, ?)",
             rows,
         )
-    return len(rows)
+        after = conn.execute(
+            "SELECT COUNT(*) FROM paper_trades WHERE strategy = ? AND date(entry_at) = ?",
+            (strategy, stamp[:10]),
+        ).fetchone()[0]
+    return after - before
 
 
 def settle_open_trades(strategy: str = "BTST") -> int:

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from loguru import logger
 
-from signal_engine import notifier
+from signal_engine import db, notifier
 from signal_engine.api_client import (
     cancel_all_orders,
     cancel_order,
@@ -54,14 +54,38 @@ def _profit_lock_price(pos, ltp: float, base_entry: float, lock_ratio: float) ->
     return base_entry - unrealized * lock_ratio
 
 
+@dataclass(frozen=True)
+class BookEntry:
+    """One positionbook row: quantity, last price, and the broker's own realised P&L.
+
+    `realised` is None when the broker did not report a figure - deliberately not 0.0, since
+    zero is both a real P&L and the orphan-detection signal, and "absent" must not be able
+    to impersonate either.
+    """
+
+    quantity: int
+    ltp: float
+    realised: "float | None" = None
+
+
 def _index_positionbook(book) -> dict:
-    """Index a positionbook response by symbol -> (quantity, ltp)."""
+    """Index a positionbook response by symbol -> BookEntry.
+
+    The per-symbol realised P&L is carried because the alternative - a portfolio-level
+    delta - misattributes every close that shares a poll cycle with another. See
+    _book_broker_close().
+    """
     book_data: dict = {}
     for entry in book:
         sym = entry.get("symbol", "")
         qty = int(entry.get("quantity", 0))
         ltp = float(entry.get("ltp", 0) or 0)
-        book_data[sym] = (qty, ltp)
+        raw = entry.get("today_realized_pnl", entry.get("pnl"))
+        try:
+            realised = None if raw is None else float(raw)
+        except (TypeError, ValueError):
+            realised = None
+        book_data[sym] = BookEntry(qty, ltp, realised)
     return book_data
 
 
@@ -313,6 +337,16 @@ class PositionTracker:
             exit_types=exit_types,
         )
         self.add_trade_record(record)
+        # The audit trail, not just the in-memory record. Without this the close reaches the
+        # day counters and Telegram but never trades.db - which every performance report and
+        # the ledger read - so the next restart's reconciliation books it a second time from
+        # the broker's figures. See db.save_tracker_exit().
+        db.save_tracker_exit(
+            strategy=pos.strategy, symbol=pos.symbol, entry=pos.entry_price,
+            sl=pos.sl, tp=pos.tp, quantity=pos.original_quantity or pos.quantity,
+            exit_price=exit_price, pnl=total_pnl, exit_types=exit_types,
+            order_id=pos.entry_order_id,
+        )
         self.record_exit(
             pnl=pnl_delta, is_partial=False, total_pnl=total_pnl,
             new_realised_pnl=new_realised_pnl,
@@ -468,7 +502,8 @@ class PositionTracker:
         losses: dict[str, float] = dict.fromkeys(self._reported_unrealised, 0.0)
         for pos in self._positions.values():
             losses.setdefault(pos.strategy, 0.0)
-            _qty, ltp = book_data.get(pos.symbol, (0, 0.0))
+            book_entry = book_data.get(pos.symbol)
+            ltp = book_entry.ltp if book_entry else 0.0
             base = pos.fill_price or pos.entry_price
             if not ltp or not base:
                 continue  # no usable mark - skip this leg rather than invent one
@@ -553,7 +588,8 @@ class PositionTracker:
         if self._positions.get(key) is not pos:
             return False
 
-        qty, _ltp = book_data.get(pos.symbol, (0, 0.0))
+        entry = book_data.get(pos.symbol)
+        qty = entry.quantity if entry else 0
         if qty != 0:
             if not pos.ever_seen_nonzero_qty:
                 pos.ever_seen_nonzero_qty = True
@@ -569,7 +605,7 @@ class PositionTracker:
         if verdict == _FILL_WAIT:
             return False
 
-        return await self._book_broker_close(key, pos, age, _settings)
+        return await self._book_broker_close(key, pos, age, _settings, entry)
 
     def _position_too_young(self, key: str, age: timedelta, _settings) -> bool:
         """Guard 1 — a freshly registered position showing qty=0 is usually positionbook lag.
@@ -676,8 +712,20 @@ class PositionTracker:
             pos.entry_order_id, reason,
         )
 
-    async def _book_broker_close(self, key: str, pos, age: timedelta, _settings) -> bool:
-        """Book a broker-side close. True if the tracker entry should be removed."""
+    async def _book_broker_close(
+        self, key: str, pos, age: timedelta, _settings, book_entry=None
+    ) -> bool:
+        """Book a broker-side close. True if the tracker entry should be removed.
+
+        P&L comes from the BROKER'S OWN per-symbol realised figure when the positionbook
+        reports one. It used to come only from a portfolio-level delta
+        (fetch_realised_pnl() - _last_realised_pnl), which is correct for exactly one close
+        per poll cycle and wrong for every close that shares one: the first booked absorbed
+        the whole delta and the rest got nothing. On 2026-09-11 ADANIENSOL was booked at
+        +897.40 and ADANIENT at +0.00 in the same second, when the broker's own figure for
+        ADANIENSOL was -197.20. The portfolio delta remains the fallback for brokers that
+        report no per-symbol number.
+        """
         async with self._pnl_lock:
             # Re-check under the lock: a concurrent _handle_exit_locked path may have
             # already recorded this close (SL HIT reconcile, TP exit). If so, skip
@@ -685,8 +733,16 @@ class PositionTracker:
             if self._positions.get(key) is not pos:
                 return False
             current_realised = await fetch_realised_pnl()
-            pnl_delta = current_realised - self._last_realised_pnl
+            portfolio_delta = current_realised - self._last_realised_pnl
             self._last_realised_pnl = current_realised
+
+        per_symbol = book_entry.realised if book_entry is not None else None
+        pnl_delta = portfolio_delta if per_symbol is None else per_symbol
+        if per_symbol is None:
+            logger.debug(
+                f"{key}: broker reported no per-symbol realised P&L - falling back to the "
+                f"portfolio delta ({portfolio_delta:,.2f})"
+            )
 
         # Guard 3: Orphan detection — zero PnL with unconfirmed fill.
         # This fires when Guard 2's order-status API call was unavailable (API error) but
@@ -719,6 +775,9 @@ class PositionTracker:
             pos,
             pnl_delta=pnl_delta,
             exit_price=exit_price,
+            # Only assume an SL hit when no other path has already claimed this exit. A
+            # no-progress market exit sets pos.exit_types before the close is detected; all
+            # four of 2026-09-11's closes were no-progress exits reported as "SL".
             exit_types=pos.exit_types[:] if pos.exit_types else ["SL"],
             hold_minutes=int(age.total_seconds() / 60),
             max_trades=_settings.max_trades_per_day,
@@ -840,7 +899,8 @@ class PositionTracker:
         if tp_distance <= 0:
             return None
 
-        _, ltp = book_data.get(pos.symbol, (0, 0.0))
+        np_entry = book_data.get(pos.symbol)
+        ltp = np_entry.ltp if np_entry else 0.0
         if ltp <= 0:
             return None
 

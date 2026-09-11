@@ -685,9 +685,23 @@ async def _send_per_strategy_day_summaries(
         return
     if not should_notify("day_summary", getattr(settings, "notify_level", "normal")):
         return
-    for strategy, records in by_strategy.items():
-        channel = _channel_for_strategy(strategy, phase)
-        if channel is None:
+
+    # EVERY enabled channel for this phase, not just the strategies that closed a trade.
+    # This iterated by_strategy alone, so a strategy with no CLOSED trade was simply absent
+    # and its channel stayed silent - on 2026-09-11 intraday-orb and intraday-breakout got
+    # nothing at all, though ORB had a declined and a broker-rejected signal and BREAKOUT had
+    # a TP HIT arrive for a position it never opened. "No summary" and "the engine was down"
+    # must never look the same in a monitoring channel.
+    for strategy, channel in _channels_to_summarise(phase).items():
+        records = by_strategy.get(strategy)
+        if not records:
+            try:
+                await _client.send_message(
+                    channel.id,
+                    f"{strategy} DAY SUMMARY | {today}\nNo trades taken today.",
+                )
+            except Exception as e:
+                logger.warning(f"Day summary: could not send {strategy}'s summary: {e}")
             continue
         stats = _aggregate_strategy_stats(records)
         net_pnl = sum(r.total_pnl for r in records)
@@ -705,6 +719,28 @@ async def _send_per_strategy_day_summaries(
             await _client.send_message(channel.id, "\n".join(lines))
         except Exception as e:
             logger.warning(f"Day summary: could not send {strategy}'s summary: {e}")
+
+
+def _channels_to_summarise(phase: str) -> dict:
+    """strategy tag -> channel, for every ENABLED channel belonging to this phase.
+
+    Driven by the registry and the config rather than by what happened to trade, so a quiet
+    strategy still files a report. A disabled channel is skipped: the engine takes no signals
+    from it, so it has nothing to summarise.
+    """
+    wanted = {base: tag for tag, base in _STRATEGY_CHANNEL_BASE.items()}
+    found = {}
+    for ch in settings.telegram_channels:
+        if not getattr(ch, "enabled", True):
+            continue
+        name = (ch.name or "").lower()
+        suffix = f"-{phase}"
+        if not name.endswith(suffix):
+            continue
+        tag = wanted.get(name[: -len(suffix)])
+        if tag:
+            found[tag] = ch
+    return found
 
 
 def _day_summary_header(

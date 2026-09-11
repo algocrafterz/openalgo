@@ -218,6 +218,58 @@ that could never have been traded because it needed the 15:15–15:30 session. A
 
 ## Recent Changes (2026-09-11)
 
+**EOD review of the first full day, and ten defects it exposed.** Full write-up:
+[`EOD-ANALYSIS-2026-09-11.md`](EOD-ANALYSIS-2026-09-11.md). The engine that ran today started
+on 10 Sep and never picked up the day's commits, so everything below was the pre-fix system.
+
+Reported day P&L was +Rs 986.41. The broker's own per-symbol figures make it about -Rs 78.
+
+*P&L came from a portfolio-level delta.* `_book_broker_close()` used
+`fetch_realised_pnl() - _last_realised_pnl`, the whole ACCOUNT's realised P&L, so two closes in
+one poll cycle meant the first absorbed everything: ADANIENSOL booked +897.40 and ADANIENT
++0.00 in the same second, when the broker's figure for ADANIENSOL was -197.20. The positionbook
+has always carried the per-symbol number - reconciliation reads it. `_index_positionbook()` now
+returns a `BookEntry(quantity, ltp, realised)` and the close path uses it.
+
+*Tracker-detected closes never reached trades.db.* `book_close()` filed an in-memory record,
+moved the day counters and sent Telegram, but wrote no EXIT row - so the audit trail every
+report reads had nothing, and the 15:05 restart's reconciliation booked all four closes a
+second time with different numbers. New `db.save_tracker_exit()`.
+
+*The TP ladder could never advance and re-fired TP1 forever.* `_last_level_hit()` compared
+`created_at >= executed_at` as strings across two databases that format timestamps differently
+- trades.db uses isoformat() with 'T', breakingtrade.db uses a space, and at index 10 ' '
+(0x20) sorts below 'T' (0x54). A later alert always compared as smaller, so the filter matched
+nothing and `_next_level(None)` was always "TP1". AXISBANK got five TP1 alerts in two minutes;
+each carries ExitQtyPct 50, so against a live position that is half the remainder exited five
+times over. Now `datetime()` on both sides.
+
+*Exits were all labelled "SL".* None was: all four were no-progress market exits. The label
+reaches the day summary and the trade record.
+
+*Two channels got no EOD summary at all.* The per-strategy send iterated only strategies with a
+CLOSED trade, so intraday-orb and intraday-breakout stayed silent - indistinguishable from "the
+engine was down". Every enabled channel for the phase now files a report, including "No trades
+taken today."
+
+*BTST counted the same stock twice.* The closing scan runs at 14:50 and 15:10 and each run
+opened a separate paper position, so AXISBANK settled twice into the winners list and
+"10 settled | 3 winners, 7 losers" described about six distinct stocks. A unique index on
+`(strategy, symbol, date(entry_at))` now makes a same-day duplicate impossible and the FIRST
+recommendation of the day wins - the price a trader acting on the first alert would have had.
+Existing duplicates collapse on first connect (verified against a copy of the live database:
+78 rows to 69, idempotent).
+
+Defects 1, 2, 3 and 6 were not analyze-only - they would have behaved identically with real
+money. The remaining irreducible difference between analyze and live is slippage: the sandbox
+fills at the requested price.
+
+**Two things must happen before the next session:** top the sandbox up (at Rs 3,073 it cannot
+fund a single position, so tomorrow repeats today) and restart the stack, since the running
+engine predates every fix.
+
+---
+
 **Three defects found in today's own logs, after the review.**
 
 *Every BreakingTrade alert overstated its R:R by exactly 2.00x - all 25 of them.* The message

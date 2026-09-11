@@ -282,6 +282,43 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
         logger.error(f"Failed to save trade: {e}")
 
 
+def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp: float,
+                      quantity: int, exit_price: "float | None", pnl: float,
+                      exit_types: list, order_id: str = "") -> None:
+    """Write the EXIT row for a close the TRACKER detected (broker SL-M fill, no-progress
+    market exit, time exit).
+
+    These closes used to leave no row at all. book_close() filed an in-memory TradeRecord,
+    advanced the day counters and sent the Telegram message - but trades.db, which every
+    performance report and the ledger actually read, got nothing. The next restart's
+    reconciliation then found "no EXIT recorded", booked the close a SECOND time from the
+    broker's own figures, and called record_close() again. On 2026-09-11 all four positions
+    closed at 13:16/13:35 and were re-booked at 15:05 with different P&L.
+
+    Never raises: the position IS closed at the broker, and a bookkeeping failure must not
+    leave the tracker believing otherwise.
+    """
+    try:
+        conn = _get_connection()
+        now = datetime.now(IST).replace(tzinfo=None).isoformat()
+        conn.execute(
+            _INSERT,
+            (
+                strategy, Direction.EXIT.value, symbol, entry, sl, tp, quantity,
+                order_id or "-TRACKER-", "SUCCESS",
+                f"Closed by tracker ({'+'.join(exit_types) if exit_types else 'UNKNOWN'}): "
+                f"P&L {pnl:+,.2f}",
+                "", now, now,
+                f"tracker close: {'+'.join(exit_types) if exit_types else 'UNKNOWN'}",
+                json.dumps({"pnl": pnl, "exit_types": list(exit_types or [])}),
+                exit_price, None, _TRADE_MODE,
+            ),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save tracker exit for {symbol}: {e}")
+
+
 def fetch_all_open_positions() -> list:
     """Every (strategy, symbol) pair whose latest SUCCESS trade today is an unclosed entry
     (a LONG/SHORT row with no later EXIT row) - the LOCAL, trades.db-only view of "what do we
