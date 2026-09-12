@@ -1225,7 +1225,8 @@ async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
         # +1 because risk_engine.record_trade runs below — this slot is now taken.
         slot_context = notifier.format_slot_context(
-            risk_engine.open_positions_for(signal.strategy) + 1, risk_engine.max_open_positions
+            risk_engine.open_positions_for(signal.strategy) + 1,
+            risk_engine.effective_max_open_positions_for(signal.strategy),
         )
         await notifier.notify_order_placed(
             signal.symbol, signal.direction.value,

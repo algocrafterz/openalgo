@@ -128,6 +128,9 @@ class RiskEngine:
         soft_blacklist: dict[str, frozenset] | None = None,
         soft_blacklist_multipliers: dict[str, float] | None = None,
         strategy_profiles: dict[str, dict] | None = None,
+        mis_margin_pct: float = 0.0,
+        margin_reserve_buffer: float = 0.0,
+        worst_case_sl_pct: float = 0.0,
     ):
         self.risk_per_trade = risk_per_trade
         self.use_day_start_capital = use_day_start_capital
@@ -142,6 +145,12 @@ class RiskEngine:
         self.min_entry_price = min_entry_price
         self.max_entry_price = max_entry_price
         self.slippage_factor = slippage_factor
+        # -1 sentinel for max_open_positions (see _dynamic_max_open_positions): the three
+        # inputs it needs to compute the ceiling fresh from live capital instead of a number
+        # someone has to remember to raise in config.yaml as the account grows.
+        self.mis_margin_pct = mis_margin_pct
+        self.margin_reserve_buffer = margin_reserve_buffer
+        self.worst_case_sl_pct = worst_case_sl_pct
         self._store = store
         self._trade_mode = trade_mode
         self.max_positions_per_symbol = max_positions_per_symbol
@@ -263,7 +272,8 @@ class RiskEngine:
         logger.info("--- Risk State (restored from DB) ---")
         if not self._by_strategy:
             logger.info(f"No strategy has traded yet today ({self._trade_mode} mode).")
-        open_cap = self.max_open_positions if self.max_open_positions > 0 else "unlimited"
+        effective_max = self._effective_max_open_positions(capital)
+        open_cap = effective_max if effective_max > 0 else "unlimited"
         trades_cap = self.max_trades_per_day if self.max_trades_per_day > 0 else "unlimited"
         for key in sorted(self._by_strategy):
             state = self._by_strategy[key]
@@ -370,6 +380,60 @@ class RiskEngine:
         fallback; a fresher in-session figure still wins when present.
         """
         return state.last_known_capital or state.day_start_capital
+
+    def _effective_max_open_positions(self, capital: float) -> int:
+        """Resolve max_open_positions, computing it fresh from live capital when the
+        config value is the -1 "dynamic" sentinel. 0 keeps its existing meaning
+        (unlimited, used by ANALYZE); any other positive value is used as-is, unchanged
+        from before this existed.
+        """
+        if self.max_open_positions != -1:
+            return self.max_open_positions
+        return self._dynamic_max_open_positions(capital)
+
+    def _dynamic_max_open_positions(self, capital: float) -> int:
+        """How many concurrent positions the account can realistically margin, computed
+        fresh from live capital instead of a fixed number that needs raising by hand as
+        the account grows (config.yaml's mode_profiles.live has the full derivation).
+
+        Sizing is risk-based (qty = capital x risk_pct / SL-distance), so the margin ONE
+        position needs, as a FRACTION of capital, does not depend on capital at all — only
+        on risk_per_trade, mis_margin_pct and the SL%. worst_case_sl_pct (the tightest SL
+        among this engine's tradeable strategies, wired in from runtime.py) is the most
+        margin-hungry case to plan for, so this is a floor, not an average.
+
+        margin_reserve_buffer (same figure as sizing.min_capital_for_entry) is subtracted
+        from capital first, as an always-uncommitted cushion. A bigger account gets a
+        little more headroom from this alone, since a fixed buffer is a smaller fraction
+        of a bigger balance — but the ceiling this converges to as capital keeps growing
+        (1 / margin_ratio_per_position) is itself capital-invariant. For a tight-stop
+        strategy (~0.20-0.30% SL) that ceiling can be 1 no matter how much capital is
+        added — that is the correct, safe answer, not a bug: a bigger account also takes a
+        proportionally bigger position, so the % of capital tied up per trade never
+        shrinks. Always returns at least 1 so a funded account is never told to stop
+        trading entirely.
+        """
+        if capital <= 0 or self.worst_case_sl_pct <= 0 or self.mis_margin_pct <= 0:
+            return 1
+        margin_ratio_per_position = (
+            self.risk_per_trade * self.mis_margin_pct
+            / (self.worst_case_sl_pct * (1 + self.slippage_factor))
+        )
+        if margin_ratio_per_position <= 0:
+            return 1
+        per_position_margin = capital * margin_ratio_per_position
+        if per_position_margin <= 0:
+            return 1
+        usable_capital = max(0.0, capital - self.margin_reserve_buffer)
+        return max(1, math.floor(usable_capital / per_position_margin))
+
+    def effective_max_open_positions_for(self, strategy: str) -> int:
+        """Public accessor for the resolved position-count ceiling for THIS strategy's
+        counters right now — what callers outside this module (notifications, smoke
+        test) should display instead of the raw (possibly -1 sentinel) config value.
+        """
+        state = self._state(strategy)
+        return self._effective_max_open_positions(self._limit_capital(state))
 
     def update_unrealised(self, loss: float, strategy: str) -> None:
         """Update mark-to-market unrealised loss for this strategy (replace, not accumulate)."""
@@ -553,7 +617,9 @@ class RiskEngine:
 
         # 0 = unlimited, matching the same convention already used by
         # max_positions_per_symbol/sector, min_capital_for_entry and test_qty_cap.
-        if self.max_open_positions > 0 and state.open_positions >= self.max_open_positions:
+        # -1 = dynamic, computed fresh from `capital` above — see _dynamic_max_open_positions.
+        effective_max = self._effective_max_open_positions(capital)
+        if effective_max > 0 and state.open_positions >= effective_max:
             logger.warning(f"[{strategy}] Max open positions reached")
             return False
 
@@ -581,8 +647,9 @@ class RiskEngine:
                     f"Monthly net drawdown limit hit ({-state.monthly_net_pnl:,.0f} >= "
                     f"{capital * self.monthly_loss_limit:,.0f})"
                 )
-        if self.max_open_positions > 0 and state.open_positions >= self.max_open_positions:
-            return f"Max positions ({state.open_positions}/{self.max_open_positions})"
+        effective_max = self._effective_max_open_positions(capital)
+        if effective_max > 0 and state.open_positions >= effective_max:
+            return f"Max positions ({state.open_positions}/{effective_max})"
         if self.max_trades_per_day > 0 and state.trades_today >= self.max_trades_per_day:
             return f"Max trades/day ({state.trades_today}/{self.max_trades_per_day})"
         return "Unknown"
@@ -590,7 +657,8 @@ class RiskEngine:
     def capacity_status(self, strategy: str) -> str:
         """Return a formatted capacity summary string for this strategy."""
         state = self._state(strategy)
-        cap = self.max_open_positions if self.max_open_positions > 0 else "unlimited"
+        effective_max = self._effective_max_open_positions(self._limit_capital(state))
+        cap = effective_max if effective_max > 0 else "unlimited"
         return f"{state.open_positions}/{cap} positions open"
 
     def open_positions_for(self, strategy: str) -> int:

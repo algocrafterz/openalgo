@@ -216,6 +216,34 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-12)
+
+**`max_open_positions` is dynamic in LIVE mode — no more manual edits as capital grows.**
+`mode_profiles.live.max_open_positions` is now `-1` ("dynamic") instead of a fixed `2`.
+`RiskEngine._dynamic_max_open_positions()` (risk.py) computes the real ceiling on every
+exposure check from: live capital (already fetched from the broker each day),
+`sizing.min_capital_for_entry` (reused as an always-uncommitted safety buffer, not a new
+config key), `broker.mis_margin_pct`, `sizing.risk_per_trade`/`slippage_factor`, and the
+TIGHTEST `strategy_profiles.<TAG>.min_sl_pct` among every `strategies.REGISTRY`
+`tradeable=True` strategy (`runtime._worst_case_live_sl_pct()`).
+
+Key finding behind this change: risk-based sizing (qty = capital × risk_pct / SL-distance)
+means the margin ONE position needs, as a % of capital, does not depend on capital OR stock
+price at all — only on risk_per_trade, mis_margin_pct and the SL%. So a capital→position-count
+bracket table (25K→2, 50K→3, ...) would have been arbitrary, not derived. With today's config
+(BREAKOUT/BREAKINGTRADE/BREAKINGTRADE-WATCHLIST at a 0.20% min_sl_pct floor), the dynamic
+ceiling resolves to 1 at every capital level from ₹25K to ₹10L+ — two such tight-stop
+positions can never fit simultaneously (2 × ~91% margin > 100%), at any account size. That is
+the correct, safe answer: a bigger account takes a proportionally bigger position too. The
+ceiling only rises above 1 once a wider-stop strategy (e.g. ORB, currently not live) is the
+one actually promoted, or `margin_reserve_buffer`'s relative weight shrinks enough at very
+high capital — both handled automatically, no config edit required either way.
+
+0 still means "unlimited" (used by `analyze`). -1 is a new, distinct sentinel so a config typo
+of 0 in LIVE can never silently mean unlimited. `RiskEngine.effective_max_open_positions_for()`
+is the new public accessor every caller outside risk.py (notifications, smoke test) must use
+instead of reading `.max_open_positions` directly, since that raw attribute can now be -1.
+
 ## Recent Changes (2026-09-11)
 
 **Concentration caps are PER STRATEGY, in both modes.** A strategy may not re-enter a name it
@@ -1924,6 +1952,108 @@ is today's F&O list walked backwards so survivorship bias is present.
 
 ---
 
+## Backtest Trust Review (2026-09-12)
+
+Triggered by the right question: almost every strategy tested came back negative, and
+there was no way to tell a real verdict from a broken harness.
+
+### The harness was not the problem. The dataset was.
+
+Four checks now run as `backtest/validation.py`, each with an answer established
+outside this repo, so a disagreement is a bug HERE:
+
+| Check | Expected | Result |
+| --- | --- | --- |
+| A. Overnight vs intraday return | overnight carries the premium | PASS — median overnight **+54.0%/yr** vs intraday **-22.8%/yr**, overnight wins in **100%** of 48 symbols |
+| B. Engine differential — panel arithmetic vs the simulator | identical | PASS — **0.0 bps** apart over **48,815** trades |
+| C. Cross-sectional momentum 12-1 | positive alpha | PASS — **+11.25%/yr** over an equal-weight benchmark, t = 2.86, Sharpe 1.43, 201 names |
+| D. Short-term 1-month reversal | negative alpha | PASS — **-1.12%/yr** (weak, t = -0.10) |
+
+C and D are run as a pair on purpose. The classic backtest bug — filling on the signal
+bar instead of the next one — makes a ranking strategy read its own outcome and would
+print BOTH as strongly positive. The sign flip is the evidence the timing is clean.
+
+**Finding A is the answer to "why is everything negative".** The NSE intraday session
+carries a structural drift of about **-23%/yr**, while the entire equity premium accrues
+overnight. A long-biased intraday book is fighting a headwind before it selects a single
+stock. This is not a defect and not bad luck; it is documented across essentially every
+equity market studied.
+
+### What was actually wrong
+
+1. **59 sessions of data.** yfinance caps 5-minute history at 60 days, and roughly half
+   of those sessions are missing their closing bars. Every intraday verdict on record
+   was drawn from ~59 sessions of half-complete data.
+2. **`db/historify.duckdb` already held 16.9M one-minute bars back to 2020 and nothing
+   used them.** `data.from_historify()` now resamples them: **48 symbols, median 1,043
+   sessions, 99.5% session completeness, zero impossible bars** — against yfinance's 59
+   sessions at 49.2%.
+3. **Costs were understated by ~60%.** `RunConfig.cost_bps` was 10; the statutory NSE
+   intraday charges alone are 8.2 bps at a Rs 1 lakh position, leaving under 1 bp per
+   side for slippage on a market-order breakout. Now 16, computed by
+   `types.india_intraday_bps()` from `portfolio.costs.india_intraday` so the backtest
+   and the Portfolio Backtester cannot hold different views of what a trade costs.
+4. **The t-statistic counted one market move as forty observations.** Now clustered by
+   session, with the uncorrected figure kept alongside as `t_naive` so the gap is
+   visible. On ORB it shrank |t| from 14.17 to 10.86.
+5. **Drawdown was measured over the wrong ordering.** The harness collects trades symbol
+   by symbol, so `max_dd_R` described a curve that ran A's whole history and then B's.
+   Now sorted by exit time.
+6. **No allowance for how many things had been tried.** `metrics.hurdle_t(n_trials)`
+   gives the |t| a result must clear: 1.97 at one configuration, 2.83 at ten, 3.53 at
+   a hundred.
+7. **Historify downloads in ONE un-chunked request.** Flattrade answers a single 1-minute
+   history call with at most ~58,000 bars and truncates silently. Ask the UI for five
+   years and it reports success and stores seven months. `backtest/backfill.py` chunks
+   by month, is resumable, and reports per-symbol coverage.
+
+### What this does to the verdicts
+
+ORB, re-run on 1,404 sessions instead of 59:
+
+| Source | Sessions | Trades | Gross bps | Net R @ cost | Clustered t |
+| --- | --- | --- | --- | --- | --- |
+| yfinance | 59 | 2,422 | **-3.21** | -0.177 @ 10 bps | -5.82 |
+| Historify | 1,404 | 9,307 | **+1.08** | -0.155 @ 16 bps | -10.86 |
+
+EMA9 on the same store, 25,254 trades over 1,499 sessions: gross **-1.65 bps**, and at
+ZERO cost the expectancy is **-0.001R per trade at t = -1.87**. That is a coin flip
+measured to three decimal places - which is a far more useful statement than the
+previous "t = -9.90 on 6,577 trades", because it says the strategy is not backwards,
+it is empty.
+
+The old sample said ORB loses money *before costs*. It does not — it has a small
+positive gross edge of about 1 basis point per trade. That edge is real and it is also
+useless, because the round trip costs sixteen. At zero cost the whole thing is
++0.023R/trade at t = 0.09, which is indistinguishable from zero. **The conclusion did
+not change, but the reason did**, and the reason is the part you can act on: this
+strategy family does not fail on direction, it fails on transaction cost.
+
+### Data now, and the ceiling
+
+| | Before | After |
+| --- | --- | --- |
+| 1-minute bars in Historify | 16.89M | **18.45M** |
+| Symbols current to the last session | 0 / 48 | **47 / 48** |
+| 5-minute sessions per symbol (median) | 59 (yfinance) | **1,043** |
+| Session completeness | 49.2% | **99.5%** |
+
+Measured against Flattrade on 2026-09-12: **1-minute history reaches back about twelve
+months and no further; daily reaches about December 2019.** The 2020-2026 one-minute
+bars already in the store therefore CANNOT be rebuilt if lost — they are an asset to
+back up, not a cache to clear. A newly added symbol starts with roughly one year of
+intraday history.
+
+    uv run python -m signal_engine.backtest.backfill --status
+    uv run python -m signal_engine.backtest.backfill --interval 1m          # extend all
+    uv run python -m signal_engine.backtest.dataquality --source historify
+    uv run --group analysis python -m signal_engine.backtest.validation
+    uv run --group analysis python -m signal_engine.backtest orb --source historify --trials 10
+
+NIFTY is the one symbol still stale: it is an index and needs `NSE_INDEX`, not `NSE`.
+
+---
+
 ## Recent Changes (2026-08-26 → 2026-08-27)
 
 ### Backtest framework (`backtest/`)
@@ -2936,7 +3066,7 @@ After sizing, `adjust_qty_for_margin()` checks whether the full-risk qty fits in
 | ₹35K    | ₹350      | ₹318              | ~60       | ₹1,860            | 5     | ₹103               | ₹142          | ₹7,500           |
 | ₹50K    | ₹500      | ₹454              | ~86       | ₹2,660            | 5–6   | ₹148               | ₹204          | ₹10,800          |
 
-Return % stays constant at ~21%/month — profit scales linearly with capital. The practical benefit of larger capital is fewer rejections from `min_capital_for_entry` floor and room to raise `max_open_positions` to 6–7 at ₹35K+.
+Return % stays constant at ~21%/month — profit scales linearly with capital. The practical benefit of larger capital is fewer rejections from `min_capital_for_entry` floor. `max_open_positions` no longer needs raising by hand as capital grows (2026-09-12) — see below.
 
 ### Multi-TP vs TP1-only: Strategy Decision
 
@@ -3092,7 +3222,7 @@ telegram:
 |-----|-------------|
 | `daily/weekly/monthly_loss_limit` | Loss lockout thresholds (fraction of capital) |
 | `max_portfolio_heat` | Max open risk fraction |
-| `max_open_positions` | Concurrent slot cap. 0 = unlimited (2026-09-10 convention, matching `max_positions_per_symbol`/`sector`). Enforced per-strategy since 2026-09-10 — each strategy gets its own counter, not a shared total |
+| `max_open_positions` | Concurrent slot cap. 0 = unlimited (2026-09-10 convention, matching `max_positions_per_symbol`/`sector`). Enforced per-strategy since 2026-09-10 — each strategy gets its own counter, not a shared total. **-1 = dynamic (2026-09-12)**: computed fresh from live capital every check instead of a fixed number — see `mode_profiles.live` and "Recent Changes (2026-09-12)" below |
 | `max_trades_per_day` | Daily order cap. 0 = unlimited. Per-strategy since 2026-09-10, same as above |
 | `min_rr` | Min reward:risk ratio |
 | `duplicate_window_seconds` | Dedup window |

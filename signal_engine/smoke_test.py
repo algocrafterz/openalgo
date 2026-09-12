@@ -219,7 +219,7 @@ def check_risk_engine_state() -> str:
     can_trade = engine.check_exposure(strategy)
     limit_info = "" if can_trade else f" | BLOCKED: {engine.exposure_block_reason(strategy)}"
     return (
-        f"OK — [{strategy}] open={open_pos}/{settings.max_open_positions} "
+        f"OK — [{strategy}] open={open_pos}/{engine.effective_max_open_positions_for(strategy)} "
         f"trades_today={trades_today}/{settings.max_trades_per_day} "
         f"daily_loss={realised_loss:.2f}{limit_info}"
     )

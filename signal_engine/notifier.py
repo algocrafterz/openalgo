@@ -1027,7 +1027,7 @@ def build_startup_summary_message(report, mode: str, capital: float, broker_name
         *engine_lines,
         f"  Config: {settings.exchange}/{settings.product}/{settings.order_type} | "
         f"sizing={settings.sizing_mode} | risk/trade={settings.risk_per_trade * 100:.1f}% | "
-        f"max_positions={settings.max_open_positions} | "
+        f"max_positions={'dynamic (from live capital)' if settings.max_open_positions == -1 else settings.max_open_positions} | "
         f"daily_loss_limit={settings.daily_loss_limit * 100:.1f}%",
         "",
         f"Channels: {ch_list}",

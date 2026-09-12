@@ -10,6 +10,7 @@ from loguru import logger
 
 from signal_engine.config import resolve_mode_profile, settings
 from signal_engine.risk import RiskEngine
+from signal_engine.strategies import REGISTRY
 
 #: Risk limits a mode_profile may override. Deliberately a fixed list rather than "anything
 #: in the profile": a typo in config would otherwise set an attribute nothing reads, and the
@@ -59,6 +60,20 @@ def apply_trade_mode(engine: RiskEngine, trade_mode: str) -> None:
     )
 
 
+def _worst_case_live_sl_pct() -> float:
+    """Tightest min_sl_pct among strategies REGISTRY marks tradeable=True — the most
+    margin-hungry position RiskEngine's dynamic max_open_positions must plan for
+    (see risk.py's _dynamic_max_open_positions). A strategy with no strategy_profiles
+    override inherits the global settings.min_sl_pct floor, same as validator.py does.
+    """
+    floors = [
+        settings.strategy_profiles.get(tag, {}).get("min_sl_pct", settings.min_sl_pct)
+        for tag, meta in REGISTRY.items()
+        if meta.tradeable
+    ]
+    return min(floors) if floors else settings.min_sl_pct
+
+
 def build_risk_engine(store, trade_mode: str = "live") -> RiskEngine:
     """Build a RiskEngine wired to the current configuration.
 
@@ -88,4 +103,7 @@ def build_risk_engine(store, trade_mode: str = "live") -> RiskEngine:
         soft_blacklist=settings.soft_blacklist,
         soft_blacklist_multipliers=settings.soft_blacklist_multipliers,
         strategy_profiles=settings.strategy_profiles,
+        mis_margin_pct=settings.mis_margin_pct,
+        margin_reserve_buffer=settings.min_capital_for_entry,
+        worst_case_sl_pct=_worst_case_live_sl_pct(),
     )

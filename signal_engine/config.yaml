@@ -684,22 +684,38 @@ bracket:
 # never hand a live account the paper limits.
 mode_profiles:
 
-  # Real money. These are the numbers derived on 2026-09-06: one position needs ~60% of a
-  # Rs35k account at 20% MIS margin, so 2 concurrent is the ceiling; 4% daily is four full
-  # stops; the Rs300 price floor keeps one tick under ~0.05R.
+  # Real money. daily_loss_limit 4% is four full stops; the Rs300 price floor keeps one
+  # tick under ~0.05R.
   #
   # 2026-09-10: RiskEngine.isolates_per_strategy is False for any mode other than "analyze"
-  # (risk.py), so in LIVE mode every one of these five numbers is a POOLED total shared by
+  # (risk.py), so in LIVE mode every one of these numbers is a POOLED total shared by
   # ALL enabled live strategies, not a per-strategy allowance. There is one real broker
-  # account, so max_open_positions=2 means 2 TOTAL across every live strategy combined, and
-  # a loss in any one of them counts against the same daily/weekly/monthly ceiling as every
-  # other. Same day-start capital number too (sizing.sandbox_capital's per-strategy note is
-  # ANALYZE-only) — a strategy sizing a trade after another already holds a position checks
-  # what OpenAlgo's funds API says is ACTUALLY left, not a second imaginary full account.
-  # Currently moot (only BREAKOUT is enabled live), but this is what makes it safe to ever
-  # enable a second live strategy without re-deriving these numbers from scratch.
+  # account, and a loss in any one live strategy counts against the same daily/weekly/monthly
+  # ceiling as every other. Same day-start capital number too (sizing.sandbox_capital's
+  # per-strategy note is ANALYZE-only) — a strategy sizing a trade after another already
+  # holds a position checks what OpenAlgo's funds API says is ACTUALLY left, not a second
+  # imaginary full account.
+  #
+  # 2026-09-12: max_open_positions is -1, meaning "compute this fresh from live capital every
+  # time" instead of a fixed number — see RiskEngine._dynamic_max_open_positions() in risk.py.
+  # It used to be a plain 2, derived on 2026-09-06 from "one position needs ~60% of a Rs35k
+  # account at 20% MIS margin". That derivation was ALREADY capital-independent (sizing is
+  # risk_per_trade % of whatever the account holds, so the margin ONE position needs is the
+  # same FRACTION of capital at Rs25k or Rs10L) — the fixed 2 just meant re-deriving and
+  # hand-editing this number was inevitable the day a second live strategy with a different
+  # SL profile got promoted, or capital moved enough for the margin_reserve_buffer's relative
+  # weight to matter. Now it's computed at runtime from: live capital (fetched from the
+  # broker), sizing.min_capital_for_entry (used as the always-uncommitted safety buffer),
+  # broker.mis_margin_pct, sizing.risk_per_trade/slippage_factor, and the TIGHTEST
+  # strategy_profiles.<TAG>.min_sl_pct among every REGISTRY tradeable=True strategy in
+  # strategies.py (runtime.py's _worst_case_live_sl_pct — currently BREAKOUT/BREAKINGTRADE/
+  # BREAKINGTRADE-WATCHLIST at 0.20%, since ORB has no override and inherits the wider global
+  # 0.50% floor). No manual edit is ever needed here again as capital grows through
+  # Rs25k/35k/50k/75k/1L+ — see PRD.md for the worked numbers at each of those points.
+  # 0 keeps meaning "unlimited" (used by `analyze` below); -1 is the new "dynamic" sentinel,
+  # distinct from 0 on purpose so a config typo of 0 in LIVE can never silently mean unlimited.
   live:
-    max_open_positions: 2
+    max_open_positions: -1
     max_trades_per_day: 10
     daily_loss_limit: 0.04
     weekly_loss_limit: 0.08

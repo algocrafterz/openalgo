@@ -91,6 +91,7 @@ class TestPipelineFlow:
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
+            mock_risk.effective_max_open_positions_for.return_value = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             await handle_message(_valid_message())
@@ -281,6 +282,7 @@ class TestCncBracketSkip:
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
+            mock_risk.effective_max_open_positions_for.return_value = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -325,6 +327,7 @@ class TestCncBracketSkip:
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
+            mock_risk.effective_max_open_positions_for.return_value = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -368,6 +371,7 @@ class TestBracketOrderFlow:
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
+            mock_risk.effective_max_open_positions_for.return_value = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
@@ -406,6 +410,7 @@ class TestBracketOrderFlow:
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
+            mock_risk.effective_max_open_positions_for.return_value = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = False
@@ -485,6 +490,7 @@ class TestBracketOrderFlow:
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
+            mock_risk.effective_max_open_positions_for.return_value = 3
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
             mock_settings.bracket_enabled = True
