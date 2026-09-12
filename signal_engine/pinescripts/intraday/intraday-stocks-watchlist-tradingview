@@ -1,52 +1,33 @@
 # Shared intraday watchlist: ORB, BREAKOUT, EMA9VWAP
-# Reviewed 2026-09-12, corrected 2026-09-12 (later same day): the first pass only
-# checked liquidity. This pass cross-checks the ORB grade history
-# (orb-performance-2026-Q1.md) and volatility (ATR% of price), which liquidity
-# alone does not capture. See ema9-vwap/STRATEGY-LOG.md for full reasoning.
+# Four-factor screen (current 60d, 5-min bars unless noted): median daily
+# traded value >= Rs 100cr, median ATR% >= 0.15%,
+# beta vs NIFTY (1y daily) in [1.0, 2.0], 5-day/30-day
+# relative volume >= 0.8. Excludes BHEL, YESBANK
+# (blacklisted) and any symbol currently under NSE ASM/GSM surveillance.
+# No performance-report grading, no sector-rotation filter (swing-only tool -
+# see STRATEGY-LOG.md). Regenerated on the first startup of each ISO week by
+# signal_engine/scripts/watchlist_screen.py - do not hand-edit; change the
+# screen thresholds there instead.
+# Last run: 2026-09-13 03:50 IST, data through 2026-09-11
+# Trailing (N/4) = appearances in the last 4 weekly runs.
 
-# --- kept: consistent or improving ORB/BREAKOUT grade ---
-ASHOKLEY      # A -> A, consistent
-TATASTEEL     # C -> A, improving
-RECLTD        # B -> A, improving
-NATIONALUM    # A -> B, still solid
-PFC           # A -> B, still solid
-JSWENERGY     # C -> A, improving
-APOLLOTYRE    # A -> A, consistent. Thin liquidity (last of 209 F&O names checked)
-              # but real, repeated ORB/BREAKOUT edge - the strategy that needs
-              # volume the most (EMA9VWAP) simply has no edge on ANY stock, so
-              # this liquidity concern does not override APOLLOTYRE's own record.
-
-# --- kept, but grade is stale (strong Q1, dropped out of the Q2 sample) ---
-SBIN          # A, then untracked - watch, do not assume still strong
-HINDALCO      # A, then untracked - watch
-BPCL          # B, then untracked - watch
-
-# --- kept, no ORB/BREAKOUT track record yet, but liquid AND volatile enough ---
-VEDL          # never graded; ATR% and traded value both above the ORB-45 median
-INDUSINDBK    # never graded; same
-
-# --- added: liquid AND at-or-above the existing watchlist's typical volatility ---
-TCS
-INFY
-
-# --- added: liquid, somewhat calmer than the existing watchlist median - keep,
-#     but do not expect these to fire as often as the PSU/metal names above ---
-KOTAKBANK
-AXISBANK
-NTPC
-
-# --- removed: ADANIPOWER (D grade, dropped from ORB watchlist by Q2), MANAPPURAM
-#     (D grade, explicitly named as a drag in the 2026-03-13 cost analysis),
-#     TATAPOWER (D grade in BOTH quarters, never improved) ---
-
-# --- removed: FEDERALBANK -> corrected to FEDERALBNK, but its OWN grade went
-#     A -> D between quarters, so it is not carried forward as a clean keep;
-#     BANKBARODA fell B -> D the same way. Both are dropped rather than kept
-#     on the strength of a liquidity check that does not see this decline. ---
-
-# --- considered, not added: HDFCBANK, RELIANCE, ICICIBANK, BHARTIARTL, ITC ---
-# The most liquid names in the whole F&O universe, but meaningfully CALMER than
-# every stock already on this list (ATR% 74-79% of the ORB-45 median vs TCS/INFY
-# at 100-106%). Deep pockets, smaller ranges - a breakout strategy needs the
-# range more than it needs the depth. Add only after checking they actually
-# produce ORB/BREAKOUT signals at a usable rate; do not assume liquidity implies fit.
+COCHINSHIP  # 1/4
+BANDHANBNK  # 1/4
+KEI  # 1/4
+DLF  # 1/4
+GODREJPROP  # 1/4
+IDEA  # 1/4
+ADANIENT  # 1/4
+COFORGE  # 1/4
+POLYCAB  # 1/4
+TATASTEEL  # 1/4
+ULTRACEMCO  # 1/4
+MARUTI  # 1/4
+BANKBARODA  # 1/4
+CHOLAFIN  # 1/4
+INDUSINDBK  # 1/4
+CDSL  # 1/4
+DIXON  # 1/4
+LTM  # 1/4
+INDIANB  # 1/4
+ADANIPORTS  # 1/4

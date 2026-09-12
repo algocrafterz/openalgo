@@ -688,6 +688,18 @@ def _run_startup():
     except Exception:
         logger.exception("Telegram notification failed (non-fatal)")
 
+    # 5. Weekly watchlist screen, LAST so it can never delay trading readiness or the
+    # notification above. Runs on whatever day the system actually next starts up
+    # rather than a fixed clock time - see watchlist_screen.py's module docstring for
+    # why, and why the Telegram send here does not race the listener's own session.
+    try:
+        from signal_engine.scripts.watchlist_screen import maybe_run_weekly_screen
+
+        if maybe_run_weekly_screen():
+            logger.info("Weekly watchlist screen ran and notified Telegram")
+    except Exception:
+        logger.exception("Weekly watchlist screen failed (non-fatal)")
+
 
 def _run_shutdown(reason: str = "scheduled"):
     """Shutdown flow: build summary, notify, exit."""

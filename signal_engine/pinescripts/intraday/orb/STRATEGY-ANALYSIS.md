@@ -513,30 +513,16 @@ Entry blocked when **2 or more** of these filters oppose the direction.
 
 ---
 
-## Signal Performance Summary (Q1 2026)
+## Stock Selection
 
-See [SIGNAL-PERFORMANCE-2026-Q1.md](trade-analysis/SIGNAL-PERFORMANCE-2026-Q1.md) for full analysis.
-
-**Key metrics (31 trading days, 196 trades):**
-- Win Rate: 67.3% | Expectancy: +0.28%/trade | Cumulative PnL: +54.89%
-- Shorts outperform: 72.4% WR vs Longs 63.3%
-- Fridays underperform: 55.2% WR vs 70%+ other days
-- Best performers (Grade A): NATIONALUM, APOLLOTYRE, PFC, CANBK, TMPV, SBIN, RECLTD, ASHOKLEY, PNB, ZYDUSLIFE, LICHSGFIN, EXIDEIND, HINDALCO
-- Remove: BHEL (0% WR), MANAPPURAM (17% WR)
-
-## Stock Selection Methodology
-
-**Monthly review process:**
-1. Run signal analysis on last 20 trading days
-2. Grade each stock (A/B/C/D based on WR% and PnL)
-3. Keep Grade A+B, watch Grade C, remove Grade D after 2 months
-4. Add candidates from F&O stock list with: vol > 50L shares/day, ATR% 1.5-3.5%, trending sector
-
-**Sector rotation awareness:**
-- Risk-on rally: Metals, Banks, Power (high beta, strong ORB moves)
-- Defensive rotation: FMCG, Pharma, IT (cleaner but smaller moves)
-- Rate cut cycle: Banks, Realty, NBFCs
-- Commodity boom: Metals, Oil & Gas
+Removed 2026-09-12: the dated Q1/H1 performance reports and the grade-based
+monthly-review process that lived here are gone (still recoverable from git
+history if ever needed, just not part of the live tree). Stock selection is
+now done from each candidate's own current technical metrics (liquidity,
+volatility, and a fresh backtest on recent data) rather than a quarter-old
+grade table — see `signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md`
+for the current methodology and `intraday-stocks-watchlist-tradingview` for
+the resulting list.
 
 ## Summary
 

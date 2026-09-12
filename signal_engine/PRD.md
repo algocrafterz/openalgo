@@ -216,6 +216,66 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-13)
+
+**Intraday watchlist (ORB/BREAKOUT/EMA9VWAP) rebuilt from live technical metrics, not
+performance grades; sector-rotation-map scoped to swing strategies only.** The dated
+Q1/H1 ORB performance reports were removed from the repo (stale, and the user did not
+want future selection biased by old market conditions) — `analyze_orb.py`, the tool
+that regenerates such a report from a fresh Telegram export, was kept. The shared
+`signal_engine/pinescripts/intraday/intraday-stocks-watchlist-tradingview` file is now
+built by a repeatable screen (median daily traded value >= Rs 100cr, median ATR% of
+price >= 0.15%, current 60-day 5-min bars via `data.load(refresh=True)`, top 24 by
+ATR%) rather than hand-graded. Recommended cadence: monthly, matching the existing
+blacklist review cadence elsewhere in `config.yaml` — not static, and not weekly (the
+ranking was stable across a 2-week re-check this session).
+
+Separately, `sector-rotation-map` (an external RRG dashboard, OpenAlgo-powered) was
+evaluated as a possible stock filter. Its calculation was verified correct by an
+independent reimplementation, but its verdict is scoped to swing strategies only
+(`rsi-tp-mr`), not intraday: RRG is inherently a weekly-bar technique (52-week rolling
+window) and its value for a 5-minute entry was never tested. Full reasoning and the
+current candidate list in `signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md`.
+
+**The watchlist screen above is now a scheduled job, not a manual script — triggered
+by startup, not a fixed cron hour.** `signal_engine/scripts/watchlist_screen.py`'s
+`maybe_run_monthly_screen()` is called from `openalgoscheduler._run_startup()` as its
+LAST step (a fixed clock time assumes the machine is on then, which a laptop is not
+guaranteed to be), gated by `signal_engine/data/watchlist_screen_state.json` so it
+only does real work once per calendar month regardless of how many times startup runs.
+It posts a digest to `notify_channel` — sent, not just formatted; verified with real
+runs during this session — and rewrites the repo's watchlist file, but does **not**
+touch TradingView (no public API for that); updating TradingView from the Telegram
+message stays a manual step. Running as startup's last step also means the Telegram
+send is sequential with (never races) the live listener for their shared Telethon
+session file.
+
+**Screen criteria expanded from two factors to four, researched against public
+practice and NSE-specific rules, not assumed.** Liquidity (traded value, not market
+cap) and ATR% alone missed two real gaps: no check for whether a stock's activity is
+CURRENTLY elevated (added relative volume, 5-day vs 30-day baseline — 15 of the prior
+month's 24 picks failed this), and no NSE-specific tradeability gate (added a live
+check against NSE's own ASM/GSM surveillance endpoints — some stages carry 100% margin
+or block intraday trading outright, independent of how well a stock otherwise
+screens). Also added beta vs NIFTY (1.0–2.0 band) as a distinct measure from ATR%: one
+prior pick scored highest on ATR% and 0.60 on beta, meaning its volatility was almost
+entirely uncorrelated with the market. Full sources and the funnel counts in
+`ema9-vwap/STRATEGY-LOG.md`'s 2026-09-13 03:30 entry.
+
+**Cadence moved from monthly to weekly, with conviction tracking added — measured,
+not assumed.** Recomputing the liquidity/ATR%/RVOL pool at different points in the
+same 60-day window: day-to-day overlap ~74%, but week-to-week overlap only **~39%**
+— more than half the pool turns over within a week, mostly RVOL's own 5-day window
+reacting to single high-volume days. A monthly screen took one such noisy snapshot
+with no way to tell a real trend from a one-day fluke. Now weekly (ISO week), and
+every run's symbols are appended to a rolling 4-run history
+(`signal_engine/data/watchlist_screen_state.json`) so each candidate is annotated
+`(N/4)` — how many recent runs it appeared in — in both the Telegram digest and the
+watchlist file. ASM/GSM exclusion confirmed (not changed) as watchlist-level: the
+broker already refuses orders on those names, so keeping them out of the candidate
+list upstream is the right layer rather than relying on the broker's rejection
+downstream. Full churn data in `ema9-vwap/STRATEGY-LOG.md`'s 2026-09-13 03:51 entry.
+
 ## Recent Changes (2026-09-12)
 
 **`max_open_positions` is dynamic in LIVE mode — no more manual edits as capital grows.**
@@ -1951,6 +2011,145 @@ is today's F&O list walked backwards so survivorship bias is present.
 **Neither Pine file has been compiled on TradingView.** Paper first.
 
 ---
+
+## Remaining Strategies on the Rebuilt Dataset (2026-09-13)
+
+Swing strategies (`gap_rsi`, `phoenix`, `value_zone`) run on the yfinance 10-year
+adjusted daily panel, 201 F&O names, 2016-2026, IS/OOS split at 2022-09-09. Intraday
+ones queued behind the F&O backfill (see below) because Historify's DuckDB file takes
+an exclusive lock while being written and cannot be read concurrently.
+
+| Strategy | OOS trades | OOS net R | OOS clustered t | Verdict |
+| --- | --- | --- | --- | --- |
+| **gap_rsi** (extreme-RSI breakaway gap) | 3,716 | -0.231 | -2.18 | Negative, clears the hurdle in the wrong direction. Even the isolated LONGS-only book is a coin flip (t=-2.31 despite +0.039 mean R — see note below). SHORTS alone: -0.491R, t=-6.31. Do not trade. |
+| **phoenix** | 156 | +0.085 | 1.85 | Promising but NOT proven — OOS \|t\| (1.85) is below the single-trial hurdle (1.97), let alone the 10-trial hurdle (2.83) this session has now run up. All trades are LONGS (shorts fire zero times); 82.5% OOS win rate on few trades. Needs more sessions before a verdict, not a trade. |
+| **value_zone** | 1,305 | +0.033 | **7.54** | The strongest result in this session, OOS and clustered. 76% win rate, 3,151 total trades, gross ≈3.1% per trade before cost. **But it trades with NO real stop-loss by design** (`stop_mode="none"` reproduces the source Pine, which has none — `sl` is parked 99% away and MAX_HOLD (120 sessions) is the only floor). MAX_HOLD exits are 14.1% of trades at -20.7% average loss. Position sizing must assume a name can be held for six months and give back a fifth of its value before this strategy's own logic closes it. |
+
+**Why gap_rsi's "longs only" row shows a negative t with a positive mean R:** this is
+the clustering correction catching something real, not a bug. `net_R` weights every
+trade equally; the clustered `t` weights every SESSION equally. A few sessions with a
+pile of simultaneous long entries are dragging the per-trade average positive while
+most individual sessions lose. On a session picked at random, the longs book is more
+likely to be a loser than net_R alone suggests - which is exactly the failure mode
+`t_naive` vs `t` exists to expose (see [[project-backtest-validation-suite]]).
+
+**None of these three would pass the 10-trial hurdle (\|t\| > 2.83) except value_zone.**
+That is the correct number of trials to hold them to: this session alone has now run
+ORB, EMA9, gap_rsi, phoenix and value_zone at the shipped defaults plus each one's
+cost-sensitivity sweep.
+
+## Broker Choice for Deeper History, and the yfinance Policy (2026-09-13)
+
+### Angel One over mStock - evidence, not a guess
+
+Commit `48807197` (`fix(angel): pace rate limits to real caps, eliminate history gaps,
+speed up streaming`), already in this repo, states: **"Validated: 2-year 1-minute
+history is gapless across NSE, NSE_INDEX, BSE, BSE_INDEX, NFO, BFO and MCX."** That is
+a tested claim about Angel's own plugin, not a marketing number - and it already beats
+Flattrade's measured ~12-13 months with a mid-window gap. No equivalent claim exists
+for mStock anywhere in this repo's history. Recommendation: **Angel One** is the
+broker to set up in `.secondary_broker.env` first.
+
+This is still a claim about the PLUGIN CODE's tested behaviour, not this specific
+account's live data. `broker_login.py --probe` (now checks 5 symbols, not one, since
+Flattrade's own depth turned out to vary by symbol) is what turns "should be ~2 years"
+into a verified number before a multi-hour backfill is run against it.
+
+### yfinance: cross-check only, never a backtest data source
+
+Confirmed policy, now the actual default (`__main__.py` and `data.py`): Historify is
+the ONLY source a reported backtest result may be built on. yfinance is kept for
+exactly one purpose - `dataquality.cross_source()` compares Historify's daily closes
+against Yahoo's as an INDEPENDENT check that a broker price is not systematically
+wrong, which two draws from the SAME source could never catch. It is not a fallback
+for missing history: yfinance's own 60-day intraday cap and 49.2% session-completeness
+(measured 2026-09-12) make it strictly worse than Historify everywhere Historify has
+any coverage, and it carries a per-symbol rate limit Historify does not. `--source
+yahoo` remains for the one legitimate case - a symbol Historify has not been
+backfilled for yet - and should be treated as informational, never final.
+
+### Provenance: Historify's schema has no broker/source column
+
+`market_data`'s primary key is `(symbol, exchange, interval, timestamp)` - there is
+nowhere to record WHICH broker a given historical bar came from. Backfilling the same
+symbol/date range from two different brokers would silently make that unanswerable
+later if one is ever found to disagree with the other.
+
+Design choice made here rather than a schema migration: **keep the ranges
+non-overlapping**. Flattrade continues to own the recent window (its own daily catch-up
+keeps it current for live trading); a second broker is used ONLY to reach further back
+than Flattrade goes, into dates Flattrade has already returned "no data" for. Under
+that split, provenance is recoverable from the date alone without touching the live
+Historify schema. A `source` column is possible if full per-bar provenance is ever
+needed, but that changes a table the live Historify feature also writes to and needs
+a proper migration (see CLAUDE.md's Schema Changes rule) - not done speculatively.
+
+## Full F&O Universe Backfill and Historify-Only Data Pipeline (2026-09-13)
+
+Triggered by: "is data available for all stocks in nse exchange or only for specific
+stocks" + "I would prefer not to use yfinance due to rate limits ... use openalgo
+historify instead ... fetch all available information available for all fno stocks
+universe".
+
+### The F&O list itself was stale
+
+`data.NSE_FNO` (hardcoded) had 209 names; the live `symtoken` table has 211 - three
+new listings (`ATHERENERG`, `MAHABANK`, `SAGILITY`) were missing and one delisted name
+(`DALBHARAT`) was still in the list. Synced via `data.refresh_fno()`.
+
+### Coverage before this session: 44 of 211 F&O names had ANY Historify data
+
+167 names - spanning nearly every sector, not a handful of niche tickers - had zero
+rows. `backfill.py --symbols <167 names> --start 2025-09-08 --interval 1m` is
+backfilling all of them to Flattrade's practical ceiling (see below).
+
+### Flattrade's real intraday depth ceiling, re-measured
+
+Bisected against three fresh symbols (ADANIPORTS, COALINDIA, HINDALCO), not just the
+one used on 2026-09-12: data is present at 120 days back, ABSENT from 150-240 days
+back (a real gap in the broker's own retention, not a clean boundary), and PRESENT
+again intermittently from 270-360 days back. There is no clean "12 months and no
+further" line - it is uneven. A background pass (`backfill_1m_deeper.log`) pushes the
+167 newly-covered names all the way to 2020-01-01 to check exhaustively rather than
+assume, at the cost of mostly-empty requests beyond ~14 months.
+
+### Historify replaces yfinance for swing/daily work too
+
+`data.from_historify_daily()` (new) pulls Historify's `D`-interval bars and back-adjusts
+them for splits/bonuses with `_split_adjust_daily()` - the same guarantee
+`auto_adjust=True` got from yfinance, now sourced from the broker feed already in this
+instance instead of a rate-limited external API. Historify's daily retention reaches
+further back than its 1-minute retention (small daily candles cost the broker far less
+to keep), so this is usually the DEEPEST panel available here. Pinned by 5 tests in
+`test_backtest_integrity.py::TestSplitAdjustedDaily` (single split, two compounding
+splits, high/low scaled with close, volume deliberately left unadjusted).
+
+`__main__.py`'s swing path now defaults to `--source historify`; `--source yahoo`
+remains as an explicit fallback for a symbol Historify has not been backfilled for.
+
+### Full pipeline running this session (`pipeline.sh`, background)
+
+1. Finish the 167-symbol, ~1-year 1m backfill already running.
+2. Push those same 167 symbols back to 2020-01-01 (exhaustive depth check).
+3. Backfill `D`-interval bars for the full 211-symbol F&O universe (one request per
+   symbol - daily's chunk size is 4000 days, so this step is minutes, not hours).
+4. Re-run the remaining intraday strategies (`dhb`, `ib_extension`, `key_level`,
+   `ema9_vwap`, `ema9_pdf`) against the now-current, now-complete Historify universe.
+5. Re-run the three swing strategies (`gap_rsi`, `phoenix`, `value_zone`) against
+   Historify's own split-adjusted daily bars instead of yfinance, and diff the results.
+
+### Second-broker path, for going deeper than Flattrade can
+
+`signal_engine/backtest/broker_login.py` (new): authenticates directly against Angel
+One or mStock - both already OpenAlgo plugins - using credentials from a SEPARATE,
+git-ignored `signal_engine/backtest/.secondary_broker.env`, and NEVER calls
+`database.auth_db.upsert_auth`. This matters because `upsert_auth` is keyed by
+username alone, not (username, broker): logging a second broker in through OpenAlgo's
+normal web flow would silently replace the live Flattrade session this instance trades
+on. `--probe` authenticates and reports how far back 1-minute data actually goes,
+without writing anything, so the decision to run a real backfill is made on evidence.
+Not run this session - needs the user's own broker credentials, supplied via that file,
+never through chat.
 
 ## Backtest Trust Review (2026-09-12)
 
