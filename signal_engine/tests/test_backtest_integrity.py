@@ -373,3 +373,46 @@ class TestBySymbolEmptyTrades:
     def test_sort_values_does_not_raise_on_the_empty_frame(self):
         df = metrics.by_symbol([])
         df.sort_values("total_R", ascending=False)   # must not raise KeyError
+
+
+class TestDeadTokenFailsFast:
+    """A dead session token makes every remaining chunk look exactly like a real
+    data gap - three consecutive all-zero symbols is the signature that catches
+    that before it burns 30+ minutes silently doing nothing (see PRD.md 2026-09-14)."""
+
+    def test_three_consecutive_zero_symbols_raises(self, monkeypatch):
+        from signal_engine.backtest import backfill
+
+        monkeypatch.setattr(backfill, "_broker_session",
+                            lambda db_path="": ("tok", None, "angel"))
+
+        def fake_get_history(*a, **kw):
+            return True, {"data": []}, 200   # every chunk: no data, every time
+
+        monkeypatch.setattr(
+            "services.history_service.get_history_with_auth", fake_get_history)
+        with pytest.raises(RuntimeError, match="dead/expired session token"):
+            backfill.backfill(["A", "B", "C", "D"], "2024-01-01", "2024-02-01",
+                              session=("tok", None, "angel"))
+
+    def test_two_zero_symbols_then_a_real_one_does_not_raise(self, monkeypatch):
+        from signal_engine.backtest import backfill
+
+        calls = {"n": 0}
+
+        def fake_get_history(auth, feed, broker, sym, exchange, interval, c0, c1):
+            calls["n"] += 1
+            if sym == "C":
+                return True, {"data": [{"timestamp": 1704067200, "open": 100,
+                                        "high": 101, "low": 99, "close": 100,
+                                        "volume": 10}]}, 200
+            return True, {"data": []}, 200
+
+        monkeypatch.setattr(
+            "services.history_service.get_history_with_auth", fake_get_history)
+        monkeypatch.setattr(
+            "database.historify_db.upsert_market_data", lambda *a, **kw: 1)
+        results = backfill.backfill(["A", "B", "C", "D"], "2024-01-01", "2024-01-05",
+                                    session=("tok", None, "angel"))
+        assert len(results) == 4   # completed without raising
+        assert results[2].stored > 0

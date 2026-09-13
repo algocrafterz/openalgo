@@ -195,6 +195,7 @@ def backfill(symbols: list[str], start: str, end: str | None = None, *,
     step = CHUNK_DAYS if interval == "1m" else DAILY_CHUNK_DAYS
     hist_db_path = "db/historify.duckdb"
     results: list[SymbolResult] = []
+    consecutive_zero = 0
 
     for sym in symbols:
         res = SymbolResult(symbol=sym)
@@ -238,6 +239,28 @@ def backfill(symbols: list[str], start: str, end: str | None = None, *,
         logger.info(f"backfill {sym}: stored={res.stored} ok={res.chunks_ok} "
                    f"empty={res.chunks_empty} failed={res.chunks_failed} "
                    f"compared={res.compared} mismatches={res.mismatches}")
+
+        # A dead session token (or a revoked key) makes every chunk for every
+        # remaining symbol come back looking exactly like "no data for this
+        # range" - Angel's own plugin collapses "auth failed" and "genuinely
+        # nothing traded" into the same empty DataFrame before this function
+        # ever sees the difference (see PRD.md, 2026-09-14: a token died at
+        # midnight IST mid-run and burned 30+ minutes silently "backfilling"
+        # thousands of empty chunks before anyone noticed). Three consecutive
+        # symbols with ZERO bars stored across their entire requested range is
+        # not a plausible coincidence - even a very recent listing should have
+        # picked up its live months - so treat it as a dead session and stop
+        # immediately instead of grinding through the rest of `symbols` the
+        # same way.
+        consecutive_zero = 0 if (res.stored or dry_run) else consecutive_zero + 1
+        if consecutive_zero >= 3:
+            raise RuntimeError(
+                f"backfill stopped: {consecutive_zero} consecutive symbols "
+                f"(...,{results[-3].symbol},{results[-2].symbol},{results[-1].symbol}) "
+                f"stored zero bars each across the full {start}..{end or 'now'} range. "
+                f"This is the signature of a dead/expired session token, not a real "
+                f"data gap - re-run login() for a fresh session and resume from "
+                f"{sym!r} onward rather than continuing.")
     return results
 
 

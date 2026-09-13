@@ -209,7 +209,12 @@ def main() -> None:
     print(f"logged into {session[2]} - token held in this process only, "
           f"auth_db untouched\n")
 
-    probe_symbols = ([s.strip().upper() for s in args.symbols.split(",")]
+    # Capped at 5 regardless of how many --symbols were passed for the backfill
+    # itself: probing is a quick sanity check before a run that can be hundreds of
+    # symbols, not a second full pass. Missing this cap once meant a 47-symbol
+    # --symbols resume triggered 517 probe calls (47 x 11 offsets) - ~5 minutes
+    # spent re-confirming depth on symbols about to be backfilled anyway.
+    probe_symbols = ([s.strip().upper() for s in args.symbols.split(",")][:5]
                      if args.symbols else DEFAULT_PROBE_SYMBOLS)
     report = probe_depth(session, symbols=probe_symbols, interval=args.interval)
     df = pd.DataFrame(report)
