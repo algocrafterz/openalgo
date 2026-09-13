@@ -24,9 +24,15 @@ class RunConfig:
     allow_longs: bool = True
     allow_shorts: bool = True
 
-    # Round-trip cost as basis points of notional (charges + slippage). For NSE
-    # intraday equity ~8 bps of charges for a mid-size position, plus slippage.
-    cost_bps: float = 10.0
+    # Round-trip cost as basis points of the ENTRY notional (statutory charges plus
+    # slippage), from `india_intraday_bps()` below at a ~Rs 1 lakh position. Both legs
+    # are market orders, so slippage is charged twice and is the larger half.
+    #
+    # This was 10.0, which was too kind: the statutory charges alone are 8.2 bps at
+    # that size, leaving under 1 bp per side for slippage on a momentum breakout. The
+    # live cost study in the Q1 signal-performance note independently landed on ~19 bps.
+    # Raising it makes every historical result worse, which is the honest direction.
+    cost_bps: float = 16.0
 
     # signal_engine's validator rejects stops tighter than this fraction of price.
     # Modelling it here keeps the backtest honest about what would actually trade.
@@ -104,3 +110,27 @@ class Ctx:
 
     def has(self, k: str) -> bool:
         return k in self.a
+
+
+def india_intraday_bps(notional: float = 1_00_000.0, slippage_bps_per_side: float = 4.0,
+                       exchange: str = "NSE") -> float:
+    """Round-trip intraday cost in basis points of the ENTRY notional.
+
+    Computed from `portfolio.costs.india_intraday` rather than restated here, so the
+    backtest and the Portfolio Backtester cannot drift to different views of what a
+    trade costs. The statutory part is exact; the slippage part is an assumption and
+    is the larger of the two, which is why it is a named argument rather than a
+    constant buried in the sum.
+
+    4 bps per side is the working figure for a MARKET order on an F&O-liquid NSE name
+    at 5-minute resolution. Both legs of these strategies are market orders - the
+    entry on the alert and the exit on the stop or the timed close - so it is charged
+    twice. `cost_sensitivity()` exists because this number, not the statutory one, is
+    what decides a marginal strategy.
+    """
+    from portfolio.costs import india_intraday
+
+    schedule = india_intraday(exchange)
+    charges = schedule.charge(buy_value=notional, sell_value=notional, orders=2)
+    statutory_bps = float(charges) / notional * 10_000.0
+    return round(statutory_bps + 2.0 * slippage_bps_per_side, 2)

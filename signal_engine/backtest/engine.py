@@ -64,17 +64,34 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
         if pending is not None:
             sig, sig_px = pending
             pending = None
+            fill = float(o[i])
             if pos is None:
-                pos = Position(direction=sig.direction, entry=float(o[i]),
+                pos = Position(direction=sig.direction, entry=fill,
                                signal_price=float(sig_px), sl=float(sig.sl),
                                sl_eff=float(sig.sl), tp=float(sig.tp),
+                               # Risk is measured from the SIGNAL price, not the fill,
+                               # because that is what the live engine sizes on - the
+                               # alert carries the signal bar's close. The fill's drift
+                               # away from it is a real cost and stays in the result.
                                risk=abs(float(sig_px) - float(sig.sl)),
                                tag=sig.tag, entry_bar=i)
                 trades_today += 1
+                # The gap between the signal close and this open can carry price clean
+                # through the stop before the order is even placed. The live system
+                # STILL TAKES IT: `validator._check_price_ordering` compares the stop
+                # against the alert price, not against the fill, so the order goes out
+                # as a market buy and the stop it then places sits on the wrong side of
+                # the market. Modelling that as a skipped trade would flatter the
+                # backtest, so the fill happens and is closed flat below - but it is
+                # tagged so the count is visible rather than buried inside SL_GAP.
+                entered_through_stop = ((fill <= sig.sl) if sig.direction == 1
+                                        else (fill >= sig.sl))
                 if sig.direction == 1:
                     long_taken = True
                 else:
                     short_taken = True
+                if entered_through_stop:
+                    close_out("SL_GAP_ENTRY", fill, i)
 
         # 2. manage an open position on this bar
         if pos is not None:

@@ -100,6 +100,7 @@ nul
 
 # Signal Engine runtime data
 signal_engine/.env
+signal_engine/backtest/.secondary_broker.env
 signal_engine/data/
 signal_engine/logs/
 signal_engine/*.pid

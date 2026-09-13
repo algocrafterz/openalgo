@@ -2097,6 +2097,159 @@ Historify schema. A `source` column is possible if full per-bar provenance is ev
 needed, but that changes a table the live Historify feature also writes to and needs
 a proper migration (see CLAUDE.md's Schema Changes rule) - not done speculatively.
 
+## Angel Backfill Relaunched After Results Were Captured (2026-09-13, 16:07 IST)
+
+Killed the first attempt seconds after starting it (nothing lost) to run the 8
+strategies above FIRST, since a concurrent Historify read fails immediately on
+DuckDB's file lock - there is no safe interleaving. Relaunched now that those results
+are captured in this file. Expected runtime ~4 hours (211 symbols x ~9.7 years x
+30-day chunks, paced by Angel's own internal rate limit). Once complete: re-run the
+5 intraday strategies above - they should finally use the full universe instead of
+the ~48-symbol subset that clears `min_sessions=250` today.
+
+## Remaining Strategies Backtested (2026-09-13)
+
+All on Historify (no yfinance), `--trials 15` (this session's actual configuration
+count across every strategy and sweep run so far).
+
+### Intraday (5-minute, cost 16 bps) - still the pre-Angel-backfill universe
+
+These ran on the ~48 symbols with 250+ SESSIONS of history (`min_sessions=250`
+default) - the 164 newly-covered symbols have ~250 calendar days of 1m data each,
+which lands right at that threshold and mostly didn't clear it. **These results will
+change, likely for the better on sample size, once the Angel backfill (below)
+extends everyone comfortably past it.**
+
+| Strategy | OOS trades | OOS net R | OOS clustered t | Verdict |
+| --- | --- | --- | --- | --- |
+| **dhb** | 220 | -0.197 | -2.36 | Negative at shipped defaults; the earlier "not tradeable" finding (from a smaller yfinance sample) holds up on more data. |
+| **key_level** | 1,647 | -0.496 | -13.96 | Clearly negative - matches the standing PRD finding that every reference level has a negative break edge (fade, not breakout). |
+| **ema9_vwap** | 14,417 | -0.257 | -16.93 | Clearly negative. Introduced `SL_GAP_ENTRY` (2 trades) - the tag added this session for a fill that gaps through its own stop, per the live validator's actual behaviour. |
+| **ema9_pdf** | 2,224 | -0.500 | -14.97 | Clearly negative. DOJI exit (13.3% of trades, +0.912R average) is the one bright spot in the exit mix - worth isolating as its own hypothesis later. |
+| **ib_extension** | 0 | - | - | Never fired a single signal across 48 symbols, either window. The double-breakout condition (weekly IB AND daily IB, same direction, Wed-Fri only) is evidently too narrow for this universe/period - a real finding, not a bug (though the empty-case crash in `metrics.by_symbol()` WAS a bug, now fixed - see below). |
+
+### Swing (daily, cost 24 bps, Historify's OWN split-adjusted daily bars - not yfinance)
+
+197 symbols now (was 201 on yfinance), 2019-12-03 to 2026-09-13, IS/OOS cut
+2023-12-28. Confirms the yfinance-based verdicts from 2026-09-12 transfer to
+broker-sourced daily data:
+
+| Strategy | OOS trades | OOS net R | OOS clustered t | Verdict |
+| --- | --- | --- | --- | --- |
+| **gap_rsi** | 2,696 | -0.168 | -1.84 | Negative, confirming the 2026-09-12 yfinance-based verdict on independent broker data. Same "longs only" clustering artifact as before (t=-0.33 despite net_R=+0.136 - a few days concentrate many simultaneous long entries). |
+| **phoenix** | 131 | +0.094 | 1.88 | Still promising, still NOT proven - OOS \|t\| (1.88) clears the single-trial hurdle (1.97) barely below it, well short of this session's actual 15-trial hurdle (2.96 - see `hurdle_t(15)`). More sessions needed, not a trade yet. |
+| **value_zone** | 994 | +0.021 | **3.24** | Holds up on independent broker data: still the strongest result in the portfolio. Clears the 15-trial hurdle (2.96). 68.3% OOS win rate. The no-stop-loss caveat from 2026-09-12 stands unchanged - MAX_HOLD exits are 11.6% of trades at -18.7% average loss, and this is still by design (`stop_mode="none"` reproduces the source Pine, which has none). |
+
+### Two bugs found and fixed while running these
+
+1. **`data.from_historify_daily()` crashed on every call.** `.dt.tz_convert(...).normalize()`
+   is missing a second `.dt` - each `.dt.method()` call returns a plain Series, not
+   another datetime accessor, so `.normalize()` needs its own `.dt` prefix. This
+   crashed `gap_rsi`, `phoenix` and `value_zone` on their first attempt. Fixed; pinned
+   by an end-to-end test against a real temporary DuckDB file
+   (`TestFromHistorifyDaily`), not just the pure adjustment math already covered by
+   `TestSplitAdjustedDaily`.
+2. **`metrics.by_symbol([])` crashed instead of reporting zero trades.** Building a
+   DataFrame from an empty list of dicts produces a frame with NO columns, so the
+   subsequent `.sort_values("total_R", ...)` raised `KeyError: 'total_R'` - which is
+   exactly what `ib_extension` hit, since it never fired a signal at all. A strategy
+   that fires zero times over the window is a real, reportable finding and must not
+   crash the `--full` report. Fixed with the same empty-guard pattern `by_reason()`
+   already used; pinned by `TestBySymbolEmptyTrades`.
+
+### A sandbox restart happened mid-run - what survived and what didn't
+
+Historify's data (persistent volume) and every code/PRD/memory change survived
+intact. Every `/tmp` log and in-flight background process did not - the 8 strategy
+backtests above had to be re-run from scratch, and this section itself is written
+promptly rather than held until a longer pipeline finishes, per the lesson from the
+previous entry.
+
+## Full Angel Re-Fill, Consistency Check, and PineScript Inventory (2026-09-13)
+
+Three follow-up requests, addressed in order.
+
+### 1. Angel as the authoritative source, not just a gap-filler
+
+Original plan kept Flattrade and Angel non-overlapping by date to avoid needing a
+comparison step. Superseded: `backfill()` gained `compare_existing=True` (now
+`broker_login.py`'s default). Before every chunk write, it reads whatever Historify
+already has for that exact (symbol, timestamp range), compares CLOSE within
+`COMPARE_TOLERANCE_PCT` (0.5%), logs a warning naming the symbol/range/worst
+disagreement if any bar disagrees beyond that, and then writes the new (Angel) value
+over it regardless - Angel is authoritative for the whole range, agreement or not.
+This is a full re-fill: **2016-01-01 through today**, all 211 F&O symbols, superseding
+the earlier `--end 2025-09-17` non-overlap design. Running now (started 17:24 IST);
+see `angel_full_refill.log` for the live run, or the final printed summary for total
+bars compared / disagreed / worst diff.
+
+### 2. How to confirm the backfill reached everything Angel actually has
+
+Three checks, in order of how much they tell you:
+
+    # A. Per-symbol coverage: first date, last date, staleness
+    uv run python -m signal_engine.backtest.backfill --status
+
+Read the `first` column: it should cluster around 2016-2019 for most symbols (Angel's
+own ceiling, per the probe, sits somewhere between 7 and 10 years back - not a single
+clean date, so some spread across symbols is expected and correct, not a bug).
+A symbol still showing a 2025-09-18 `first` date after the full run finishes did not
+gain from Angel - worth investigating THAT symbol specifically (some F&O names are
+newer listings and genuinely have less history at any broker).
+
+    # B. Whether Angel and Flattrade agreed where they overlapped
+    tail -100 angel_full_refill.log | grep -A5 "agreement with the existing store"
+
+Reports total overlapping bars checked, how many disagreed beyond 0.5%, and the worst
+single disagreement. Zero or near-zero mismatches is the expected, reassuring
+outcome - it means Flattrade was already accurate and Angel confirms it, not that the
+comparison did nothing. A high mismatch rate would be the actual red flag, worth
+individually inspecting via `dataquality.py --cross-check`.
+
+    # C. Data quality on the result (impossible bars, session completeness, gaps)
+    uv run python -m signal_engine.backtest.dataquality --source historify --interval 5m
+
+This is the same audit that found yfinance's 49.2% session completeness back on
+2026-09-12 - re-run it against the refilled store to confirm Angel's bars are as
+clean as Flattrade's were, not just deeper.
+
+### 3. PineScript inventory - what still needs backtesting
+
+Every file under `signal_engine/pinescripts/`, classified by whether it declares
+`strategy()` or `indicator()` in Pine, and whether it fires the structured
+Entry/SL/TP/Direction alert `signal_engine/parser.py` actually executes on (not just
+a generic notification):
+
+| File | Type | Backtest status |
+| --- | --- | --- |
+| `orb/orb.pine` | strategy | `orb` adapter - run |
+| `orb/breakout.pine` | strategy | `key_level` adapter - run (PD/IB families only; PVAH/PPOC/PVAL sub-family explicitly out of scope, needs 1-min volume-profile reconstruction - see `key_level.py`'s own docstring) |
+| `ema9/ema9-intraday.pine` | strategy | `ema9` adapter - run |
+| `ema9-vwap/ema9-vwap.pine` | strategy | `ema9_vwap` adapter - run |
+| `ib-extension/ib-extension.pine` | strategy | `ib_extension` adapter - run (0 trades - the double-breakout condition never fired) |
+| `swing/dividend-growth/dividend-growth.pine` | strategy | `value_zone` adapter - run (strongest result) |
+| `intraday/intraday-dhb.txt` | discretionary write-up, no compiled pine | `dhb` adapter - run |
+| `swing/momentum-rank/momentum-rank.pine` | indicator (alert-only, full Entry/SL/TP/Direction contract) | **This IS the live deployment of the 12-1 cross-sectional momentum result already validated in `portfolio.py`** (the gold-standard +11.25%/yr alpha finding, 2026-09-12). Its own header cites the same backtest (+12.7%/yr alpha, t=3.12) run against 201 F&O names 2016-2026 - a later, slightly different parameter sweep than this session's, both independently positive. Re-running via `portfolio.py` against Historify daily (once the Angel re-fill lands) will give the final, broker-verified number to compare against the header's claim. |
+| `orderflow/candlestick-patterns.pine` | indicator, no alert | Not a strategy - pattern overlay only, no entry/exit/stop of its own |
+| `orderflow/initiative_drive_detector_v6.pine` | indicator, alert fires direction+score | Context alert, not a complete trade signal - no SL/TP/entry price, meant to inform a discretionary decision |
+| `orderflow/keylevel-candles.pine` | indicator, alert fires break/fake verdict | Same - context, not a complete signal |
+| `orderflow/market-structure.pine` | indicator, generic alert | Visual structure marking only |
+| `orb/support-resistance.pine` | indicator, no alert | Visual zone marking only (already discussed earlier in this file - retuned, `alertMode` defaults to Reject per the level-study evidence) |
+| `orb/orb-luxy-big-beautiful-dynamic-orb.pine` | indicator, generic alert | Visual dynamic-ORB overlay, no embedded stop/target |
+| `volume-profile/smart-money-concepts-luxalgo.pine` | indicator, no alert | Third-party (LuxAlgo) order-block/liquidity visualization only |
+| `volume-profile/volume-heatmap.pine` | indicator, no alert | Visualization only |
+| `volume-profile/volume-suite.pine` | indicator, no alert | Visualization only |
+| `volume-profile/volume-profile-decision-assist.pine` | indicator, alert fires a formatted message | Decision-support alert, not a complete trade signal |
+
+**Conclusion: every actual STRATEGY in this repo (a script with defined entry, stop
+and target logic) already has a Python backtest adapter and has been run this
+session or the previous one.** The 9 remaining files are indicators or context alerts
+- they inform a discretionary trader but do not themselves specify a complete,
+backtestable trade (no stop, no target). Backtesting one of them would mean
+INVENTING a strategy around its signal (e.g. "buy when initiative-drive score exceeds
+X, with a Y% stop") rather than converting an existing, specified one - a new
+strategy-design task, not a re-run, so none were attempted without being asked.
+
 ## Angel One Probe Result: ~7 Years, Confirmed (2026-09-13)
 
 User connected Angel One via `broker_login.py` (credentials in

@@ -49,12 +49,20 @@ def main() -> None:
     _register()
     ap = argparse.ArgumentParser(prog="signal_engine.backtest")
     ap.add_argument("strategy", choices=sorted(REGISTRY))
+    ap.add_argument("--source", default="historify", choices=["historify", "yahoo"],
+                    help="historify (default) = OpenAlgo's own store: years of broker "
+                         "1m bars resampled for intraday, split-adjusted broker daily "
+                         "bars for swing, no external rate limit; yahoo = fallback "
+                         "only (60 days of 5m intraday, or 10y adjusted daily)")
     ap.add_argument("--interval", default=None, help="default: 5m intraday, 1d swing")
     ap.add_argument("--period", default=None, help="default: 60d intraday, 10y swing")
     ap.add_argument("--cost-bps", type=float, default=None,
-                    help="default: 10 bps intraday, 20 bps swing")
+                    help="default: 16 bps intraday, 24 bps swing")
     ap.add_argument("--refresh", action="store_true", help="re-download bar data")
     ap.add_argument("--full", action="store_true", help="also print per-symbol and exit mix")
+    ap.add_argument("--trials", type=int, default=1,
+                    help="how many configurations were searched in total, across every "
+                         "strategy and sweep. Sets the |t| a result must clear.")
     args = ap.parse_args()
 
     pd.set_option("display.width", 240)
@@ -64,14 +72,27 @@ def main() -> None:
     swing = kind == "swing"
     interval = args.interval or ("1d" if swing else "5m")
     period = args.period or ("10y" if swing else "60d")
-    cost_bps = args.cost_bps if args.cost_bps is not None else (20.0 if swing else 10.0)
+    cost_bps = args.cost_bps if args.cost_bps is not None else (24.0 if swing else 16.0)
 
     if swing:
-        # daily bars must be split/bonus adjusted - a 1:5 split reads as a -80% gap
-        frames = data.load(period=period, interval=interval, refresh=args.refresh,
-                           min_bars=750, auto_adjust=True)
+        # daily bars must be split/bonus adjusted - a 1:5 split reads as a -80% gap.
+        # Historify is the default: it is broker-verified, carries no per-symbol rate
+        # limit, and its daily coverage reaches further back than its 1-minute
+        # coverage. `_split_adjust_daily` gives it the same adjustment guarantee
+        # `auto_adjust=True` gets from yfinance. `--source yahoo` stays available as a
+        # fallback for a symbol Historify has not been backfilled for yet.
+        if args.source == "historify":
+            frames = data.from_historify_daily(min_sessions=500)
+        else:
+            frames = data.load(period=period, interval=interval, refresh=args.refresh,
+                               min_bars=750, auto_adjust=True)
         bt = Backtest(cls(), frames, SwingRunConfig(cost_bps=cost_bps),
                       engine=simulate_swing)
+    elif args.source == "historify":
+        frames = data.from_historify(interval=interval)
+        strategy = cls()
+        run = RunConfig(cost_bps=cost_bps).with_(**getattr(strategy, "run_overrides", {}))
+        bt = Backtest(strategy, frames, run)
     else:
         frames = data.load(period=period, interval=interval, refresh=args.refresh)
         strategy = cls()
@@ -83,7 +104,7 @@ def main() -> None:
     print("\n=== shipped defaults, in-sample vs out-of-sample ===")
     print(bt.confirm(p, args.strategy).to_string(index=False))
     print("\n=== cost sensitivity (full period) ===")
-    bps = (0, 8, 15, 20, 30) if swing else (6, 8, 10, 12)
+    bps = (0, 10, 20, 24, 35) if swing else (0, 8, 16, 24)
     print(bt.cost_sensitivity(p, bps=bps).to_string(index=False))
 
     if swing:
@@ -102,7 +123,17 @@ def main() -> None:
         print("\n=== exit mix ===")
         print(bt.by_reason(p).to_string())
 
-    print("\nRead the OOS row, not the IS row. |t| < 2 means indistinguishable from zero.")
+    hurdle = metrics.hurdle_t(args.trials)
+    print("\nRead the OOS row, not the IS row.")
+    print("`t` is clustered by session - trades taken across a basket on one day are "
+          "one market bet,\nnot forty. `t_naive` is the uncorrected figure, shown so "
+          "the gap is visible.")
+    print(f"With {args.trials} configuration(s) searched, a result needs |t| > {hurdle:.2f} "
+          f"to beat chance.")
+    if args.source == "yahoo":
+        print("\nSOURCE IS YAHOO: ~59 sessions of 5m bars, and roughly half of them are "
+              "missing\ntheir closing bars. Indicative only - rerun with --source "
+              "historify before believing it.")
 
 
 if __name__ == "__main__":

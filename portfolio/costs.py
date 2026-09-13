@@ -270,3 +270,54 @@ class EquityCosts:
 
     def effective_rate(self, buy_value: float, sell_value: float, orders: int = 0) -> float:
         return self.schedule.effective_rate(buy_value, sell_value, orders)
+
+
+def india_intraday(exchange: str = "NSE") -> CostSchedule:
+    """
+    NSE/BSE equity INTRADAY (MIS), which is a different schedule from delivery.
+
+    Two lines change and both matter. STT falls from 0.1% on each leg to 0.025% on
+    the SELL leg only, which is most of the cost difference. Brokerage stops being
+    free: discount brokers charge 0.03% or Rs 20 per order, whichever is lower, on
+    each of the two legs.
+
+    On a Rs 1,00,000 round trip this comes to roughly 6 basis points of the entry
+    notional -- before any slippage, which for a market-order momentum entry is
+    typically larger than every statutory charge combined.
+    """
+    txn = 0.0000375 if exchange.upper() == "BSE" else 0.0000297
+    return CostSchedule(
+        name=f"India intraday ({exchange.upper()})",
+        currency="INR",
+        tax_label="GST",
+        tax_rate=0.18,
+        charges=(
+            Charge(
+                key="brokerage", label="Brokerage", basis="order",
+                rate=0.0003, cap=20.0, taxed=True,
+                note="0.03% or Rs 20 per order, whichever is lower",
+            ),
+            Charge(
+                key="stt", label="STT", basis="sell", rate=0.00025,
+                note="0.025% on the sell leg only for intraday",
+            ),
+            Charge(
+                key="exchange_txn", label="Exchange txn charge", basis="turnover",
+                rate=txn, taxed=True,
+                note="NSE 0.00297%, BSE 0.00375% of turnover",
+            ),
+            Charge(
+                key="sebi", label="SEBI charges", basis="turnover",
+                rate=10.0 / 1_00_00_000, taxed=True,
+                note="Rs 10 per crore of turnover",
+            ),
+            Charge(
+                key="stamp_duty", label="Stamp duty", basis="buy", rate=0.00003,
+                note="0.003% on the buy leg only for intraday",
+            ),
+        ),
+    )
+
+
+PRESETS["india_intraday_nse"] = lambda: india_intraday("NSE")
+PRESETS["india_intraday_bse"] = lambda: india_intraday("BSE")
