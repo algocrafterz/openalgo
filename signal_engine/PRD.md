@@ -276,6 +276,19 @@ broker already refuses orders on those names, so keeping them out of the candida
 list upstream is the right layer rather than relying on the broker's rejection
 downstream. Full churn data in `ema9-vwap/STRATEGY-LOG.md`'s 2026-09-13 03:51 entry.
 
+**Split further into compute-daily/decide-weekly** after feedback that bundling all
+four factors onto one cadence was itself the mistake — cost only applies to beta
+(a full year of per-symbol daily bars), not to liquidity/ATR%/RVOL, which are nearly
+free on top of the 60-day pull already needed. `run_daily_scan()` now runs on every
+startup and only updates a rolling 10-day history; `run_weekly_screen()` runs on top
+of that once a week and is the only part that fetches beta, writes the watchlist
+file, and sends Telegram. Conviction resolution improved from 4 weekly points to 10
+daily ones. Also fixed a ranking bug this surfaced: sorting by conviction alone made
+every symbol tie on the first run and silently fall back to alphabetical order —
+today's (ATR%, RVOL) is now the explicit tie-break. Full reasoning (with a
+plain-language explanation of why the four factors don't share one clock) in
+`ema9-vwap/STRATEGY-LOG.md`'s 2026-09-13 15:34 entry.
+
 ## Recent Changes (2026-09-12)
 
 **`max_open_positions` is dynamic in LIVE mode — no more manual edits as capital grows.**
@@ -2083,6 +2096,75 @@ that split, provenance is recoverable from the date alone without touching the l
 Historify schema. A `source` column is possible if full per-bar provenance is ever
 needed, but that changes a table the live Historify feature also writes to and needs
 a proper migration (see CLAUDE.md's Schema Changes rule) - not done speculatively.
+
+## Angel One Probe Result: ~7 Years, Confirmed (2026-09-13)
+
+User connected Angel One via `broker_login.py` (credentials in
+`.secondary_broker.env`, never touching `auth_db`). `--probe` result across 5 symbols
+(RELIANCE, TCS, SBIN, TATASTEEL, HDFCBANK), 1-minute interval:
+
+    days_back   week_of      bars
+       30       2026-08-14   1805
+       90       2026-06-15   1875
+      180       2026-03-17   1875
+      365       2025-09-13   1875
+      545       2025-03-17   1875
+      730       2024-09-13   1875
+     1095       2023-09-14   1500
+     1460       2022-09-14   1875
+     1825       2021-09-14   1875
+     2555       2019-09-15   1875
+     3650       2016-09-15      0
+
+**Gapless real data at every offset up to 2555 days (~7.0 years) on all 5 symbols,
+consistent with commit `48807197`'s own "2-year gapless" claim being a floor, not a
+ceiling. Zero at 3650 days (~10 years) - the true boundary sits somewhere in between.**
+This is ~7x Flattrade's measured ~1 year, and does not share Flattrade's mid-window
+gap (150-240 days back).
+
+### Backfill plan: non-overlapping by design, not by schema
+
+Angel backfill covers **2016-01-01 to 2025-09-17** (one day before the shallow
+164-symbol group's Flattrade coverage begins) for the full 211-symbol F&O universe -
+including the 47 symbols that already have Flattrade data back to 2020, since Angel
+plausibly reaches further still and the ranges do not overlap (Angel: pre-2020,
+Flattrade: 2020-onward for those 47). This preserves the provenance-by-date design
+from the earlier entry without touching `market_data`'s schema.
+
+`--pause 0.1` (down from Flattrade's 0.4): Angel's own plugin already rate-limits
+itself internally (`HISTORY_MIN_INTERVAL = 0.5s`, module-level, shared across calls in
+this process) - added external pacing on top only slows the run down.
+
+**Must run to completion before any read of Historify is attempted** - `upsert_market_data`
+opens and closes a connection per chunk, but a concurrent `read_only=True` connection
+still fails immediately on DuckDB's file lock rather than waiting; there is no safe
+window to interleave a strategy read with a live backfill.
+
+### A genuine sandbox restart happened mid-session
+
+The background pipeline from the previous entry (steps 1-3) completed successfully
+before the sandbox recycled - Historify's data survived (persistent volume) but every
+`/tmp` log and the pipeline's own progress markers did not. Steps 4-5 (the 8 remaining
+strategy backtests) had to be re-run from scratch; no data was lost, only computed
+results that hadn't been captured into this file yet. Lesson: write findings into
+PRD.md as they land, not only at the end of a long background run.
+
+### Coverage gaps: 3 of 211, and why
+
+`GVT&D` and `COCHINSHIP` each have TWO `symtoken` rows for the same (symbol, exchange)
+- a `-BE` (trade-for-trade) and a `-EQ` (normal) series with different tokens.
+`database.token_db_enhanced.get_token_dbquery` does
+`SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()` with no
+disambiguation, so it can silently resolve to the illiquid BE token, which the broker
+then returns no history for. `M&M` is missing only from the `D` interval for the same
+underlying reason. `NIFTYFPI` has zero rows in `symtoken` for exchange='NSE' at all -
+it is not a valid, currently-listed symbol on this instance, matching the
+"possibly delisted" error yfinance gave it earlier.
+
+Not fixed here: `get_token_dbquery` is a core, widely-used lookup the whole live
+platform depends on, not a backtest-only function - changing its disambiguation rule
+needs its own review, not a byproduct of a backtest data pipeline. 208/211 (98.6%)
+F&O coverage is high enough to proceed; these three are noted, not chased further.
 
 ## Full F&O Universe Backfill and Historify-Only Data Pipeline (2026-09-13)
 

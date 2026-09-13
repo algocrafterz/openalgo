@@ -48,6 +48,81 @@ kept rather than tuning a knob until one combination looked good on this data.
 
 ---
 
+### 2026-09-13 15:34 — Compute daily, decide weekly: the previous entry conflated the two
+
+**What changed**
+
+Direct pushback on the previous entry's explanation: "why not compute daily and use
+it weekly - your explanation is not understandable." The pushback was correct. The
+previous entry picked ONE cadence (weekly) for all four factors because it only
+compared "run everything weekly" against "run everything daily" and weekly won on
+cost. That comparison was never the right one to make - cost only applies to ONE of
+the four factors (beta), not all of them, and bundling them together was the actual
+mistake, not the weekly conclusion itself.
+
+**In plain terms, before the technical detail:** two of the checks (how much a stock
+trades, how much it moves) are like a person's long-term fitness level - they do not
+swing day to day. One check (is it unusually busy right now) is like a heart rate -
+it changes fast, sometimes within a day. One check (how closely it moves with the
+whole market) is built from a full year of history, so one more day of data changes
+it about as much as one more day changes a year-long average - essentially not at
+all. Treating all four as if they needed the same refresh schedule was the error.
+
+**What actually changed in the code:** the screen is now split into two functions.
+`run_daily_scan()` - liquidity, ATR%, RVOL, and the ASM/GSM exclusion - runs on
+EVERY startup, unconditionally, and only appends today's qualifying pool to a
+rolling 10-trading-day history. It does not fetch beta and does not notify anyone.
+`run_weekly_screen()` runs on top of that history once a week: it is the only place
+that fetches beta (the genuinely expensive, genuinely slow-changing factor), builds
+the final Top 20, writes the watchlist file, and sends the Telegram message. The
+result is a richer, 10-point daily-resolution conviction count (`N/10`) instead of
+the previous 4-point weekly one (`N/4`), without paying for a beta refetch or asking
+for a manual TradingView update more than once a week.
+
+**A second, real bug found while implementing this, not just a rename:** the
+previous version's final ranking sorted candidates by conviction alone. On the very
+first run under any conviction system, everything ties (see the 2026-09-13 03:51
+entry's own first output - all 20 candidates were `1/4`), and Python's sort then
+falls back to whatever order the list was already in - alphabetical, in this case.
+That silently discarded the RVOL/ATR% ranking that mattered before conviction
+tracking existed. Fixed by carrying today's (ATR%, RVOL) through as an explicit
+tie-break: conviction is still the primary sort key, but ties now fall back to the
+same ranking the screen has always used, not the alphabet. Verified directly: a
+synthetic case where a stock named to sort first alphabetically has the weaker RVOL
+correctly loses the tie to the one with genuinely higher current volume.
+
+**Entry** — Not affected for any strategy; still a watchlist-maintenance change.
+
+**Exit (SL)** — Not affected.
+
+**Exit (TP)** — Not affected.
+
+**Consideration** — The daily scan now runs on every startup regardless of the
+weekly gate, which means the expensive 210-symbol 5-minute data refresh happens
+daily, not weekly. This was already true in spirit (RVOL cannot be checked without
+it), so the actual new recurring cost is small; what changed is that this cost is
+now paid every day instead of masked by a weekly gate that used to cover all four
+factors at once. Beta - the one genuinely expensive per-symbol fetch - still only runs
+weekly, which is the whole point of the split. If the daily 5-minute refresh itself
+ever becomes a bottleneck, the next lever is caching it independently of both
+schedules, not re-coupling the four factors back together.
+
+**NOTE:** Re-ran end to end after the fix: same 64/40 funnel, same Top-20 list as
+the pre-conviction version (COCHINSHIP, BANDHANBNK, KEI, DLF, GODREJPROP, IDEA,
+ADANIENT, COFORGE, POLYCAB, TATASTEEL, ULTRACEMCO, MARUTI, BANKBARODA, CHOLAFIN,
+INDUSINDBK, CDSL, DIXON, LTM, INDIANB, ADANIPORTS) - confirms the tie-break fix
+restores the original ranking quality while the conviction machinery sits
+underneath it, ready to differentiate once a real history accumulates. `DailyScan`
+gained a `metrics: dict[symbol -> (atr_pct, rvol)]` field purely to carry this
+tie-break data from the daily scan to the weekly finalize step - no new network
+calls, values already computed by run_daily_scan(). 5 new tests (31 total):
+`TestRankingTieBreak` plus daily-history/weekly-gate coverage for the split itself.
+
+Reproduce: `uv run --group analysis python -m signal_engine.scripts.watchlist_screen
+--dry-run --force`.
+
+---
+
 ### 2026-09-13 03:51 — Weekly cadence (measured, not assumed) + conviction tracking; ASM/GSM confirmed as watchlist-level exclusion
 
 **What changed**

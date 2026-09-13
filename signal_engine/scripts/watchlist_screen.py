@@ -1,101 +1,97 @@
-"""Weekly multi-factor screen for the shared ORB/BREAKOUT/EMA9VWAP watchlist.
+"""Multi-factor screen for the shared ORB/BREAKOUT/EMA9VWAP watchlist.
 
 Runs the screen used to build the watchlist by hand (see
 signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md, 2026-09-12/13 entries).
-As of 2026-09-13 this checks FOUR factors, not two - researched against public
-trading-desk practice and NSE-specific surveillance rules (see that date's log entry
-for sources):
+Checks FOUR factors, split into two speeds - see COMPUTE VS DECIDE below:
 
     1. Liquidity   - median daily traded value >= Rs 100cr (not market cap: a stock
                      can have a huge market cap and still trade thin - traded VALUE is
                      what determines whether an order actually fills near the quote).
     2. Volatility  - median ATR% of price >= 0.15% (does the stock move enough to
                      reach a target before the day ends).
-    3. Beta        - 1.0-2.0 vs NIFTY, computed on ~1y of daily closes. Below 1.0 is
+    3. RVOL        - last 5 trading days' average volume >= 0.8x the preceding 30-day
+                     baseline. Liquidity and ATR% are HISTORICAL averages; a stock can
+                     clear both while its current activity has already cooled off from
+                     whatever catalyst got it there. RVOL is the one factor that asks
+                     "is this still happening now" - and because it is a 5-DAY window,
+                     it is also the one factor that moves meaningfully from one day to
+                     the next, which is why it is checked DAILY, not weekly.
+    4. Beta        - 1.0-2.0 vs NIFTY, computed on ~1y of daily closes. Below 1.0 is
                      too sluggish for intraday; above 2.0 tends to be erratic small-cap
                      risk that is hard to size for. Distinct from ATR%: a stock can be
                      volatile in absolute terms (high ATR%) while barely correlated to
                      the market (low beta) if its moves are purely idiosyncratic - one
                      of this screen's own picks (a newly-listed name) scored #1 on ATR%
-                     and 0.60 on beta, which is why both are checked, not one alone.
-    4. RVOL        - last 5 trading days' average volume >= 0.8x the preceding 30-day
-                     baseline. Liquidity and ATR% are HISTORICAL averages; a stock can
-                     clear both while its current activity has already cooled off from
-                     whatever catalyst got it there. RVOL is the one factor that asks
-                     "is this still happening now".
+                     and 0.60 on beta. Built from a YEAR of history, so one more day of
+                     data changes it by a rounding error - recomputing it daily buys
+                     nothing and costs a real, separate network fetch per symbol.
 
     Hard exclusion, independent of all four factors above: any symbol currently under
     NSE ASM (Additional Surveillance Measure) or GSM (Graded Surveillance Measure).
     Some ASM stages carry 100% margin (kills MIS leverage) or block intraday trading
     outright - a name can pass every technical filter and still be untradeable via
     MIS, and the broker will refuse the order anyway. Checked live against NSE's own
-    reportASM/reportGSM endpoints every run, not a static list, since a stock's
-    surveillance stage changes over time. Better to never offer it as a candidate than
-    to let a strategy signal fire on it and rely on the broker's own rejection.
+    reportASM/reportGSM endpoints every run, not a static list. Better to never offer
+    it as a candidate than to let a strategy signal fire on it and rely on the
+    broker's own rejection.
 
-WHY WEEKLY, NOT MONTHLY (changed 2026-09-13, same day as the four-factor rewrite)
-    Measured directly: recomputing the liquidity/ATR%/RVOL pool at different points
-    within the same 60-day window, day-to-day overlap is ~74% (moderate, not
-    whiplash) but week-to-week overlap is only ~39% - more than half the pool turns
-    over within a single week, mostly driven by RVOL's own 5-day window. A MONTHLY
-    screen takes exactly one such noisy snapshot and has no way to tell "this is a
-    real multi-week momentum build" from "this stock had one unusually high-volume
-    day that happened to land inside the 5-day window on screen day". Weekly runs
-    make CONVICTION_WINDOW (below) possible: a symbol appearing in several consecutive
-    weekly screens is a materially stronger signal than appearing once, which a
-    monthly-only cadence cannot distinguish at all.
+COMPUTE VS DECIDE - why this is not simply "weekly" or simply "daily"
+    The first version of this screen computed everything (all four factors) and
+    notified on the same cadence, and picking ONE cadence for both was the mistake:
+    liquidity/ATR%/RVOL barely cost anything beyond the 60-day data pull already
+    needed, so there is no reason not to run them daily - and running them daily gives
+    a much richer, DAILY-resolution read on which stocks are showing up consistently
+    (DAILY_WINDOW=10 trading days of data instead of 4 weekly snapshots). Beta is
+    the opposite: it is expensive (a full year of DAILY bars fetched PER SYMBOL,
+    across ~150 survivors) and nearly static day to day, so recomputing it daily would
+    spend real time and network calls to move a number that has not meaningfully
+    changed. So: `run_daily_scan()` (factors 1-3 + ASM/GSM) runs on EVERY startup and
+    only appends to a rolling history - it does not notify anyone and does not fetch
+    beta. `run_weekly_screen()` runs on top of that history once a week: it fetches
+    beta (the one genuinely slow-changing, genuinely expensive part), builds the final
+    Top-N, and is the only thing that sends a Telegram message and rewrites the
+    watchlist file. The result: fresher, denser data feeding the decision, without a
+    daily beta refetch or a daily message asking for a manual TradingView update.
 
 CONVICTION TRACKING
-    Every run's symbol list is appended to STATE_FILE's rolling history (capped at
-    CONVICTION_WINDOW entries). Each candidate in the current digest is annotated with
-    how many of the last CONVICTION_WINDOW runs (including this one) it appeared in -
-    "4/4" means it has shown up in every recent screen, "1/4" means it is new or
-    intermittent. This is reported, not filtered on: a first appearance is still
-    useful information, just weaker than a repeated one, and the choice of how much
-    weight to give repetition is left to whoever reads the message rather than baked
-    into a cutoff nobody could later audit.
-
-COST-AWARE ORDERING (why this fetches liquidity/ATR before beta, not all four at once)
-    Beta needs ~1 year of DAILY bars fetched PER SYMBOL - expensive across the ~210
-    F&O names. Liquidity, ATR% and RVOL are all derivable from the SAME 60-day 5-minute
-    pull already needed for the base screen, and the ASM/GSM check is one shared network
-    call regardless of universe size. So the funnel order is: (1) liquidity+ATR%+RVOL
-    from data already being fetched, (2) drop ASM/GSM names, (3) fetch beta ONLY for
-    whatever survives steps 1-2 (typically ~30-40% of the universe), not all 210. This
-    now runs weekly rather than monthly, so keeping the funnel cheap matters more than
-    it did - see the startup-timing note below for the actual bound.
+    Every daily scan's qualifying pool (factors 1-3 + not under surveillance) is kept
+    in a rolling window of the last DAILY_WINDOW trading days. Each candidate in the
+    weekly digest is annotated with how many of those days it cleared the daily bar -
+    "8/10" is a stock that has been consistently active for two weeks; "1/10" showed
+    up today and has no track record yet. This is reported, not filtered on: a first
+    appearance is still useful information, just weaker than a repeated one.
 
 WHY IT ONLY UPDATES A FILE AND SENDS A MESSAGE - IT NEVER TOUCHES TRADINGVIEW
-    TradingView's watchlist is edited by a human, by design (no public API for it). This
-    script's job ends at making the new candidate list visible: it overwrites the repo's
-    watchlist file (so the repo stays the source of truth) and posts to the signal-engine
-    Telegram channel (notify_channel) so the update is seen without opening a terminal.
-    Updating TradingView itself stays a manual, deliberate step.
+    TradingView's watchlist is edited by a human, by design (no public API for it). The
+    weekly step's job ends at making the new candidate list visible: it overwrites the
+    repo's watchlist file (so the repo stays the source of truth) and posts to the
+    signal-engine Telegram channel (notify_channel) so the update is seen without
+    opening a terminal. Updating TradingView itself stays a manual, deliberate step.
 
 WHY THIS RUNS FROM STARTUP, NOT A FIXED CRON TIME
     A fixed cron hour assumes the machine is on then, which a laptop is not guaranteed
     to be. `maybe_run_weekly_screen()` is called from `openalgoscheduler._run_startup()`
-    as its LAST step: it runs on whatever day the trading bot actually next starts up,
-    gated by a state file so it only does real work once per ISO calendar week no
-    matter how many times startup runs that week. Being last also means a slow screen
-    (beta fetches take a few minutes) never delays the broker-auth/trading-readiness
-    steps ahead of it. The Telegram send below is sequential with that earlier one
-    (same process, one after another), not concurrent, so it does not race the live
-    listener for their shared Telethon session (signal_engine/data/telegram) the way
-    two independent processes touching it at once would (see
-    analysis/breakingtrade/alerts.py's module docstring for that risk).
+    as its LAST step, on EVERY startup: the daily scan inside it runs unconditionally
+    (cheap, idempotent per calendar day), and the weekly finalize/notify runs only when
+    due. Being last means neither part can delay the broker-auth/trading-readiness
+    steps ahead of it. The Telegram send is sequential with the earlier startup
+    notification (same process, one after another), not concurrent, so it does not
+    race the live listener for their shared Telethon session
+    (signal_engine/data/telegram) the way two independent processes touching it at
+    once would (see analysis/breakingtrade/alerts.py's module docstring for that risk).
 
 USAGE
     Normal operation: nothing to run by hand - openalgoscheduler.py's startup flow
-    calls maybe_run_weekly_screen() automatically.
+    calls maybe_run_weekly_screen() automatically on every startup.
 
     Manual / testing:
         uv run --group analysis python -m signal_engine.scripts.watchlist_screen
         uv run --group analysis python -m signal_engine.scripts.watchlist_screen --dry-run
         uv run --group analysis python -m signal_engine.scripts.watchlist_screen --force
 
-    --force bypasses the "already ran this week" gate. --dry-run additionally skips
-    writing the file, sending Telegram, marking the gate, and updating history.
+    --force bypasses the "already finalized this week" gate (the daily scan always
+    runs regardless). --dry-run additionally skips writing the file, sending Telegram,
+    and updating the weekly gate (the daily history is still recorded for real).
 """
 
 from __future__ import annotations
@@ -103,7 +99,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -124,10 +120,10 @@ MIN_BETA = 1.0
 MAX_BETA = 2.0
 MIN_RVOL = 0.8
 TOP_N = 20
-#: How many recent runs the conviction count looks back over. 4 at weekly cadence is
-#: roughly a month - long enough to distinguish a fluke from a trend, short enough
-#: that a genuine regime change is not stuck being remembered for a full quarter.
-CONVICTION_WINDOW = 4
+#: How many trading days of daily-scan history conviction looks back over. 10 is two
+#: trading weeks - enough resolution to separate a fluke from a trend, short enough
+#: that an old regime is not remembered for a full quarter.
+DAILY_WINDOW = 10
 #: config.yaml blacklist._global and strategy_profiles hard blocks - excluded regardless
 #: of how well they screen, since a signal on them is rejected downstream anyway.
 BLOCKED_SYMBOLS = frozenset({"YESBANK", "BHEL"})
@@ -146,10 +142,13 @@ class ScreenResult:
     computed_at: datetime
     data_through: str
     surveillance_fetch_failed: bool = field(default=False)
-    #: symbol -> how many of the last CONVICTION_WINDOW runs (including this one) it
-    #: appeared in. Populated by maybe_run_weekly_screen()/main() after run_screen()
-    #: returns, since it needs the persisted history - empty from run_screen() alone.
+    #: symbol -> how many of the last DAILY_WINDOW daily scans it cleared. Populated by
+    #: run_weekly_screen() after run_daily_scan() has updated history.
     conviction: dict[str, int] = field(default_factory=dict)
+
+
+def _today_key(now: datetime | None = None) -> str:
+    return (now or datetime.now()).date().isoformat()
 
 
 def _current_week_key(now: datetime | None = None) -> str:
@@ -168,43 +167,16 @@ def _load_state() -> dict:
         return {}
 
 
-def should_run_this_week(now: datetime | None = None) -> bool:
-    """True unless the state file already records a run for the current ISO week.
-
-    A missing or corrupt state file reads as "not run yet" - fail toward doing the
-    (idempotent, harmless-to-repeat) screen rather than silently skipping it forever
-    because of a bad state file.
-    """
-    return _load_state().get("last_run_week") != _current_week_key(now)
-
-
-def mark_run_this_week(symbols: list[str], now: datetime | None = None) -> None:
-    """Records the run AND appends to the rolling history conviction tracking reads.
-
-    History is capped at CONVICTION_WINDOW entries - it exists only to answer "how
-    many of the last few runs was this symbol in", nothing further back matters.
-    """
-    state = _load_state()
-    history = state.get("history", [])
-    history.append({"week": _current_week_key(now), "symbols": symbols})
-    state["last_run_week"] = _current_week_key(now)
-    state["history"] = history[-CONVICTION_WINDOW:]
+def _save_state(state: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state))
 
 
-def compute_conviction(symbols: list[str]) -> dict[str, int]:
-    """For each symbol, how many of the last CONVICTION_WINDOW *recorded* runs
-    (not counting the run in progress, which has not been marked yet) it appeared in,
-    plus 1 for the current run itself. Called with THIS run's own symbol list before
-    mark_run_this_week() persists it, so the count is always current-run-inclusive."""
-    history = _load_state().get("history", [])
-    counts = dict.fromkeys(symbols, 1)  # this run counts as an appearance
-    for past_run in history:
-        for sym in past_run.get("symbols", []):
-            if sym in counts:
-                counts[sym] += 1
-    return counts
+def should_run_this_week(now: datetime | None = None) -> bool:
+    """True unless the state file already records a WEEKLY finalize for the current
+    ISO week. The daily scan is unconditional and has no gate of its own - see
+    run_daily_scan()'s docstring for why running it again same-day is harmless."""
+    return _load_state().get("last_run_week") != _current_week_key(now)
 
 
 def fetch_surveillance_symbols() -> tuple[set[str], bool]:
@@ -239,8 +211,8 @@ def fetch_surveillance_symbols() -> tuple[set[str], bool]:
 
 
 def _beta_vs_nifty(symbols: list[str]) -> dict[str, float]:
-    """Beta on ~1y of daily closes, ONLY for the symbols passed in - see the module
-    docstring's cost-aware-ordering note for why this is never run on the full universe."""
+    """Beta on ~1y of daily closes, ONLY for the symbols passed in - the expensive,
+    slow-changing factor, fetched only when run_weekly_screen() actually finalizes."""
     import numpy as np
     import pandas as pd
     import yfinance as yf
@@ -273,12 +245,28 @@ def _beta_vs_nifty(symbols: list[str]) -> dict[str, float]:
     return betas
 
 
-def run_screen() -> ScreenResult:
-    """The four-factor screen. Always refreshes the 5-min data cache - a stale cache
-    silently reproduces last week's numbers under this week's date, which is exactly
-    the failure mode a scheduled re-run exists to prevent. Conviction is NOT populated
-    here (empty dict) - see compute_conviction()'s docstring for why that is a separate
-    step; callers that want it call compute_conviction(result.symbols) themselves."""
+@dataclass(frozen=True)
+class DailyScan:
+    """Output of the cheap, daily-safe part of the screen - no beta, no notification."""
+    qualifying_symbols: list[str]
+    universe_size: int
+    surveillance_fetch_failed: bool
+    data_through: str
+    #: symbol -> (atr_pct, rvol) for every qualifying symbol, today's values. Carried
+    #: through to run_weekly_screen() purely as a sort TIE-BREAK: conviction is the
+    #: primary ranking key, but early on (or whenever several symbols tie on
+    #: conviction) falling back to alphabetical order would silently discard real
+    #: signal - this keeps today's RVOL/ATR% as the secondary key, same as before
+    #: conviction tracking existed.
+    metrics: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+
+def run_daily_scan() -> DailyScan:
+    """Factors 1-3 (liquidity, ATR%, RVOL) plus the ASM/GSM exclusion. Cheap enough to
+    run on every startup: it reuses the same 60-day 5-minute pull the old single-speed
+    screen needed anyway, with no per-symbol daily-bar fetch on top of it. Appends to
+    STATE_FILE's daily history, keyed by calendar date so re-running the same day
+    (e.g. the bot restarted twice) overwrites today's entry instead of duplicating it."""
     import pandas as pd
 
     from signal_engine.backtest import data
@@ -314,26 +302,71 @@ def run_screen() -> ScreenResult:
         & (tech.atr_pct >= MIN_ATR_PCT)
         & (tech.rvol >= MIN_RVOL)
         & (~tech.symbol.isin(blocked))
-    ].copy()
+    ]
+    qualifying = sorted(stage1.symbol.tolist())
+    metrics = {
+        row.symbol: (float(row.atr_pct), float(row.rvol))
+        for row in stage1.itertuples()
+    }
 
-    betas = _beta_vs_nifty(stage1.symbol.tolist())
-    stage1["beta"] = stage1.symbol.map(betas)
-    final = stage1[
-        stage1.beta.notna() & (stage1.beta >= MIN_BETA) & (stage1.beta <= MAX_BETA)
-    ].sort_values(["rvol", "atr_pct"], ascending=False)
+    state = _load_state()
+    history = state.get("daily_history", [])
+    today = _today_key()
+    history = [entry for entry in history if entry.get("date") != today]
+    history.append({"date": today, "symbols": qualifying})
+    history.sort(key=lambda e: e["date"])
+    state["daily_history"] = history[-DAILY_WINDOW:]
+    _save_state(state)
 
-    top = final.head(TOP_N)
+    return DailyScan(qualifying, universe_size, fetch_failed, data_through, metrics)
+
+
+def compute_conviction(symbols: list[str]) -> dict[str, int]:
+    """For each symbol, how many of the daily scans currently in history it appears
+    in (out of up to DAILY_WINDOW). Reads whatever run_daily_scan() has already
+    persisted - call this AFTER run_daily_scan(), not instead of it."""
+    history = _load_state().get("daily_history", [])
+    counts = dict.fromkeys(symbols, 0)
+    for day in history:
+        for sym in day.get("symbols", []):
+            if sym in counts:
+                counts[sym] += 1
+    return counts
+
+
+def run_weekly_screen(daily: DailyScan) -> ScreenResult:
+    """The expensive, slow-changing part: beta, on top of whatever run_daily_scan()
+    just found. Only called when the weekly gate says it is time to finalize."""
+    import pandas as pd
+
+    betas = _beta_vs_nifty(daily.qualifying_symbols)
+    beta_df = pd.DataFrame(
+        {"symbol": daily.qualifying_symbols,
+         "beta": [betas.get(s) for s in daily.qualifying_symbols]}
+    )
+    final = beta_df[beta_df.beta.notna() & beta_df.beta.between(MIN_BETA, MAX_BETA)]
+
+    conviction = compute_conviction(final.symbol.tolist())
+    # Conviction is the primary key; today's (ATR%, RVOL) breaks ties instead of
+    # falling back to alphabetical order - see DailyScan.metrics' docstring for why.
+    def _rank(sym: str) -> tuple[int, float, float]:
+        atr_pct, rvol = daily.metrics.get(sym, (0.0, 0.0))
+        return (conviction.get(sym, 0), rvol, atr_pct)
+
+    top = sorted(final.symbol.tolist(), key=_rank, reverse=True)[:TOP_N]
+
     return ScreenResult(
-        symbols=top.symbol.tolist(),
-        universe_size=universe_size,
+        symbols=top,
+        universe_size=daily.universe_size,
         stage_counts={
-            "universe": universe_size,
-            "liquidity_atr_rvol_not_surveilled": len(stage1),
+            "universe": daily.universe_size,
+            "liquidity_atr_rvol_not_surveilled": len(daily.qualifying_symbols),
             "beta_band": len(final),
         },
         computed_at=datetime.now(),
-        data_through=data_through,
-        surveillance_fetch_failed=fetch_failed,
+        data_through=daily.data_through,
+        surveillance_fetch_failed=daily.surveillance_fetch_failed,
+        conviction=conviction,
     )
 
 
@@ -355,10 +388,10 @@ def format_digest(result: ScreenResult) -> str:
             "was applied. Verify candidates manually before trading."
         )
     lines.append(f"Top {len(result.symbols)}, data through {result.data_through} "
-                 f"(conviction = appearances in the last {CONVICTION_WINDOW} runs):")
+                 f"(conviction = daily-scan hits in the last {DAILY_WINDOW} trading days):")
     for sym in result.symbols:
-        n = result.conviction.get(sym, 1)
-        lines.append(f"  {sym} ({n}/{CONVICTION_WINDOW})")
+        n = result.conviction.get(sym, 0)
+        lines.append(f"  {sym} ({n}/{DAILY_WINDOW})")
     lines += [
         "------------------------",
         "For ORB / BREAKOUT / EMA9VWAP. Update TradingView's watchlist manually - this",
@@ -373,20 +406,22 @@ def update_watchlist_file(result: ScreenResult) -> None:
     conviction comment so a diff against the previous run shows what actually changed."""
     header = (
         "# Shared intraday watchlist: ORB, BREAKOUT, EMA9VWAP\n"
-        "# Four-factor screen (current 60d, 5-min bars unless noted): median daily\n"
+        "# Four-factor screen: liquidity/ATR%/RVOL/ASM-GSM checked DAILY (median daily\n"
         f"# traded value >= Rs {MIN_DAILY_VALUE_CR:.0f}cr, median ATR% >= {MIN_ATR_PCT:.2f}%,\n"
-        f"# beta vs NIFTY (1y daily) in [{MIN_BETA:.1f}, {MAX_BETA:.1f}], 5-day/30-day\n"
-        f"# relative volume >= {MIN_RVOL:.1f}. Excludes {', '.join(sorted(BLOCKED_SYMBOLS))}\n"
-        "# (blacklisted) and any symbol currently under NSE ASM/GSM surveillance.\n"
-        "# No performance-report grading, no sector-rotation filter (swing-only tool -\n"
-        "# see STRATEGY-LOG.md). Regenerated on the first startup of each ISO week by\n"
+        f"# 5-day/30-day relative volume >= {MIN_RVOL:.1f}, excludes NSE ASM/GSM and\n"
+        f"# {', '.join(sorted(BLOCKED_SYMBOLS))}); beta vs NIFTY (1y daily, band "
+        f"[{MIN_BETA:.1f}, {MAX_BETA:.1f}])\n"
+        "# checked WEEKLY, since a year of history barely moves day to day. See\n"
+        "# STRATEGY-LOG.md for why compute and notify run on different schedules.\n"
+        "# No performance-report grading, no sector-rotation filter (swing-only tool).\n"
+        "# Regenerated on the first startup of each ISO week by\n"
         "# signal_engine/scripts/watchlist_screen.py - do not hand-edit; change the\n"
         "# screen thresholds there instead.\n"
         f"# Last run: {result.computed_at:%Y-%m-%d %H:%M} IST, data through {result.data_through}\n"
-        f"# Trailing (N/{CONVICTION_WINDOW}) = appearances in the last {CONVICTION_WINDOW} weekly runs.\n"
+        f"# Trailing (N/{DAILY_WINDOW}) = daily-scan hits in the last {DAILY_WINDOW} trading days.\n"
         "\n"
     )
-    lines = [f"{sym}  # {result.conviction.get(sym, 1)}/{CONVICTION_WINDOW}"
+    lines = [f"{sym}  # {result.conviction.get(sym, 0)}/{DAILY_WINDOW}"
              for sym in result.symbols]
     WATCHLIST_FILE.write_text(header + "\n".join(lines) + "\n")
 
@@ -398,23 +433,29 @@ async def send_digest(message: str) -> bool:
 
 
 def maybe_run_weekly_screen(force: bool = False) -> bool:
-    """Called from openalgoscheduler._run_startup() as its last step.
+    """Called from openalgoscheduler._run_startup() as its last step, on EVERY
+    startup. The daily scan always runs (cheap, idempotent per day); the expensive
+    beta fetch and the Telegram/file write only happen when the weekly gate is due.
 
-    Returns True if the screen ran (regardless of delivery success), False if the
-    weekly gate skipped it. Never raises - a screen failure must not be allowed to
-    look like a startup failure; the caller logs but does not fail on a False/exception
-    from this, matching every other non-fatal step in that file's own convention.
+    Returns True if the weekly finalize ran (regardless of delivery success), False if
+    it was gated off (the daily scan still ran either way). Never raises - a screen
+    failure must not be allowed to look like a startup failure; the caller logs but
+    does not fail on a False/exception from this, matching every other non-fatal step
+    in openalgoscheduler.py's own convention.
     """
+    daily = run_daily_scan()
+
     if not force and not should_run_this_week():
         return False
 
-    result = run_screen()
-    conviction = compute_conviction(result.symbols)
-    result = replace(result, conviction=conviction)
+    result = run_weekly_screen(daily)
     message = format_digest(result)
     update_watchlist_file(result)
     asyncio.run(send_digest(message))
-    mark_run_this_week(result.symbols)
+
+    state = _load_state()
+    state["last_run_week"] = _current_week_key()
+    _save_state(state)
     return True
 
 
@@ -422,29 +463,32 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Run the screen and print the digest, but do not write the watchlist "
-             "file, send Telegram, mark the weekly gate, or update history.",
+        help="Run the daily scan and (if due) the weekly finalize, print the digest, "
+             "but do not write the watchlist file, send Telegram, or mark the gate.",
     )
     parser.add_argument(
         "--force", action="store_true",
-        help="Run even if this ISO week's screen has already run.",
+        help="Finalize even if this ISO week has already been finalized.",
     )
     args = parser.parse_args()
 
-    if not args.force and not args.dry_run and not should_run_this_week():
-        print(f"Already ran for {_current_week_key()} - nothing to do. Use --force to override.")
+    print(f"=== daily scan, {datetime.now():%Y-%m-%d %H:%M} ===")
+    daily = run_daily_scan()
+    print(f"{daily.universe_size} F&O names -> {len(daily.qualifying_symbols)} "
+          f"pass liquidity/ATR%/RVOL/surveillance today")
+
+    if not args.force and not should_run_this_week():
+        print(f"\nNot yet due for {_current_week_key()} - use --force to finalize anyway.")
         return 0
 
-    print(f"=== watchlist screen, {datetime.now():%Y-%m-%d %H:%M} ===")
-    result = run_screen()
-    conviction = compute_conviction(result.symbols)
-    result = replace(result, conviction=conviction)
+    print("\n=== weekly finalize ===")
+    result = run_weekly_screen(daily)
     message = format_digest(result)
     print(message)
 
     if args.dry_run:
-        print("\n(--dry-run: file not written, message not sent, gate not marked, "
-              "history not updated)")
+        print("\n(--dry-run: file not written, message not sent, gate not marked - "
+              "daily history above was still recorded for real)")
         return 0
 
     update_watchlist_file(result)
@@ -452,7 +496,10 @@ def main() -> int:
 
     sent = asyncio.run(send_digest(message))
     print(f"telegram notify_channel send: {'ok' if sent else 'FAILED or not configured'}")
-    mark_run_this_week(result.symbols)
+
+    state = _load_state()
+    state["last_run_week"] = _current_week_key()
+    _save_state(state)
     return 0 if sent else 1
 
 
