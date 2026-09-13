@@ -2165,6 +2165,25 @@ backtests above had to be re-run from scratch, and this section itself is writte
 promptly rather than held until a longer pipeline finishes, per the lesson from the
 previous entry.
 
+## Logging Bug Found Mid-Run (2026-09-13, does not affect data correctness)
+
+`utils/logging.py`'s console formatter falls back to `record.msg` (the raw %-style
+template) instead of `record.getMessage()` (the substituted string) whenever
+`super().format(record)` raises - reproduced directly, not just observed once. Every
+`logger.warning`/`logger.info` call in `backfill.py` and `broker_login.py` using
+%-style lazy args (`logger.warning("%s", x)`) showed the literal `%s` on console
+instead of the value. Fixed by switching those calls to f-strings (already the
+dominant convention elsewhere in this codebase) - not a fix to the shared formatter
+itself, which is cross-cutting production logging infrastructure out of scope here.
+
+**Does not affect any data written to Historify** - only the human-readable progress
+log during the run. The Angel re-fill launched before this fix carries the bug in its
+already-running process (Python does not hot-reload); its FINAL summary numbers
+(compared/mismatches/worst) are computed directly from the returned `SymbolResult`
+objects and printed via f-string, not parsed from the log, so they are correct
+regardless. Only the interim per-chunk diagnostic lines in `angel_full_refill.log`
+are garbled for this one run.
+
 ## Full Angel Re-Fill, Consistency Check, and PineScript Inventory (2026-09-13)
 
 Three follow-up requests, addressed in order.
