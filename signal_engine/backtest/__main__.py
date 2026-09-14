@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import resource
 
 import pandas as pd
 
@@ -16,6 +17,17 @@ from signal_engine.backtest.harness import Backtest
 from signal_engine.backtest.swing_engine import SwingRunConfig, simulate_swing
 from signal_engine.backtest.types import RunConfig
 
+
+def _rss_mb() -> float:
+    """Peak resident memory so far, in MB.
+
+    ru_maxrss is a high-water mark, not current usage - exactly what matters for
+    spotting an OOM-in-the-making. Printed at each stage boundary below so a future
+    crash's LAST printed number shows which stage it died in, since the OOM killer
+    SIGKILLs the process with nothing written to log/errors.jsonl.
+    """
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
 #: name -> (strategy class, params class, kind). "kind" picks the simulator and the
 #: bar data: intraday strategies run on 5-minute bars and flatten at the close, swing
 #: strategies run on adjusted daily bars and hold for weeks.
@@ -23,20 +35,24 @@ REGISTRY: dict = {}
 
 
 def _register():
+    from signal_engine.backtest.strategies.breakout import Breakout, BreakoutParams
     from signal_engine.backtest.strategies.dhb import Dhb, DhbParams
     from signal_engine.backtest.strategies.ema9 import Ema9, Ema9Params
     from signal_engine.backtest.strategies.ema9_pdf import Ema9Pdf, Ema9PdfParams
     from signal_engine.backtest.strategies.ema9_vwap import Ema9Vwap, Ema9VwapParams
+    from signal_engine.backtest.strategies.ema_pullback import EmaPullback, EmaPullbackParams
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
     from signal_engine.backtest.strategies.phoenix import Phoenix, PhoenixParams
     from signal_engine.backtest.strategies.value_zone import ValueZone, ValueZoneParams
+    REGISTRY["breakout"] = (Breakout, BreakoutParams, "intraday")
     REGISTRY["dhb"] = (Dhb, DhbParams, "intraday")
     REGISTRY["ema9"] = (Ema9, Ema9Params, "intraday")
     REGISTRY["ema9_pdf"] = (Ema9Pdf, Ema9PdfParams, "intraday")
     REGISTRY["ema9_vwap"] = (Ema9Vwap, Ema9VwapParams, "intraday")
+    REGISTRY["ema_pullback"] = (EmaPullback, EmaPullbackParams, "swing")
     REGISTRY["gap_rsi"] = (GapRsi, GapRsiParams, "swing")
     REGISTRY["ib_extension"] = (IbExtension, IbExtParams, "intraday")
     REGISTRY["key_level"] = (KeyLevel, KeyLevelParams, "intraday")
@@ -86,23 +102,31 @@ def main() -> None:
         else:
             frames = data.load(period=period, interval=interval, refresh=args.refresh,
                                min_bars=750, auto_adjust=True)
+        print(f"[mem] after load: {_rss_mb():.0f} MB peak RSS")
+        # release_raw=True: this CLI run never varies strategy params (`p` below is
+        # fixed for the whole report), so each symbol's raw frame is safe to drop the
+        # moment its indicators are prepared - see Backtest.__init__.
         bt = Backtest(cls(), frames, SwingRunConfig(cost_bps=cost_bps),
-                      engine=simulate_swing)
+                      engine=simulate_swing, release_raw=True)
     elif args.source == "historify":
         frames = data.from_historify(interval=interval)
+        print(f"[mem] after load: {_rss_mb():.0f} MB peak RSS")
         strategy = cls()
         run = RunConfig(cost_bps=cost_bps).with_(**getattr(strategy, "run_overrides", {}))
-        bt = Backtest(strategy, frames, run)
+        bt = Backtest(strategy, frames, run, release_raw=True)
     else:
         frames = data.load(period=period, interval=interval, refresh=args.refresh)
+        print(f"[mem] after load: {_rss_mb():.0f} MB peak RSS")
         strategy = cls()
         run = RunConfig(cost_bps=cost_bps).with_(**getattr(strategy, "run_overrides", {}))
-        bt = Backtest(strategy, frames, run)
+        bt = Backtest(strategy, frames, run, release_raw=True)
     p = params_cls()
 
     print(bt.describe())
     print("\n=== shipped defaults, in-sample vs out-of-sample ===")
     print(bt.confirm(p, args.strategy).to_string(index=False))
+    print(f"[mem] after prepare+confirm: {_rss_mb():.0f} MB peak RSS "
+          f"(raw frames released)")
     print("\n=== cost sensitivity (full period) ===")
     bps = (0, 10, 20, 24, 35) if swing else (0, 8, 16, 24)
     print(bt.cost_sensitivity(p, bps=bps).to_string(index=False))
@@ -134,6 +158,7 @@ def main() -> None:
         print("\nSOURCE IS YAHOO: ~59 sessions of 5m bars, and roughly half of them are "
               "missing\ntheir closing bars. Indicative only - rerun with --source "
               "historify before believing it.")
+    print(f"\n[mem] end of run: {_rss_mb():.0f} MB peak RSS")
 
 
 if __name__ == "__main__":

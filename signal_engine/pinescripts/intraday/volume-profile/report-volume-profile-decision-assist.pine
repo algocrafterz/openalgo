@@ -18,7 +18,7 @@
 // DESIGN
 //   Modular sections mirror the analysis doc's Module 1 (structure),
 //   Module 2 (setup engine), Module 3 (execution/display). Logic patterns are
-//   reused from initiative_drive_detector_v6.pine (score table, confirmed-bar
+//   reused from concept-initiative_drive_detector_v6.pine (score table, confirmed-bar
 //   alerts, JSON emit) and orb.pine (session windows, level tracking).
 //
 //   Levels source: MANUAL VAH/POC/VAL inputs (from GoCharting each morning).

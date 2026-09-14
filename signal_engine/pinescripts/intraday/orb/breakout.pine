@@ -381,7 +381,7 @@ godChopGuard = true
 // 30.9% follow-through against a 33.3% random-walk baseline (t = -9.87). See breakout.md
 // 2026-08-30. It is deployed as forward-data collection, not as a proven edge.
 //
-// Merged from pinescripts/intraday/volume-profile/volume-profile-decision-assist.pine
+// Merged from pinescripts/intraday/volume-profile/report-volume-profile-decision-assist.pine
 
 // ─── Value Area source ──────────────────────────────────────────────────────
 // AUTO   — reconstruct the previous session's profile from 1-min data inside this
@@ -2249,7 +2249,7 @@ if barstate.isconfirmed or barstate.islast
 // ================================ KEY-LEVEL ENGINE: LEVEL CONSTRUCTION =============================
 // Non-ORB key levels: prev-session VAH/POC/VAL, PDH/PDL, Initial Balance. Sits after the
 // global cache (cachedATR/volBaseline/sessionVWAP ready) and before ORB level building.
-// Ported from volume-profile-decision-assist.pine; kl-prefixed to avoid collisions, and
+// Ported from report-volume-profile-decision-assist.pine; kl-prefixed to avoid collisions, and
 // reuses this file's cachedATR/volBaseline/sessionVWAP/shouldReset rather than recomputing.
 
 // ─── Previous Day High/Low ──────────────────────────────────────────────────

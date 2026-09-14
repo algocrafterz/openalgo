@@ -43,8 +43,8 @@ is unaffected by the move.
 - No wholesale re-taxonomy. The `intraday|swing/<strategy>/` layout is sound, and renaming
   further would have invalidated ~13 documented paths in `PRD.md` and `HOW-IT-WORKS.md` for
   cosmetic gain. Every reference the moves above *did* break was updated.
-- `candlestick-patterns.pine` (third-party, MPL-2.0) left in place untracked rather than deleted;
-  it is the source `keylevel-candles.pine` was reduced from.
+- `indicator-candlestick-patterns.pine` (third-party, MPL-2.0) left in place untracked rather than deleted;
+  it is the source `indicator-keylevel-candles.pine` was reduced from.
 
 **Behaviour changes**
 - None.

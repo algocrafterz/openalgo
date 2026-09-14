@@ -30,16 +30,25 @@ class Backtest:
 
     def __init__(self, strategy, frames: dict[str, pd.DataFrame],
                  run: RunConfig | None = None, is_fraction: float = 0.60,
-                 engine=simulate):
+                 engine=simulate, release_raw: bool = False):
         # `engine` swaps the simulator without touching the reporting. The intraday
         # `engine.simulate` forces an EOD exit, so a multi-day strategy passes
         # `swing_engine.simulate_swing` here and reuses every report below unchanged.
+        #
+        # `release_raw`: once a symbol's Ctx is built, its raw OHLCV frame is dropped
+        # from `self.frames` rather than kept alongside the prepared copy for the rest
+        # of the run - halves steady-state memory on a full-universe pull. Only safe
+        # when every call uses the SAME strategy params (so prepare_key never changes,
+        # e.g. the CLI's single-config report). Leave False for sweep()/ablation(),
+        # which re-prepare each symbol under multiple param variants and need the raw
+        # frame still there on a cache miss.
         self.strategy = strategy
         self.frames = frames
         self.engine = engine
         self.run = run or RunConfig()
-        self.days = sessions(frames)
+        self.days = sessions(frames)          # computed before any release, below
         self.cut = self.days[int(len(self.days) * is_fraction)]
+        self.release_raw = release_raw
         self._prep: dict = {}
 
     # ---- windows --------------------------------------------------------
@@ -66,7 +75,16 @@ class Backtest:
         for sym, df in self.frames.items():
             key = (sym, self.strategy.prepare_key(p))
             if key not in self._prep:
+                if df is None:
+                    # raw was released under release_raw=True and this is a NEW
+                    # prepare_key - the one case that combination cannot support.
+                    raise RuntimeError(
+                        f"{sym}: raw frame was released (release_raw=True) and no "
+                        f"cached prepare() exists for this parameter set; construct "
+                        f"Backtest with release_raw=False to vary strategy params")
                 self._prep[key] = Ctx(self.strategy.prepare(df, p), symbol=sym)
+                if self.release_raw:
+                    self.frames[sym] = None
             out += [t for t in self.engine(self._prep[key], self.strategy, p, run) if keep(t.day)]
         return out
 

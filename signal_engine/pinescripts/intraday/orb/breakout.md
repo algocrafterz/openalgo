@@ -3,9 +3,77 @@
 Key-level breakout strategy. Started as a byte-identical copy of `orb.pine`, then
 extended so the Opening Range is one key level among several rather than the only one.
 
-- **Source strategy**: `orb.pine` (unchanged, still the live strategy)
-- **Merged from**: `../volume-profile/volume-profile-decision-assist.pine`
+- **Source strategy**: `orb.pine` (origin only — BREAKOUT has traded real capital alone
+  since the 2026-09-06 "ORB stood down" entry below; `orb.pine` itself is inactive)
+- **Merged from**: `../volume-profile/report-volume-profile-decision-assist.pine`
 - **Model reference**: `../volume-profile/volume-profile-model.md`
+
+---
+
+## 2026-09-14 23:35 IST — Standalone backtest adapter; full 212-symbol run confirms the negative premise, harder than before
+
+### Why a new adapter instead of reusing key_level.py
+
+`signal_engine/backtest/strategies/key_level.py` is a research tool for the key-level engine
+concept, not a claim about what BREAKOUT actually trades — its own docstring says as much.
+Cross-checking its claimed defaults against the CURRENT `breakout.pine` source (this was the
+live tag's first-ever standalone backtest) turned up two places where research and production had
+already drifted apart:
+
+1. **CLV gate**: `key_level.py` claims `0.65/0.35`; the live script is `0.50/0.50` since a
+   2026-08-30b correction (the original gate was found INVERTED — decisive break candles have
+   WORSE follow-through, not better).
+2. **`klMaxTpR` reachability gate** (added 2026-09-06): a setup whose nearest structural target
+   sits more than 2.0R away is refused outright. `key_level.py` has no equivalent of this at all.
+
+New file: `signal_engine/backtest/strategies/breakout.py` (tag `BREAKOUT`), built independently
+rather than importing `key_level.py`, so a future research-only change to that file cannot
+silently redefine what this backtest reports for real money. It also confirmed, and deliberately
+reproduces, the shipped `-BRK`-is-unreachable bug documented below (2026-08-28) — a "fixed"
+backtest would stop describing what is actually trading.
+
+Exit model is TP1-only with a single SL, matching every other adapter in this codebase — not
+the live multi-tier TP1/TP1.5/TP2/TP3 ladder or same-day re-entry cycles. The engine
+(`signal_engine/backtest/engine.py`) supports exactly one SL/TP per trade; modelling the ladder
+would mean changing shared harness code all 11 other strategies depend on, which is a separate
+decision from porting this one strategy.
+
+### Full-universe result: 212 F&O symbols, 2016-10-03 to 2026-09-13, 16 bps realistic cost
+
+|  | n | win% | gross bps | net R | t (session-clustered) |
+|---|---|---|---|---|---|
+| IS | 26,884 | 41.8 | -1.85 | -0.494 | -62.84 |
+| OOS | 20,157 | 43.9 | -0.31 | -0.493 | -49.62 |
+
+**Zero of 212 symbols were net profitable.** Median -0.486R. At **zero trading cost** — no
+statutory charges, no slippage — net_R is still -0.028R at t=-5.69: a statistically significant
+loss with no cost involved at all. Both IS and OOS gross edges are negative and consistent in
+sign (unlike a fitted-then-decayed result, where sign usually flips between windows). This
+directly extends the 2026-08-30 finding below (unconditional key-level breaks: 30.9% follow-
+through vs a 33.3% random-walk baseline, t=-9.87) to the FULL filter stack the live script
+actually applies (score >= 7, HTF confirmation, volume gates, chase/headroom limits) across the
+whole tradeable universe and a decade of data, not a sample. The filters do not rescue the
+premise. Win rate 42.7%, payoff 0.53 — losers average -1.45R against winners' +0.76R, so it
+loses on frequency AND size simultaneously. Exit mix: 55.6% SL, 42.5% TP.
+
+**This is a stronger and more confident negative finding than the standalone `orb` strategy's**
+(which at least had a small, cost-fragile, sign-inconsistent gross edge). BREAKOUT's is negative
+before cost enters the picture, in both time windows, across the full universe.
+
+### An unrelated fix that made this run possible
+
+The prior full-universe backtest attempt (all 11 registered strategies) crashed with OOM on a
+7.8GB box, independent of anything strategy-specific: `data.from_historify()`'s 1m->5m resample
+used a per-day `groupby().apply()` — ~535,000 tiny pandas calls across 212 symbols x ~2,500
+trading days — which does not itself use much memory but fragments the process heap badly enough
+that RSS ratchets upward for the life of the run regardless of live data size (verified
+bit-for-bit identical output from a single vectorized `.resample(..., origin=<09:15>)` call per
+symbol, 36-106x faster, no fragmentation). Combined with downcasting OHLCV and every strategy's
+own derived indicator columns to float32 (`signal_engine/backtest/types.py`'s `Ctx`) and dropping
+each symbol's raw frame once its indicators are prepared (`harness.py`'s new `release_raw` flag),
+peak memory across all 12 strategies (11 original + `breakout`) now stays in the 4-6.6GB range
+with no crashes. None of this changed any strategy's numbers — verified bit-identical on `orb`
+before and after.
 
 ---
 
@@ -1748,7 +1816,7 @@ scope, which the main-body budget needed.
 
 ## 2026-08-22c — Ported upstream improvements (Luxy v5 latest)
 
-Compared `orb-luxy-big-beautiful-dynamic-orb.pine` against **`orb.pine`** (our unmodified
+Compared `indicator-orb-luxy-big-beautiful-dynamic-orb.pine` against **`orb.pine`** (our unmodified
 ancestor) rather than against `breakout.pine`, so upstream's changes were isolated from ours.
 
 ### Ported

@@ -41,7 +41,7 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 | --- | --- | --- |
 | `orb.pine` | `intraday-orb` | **Frozen and live.** The production ORB strategy. |
 | `breakout.pine` | `intraday-breakout` | **In development.** Key-level engine; changelog in `breakout.md`. |
-| `orb-luxy-big-beautiful-dynamic-orb.pine` | `Luxy Big Beautiful ORB` | Third-party reference indicator, not wired to the engine. |
+| `indicator-orb-luxy-big-beautiful-dynamic-orb.pine` | `Luxy Big Beautiful ORB` | Third-party reference indicator, not wired to the engine. |
 
 `trade-analysis/` holds the performance reports, the Telegram export and
 `analyze_orb.py`, which globs `orb-telegram-export-*.json` next to itself.
@@ -49,17 +49,17 @@ reports, tooling, exports) lives in a subfolder — see ORB below.
 ### intraday/orderflow
 | File | Pine title | Role |
 | --- | --- | --- |
-| `initiative_drive_detector_v6.pine` | `id-candle-detector` | Marks initiative-drive candles with a green/red `ID` label. **Four hard gates define a drive** — body > median body x1.5, range > median range x1.15, directional body, close at the extreme — and five context criteria (RVOL, close beyond the N-bar level, EMA, VWAP, ADX with +DI/-DI) only *rank* it. Does not confirm order flow: every flag is a prompt to check the footprint. |
-| `keylevel-candles.pine` | `keylevel-candles` | Companion to `breakout.pine`. Every candle that trades **through** a key level gets exactly one verdict, decided positionally from where the previous close sat versus this one: `B▲` broke up, `B▼` broke down, `F▲` poked above and closed back below (level held as resistance), `F▼` dipped below and closed back above (level held as support). Conviction shows as label opacity, never as a filter. Level set mirrors `breakout.pine:661`; a coverage table reports which levels are armed and what each produced. |
-| `candlestick-patterns.pine` | third-party (repo32, MPL-2.0) | Untracked source material that `keylevel-candles.pine` was reduced from. Not wired to anything. |
+| `concept-initiative_drive_detector_v6.pine` | `id-candle-detector` | Marks initiative-drive candles with a green/red `ID` label. **Four hard gates define a drive** — body > median body x1.5, range > median range x1.15, directional body, close at the extreme — and five context criteria (RVOL, close beyond the N-bar level, EMA, VWAP, ADX with +DI/-DI) only *rank* it. Does not confirm order flow: every flag is a prompt to check the footprint. |
+| `indicator-keylevel-candles.pine` | `keylevel-candles` | Companion to `breakout.pine`. Every candle that trades **through** a key level gets exactly one verdict, decided positionally from where the previous close sat versus this one: `B▲` broke up, `B▼` broke down, `F▲` poked above and closed back below (level held as resistance), `F▼` dipped below and closed back above (level held as support). Conviction shows as label opacity, never as a filter. Level set mirrors `breakout.pine:661`; a coverage table reports which levels are armed and what each produced. |
+| `indicator-candlestick-patterns.pine` | third-party (repo32, MPL-2.0) | Untracked source material that `indicator-keylevel-candles.pine` was reduced from. Not wired to anything. |
 
 ### intraday/volume-profile
 | File | Pine title | Role |
 | --- | --- | --- |
-| `volume-profile-decision-assist.pine` | `Volume Profile Decision Assist` | Key-level engine feeding the breakout work. |
-| `volume-heatmap.pine` | `Volcano Heatmap Volume v2` | Volume heatmap. |
-| `volume-suite.pine` | `Volume Suite - By Leviathan` | Third-party volume toolkit. |
-| `smart-money-concepts-luxalgo.pine` | `anand-Smart Money Concepts [LuxAlgo]` | Third-party SMC indicator. |
+| `report-volume-profile-decision-assist.pine` | `Volume Profile Decision Assist` | Key-level engine feeding the breakout work. |
+| `indicator-volume-heatmap.pine` | `Volcano Heatmap Volume v2` | Volume heatmap. |
+| `indicator-volume-suite.pine` | `Volume Suite - By Leviathan` | Third-party volume toolkit. |
+| `concept-smart-money-concepts-luxalgo.pine` | `anand-Smart Money Concepts [LuxAlgo]` | Third-party SMC indicator. |
 
 ### intraday/ib-extension — Initial Balance extension
 | File | Pine title | Role |

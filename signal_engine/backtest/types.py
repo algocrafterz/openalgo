@@ -99,7 +99,22 @@ class Ctx:
     __slots__ = ("a", "index", "n", "symbol")
 
     def __init__(self, df, symbol: str = ""):
-        self.a = {c: df[c].to_numpy() for c in df.columns if c != "day"}
+        # float64 -> float32: every strategy's prepare() adds its own indicator
+        # columns (EMAs, ATR, RSI, ADX, VWAP, pivots, ...) on top of the 5 raw OHLCV
+        # ones, computed via pandas rolling/ewm which default to float64. A
+        # column-heavy strategy (e.g. ema9's ~26 added columns) can dwarf the raw
+        # price data several times over across a full-universe, multi-year panel -
+        # this is where that memory actually goes, not the original OHLCV. float32
+        # still carries far more precision than a NSE tick (paise), so it does not
+        # change which side of a comparison a signal lands on.
+        self.a = {}
+        for c in df.columns:
+            if c == "day":
+                continue
+            arr = df[c].to_numpy()
+            if arr.dtype == np.float64:
+                arr = arr.astype(np.float32)
+            self.a[c] = arr
         self.a["day"] = df["day"].to_numpy() if "day" in df.columns else None
         self.index = df.index
         self.n = len(df)

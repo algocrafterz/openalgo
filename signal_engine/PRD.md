@@ -216,6 +216,48 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-14)
+
+**Backtest OOM fix: the full 11-strategy registry now runs to completion; a standalone
+BREAKOUT adapter shipped alongside it.** Prior full-universe runs crashed with OOM on this
+7.8GB box regardless of which strategy — root cause was `data.from_historify()`'s 1m->5m
+resample using a per-day `groupby().apply()` (~535,000 tiny pandas calls across 212 symbols x
+~2,500 trading days), which fragments the process heap badly enough that RSS ratchets upward
+for the life of the run independent of live data size. Fixed with a single vectorized
+`.resample(..., origin=<09:15>)` call per symbol (verified bit-for-bit identical output,
+36-106x faster), float32 downcasting of both raw OHLCV and every strategy's own derived
+indicator columns (`Ctx` in `signal_engine/backtest/types.py`), and a new `release_raw` flag
+on `Backtest` (`harness.py`) that drops each symbol's raw frame once its indicators are
+prepared. None of this changed any strategy's reported numbers — verified bit-identical on
+`orb` before/after. Peak memory across all 12 strategies now ranges 4-6.6GB, no crashes.
+
+Full-universe (212 F&O symbols, 2016-2026, 16 bps cost) results, OOS row:
+
+| Strategy | OOS t | OOS net_R | Profitable symbols | Read |
+|---|---|---|---|---|
+| `breakout` (live BREAKOUT tag) | -49.62 | -0.493 | 0/212 | Negative even at 0 cost — see below |
+| `key_level` | -33.67 | -0.450 | 1/212 | Cost-fragile weak gross edge |
+| `ema9_pdf` | -30.42 | -0.344 | 0/212 | No edge before cost |
+| `ema9_vwap` | -31.22 | -0.204 | 0/211 | Real gross edge (t=9.23 at 0 cost), erased by volume of trades |
+| `ema9` | -22.12 | -0.151 | 1/211 | No edge before cost |
+| `orb` | -17.27 | -0.156 | 6/211 | Small real edge, erased by cost |
+| `dhb` | -4.80 | -0.085 | 67/210 | Mildest loser, consistent gross edge, worth revisiting on cost |
+| `gap_rsi` | -1.84 | -0.168 | 59/195 | Indistinguishable from zero (t below 1.97 bar) |
+| `phoenix` | +1.88 | +0.094 | 119/168 | Promising, just under significance, small OOS n |
+| `value_zone` | +3.24 | +0.021 | 161/196 | **Strongest positive result** — consistent both windows, 82% symbols profitable, low cost sensitivity |
+| `ema_pullback` | -5.49 | -0.158 | 102/195 | **Overfit**: IS gross +262bps flips to OOS loss |
+| `ib_extension` | n/a | n/a | 0/210 | **Broken** — zero trades in the entire run, needs debugging |
+
+**BREAKOUT got its first-ever standalone backtest adapter** (`signal_engine/backtest/strategies/breakout.py`),
+separate from the pre-existing `key_level.py` research tool because cross-checking the latter's
+claimed defaults against the current `breakout.pine` source found two drifted values (CLV gate
+0.65/0.35 vs the live 0.50/0.50; missing `klMaxTpR` reachability gate added 2026-09-06). Full
+finding and methodology: `signal_engine/pinescripts/intraday/orb/breakout.md`'s 2026-09-14 entry.
+
+Also: 10 non-strategy `.pine` files (indicator/overlay/dashboard scripts with no trading logic
+of their own) renamed with category prefixes (`indicator-`, `concept-`, `report-`) for clarity;
+all cross-references updated. No strategy or backtest code path touches these files.
+
 ## Recent Changes (2026-09-13)
 
 **Intraday watchlist (ORB/BREAKOUT/EMA9VWAP) rebuilt from live technical metrics, not
@@ -1684,7 +1726,7 @@ trade: `tp_mode` (`level` | `r` | `level_min_r`) with `tp_r`; `sl_mode` (`level`
 
 ### Candlestick patterns measured, and mostly switched off
 
-`pinescripts/intraday/orderflow/candlestick-patterns.pine` (repo32) retuned. All 14
+`pinescripts/intraday/orderflow/indicator-candlestick-patterns.pine` (repo32) retuned. All 14
 directional patterns were transcribed to numpy and measured over 764,573 five-minute bars:
 mean forward return over 12 bars in ATR units, signed by the pattern's direction, **minus the
 unconditional forward return of the same bars**.
@@ -1715,7 +1757,7 @@ week), requires above-average volume, skips the opening bars, and enables only t
 non-negative measured behaviour. This is consistent with the DHB result, where a required
 confirmation candle was completely inert.
 
-### `market-structure.pine` retuned for NSE
+### `report-market-structure.pine` retuned for NSE
 
 Flux Charts' Market Structure Dashboard carried three FX defaults that are wrong on an Indian
 equity: ICT sessions and killzones on a New York clock (so an NSE session reported "NY LUNCH"
@@ -1887,7 +1929,7 @@ takes total R from +11.1 to +3.8. Ablation shows the pullback requirement and th
 gate carry it; the confirmation candle is inert (identical results with it off) and the bare
 "break the first day high" version loses money (-0.012 R). Not tradeable on this evidence.
 
-### `support-resistance.pine` retuned (`pinescripts/intraday/orb/`)
+### `indicator-support-resistance.pine` retuned (`pinescripts/intraday/orb/`)
 
 LonesomeTheBlue's SRv2, ported to v6 and retuned for 5-minute NSE work: zone width is now
 ATR-relative rather than 10% of a 300-bar range (which made zones 1.5-2.5% of price and
@@ -2249,16 +2291,16 @@ a generic notification):
 | `swing/dividend-growth/dividend-growth.pine` | strategy | `value_zone` adapter - run (strongest result) |
 | `intraday/intraday-dhb.txt` | discretionary write-up, no compiled pine | `dhb` adapter - run |
 | `swing/momentum-rank/momentum-rank.pine` | indicator (alert-only, full Entry/SL/TP/Direction contract) | **This IS the live deployment of the 12-1 cross-sectional momentum result already validated in `portfolio.py`** (the gold-standard +11.25%/yr alpha finding, 2026-09-12). Its own header cites the same backtest (+12.7%/yr alpha, t=3.12) run against 201 F&O names 2016-2026 - a later, slightly different parameter sweep than this session's, both independently positive. Re-running via `portfolio.py` against Historify daily (once the Angel re-fill lands) will give the final, broker-verified number to compare against the header's claim. |
-| `orderflow/candlestick-patterns.pine` | indicator, no alert | Not a strategy - pattern overlay only, no entry/exit/stop of its own |
-| `orderflow/initiative_drive_detector_v6.pine` | indicator, alert fires direction+score | Context alert, not a complete trade signal - no SL/TP/entry price, meant to inform a discretionary decision |
-| `orderflow/keylevel-candles.pine` | indicator, alert fires break/fake verdict | Same - context, not a complete signal |
-| `orderflow/market-structure.pine` | indicator, generic alert | Visual structure marking only |
-| `orb/support-resistance.pine` | indicator, no alert | Visual zone marking only (already discussed earlier in this file - retuned, `alertMode` defaults to Reject per the level-study evidence) |
-| `orb/orb-luxy-big-beautiful-dynamic-orb.pine` | indicator, generic alert | Visual dynamic-ORB overlay, no embedded stop/target |
-| `volume-profile/smart-money-concepts-luxalgo.pine` | indicator, no alert | Third-party (LuxAlgo) order-block/liquidity visualization only |
-| `volume-profile/volume-heatmap.pine` | indicator, no alert | Visualization only |
-| `volume-profile/volume-suite.pine` | indicator, no alert | Visualization only |
-| `volume-profile/volume-profile-decision-assist.pine` | indicator, alert fires a formatted message | Decision-support alert, not a complete trade signal |
+| `orderflow/indicator-candlestick-patterns.pine` | indicator, no alert | Not a strategy - pattern overlay only, no entry/exit/stop of its own |
+| `orderflow/concept-initiative_drive_detector_v6.pine` | indicator, alert fires direction+score | Context alert, not a complete trade signal - no SL/TP/entry price, meant to inform a discretionary decision |
+| `orderflow/indicator-keylevel-candles.pine` | indicator, alert fires break/fake verdict | Same - context, not a complete signal |
+| `orderflow/report-market-structure.pine` | indicator, generic alert | Visual structure marking only |
+| `orb/indicator-support-resistance.pine` | indicator, no alert | Visual zone marking only (already discussed earlier in this file - retuned, `alertMode` defaults to Reject per the level-study evidence) |
+| `orb/indicator-orb-luxy-big-beautiful-dynamic-orb.pine` | indicator, generic alert | Visual dynamic-ORB overlay, no embedded stop/target |
+| `volume-profile/concept-smart-money-concepts-luxalgo.pine` | indicator, no alert | Third-party (LuxAlgo) order-block/liquidity visualization only |
+| `volume-profile/indicator-volume-heatmap.pine` | indicator, no alert | Visualization only |
+| `volume-profile/indicator-volume-suite.pine` | indicator, no alert | Visualization only |
+| `volume-profile/report-volume-profile-decision-assist.pine` | indicator, alert fires a formatted message | Decision-support alert, not a complete trade signal |
 
 **Conclusion: every actual STRATEGY in this repo (a script with defined entry, stop
 and target logic) already has a Python backtest adapter and has been run this
@@ -2793,13 +2835,13 @@ Detection was also too loose to mean "initiative". Fixes, in order of impact:
 
 Marking is now unobtrusive: tiny `plotshape` triangles off the bar plus a faint background tint. Candle recolouring and score labels are **off** by default -- recolouring overwrites the real candle colour, which is still needed when reading the bar against the footprint.
 
-**Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`.
+**Files**: `pinescripts/intraday/orderflow/concept-initiative_drive_detector_v6.pine`.
 
 ### Key-level candle verdicts, and two Pine compile faults
 
 `plotshape`'s `size` argument is a const string, so the `input.string` marker-size control was rejected outright: *Cannot call "plotshape" with argument "size"*. Sizes driven by an input have to be drawn with `label.new`, whose properties accept series values. Both orderflow scripts hit this.
 
-`keylevel-candles.pine` was firing almost nothing but FAIL on a live TCS 5-min chart. Two causes:
+`indicator-keylevel-candles.pine` was firing almost nothing but FAIL on a live TCS 5-min chart. Two causes:
 
 - **Proximity was the wrong trigger.** "Within 0.25 x ATR of the nearest level" is true on nearly every bar once eleven levels are on the chart. The bar now has to actually trade *through* a level, and of the levels it pierced, the one its close settles nearest is the one under test.
 - **The level reference was unstable.** `close[1]` was compared against whichever level was nearest on *this* bar, frequently a different level from the one the previous bar closed against. Every level in the table is fixed once formed, so the comparison is now made against that one level.
@@ -2808,9 +2850,9 @@ Also: OR/IB levels were live during their own formation window, so every bar ins
 
 The output is one of three verdicts rather than five pattern names, each carrying a tooltip with the candle type, level, body/wick geometry, volume and the reading -- `BREAK` (conviction close through, on volume, no wick into the level), `FAKE` (rejection wick, or a close back inside after the previous bar closed beyond), `WEAK` (inconclusive, off by default).
 
-`initiative_drive_detector_v6.pine` markers are now small green/red `ID` labels instead of cyan/amber diamonds.
+`concept-initiative_drive_detector_v6.pine` markers are now small green/red `ID` labels instead of cyan/amber diamonds.
 
-**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`, `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`, `pinescripts/README.md`.
+**Files**: `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`, `pinescripts/intraday/orderflow/concept-initiative_drive_detector_v6.pine`, `pinescripts/README.md`.
 
 ### Initiative drive: expansion is a gate, not a score point
 
@@ -2829,7 +2871,7 @@ The remaining five (RVOL, close beyond the N-bar level, EMA, VWAP, ADX with +DI/
 
 Marks were scattered across the price pane at each event's own price and the tooltips read like a manual. All marks now sit on a single row anchored below the session low (`rowY`, offset in ATRs, only ever pushed lower), with short text (`BRK U` / `FAKE D`) and a three-line tooltip: what the level was, what the candle did, what it means. No jargon.
 
-**Files**: `pinescripts/intraday/orderflow/initiative_drive_detector_v6.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+**Files**: `pinescripts/intraday/orderflow/concept-initiative_drive_detector_v6.pine`, `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`.
 
 ### Key-level marks: shorter, and level coverage made visible
 
@@ -2839,7 +2881,7 @@ Separately: on a live chart only PDL and ORL appeared to produce verdicts. The s
 
 Added a coverage table (bottom-right): every level in play, its price, and today's BREAK / FAKE counts, with an explicit `VAH/POC/VAL — off` row when the volume-profile levels are disabled. A level producing nothing is now visibly distinct from a level that was never armed.
 
-**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+**Files**: `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`.
 
 ### No unlabelled key-level lines
 
@@ -2847,11 +2889,11 @@ Added a coverage table (bottom-right): every level in play, its price, and today
 
 Suppression is now symmetric: a distant level whose line we draw ourselves is dropped entirely instead of being left anonymous. Levels whose line comes from elsewhere (`drawLine=false`, the ORB plots) are always tagged, because that line cannot be removed and must not be orphaned.
 
-`keylevel-candles.pine` was compounding this — it re-plotted ORH/ORL/IBH/IBL/PDH/PDL with `plot()`, which carries no on-chart tag, duplicating lines breakout.pine already draws AND labels. `Plot Levels` now defaults off.
+`indicator-keylevel-candles.pine` was compounding this — it re-plotted ORH/ORL/IBH/IBL/PDH/PDL with `plot()`, which carries no on-chart tag, duplicating lines breakout.pine already draws AND labels. `Plot Levels` now defaults off.
 
 Also dampened its FAKE spam: `VAL` alone produced 15 verdicts in one session because a close one tick beyond a level counted as a break, making every oscillation a failed break. Added an acceptance margin (prior close must clear the level by 0.15 x ATR) and a per-level cooldown (3 bars).
 
-**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`.
 
 ### Every level drawn and tagged; previous-day VP levels get a P prefix
 
@@ -2859,9 +2901,9 @@ Making tag suppression symmetric fixed anonymous lines but created a worse probl
 
 `VAH/POC/VAL` renamed to `PVAH/PPOC/PVAL`. These are the PREVIOUS session's value area, but TradingView's Session Volume Profile plots the CURRENT day's VAH/POC/VAL — two sets of lines carrying the same three names at different prices, both on the chart at once. The P prefix also makes the naming self-consistent: `PVAH/PPOC/PVAL/PDH/PDL` are previous-session, bare `ORH/ORM/ORL/IBH/IBM/IBL` are today's. Display only — `klLvlNames` feeds a human-readable KEYLEVEL packet that goes to a channel the signal engine does not listen on, and `parser.py` never reads level names, so nothing in the trade pipeline is affected.
 
-`keylevel-candles.pine`: acceptance margin and per-level cooldown both back to 0, so every candle interacting with a level is judged again — a run of F-down marks along one level *is* the conviction signal, and thinning it out removed the evidence. Each of the four verdicts now has its own colour (B up green, B down red, F up amber, F down blue) because at tiny label size the arrow alone was not readable.
+`indicator-keylevel-candles.pine`: acceptance margin and per-level cooldown both back to 0, so every candle interacting with a level is judged again — a run of F-down marks along one level *is* the conviction signal, and thinning it out removed the evidence. Each of the four verdicts now has its own colour (B up green, B down red, F up amber, F down blue) because at tiny label size the arrow alone was not readable.
 
-**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+**Files**: `pinescripts/intraday/orb/breakout.pine`, `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`.
 
 ### Every level interaction gets a verdict
 
@@ -2882,7 +2924,7 @@ Note the other half of the drop was configuration, not code: the 01:46 chart had
 
 Default label size raised from tiny to normal.
 
-**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+**Files**: `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`.
 
 ### Cluster fan-out for key-level marks
 
@@ -2890,7 +2932,7 @@ With every interaction now judged, a level being ground along puts a verdict on 
 
 The first attempt put slot resolution in a helper function, which would not have compiled: **Pine rejects assignment to a global variable from inside a user function.** It is resolved at global scope instead, which is legal, and the verdicts being mutually exclusive means one slot per bar is sufficient. A scan of both orderflow scripts confirms no other function assigns to a global.
 
-**Files**: `pinescripts/intraday/orderflow/keylevel-candles.pine`.
+**Files**: `pinescripts/intraday/orderflow/indicator-keylevel-candles.pine`.
 
 ### pinescripts/ structure
 
@@ -3138,7 +3180,7 @@ and deliberately not ported.
 
 New PineScript alongside `orb.pine` — a copy of it, extended so the Opening Range becomes
 one key level among several. Merges the volume-profile decision-assist logic
-(`pinescripts/intraday/volume-profile/volume-profile-decision-assist.pine`) into the ORB
+(`pinescripts/intraday/volume-profile/report-volume-profile-decision-assist.pine`) into the ORB
 strategy, since ORB, Value Area, Previous Day and Initial Balance breaks are all the same
 key-level breakout with shared entry mechanics.
 
