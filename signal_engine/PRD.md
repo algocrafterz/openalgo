@@ -246,7 +246,7 @@ Full-universe (212 F&O symbols, 2016-2026, 16 bps cost) results, OOS row:
 | `phoenix` | +1.88 | +0.094 | 119/168 | Promising, just under significance, small OOS n |
 | `value_zone` | +3.24 | +0.021 | 161/196 | **Strongest positive result** — consistent both windows, 82% symbols profitable, low cost sensitivity |
 | `ema_pullback` | -5.49 | -0.158 | 102/195 | **Overfit**: IS gross +262bps flips to OOS loss |
-| `ib_extension` | n/a | n/a | 0/210 | **Broken** — zero trades in the entire run, needs debugging |
+| `ib_extension` | -8.15 | -0.089 | 30/211 | Was reporting 0 trades — bug, now fixed (see 2026-09-14 entry below). Real result: significant loss even at 0 cost (t=-3.49) |
 
 **BREAKOUT got its first-ever standalone backtest adapter** (`signal_engine/backtest/strategies/breakout.py`),
 separate from the pre-existing `key_level.py` research tool because cross-checking the latter's
@@ -257,6 +257,23 @@ finding and methodology: `signal_engine/pinescripts/intraday/orb/breakout.md`'s 
 Also: 10 non-strategy `.pine` files (indicator/overlay/dashboard scripts with no trading logic
 of their own) renamed with category prefixes (`indicator-`, `concept-`, `report-`) for clarity;
 all cross-references updated. No strategy or backtest code path touches these files.
+
+**`ib_extension`'s zero-trades result (2026-09-13 entry below) was a bug, not a finding.**
+`entry()`'s regime gate (`p.use_regime and c["regime"][i] != direction`) rejected every signal
+in both directions because `self.regime` was never populated — `load_regime()` (Nifty-50 vs its
+50 EMA) existed in the file but nothing ever called it, so `prepare()`'s fallback filled the
+`regime` column with 0.0 for every bar, and `0.0 != 1` and `0.0 != -1` are both always true. No
+error, no crash, nothing in a log — the same silent-failure shape as the IST bug this project has
+already been burned by once (see root CLAUDE.md). A second, compounding bug: even with regime
+loaded, `load_regime()` only fetched `period="2y"` of daily Nifty data against a ~10-year
+Historify backtest, and the gate did not special-case the documented `0 = unknown regime` value
+from unmapped dates as a pass — it would have kept blocking ~8 of 10 years even after the wiring
+was fixed. Fixed both: `IbExtension.__init__` now loads regime automatically (`period="max"`,
+covers 2007 onward), and the gate now reads `c["regime"][i] not in (0.0, direction)` so unknown
+regime passes through instead of blocking. Real OOS result: n=3,775, net_R=-0.089, t=-8.15 —
+significantly negative, and still significantly negative at zero trading cost (t=-3.49, payoff
+0.74-0.79) — consistent with the strategy's own docstring warning that its stop/target geometry
+gives a payoff below 1:1 even at the best-case entry. 30/211 symbols profitable.
 
 ## Recent Changes (2026-09-13)
 
@@ -2168,7 +2185,7 @@ extends everyone comfortably past it.**
 | **key_level** | 1,647 | -0.496 | -13.96 | Clearly negative - matches the standing PRD finding that every reference level has a negative break edge (fade, not breakout). |
 | **ema9_vwap** | 14,417 | -0.257 | -16.93 | Clearly negative. Introduced `SL_GAP_ENTRY` (2 trades) - the tag added this session for a fill that gaps through its own stop, per the live validator's actual behaviour. |
 | **ema9_pdf** | 2,224 | -0.500 | -14.97 | Clearly negative. DOJI exit (13.3% of trades, +0.912R average) is the one bright spot in the exit mix - worth isolating as its own hypothesis later. |
-| **ib_extension** | 0 | - | - | Never fired a single signal across 48 symbols, either window. The double-breakout condition (weekly IB AND daily IB, same direction, Wed-Fri only) is evidently too narrow for this universe/period - a real finding, not a bug (though the empty-case crash in `metrics.by_symbol()` WAS a bug, now fixed - see below). |
+| **ib_extension** | 0 | - | - | **CORRECTED 2026-09-14: this WAS a bug, not a real finding** - see the 2026-09-14 entry below. `use_regime=True` (shipped default) silently rejected every signal in both directions because `load_regime()` was never called anywhere in the codebase; the double-breakout condition itself was never actually tested by this run. |
 
 ### Swing (daily, cost 24 bps, Historify's OWN split-adjusted daily bars - not yfinance)
 

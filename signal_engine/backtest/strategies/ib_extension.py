@@ -123,9 +123,18 @@ class IbExtension(Strategy):
     tag = "IBEXT"
     pine = "signal_engine/pinescripts/intraday/ib-extension/ib-extension.pine"
 
-    #: Daily Nifty-50 regime, loaded once and shared across symbols. Set by
-    #: `load_regime()` before the backtest runs; None disables the gate.
-    regime: pd.Series | None = None
+    def __init__(self, regime: pd.Series | None = None) -> None:
+        # Daily Nifty-50 regime the use_regime gate reads, loaded once here. Before
+        # this, nothing in the codebase ever called load_regime(): with no regime
+        # loaded, prepare() filled the "regime" column with 0.0 for every bar, and
+        # entry()'s `c["regime"][i] != direction` is true for 0.0 against BOTH +1 and
+        # -1 - use_regime=True (the shipped default) silently rejected every signal in
+        # both directions for the life of this adapter. Zero trades, no error, no log
+        # line - the same silent-failure shape as the IST bug (root CLAUDE.md).
+        # `regime=<series>` stays available for a caller that wants to isolate the
+        # filter with a specific series; `p.use_regime=False` remains the way to
+        # disable the check entirely.
+        self.regime = load_regime() if regime is None else regime
 
     # ---- preparation ---------------------------------------------------
 
@@ -233,7 +242,10 @@ class IbExtension(Strategy):
             g = c["gap_pct"][i]
             if np.isfinite(g) and g > p.circuit_gap_pct:
                 return None
-        if p.use_regime and c["regime"][i] != direction:
+        # 0 = unknown regime (prepare()'s fillna(0.0), or a date load_regime() has no
+        # coverage for) and must PASS, not block - the gate only rejects a bar where
+        # the regime is actually KNOWN and disagrees with this direction.
+        if p.use_regime and c["regime"][i] not in (0.0, direction):
             return None
 
         atr = c["atr"][i]
@@ -255,15 +267,21 @@ class IbExtension(Strategy):
                            tag="IB_UP" if direction == 1 else "IB_DN")
 
 
-def load_regime(ema_len: int = 50) -> pd.Series:
+def load_regime(ema_len: int = 50, period: str = "max") -> pd.Series:
     """Daily Nifty-50 direction: +1 above its EMA, -1 below.
 
     Indexed by date and consumed by `IbExtension.prepare`. The EMA is computed on
     closed daily bars and the series is shifted one day, so a bar on date D reads the
     regime as of D-1's close - the Pine's `lookahead_off` behaviour.
+
+    `period="max"` (not the old "2y"): the historify-backed backtest this strategy
+    otherwise runs against covers ~10 years, and daily yfinance data has no equivalent
+    of the 60-day intraday cap - there is no reason to truncate it to 2 years. Any
+    date this still does not cover reads as regime 0 (unknown), which `entry()`
+    treats as a pass, not a block.
     """
     import yfinance as yf
-    nif = yf.download("^NSEI", period="2y", interval="1d", progress=False, auto_adjust=True)
+    nif = yf.download("^NSEI", period=period, interval="1d", progress=False, auto_adjust=True)
     if isinstance(nif.columns, pd.MultiIndex):
         nif.columns = nif.columns.get_level_values(0)
     close = nif["Close"].dropna()
