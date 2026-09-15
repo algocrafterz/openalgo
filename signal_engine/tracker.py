@@ -23,6 +23,31 @@ from signal_engine.risk import RiskEngine
 from signal_engine.timeutils import IST
 
 
+def _dedupe_breakingtrade_overlap(records: list) -> list:
+    """Drop BREAKINGTRADE-WATCHLIST records for any symbol BREAKINGTRADE also traded today.
+
+    BREAKINGTRADE and BREAKINGTRADE-WATCHLIST collide by design (same scanner, same
+    daily-changing universe — see config.yaml's duplicate_window_seconds comment), and the
+    broker nets positions by (symbol, exchange, product) alone, with no strategy dimension
+    (sandbox.position_manager.get_position_for_symbol takes no strategy argument). So when
+    both fire on the same symbol the same day, it is really ONE broker position that two
+    engine legs each computed an independent, unblended P&L for — not two positions. That
+    produced the 2026-09-15 reconciliation mismatch (engine -1,573.43 vs broker -1,127.04).
+    For reporting, BREAKINGTRADE is the confirmed signal and owns that symbol's P&L; the
+    watchlist leg is dropped so it is not double-counted. A symbol only WATCHLIST traded
+    (no BREAKINGTRADE entry that day) is untouched.
+
+    This only changes what the day summary / per-strategy reports show — it does not change
+    what orders get placed, and reconcile.py's engine-vs-broker canary deliberately keeps
+    reading the full, undeduped trades.db so it still catches every real close.
+    """
+    confirmed_symbols = {r.symbol.upper() for r in records if r.strategy.upper() == "BREAKINGTRADE"}
+    return [
+        r for r in records
+        if not (r.strategy.upper() == "BREAKINGTRADE-WATCHLIST" and r.symbol.upper() in confirmed_symbols)
+    ]
+
+
 def _compute_r(total_pnl: float, qty: int, entry: float, sl: float) -> float | None:
     """Compute R-multiple: total_pnl divided by initial 1R risk for the position."""
     risk_per_share = abs(entry - sl)
@@ -455,6 +480,7 @@ class PositionTracker:
             )
             for r in rows
         ]
+        records = _dedupe_breakingtrade_overlap(records)
         # Same classification the day counters use: a TIME exit is a trade but not a decided
         # win or loss - the clock closed it, not the strategy's own rule.
         decided = [r for r in records if "TIME" not in (r.exit_types or [])]
