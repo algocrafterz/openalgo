@@ -260,15 +260,17 @@ the time. Changed to a bounded `flock -w 20` (overridable via `LOCK_WAIT_SECS` f
 still refuses a genuine duplicate, just tolerates the old process's teardown window. Tests:
 `test_openalgoctl.sh`'s `acquire_lock` section (free / brief-hold / long-hold cases).
 
-**Backtest roundup across all 9 candidate strategies — final promising/not-promising call.**
-Closing out the "go through the remaining 9" backtest pass with a single verdict table and a
-fine-tuning plan for what survived, rather than leaving the result scattered across each
-strategy's own `STRATEGY-ANALYSIS.md`:
+**Backtest roundup across all 10 candidate strategies — final promising/not-promising call.**
+Closing out the "go through the remaining 9" backtest pass (plus `breakout.pine`'s own
+standalone adapter, added the same session) with a single verdict table and a fine-tuning plan
+for what survived, rather than leaving the result scattered across each strategy's own
+`STRATEGY-ANALYSIS.md` / changelog:
 
 | Strategy | Verdict | Why |
 |---|---|---|
 | `swing/momentum-rank/momentum-rank.pine` | **Promising — top priority** | 36.9% CAGR over 105 simulated months, +10.7%/yr alpha over an equal-weight benchmark, Sharpe 1.43. Survives 7x realistic costs (+8.2%/yr floor) and every lookback/rebalance/portfolio-size sweep. Never traded live. |
 | `intraday/orb/orb.pine` | **Promising — marginal, execution-bound** | Two real bugs fixed (R:R had collapsed below 1.0; volume filter was inert). Honest live number is +33% over 186 trades, 62.7% win rate, but the edge flips negative past ~19 bps slippage against an ~11 bps break-even from statutory costs alone — slippage, not the signal, decides the sign. Only holds up at 1-2 concurrent slots; 3+ goes negative in testing. Fixes not yet compiled on TradingView. |
+| `intraday/orb/breakout.pine` (`BREAKOUT` tag) | Do not trade | Standalone adapter, full 212-symbol universe, 2016-2026: **zero of 212 symbols net profitable**, both IS and OOS negative (t = -62.84 / -49.62), and still a significant loser at zero trading cost (t = -5.69). Extends the 2026-08-30 finding (key-level breaks follow through 30.9% vs. a 33.3% random-walk baseline) across the full live filter stack. Currently live only as deliberate forward-data collection, not an expected edge. |
 | `intraday/ema9/ema9-intraday.pine` | Do not trade | All 6 tested variants (shipped script + 5 from the source PDF) lose money before costs. |
 | `intraday/ib-extension/ib-extension.pine` | Do not trade | Only 66/200 symbols profitable; the 1x-range target is mechanically unreachable most days given the stop size — a geometry problem, not a tunable parameter. |
 | `swing/dividend-growth/dividend-growth.pine` | Do not trade | The 76% win rate is manufactured — the strategy block only closes profitable positions, so real losses sit as unrealized "open trades" and never count against it. |
