@@ -216,6 +216,50 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-15)
+
+**BREAKINGTRADE-WATCHLIST's P&L is no longer double-counted against BREAKINGTRADE on a
+symbol both fired on the same day.** BREAKINGTRADE and BREAKINGTRADE-WATCHLIST collide by
+design (same scanner, same daily-changing universe — see `config.yaml`'s
+`duplicate_window_seconds` comment), and on 2026-09-15 both fired on LTM, SUPREMEIND and
+HDFCBANK within minutes of each other. The engine tracked these as two independent
+per-strategy P&L legs, but the broker/sandbox nets positions by (symbol, exchange, product)
+alone — `sandbox.position_manager.get_position_for_symbol()` has no strategy argument — so
+it was really ONE blended broker position the whole time. That mismatch between per-strategy
+engine accounting and per-symbol broker accounting produced the day's first-ever
+reconciliation-canary trigger (`reconcile.py`, built after the 2026-09-11 incident):
+engine -1,573.43 vs broker -1,127.04, a -446.39 gap. Fix: `tracker._dedupe_breakingtrade_overlap()`,
+applied in `_day_from_db()`, drops BREAKINGTRADE-WATCHLIST's leg for any symbol BREAKINGTRADE
+also traded that day before the day summary / per-strategy Telegram reports are built — a
+non-overlapping symbol is unaffected either way. Reporting-layer only: `reconcile.py`
+deliberately still reads the full, undeduped `trades.db` so the integrity canary keeps seeing
+every real close, and no order-placement behavior changed — the underlying broker-side netting
+(the deeper fix, which would change what orders get placed) is unresolved and matters before
+enabling the `-live` counterparts of both strategies together. Tests: `test_breakingtrade_overlap_dedup.py`.
+
+**Startup watchdog no longer kills and relaunches its own in-progress boot.** Postmortem for
+this morning's 5 failed OpenAlgo launches (09:50-10:20 IST, "operation was canceled by the
+user", engine didn't start until 10:27 — missing ORB's opening-range window entirely for the
+day): the Windows Task Scheduler watchdog fires every 5 minutes and used to unconditionally
+`taskkill` any old service window and run `openalgoctl.sh stop` before every relaunch, even
+when the previous attempt was merely still mid-boot (NTP wait + broker login legitimately
+takes 1-3 minutes) rather than dead — a self-inflicted kill/relaunch livelock. Fixed with a
+`flock`-based single-instance guard (`acquire_lock()` in `openalgoctl.sh`), now the sole
+authority on "is a start already in progress or running" for every entry point (watchdog,
+manual `openalgoctl.ps1` run, direct WSL invocation); `openalgoctl.ps1` no longer pre-emptively
+kills anything and detects an early window exit as a likely duplicate-start refusal instead of
+waiting out the full health-check timeout; `createTaskOpenAlgoScheduler.ps1`'s
+`ExecutionTimeLimit` raised 3m -> 10m so Task Scheduler itself doesn't hard-kill a legitimately
+slow boot (`MultipleInstancesPolicy=IgnoreNew` was already in place as a second layer). One gap
+closed in the same fix: the lock originally used `flock -n` (instant refusal) — `cmd_restart`
+kills the old run's app/signal PIDs and comes straight back to `acquire_lock`, but the OLD run
+process only notices its children died on its next 5s poll, then can spend up to another 10s in
+`cleanup()`'s shutdown-notification timeout before it actually exits and releases the flock. An
+instant refusal there would have made a plain `restart` fail as a spurious "duplicate" most of
+the time. Changed to a bounded `flock -w 20` (overridable via `LOCK_WAIT_SECS` for tests) —
+still refuses a genuine duplicate, just tolerates the old process's teardown window. Tests:
+`test_openalgoctl.sh`'s `acquire_lock` section (free / brief-hold / long-hold cases).
+
 ## Recent Changes (2026-09-14)
 
 **Backtest OOM fix: the full 11-strategy registry now runs to completion; a standalone
