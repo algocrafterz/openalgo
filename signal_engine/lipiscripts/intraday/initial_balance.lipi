@@ -76,7 +76,7 @@ extAmount = ibRange * extPercent / 100
 // ==== PLOT LEVELS ONLY DURING THE SESSION ====
 plot(inSession and not na(ibHigh) ? ibHigh : na, color=color.yellow, linewidth=1, title="IB High")
 plot(inSession and not na(ibLow) ? ibLow : na, color=color.yellow, linewidth=1, title="IB Low")
-plot(inSession and ibLocked and showMid == 1 ? ibMid : na, color=color.yellow, linewidth=1, title="IB Mid")
+plot(inSession and ibLocked and showMid == 1 ? ibMid : na, color=color.yellow, linewidth=1, style=plotStyle.cross, title="IB Mid")
 plot(inSession and ibLocked and showExt == 1 ? ibHigh + extAmount : na, color=color.yellow, linewidth=1, title="IB Upper Extension")
 plot(inSession and ibLocked and showExt == 1 ? ibLow - extAmount : na, color=color.yellow, linewidth=1, title="IB Lower Extension")
 
