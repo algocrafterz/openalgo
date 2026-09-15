@@ -213,7 +213,20 @@ barIsUp() {
 
 - 64 plot counts per script; `plot`, `plotshape`, `plotarrow`, `plotbar`,
   `plotcandle`, `plotchar`, `bgcolor` and series-color `fill` all consume them
-- 9,000 bars back, 500 bars forward
+- **`series[N]` (the `[]` history operator) hard-errors above N=500, for any
+  timeframe** - confirmed by an actual runtime error in this repo:
+  `Runtime error at index 0. The script is trying to access historical data
+  outside allowed range(525). The allowed range is 0 to 500.` This is a
+  separate, tighter limit than "9,000 bars back" below - that figure appears
+  to describe total bars a chart can load/display, not the max depth a
+  single `[]` reference may reach. Treat 500 as the real ceiling for any
+  `series[N]` literal until proven otherwise. Also confirmed: in
+  `cond ? volume[a] : volume[b]`, only the branch actually selected by `cond`
+  is evaluated at runtime - the unselected branch's out-of-range literal does
+  not error. Do not rely on this to smuggle a >500 literal into unused code;
+  it was only confirmed for this one construct.
+- 9,000 bars back (chart display/load, not `[]` depth - see above), 500 bars
+  forward
 - 80,000 compiled tokens; 1,000 variables per scope; 550 scopes total
 - 20s execution (basic) / 40s (paid); 500ms per loop per bar
 - 2-minute compile limit; three consecutive compile warnings trigger a 1-hour ban
