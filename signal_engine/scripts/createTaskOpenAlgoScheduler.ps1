@@ -142,7 +142,14 @@ $watchdogXml = @"
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>false</StartWhenAvailable>
-    <ExecutionTimeLimit>PT3M</ExecutionTimeLimit>
+    <!-- Was PT3M. A normal boot (network wait + NTP-sync wait for WSL2 clock
+         drift + broker login) can legitimately run past 3 minutes; hard-killing
+         it mid-boot just to retry 5 minutes later produced the exact
+         kill/relaunch churn this was meant to prevent. MultipleInstancesPolicy
+         below already stops overlapping watchdog runs, so a generous limit
+         here only guards against a truly wedged wsl.exe/powershell.exe, not
+         against pile-up. -->
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
     <Enabled>true</Enabled>
   </Settings>
   <Actions Context="Author">

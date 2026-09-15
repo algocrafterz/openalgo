@@ -2,11 +2,21 @@
 # OpenAlgo + Signal Engine — unified service controller.
 #
 # Usage:
-#   openalgoctl.sh start    — start in background, return after health check
+#   openalgoctl.sh start    — alias for 'run' (blocks in the foreground). For an
+#                             actual detached/background start, use the Windows
+#                             wrapper (openalgoctl.ps1 start), which launches this
+#                             in its own window and polls the health URL for you.
 #   openalgoctl.sh run      — start in foreground, block until exit (for Task Scheduler / systemd)
 #   openalgoctl.sh stop     — stop all services
 #   openalgoctl.sh restart  — stop then start
 #   openalgoctl.sh status   — show running state
+#
+# Single-instance guard: 'run'/'start' take an exclusive, non-blocking flock
+# (see acquire_lock()) before doing anything else. A second concurrent
+# start/run attempt — from any source: Task Scheduler, a manual ps1 run, or a
+# direct invocation of this script — is refused immediately with a logged
+# reason and a Telegram notification, instead of killing and replacing the
+# instance that's already up or mid-boot.
 
 set -euo pipefail
 
@@ -29,11 +39,58 @@ LOG_DIR="$PROJECT_DIR/signal_engine/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/openalgoctl.log"
 PID_FILE="$PROJECT_DIR/signal_engine/openalgo.pid"
+LOCK_FILE="$PROJECT_DIR/signal_engine/openalgo.lock"
 HEALTH_URL="http://127.0.0.1:5000/"
 MAX_WAIT=90
 NET_MAX_WAIT=120
+# Overridable so tests can exercise the "gives up eventually" path in under a
+# second instead of the real 20s. See acquire_lock() for why 20s.
+LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-20}"
 
 log() { echo "[openalgoctl] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+# --- Single-instance guard ---
+#
+# There are multiple independent entry points that can try to start this
+# stack: the Windows watchdog (every 5 min), a manual openalgoctl.ps1 run,
+# and a direct WSL invocation of this script. Before this flock, all of them
+# raced on "check health, then act" -- if a second entry point fired while
+# the first was still mid-boot (NTP wait, broker login, ~1-3 minutes), it
+# would see "not healthy yet" and kill + relaunch the first one. That
+# kill/relaunch churn is what looked messy in the logs on 2026-09-15.
+#
+# flock is race-free (atomic in the kernel) and self-cleaning: the lock is
+# tied to this process's file descriptor and is released automatically on
+# ANY exit -- normal, crash, or SIGKILL -- so unlike the PID file it can
+# never go stale. This is now the sole authority on "is a start already in
+# progress or running"; every entry point must go through it before touching
+# any process.
+acquire_lock() {
+    exec 9>"$LOCK_FILE"
+    # Bounded wait, not an instant refusal (flock -n). cmd_restart kills the old
+    # run's app/signal PIDs and comes straight back here -- but the OLD run
+    # process only notices its children died on its next 5s poll, then spends
+    # up to another 10s in cleanup()'s shutdown-notification timeout before it
+    # exits and the kernel releases its flock. An instant -n here would refuse
+    # a plain restart as a "duplicate" nearly every time. 20s covers that
+    # teardown with margin and still refuses a genuine duplicate (a start
+    # arriving while another instance is legitimately up or mid-boot) -- 20s
+    # is nowhere near enough for that instance to finish on its own.
+    if ! flock -w "$LOCK_WAIT_SECS" 9; then
+        log "=========================================="
+        log "REFUSED: another OpenAlgo start/run is already in progress or running"
+        log "(waited ${LOCK_WAIT_SECS}s for it to release the lock)."
+        log "Refusing to start a duplicate instance -- this prevents duplicate"
+        log "broker sessions, duplicate signal engines racing on the same"
+        log "orders, and port clashes on 5000/8765/5555."
+        log "Run '$0 status' to see what's running."
+        log "=========================================="
+        timeout 15 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
+            notify "startup" "Duplicate start attempt blocked. OpenAlgo is already running or starting elsewhere -- refusing to start a second instance." \
+            >/dev/null 2>&1 || log "Duplicate-start alert could not be sent (non-fatal)"
+        exit 2
+    fi
+}
 
 # --- Log rotation (5MB cap, one compressed generation kept) ---
 rotate_log() {
@@ -306,6 +363,14 @@ cmd_start() {
 }
 
 cmd_run() {
+    rotate_log
+    exec > >(tee -a "$LOG_FILE") 2>&1
+
+    # Acquire the single-instance lock FIRST, before touching anything else,
+    # so a duplicate attempt is rejected before it can observe (or disturb)
+    # any state belonging to the instance that already holds it.
+    acquire_lock
+
     if is_running; then
         log "RUN SKIPPED: OpenAlgo already running"
         get_pids
@@ -317,9 +382,6 @@ cmd_run() {
     log "=========================================="
     log "Starting OpenAlgo (foreground)"
     log "=========================================="
-    rotate_log
-
-    exec > >(tee -a "$LOG_FILE") 2>&1
 
     _STOP_REASON="scheduled"
     _CLEANUP_DONE=false

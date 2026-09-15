@@ -178,23 +178,27 @@ function Invoke-Start {
     }
     catch {}
 
-    # Kill old service window if it exists.
-    # Note: with $ErrorActionPreference = "Stop" + $PSNativeCommandUseErrorActionPreference,
-    # a missing PID makes taskkill throw a terminating exception. Probe first, swallow last.
+    # NOTE: this used to unconditionally taskkill any old service window and
+    # call 'openalgoctl.sh stop' here before every relaunch — on every
+    # watchdog tick, whether or not the existing instance was actually dead.
+    # If a previous start was merely slow (NTP wait, broker login — can run
+    # 1-3 minutes) rather than dead, this killed a perfectly good in-progress
+    # boot and relaunched it, which is exactly the kill/relaunch churn that
+    # made overlapping starts messy (see 2026-09-15 postmortem in
+    # openalgoctl.log). The health check above already skips cleanly when
+    # truly up. For every other case, openalgoctl.sh's own flock-based lock
+    # (acquire_lock() in openalgoctl.sh) is now the single source of truth:
+    # if a start/run is already in flight anywhere — this window, a stale
+    # window, or a direct WSL invocation — the shell script refuses the
+    # duplicate itself, logs why, and notifies via Telegram. Nothing here
+    # needs to kill anything pre-emptively anymore.
     if (Test-Path $servicePidFile) {
         $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue
-        if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-            Write-Log "Killing old service window (PID $oldPid)..."
-            try { & taskkill /T /F /PID $oldPid 2>&1 | Out-Null } catch { Write-Log "taskkill ignored: $($_.Exception.Message)" }
+        if (-not ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue))) {
+            # Stale reference to a window that's already gone — just clean up the file.
+            Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
         }
-        Remove-Item $servicePidFile -Force -ErrorAction SilentlyContinue
     }
-
-    # Stop services inside WSL
-    Write-Log "Cleaning up stale state..."
-    $ErrorActionPreference = "Continue"
-    & $wsl -d $distro -- bash -lc "cd $workdir && $ctlScript stop" 2>&1 | Out-Null
-    Start-Sleep -Seconds 2
 
     Write-Log "Launching OpenAlgo in minimized window (openalgoctl.sh run)..."
 
@@ -232,6 +236,18 @@ title OpenAlgo Service
             }
         }
         catch {}
+
+        # The window's cmd.exe waits on wsl.exe and only exits once
+        # openalgoctl.sh exits — so an early exit here almost always means
+        # the single-instance lock refused this as a duplicate (see
+        # acquire_lock() in openalgoctl.sh) rather than a genuinely slow
+        # boot. Stop polling and point at the real reason instead of waiting
+        # out the rest of $maxWait for nothing.
+        if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) {
+            Write-Log "START ABORTED: service window exited before health check passed — see openalgoctl.log for the reason (likely a duplicate-start refusal)."
+            Write-Host "Start did not complete — window exited early. Check signal_engine/logs/openalgoctl.log for the reason." -ForegroundColor Red
+            exit 1
+        }
 
         Write-Host "  Waiting... ($elapsed`s)" -ForegroundColor Gray
     }

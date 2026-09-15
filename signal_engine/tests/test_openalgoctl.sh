@@ -61,6 +61,38 @@ check "expired cooldown self-clears" "$([ -f "$AUTH_COOLDOWN_FILE" ] && echo pre
 # A blip must not cost the trading day: worst case before retry is well under a session.
 check "max cooldown < NSE session (6.25h)" "$(( $(cooldown_secs_for 99) < 22500 ))" "1"
 
+echo "acquire_lock: single-instance guard (regression guard for the 2026-09-15"
+echo "kill/relaunch churn, and for cmd_restart racing the old run's teardown)"
+
+# LOCK_WAIT_SECS overrides the real 20s so these run in a few seconds, not 20+.
+_try_acquire() {
+    # Subshell: acquire_lock() calls `exit 2` on refusal, which must not kill
+    # the test runner. "acquired" only prints if acquire_lock() returned.
+    ( LOCK_FILE="$1" LOCK_WAIT_SECS="$2" UV_BIN="/bin/true" acquire_lock \
+        && echo acquired ) 2>/dev/null
+}
+
+check "free lock is acquired immediately" \
+    "$(_try_acquire "$TMP/lock_free" 1)" "acquired"
+
+# Held briefly by another process, released well inside the wait window.
+lock_brief="$TMP/lock_brief"
+( exec 8>"$lock_brief"; flock 8; sleep 1 ) &
+holder=$!
+sleep 0.2  # let the holder actually acquire before we contend for it
+check "waits out a brief hold and then acquires" \
+    "$(_try_acquire "$lock_brief" 3)" "acquired"
+wait "$holder" 2>/dev/null
+
+# Still held after the wait window elapses -> refused, not an infinite hang.
+lock_long="$TMP/lock_long"
+( exec 8>"$lock_long"; flock 8; sleep 3 ) &
+holder=$!
+sleep 0.2
+check "gives up and refuses when still held after the wait" \
+    "$(_try_acquire "$lock_long" 1)" ""
+wait "$holder" 2>/dev/null
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
