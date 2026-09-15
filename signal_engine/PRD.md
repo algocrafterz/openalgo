@@ -260,6 +260,33 @@ the time. Changed to a bounded `flock -w 20` (overridable via `LOCK_WAIT_SECS` f
 still refuses a genuine duplicate, just tolerates the old process's teardown window. Tests:
 `test_openalgoctl.sh`'s `acquire_lock` section (free / brief-hold / long-hold cases).
 
+**Backtest roundup across all 9 candidate strategies — final promising/not-promising call.**
+Closing out the "go through the remaining 9" backtest pass with a single verdict table and a
+fine-tuning plan for what survived, rather than leaving the result scattered across each
+strategy's own `STRATEGY-ANALYSIS.md`:
+
+| Strategy | Verdict | Why |
+|---|---|---|
+| `swing/momentum-rank/momentum-rank.pine` | **Promising — top priority** | 36.9% CAGR over 105 simulated months, +10.7%/yr alpha over an equal-weight benchmark, Sharpe 1.43. Survives 7x realistic costs (+8.2%/yr floor) and every lookback/rebalance/portfolio-size sweep. Never traded live. |
+| `intraday/orb/orb.pine` | **Promising — marginal, execution-bound** | Two real bugs fixed (R:R had collapsed below 1.0; volume filter was inert). Honest live number is +33% over 186 trades, 62.7% win rate, but the edge flips negative past ~19 bps slippage against an ~11 bps break-even from statutory costs alone — slippage, not the signal, decides the sign. Only holds up at 1-2 concurrent slots; 3+ goes negative in testing. Fixes not yet compiled on TradingView. |
+| `intraday/ema9/ema9-intraday.pine` | Do not trade | All 6 tested variants (shipped script + 5 from the source PDF) lose money before costs. |
+| `intraday/ib-extension/ib-extension.pine` | Do not trade | Only 66/200 symbols profitable; the 1x-range target is mechanically unreachable most days given the stop size — a geometry problem, not a tunable parameter. |
+| `swing/dividend-growth/dividend-growth.pine` | Do not trade | The 76% win rate is manufactured — the strategy block only closes profitable positions, so real losses sit as unrealized "open trades" and never count against it. |
+| `swing/gap-rsi` ("1:10 R:R" video) | Not shipped, no edge | Short side robustly negative (0 of 11 years positive). Long side is a coin flip, statistically indistinguishable from zero (95% CI crosses zero). No `.pine` file was written. |
+| `swing/ema-pullback` | Not yet tested | Script exists; needs 10 years of split-adjusted Historify data pulled before `backtest ema_pullback --full` can run. |
+| `intraday/volume-profile` | Not yet tested | Still in design/validation phase — footprint-reconstruction accuracy study has to land first; no `.pine` strategy file yet. |
+
+Fine-tuning plan for the two promising ones:
+1. **`momentum-rank`** — compile on TradingView (untested there), re-run the robustness sweep
+   specifically on the shipped 8-of-40 config (the strong numbers above are mostly from the
+   larger 30-of-201 test), then paper-trade one full rebalance cycle before funding. Open risk
+   to decide on explicitly: no crash protection (-29.4% in Feb-Mar 2020, in line with the
+   universe) — decide whether a market-regime override belongs in v1 before scaling size.
+2. **`orb`** — compile the R:R/volume-filter fixes on TradingView, then attack slippage
+   directly (limit vs. market fills on entry/exit) using the same method as the
+   `intraday-slippage-analysis` learned pattern. Keep position sizing capped at 1-2 concurrent
+   slots until live data confirms the backtest edge past that limit.
+
 ## Recent Changes (2026-09-14)
 
 **Backtest OOM fix: the full 11-strategy registry now runs to completion; a standalone
