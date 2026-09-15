@@ -45,6 +45,10 @@ checkpoint.txt
 checkpoints.json
 log/ws_proxy_stats.json
 log/test/
+# Dateext-rotated logs (e.g. openalgo_2026-09-10.log.2026-09-10): the *.log rule
+# above only matches files ENDING in .log, so a rotation suffix appended after
+# .log slips through as permanent untracked noise.
+log/*.log.*
 
 
 # Strategy encryption key
@@ -52,6 +56,9 @@ db/strategy_encryption.key
 
 # DB backup files (created by upgrade/rotate_pepper.py and other migrations)
 db/backups/
+# Ad-hoc manual DB snapshots (e.g. sandbox.db.bak-20260911-160450) taken before
+# a risky operation. Left on disk for the operator, never committed.
+db/*.bak*
 
 # CSV Files (except specific data files)
 *.csv
@@ -106,6 +113,9 @@ signal_engine/logs/
 signal_engine/*.pid
 signal_engine/*.lock
 signal_engine/*.session
+# openalgoctl.ps1's Invoke-Start writes this batch launcher at runtime to work
+# around Start-Process argument quoting - it is not source.
+signal_engine/scripts/openalgo-run.bat
 
 # PineScript run artifacts: TradingView Strategy-Tester exports and chart
 # screenshots are regenerated per run, not source. They were showing up in
