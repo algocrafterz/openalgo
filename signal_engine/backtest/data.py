@@ -173,6 +173,12 @@ def sessions(frames: dict[str, pd.DataFrame]) -> list:
 #: Where the Historify DuckDB lives, relative to the repo root.
 HISTORIFY_DB = Path(os.environ.get("HISTORIFY_DB", "db/historify.duckdb"))
 
+#: historify.duckdb is 8GB+; DuckDB otherwise defaults to ~80% of detected RAM and
+#: all CPU cores for its buffer pool, which is enough to OOM-crash a WSL VM sized
+#: for the whole dev environment (browser, editor, other processes) when a backtest
+#: script pulls the full universe. Cap it explicitly instead.
+_DUCKDB_CONFIG = {"memory_limit": "4GB", "threads": "4"}
+
 #: NSE continuous session. Bars outside this are broker-feed artefacts (pre-open
 #: crossings, post-close corrections, and in one case a whole second download made
 #: against a different timezone) and are dropped rather than traded.
@@ -203,7 +209,7 @@ def _freq(interval: str) -> str:
 def historify_symbols(interval: str = "1m", db_path=None) -> list[str]:
     """Symbols the local store actually holds at this interval, longest history first."""
     import duckdb
-    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True)
+    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
     try:
         return [r[0] for r in con.execute(
             "SELECT symbol FROM market_data WHERE interval = ? "
@@ -276,7 +282,7 @@ def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
     """
     import duckdb
 
-    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True)
+    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
     try:
         symbols = symbols or historify_symbols("1m", db_path)
         out: dict[str, pd.DataFrame] = {}
@@ -391,7 +397,7 @@ def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int =
     """
     import duckdb
 
-    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True)
+    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
     try:
         symbols = symbols or historify_symbols("D", db_path)
         out: dict[str, pd.DataFrame] = {}

@@ -72,7 +72,14 @@ def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
         try:
             import duckdb
 
-            conn = duckdb.connect(db_path)
+            # historify.duckdb is 8GB+; DuckDB otherwise defaults to ~80% of detected
+            # RAM and all CPU cores for its buffer pool, which inside the single
+            # gunicorn worker this connection runs in can starve the rest of the app
+            # and OOM-crash the whole process. Cap it well below the WSL VM budget
+            # (19GB as of 2026-09-15 — raise this if the WSL memory allocation grows
+            # further, but keep it well under total so the rest of the app, the
+            # broker feed, and signal_engine (a separate process) all have headroom).
+            conn = duckdb.connect(db_path, config={"memory_limit": "6GB", "threads": "2"})
             break
         except Exception as e:
             last_error = e
