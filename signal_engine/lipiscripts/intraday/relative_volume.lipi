@@ -1,0 +1,232 @@
+indicator("Volume + Same-Time-of-Day RVOL", overlay=false)
+
+// One script for both 5m and 15m (see `chartTF` input) - a separate
+// relative_volume_15m.lipi existed briefly for a deeper 15m-only lookback,
+// but that headroom (up to 20 sessions) is folded into this script too, so
+// there is now only this one file. Draws the volume bars itself (histogram)
+// plus RVOL (current bar's volume / same-time-of-day average) plotted
+// directly on the bars via bar color, on a 5-tier scale so relative volume
+// is evident at a glance without reading numbers:
+//   < 1.0x        - below average    - blue  (baseline)
+//   1.0x - 1.5x   - normal-to-mild   - green
+//   1.5x - 2.0x   - meaningfully elevated - yellow  (+ yellow triangle, "1.5x")
+//   2.0x - 3.0x   - strong spike     - orange  (+ orange triangle, "2x")
+//   3.0x+         - exceptional      - red     (+ red triangle, "3x+")
+// Markers are only drawn from 1.5x up - a marker on every >1.0x bar (roughly
+// half of all bars, by definition) would clutter the chart; the bar color
+// alone carries the 1.0x-1.5x signal. Say so if you want markers there too.
+//
+// CONFIRMED BY COMPILE (not just documented):
+// - color.rgb(74, 144, 226) as a literal RGB color.
+// - plotshape() inside this overlay=false pane, location=abovebar
+//   positioning correctly relative to this pane's own bars.
+// - Chained ternaries for tier color, matching the pattern already used in
+//   candlestick_patterns.lipi and initiative_drive_detector.lipi.
+// - A ternary branch resolving to a static na variable (naFloat below),
+//   used to safely skip an out-of-range history index on one branch only.
+//
+// The average line itself never mixes different times of day together. The
+// 09:15 bar's average only ever comes from previous sessions' 09:15 bars, the
+// 09:30 bar's average only from previous 09:30 bars, and so on for every
+// slot. A plain SMA on a 15m chart blends yesterday's late-session volume
+// into the first 1-2 hours of today; this line does not, from the very first
+// candle.
+//
+// ==== HOW: FIXED BAR-COUNT OFFSETS, NOT CALENDAR LOOKUP ====
+// LipiScript has no loops, arrays or maps, and its only proven history
+// operator is `series[N]` with N a literal integer. There is no verified way
+// to read the chart's active timeframe at runtime (`interval.multiplier` is
+// docs-only, unconfirmed) - so the offsets below cannot self-detect the
+// timeframe. Instead, BOTH the 5m and 15m offset sets are computed as
+// literals every bar, and a `chartTF` input picks which set feeds the
+// average. Set it to match whatever timeframe the chart is actually on; the
+// script cannot verify this for you. Confirmed by a compile: only the
+// branch `chartTF` actually selects gets evaluated at runtime - the other
+// branch's literal is not touched that bar.
+//
+// NSE session 09:15-15:30 is 375 minutes -> 25 bars at 15m, 75 bars at 5m.
+// 1 session ago = volume[25] (15m) / volume[75] (5m), 2 sessions ago =
+// volume[50] / volume[150], and so on.
+//
+// ==== LOOKBACK: 1-20 ON 15m, AUTO-CAPPED TO 6 ON 5m - ONE SHARED INPUT ====
+// A confirmed, hard platform limit: `series[N]` errors above N=500, for any
+// timeframe -
+//   Runtime error at index 0. The script is trying to access historical
+//   data outside allowed range(525). The allowed range is 0 to 500.
+// At 25 bars/session (15m), 20 sessions back is volume[500] - exactly at
+// the limit, safe. At 75 bars/session (5m), even 7 sessions needs
+// volume[525] - already over. So slots 7-20 (`v7`..`v20` below) resolve to a
+// proper `na` on the 5m branch instead of an out-of-range literal:
+//   v7 = chartTF == 1 ? naFloat : volume[175]
+//   ... same pattern through v20 = chartTF == 1 ? naFloat : volume[500]
+// `na(vK)` is then always true for those slots when chartTF=1, so the
+// existing sum/count gating (same pattern as every other slot) automatically
+// excludes them - no crash, no silently wrong number. Net effect: one
+// `lookbackSessions` input drives both timeframes; 15m can use the value you
+// set up to 20, 5m silently uses min(lookbackSessions, 6) - the most it can
+// ever safely reach.
+//
+// Default is 7 sessions (~1.5 trading weeks): close enough to the current
+// volume regime to catch a genuine shift (news, index inclusion, a new
+// range) without a month-old baseline diluting it, while still averaging
+// enough sessions per slot to not be pure noise. This also means the 5m
+// branch runs at its safe maximum of 6 by default - useful because 5m bars
+// are noisier per slot than 15m ones (a single block trade can dominate one
+// 5-min interval), so averaging over more sessions helps tell a genuine
+// spike from one-off noise before calling it "institutional interest".
+// Raise `lookbackSessions` toward 20 for a smoother, slower-to-react 15m
+// baseline if you trade the same symbol every day; it has no further effect
+// on 5m past 6.
+//
+// ==== THE LOAD-BEARING ASSUMPTION - READ THIS ====
+// Only correct if every session in the lookback produced EXACTLY the
+// expected bar count for the selected timeframe, back to back, no gaps. A
+// half day (Muhurat trading), a missing candle, a feed outage, or a symbol
+// with less than `lookbackSessions` of history will silently shift the
+// "same slot" alignment - no error, just a wrong slot compared as if it
+// were right. Nothing inside the script can detect this (no syminfo, no
+// session-boundary object). This also covers any pre-open auction or
+// post-close bar the feed might insert outside 09:15-15:30 - if the raw
+// series has bars beyond the regular session, every offset below silently
+// shifts by that many extra bars per day.
+//
+// This pane (overlay=false) draws its own volume bars below, so it replaces
+// the built-in Volume study rather than needing to be merged onto it.
+
+// ==== SESSION INPUTS (GATING ONLY - DOES NOT AFFECT THE OFFSETS ABOVE) ====
+sessionStartHour = input.int(9, "Session Start Hour")
+sessionStartMin = input.int(15, "Session Start Minute")
+sessionEndHour = input.int(15, "Session End Hour")
+sessionEndMin = input.int(30, "Session End Minute")
+stampMode = input.int(0, "Bar Timestamp (0=open time, 1=close time)")
+chartTF = input.int(0, "Chart Timeframe (0=15m, 1=5m)")
+lookbackSessions = input.int(7, "Lookback Sessions (1-20 on 15m; auto-capped to 6 on 5m)")
+
+// ==== SESSION BOUNDS ====
+minuteOfDay = hour * 60 + minute
+sessionOpen = sessionStartHour * 60 + sessionStartMin
+sessionClose = sessionEndHour * 60 + sessionEndMin
+
+// An open-stamped bar printed at the close minute belongs to the next session
+// slot; a close-stamped feed shifts both comparisons by one bar.
+inSession = stampMode == 1 ? minuteOfDay > sessionOpen and minuteOfDay <= sessionClose : minuteOfDay >= sessionOpen and minuteOfDay < sessionClose
+
+// A float-typed zero, so int literals never sit opposite a float in a
+// ternary (see initiative_drive_detector.lipi for why that matters here).
+zeroF = high - high
+static float naFloat = na
+
+// ==== SAME-SLOT VOLUME, 1 TO 20 SESSIONS BACK, BOTH TIMEFRAMES ====
+// 15m: 25 bars/session, safe through k=20 (volume[500], the confirmed
+// limit). 5m: 75 bars/session, only safe through k=6 (volume[450]) - k=7
+// onward would exceed the 500-bar series[] limit, so those branches are
+// na (see header note) and get excluded from the sum automatically.
+v1 = chartTF == 1 ? volume[75] : volume[25]
+v2 = chartTF == 1 ? volume[150] : volume[50]
+v3 = chartTF == 1 ? volume[225] : volume[75]
+v4 = chartTF == 1 ? volume[300] : volume[100]
+v5 = chartTF == 1 ? volume[375] : volume[125]
+v6 = chartTF == 1 ? volume[450] : volume[150]
+v7 = chartTF == 1 ? naFloat : volume[175]
+v8 = chartTF == 1 ? naFloat : volume[200]
+v9 = chartTF == 1 ? naFloat : volume[225]
+v10 = chartTF == 1 ? naFloat : volume[250]
+v11 = chartTF == 1 ? naFloat : volume[275]
+v12 = chartTF == 1 ? naFloat : volume[300]
+v13 = chartTF == 1 ? naFloat : volume[325]
+v14 = chartTF == 1 ? naFloat : volume[350]
+v15 = chartTF == 1 ? naFloat : volume[375]
+v16 = chartTF == 1 ? naFloat : volume[400]
+v17 = chartTF == 1 ? naFloat : volume[425]
+v18 = chartTF == 1 ? naFloat : volume[450]
+v19 = chartTF == 1 ? naFloat : volume[475]
+v20 = chartTF == 1 ? naFloat : volume[500]
+
+// ==== RUNNING SUM AND COUNT, GATED BY lookbackSessions ====
+// A slot only contributes once its k is within the chosen lookback AND it
+// has real history (not na). v7-v20 are automatically excluded on 5m.
+use1 = 1 <= lookbackSessions
+use2 = 2 <= lookbackSessions
+use3 = 3 <= lookbackSessions
+use4 = 4 <= lookbackSessions
+use5 = 5 <= lookbackSessions
+use6 = 6 <= lookbackSessions
+use7 = 7 <= lookbackSessions
+use8 = 8 <= lookbackSessions
+use9 = 9 <= lookbackSessions
+use10 = 10 <= lookbackSessions
+use11 = 11 <= lookbackSessions
+use12 = 12 <= lookbackSessions
+use13 = 13 <= lookbackSessions
+use14 = 14 <= lookbackSessions
+use15 = 15 <= lookbackSessions
+use16 = 16 <= lookbackSessions
+use17 = 17 <= lookbackSessions
+use18 = 18 <= lookbackSessions
+use19 = 19 <= lookbackSessions
+use20 = 20 <= lookbackSessions
+
+sum1 = use1 and not na(v1) ? v1 : zeroF
+sum2 = sum1 + (use2 and not na(v2) ? v2 : zeroF)
+sum3 = sum2 + (use3 and not na(v3) ? v3 : zeroF)
+sum4 = sum3 + (use4 and not na(v4) ? v4 : zeroF)
+sum5 = sum4 + (use5 and not na(v5) ? v5 : zeroF)
+sum6 = sum5 + (use6 and not na(v6) ? v6 : zeroF)
+sum7 = sum6 + (use7 and not na(v7) ? v7 : zeroF)
+sum8 = sum7 + (use8 and not na(v8) ? v8 : zeroF)
+sum9 = sum8 + (use9 and not na(v9) ? v9 : zeroF)
+sum10 = sum9 + (use10 and not na(v10) ? v10 : zeroF)
+sum11 = sum10 + (use11 and not na(v11) ? v11 : zeroF)
+sum12 = sum11 + (use12 and not na(v12) ? v12 : zeroF)
+sum13 = sum12 + (use13 and not na(v13) ? v13 : zeroF)
+sum14 = sum13 + (use14 and not na(v14) ? v14 : zeroF)
+sum15 = sum14 + (use15 and not na(v15) ? v15 : zeroF)
+sum16 = sum15 + (use16 and not na(v16) ? v16 : zeroF)
+sum17 = sum16 + (use17 and not na(v17) ? v17 : zeroF)
+sum18 = sum17 + (use18 and not na(v18) ? v18 : zeroF)
+sum19 = sum18 + (use19 and not na(v19) ? v19 : zeroF)
+sum20 = sum19 + (use20 and not na(v20) ? v20 : zeroF)
+
+count1 = use1 and not na(v1) ? 1 : 0
+count2 = count1 + (use2 and not na(v2) ? 1 : 0)
+count3 = count2 + (use3 and not na(v3) ? 1 : 0)
+count4 = count3 + (use4 and not na(v4) ? 1 : 0)
+count5 = count4 + (use5 and not na(v5) ? 1 : 0)
+count6 = count5 + (use6 and not na(v6) ? 1 : 0)
+count7 = count6 + (use7 and not na(v7) ? 1 : 0)
+count8 = count7 + (use8 and not na(v8) ? 1 : 0)
+count9 = count8 + (use9 and not na(v9) ? 1 : 0)
+count10 = count9 + (use10 and not na(v10) ? 1 : 0)
+count11 = count10 + (use11 and not na(v11) ? 1 : 0)
+count12 = count11 + (use12 and not na(v12) ? 1 : 0)
+count13 = count12 + (use13 and not na(v13) ? 1 : 0)
+count14 = count13 + (use14 and not na(v14) ? 1 : 0)
+count15 = count14 + (use15 and not na(v15) ? 1 : 0)
+count16 = count15 + (use16 and not na(v16) ? 1 : 0)
+count17 = count16 + (use17 and not na(v17) ? 1 : 0)
+count18 = count17 + (use18 and not na(v18) ? 1 : 0)
+count19 = count18 + (use19 and not na(v19) ? 1 : 0)
+count20 = count19 + (use20 and not na(v20) ? 1 : 0)
+
+// ==== SAME-TIME-OF-DAY AVERAGE VOLUME ====
+avgVol = inSession and count20 > 0 ? sum20 / count20 : na
+
+// ==== RVOL: CURRENT VOLUME / SAME-TIME-OF-DAY AVERAGE ====
+rvol = inSession and not na(avgVol) and avgVol > zeroF ? volume / avgVol : na
+
+// ==== TIERED BAR COLOR - THIS IS RVOL PLOTTED DIRECTLY ON THE BARS ====
+barColor = (na(rvol) or rvol < 1.0) ? color.rgb(74, 144, 226) : (rvol >= 3.0 ? color.red : (rvol >= 2.0 ? color.orange : (rvol >= 1.5 ? color.yellow : color.green)))
+
+plot(inSession ? volume : na, style=plotStyle.histogram, color=barColor, title="Volume")
+
+plot(inSession and not na(avgVol) ? avgVol : na, color=color.yellow, linewidth=2, title="Volume SMA (Same Time-of-Day)")
+
+// ==== TIERED SPIKE MARKERS: DIFFERENTIATE BY HOW FAR ABOVE AVERAGE ====
+// Only from 1.5x up - see header note on why 1.0x-1.5x gets color only.
+rvolElevated = not na(rvol) and rvol >= 1.5 and rvol < 2.0
+rvolStrong = not na(rvol) and rvol >= 2.0 and rvol < 3.0
+rvolExceptional = not na(rvol) and rvol >= 3.0
+
+plotshape(rvolElevated, shape=shape.triangleup, location=location.abovebar, color=color.yellow, size=size.small, text="1.5x", title="RVOL Elevated (1.5x-2x)")
+plotshape(rvolStrong, shape=shape.triangleup, location=location.abovebar, color=color.orange, size=size.small, text="2x", title="RVOL Strong Spike (2x-3x)")
+plotshape(rvolExceptional, shape=shape.triangleup, location=location.abovebar, color=color.red, size=size.small, text="3x+", title="RVOL Exceptional (3x+)")
