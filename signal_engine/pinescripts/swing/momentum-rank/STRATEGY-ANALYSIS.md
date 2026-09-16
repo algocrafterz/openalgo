@@ -504,3 +504,70 @@ the live deployed copy `strategies/scripts/momentum_rank_strategy_20260916144143
 suite: 27/27 passing. Strategy remains **candidate, paper-tracked** — these fixes improve the
 integrity of what gets recommended, they do not constitute new evidence of an edge, and the
 split-adjustment gap above should be resolved before this is traded with meaningful size.
+
+---
+
+## 2026-09-16 (third follow-up) — Per-symbol score in the digest; pre-settlement data guard
+
+**1. Digest now shows each symbol's 12-1 momentum score, ranked best-first.** Buying all 12
+names equal-weight needs meaningful capital; a trader who can only fund a subset had no way
+to choose one over another before this change — every name looked identical in the digest.
+`_build_digest()` now takes a `scores` dict (the live `usable` scores computed in
+`run_once()`) and:
+
+- Sorts SELL/BUY/HOLD and the "Full basket" section best-score-first (missing scores sort
+  last, shown as `n/a` rather than silently omitted).
+- Adds a one-line prompt: `"Capital-constrained? Buy top-down by score, not all TOP_N
+  names."`
+- The "Full basket" section is now a numbered, score-ranked list instead of a flat
+  space-joined line, e.g. `1. RELIANCE  +61.0%` ... `4. TCS  +41.7%` — a trader funding only
+  half the book can stop at the midpoint of this list rather than guess.
+
+**Caveat carried into the digest implicitly, worth stating explicitly here:** the score is
+the *ranking* signal, not a return forecast or a risk-adjusted priority order. Buying only
+the top few by score is a real, different portfolio from "buy all 12 equal-weight" — it is
+MORE concentrated than anything in the "Backtest metrics" section above, which tested equal
+weight across the full `top_n`. Concentration was shown earlier in this document to buy
+return and volatility roughly in equal measure (see "Robustness" section, portfolio-size
+row) — partial-basket buying should expect a similar trade, not a free lunch.
+
+**2. Pre-settlement data guard — the actual point of "ensure upcoming data is filled as day
+progresses."** Traced the schedule end-to-end: `strategy_configs.json` had this strategy
+running **14:45-15:05 IST**, which is *before* NSE cash market close (15:30 IST). Every
+number in this document's "Backtest metrics" was computed from `from_historify_daily()`'s
+SETTLED daily closes — the live script's `client.history()` call had no equivalent
+guarantee. If the broker's daily-bar endpoint returns a live, still-forming candle for the
+current session when queried intraday (behavior not verified per-broker; this repo has no
+corporate-action-normalization layer either, see the split-adjustment gap above), the
+ranking would be computed off a price that could still move before the real close — not the
+"filled" data the backtest assumed.
+
+**Fixed two ways:**
+- **Code-level guard (the real fix, holds regardless of schedule):** `fetch_universe_closes()`
+  now takes `now_ist` and calls `_today_bar_is_incomplete(bar_date, now_ist)` per symbol —
+  true only when a symbol's last bar is dated *today* (IST) and now is before 15:30 IST + a
+  10-minute settle buffer. A matching bar is trimmed off that symbol's series before scoring,
+  so `momentum_score()` and `sessions_elapsed()` only ever see fully settled sessions, exactly
+  matching what the backtest assumed — independent of whatever the host schedule is set to,
+  now or later. Counted separately as `today_truncated`, NOT folded into `fetch_errors`: this
+  is expected, correct behavior on a pre-close run, not a data-quality problem, and the digest
+  says so via a distinct "Pre-settlement note" (only shown when `today_truncated > 0`) so it
+  is never confused with the "Data note" that flags real fetch failures/corruption.
+- **Schedule fix (removes the reason the guard fires every week):** moved
+  `strategy_configs.json`'s window for this strategy from 14:45-15:05 to **15:45-16:15 IST**
+  — 15 minutes past close, inside the code's own 10-minute settle buffer with room to spare,
+  so a normal run now uses genuinely same-day settled data instead of silently falling back to
+  yesterday's close every single week. `strategy_configs.json` is gitignored (user/deployment
+  state, not source) — this was edited directly, not through git.
+
+**Tests:** 10 new tests (`TestTodayBarIsIncomplete`, three new `TestFetchUniverseCloses`
+cases, `TestBuildDigest` score/ranking/pre-settlement cases). Full suite: **37/37 passing**.
+
+### Status
+
+All fixes shipped to `strategies/examples/momentum_rank_strategy.py` (source),
+`strategies/scripts/momentum_rank_strategy_20260916144143.py` (live deployed copy, kept in
+sync), and `strategies/strategy_configs.json` (schedule). Strategy remains **candidate,
+paper-tracked**. These are data-integrity and usability fixes to the recommendation pipeline,
+not new evidence of an edge — the split-adjustment gap from the prior entry is still open and
+remains the top item before sizing this up.

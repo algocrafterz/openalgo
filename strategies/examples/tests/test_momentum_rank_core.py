@@ -10,7 +10,7 @@ Run: uv run pytest strategies/examples/tests/ -v
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -127,11 +127,32 @@ class TestBuildDigest:
             days, target=["A", "B", "C"], sells=["X"], buys=["C"],
             rebalance_number=3)
         assert "REBALANCE #3" in digest
-        assert "SELL (1): X" in digest
-        assert "BUY  (1): C" in digest
-        assert "HOLD, no action (2): A B" in digest
-        assert "Full basket (3 names, ~8.3% each): A B C" in digest
+        assert "SELL (1): X (n/a)" in digest
+        assert "BUY  (1): C (n/a)" in digest
+        assert "HOLD, no action (2): A (n/a) B (n/a)" in digest
+        assert "Full basket, ranked by score (3 names" in digest
         assert "DIGEST ONLY" in digest
+
+    def test_scores_shown_and_ranked_best_first(self):
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(
+            days, target=["LOW", "HIGH", "MID"], sells=[],
+            buys=["LOW", "HIGH", "MID"], rebalance_number=1,
+            scores={"LOW": 0.05, "HIGH": 0.80, "MID": 0.30})
+        assert "HIGH (+80.0%)" in digest
+        assert "MID (+30.0%)" in digest
+        assert "LOW (+5.0%)" in digest
+        # Ranked list must be ordered best-score-first: HIGH, MID, LOW.
+        assert digest.index("HIGH") < digest.index("MID") < digest.index("LOW")
+
+    def test_missing_score_shows_as_na_and_sorts_last(self):
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(
+            days, target=["HAVE", "MISSING"], sells=[],
+            buys=["HAVE", "MISSING"], rebalance_number=1,
+            scores={"HAVE": 0.10})
+        assert "MISSING (n/a)" in digest
+        assert digest.index("HAVE") < digest.index("MISSING")
 
     def test_next_rebalance_estimate_scales_with_rebal_days(self):
         # 10 calendar days spanning 9 sessions -> ~1.11 cal days/session;
@@ -180,6 +201,20 @@ class TestBuildDigest:
                                      universe_size=211)
         assert "Data note" not in digest
 
+    def test_today_truncated_surfaced_as_presettlement_note(self):
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(days, target=["A"], sells=[], buys=["A"],
+                                     rebalance_number=1, universe_size=211,
+                                     today_truncated=40)
+        assert "Pre-settlement note: 40/211" in digest
+
+    def test_no_today_truncated_omits_presettlement_note(self):
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(days, target=["A"], sells=[], buys=["A"],
+                                     rebalance_number=1, universe_size=211,
+                                     today_truncated=0)
+        assert "Pre-settlement note" not in digest
+
 
 class _FakeClient:
     """Stub for openalgo.api - returns canned DataFrames keyed by symbol."""
@@ -192,6 +227,10 @@ class _FakeClient:
 
 
 class TestFetchUniverseCloses:
+    # Fixed "now" well after every fixture's last bar date, so the
+    # today-bar-settlement guard never fires unless a test asks it to.
+    _FAR_FUTURE_NOW = datetime(2026, 6, 1, 12, 0, tzinfo=core.IST)
+
     def test_excludes_symbol_with_non_positive_close(self, monkeypatch):
         idx = pd.date_range("2026-01-01", periods=3)
         good = pd.DataFrame({"close": [10.0, 11.0, 12.0]}, index=idx)
@@ -199,11 +238,13 @@ class TestFetchUniverseCloses:
         monkeypatch.setattr(core, "UNIVERSE", ["GOOD", "BAD"])
         client = _FakeClient({"GOOD": good, "BAD": bad})
 
-        closes, days, last_price, errors = core.fetch_universe_closes(client)
+        closes, days, last_price, errors, truncated = core.fetch_universe_closes(
+            client, now_ist=self._FAR_FUTURE_NOW)
 
         assert "GOOD" in closes
         assert "BAD" not in closes
         assert errors == 1
+        assert truncated == 0
 
     def test_all_clean_data_reports_zero_errors(self, monkeypatch):
         idx = pd.date_range("2026-01-01", periods=3)
@@ -211,10 +252,74 @@ class TestFetchUniverseCloses:
         monkeypatch.setattr(core, "UNIVERSE", ["GOOD"])
         client = _FakeClient({"GOOD": good})
 
-        closes, days, last_price, errors = core.fetch_universe_closes(client)
+        closes, days, last_price, errors, truncated = core.fetch_universe_closes(
+            client, now_ist=self._FAR_FUTURE_NOW)
 
         assert "GOOD" in closes
         assert errors == 0
+        assert truncated == 0
+
+    def test_drops_still_forming_today_bar_before_settle_cutoff(self, monkeypatch):
+        # Last bar is "today" (2026-06-01) and now_ist is 14:45 IST - before
+        # the 15:30 NSE close + settle buffer - so it must be excluded.
+        idx = pd.date_range("2026-05-28", periods=3)  # ends 2026-05-30
+        idx = idx.append(pd.DatetimeIndex([pd.Timestamp("2026-06-01")]))
+        df = pd.DataFrame({"close": [10.0, 11.0, 12.0, 13.0]}, index=idx)
+        monkeypatch.setattr(core, "UNIVERSE", ["SYM"])
+        client = _FakeClient({"SYM": df})
+        pre_close = datetime(2026, 6, 1, 14, 45, tzinfo=core.IST)
+
+        closes, days, last_price, errors, truncated = core.fetch_universe_closes(
+            client, now_ist=pre_close)
+
+        assert closes["SYM"] == [10.0, 11.0, 12.0]  # today's 13.0 bar dropped
+        assert last_price["SYM"] == 12.0
+        assert date(2026, 6, 1) not in days
+        assert truncated == 1
+        assert errors == 0  # truncation is not a data-quality error
+
+    def test_keeps_today_bar_after_settle_cutoff(self, monkeypatch):
+        idx = pd.date_range("2026-05-28", periods=3)
+        idx = idx.append(pd.DatetimeIndex([pd.Timestamp("2026-06-01")]))
+        df = pd.DataFrame({"close": [10.0, 11.0, 12.0, 13.0]}, index=idx)
+        monkeypatch.setattr(core, "UNIVERSE", ["SYM"])
+        client = _FakeClient({"SYM": df})
+        post_close = datetime(2026, 6, 1, 15, 45, tzinfo=core.IST)
+
+        closes, days, last_price, errors, truncated = core.fetch_universe_closes(
+            client, now_ist=post_close)
+
+        assert closes["SYM"] == [10.0, 11.0, 12.0, 13.0]
+        assert truncated == 0
+
+    def test_keeps_yesterdays_bar_when_it_is_not_todays_date(self, monkeypatch):
+        # Last bar is 2026-05-30, "now" is 2026-06-01 - the bar is not dated
+        # today at all, so it must never be treated as unsettled.
+        idx = pd.date_range("2026-05-28", periods=3)  # ends 2026-05-30
+        df = pd.DataFrame({"close": [10.0, 11.0, 12.0]}, index=idx)
+        monkeypatch.setattr(core, "UNIVERSE", ["SYM"])
+        client = _FakeClient({"SYM": df})
+        now = datetime(2026, 6, 1, 9, 0, tzinfo=core.IST)
+
+        closes, days, last_price, errors, truncated = core.fetch_universe_closes(
+            client, now_ist=now)
+
+        assert closes["SYM"] == [10.0, 11.0, 12.0]
+        assert truncated == 0
+
+
+class TestTodayBarIsIncomplete:
+    def test_false_for_a_past_date(self):
+        now = datetime(2026, 6, 1, 10, 0, tzinfo=core.IST)
+        assert core._today_bar_is_incomplete(date(2026, 5, 30), now) is False
+
+    def test_true_before_close_plus_buffer(self):
+        now = datetime(2026, 6, 1, 15, 0, tzinfo=core.IST)
+        assert core._today_bar_is_incomplete(date(2026, 6, 1), now) is True
+
+    def test_false_after_close_plus_buffer(self):
+        now = datetime(2026, 6, 1, 15, 41, tzinfo=core.IST)
+        assert core._today_bar_is_incomplete(date(2026, 6, 1), now) is False
 
 
 class TestCleanBotToken:

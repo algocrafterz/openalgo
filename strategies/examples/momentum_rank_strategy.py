@@ -99,7 +99,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dt_time
 from pathlib import Path
 
 from openalgo import api
@@ -217,6 +218,31 @@ MIN_PRICE = 20.0
 # calendar days (~1.55x for weekends/holidays) plus slack.
 _CALENDAR_DAYS_BACK = int((LOOKBACK + SKIP + 40) * 1.55)
 
+# ---------------------------------------------------------------------------
+# Every backtest number in STRATEGY-ANALYSIS.md was produced from SETTLED
+# daily closes (signal_engine/backtest/data.py's from_historify_daily()).
+# NSE cash closes at 15:30 IST. If this script is ever run intraday (its own
+# host schedule cannot be seen from inside this file - see the module
+# docstring), a broker's "today" daily bar can be a live, still-forming
+# candle rather than the session's real close. Using it would silently feed
+# a materially different kind of price than the backtest assumed, so any
+# bar dated "today" (IST) is dropped until a buffer past close. This file
+# stays a single self-contained upload (see the module docstring), so IST is
+# redefined locally rather than imported from signal_engine/timeutils.py.
+# ---------------------------------------------------------------------------
+IST = timezone(timedelta(hours=5, minutes=30))
+_NSE_CLOSE_IST = dt_time(15, 30)
+_EOD_SETTLE_BUFFER_MIN = 10
+
+
+def _today_bar_is_incomplete(bar_date: date, now_ist: datetime) -> bool:
+    """True if `bar_date` is today (IST) and the session may not have settled yet."""
+    if bar_date != now_ist.date():
+        return False
+    cutoff = (datetime.combine(now_ist.date(), _NSE_CLOSE_IST, tzinfo=IST)
+              + timedelta(minutes=_EOD_SETTLE_BUFFER_MIN))
+    return now_ist < cutoff
+
 # How often this process's OWN while-loop rechecks, IF the /python host keeps
 # it running that long. In practice the host starts/stops this script on its
 # own schedule (see strategy_configs.json), currently a ~20 min weekly
@@ -328,20 +354,44 @@ def _send_telegram(text: str) -> bool:
         return False
 
 
+def _score_pct(scores: dict[str, float], sym: str) -> str:
+    v = scores.get(sym)
+    return f"{v * 100:+.1f}%" if v is not None else "n/a"
+
+
+def _ranked(symbols: list[str], scores: dict[str, float]) -> list[str]:
+    """`symbols` sorted best-score-first; unscored names sort last."""
+    return sorted(symbols,
+                  key=lambda s: (scores.get(s) is None, -(scores.get(s) or 0.0)))
+
+
+def _fmt_scored_list(symbols: list[str], scores: dict[str, float]) -> str:
+    ranked = _ranked(symbols, scores)
+    return " ".join(f"{s} ({_score_pct(scores, s)})" for s in ranked)
+
+
 def _build_digest(trading_days: list, target: list[str], sells: list[str],
                    buys: list[str], rebalance_number: int,
-                   fetch_errors: int = 0, universe_size: int = 0) -> str:
+                   fetch_errors: int = 0, universe_size: int = 0,
+                   scores: dict[str, float] | None = None,
+                   today_truncated: int = 0) -> str:
     """The full rotation notification: what to do, and when the next one is
     expected. `trading_days` is the full observed window (oldest -> newest),
     used both as the "as of" date and to estimate the next rebalance date
     from the actual calendar-days-per-session ratio in this data, since
     REBAL_DAYS counts trading sessions, not calendar days.
 
-    `fetch_errors`/`universe_size` surface data-quality gaps to the trader -
-    a rebalance built from a smaller-than-usual universe (broker outage, bad
-    ticks) is still valid, but the trader should know the ranking may be
-    missing names, not just see a clean-looking basket.
+    `scores` (symbol -> 12-1 momentum return) lets a capital-constrained
+    trader who can't buy all TOP_N names pick the strongest few instead of
+    an arbitrary subset - every list below is ranked best-score-first.
+
+    `fetch_errors`/`universe_size` surface real data-quality gaps (broker
+    outage, corrupt ticks) - the ranking may be missing eligible names.
+    `today_truncated` is a separate, non-alarming note: symbols whose
+    still-forming "today" bar was excluded because this ran before the
+    session settled - expected on a pre-close check, not a data problem.
     """
+    scores = scores or {}
     as_of = trading_days[-1]
     if len(trading_days) > 1:
         span_days = (trading_days[-1] - trading_days[0]).days
@@ -357,19 +407,25 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
         if sells or buys else
         "NO ACTION NEEDED: basket unchanged this rebalance"
     )
+    name_width = max((len(s) for s in target), default=0)
 
     lines = [
         f"MOMENTUM-RANK REBALANCE #{rebalance_number} - {as_of}",
         "=" * 44,
         action_line,
+        "Capital-constrained? Buy top-down by score, not all TOP_N names.",
         "",
-        f"SELL ({len(sells)}): " + (" ".join(sells) if sells else "none"),
-        f"BUY  ({len(buys)}): " + (" ".join(buys) if buys else "none"),
+        f"SELL ({len(sells)}): " + (_fmt_scored_list(sells, scores) if sells else "none"),
+        f"BUY  ({len(buys)}): " + (_fmt_scored_list(buys, scores) if buys else "none"),
         f"HOLD, no action ({len(held_unchanged)}): "
-        + (" ".join(held_unchanged) if held_unchanged else "none"),
+        + (_fmt_scored_list(held_unchanged, scores) if held_unchanged else "none"),
         "",
-        f"Full basket ({len(target)} names, ~{per_slot_pct:.1f}% each): "
-        + " ".join(target),
+        f"Full basket, ranked by score ({len(target)} names, "
+        f"~{per_slot_pct:.1f}% each if buying all):",
+    ] + [
+        f"  {i:>2}. {s.ljust(name_width)}  {_score_pct(scores, s)}"
+        for i, s in enumerate(_ranked(target, scores), 1)
+    ] + [
         "-" * 44,
         f"Cadence: rebalances every {REBAL_DAYS} trading sessions (~6 weeks)",
         "Next check: per this strategy's schedule (currently weekly, not "
@@ -384,6 +440,13 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
             "excluded this run (fetch failure or bad broker data) - the "
             "ranking above may be missing eligible names.",
         ]
+    if today_truncated:
+        lines += [
+            "-" * 44,
+            f"Pre-settlement note: {today_truncated}/{universe_size} symbols' "
+            "still-forming today bar was excluded - ranking uses each "
+            "symbol's last fully settled session, not a live/partial price.",
+        ]
     lines += [
         "-" * 44,
         "This is a DIGEST ONLY - no order has been placed automatically.",
@@ -394,23 +457,34 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
 
 
 def fetch_universe_closes(
-    client,
-) -> tuple[dict[str, list[float]], list, dict[str, float], int]:
+    client, now_ist: datetime | None = None,
+) -> tuple[dict[str, list[float]], list, dict[str, float], int, int]:
     """Daily closes for the full universe, oldest -> newest.
 
     Returns (closes_by_symbol, sorted_trading_days_observed, last_close_by_symbol,
-    error_count). `trading_days` is derived from what the broker feed actually
-    returned, not a separately-maintained calendar, so it can never drift from
-    live reality. `error_count` is symbols dropped this run (fetch failure,
-    broker error, or corrupt data) - surfaced in the digest so the trader knows
-    the ranking may be missing names.
+    error_count, today_truncated_count). `trading_days` is derived from what the
+    broker feed actually returned, not a separately-maintained calendar, so it
+    can never drift from live reality.
+
+    `error_count` is symbols DROPPED this run (fetch failure, broker error, or
+    corrupt data) - a real data-quality problem, surfaced as a "Data note" in
+    the digest. `today_truncated_count` is symbols whose still-forming "today"
+    bar was trimmed off, keeping the symbol itself - expected, correct
+    behaviour when this runs before the settle cutoff, NOT a data-quality
+    problem, so it is reported separately and must never be added to
+    `error_count` (doing so would make an ordinary intraday run look like a
+    broken-data run to the trader).
+
+    `now_ist` is injectable for tests; defaults to the real current time.
     """
+    now_ist = now_ist or datetime.now(IST)
     start = (datetime.now() - timedelta(days=_CALENDAR_DAYS_BACK)).strftime("%Y-%m-%d")
     end = datetime.now().strftime("%Y-%m-%d")
     closes: dict[str, list[float]] = {}
     last_price: dict[str, float] = {}
     trading_days: set = set()
     errors = 0
+    today_truncated = 0
     for sym in UNIVERSE:
         try:
             df = client.history(symbol=sym, exchange=EXCHANGE, interval="D",
@@ -443,14 +517,30 @@ def fetch_universe_closes(
                   f"excluding this run, likely bad broker/feed data")
             errors += 1
             continue
+        dates = [d.date() if hasattr(d, "date") else d for d in df.index]
+        if dates and _today_bar_is_incomplete(dates[-1], now_ist):
+            # The backtest that validated this strategy only ever used
+            # SETTLED closes. A bar dated today, fetched before 15:30 IST
+            # (+ settle buffer), may still be forming - drop it rather than
+            # rank off a price that can still move before the real close.
+            # Expected/correct, not a data-quality problem - counted
+            # separately from `errors`.
+            dates = dates[:-1]
+            close_col = close_col.iloc[:-1]
+            today_truncated += 1
+            if close_col.empty:
+                continue
         closes[sym] = close_col.tolist()
         last_price[sym] = float(close_col.iloc[-1])
-        trading_days.update(
-            d.date() if hasattr(d, "date") else d for d in df.index)
+        trading_days.update(dates)
     if errors:
-        print(f"[momentum-rank] {errors}/{len(UNIVERSE)} symbols failed to fetch - "
-              f"proceeding with the remaining {len(closes)}")
-    return closes, sorted(trading_days), last_price, errors
+        print(f"[momentum-rank] {errors}/{len(UNIVERSE)} symbols failed to fetch "
+              f"or had corrupt data - proceeding with the remaining {len(closes)}")
+    if today_truncated:
+        print(f"[momentum-rank] {today_truncated}/{len(UNIVERSE)} symbols had "
+              f"today's still-forming bar excluded (pre-settlement run) - "
+              f"ranking uses each symbol's last fully settled session")
+    return closes, sorted(trading_days), last_price, errors, today_truncated
 
 
 def run_once(dry_run: bool = False) -> None:
@@ -461,7 +551,8 @@ def run_once(dry_run: bool = False) -> None:
         if state["last_rebalance_date"] else None)
 
     client = api(api_key=API_KEY, host=HOST)
-    closes, trading_days, last_price, fetch_errors = fetch_universe_closes(client)
+    closes, trading_days, last_price, fetch_errors, today_truncated = (
+        fetch_universe_closes(client))
     if not trading_days:
         print("[momentum-rank] no data returned for any symbol - aborting this run")
         return
@@ -498,7 +589,8 @@ def run_once(dry_run: bool = False) -> None:
     rebalance_number = int(state.get("rebalance_count", 0)) + 1
 
     digest = _build_digest(trading_days, target, sells, buys, rebalance_number,
-                            fetch_errors, len(UNIVERSE))
+                            fetch_errors, len(UNIVERSE), scores=usable,
+                            today_truncated=today_truncated)
     print(digest)
 
     if dry_run:
