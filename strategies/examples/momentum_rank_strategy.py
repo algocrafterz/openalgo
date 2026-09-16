@@ -329,12 +329,18 @@ def _send_telegram(text: str) -> bool:
 
 
 def _build_digest(trading_days: list, target: list[str], sells: list[str],
-                   buys: list[str], rebalance_number: int) -> str:
+                   buys: list[str], rebalance_number: int,
+                   fetch_errors: int = 0, universe_size: int = 0) -> str:
     """The full rotation notification: what to do, and when the next one is
     expected. `trading_days` is the full observed window (oldest -> newest),
     used both as the "as of" date and to estimate the next rebalance date
     from the actual calendar-days-per-session ratio in this data, since
     REBAL_DAYS counts trading sessions, not calendar days.
+
+    `fetch_errors`/`universe_size` surface data-quality gaps to the trader -
+    a rebalance built from a smaller-than-usual universe (broker outage, bad
+    ticks) is still valid, but the trader should know the ranking may be
+    missing names, not just see a clean-looking basket.
     """
     as_of = trading_days[-1]
     if len(trading_days) > 1:
@@ -352,7 +358,7 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
         "NO ACTION NEEDED: basket unchanged this rebalance"
     )
 
-    return "\n".join([
+    lines = [
         f"MOMENTUM-RANK REBALANCE #{rebalance_number} - {as_of}",
         "=" * 44,
         action_line,
@@ -362,26 +368,42 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
         f"HOLD, no action ({len(held_unchanged)}): "
         + (" ".join(held_unchanged) if held_unchanged else "none"),
         "",
-        f"Full basket ({len(target)} names): " + " ".join(target),
+        f"Full basket ({len(target)} names, ~{per_slot_pct:.1f}% each): "
+        + " ".join(target),
         "-" * 44,
         f"Cadence: rebalances every {REBAL_DAYS} trading sessions (~6 weeks)",
         "Next check: per this strategy's schedule (currently weekly, not "
         "daily) - a check is not a rebalance, see below",
         f"Next rebalance expected: around {next_estimate} "
         "(estimate - depends on trading sessions elapsed, not the calendar)",
+    ]
+    if fetch_errors:
+        lines += [
+            "-" * 44,
+            f"Data note: {fetch_errors}/{universe_size} universe symbols "
+            "excluded this run (fetch failure or bad broker data) - the "
+            "ranking above may be missing eligible names.",
+        ]
+    lines += [
         "-" * 44,
         "This is a DIGEST ONLY - no order has been placed automatically.",
         "Status: candidate strategy, paper-tracked - see this strategy's "
         "STRATEGY-ANALYSIS.md before sizing up.",
-    ])
+    ]
+    return "\n".join(lines)
 
 
-def fetch_universe_closes(client) -> tuple[dict[str, list[float]], list, dict[str, float]]:
+def fetch_universe_closes(
+    client,
+) -> tuple[dict[str, list[float]], list, dict[str, float], int]:
     """Daily closes for the full universe, oldest -> newest.
 
-    Returns (closes_by_symbol, sorted_trading_days_observed, last_close_by_symbol).
-    `trading_days` is derived from what the broker feed actually returned, not
-    a separately-maintained calendar, so it can never drift from live reality.
+    Returns (closes_by_symbol, sorted_trading_days_observed, last_close_by_symbol,
+    error_count). `trading_days` is derived from what the broker feed actually
+    returned, not a separately-maintained calendar, so it can never drift from
+    live reality. `error_count` is symbols dropped this run (fetch failure,
+    broker error, or corrupt data) - surfaced in the digest so the trader knows
+    the ranking may be missing names.
     """
     start = (datetime.now() - timedelta(days=_CALENDAR_DAYS_BACK)).strftime("%Y-%m-%d")
     end = datetime.now().strftime("%Y-%m-%d")
@@ -410,14 +432,25 @@ def fetch_universe_closes(client) -> tuple[dict[str, list[float]], list, dict[st
         if df is None or df.empty or "close" not in df.columns:
             continue
         df = df.sort_index()
-        closes[sym] = df["close"].tolist()
-        last_price[sym] = float(df["close"].iloc[-1])
+        close_col = df["close"]
+        if (close_col <= 0).any():
+            # A non-positive close is broker/feed corruption, not a real price -
+            # dividing by it (or by it as the lookback anchor) would silently
+            # produce a nonsense momentum ratio that could rank a garbage
+            # symbol at the top. Drop the whole symbol for this run rather
+            # than trust a partially-corrupt series.
+            print(f"[momentum-rank] {sym}: non-positive close in history - "
+                  f"excluding this run, likely bad broker/feed data")
+            errors += 1
+            continue
+        closes[sym] = close_col.tolist()
+        last_price[sym] = float(close_col.iloc[-1])
         trading_days.update(
             d.date() if hasattr(d, "date") else d for d in df.index)
     if errors:
         print(f"[momentum-rank] {errors}/{len(UNIVERSE)} symbols failed to fetch - "
               f"proceeding with the remaining {len(closes)}")
-    return closes, sorted(trading_days), last_price
+    return closes, sorted(trading_days), last_price, errors
 
 
 def run_once(dry_run: bool = False) -> None:
@@ -428,7 +461,7 @@ def run_once(dry_run: bool = False) -> None:
         if state["last_rebalance_date"] else None)
 
     client = api(api_key=API_KEY, host=HOST)
-    closes, trading_days, last_price = fetch_universe_closes(client)
+    closes, trading_days, last_price, fetch_errors = fetch_universe_closes(client)
     if not trading_days:
         print("[momentum-rank] no data returned for any symbol - aborting this run")
         return
@@ -444,14 +477,28 @@ def run_once(dry_run: bool = False) -> None:
     if len(usable) < TOP_N:
         print(f"[momentum-rank] only {len(usable)} of {len(UNIVERSE)} names have "
               f"{LOOKBACK}+ sessions of history - skipping this rebalance, will "
-              f"retry tomorrow")
+              f"retry next check")
         return
 
     target = rank_universe(usable, last_price, TOP_N, MIN_PRICE)
+    # Mirrors portfolio.py's PortfolioBacktest.run(): only ever trade a FULL
+    # top_n basket. The backtest that validated this strategy never held a
+    # partial book, so a smaller live basket (e.g. because the min-price
+    # filter removed some of the score-eligible names) would silently run an
+    # untested, more-concentrated, partly-uninvested portfolio at the same
+    # per-slot weight. Skip and retry rather than ship that.
+    if len(target) < TOP_N:
+        print(f"[momentum-rank] only {len(target)} of {TOP_N} names pass the "
+              f"₹{MIN_PRICE:.0f} min-price filter this rebalance - skipping "
+              f"to avoid trading an under-tested partial basket, will retry "
+              f"next check")
+        return
+
     sells, buys = diff_basket(held, target)
     rebalance_number = int(state.get("rebalance_count", 0)) + 1
 
-    digest = _build_digest(trading_days, target, sells, buys, rebalance_number)
+    digest = _build_digest(trading_days, target, sells, buys, rebalance_number,
+                            fetch_errors, len(UNIVERSE))
     print(digest)
 
     if dry_run:

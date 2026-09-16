@@ -130,7 +130,7 @@ class TestBuildDigest:
         assert "SELL (1): X" in digest
         assert "BUY  (1): C" in digest
         assert "HOLD, no action (2): A B" in digest
-        assert "Full basket (3 names): A B C" in digest
+        assert "Full basket (3 names, ~8.3% each): A B C" in digest
         assert "DIGEST ONLY" in digest
 
     def test_next_rebalance_estimate_scales_with_rebal_days(self):
@@ -165,6 +165,56 @@ class TestBuildDigest:
                                      buys=["C"], rebalance_number=1)
         assert "ACTION REQUIRED" in digest
         assert "NO ACTION NEEDED" not in digest
+
+    def test_fetch_errors_surfaced_as_data_note(self):
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(days, target=["A"], sells=[], buys=["A"],
+                                     rebalance_number=1, fetch_errors=5,
+                                     universe_size=211)
+        assert "Data note: 5/211" in digest
+
+    def test_no_fetch_errors_omits_data_note(self):
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(days, target=["A"], sells=[], buys=["A"],
+                                     rebalance_number=1, fetch_errors=0,
+                                     universe_size=211)
+        assert "Data note" not in digest
+
+
+class _FakeClient:
+    """Stub for openalgo.api - returns canned DataFrames keyed by symbol."""
+
+    def __init__(self, frames: dict):
+        self._frames = frames
+
+    def history(self, symbol, exchange, interval, start_date, end_date):
+        return self._frames[symbol]
+
+
+class TestFetchUniverseCloses:
+    def test_excludes_symbol_with_non_positive_close(self, monkeypatch):
+        idx = pd.date_range("2026-01-01", periods=3)
+        good = pd.DataFrame({"close": [10.0, 11.0, 12.0]}, index=idx)
+        bad = pd.DataFrame({"close": [10.0, 0.0, 12.0]}, index=idx)
+        monkeypatch.setattr(core, "UNIVERSE", ["GOOD", "BAD"])
+        client = _FakeClient({"GOOD": good, "BAD": bad})
+
+        closes, days, last_price, errors = core.fetch_universe_closes(client)
+
+        assert "GOOD" in closes
+        assert "BAD" not in closes
+        assert errors == 1
+
+    def test_all_clean_data_reports_zero_errors(self, monkeypatch):
+        idx = pd.date_range("2026-01-01", periods=3)
+        good = pd.DataFrame({"close": [10.0, 11.0, 12.0]}, index=idx)
+        monkeypatch.setattr(core, "UNIVERSE", ["GOOD"])
+        client = _FakeClient({"GOOD": good})
+
+        closes, days, last_price, errors = core.fetch_universe_closes(client)
+
+        assert "GOOD" in closes
+        assert errors == 0
 
 
 class TestCleanBotToken:

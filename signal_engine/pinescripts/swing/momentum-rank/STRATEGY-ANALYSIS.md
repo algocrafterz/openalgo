@@ -411,3 +411,96 @@ lists with counts, per-slot equal-weight %, and an unambiguous "DIGEST ONLY - no
 automatically" disclaimer. The "Cadence: rebalances every 30 sessions" and "Next check: ...
 weekly, not daily" lines now sit next to each other, made explicit that a *check* is not a
 *rebalance* to avoid a trader reading "weekly" as the new rebalance frequency.
+
+---
+
+## 2026-09-16 (second follow-up) — End-to-end verification before treating this as a live
+## trader recommendation
+
+Walked the full live path — universe, filter criteria, ranking, and the sell/buy logic —
+against what `portfolio.py` actually validated, since the digest now goes to a real trader
+expecting these to be genuinely good CNC picks.
+
+### Confirmed correct
+
+- **Universe matches exactly.** `momentum_rank_strategy.py`'s hardcoded `UNIVERSE` (211
+  names) diffed byte-for-byte against `signal_engine/backtest/data.py`'s `NSE_FNO` — zero
+  names differ either direction. No drift between what was backtested and what is live.
+- **New/thin-history names self-exclude correctly.** The live universe (211) is larger than
+  the backtest's history-filtered universe (197, `min_sessions=500`) by design — recently
+  listed F&O names (SWIGGY, TMPV, VMM, ATHERENERG, etc.) are included in `UNIVERSE` but
+  `momentum_score()` returns `None` for any symbol without `LOOKBACK+SKIP` (321) sessions of
+  real history, so they fall out of `usable` automatically. This reproduces the backtest's
+  `min_sessions` filter at runtime instead of a static list — correct, not a gap.
+- **Sell signals absolutely do fire during rebalance, independent of buys.** This is a
+  rotation, not a buy-and-hold list: `diff_basket()` computes `sells = held - target` and
+  `buys = target - held` independently. A name that falls out of the top-12 ranking is
+  SOLD that rebalance even if no single new name displaces it 1-for-1 (e.g. two names drop
+  out and two different names enter — 2 sells, 2 buys, not paired). The very first-ever
+  rebalance is buy-only (`held=[]`), which is correct. With the partial-basket fix below,
+  `len(held) == len(target) == TOP_N` on every subsequent rebalance, so in steady state
+  `len(sells) == len(buys)` always — a pure sell-with-no-buy can no longer happen once the
+  book is established, by construction, not by a special case.
+
+### Bugs found and fixed (see `momentum_rank_strategy.py` diff)
+
+1. **No data-corruption guard on fetched closes.** `fetch_universe_closes()` took
+   `client.history()`'s `close` column on faith — a single non-positive tick (broker glitch,
+   bad feed record) would have silently fed a nonsense ratio into `momentum_score()`,
+   capable of ranking a garbage symbol into the top 12 and recommending it as a live BUY.
+   **Fixed:** any symbol with a non-positive close anywhere in its fetched window is now
+   dropped for that run (`fetch_errors` counter), not silently trusted.
+2. **Live script could trade a smaller-than-tested basket.** `run_once()` checked that
+   enough names had *score* history (`len(usable) >= TOP_N`) but never re-checked after the
+   `MIN_PRICE` filter was also applied inside `rank_universe()`. `portfolio.py`'s
+   `PortfolioBacktest.run()` requires the FULL `top_n` to survive every filter or it skips
+   the period entirely (`if len(f) < cfg.top_n: continue`) — the live script had no
+   equivalent, so it could have shipped a smaller, more-concentrated, partially-uninvested
+   basket (at the same per-slot 8.3% weight, meaning real uninvested cash) that was never
+   the portfolio validated by any backtest here. **Fixed:** `run_once()` now skips and
+   retries next check if fewer than `TOP_N` names survive both filters, mirroring the
+   backtest exactly.
+3. **Stale "retry tomorrow" text**, same root cause as the earlier "checked once daily" fix
+   — changed to "retry next check".
+4. **Digest didn't surface data-quality problems to the trader.** If symbols failed to
+   fetch or were dropped as corrupt, that only ever showed up in the console log, never in
+   what the trader actually reads. **Fixed:** added a conditional "Data note: N/211 universe
+   symbols excluded this run..." line, shown only when `fetch_errors > 0`.
+
+### Known, NOT fixed — flag before sizing this up
+
+- **Corporate-action (split/bonus) adjustment gap.** `signal_engine/backtest/data.py`'s
+  `from_historify_daily()` explicitly split-adjusts every bar
+  (`_split_adjust_daily()`) before any backtest number in this document was produced. The
+  live script's `fetch_universe_closes()` calls `client.history()` — OpenAlgo's REST history
+  endpoint, which is a broker-fed pass-through (`services/history_service.py` has no
+  adjustment step, and no `broker/*/api/data.py` module in this repo applies one either).
+  **If any live-fetched symbol undergoes a stock split or bonus inside its 321-session
+  (~15-16 month) lookback window, its close series will NOT be back-adjusted, and
+  `momentum_score()` will compute a spurious return off the discontinuity** (a 1:1 bonus
+  halves the price overnight with no change in wealth — read naively, that looks like a
+  -50% crash to the score). This is broker-agnostic — no broker integration in this repo
+  currently normalizes corporate actions on the history endpoint. **Not fixed here**
+  because a heuristic split-detector risks false positives (excluding a real, large
+  momentum move) without a proper corporate-actions data source, and that is a bigger,
+  separate piece of work than this pass. **Recommendation: before increasing size on this
+  strategy, cross-check each rebalance's picks against a known corporate-actions calendar
+  (e.g. NSE's corporate action announcements) for the trailing 16 months, or add a bulk
+  adjustment step sourced the same way `_split_adjust_daily()` does.** This is the single
+  highest-priority follow-up on this strategy.
+- **No liquidity/volume filter beyond `min_price >= 20`.** Matches what was actually
+  backtested (`portfolio.py` has no volume filter either), so this is not a live-only gap —
+  but it means a technically-eligible, thinly-traded name could appear in the digest. Same
+  limitation the backtest always had.
+- **No ASM/GSM/trade-to-trade surveillance-stage awareness.** Nothing in OpenAlgo currently
+  ingests NSE's surveillance-stage lists. A recommended BUY could be a stock currently under
+  additional surveillance margin (does not block CNC delivery, but changes the effective
+  cost). Not checked by this script or by the backtest.
+
+### Status
+
+Fixes above are shipped to both `strategies/examples/momentum_rank_strategy.py` (source) and
+the live deployed copy `strategies/scripts/momentum_rank_strategy_20260916144143.py`. Test
+suite: 27/27 passing. Strategy remains **candidate, paper-tracked** — these fixes improve the
+integrity of what gets recommended, they do not constitute new evidence of an edge, and the
+split-adjustment gap above should be resolved before this is traded with meaningful size.
