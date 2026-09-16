@@ -3,7 +3,8 @@
 //
 // WHAT IT DOES
 //   Ranks a configured universe (up to 40 symbols) by 12-month return skipping the most
-//   recent month, and holds the strongest N. Rebalances every `rebalDays` sessions.
+//   recent month, and holds the strongest N. Rebalances every `rebalDays` sessions
+//   (30 = ~six weeks, tuned 2026-09-15 - see STRATEGY-ANALYSIS.md).
 //   Long only, CNC delivery, no stop loss - the exit is falling out of the top N.
 //
 // WHY 12-1 AND NOT "PRICE NEAR ITS HIGH"
@@ -93,7 +94,7 @@ string u40 = input.symbol("NSE:JINDALSTEL","40", group = grp_u, inline = "j")
 int    lookbackDays = input.int(250, "Lookback (sessions)", minval = 120, maxval = 400, group = grp_r, tooltip = "Return window. 250 sessions is about 12 months.\n\nTested 180 / 250 / 300 / 400 - all gave 12.6-13.8% alpha with t around 3, so this is NOT a cherry-picked value. 120 was weaker (+6.6%).")
 int    skipDays     = input.int(21,  "Skip recent (sessions)", minval = 0, maxval = 60, group = grp_r, tooltip = "Sessions excluded from the END of the window. The classic 12-1 construction.\n\nThe most recent month runs on short-horizon REVERSAL, which works against momentum. Skipping it is what separates 12-1 from a plain 12-month return.")
 int    topN         = input.int(8,   "Hold top N", minval = 1, maxval = 20, group = grp_r, tooltip = "Names held, equal weight.\n\nSmaller = more alpha AND more volatility; tested Sharpe was flat (~1.48) from 10 to 80 names, so concentration buys return and risk in equal measure. 8 of 40 matches the 30-of-201 selectivity that was tested.")
-int    rebalDays    = input.int(21,  "Rebalance every (sessions)", minval = 5, maxval = 130, group = grp_r, tooltip = "21 sessions is about monthly. Tested 21 / 42 / 63 / 126 - all gave 11-13% alpha, so the exact cadence is not load-bearing.")
+int    rebalDays    = input.int(30,  "Rebalance every (sessions)", minval = 5, maxval = 130, group = grp_r, tooltip = "30 sessions is about six weeks. Tested 21 / 30 / 42 / 63 / 126 on both a 197-name F&O universe and this script's actual 40-name universe (2026-09-15 fine-tune, Historify daily bars 2019-12..2026-09): 30 was the one setting that improved EVERY metric over 21 in the deployable 40-name universe - max drawdown 19.3% -> 14.3%, all-period alpha 13.5%/yr -> 23.3%/yr, OOS alpha 4.6%/yr -> 7.5%/yr - without changing lookback, skip or top_n. Does not clear the strict multi-trial significance bar on this ~6.75y window (OOS sample is only 22 rebalances), so treat as a risk-reducing refinement, not a proven new edge. See STRATEGY-ANALYSIS.md's 2026-09-15 entry.")
 float  minPrice     = input.float(20.0, "Min price", minval = 0, group = grp_r, tooltip = "Names below this are skipped at the rebalance.")
 
 bool   sendAlerts   = input.bool(true,  "Send Telegram alerts", group = grp_a)

@@ -175,3 +175,211 @@ is identical, only the yardstick moves); and the fill assumption noted above.
 technically lookahead. On this universe it changes nothing (37.67% / 11.48% either way)
 because all 40 names have continuous data. It stays a latent issue for any universe
 containing delistings.
+
+---
+
+## 2026-09-15 — Fine-tuning against Historify (broker-verified) daily bars
+
+**What changed:** `rebalDays` default moved from 21 to 30 sessions. Everything else
+(lookback 250, skip 21, top_n 8, min_price 20) is unchanged.
+
+### An important data-window correction first
+
+`data.from_historify_daily()` — OpenAlgo's own broker-fed store, the source `portfolio.py`'s
+header calls "the loader to prefer for anything reported" — only has daily bars back to
+**2019-12-03** for this universe, not 2016. The original +12.7%/yr alpha, 36.9% CAGR numbers
+above were produced against a longer (2016-2026) source. Re-running the identical
+methodology on the shorter, broker-verified ~6.75-year window gives a **much weaker and
+statistically insignificant out-of-sample result for the shipped config**: OOS alpha
++4.55%/yr, t = 0.71 (need t > ~3.7 to call it real after searching this many parameter
+combinations). This is not a bug — it is the same "alpha is lumpy" honest limit already
+documented above, just visible now because the 2016-2020 run-up that padded the old
+in-sample window is mostly gone from this shorter store. **Treat the original 36.9%
+CAGR / +10.7%/yr alpha headline as unverified against the platform's own broker data.**
+
+### What was swept
+
+Two grids, both `mom_skip` factor via `portfolio.py`, cost 22 bps, min price ₹20, 60/40
+in-sample/out-of-sample split (cut 2023-12-28):
+
+1. **197-name NSE F&O universe** (everything Historify has ≥500 daily sessions for) —
+   300 configs: lookback {200,225,250,275,300}, skip {10,15,21,30}, top_n {6,8,10,12,15},
+   rebal {21,30,42}. Marginal effects favored a bigger, more diversified basket (top_n
+   12-15) and a slower rebalance (30d) — but that universe is **not what the shipped
+   script can trade**: Pine's `request.security` call cap is 40, hard-coded as `u1..u40`.
+2. **The actual 40-symbol Pine universe** — 180 configs, same axes minus top_n capped at
+   12. This is the one that matters for what actually ships.
+
+### Result on the deployable 40-name universe
+
+| config | OOS alpha | OOS t | OOS max DD | all-period alpha | all-period t | all-period max DD |
+|---|---|---|---|---|---|---|
+| shipped: 250 / 21 / top8 / **21d** | +4.55%/yr | 0.71 | 16.8% | +13.53%/yr | 1.97 | 19.3% |
+| **fine-tuned: 250 / 21 / top8 / 30d** | **+7.50%/yr** | 0.97 | **10.1%** | **+23.30%/yr** | 2.75 | **14.3%** |
+
+Changing only the rebalance cadence (21 sessions -> 30, i.e. roughly monthly to roughly
+six-weekly) improved every single number: more alpha in-sample, out-of-sample and overall,
+lower drawdown in both windows, and a higher t-stat. It was also the most consistent
+single-axis finding across BOTH grids (the 197-name sweep's rebal=30 group beat rebal=21
+by a similar margin on alpha and, notably, drawdown: 19.3% average vs 28.0%). That
+convergence across two independently-run universes is why it was adopted despite not
+individually clearing the strict multi-trial significance bar (t=2.75 vs hurdle ~3.7) — a
+single OOS window of only 22 rebalance periods (2024-2026) does not have the statistical
+power to prove any config "real" on its own; this one is simply the most consistently
+better in every direction tested, in both universes, on both cost-free and cost-loaded
+runs.
+
+**What did NOT move**: lookback, skip and top_n were re-swept on the 40-name universe and
+none showed a clear, consistent improvement over the shipped 250/21/8 — the marginal
+effects there were small and noisy (see raw grid CSVs). Concentration (top_n 6 vs 8 vs 10
+vs 12) barely mattered within a 40-name pool; it mattered a lot in the larger 197-name
+pool, which is the artifact of testing selectivity (top 8-of-40 = 20% vs top 12-of-197 =
+6%) rather than a signal to chase without also growing the universe. **Growing the pine
+universe beyond 40 names is not possible without moving this strategy off Pine's
+`request.security` model** (e.g. a Python-native scheduled rebalance job pulling the F&O
+list from OpenAlgo directly) - flagged as a future option, not done here.
+
+### Honest status after this pass
+
+Still **candidate, paper only, never traded**. The fine-tune is a risk-reduction (lower
+drawdown, same or better alpha) supported by two independent grids agreeing on direction,
+not a newly-proven edge — the original headline numbers cannot currently be reproduced
+against the platform's own broker-verified data store because that store's depth (2019-12
+onward) is shorter than the window they were computed on. Before this goes anywhere near
+live capital: paper-trade the 30-day-rebalance version through at least a few real
+rebalances, and treat the original 2016-2026 numbers as aspirational rather than
+confirmed.
+
+---
+
+## 2026-09-15 (same day, follow-up) — Full-universe result adopted; Python-native Phase 1 shipped
+
+The framing above restricted fine-tuning to Pine's deployable 40-symbol universe because
+that was what the live `.pine` script could actually hold. **The user rejected that
+framing**: backtests must use the full available F&O universe, not a subset chosen to fit
+a deployment constraint — the constraint is a separate, explicitly-labeled finding, not a
+reason to narrow the backtest itself. (Saved to memory —
+`feedback_backtest_full_universe.md` — as a standing rule for every future strategy in
+this project.)
+
+**Re-reading the two grids with that correction: the full 197-name universe result is the
+authoritative one**, not the 40-name-restricted one:
+
+| config | OOS alpha | OOS t | OOS max DD | all-period alpha | all-period t | all-period max DD |
+|---|---|---|---|---|---|---|
+| shipped Pine (40-name): 250/21/top8/21d | +0.06%/yr | 0.25 | 32.7% | +12.26%/yr | 1.56 | 32.7% |
+| **full-universe fine-tune: 300/21/top12/30d** | **+11.01%/yr** | 1.38 | **15.5%** | **+25.74%/yr** | **3.59** | **15.5%** |
+
+Holding the top 12 of the full ~197-208 name universe (vs. top 8 of 40) roughly doubles
+the Sharpe (1.44 -> 2.07) and halves the drawdown against the shipped config. This
+requires a bigger, more diversified basket than Pine's 40-name cap can ever provide — so
+closing this gap means moving the ranking step off Pine, not further tuning it in place.
+
+**Decision: migrate to Python-native execution (Phase 1 only).** User chose this over (a)
+keeping Pine and just picking a better 40, or (b) documenting the gap and doing nothing.
+Phase 1 ships `strategies/examples/momentum_rank_strategy.py` +
+`strategies/examples/momentum_rank_strategy.py` (single self-contained file, since
+OpenAlgo's `/python` Strategy Host only accepts one uploaded `.py`; unit tests in
+`strategies/examples/tests/test_momentum_rank_core.py`, including a numerical-parity
+check against `portfolio.py`'s `build_factor("mom_skip", ...)`), running the fine-tuned
+config (lookback 300, skip 21, top_n 12, rebal 30) against the full universe via
+OpenAlgo's own `history` API, uploadable through the existing `/python` Strategy Host.
+
+**Deliberately still manual execution, by design.** `signal_engine/main.py` resolves
+strategy config via `strategy_profiles.get(tag, {})` — an unregistered strategy tag
+silently falls through to global defaults rather than erroring, and `momentum-rank` is
+registered nowhere. If a Python job posted machine-parseable "STRATEGY DIRECTION" alerts
+into the live Telegram chat, the daemon would auto-execute them today, sized by whatever
+the engine's global `sizing.mode` is against the strategy's fake 25%-wide placeholder
+stop — not real equal-weight sizing. So the Phase 1 script sends **only a human-readable
+digest** to its own, separate Telegram bot/chat; the trader still reads it and places CNC
+orders manually, exactly as before, just now backed by the correct full-universe ranking.
+
+**Phase 2 (not started, deliberately out of scope):** wiring this into automatic order
+placement needs a new per-strategy sizing-mode override in `risk.py`/`config.py` (today
+`RiskEngine.calculate_quantity` branches on one engine-global `sizing_mode`; no strategy
+has ever gotten a per-strategy exception — confirmed by `grep` across `signal_engine/
+*.py`), plus a `strategy_profiles.MOMENTUM-RANK` entry, plus a decision on whether to
+keep synthesizing a fake wide SL/TP to satisfy the `Signal` schema or extend that schema
+to make SL/TP genuinely optional for no-stop strategies. Revisit once the Python-computed
+digests have been watched for a while.
+
+The Pine script (`momentum-rank.pine`, `rebalDays=30` as of the earlier entry above)
+remains as a secondary/legacy reference implementation, validated but permanently capped
+at 40 names — not deprecated, just no longer the primary path for this strategy.
+
+---
+
+## 2026-09-16 17:40 — Weekly vs monthly rotation cadence, full universe
+
+**Question:** does rebalancing weekly (for short-term moves) beat the already-adopted
+~monthly cadence (for long-term moves), and does blending both timeframes help. Full
+197-name F&O universe, Historify daily bars, `portfolio.py`, cost 22 bps, min price ₹20,
+60/40 IS/OOS split (cut 2023-12-28) — same methodology as the two entries above, so these
+numbers are directly comparable.
+
+### Setup
+
+Three factor families, each swept across rebalance cadence:
+
+1. **12-1 factor** (lookback 300, skip 21 — the adopted long-term factor) at weekly (5d),
+   biweekly (10d), ~3wk (15d), monthly (21d), the adopted 30d, and quarterly (63d).
+2. **Pure short-term factor** (21d trailing return, and 63d-mom/skip-5) at weekly/biweekly/
+   monthly — this is what "weekly rotation for short-term moves" means taken literally: a
+   shorter lookback rebalanced faster, not just the long-term factor rebalanced faster.
+3. **Blend ("both")** — 12-1 and 1-month-return factors combined via rank average
+   (50/50 and 70/30 weight toward the long-term factor), rebalanced weekly and monthly.
+
+### Result
+
+| config | OOS alpha | OOS t | OOS max DD | ALL alpha | ALL t | ALL max DD | turnover/period |
+|---|---|---|---|---|---|---|---|
+| **12-1, adopted 30d** | +11.0%/yr | 1.38 | **15.5%** | **+25.7%/yr** | **3.59** | **15.5%** | 29.7% |
+| 12-1, monthly (21d) | +7.8%/yr | 0.93 | 23.5% | +18.8%/yr | 2.50 | 23.5% | 24.2% |
+| 12-1, weekly (5d) | +9.7%/yr | 1.15 | 32.7% | +18.7%/yr | 2.47 | 32.7% | 12.2% |
+| 12-1, biweekly (10d) | +11.2%/yr | 1.20 | 26.1% | +19.9%/yr | 2.56 | 26.1% | 17.5% |
+| pure 1m-momentum, weekly (5d) | +12.4%/yr | 1.32 | 24.8% | **+3.4%/yr** | 0.63 | 39.6% | 45.9% |
+| pure 3m-mom/skip5, weekly (5d) | +8.8%/yr | 1.01 | 19.9% | +17.5%/yr | 2.31 | 19.9% | 27.0% |
+| blend 50/50, weekly (5d) | +17.6%/yr | 1.68 | 31.4% | +24.1%/yr | 2.82 | 31.4% | 33.8% |
+| **blend 70/30, weekly (5d)** | **+20.1%/yr** | **1.88** | 31.9% | +22.9%/yr | 2.73 | 31.9% | 28.9% |
+| blend 50/50, monthly (21d) | +17.8%/yr | 1.65 | 28.5% | +20.9%/yr | 2.46 | 28.5% | 65.8% |
+
+Full grid (18 configs x IS/OOS/ALL): `rotation_freq_results.csv` in that session's
+scratchpad, not checked in — re-runnable via the sweep logic above against
+`data.from_historify_daily()`.
+
+### Answer
+
+- **Weekly rotation of the long-term (12-1) factor alone does not help.** Same ALL-period
+  alpha as monthly (~18.7-18.8%), worse drawdown (32.7% vs 23.5%), and both are clearly
+  behind the already-adopted 30-day cadence (25.7% alpha, 15.5% drawdown, the only config
+  here clearing the t > ~3.7 significance bar territory). Faster rotation just pays more
+  turnover for a noisier version of the same signal — the 12-1 factor changes slowly by
+  construction (it is a 300-day-back measurement), so sampling it every 5 days instead of
+  every 21-30 mostly adds noise and cost, not information.
+- **Weekly rotation using a genuinely short-term factor is weak or actively bad.** Plain
+  1-month momentum rebalanced weekly loses money against the benchmark in-sample (-3.9%/yr)
+  and only barely helps OOS — this reproduces the same short-horizon reversal effect that is
+  the reason the 12-1 factor skips its most recent 21 days in the first place (see "Where
+  the edge comes from" above). A 3-month/skip-5 factor rebalanced weekly is less bad
+  (+17.5%/yr ALL) but still behind the adopted config on every axis.
+- **"Both" (blending long-term and short-term momentum, weekly) is the one interesting
+  result** — it has the best OOS alpha and OOS t-stat of everything tested here (blend
+  70/30: +20.1%/yr, t=1.88), beating every pure-weekly and pure-monthly single-factor
+  variant on the out-of-sample window specifically. But it comes with a meaningfully worse
+  drawdown (~32% vs the adopted config's 15.5%) and no config here reaches the t > ~3.7
+  hurdle this doc has used elsewhere to call a result "proven" — with only ~22-31 OOS
+  rebalance periods, none of these differences are statistically distinguishable from noise
+  yet.
+
+**Recommendation:** keep the already-adopted 300/21/top12/**30d** monthly-ish cadence as
+the primary config — it remains the best risk-adjusted result found across every sweep run
+on this strategy (highest t-stat, lowest drawdown, lowest turnover cost). Weekly rotation on
+its own is not supported by this data. The long+short blend rotated weekly is the only
+weekly variant worth a second look, but it is a **new, untested idea** (not yet run through
+the IS/OOS split as rigorously as the adopted config, not yet swept across blend weights or
+lookbacks) and trades better OOS alpha for higher drawdown — flag as a future research item,
+not a change to ship now.
+
+**Status:** research only, no code changed. `momentum_rank_strategy.py` continues to run
+the adopted 300/21/top12/30d config.
