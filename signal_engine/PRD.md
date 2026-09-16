@@ -3589,7 +3589,7 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 | `openalgoscheduler.py` | Startup: auto-login (TOTP), verify auth, start signal engine |
 | `openalgoctl.sh` | Service controller: start/run/stop/restart/status, log rotation |
 | `openalgoctl.ps1` | Windows: launches `openalgoctl.sh` in minimized cmd |
-| `createTaskOpenAlgoScheduler.ps1` | Windows Task Scheduler: 3 tasks — 8:50 AM start, 3:30 PM stop, watchdog every 5 min 9 AM-3:25 PM |
+| `createTaskOpenAlgoScheduler.ps1` | Windows Task Scheduler: 5 tasks — 8:50 AM start, 2:55 PM squareoff, 4:00 PM stop, watchdog every 5 min 9 AM-4 PM, heartbeat check every 10 min 9:05 AM-4 PM |
 
 ---
 
@@ -4060,10 +4060,13 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 .\signal_engine\scripts\createTaskOpenAlgoScheduler.ps1
 # Creates 5 tasks under Anand user:
 #   openAlgoAutoStart      -- 8:50 AM weekdays, long-running (blocks all day)
-#   openAlgoAutoStop       -- 3:30 PM weekdays, graceful shutdown
-#   openAlgoWatchdog       -- every 5 min, 9:00 AM-3:25 PM weekdays, crash recovery
-#   openAlgoSquareOff      -- 3:02 PM weekdays, MIS failsafe close (WakeToRun)
-#   openAlgoHeartbeatCheck -- every 10 min, 9:05 AM-3:25 PM weekdays, dead-man's switch
+#   openAlgoAutoStop       -- 4:00 PM weekdays, graceful shutdown (moved from 3:30 PM on
+#                             2026-09-17 to give the momentum-rank EOD scan runway after close)
+#   openAlgoWatchdog       -- every 5 min, 9:00 AM-4:00 PM weekdays, crash recovery
+#   openAlgoSquareOff      -- 2:55 PM weekdays, MIS failsafe close (WakeToRun) -- moved
+#                             from 3:02 PM on 2026-09-17; now fires BEFORE the engine's
+#                             own 3:00 PM exit, not after (see note below)
+#   openAlgoHeartbeatCheck -- every 10 min, 9:05 AM-4:00 PM weekdays, dead-man's switch
 ```
 
 ### Windows Task Scheduler -- How the 5 Tasks Work Together
@@ -4071,12 +4074,14 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 | Time | Task | Action |
 |------|------|--------|
 | 8:50 AM | `openAlgoAutoStart` | Calls `openalgoctl.ps1 run` -- starts app.py + signal engine, **stays running all day** |
-| 9:00 AM-3:25 PM | `openAlgoWatchdog` | Calls `openalgoctl.ps1 start` every 5 min -- no-op if healthy, relaunches if crashed |
-| 9:05 AM-3:25 PM | `openAlgoHeartbeatCheck` | Runs `heartbeat_check.ps1` every 10 min -- alerts if `signal_engine/logs/heartbeat.txt` is stale, independent of WSL/bash/Python |
-| 3:02 PM | `openAlgoSquareOff` | Calls `openalgoctl.ps1 squareoff` -- failsafe MIS close if the engine's own 3:00 PM exit didn't run (WakeToRun) |
-| 3:30 PM | `openAlgoAutoStop` | Calls `openalgoctl.ps1 stop` -- sends Telegram notification, kills both services |
+| 9:00 AM-4:00 PM | `openAlgoWatchdog` | Calls `openalgoctl.ps1 start` every 5 min -- no-op if healthy, relaunches if crashed |
+| 9:05 AM-4:00 PM | `openAlgoHeartbeatCheck` | Runs `heartbeat_check.ps1` every 10 min -- alerts if `signal_engine/logs/heartbeat.txt` is stale, independent of WSL/bash/Python |
+| 2:55 PM | `openAlgoSquareOff` | Calls `openalgoctl.ps1 squareoff` -- failsafe MIS close (WakeToRun). **Now fires BEFORE the engine's own 3:00 PM exit** (moved from 3:02 PM on 2026-09-17), so it unconditionally force-closes MIS positions every day rather than only when the engine failed to — confirm this is the intended behavior |
+| 4:00 PM | `openAlgoAutoStop` | Calls `openalgoctl.ps1 stop` -- sends Telegram notification, kills both services. Moved from 3:30 PM on 2026-09-17 to give the momentum-rank EOD scan (runs after market close) more runway |
 
 The watchdog uses `start` (idempotent): polls `http://127.0.0.1:5000/`, skips if healthy, restarts the full stack if dead. Maximum recovery time after a crash: **5 minutes**.
+
+**2026-09-17 schedule change — partially blocked by a Windows permission issue.** `openAlgoSquareOff` (2:55 PM) and `openAlgoHeartbeatCheck`'s window (extended to 4:00 PM) applied cleanly — both are owned by the current user since they were created fresh on 2026-09-16. `openAlgoAutoStop` (still firing at its old ~3:00 PM) and `openAlgoWatchdog`'s window (still ending 3:25 PM, not extended) **did not update** — `Register-ScheduledTask` returned "Access is denied" for both, the same restriction hit on 2026-09-16 for tasks that predate this fix. Re-running `createTaskOpenAlgoScheduler.ps1` from an **elevated** ("Run as Administrator") PowerShell window applies the fix, since the script is idempotent.
 
 ### Failure alerting and cooldown (2026-08-25)
 

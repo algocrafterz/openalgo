@@ -22,8 +22,8 @@ if (!(Test-Path $ps1Path)) {
 
 # --- Configuration ---
 $startTime      = "8:50AM"
-$stopTime       = "3:30PM"
-$squareoffTime  = "3:02PM"
+$stopTime       = "4:00PM"
+$squareoffTime  = "2:55PM"
 $watchdogTime   = "9:00AM"
 $days           = @("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
 
@@ -106,13 +106,13 @@ $watchdogXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>OpenAlgo watchdog - restarts services if crashed. Fires every 5 min on weekdays 09:00-15:25.</Description>
+    <Description>OpenAlgo watchdog - restarts services if crashed. Fires every 5 min on weekdays 09:00-16:00.</Description>
   </RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
       <Repetition>
         <Interval>PT5M</Interval>
-        <Duration>PT6H25M</Duration>
+        <Duration>PT7H</Duration>
         <StopAtDurationEnd>true</StopAtDurationEnd>
       </Repetition>
       <StartBoundary>2026-01-05T09:00:00</StartBoundary>
@@ -166,7 +166,7 @@ Register-ScheduledTask `
     -Xml $watchdogXml `
     -Force | Out-Null
 
-Write-Host "Task 3 created: openAlgoWatchdog   (Weekdays $watchdogTime-3:25PM, every 5 min)" -ForegroundColor Green
+Write-Host "Task 3 created: openAlgoWatchdog   (Weekdays $watchdogTime-4:00PM, every 5 min)" -ForegroundColor Green
 
 # -------------------------------------------------------
 # Task 4: Square-Off (3:02 PM failsafe)
@@ -224,7 +224,7 @@ $heartbeatXml = @"
     <CalendarTrigger>
       <Repetition>
         <Interval>PT10M</Interval>
-        <Duration>PT6H20M</Duration>
+        <Duration>PT6H55M</Duration>
         <StopAtDurationEnd>true</StopAtDurationEnd>
       </Repetition>
       <StartBoundary>2026-01-05T09:05:00</StartBoundary>
@@ -267,22 +267,23 @@ Register-ScheduledTask `
     -Xml $heartbeatXml `
     -Force | Out-Null
 
-Write-Host "Task 5 created: openAlgoHeartbeatCheck (Weekdays 9:05AM-3:25PM, every 10 min -- dead-man's switch)" -ForegroundColor Green
+Write-Host "Task 5 created: openAlgoHeartbeatCheck (Weekdays 9:05AM-4:00PM, every 10 min -- dead-man's switch)" -ForegroundColor Green
 
 # --- Summary ---
 Write-Host ""
 Write-Host "All 5 tasks registered under user: Anand" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "How they work together:" -ForegroundColor Cyan
-Write-Host "  8:50 AM  openAlgoAutoStart  -- starts app.py + signal engine, stays running all day" -ForegroundColor White
-Write-Host "  9:00 AM  openAlgoWatchdog   -- fires every 5 min; no-op if running, restarts if dead" -ForegroundColor White
-Write-Host "  3:02 PM  openAlgoSquareOff  -- failsafe: closes MIS positions if engine didn't (WakeToRun)" -ForegroundColor White
-Write-Host "  3:30 PM  openAlgoAutoStop   -- sends shutdown notification, kills all services" -ForegroundColor White
+Write-Host "  8:50 AM  openAlgoAutoStart      -- starts app.py + signal engine, stays running all day" -ForegroundColor White
+Write-Host "  9:00 AM  openAlgoWatchdog       -- fires every 5 min; no-op if running, restarts if dead" -ForegroundColor White
+Write-Host "  9:05 AM  openAlgoHeartbeatCheck -- fires every 10 min; dead-man's switch, independent of WSL/bash/Python" -ForegroundColor White
+Write-Host "  2:55 PM  openAlgoSquareOff      -- failsafe: closes MIS positions if engine didn't (WakeToRun)" -ForegroundColor White
+Write-Host "  4:00 PM  openAlgoAutoStop       -- sends shutdown notification, kills all services (later than market close for the momentum-rank EOD scan)" -ForegroundColor White
 Write-Host ""
 Write-Host "Square-off design:" -ForegroundColor Cyan
 Write-Host "  Signal engine fires its own exit at 3:00 PM (asyncio scheduler, 5s polling)" -ForegroundColor White
-Write-Host "  openAlgoSquareOff fires at 3:02 PM via Task Scheduler (OS-level, survives engine crash)" -ForegroundColor White
-Write-Host "  If engine already closed at 3:00 => 3:02 squareoff is a no-op" -ForegroundColor White
-Write-Host "  If engine was dead/sleeping => 3:02 squareoff closes positions before broker auto-square (3:20)" -ForegroundColor White
+Write-Host "  openAlgoSquareOff now fires at 2:55 PM -- BEFORE the engine's own 3:00 PM exit, not after." -ForegroundColor Yellow
+Write-Host "  This means it no longer waits to see whether the engine would have closed the position" -ForegroundColor Yellow
+Write-Host "  itself; it force-closes all MIS positions every day at 2:55 regardless. Confirm this is intended." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Script path: $ps1Path" -ForegroundColor Cyan
