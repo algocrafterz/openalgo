@@ -383,3 +383,31 @@ not a change to ship now.
 
 **Status:** research only, no code changed. `momentum_rank_strategy.py` continues to run
 the adopted 300/21/top12/30d config.
+
+---
+
+## 2026-09-16 (follow-up) — Fixed stale "checked once daily" text; digest clarity pass
+
+**Bug found:** `momentum_rank_strategy.py`'s docstring, console log, and the Telegram digest
+itself all claimed the strategy is "checked once daily." That was never true of the actual
+deployment — `strategies/strategy_configs.json` schedules this script through the `/python`
+host for a ~20-minute window on **Wednesdays only** (`schedule_days: ["wed"]`), i.e. weekly,
+not daily. The script has no way to see its own host-level schedule, so the "daily" text was
+just a leftover assumption from an earlier draft, never updated to match reality. Fixed in
+both `strategies/examples/momentum_rank_strategy.py` (source of truth) and the live deployed
+copy `strategies/scripts/momentum_rank_strategy_20260916144143.py` (gitignored — the file the
+host actually executes), which had drifted out of sync with the source copy.
+
+**Also fixed while rechecking the digest for trader clarity:** the digest always headlined
+`ACTION REQUIRED: place CNC MARKET orders...` even on a rebalance where the top-N basket
+didn't change (sells and buys both empty) — misleading, since there is nothing to trade that
+period. It now reads `NO ACTION NEEDED: basket unchanged this rebalance` in that case.
+Covered by two new tests in `test_momentum_rank_core.py`
+(`test_no_buys_or_sells_does_not_claim_action_required`,
+`test_buys_or_sells_still_flags_action_required`); all 23 tests in the suite pass.
+
+Rest of the digest was reviewed and found already clear/actionable: explicit SELL/BUY/HOLD
+lists with counts, per-slot equal-weight %, and an unambiguous "DIGEST ONLY - no order placed
+automatically" disclaimer. The "Cadence: rebalances every 30 sessions" and "Next check: ...
+weekly, not daily" lines now sit next to each other, made explicit that a *check* is not a
+*rebalance* to avoid a trader reading "weekly" as the new rebalance frequency.
