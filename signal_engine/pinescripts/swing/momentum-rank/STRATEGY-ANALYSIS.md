@@ -571,3 +571,179 @@ sync), and `strategies/strategy_configs.json` (schedule). Strategy remains **can
 paper-tracked**. These are data-integrity and usability fixes to the recommendation pipeline,
 not new evidence of an edge — the split-adjustment gap from the prior entry is still open and
 remains the top item before sizing this up.
+
+---
+
+## 2026-09-16 (fourth follow-up) — Live dry-run confirmed; top-3/5 concentration tested
+
+### Dry run against the live server
+
+Ran `momentum_rank_strategy.py --dry-run` against this instance's actual running server and
+broker session (Flattrade), using a scratch copy of the state file with an old
+`last_rebalance_date` to force the 30-session gate open — dry-run never writes state, so the
+real `log/strategies/momentum_rank_state.json` was untouched.
+
+**Confirmed working end-to-end on real data:**
+- The non-positive-close guard added in the previous pass fired for real: `SAGILITY` was
+  excluded live with "non-positive close in history" — this is not a hypothetical test case,
+  it caught an actual bad tick in this instance's broker feed on this run.
+- Two symbols (`GVT&D`, `M&M`) failed with a Flattrade-side HTTP 500 ("jData is not valid json
+  object") and one (`NIFTYFPI`) isn't a valid NSE equity symbol (index ticker miscategorized
+  in the universe list) — all three correctly counted toward `fetch_errors` and surfaced as a
+  "Data note: 4/211 universe symbols excluded" in the digest, not silently dropped.
+- The score-ranked digest format renders correctly on live data (see below) — SELL/BUY/HOLD
+  and the numbered "Full basket" list, capital-constrained buy-order prompt, all present.
+- Because today's real held basket (from `momentum_rank_state.json`) still ranks inside the
+  top 12 by live score, this run correctly produced `NO ACTION NEEDED` — a useful live
+  confirmation that the "basket unchanged" branch fixed two passes ago works correctly, not
+  just in the unit tests.
+
+**Follow-up needed, not fixed here:** `NIFTYFPI` should be removed from `UNIVERSE` in both the
+source and deployed copy — it is an index reference, not a tradeable NSE equity, so it will
+permanently fail every fetch. Cosmetic (already correctly excluded, doesn't affect picks),
+low priority.
+
+### Concentrated portfolio (top 3 / top 5) vs the shipped top-12
+
+Same adopted factor (12-1 momentum, lookback 300, skip 21) and same 30-day rebalance, full
+197-name universe, only `top_n` varied — isolates the effect of buying fewer, higher-scored
+names instead of the full rotation.
+
+| top_n | OOS alpha | OOS t | OOS max DD | ALL alpha | ALL t | ALL max DD | ALL Sharpe |
+|---|---|---|---|---|---|---|---|
+| **top 3** | **-12.67%/yr** | -0.44 | 34.8% | **-6.32%/yr** | 0.04 | 47.6% | 0.63 |
+| top 5 | -3.58%/yr | -0.04 | 29.2% | +14.24%/yr | 1.46 | 29.2% | 1.23 |
+| top 8 | -0.40%/yr | 0.12 | 27.0% | +24.59%/yr | 2.55 | 27.0% | 1.71 |
+| **top 12 (shipped)** | **+11.01%/yr** | **1.38** | **15.5%** | **+25.74%/yr** | **3.59** | 15.5% | **2.07** |
+| top 20 | +9.05%/yr | 1.33 | **12.7%** | +15.31%/yr | 2.71 | **12.7%** | 1.79 |
+
+**Result: going more concentrated than the shipped top-12 makes this WORSE, not better, on
+every axis, not just risk.** Top-3 loses to the benchmark out-of-sample (-12.67%/yr alpha)
+and roughly breaks even over the full period (-6.32%/yr, effectively noise, t~0). Top-5 is
+still OOS-negative. Only from top-8 upward does the strategy show a real out-of-sample edge,
+and top-12 is the single best point tested on every metric shown — best OOS alpha, best
+t-stat, and (tied with top-20) the lowest drawdown.
+
+**This is the opposite of the "Robustness" section's portfolio-size finding earlier in this
+document** (top 10 beats top 30 on alpha, "concentration buys return and volatility in equal
+measure"). That earlier result was measured on the longer, non-broker-verified 2016-2026
+window with 21-day rebalance. This test uses the shorter, broker-verified 2019-2026 window
+with the now-adopted 30-day rebalance — same tension already flagged in the 2026-09-15 entry
+above (the original 2016-2020 run-up inflates results computed on the older window). Read
+together: **do not extrapolate the old "smaller is more alpha" finding down to 3-5 names on
+this dataset** — directly tested here, it fails.
+
+**Why 3-5 names likely breaks down:** momentum names are individually volatile (see the
+"Backtest metrics" table's win/loss ratio - about half of positions lose money, winners just
+run much bigger). At 12 names, a handful of duds get diluted by the rest of the book. At 3-5,
+a single bad pick is 20-33% of the entire book with no offsetting names that period - the
+strategy's edge (a few huge winners compounding) needs enough names in rotation for those
+winners to statistically show up every period, and enough names to dilute the losers when
+they don't.
+
+### Layman summary
+
+**Don't cherry-pick just the top 3 or top 5 to save capital — on the numbers here, it made
+the strategy worse, not better, in the recent test window.** With only 3 or 5 stocks, this
+strategy actually lost to a simple "buy the whole basket" benchmark. It only starts clearly
+beating the benchmark from about 8 stocks up, and 12 (what's already being recommended) was
+the best-tested option, not just the safest. If capital genuinely doesn't stretch to all 12,
+this data suggests going down to 8 is the lowest you should cut it to, not 3-5 — skipping
+straight to the top 3-5 isn't supported by this backtest, it is actively contradicted by it.
+(The digest no longer shows a per-symbol score at all as of the next entry below — this
+result argues for buying the full basket, not for a better way to pick a subset of it.)
+
+### Status
+
+Research and live verification only — no code changes this pass beyond what the dry run
+already exercised. Strategy remains **candidate, paper-tracked** at the shipped top-12
+config; this pass provides evidence AGAINST going more concentrated, it does not change the
+recommended config.
+
+---
+
+## 2026-09-16 (fifth follow-up) — Score removed from digest; Flattrade error hardening
+
+### Digest: score removed, one symbol per line
+
+The previous pass's concentration backtest (immediately above) showed buying fewer than the
+full top-12 basket underperforms — so showing each symbol's score in the digest was actively
+counterproductive: it invited exactly the cherry-picking that data argues against. Removed
+entirely. `_build_digest()` no longer takes a `scores` parameter; `_score_pct`, `_ranked`, and
+`_fmt_scored_list` are deleted.
+
+SELL/BUY/HOLD and the "Full basket" section are now:
+- **One symbol per line**, not space-joined on one line — the formatting the trader asked for.
+- **Alphabetical, not score-ranked** — `rank_universe()` itself still returns `target` in
+  score order internally (that is how the top-12 gets picked), but the DIGEST re-sorts
+  alphabetically before printing, so no implicit "buy these first" ordering leaks through
+  either. All 12 names are presented as equally mandatory.
+- The digest's advisory line changed from "Capital-constrained? Buy top-down by score" to
+  "Buy ALL names below, equal weight - this strategy was tested as a full basket. Buying only
+  a few underperformed badly in backtest, see STRATEGY-ANALYSIS.md" — same spot, opposite
+  message, now backed by the concentration-backtest evidence instead of contradicting it.
+
+### Angel-for-live-data: investigated, NOT implemented — real architecture blocker
+
+User's ask: since Historify's backfill used Angel data, should the live weekly digest also
+fetch through Angel instead of Flattrade (motivated by two live fetch failures seen in the
+dry run above). Traced this before writing any code and found a hard blocker:
+
+- `database.token_db.get_token(symbol, exchange)` — used by every broker's `get_history()`,
+  including `broker/angel/api/data.py` — has **no broker parameter**. `SymToken`
+  (`database/symbol.py`) has no `broker` column either: it is ONE shared table holding
+  whichever broker's master contract was most recently downloaded onto this instance.
+- This instance's live trading broker is Flattrade, so `SymToken` currently holds Flattrade's
+  tokens. Calling Angel's `get_history()` today would resolve each symbol through
+  Flattrade's token, not Angel's own - wrong/garbage data, not actually "Angel data."
+  Making it correct means re-downloading Angel's OWN master contract into that shared table,
+  which **overwrites Flattrade's** and breaks live Flattrade order/symbol resolution until
+  Flattrade re-authenticates.
+- This is exactly the constraint `signal_engine/backtest/broker_login.py`'s own docstring
+  already documents and works around for backfilling: it logs into a second broker directly
+  (never through `auth_db`/`upsert_auth`) and keeps the token in-process only, specifically
+  so `SymToken`/the live session are never touched. Backfilling is a manual, offline,
+  occasional operation; the momentum-rank digest is a recurring LIVE check that has to
+  coexist with live Flattrade trading every time it runs - the risk profile is not the same.
+
+**Presented this to the user with four options** (fix the actual observed errors / temporarily
+swap the master contract each run / stand up a second Angel-only OpenAlgo instance / leave
+as-is). **Chosen: fix the actual observed errors, no broker switch** — lowest risk, and
+targets what was actually broken rather than a hypothesized fix.
+
+### What was actually wrong, and what was fixed
+
+The 2026-09-16 dry run's 4 excluded symbols were three different things, not one problem:
+
+| symbol | cause | fix |
+|---|---|---|
+| `SAGILITY` | non-positive close (bad tick) | already handled - the corruption guard from two passes ago |
+| `NIFTYFPI` | not a real NSE-equity symbol in this instance's master at all | **removed from `UNIVERSE`** - permanent failure, retrying cannot help |
+| `GVT&D`, `M&M` | Flattrade HTTP 500, "jData is not valid json object" | **retry added** - re-verified live: both fail IDENTICALLY on the second attempt, confirming this is a deterministic Flattrade-side bug, not a transient blip. Still correctly excluded and surfaced in the "Data note," now with confirmed evidence it is not a fluke worth chasing further here.
+
+**`_fetch_symbol_history()`** (new) wraps the broker call with up to `_FETCH_ATTEMPTS = 2`
+tries, 1.5s apart, distinguishing "genuinely no data" (empty response, not retried, not an
+error - e.g. a brand-new listing) from "fetch failed" (retried, counted as `fetch_errors`
+only if every attempt fails). `NIFTYFPI` was also removed only from this live script's
+`UNIVERSE`, deliberately NOT from `signal_engine/backtest/data.py`'s `NSE_FNO` - that constant
+is shared by other backtests, and whether Historify has usable NIFTYFPI history is a separate
+question from whether this LIVE script's broker can trade it today. This is now a known,
+intentional 1-symbol difference between the two lists (previously verified identical in an
+earlier pass).
+
+**Re-verified live after all fixes** (fresh dry run, same scratch-state technique as before):
+universe now 210 (was 211), `NIFTYFPI` no longer attempted, `GVT&D`/`M&M` show "after 2
+attempt(s)" in the log confirming the retry actually ran, `SAGILITY` still correctly excluded,
+digest renders score-free and one-per-line, `NO ACTION NEEDED` still correctly returned since
+the real held basket still ranks in the top 12.
+
+**Tests:** 4 new (`TestFetchSymbolHistory` x3, `TestUniverse` x1), 2 rewritten for the new
+digest format. **41/41 passing.**
+
+### Status
+
+Shipped to `strategies/examples/momentum_rank_strategy.py` and the synced deployed copy.
+Angel-as-data-source remains an open, deliberately-declined option - revisit only via one of
+the three alternatives above (fix targeted errors [done], temporary master-contract swap, or
+a dedicated second instance), never a silent live switch. Strategy remains **candidate,
+paper-tracked**, shipped top-12 config unchanged.

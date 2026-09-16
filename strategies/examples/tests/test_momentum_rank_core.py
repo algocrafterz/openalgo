@@ -127,32 +127,33 @@ class TestBuildDigest:
             days, target=["A", "B", "C"], sells=["X"], buys=["C"],
             rebalance_number=3)
         assert "REBALANCE #3" in digest
-        assert "SELL (1): X (n/a)" in digest
-        assert "BUY  (1): C (n/a)" in digest
-        assert "HOLD, no action (2): A (n/a) B (n/a)" in digest
-        assert "Full basket, ranked by score (3 names" in digest
+        assert "SELL (1):\n  X" in digest
+        assert "BUY (1):\n  C" in digest
+        assert "HOLD, no action (2):\n  A\n  B" in digest
+        assert "Full basket (3 names" in digest
         assert "DIGEST ONLY" in digest
 
-    def test_scores_shown_and_ranked_best_first(self):
+    def test_no_score_shown_anywhere(self):
+        # Buying all TOP_N is mandatory (see STRATEGY-ANALYSIS.md's
+        # concentration backtest) - a per-symbol score would bias a trader
+        # toward cherry-picking a subset, so it must never appear. The
+        # equal-weight capital % (a sizing note, not a score) is fine.
         days = [date(2026, 1, 1), date(2026, 1, 2)]
         digest = core._build_digest(
-            days, target=["LOW", "HIGH", "MID"], sells=[],
-            buys=["LOW", "HIGH", "MID"], rebalance_number=1,
-            scores={"LOW": 0.05, "HIGH": 0.80, "MID": 0.30})
-        assert "HIGH (+80.0%)" in digest
-        assert "MID (+30.0%)" in digest
-        assert "LOW (+5.0%)" in digest
-        # Ranked list must be ordered best-score-first: HIGH, MID, LOW.
-        assert digest.index("HIGH") < digest.index("MID") < digest.index("LOW")
+            days, target=["A", "B", "C"], sells=["X"], buys=["C"],
+            rebalance_number=1)
+        assert "score" not in digest.lower()
+        assert "A (" not in digest and "B (" not in digest and "C (" not in digest
+        assert "X (" not in digest
 
-    def test_missing_score_shows_as_na_and_sorts_last(self):
+    def test_each_symbol_on_its_own_line(self):
         days = [date(2026, 1, 1), date(2026, 1, 2)]
         digest = core._build_digest(
-            days, target=["HAVE", "MISSING"], sells=[],
-            buys=["HAVE", "MISSING"], rebalance_number=1,
-            scores={"HAVE": 0.10})
-        assert "MISSING (n/a)" in digest
-        assert digest.index("HAVE") < digest.index("MISSING")
+            days, target=["ZEBRA", "APPLE", "MANGO"], sells=[],
+            buys=["ZEBRA", "APPLE", "MANGO"], rebalance_number=1)
+        # Alphabetical, one per line - not a rank order.
+        assert "BUY (3):\n  APPLE\n  MANGO\n  ZEBRA" in digest
+        assert "  APPLE\n  MANGO\n  ZEBRA" in digest  # Full basket section too
 
     def test_next_rebalance_estimate_scales_with_rebal_days(self):
         # 10 calendar days spanning 9 sessions -> ~1.11 cal days/session;
@@ -169,7 +170,7 @@ class TestBuildDigest:
         digest = core._build_digest(days, target=["A", "B"], sells=[], buys=[],
                                      rebalance_number=1)
         assert "SELL (0): none" in digest
-        assert "BUY  (0): none" in digest
+        assert "BUY (0): none" in digest
 
     def test_no_buys_or_sells_does_not_claim_action_required(self):
         # Basket unchanged from last rebalance - nothing for the trader to
@@ -224,6 +225,82 @@ class _FakeClient:
 
     def history(self, symbol, exchange, interval, start_date, end_date):
         return self._frames[symbol]
+
+
+class _FlakyClient:
+    """Stub whose .history() fails `fail_times` times, then returns `df`."""
+
+    def __init__(self, df, fail_times=1, error=None):
+        self._df = df
+        self._fail_times = fail_times
+        self._error = error or RuntimeError("transient boom")
+        self.calls = 0
+
+    def history(self, symbol, exchange, interval, start_date, end_date):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise self._error
+        return self._df
+
+
+class _AlwaysErrorClient:
+    """Stub whose .history() always returns a broker-style error dict."""
+
+    def __init__(self, message="jData is not valid json object"):
+        self._message = message
+        self.calls = 0
+
+    def history(self, symbol, exchange, interval, start_date, end_date):
+        self.calls += 1
+        return {"status": "error", "message": self._message}
+
+
+class TestFetchSymbolHistory:
+    def test_retries_once_then_succeeds(self, monkeypatch):
+        monkeypatch.setattr(core.time, "sleep", lambda s: None)
+        idx = pd.date_range("2026-01-01", periods=3)
+        good = pd.DataFrame({"close": [10.0, 11.0, 12.0]}, index=idx)
+        client = _FlakyClient(good, fail_times=1)
+
+        df, error = core._fetch_symbol_history(client, "SYM", "2026-01-01",
+                                                 "2026-01-03")
+
+        assert error is None
+        assert df is not None
+        assert client.calls == 2
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        # Mirrors the live GVT&D/M&M failure: a deterministic broker-side
+        # error that repeats identically on retry.
+        monkeypatch.setattr(core.time, "sleep", lambda s: None)
+        client = _AlwaysErrorClient()
+
+        df, error = core._fetch_symbol_history(client, "SYM", "2026-01-01",
+                                                 "2026-01-03")
+
+        assert df is None
+        assert error is not None
+        assert "jData" in error
+        assert client.calls == core._FETCH_ATTEMPTS
+
+    def test_empty_response_is_not_retried_or_treated_as_error(self, monkeypatch):
+        monkeypatch.setattr(core.time, "sleep", lambda s: None)
+        empty = pd.DataFrame({"close": []})
+        client = _FlakyClient(empty, fail_times=0)
+
+        df, error = core._fetch_symbol_history(client, "SYM", "2026-01-01",
+                                                 "2026-01-03")
+
+        assert df is None
+        assert error is None
+        assert client.calls == 1  # no error occurred, so no retry needed
+
+
+class TestUniverse:
+    def test_niftyfpi_is_not_in_the_live_universe(self):
+        # Confirmed live (2026-09-16 dry run): this instance's symbol master
+        # has no NSE-equity mapping for it, so every fetch permanently fails.
+        assert "NIFTYFPI" not in core.UNIVERSE
 
 
 class TestFetchUniverseCloses:

@@ -169,6 +169,14 @@ def sessions_elapsed(last_rebalance_date: date | None, trading_days: list[date])
 # constant so this single uploaded file has no dependency on the
 # signal_engine package inside the /python strategy-host subprocess. Refresh
 # from data.py (or data.refresh_fno()) whenever NSE revises the F&O list.
+#
+# ONE deliberate exception: NIFTYFPI is in data.py's NSE_FNO but NOT here -
+# this instance's own symbol master (database.token_db.get_token) has no
+# NSE-equity mapping for it (confirmed live, 2026-09-16 dry run: "Symbol
+# 'NIFTYFPI' not found for exchange 'NSE'"), so every fetch permanently
+# fails. Not fixed in data.py - that constant is shared by other backtests
+# and NIFTYFPI's tradeability there is a separate question from whether this
+# LIVE script can ever buy it.
 # ---------------------------------------------------------------------------
 UNIVERSE = [
     "360ONE", "ABB", "ABCAPITAL", "ADANIENSOL", "ADANIENT", "ADANIGREEN", "ADANIPORTS",
@@ -190,7 +198,7 @@ UNIVERSE = [
     "LAURUSLABS", "LICHSGFIN", "LICI", "LODHA", "LT", "LTF", "LTM", "LUPIN", "M&M",
     "MANAPPURAM", "MANKIND", "MARICO", "MARUTI", "MAXHEALTH", "MAZDOCK", "MCX", "MFSL",
     "MOTHERSON", "MOTILALOFS", "MPHASIS", "MUTHOOTFIN", "NAM-INDIA", "NATIONALUM",
-    "NAUKRI", "NBCC", "NESTLEIND", "NHPC", "NIFTYFPI", "NMDC", "NTPC", "NYKAA",
+    "NAUKRI", "NBCC", "NESTLEIND", "NHPC", "NMDC", "NTPC", "NYKAA",
     "OBEROIRLTY", "OFSS", "OIL", "ONGC", "PAGEIND", "PATANJALI", "PAYTM", "PERSISTENT",
     "PETRONET", "PFC", "PGEL", "PHOENIXLTD", "PIDILITIND", "PIIND", "PNB",
     "PNBHOUSING", "POLICYBZR", "POLYCAB", "POWERGRID", "POWERINDIA", "PREMIERENE",
@@ -354,26 +362,23 @@ def _send_telegram(text: str) -> bool:
         return False
 
 
-def _score_pct(scores: dict[str, float], sym: str) -> str:
-    v = scores.get(sym)
-    return f"{v * 100:+.1f}%" if v is not None else "n/a"
-
-
-def _ranked(symbols: list[str], scores: dict[str, float]) -> list[str]:
-    """`symbols` sorted best-score-first; unscored names sort last."""
-    return sorted(symbols,
-                  key=lambda s: (scores.get(s) is None, -(scores.get(s) or 0.0)))
-
-
-def _fmt_scored_list(symbols: list[str], scores: dict[str, float]) -> str:
-    ranked = _ranked(symbols, scores)
-    return " ".join(f"{s} ({_score_pct(scores, s)})" for s in ranked)
+def _section(label: str, symbols: list[str]) -> list[str]:
+    """One symbol per line, alphabetical - no score, no rank order. This
+    strategy was validated buying the FULL top_n basket (see
+    STRATEGY-ANALYSIS.md's concentration backtest: top-3/top-5 subsets
+    UNDERPERFORMED the full basket, including losing to the benchmark
+    out-of-sample). Showing a score or a best-to-worst order here would
+    invite exactly the partial-basket cherry-picking that data argues
+    against, so every name is presented as equally mandatory.
+    """
+    if not symbols:
+        return [f"{label} (0): none"]
+    return [f"{label} ({len(symbols)}):"] + [f"  {s}" for s in sorted(symbols)]
 
 
 def _build_digest(trading_days: list, target: list[str], sells: list[str],
                    buys: list[str], rebalance_number: int,
                    fetch_errors: int = 0, universe_size: int = 0,
-                   scores: dict[str, float] | None = None,
                    today_truncated: int = 0) -> str:
     """The full rotation notification: what to do, and when the next one is
     expected. `trading_days` is the full observed window (oldest -> newest),
@@ -381,17 +386,12 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
     from the actual calendar-days-per-session ratio in this data, since
     REBAL_DAYS counts trading sessions, not calendar days.
 
-    `scores` (symbol -> 12-1 momentum return) lets a capital-constrained
-    trader who can't buy all TOP_N names pick the strongest few instead of
-    an arbitrary subset - every list below is ranked best-score-first.
-
     `fetch_errors`/`universe_size` surface real data-quality gaps (broker
     outage, corrupt ticks) - the ranking may be missing eligible names.
     `today_truncated` is a separate, non-alarming note: symbols whose
     still-forming "today" bar was excluded because this ran before the
     session settled - expected on a pre-close check, not a data problem.
     """
-    scores = scores or {}
     as_of = trading_days[-1]
     if len(trading_days) > 1:
         span_days = (trading_days[-1] - trading_days[0]).days
@@ -407,25 +407,23 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
         if sells or buys else
         "NO ACTION NEEDED: basket unchanged this rebalance"
     )
-    name_width = max((len(s) for s in target), default=0)
 
     lines = [
         f"MOMENTUM-RANK REBALANCE #{rebalance_number} - {as_of}",
         "=" * 44,
         action_line,
-        "Capital-constrained? Buy top-down by score, not all TOP_N names.",
+        "Buy ALL names below, equal weight - this strategy was tested as a "
+        "full basket. Buying only a few underperformed badly in backtest, "
+        "see STRATEGY-ANALYSIS.md.",
         "",
-        f"SELL ({len(sells)}): " + (_fmt_scored_list(sells, scores) if sells else "none"),
-        f"BUY  ({len(buys)}): " + (_fmt_scored_list(buys, scores) if buys else "none"),
-        f"HOLD, no action ({len(held_unchanged)}): "
-        + (_fmt_scored_list(held_unchanged, scores) if held_unchanged else "none"),
+        *_section("SELL", sells),
         "",
-        f"Full basket, ranked by score ({len(target)} names, "
-        f"~{per_slot_pct:.1f}% each if buying all):",
-    ] + [
-        f"  {i:>2}. {s.ljust(name_width)}  {_score_pct(scores, s)}"
-        for i, s in enumerate(_ranked(target, scores), 1)
-    ] + [
+        *_section("BUY", buys),
+        "",
+        *_section("HOLD, no action", held_unchanged),
+        "",
+        f"Full basket ({len(target)} names, ~{per_slot_pct:.1f}% each):",
+        *[f"  {s}" for s in sorted(target)],
         "-" * 44,
         f"Cadence: rebalances every {REBAL_DAYS} trading sessions (~6 weeks)",
         "Next check: per this strategy's schedule (currently weekly, not "
@@ -454,6 +452,49 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
         "STRATEGY-ANALYSIS.md before sizing up.",
     ]
     return "\n".join(lines)
+
+
+# Retries: one extra attempt after the first failure. A deterministic
+# broker-side bug (e.g. GVT&D/M&M's "jData is not valid json object",
+# observed live 2026-09-16) will fail identically both times and still end
+# up excluded - a retry only helps the genuinely transient case (rate limit,
+# momentary network blip), and costs one extra rate-limited call at worst.
+_FETCH_ATTEMPTS = 2
+_FETCH_RETRY_DELAY_SECONDS = 1.5
+
+
+def _fetch_symbol_history(client, sym: str, start: str, end: str,
+                          attempts: int = _FETCH_ATTEMPTS,
+                          delay: float = _FETCH_RETRY_DELAY_SECONDS):
+    """One symbol's raw history, retrying failures up to `attempts` times.
+
+    Returns (df, error_message). `df` is None with no error for "fetched
+    fine, just no rows" (e.g. a brand-new listing with no history yet) -
+    that is not retried, since trying again cannot produce data that does
+    not exist. `error_message` is set only after every attempt failed.
+    """
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            df = client.history(symbol=sym, exchange=EXCHANGE, interval="D",
+                                 start_date=start, end_date=end)
+        except Exception as e:
+            last_error = str(e)
+        else:
+            # client.history() returns a DataFrame on success, or an error
+            # dict on failure (bad symbol, broker/session issue, rate limit,
+            # etc.) - per its own documented contract. A dict has no .empty
+            # attribute, so checking that first (instead of isinstance
+            # DataFrame) avoids importing pandas just for this.
+            if isinstance(df, dict):
+                last_error = str(df.get("message", df))
+            elif df is None or df.empty or "close" not in df.columns:
+                return None, None
+            else:
+                return df, None
+        if attempt < attempts:
+            time.sleep(delay)
+    return None, last_error
 
 
 def fetch_universe_closes(
@@ -486,24 +527,13 @@ def fetch_universe_closes(
     errors = 0
     today_truncated = 0
     for sym in UNIVERSE:
-        try:
-            df = client.history(symbol=sym, exchange=EXCHANGE, interval="D",
-                                 start_date=start, end_date=end)
-        except Exception as e:
-            print(f"[momentum-rank] {sym}: history fetch failed - {e}")
+        df, error = _fetch_symbol_history(client, sym, start, end)
+        if error:
+            print(f"[momentum-rank] {sym}: history fetch failed after "
+                  f"{_FETCH_ATTEMPTS} attempt(s) - {error}")
             errors += 1
             continue
-        # client.history() returns a DataFrame on success, or an error dict
-        # on failure (bad symbol, broker/session issue, rate limit, etc.) -
-        # per its own documented contract. A dict has no .empty attribute,
-        # so checking that first (instead of isinstance-checking DataFrame)
-        # avoids importing pandas just for this.
-        if isinstance(df, dict):
-            print(f"[momentum-rank] {sym}: history error - "
-                  f"{df.get('message', df)}")
-            errors += 1
-            continue
-        if df is None or df.empty or "close" not in df.columns:
+        if df is None:
             continue
         df = df.sort_index()
         close_col = df["close"]
@@ -589,7 +619,7 @@ def run_once(dry_run: bool = False) -> None:
     rebalance_number = int(state.get("rebalance_count", 0)) + 1
 
     digest = _build_digest(trading_days, target, sells, buys, rebalance_number,
-                            fetch_errors, len(UNIVERSE), scores=usable,
+                            fetch_errors, len(UNIVERSE),
                             today_truncated=today_truncated)
     print(digest)
 
