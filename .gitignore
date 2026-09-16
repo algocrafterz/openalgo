@@ -116,6 +116,8 @@ signal_engine/*.session
 # openalgoctl.ps1's Invoke-Start writes this batch launcher at runtime to work
 # around Start-Process argument quoting - it is not source.
 signal_engine/scripts/openalgo-run.bat
+# Same function's PID-tracking file for the launched service window - runtime state, not source.
+signal_engine/scripts/openalgo-service.pid
 
 # PineScript run artifacts: TradingView Strategy-Tester exports and chart
 # screenshots are regenerated per run, not source. They were showing up in

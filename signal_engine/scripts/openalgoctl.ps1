@@ -34,7 +34,12 @@ $wsl = "C:\Windows\System32\wsl.exe"
 $distro = "Ubuntu-24.04"
 
 $workdir = "/home/anand/github/openalgo"
-$ctlScript = "./signal_engine/scripts/openalgoctl.sh"
+# Invoked as "bash <script>", not "./<script>" — the WSL executable bit on
+# this file has been lost before (git checkout/edit reset it to non-exec),
+# which makes "./openalgoctl.sh" fail instantly with Permission Denied
+# before it can log or alert anything. "bash <script>" only needs read
+# access, so it survives that class of failure entirely.
+$ctlScript = "bash ./signal_engine/scripts/openalgoctl.sh"
 
 $maxLogSizeMB = 5
 $healthUrl = "http://127.0.0.1:5000/"
@@ -205,12 +210,21 @@ function Invoke-Start {
     # Write a batch file to avoid Start-Process argument quoting issues.
     # The batch file runs WSL in foreground — the window stays open as
     # long as services are running, and closes when they stop.
-    $batFile = "$PSScriptRoot\openalgo-run.bat"
+    #
+    # Written to $env:TEMP (a local NTFS path), NOT $PSScriptRoot. This
+    # script lives inside the WSL filesystem, reached from Windows via the
+    # \\wsl.localhost\... UNC path — a batch file launched via Start-Process
+    # from that "network" location gets Windows' Mark-of-the-Web / SmartScreen
+    # "Open File - Security Warning" modal EVERY time, which blocks unattended
+    # execution and needs a human to click "Run". A file freshly written to a
+    # genuine local path by the current user isn't flagged that way.
+    $batFile = "$env:TEMP\openalgo-run.bat"
     @"
 @echo off
 title OpenAlgo Service
 "$wsl" -d $distro -- bash -lc "cd $workdir && $ctlScript run"
 "@ | Out-File -FilePath $batFile -Encoding ascii
+    Unblock-File -Path $batFile -ErrorAction SilentlyContinue
 
     $proc = Start-Process -WindowStyle Minimized -FilePath $batFile -PassThru
     $proc.Id | Out-File $servicePidFile -Encoding ascii

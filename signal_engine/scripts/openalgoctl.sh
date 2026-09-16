@@ -139,7 +139,18 @@ wait_for_network() {
     log "Checking network connectivity..."
     local elapsed=0
 
-    while ! curl -fs --max-time 3 https://httpbin.org/status/200 >/dev/null 2>&1; do
+    # Probe more than one well-known, high-uptime endpoint — a single
+    # external test service (this used to be only httpbin.org, which is not
+    # an SLA'd service) being slow or down must not block the entire day's
+    # startup. Any one succeeding is enough.
+    network_up() {
+        curl -fs --max-time 3 https://www.google.com/generate_204 >/dev/null 2>&1 && return 0
+        curl -fs --max-time 3 https://api.telegram.org >/dev/null 2>&1 && return 0
+        curl -fs --max-time 3 https://cloudflare.com >/dev/null 2>&1 && return 0
+        return 1
+    }
+
+    while ! network_up; do
         sleep 2
         elapsed=$((elapsed + 2))
 
@@ -180,9 +191,15 @@ kill_from_pidfile() {
     fi
 
     # Kill the actual Python processes spawned by uv (uv does not forward SIGTERM).
-    # Match by .venv path — safe, project-specific, survives orphaning.
+    # Match by .venv path AND the exact entrypoint module — safe, project-specific,
+    # survives orphaning. NOTE: this used to match the bare "-m signal_engine"
+    # prefix, which also matches unrelated standalone tools under the same
+    # package (e.g. `python -m signal_engine.analysis.breakingtrade --watch`),
+    # so a routine stop/restart of the supervised stack could collaterally kill
+    # a completely separate process the user started by hand. Match the exact
+    # entrypoint this script itself starts instead.
     log "Killing Python processes (venv)..."
-    pkill -TERM -f "$venv_python -m signal_engine" 2>/dev/null || true
+    pkill -TERM -f "$venv_python -m signal_engine.main" 2>/dev/null || true
     pkill -TERM -f "$venv_python app.py" 2>/dev/null || true
 
     sleep 2
@@ -195,8 +212,8 @@ kill_from_pidfile() {
         [ -n "$old_signal" ] && kill -9 "$old_signal" 2>/dev/null || true
         [ -n "$old_app" ]    && kill -9 "$old_app"    2>/dev/null || true
     fi
-    pkill -9 -f "$venv_python -m signal_engine" 2>/dev/null || true
-    pkill -9 -f "$venv_python app.py"           2>/dev/null || true
+    pkill -9 -f "$venv_python -m signal_engine.main" 2>/dev/null || true
+    pkill -9 -f "$venv_python app.py"                2>/dev/null || true
 
     rm -f "$PID_FILE"
 }
@@ -228,6 +245,13 @@ wait_for_health() {
 #     Writes PID file as soon as each process starts.
 
 AUTH_COOLDOWN_FILE="$LOG_DIR/auth_cooldown.txt"
+# Written by cmd_stop() right before it kills app.py/signal_engine from a
+# SEPARATE process (the AutoStop task) than the one running this loop. Without
+# it, the run loop's own liveness check can't tell "I was told to stop" apart
+# from "I died", and fires a false "Stack is DOWN / app_crash" alert every
+# single day at the scheduled stop time. See cmd_run()'s death-handling below.
+STOP_SENTINEL_FILE="$LOG_DIR/stop_requested.flag"
+HEARTBEAT_FILE="$LOG_DIR/heartbeat.txt"
 
 # Escalating cooldown after a failed broker auth.
 #
@@ -295,6 +319,10 @@ bootstrap() {
     fi
 
     wait_for_network || return 1
+    # Clear any stale sentinel from a prior run that crashed before reaching
+    # cleanup() — otherwise this fresh boot would misread it as "I was just
+    # told to stop" the instant something goes wrong.
+    rm -f "$STOP_SENTINEL_FILE"
     kill_from_pidfile
 
     # Wait for NTP sync before starting — required on WSL2 after wake-from-sleep.
@@ -330,6 +358,15 @@ bootstrap() {
 
     if "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler startup; then
         log "Startup successful"
+        if [ -f "$AUTH_COOLDOWN_FILE" ]; then
+            local _prior_failures; _prior_failures=$(_cooldown_count)
+            if [ "$_prior_failures" -gt 1 ]; then
+                log "Recovered after ${_prior_failures} failed attempt(s)."
+                timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
+                    notify "startup" "Recovered after ${_prior_failures} failed startup attempt(s). Signal engine is now UP." \
+                    >/dev/null 2>&1 || log "Recovery alert could not be sent (non-fatal)"
+            fi
+        fi
         rm -f "$AUTH_COOLDOWN_FILE"
     else
         log "ERROR: Startup failed — writing auth cooldown to prevent API lockout"
@@ -391,11 +428,16 @@ cmd_run() {
         $_CLEANUP_DONE && return
         _CLEANUP_DONE=true
         log "Shutting down (reason: $_STOP_REASON)..."
-        timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "$_STOP_REASON" 2>&1 || \
-            log "Shutdown notification failed (non-fatal)"
+        if [ -f "$STOP_SENTINEL_FILE" ]; then
+            log "Expected stop (sentinel present) — shutdown notification already sent by 'stop', skipping duplicate."
+            rm -f "$STOP_SENTINEL_FILE"
+        else
+            timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "$_STOP_REASON" 2>&1 || \
+                log "Shutdown notification failed (non-fatal)"
+        fi
         kill "$SIGNAL_PID" 2>/dev/null || true
         kill "$APP_PID" 2>/dev/null || true
-        rm -f "$PID_FILE"
+        rm -f "$PID_FILE" "$HEARTBEAT_FILE"
         # Note: no 'wait' here — exec > >(tee ...) creates a tee subprocess that
         # won't exit until shell stdout closes, causing 'wait' to deadlock.
         log "Done."
@@ -440,6 +482,7 @@ cmd_run() {
         # Wait while both processes are alive
         while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$SIGNAL_PID" 2>/dev/null; do
             sleep 5
+            date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
             # Reset restart counter if signal engine has been stable for _RESTART_WINDOW seconds
             if (( SECONDS - _last_start >= _RESTART_WINDOW )); then
                 _RESTART_COUNT=0
@@ -478,6 +521,16 @@ cmd_run() {
                 fi
             fi
         done
+
+        # Inner loop exited because someone (cmd_stop, run from a separate
+        # process/task) deliberately killed app.py or signal_engine — not
+        # because either one crashed. Honor that instead of misreporting a
+        # "Stack is DOWN" crash alert for a routine scheduled stop.
+        if [ -f "$STOP_SENTINEL_FILE" ]; then
+            _STOP_REASON="$(cat "$STOP_SENTINEL_FILE" 2>/dev/null || echo scheduled)"
+            log "Expected stop detected (reason: $_STOP_REASON) — not treating this as a crash."
+            break
+        fi
 
         # app.py alive but not serving — the case liveness checks cannot see
         if [ "$_app_wedged" = true ]; then
@@ -543,6 +596,10 @@ cmd_stop() {
     fi
 
     log "STOPPING: Terminating OpenAlgo processes"
+
+    # Tell the (separate process) run-loop this is an expected stop, before
+    # killing anything — see STOP_SENTINEL_FILE comment above.
+    echo "${STOP_REASON:-scheduled}" > "$STOP_SENTINEL_FILE"
 
     # Send shutdown notification while app.py is still running (Telegram needs it).
     # 10s timeout — if Telegram is slow or the session is busy (signal_engine holds

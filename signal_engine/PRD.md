@@ -216,6 +216,26 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-16)
+
+**Startup/watchdog stack hardened after a silent 20+ hour outage.** `openalgoctl.sh` lost
+its executable bit on 2026-09-15 (git tracked it as non-executable); every scheduled
+start/watchdog attempt since then failed instantly with `Permission Denied`, before any
+log line or Telegram alert could fire — the stack was down through the first ~3 hours of
+today's session with zero notification. Fixed the immediate cause and five related gaps
+found while tracing it: the invocation no longer depends on the executable bit surviving a
+checkout; a new `heartbeat.txt` file plus an independent `openAlgoHeartbeatCheck` Task
+Scheduler task (no WSL/bash/Python dependency) now catches this failure class directly;
+the recurring Windows "Open File - Security Warning" popup (helper `.bat` launched from
+the `\\wsl.localhost\...` path) is gone — it now runs from `$env:TEMP`; the daily 3:30 PM
+scheduled stop no longer misreports itself as an `app_crash`; the missing `openAlgoSquareOff`
+3:02 PM failsafe task was re-registered; and `kill_from_pidfile`'s process match was
+narrowed so a routine restart can no longer collaterally kill an unrelated
+`signal_engine.*` tool (e.g. the BreakingTrade watcher). Full detail in the "Dead-man's
+switch and the 2026-09-15/16 silent outage" section under Startup & Shutdown below.
+Deferred: migrating the bash+PowerShell+Task Scheduler supervision to WSL2 systemd
+services, which needs a WSL restart.
+
 ## Recent Changes (2026-09-15)
 
 **BREAKINGTRADE-WATCHLIST's P&L is no longer double-counted against BREAKINGTRADE on a
@@ -284,6 +304,38 @@ Fine-tuning plan for the two promising ones:
    larger 30-of-201 test), then paper-trade one full rebalance cycle before funding. Open risk
    to decide on explicitly: no crash protection (-29.4% in Feb-Mar 2020, in line with the
    universe) — decide whether a market-regime override belongs in v1 before scaling size.
+   **Update 2026-09-15**: fine-tuning sweep re-run against Historify (OpenAlgo's own
+   broker-verified daily store), 300 configs on the full 197-name F&O universe plus 180
+   configs on the actual deployable 40-name Pine universe — see the dated entry in
+   `swing/momentum-rank/STRATEGY-ANALYSIS.md`. Two findings: (a) Historify's daily history
+   for this universe only reaches back to 2019-12, not 2016, so the 36.9% CAGR / +10.7%/yr
+   headline above is **not yet reproducible against the platform's own broker data** and
+   should be treated as unconfirmed until it is; on the shorter window the shipped config's
+   OOS alpha is a statistically insignificant +4.55%/yr (t=0.71). (b) The one robust,
+   cross-validated improvement found was slowing the rebalance cadence from 21 to 30
+   sessions (~monthly to ~six-weekly) — shipped into the `.pine` default — which cut max
+   drawdown 19.3% -> 14.3% and raised OOS alpha to +7.50%/yr, consistent across both
+   universes tested. Still candidate/paper-only; the rest of this plan (TradingView compile,
+   paper-trade a full cycle, decide on a crash-regime override) is unchanged and still open.
+   **Update 2026-09-15 (follow-up)**: the 40-symbol-restricted framing above was
+   superseded — backtests must use the full F&O universe, not a subset chosen for a
+   deployment constraint (see `feedback_backtest_full_universe.md` in memory). Re-read
+   with the full 197-name universe as authoritative: top 12 of 197, lookback 300, rebal
+   30 gives +11.0%/yr OOS alpha (t=1.38) and +25.7%/yr all-period alpha (t=3.59) at 15.5%
+   max drawdown, vs. the 40-name Pine cap's +0.06%/yr OOS / +12.3%/yr all-period / 32.7%
+   drawdown. Since Pine cannot hold more than 40 names, closing this gap means moving off
+   Pine — user chose to migrate. **Phase 1 shipped**: `strategies/examples/
+   momentum_rank_strategy.py` (single self-contained file — the `/python` host only
+   accepts one uploaded `.py` — unit-tested including numerical
+   parity with `portfolio.py`'s `build_factor`) ranks the full universe via OpenAlgo's
+   own `history` API and posts a human-readable digest to its own Telegram bot/chat —
+   deliberately NOT the machine-parseable alert format, so the trader still places CNC
+   orders manually (auto-execution would today route through `signal_engine`'s global
+   sizing mode against a fake SL, since unregistered strategy tags silently fall through
+   to defaults rather than erroring — `main.py:208`). Phase 2 (auto-execution: a new
+   per-strategy sizing-mode override in `risk.py`, `strategy_profiles.MOMENTUM-RANK`
+   registration) is explicitly deferred, not started. See the STRATEGY-ANALYSIS.md
+   follow-up entry for full detail.
 2. **`orb`** — compile the R:R/volume-filter fixes on TradingView, then attack slippage
    directly (limit vs. market fills on entry/exit) using the same method as the
    `intraday-slippage-analysis` learned pattern. Keep position sizing capped at 1-2 concurrent
@@ -4006,18 +4058,22 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 
 # Windows Task Scheduler (one-time setup, run as Administrator)
 .\signal_engine\scripts\createTaskOpenAlgoScheduler.ps1
-# Creates 3 tasks under Anand user:
-#   openAlgoAutoStart  -- 8:50 AM weekdays, long-running (blocks all day)
-#   openAlgoAutoStop   -- 3:30 PM weekdays, graceful shutdown
-#   openAlgoWatchdog   -- every 5 min, 9:00 AM-3:25 PM weekdays, crash recovery
+# Creates 5 tasks under Anand user:
+#   openAlgoAutoStart      -- 8:50 AM weekdays, long-running (blocks all day)
+#   openAlgoAutoStop       -- 3:30 PM weekdays, graceful shutdown
+#   openAlgoWatchdog       -- every 5 min, 9:00 AM-3:25 PM weekdays, crash recovery
+#   openAlgoSquareOff      -- 3:02 PM weekdays, MIS failsafe close (WakeToRun)
+#   openAlgoHeartbeatCheck -- every 10 min, 9:05 AM-3:25 PM weekdays, dead-man's switch
 ```
 
-### Windows Task Scheduler -- How the 3 Tasks Work Together
+### Windows Task Scheduler -- How the 5 Tasks Work Together
 
 | Time | Task | Action |
 |------|------|--------|
 | 8:50 AM | `openAlgoAutoStart` | Calls `openalgoctl.ps1 run` -- starts app.py + signal engine, **stays running all day** |
 | 9:00 AM-3:25 PM | `openAlgoWatchdog` | Calls `openalgoctl.ps1 start` every 5 min -- no-op if healthy, relaunches if crashed |
+| 9:05 AM-3:25 PM | `openAlgoHeartbeatCheck` | Runs `heartbeat_check.ps1` every 10 min -- alerts if `signal_engine/logs/heartbeat.txt` is stale, independent of WSL/bash/Python |
+| 3:02 PM | `openAlgoSquareOff` | Calls `openalgoctl.ps1 squareoff` -- failsafe MIS close if the engine's own 3:00 PM exit didn't run (WakeToRun) |
 | 3:30 PM | `openAlgoAutoStop` | Calls `openalgoctl.ps1 stop` -- sends Telegram notification, kills both services |
 
 The watchdog uses `start` (idempotent): polls `http://127.0.0.1:5000/`, skips if healthy, restarts the full stack if dead. Maximum recovery time after a crash: **5 minutes**.
@@ -4033,6 +4089,22 @@ A failed startup used to be silent and open-ended. `_run_startup()` called `sys.
 - Alerts also fire on `app.py` crash and on signal-engine crash-loop giveup.
 
 Covered by `tests/test_openalgoscheduler.py` and `tests/test_openalgoctl.sh` (13 shell assertions on the cooldown state machine).
+
+### Dead-man's switch and the 2026-09-15/16 silent outage
+
+On 2026-09-15, `openalgoctl.sh` lost its executable bit (git tracked it as mode `100644`). Every subsequent `AutoStart`/`Watchdog` invocation (`openalgoctl.ps1` runs `./signal_engine/scripts/openalgoctl.sh <cmd>`) failed instantly with `Permission Denied` — **before** the script could write a log line or send a Telegram alert. The stack was down from 15:00 that day through 11:30+ the next morning with zero notification anywhere; every alerting path in this doc lives inside the process that couldn't start.
+
+Fixes:
+- `$ctlScript` in `openalgoctl.ps1` now invokes `bash ./signal_engine/scripts/openalgoctl.sh <cmd>` instead of relying on `./<script>` and the executable bit surviving every checkout.
+- `openalgoctl.sh`'s run loop now writes `signal_engine/logs/heartbeat.txt` (a Unix timestamp) every ~5s while genuinely healthy. A new, independent Task Scheduler task, `openAlgoHeartbeatCheck` (`heartbeat_check.ps1`), checks that file's staleness every 10 minutes during market hours and raises a blocking Windows alert if it's missing or stale — with **no dependency on WSL, bash, or Python succeeding**, so it survives the exact failure class above.
+- Separately, `Invoke-Start` in `openalgoctl.ps1` writes its helper `openalgo-run.bat` to `$env:TEMP` instead of `$PSScriptRoot` (which resolves to the `\\wsl.localhost\...` UNC path). Windows flags batch files launched via `Start-Process` from that path with a "This file is in a location outside your local network" security prompt on every single launch, which silently blocks unattended recovery waiting for a click that never comes.
+- `cmd_stop()` now writes `signal_engine/logs/stop_requested.flag` before killing anything. `AutoStop` runs as a separate process from the long-running `AutoStart`/`Watchdog` loop, and that loop previously had no way to distinguish "I was told to stop" from "I died" — it misreported every routine 3:30 PM shutdown as `app_crash` / "Stack is DOWN". The sentinel fixes the misattribution and also prevents a duplicate shutdown notification (the `stop` command already sends one).
+- `kill_from_pidfile()`'s process-matching narrowed from `-m signal_engine` to `-m signal_engine.main` — the old pattern also matched unrelated standalone tools under the same package (e.g. `signal_engine.analysis.breakingtrade`), risking collateral kills on routine restarts.
+- `wait_for_network()` no longer depends on a single external test service (`httpbin.org`); it now accepts any of three well-known endpoints.
+- A successful startup that followed one or more auth-cooldown failures now sends a "recovered after N failed attempts" notification instead of resolving silently.
+- The missing `openAlgoSquareOff` task (documented as one of the scheduled tasks but absent from the live Task Scheduler — cause unknown) was re-registered.
+
+Not done as part of this fix, flagged as a larger follow-up: replacing the bash+PowerShell+Task Scheduler supervision stack with WSL2 systemd services (`Restart=always`), which would remove most of the hand-rolled flock/restart-budget/health-probe logic. Deferred because it requires enabling systemd in `/etc/wsl.conf` and restarting the WSL2 VM.
 
 ### WSL Stability -- ~/.wslconfig (Windows user home)
 

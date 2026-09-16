@@ -204,9 +204,74 @@ Register-ScheduledTask `
 
 Write-Host "Task 4 created: openAlgoSquareOff  (Weekdays $squareoffTime -- failsafe MIS close, WakeToRun)" -ForegroundColor Green
 
+# -------------------------------------------------------
+# Task 5: Heartbeat Check (dead-man's switch)
+# Runs heartbeat_check.ps1 every 10 min, 9:05 AM-3:25 PM weekdays. Has NO
+# dependency on WSL/bash/Python -- catches the case where the rest of this
+# stack fails before it can alert on itself (see heartbeat_check.ps1 header;
+# this is what would have caught the 2026-09-15/16 silent outage).
+# -------------------------------------------------------
+
+Unregister-ScheduledTask -TaskName "openAlgoHeartbeatCheck" -Confirm:$false -ErrorAction SilentlyContinue
+
+$heartbeatXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>OpenAlgo heartbeat check -- alerts if the stack goes silent during market hours. Independent of WSL/bash/Python.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <Repetition>
+        <Interval>PT10M</Interval>
+        <Duration>PT6H20M</Duration>
+        <StopAtDurationEnd>true</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-05T09:05:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <WeeksInterval>1</WeeksInterval>
+        <DaysOfWeek>
+          <Monday /><Tuesday /><Wednesday /><Thursday /><Friday />
+        </DaysOfWeek>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>Anand</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PSScriptRoot\heartbeat_check.ps1"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+
+Register-ScheduledTask `
+    -TaskName "openAlgoHeartbeatCheck" -TaskPath "\" `
+    -Xml $heartbeatXml `
+    -Force | Out-Null
+
+Write-Host "Task 5 created: openAlgoHeartbeatCheck (Weekdays 9:05AM-3:25PM, every 10 min -- dead-man's switch)" -ForegroundColor Green
+
 # --- Summary ---
 Write-Host ""
-Write-Host "All 4 tasks registered under user: Anand" -ForegroundColor Cyan
+Write-Host "All 5 tasks registered under user: Anand" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "How they work together:" -ForegroundColor Cyan
 Write-Host "  8:50 AM  openAlgoAutoStart  -- starts app.py + signal engine, stays running all day" -ForegroundColor White
