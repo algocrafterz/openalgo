@@ -46,6 +46,13 @@ class PortfolioConfig:
     min_price: float = 20.0
     #: Fraction of the date range used for parameter choice.
     is_fraction: float = 0.60
+    #: Dual-momentum absolute filter (Antonacci). A pick must ALSO have a positive
+    #: factor score, not just top-N relative rank - a name that is merely the best
+    #: of a falling universe is excluded. Its slot then sits in CASH (0% that period)
+    #: instead of being backfilled by the next-best negative-momentum name, which is
+    #: what actually cuts drawdown in a broad market decline. False reproduces the
+    #: plain relative-momentum book exactly (momentum-rank's validated behaviour).
+    require_positive: bool = False
 
 
 def _range_position(px: pd.DataFrame, hi: pd.DataFrame, lo: pd.DataFrame,
@@ -132,8 +139,16 @@ class PortfolioBacktest:
                 continue
             picks = list(f.nlargest(cfg.top_n).index)
 
+            # dual momentum: a pick also needs positive ABSOLUTE momentum (the same
+            # factor value > 0), not just top-N relative rank. A shortfall sits in
+            # cash rather than being backfilled by the next-best negative name.
+            cash_frac = 0.0
+            if cfg.require_positive:
+                picks = [s for s in picks if f[s] > 0]
+                cash_frac = (cfg.top_n - len(picks)) / cfg.top_n
+
             ret = op.iloc[b + 1] / op.iloc[a + 1] - 1.0
-            book = float(ret[picks].mean())
+            book = float(ret[picks].mean()) * (1.0 - cash_frac) if picks else 0.0
             bench = float(ret[valid[valid].index].mean())
 
             # cost is charged on turnover: names entering and names leaving
@@ -143,7 +158,7 @@ class PortfolioBacktest:
 
             rows.append({"date": idx[a + 1], "n": len(picks), "book_gross": book,
                          "book": book - cost, "bench": bench, "turnover": turn,
-                         "excess": book - cost - bench})
+                         "excess": book - cost - bench, "cash_frac": cash_frac})
         return pd.DataFrame(rows).set_index("date")
 
     # ---- reporting -----------------------------------------------------

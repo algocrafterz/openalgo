@@ -43,9 +43,14 @@ def _register():
     from signal_engine.backtest.strategies.ema_pullback import EmaPullback, EmaPullbackParams
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
+    from signal_engine.backtest.strategies.ibs_meanrev import IbsMeanRev, IbsMeanRevParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
+    from signal_engine.backtest.strategies.nr_breakout import NrBreakout, NrBreakoutParams
+    from signal_engine.backtest.strategies.open_drive import OpenDrive, OpenDriveParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
     from signal_engine.backtest.strategies.phoenix import Phoenix, PhoenixParams
+    from signal_engine.backtest.strategies.turtle_soup import TurtleSoup, TurtleSoupParams
+    from signal_engine.backtest.strategies.value_area_fade import ValueAreaFade, FadeParams
     from signal_engine.backtest.strategies.value_zone import ValueZone, ValueZoneParams
     REGISTRY["breakout"] = (Breakout, BreakoutParams, "intraday")
     REGISTRY["dhb"] = (Dhb, DhbParams, "intraday")
@@ -55,9 +60,14 @@ def _register():
     REGISTRY["ema_pullback"] = (EmaPullback, EmaPullbackParams, "swing")
     REGISTRY["gap_rsi"] = (GapRsi, GapRsiParams, "swing")
     REGISTRY["ib_extension"] = (IbExtension, IbExtParams, "intraday")
+    REGISTRY["ibs_meanrev"] = (IbsMeanRev, IbsMeanRevParams, "swing")
     REGISTRY["key_level"] = (KeyLevel, KeyLevelParams, "intraday")
+    REGISTRY["nr_breakout"] = (NrBreakout, NrBreakoutParams, "intraday")
+    REGISTRY["open_drive"] = (OpenDrive, OpenDriveParams, "intraday")
     REGISTRY["orb"] = (Orb, OrbParams, "intraday")
     REGISTRY["phoenix"] = (Phoenix, PhoenixParams, "swing")
+    REGISTRY["turtle_soup"] = (TurtleSoup, TurtleSoupParams, "intraday")
+    REGISTRY["value_area_fade"] = (ValueAreaFade, FadeParams, "intraday")
     REGISTRY["value_zone"] = (ValueZone, ValueZoneParams, "swing")
 
 
