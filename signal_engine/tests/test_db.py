@@ -329,3 +329,24 @@ class TestOpenPositionReconciliation:
             "Reconciled at startup",
         )
         assert fetch_all_open_positions() == []
+
+    def test_open_entry_carries_its_sig_id(self):
+        """2026-09-17: fetch_all_open_positions() dropped sig_id entirely, so the startup
+        reconciliation path that reads it (to backfill a matching EXIT via save_reconciled_exit)
+        had no way to carry the entry's SigID onto its own backfilled exit row."""
+        save(
+            _make_signal(symbol="HINDALCO", sig_id="HINDALCO-20260917-1125"),
+            _make_order(symbol="HINDALCO"), _make_result(),
+        )
+        open_positions = fetch_all_open_positions()
+        assert open_positions[0]["sig_id"] == "HINDALCO-20260917-1125"
+
+    def test_save_reconciled_exit_persists_the_sig_id(self):
+        save_reconciled_exit(
+            "BREAKOUT", "HINDALCO", 1022.4, 1019.43, 1026.85, 107, 1019.4, -363.8,
+            "Reconciled at startup", sig_id="HINDALCO-20260917-1125",
+        )
+        conn = _get_connection()
+        row = conn.execute("SELECT sig_id FROM trades").fetchone()
+        conn.close()
+        assert row == ("HINDALCO-20260917-1125",)

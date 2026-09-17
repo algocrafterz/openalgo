@@ -131,6 +131,45 @@ class TestCloseIsWrittenToTheAuditTrail:
                 quantity=10, exit_price=805.0, pnl=50.0, exit_types=["SL"],
             )  # must not raise
 
+    @pytest.mark.asyncio
+    async def test_a_tracker_detected_close_carries_the_entry_s_sig_id(self):
+        """2026-09-17: BREAKOUT positions closed by tracker detection (broker SL-M beating
+        the TradingView alert here) wrote sig_id=NULL, so the ledger's sig_id-keyed
+        reconciliation couldn't pair the close back to its entry - it reported the entry as
+        falsely still-open and the close as a phantom orphan trade. book_close() must carry
+        TrackedPosition.sig_id through to save_tracker_exit()."""
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("PFC", qty=918, fill=346.80)
+        pos.sig_id = "PFC-20260917-0955"
+        tracker.register(pos)
+        book = [{"symbol": "PFC", "quantity": 0, "ltp": 347.55, "today_realized_pnl": -688.50}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-688.50)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        assert save.call_args.kwargs["sig_id"] == "PFC-20260917-0955"
+
+    @pytest.mark.asyncio
+    async def test_a_position_with_no_sig_id_still_closes_cleanly(self):
+        """Python-sourced strategies (BREAKINGTRADE family) never carry a SigID - the field
+        must default to "" and not break the close path."""
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        tracker.register(_pos("BIOCON", qty=100, fill=380.0))  # sig_id defaults to ""
+        book = [{"symbol": "BIOCON", "quantity": 0, "ltp": 381.0, "today_realized_pnl": 10.0}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=10.0)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        assert save.call_args.kwargs["sig_id"] == ""
+
 
 class TestExitTypeNamesTheRealCause:
     @pytest.mark.asyncio

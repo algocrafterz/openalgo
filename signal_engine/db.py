@@ -301,7 +301,7 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
 
 def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp: float,
                       quantity: int, exit_price: "float | None", pnl: float,
-                      exit_types: list, order_id: str = "") -> None:
+                      exit_types: list, order_id: str = "", sig_id: "str | None" = None) -> None:
     """Write the EXIT row for a close the TRACKER detected (broker SL-M fill, no-progress
     market exit, time exit).
 
@@ -314,6 +314,11 @@ def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp
 
     Never raises: the position IS closed at the broker, and a bookkeeping failure must not
     leave the tracker believing otherwise.
+
+    sig_id: the entry's SigID (TrackedPosition.sig_id), so the ledger's sig_id-keyed
+    reconciliation can pair this close back to its entry. Left None only for entries that
+    never carried one (Python-sourced strategies) — see tracker.py's TrackedPosition.sig_id
+    docstring for the 2026-09-17 incident this closes.
     """
     try:
         conn = _get_connection()
@@ -328,7 +333,7 @@ def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp
                 "", now, now,
                 f"tracker close: {'+'.join(exit_types) if exit_types else 'UNKNOWN'}",
                 json.dumps({"pnl": pnl, "exit_types": list(exit_types or [])}),
-                exit_price, None, _TRADE_MODE,
+                exit_price, sig_id or None, _TRADE_MODE,
             ),
         )
         conn.commit()
@@ -351,7 +356,7 @@ def fetch_all_open_positions() -> list:
         conn = _get_connection()
         rows = conn.execute(
             """
-            SELECT strategy, symbol, direction, entry, sl, tp, quantity, order_id, executed_at
+            SELECT strategy, symbol, direction, entry, sl, tp, quantity, order_id, executed_at, sig_id
             FROM trades
             WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT', 'EXIT')
               AND date(executed_at) = ?
@@ -364,7 +369,7 @@ def fetch_all_open_positions() -> list:
         return []
 
     latest = {}
-    for strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at in rows:
+    for strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at, sig_id in rows:
         latest[(strategy, symbol)] = {
             "strategy": strategy,
             "symbol": symbol,
@@ -375,6 +380,7 @@ def fetch_all_open_positions() -> list:
             "quantity": int(qty or 0),
             "order_id": str(order_id or ""),
             "executed_at": str(executed_at or ""),
+            "sig_id": str(sig_id or ""),
         }
     return [v for v in latest.values() if v["direction"] in ("LONG", "SHORT")]
 
@@ -393,6 +399,7 @@ def save_reconciled_exit(
     fill_price: float,
     pnl: float,
     note: str,
+    sig_id: "str | None" = None,
 ) -> None:
     """Backfill an EXIT row for a position the broker had already closed by the time the engine
     restarted - see startup.reconcile_open_positions(). The exact fill time, and whether it
@@ -431,7 +438,7 @@ def save_reconciled_exit(
                     "reconciled": True, "realized_pnl": pnl,
                 }),
                 fill_price,
-                None,
+                sig_id or None,
                 _TRADE_MODE,
             ),
         )
@@ -516,14 +523,14 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
     when the in-memory tracker has been wiped. Only returns LONG/SHORT entries
     (never EXIT rows). Returns None if no matching trade is found.
 
-    Returns a dict with: entry, sl, tp, quantity, order_id, direction, executed_at.
+    Returns a dict with: entry, sl, tp, quantity, order_id, direction, executed_at, sig_id.
     """
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
         conn = _get_connection()
         cur = conn.execute(
             """
-            SELECT entry, sl, tp, quantity, order_id, direction, executed_at
+            SELECT entry, sl, tp, quantity, order_id, direction, executed_at, sig_id
             FROM trades
             WHERE upper(symbol) = upper(?)
               AND upper(strategy) = upper(?)
@@ -538,7 +545,7 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
         row = cur.fetchone()
         if not row:
             return None
-        entry, sl, tp, qty, order_id, direction, executed_at = row
+        entry, sl, tp, qty, order_id, direction, executed_at, sig_id = row
         return {
             "entry": float(entry or 0.0),
             "sl": float(sl or 0.0),
@@ -547,6 +554,7 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
             "order_id": str(order_id or ""),
             "direction": Direction.LONG if str(direction).upper() == "LONG" else Direction.SHORT,
             "executed_at": str(executed_at or ""),
+            "sig_id": str(sig_id or ""),
         }
     except Exception as e:
         logger.warning(f"fetch_last_entry_trade failed for {symbol}:{strategy}: {e}")

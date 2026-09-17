@@ -32,5 +32,16 @@ def _never_touch_the_real_trades_db(tmp_path, monkeypatch):
     making the real path unreachable from a test is a guarantee.
 
     Autouse and session-wide, so a future writer is covered before anyone remembers it exists.
+
+    Same guarantee for the day-summary "already sent today" marker: individual tests that
+    exercise send_day_summary() have so far remembered to patch
+    signal_engine.tracker._DAY_SUMMARY_MARKER (or _mark_summary_sent) themselves, but nothing
+    made that structural. 2026-09-17: the real marker file's mtime shows it was written
+    mid-morning with only a handful of the day's trades reflected - most plausibly some
+    exercise of the real send path that skipped that per-test patch - which then silently
+    suppressed the genuine 14:45 EOD summary for the rest of the day. Redirecting it here,
+    the same way trades.db is redirected, makes that class of leak impossible regardless of
+    whether any individual test remembers to isolate it.
     """
     monkeypatch.setattr("signal_engine.db._DB_PATH", str(tmp_path / "trades.db"))
+    monkeypatch.setattr("signal_engine.tracker._DAY_SUMMARY_MARKER", str(tmp_path / "day_summary"))

@@ -283,6 +283,7 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         db.save_reconciled_exit(
             pos["strategy"], symbol, pos["entry"], pos["sl"], pos["tp"],
             pos["quantity"], fill_price, pnl, note,
+            sig_id=pos.get("sig_id"),
         )
         risk_engine.record_close(pnl, strategy=pos["strategy"], symbol=symbol)
         try:
@@ -481,6 +482,7 @@ def _restore_tracker_positions(
             sl_order_id=sl_orders.get(bsymbol.upper(), ""),
             fill_price=float(bp.get("average_price", 0) or 0),
             ever_seen_nonzero_qty=True,
+            sig_id=found.get("sig_id", ""),
         ))
         restored += 1
         recovered_sl = sl_orders.get(bsymbol.upper(), "")

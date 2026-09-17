@@ -491,15 +491,17 @@ class TestPaperCheckin:
 
 
 class TestPaperLedger:
-    def test_initial_buy_splits_capital_and_warns_when_unfunded(self, capsys):
+    def test_initial_buy_skips_and_redistributes_when_unfunded(self, capsys):
+        """2026-09-17 regression: an unaffordable candidate must not open a qty=0
+        "position" - it's skipped, and its slot is redistributed to the other buy."""
         ledger = core._new_paper_ledger(capital=10000.0)
         prices = {"CHEAP": 50.0, "EXPENSIVE": 99999.0}
 
         out = core._paper_initial_buy(ledger, "2026-01-01",
                                       ["CHEAP", "EXPENSIVE"], prices, top_n=2)
 
-        assert out["positions"]["CHEAP"]["qty"] == int(5000.0 // 50.0)
-        assert out["positions"]["EXPENSIVE"]["qty"] == 0
+        assert out["positions"]["CHEAP"]["qty"] == 200  # absorbs the full 10000 pool
+        assert "EXPENSIVE" not in out["positions"]
         assert "WARNING" in capsys.readouterr().out
 
     def test_apply_rebalance_sells_computes_pnl_and_leaves_holds_untouched(self):

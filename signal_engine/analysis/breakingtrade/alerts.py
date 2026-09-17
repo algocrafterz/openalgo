@@ -368,6 +368,7 @@ def record(
     deliver: bool = True,
     delivered: bool = False,
     message_id: int | None = None,
+    when: datetime | None = None,
 ) -> bool:
     """Persist an alert row, optionally delivering it.
 
@@ -379,6 +380,14 @@ def record(
     message_id is Telegram's id for the message this row belongs to - passed straight through
     when the caller already sent the message itself (the multi-symbol callers below), or filled
     in here when `deliver=True` does the sending.
+
+    when: the LOGICAL time this alert is for (defaults to wall-clock now). Callers whose
+    dedup check keys off a caller-supplied timestamp - alert_btst()'s captured_at, the scan
+    time rather than the moment record() happens to run - must pass it here too, or the
+    written created_at silently disagrees with the date the dedup query filters on. 2026-09-17:
+    _btst_names_sent_today() filtered by date(captured_at), but every row was always stamped
+    with real datetime.now(), so on any day those two disagreed the "one message per day" gate
+    never found the earlier row and sent a duplicate every run.
     """
     if deliver:
         delivered, message_id = send(message, kind)
@@ -387,7 +396,7 @@ def record(
             "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, "
             "delivered, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                datetime.now().replace(microsecond=0).isoformat(sep=" "),
+                (when or datetime.now()).replace(microsecond=0).isoformat(sep=" "),
                 kind,
                 symbol,
                 direction,
@@ -544,7 +553,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     seeing, and is marked REVISED so it is not mistaken for the original call.
     """
     if watchlist is None or watchlist.empty:
-        record("btst_empty", f"BTST {captured_at:%d-%b} | no candidates today")
+        record("btst_empty", f"BTST {captured_at:%d-%b} | no candidates today", when=captured_at)
         return 0
 
     names = {str(r.symbol) for r in watchlist.itertuples()}
@@ -587,6 +596,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
             deliver=False,
             delivered=delivered,
             message_id=message_id,
+            when=captured_at,
         )
     return len(watchlist)
 

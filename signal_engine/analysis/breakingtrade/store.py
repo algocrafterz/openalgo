@@ -172,15 +172,23 @@ def is_duplicate_of_last(snapshot) -> bool:
 
 
 def previous_hits(before: datetime) -> dict:
-    """{scan_name: {symbols}} from the most recent stored poll before `before`."""
+    """{scan_name: {symbols}} matched by that scan at any point EARLIER TODAY, before `before`.
+
+    Unioned across the whole trading day rather than just the immediately preceding poll: a
+    symbol that drops out of a scan for one poll and reappears later (price/volume oscillating
+    right at the scan threshold) must not re-qualify as "new" and fire a duplicate alert.
+    2026-09-17: comparing only against the last poll let BHARATFORG fire two duplicate
+    watchlist alerts the same day (11:31 and 12:31), having dropped out of the "Neutral Day
+    Resolution Up" scan at the 11:46 poll in between - the same class of problem the
+    momentum-rank strategy's digest-dedup fixed for its own channel (commit ffff378fe).
+
+    Scoped to `before`'s calendar day so a fresh trading day still starts with a clean slate.
+    """
+    day_start = before.replace(hour=0, minute=0, second=0, microsecond=0)
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT MAX(captured_at) FROM scan_hits WHERE captured_at < ?", (_iso(before),)
-        ).fetchone()
-        if not row or row[0] is None:
-            return {}
         hits = conn.execute(
-            "SELECT scan, symbol FROM scan_hits WHERE captured_at = ?", (row[0],)
+            "SELECT scan, symbol FROM scan_hits WHERE captured_at >= ? AND captured_at < ?",
+            (_iso(day_start), _iso(before)),
         ).fetchall()
 
     previous: dict = {}

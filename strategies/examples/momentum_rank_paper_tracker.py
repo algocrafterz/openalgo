@@ -64,26 +64,88 @@ def new_ledger(capital: float = CAPITAL) -> dict:
     }
 
 
-def _warn_if_unfunded(sym: str, qty: int, price: float, per_slot: float) -> None:
-    if qty == 0:
-        print(f"[paper-tracker] WARNING: {sym} @ Rs {price:,.2f} costs more than "
-              f"the Rs {per_slot:,.2f} per-slot allocation - bought 0 shares. "
-              f"This position is completely unfunded at this capital level, "
-              f"not just underweight.")
+def _allocate_equal_weight(
+    candidates: list[str], slot_target: float, cash: float,
+    fill_prices: dict[str, float],
+) -> tuple[dict[str, dict], float, list[str]]:
+    """Spend an equal `slot_target` on each of `candidates`, whole shares only.
+
+    2026-09-17: POWERINDIA at Rs30,435 against an Rs8,333 (capital/TOP_N) slot bought 0
+    shares - a stock priced above its slot allocation used to still get a "position" entry
+    with qty=0, silently converting that entire slot into idle cash while cluttering the
+    ledger (inflating open_positions in every later report) with a holding of nothing.
+
+    Fix: a candidate that can't afford even one share at slot_target is skipped - no
+    position is opened for it - and its target is redistributed, split equally, across the
+    OTHER candidates in this same batch. Redistribution iterates (a candidate newly priced
+    out by the larger redistributed target is itself redistributed the next pass) until
+    every remaining candidate is affordable or none are left. This keeps capital deployed
+    instead of parking a whole slot as invisible cash, at the cost of a mild overweight on
+    whichever names absorb it - a materially smaller distortion than a dead slot. If NO
+    candidate in the batch is affordable even after pooling everyone's target, all are
+    skipped and the cash is simply retained (it rejoins the pool at the next rebalance,
+    since per_slot is always recomputed from current total value, not carried forward as a
+    fixed reservation).
+
+    Defensive against the general shape of "capital too small for this instrument": a
+    missing, zero or negative fill price is treated as unaffordable (skipped) rather than
+    raising, and an empty candidate list or a non-positive slot_target returns immediately
+    with nothing bought. `cash` is NOT floored or capped here - a buy is sized off the
+    slot's fair share of current total book value (cash + mark-to-market of continuing
+    holdings), the same pre-existing model apply_rebalance() already used, which can size a
+    buy larger than currently-idle cash covers (representing "trim the rest of the book a
+    little to fund this," which the model tracks as reduced cash rather than literally
+    simulating the trim) - capping the pool at cash here would silently change sizing for
+    that already-accepted case, not just the newly-handled unaffordable-price case.
+
+    Returns (fills, cash_remaining, skipped) where fills is {symbol: {"qty", "price"}}.
+    """
+    if not candidates or slot_target <= 0:
+        return {}, cash, list(candidates)
+
+    remaining = list(candidates)
+    skipped: list[str] = []
+    pool = slot_target * len(candidates)
+    while remaining:
+        target = pool / len(remaining)
+        unaffordable = [
+            s for s in remaining if fill_prices.get(s, 0) <= 0 or fill_prices[s] > target
+        ]
+        if not unaffordable:
+            break
+        for s in unaffordable:
+            remaining.remove(s)
+        skipped.extend(unaffordable)
+
+    fills: dict[str, dict] = {}
+    if remaining:
+        target = pool / len(remaining)
+        for sym in remaining:
+            price = fill_prices[sym]
+            qty = int(target // price)
+            if qty == 0:
+                skipped.append(sym)
+                continue
+            cash -= qty * price
+            fills[sym] = {"qty": qty, "price": price}
+
+    for sym in skipped:
+        price = fill_prices.get(sym, 0.0)
+        print(f"[paper-tracker] WARNING: {sym} @ Rs {price:,.2f} exceeds even its "
+              f"redistributed equal-weight share (target Rs {slot_target:,.2f}/slot) - "
+              f"skipped, no position opened. Cash retained for the next rebalance.")
+
+    return fills, cash, skipped
 
 
 def initial_buy(ledger: dict, as_of: str, target: list[str],
                 fill_prices: dict[str, float], top_n: int = TOP_N) -> dict:
     """First-ever rebalance: split `ledger['cash']` equally across `target`."""
     per_slot = ledger["cash"] / top_n
+    fills, cash, _skipped = _allocate_equal_weight(target, per_slot, ledger["cash"], fill_prices)
     positions = dict(ledger["positions"])
-    cash = ledger["cash"]
-    for sym in target:
-        price = fill_prices[sym]
-        qty = int(per_slot // price)
-        _warn_if_unfunded(sym, qty, price, per_slot)
-        cash -= qty * price
-        positions[sym] = {"qty": qty, "entry_price": price, "entry_date": as_of}
+    for sym, fill in fills.items():
+        positions[sym] = {"qty": fill["qty"], "entry_price": fill["price"], "entry_date": as_of}
     return {**ledger, "positions": positions, "cash": cash}
 
 
@@ -120,12 +182,9 @@ def apply_rebalance(ledger: dict, as_of: str, sells: list[str], buys: list[str],
     total_value = cash + remaining_value
     per_slot = total_value / top_n
 
-    for sym in buys:
-        price = fill_prices[sym]
-        qty = int(per_slot // price)
-        _warn_if_unfunded(sym, qty, price, per_slot)
-        cash -= qty * price
-        positions[sym] = {"qty": qty, "entry_price": price, "entry_date": as_of}
+    fills, cash, _skipped = _allocate_equal_weight(buys, per_slot, cash, fill_prices)
+    for sym, fill in fills.items():
+        positions[sym] = {"qty": fill["qty"], "entry_price": fill["price"], "entry_date": as_of}
 
     return {**ledger, "positions": positions, "cash": cash, "closed_trades": closed}
 

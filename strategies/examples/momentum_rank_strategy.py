@@ -390,24 +390,77 @@ def _save_paper_ledger(ledger: dict) -> None:
     PAPER_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
 
 
-def _paper_warn_if_unfunded(sym: str, qty: int, price: float, per_slot: float) -> None:
-    if qty == 0:
-        print(f"[momentum-rank] paper-ledger WARNING: {sym} @ Rs {price:,.2f} "
-              f"costs more than the Rs {per_slot:,.2f} per-slot allocation - "
-              f"bought 0 shares, completely unfunded at this capital level.")
+def _paper_allocate_equal_weight(
+    candidates: list[str], slot_target: float, cash: float,
+    fill_prices: dict[str, float],
+) -> tuple[dict[str, dict], float, list[str]]:
+    """Spend an equal `slot_target` on each of `candidates`, whole shares only.
+
+    Mirrors momentum_rank_paper_tracker.py's _allocate_equal_weight() exactly - these two
+    implementations are duplicated (not imported) because the /python host only accepts a
+    single uploaded file (see the module comment above), but must never numerically diverge;
+    see test_matches_standalone_paper_tracker_numerically.
+
+    2026-09-17: POWERINDIA at Rs30,435 against an Rs8,333 (capital/TOP_N) slot bought 0
+    shares - a stock priced above its slot allocation used to still get a "position" entry
+    with qty=0, silently converting that entire slot into idle cash while cluttering the
+    ledger (inflating open_positions in every later report) with a holding of nothing.
+
+    Fix: a candidate that can't afford even one share at slot_target is skipped - no
+    position is opened for it - and its target is redistributed, split equally, across the
+    OTHER candidates in this same batch, iterating until every remaining candidate is
+    affordable or none are left. `cash` is not floored or capped: a buy is sized off the
+    slot's fair share of current total book value, the same pre-existing model that can
+    size a buy larger than currently-idle cash covers.
+
+    Returns (fills, cash_remaining, skipped) where fills is {symbol: {"qty", "price"}}.
+    """
+    if not candidates or slot_target <= 0:
+        return {}, cash, list(candidates)
+
+    remaining = list(candidates)
+    skipped: list[str] = []
+    pool = slot_target * len(candidates)
+    while remaining:
+        target = pool / len(remaining)
+        unaffordable = [
+            s for s in remaining if fill_prices.get(s, 0) <= 0 or fill_prices[s] > target
+        ]
+        if not unaffordable:
+            break
+        for s in unaffordable:
+            remaining.remove(s)
+        skipped.extend(unaffordable)
+
+    fills: dict[str, dict] = {}
+    if remaining:
+        target = pool / len(remaining)
+        for sym in remaining:
+            price = fill_prices[sym]
+            qty = int(target // price)
+            if qty == 0:
+                skipped.append(sym)
+                continue
+            cash -= qty * price
+            fills[sym] = {"qty": qty, "price": price}
+
+    for sym in skipped:
+        price = fill_prices.get(sym, 0.0)
+        print(f"[momentum-rank] paper-ledger WARNING: {sym} @ Rs {price:,.2f} exceeds "
+              f"even its redistributed equal-weight share (target Rs {slot_target:,.2f}"
+              f"/slot) - skipped, no position opened. Cash retained for the next rebalance.")
+
+    return fills, cash, skipped
 
 
 def _paper_initial_buy(ledger: dict, as_of: str, target: list[str],
                        fill_prices: dict[str, float], top_n: int = TOP_N) -> dict:
     per_slot = ledger["cash"] / top_n
+    fills, cash, _skipped = _paper_allocate_equal_weight(
+        target, per_slot, ledger["cash"], fill_prices)
     positions = dict(ledger["positions"])
-    cash = ledger["cash"]
-    for sym in target:
-        price = fill_prices[sym]
-        qty = int(per_slot // price)
-        _paper_warn_if_unfunded(sym, qty, price, per_slot)
-        cash -= qty * price
-        positions[sym] = {"qty": qty, "entry_price": price, "entry_date": as_of}
+    for sym, fill in fills.items():
+        positions[sym] = {"qty": fill["qty"], "entry_price": fill["price"], "entry_date": as_of}
     return {**ledger, "positions": positions, "cash": cash}
 
 
@@ -433,12 +486,9 @@ def _paper_apply_rebalance(ledger: dict, as_of: str, sells: list[str],
     remaining_value = sum(pos["qty"] * fill_prices.get(sym, pos["entry_price"])
                           for sym, pos in positions.items())
     per_slot = (cash + remaining_value) / top_n
-    for sym in buys:
-        price = fill_prices[sym]
-        qty = int(per_slot // price)
-        _paper_warn_if_unfunded(sym, qty, price, per_slot)
-        cash -= qty * price
-        positions[sym] = {"qty": qty, "entry_price": price, "entry_date": as_of}
+    fills, cash, _skipped = _paper_allocate_equal_weight(buys, per_slot, cash, fill_prices)
+    for sym, fill in fills.items():
+        positions[sym] = {"qty": fill["qty"], "entry_price": fill["price"], "entry_date": as_of}
     return {**ledger, "positions": positions, "cash": cash, "closed_trades": closed}
 
 

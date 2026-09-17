@@ -61,6 +61,36 @@ class TestSendsOncePerDay:
             assert n.notify_day_summary.await_count == 1
 
     @pytest.mark.asyncio
+    async def test_more_trades_since_an_earlier_send_triggers_a_corrected_resend(self, tracker):
+        """2026-09-17 regression: a premature send (a handful of trades in, mid-morning)
+        permanently blocked the real EOD summary for the rest of the day under the old pure
+        "sent or not" guard. A later call - which only happens at all because its caller
+        already gated WHEN it's appropriate to call send_day_summary() - must see the trade
+        count has grown and send a corrected summary instead of staying silent."""
+        from signal_engine import db
+
+        with patch("signal_engine.tracker.notifier", new_callable=AsyncMock) as n:
+            await tracker.send_day_summary()  # 0 trades on record yet
+            assert n.notify_day_summary.await_count == 1
+            assert n.notify_day_summary.await_args.kwargs["trades"] == 0
+
+            db.save_tracker_exit(
+                strategy="ORB", symbol="SBIN", entry=800.0, sl=796.0, tp=810.0,
+                quantity=10, exit_price=805.0, pnl=50.0, exit_types=["SL"],
+            )
+            await tracker.send_day_summary()
+
+            assert n.notify_day_summary.await_count == 2
+            assert n.notify_day_summary.await_args.kwargs["trades"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_new_trades_since_an_earlier_send_stays_suppressed(self, tracker):
+        with patch("signal_engine.tracker.notifier", new_callable=AsyncMock) as n:
+            await tracker.send_day_summary()
+            await tracker.send_day_summary()
+            assert n.notify_day_summary.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_a_new_day_sends_again(self, tracker, tmp_path):
         with patch("signal_engine.tracker.notifier", new_callable=AsyncMock) as n:
             await tracker.send_day_summary()

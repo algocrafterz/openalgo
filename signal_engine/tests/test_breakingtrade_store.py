@@ -161,10 +161,25 @@ def test_symbol_still_matching_is_not_reported_again():
     assert new == {}
 
 
-def test_a_symbol_that_leaves_and_returns_counts_as_new_again():
+def test_a_symbol_that_leaves_and_returns_SAME_DAY_does_not_count_as_new_again():
+    """2026-09-17 regression: comparing only against the immediately preceding poll let a
+    symbol that flickered out and back in re-qualify as "new" every time, firing a duplicate
+    watchlist alert (BHARATFORG, 11:31 and 12:31, same scan, same day). Dedup must be scoped
+    to the whole trading day, not just the last poll."""
     store.record_hits([_FakeResult("X", ["ZYDUSLIFE"])], datetime(2026, 9, 3, 12, 1))
     store.record_hits([_FakeResult("X", ["VEDL"])], datetime(2026, 9, 3, 12, 31))
     new = store.record_hits([_FakeResult("X", ["ZYDUSLIFE"])], datetime(2026, 9, 3, 13, 1))
+    assert new == {}
+
+
+def test_a_symbol_that_leaves_and_returns_a_LATER_DAY_counts_as_new_again():
+    """The dedup window resets at midnight - a fresh trading day starts with a clean slate.
+    Day 2's own first poll is exempt from "new" reporting regardless (the cold-start rule -
+    see test_first_poll_reports_nothing_as_new), so the reset is proven on day 2's SECOND
+    poll instead."""
+    store.record_hits([_FakeResult("X", ["ZYDUSLIFE"])], datetime(2026, 9, 3, 12, 1))
+    store.record_hits([_FakeResult("X", ["VEDL"])], datetime(2026, 9, 4, 9, 20))  # day 2 poll 1
+    new = store.record_hits([_FakeResult("X", ["ZYDUSLIFE"])], datetime(2026, 9, 4, 9, 50))
     assert new == {"X": ["ZYDUSLIFE"]}
 
 

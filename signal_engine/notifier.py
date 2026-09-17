@@ -637,20 +637,30 @@ async def _send_and_pin_day_summary(text: str) -> bool:
         logger.warning(f"Notifier: failed to send message: {e}")
         return False
 
+    state = _load_day_summary_pin_state()
+    key = str(channel.id)
+    previous_message_id = state.get(key)
     try:
-        state = _load_day_summary_pin_state()
-        key = str(channel.id)
-        previous_message_id = state.get(key)
         await _client.pin_message(channel.id, message, notify=False)
-        if previous_message_id:
-            try:
-                await _client.unpin_message(channel.id, previous_message_id)
-            except Exception as e:
-                logger.debug(f"Day summary pin: could not unpin yesterday's summary: {e}")
-        state[key] = getattr(message, "id", None)
-        _save_day_summary_pin_state(state)
     except Exception as e:
+        # Pin genuinely failed - state must stay exactly as it was, so a later send still
+        # knows the real previous pin (if any) to replace.
         logger.warning(f"Day summary pin: could not pin today's summary (non-fatal): {e}")
+        return True
+
+    if previous_message_id:
+        try:
+            await _client.unpin_message(channel.id, previous_message_id)
+        except Exception as e:
+            logger.debug(f"Day summary pin: could not unpin yesterday's summary: {e}")
+
+    # Separate from the pin attempt above: a failure here (e.g. disk full) must not be
+    # logged as "could not pin" when the pin itself actually succeeded - the message IS
+    # pinned in Telegram, only our local record of it failed to update. See
+    # _save_day_summary_pin_state()'s own docstring for what that costs (a cosmetic
+    # double-pin tomorrow, not a broken send).
+    state[key] = getattr(message, "id", None)
+    _save_day_summary_pin_state(state)
 
     return True
 

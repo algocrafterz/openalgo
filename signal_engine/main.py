@@ -1279,6 +1279,7 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
         sl_order_id=sl_order_id,
         fill_price=entry_fill_price or 0.0,
         context=signal.context or {},
+        sig_id=signal.sig_id or "",
     ))
     return True
 

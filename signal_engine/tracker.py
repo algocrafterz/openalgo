@@ -152,6 +152,14 @@ class TrackedPosition:
     # Entry-criteria context from the signal (Signal.context). Carried so the partial-exit path
     # can place the runner's stop at the level that triggered the entry.
     context: dict = field(default_factory=dict)
+    # SigID from the originating alert (PineScript strategies only — Python-sourced strategies
+    # leave this ""). Carried onto every exit this position ever writes via save_tracker_exit(),
+    # so the ledger's sig_id-keyed reconciliation can pair a tracker-detected close (broker
+    # SL-M fill beating the TradingView alert here, no-progress exit, time exit) back to its
+    # entry. Without it, that close writes sig_id=NULL and the ledger reports both the real
+    # entry (falsely OPEN_AT_EOD/NO_EXIT_EVENT) and the close (falsely NO_ENTRY) as broken —
+    # 2026-09-17: every BREAKOUT position that closed via tracker detection did exactly this.
+    sig_id: str = ""
 
 
 #: Remembers which date's day summary has already gone out. A file rather than in-memory
@@ -162,25 +170,53 @@ class TrackedPosition:
 _DAY_SUMMARY_MARKER = os.path.join(os.path.dirname(__file__), "data", "day_summary")
 
 
-def _summary_already_sent_today() -> bool:
-    """True if today's summary is already recorded as sent.
+def _read_marker_for_today() -> "str | None":
+    """The marker's raw content if it matches today, else None.
 
-    Any read problem answers False: a corrupt or unreadable marker must never be able to
-    suppress the summary indefinitely. Sending twice is a nuisance; going silent for the
-    rest of the week is the failure that matters.
+    Any read problem also reads as None: a corrupt or unreadable marker must never be able
+    to suppress the summary indefinitely. Sending twice is a nuisance; going silent for the
+    rest of the day is the failure that matters.
     """
     try:
         with open(_DAY_SUMMARY_MARKER, encoding="utf-8") as fh:
-            return fh.read().strip() == datetime.now(IST).date().isoformat()
-    except (OSError, ValueError):
-        return False
+            content = fh.read().strip()
+    except OSError:
+        return None
+    if content.split("|", 1)[0] != datetime.now(IST).date().isoformat():
+        return None
+    return content
 
 
-def _mark_summary_sent() -> None:
+def _summary_already_sent_today() -> bool:
+    """True if today's summary is already recorded as sent."""
+    return _read_marker_for_today() is not None
+
+
+def _prior_summary_trade_count() -> "int | None":
+    """The trade count today's already-sent summary reported, or None if unsent or unknown
+    (a bare-date marker from before this field existed).
+
+    2026-09-17: a summary that went out prematurely (mid-morning, some trades still to come)
+    permanently suppressed the genuine EOD one for the rest of the day, because
+    _summary_already_sent_today() only ever answered "sent or not" — with no way to tell
+    "sent, but incompletely" apart from "sent, and correct". Comparing this against the
+    current trade count in send_day_summary() lets a later, more-complete call correct an
+    earlier short one instead of silently no-op'ing for the rest of the day.
+    """
+    content = _read_marker_for_today()
+    if content is None or "|" not in content:
+        return None
+    try:
+        return int(content.split("|", 1)[1])
+    except ValueError:
+        return None
+
+
+def _mark_summary_sent(trade_count: int) -> None:
     try:
         os.makedirs(os.path.dirname(_DAY_SUMMARY_MARKER), exist_ok=True)
         with open(_DAY_SUMMARY_MARKER, "w", encoding="utf-8") as fh:
-            fh.write(datetime.now(IST).date().isoformat())
+            fh.write(f"{datetime.now(IST).date().isoformat()}|{trade_count}")
     except OSError as e:
         logger.warning(f"Could not record day-summary marker: {e}")
 
@@ -376,7 +412,7 @@ class PositionTracker:
             strategy=pos.strategy, symbol=pos.symbol, entry=pos.entry_price,
             sl=pos.sl, tp=pos.tp, quantity=pos.original_quantity or pos.quantity,
             exit_price=exit_price, pnl=total_pnl, exit_types=exit_types,
-            order_id=pos.entry_order_id,
+            order_id=pos.entry_order_id, sig_id=pos.sig_id,
         )
         self.record_exit(
             pnl=pnl_delta, is_partial=False, total_pnl=total_pnl,
@@ -392,7 +428,8 @@ class PositionTracker:
         return record
 
     async def send_day_summary(self) -> None:
-        """Send day summary to notify channel. No-op if already sent today or no trades.
+        """Send day summary to notify channel. No-op if already sent today with nothing new
+        to report since.
 
         Called when the last open position closes (SL hit or TP exit), and again at
         time_exit if any positions remain. Deduped via _day_summary_sent flag.
@@ -401,11 +438,26 @@ class PositionTracker:
         Callers that fire this the moment a position book empties should go through
         maybe_send_day_summary() instead; this is the low-level primitive time_exit_all()
         itself uses once the day is genuinely over.
+
+        Self-correcting: if a summary already went out today but trades.db now shows MORE
+        completed trades than that summary reported, this sends a corrected one rather than
+        staying silent for the rest of the day. 2026-09-17: a premature send (a handful of
+        trades in, mid-morning) permanently blocked the real 14:45 EOD summary under the old
+        pure "sent or not" guard — every caller of this method already applies its own gate
+        on WHEN it's appropriate to call (maybe_send_day_summary's 30-minute-of-time-exit
+        window, or time_exit_all() itself), so by the time execution reaches here a repeat
+        call is exactly the case this correction exists for.
         """
         today = datetime.now(IST).date()
-        if self._day_summary_date == today or _summary_already_sent_today():
-            return
         records, counts, degraded = self._day_from_db(want_degraded=True)
+        if self._day_summary_date == today or _summary_already_sent_today():
+            prior_count = _prior_summary_trade_count()
+            if prior_count is None or counts["trades"] <= prior_count:
+                return
+            logger.warning(
+                f"Day summary: an earlier send today covered only {prior_count} trade(s); "
+                f"{counts['trades']} are on record now - sending a corrected summary."
+            )
         capital = self._risk_engine.total_last_known_capital() or 0.0
         # Per-strategy opening capital, for the per-strategy EOD summaries notifier.py sends
         # alongside the consolidated one — each strategy sizes off its OWN cached day-start
@@ -435,7 +487,7 @@ class PositionTracker:
             logger.warning("Day summary NOT delivered (notifier not ready) - will retry")
             return
         self._day_summary_date = today
-        _mark_summary_sent()
+        _mark_summary_sent(counts["trades"])
 
         # The canary, right after the day is reported: does trades.db agree with the broker?
         # Nothing compared the two before, which is how 2026-09-11 reported +986.41 on a real

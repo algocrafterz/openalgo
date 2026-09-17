@@ -26,18 +26,56 @@ class TestInitialBuy:
         spent = 40 * 100.0 + 20 * 200.0 + 13 * 300.0
         assert out["cash"] == 12000.0 - spent
 
-    def test_warns_when_price_exceeds_per_slot_allocation(self, capsys):
+    def test_a_stock_priced_above_its_slot_is_skipped_not_zero_qty(self, capsys):
+        """2026-09-17 regression: POWERINDIA @ Rs30,435 against an Rs8,333 slot used to
+        open a qty=0 "position" - unfunded, but still counted as an open position in
+        every later report. It must not appear in positions at all."""
         ledger = tracker.new_ledger(capital=10000.0)
         prices = {"CHEAP": 50.0, "EXPENSIVE": 99999.0}
 
         out = tracker.initial_buy(ledger, "2026-01-01", ["CHEAP", "EXPENSIVE"],
                                    prices, top_n=2)
 
-        assert out["positions"]["EXPENSIVE"]["qty"] == 0
+        assert "EXPENSIVE" not in out["positions"]
         captured = capsys.readouterr()
         assert "WARNING" in captured.out
         assert "EXPENSIVE" in captured.out
-        assert "completely unfunded" in captured.out
+        assert "skipped" in captured.out
+
+    def test_the_skipped_slot_s_capital_is_redistributed_to_the_other_buy(self):
+        """EXPENSIVE's Rs5,000 slot is unaffordable even alone - CHEAP absorbs the whole
+        Rs10,000 pool instead of just its own Rs5,000 slot."""
+        ledger = tracker.new_ledger(capital=10000.0)
+        prices = {"CHEAP": 50.0, "EXPENSIVE": 99999.0}
+
+        out = tracker.initial_buy(ledger, "2026-01-01", ["CHEAP", "EXPENSIVE"],
+                                   prices, top_n=2)
+
+        assert out["positions"]["CHEAP"]["qty"] == 200  # floor(10000 / 50)
+        assert out["cash"] == 0.0
+
+    def test_redistribution_drops_every_candidate_unaffordable_at_the_current_target(self):
+        """A and C are BOTH unaffordable at the initial 3-way target (3000) - each pass
+        drops everyone priced out at that pass's target, not just one at a time. Only B
+        survives, and absorbs the entire pool."""
+        ledger = tracker.new_ledger(capital=9000.0)  # per_slot = 3000
+        prices = {"A": 50000.0, "B": 100.0, "C": 4500.0}
+
+        out = tracker.initial_buy(ledger, "2026-01-01", ["A", "B", "C"], prices, top_n=3)
+
+        assert "A" not in out["positions"]
+        assert "C" not in out["positions"]
+        assert out["positions"]["B"]["qty"] == 90  # floor(9000/100)
+        assert out["cash"] == 0.0
+
+    def test_all_candidates_unaffordable_skips_every_one_and_keeps_the_cash(self):
+        ledger = tracker.new_ledger(capital=1000.0)
+        prices = {"A": 50000.0, "B": 60000.0}
+
+        out = tracker.initial_buy(ledger, "2026-01-01", ["A", "B"], prices, top_n=2)
+
+        assert out["positions"] == {}
+        assert out["cash"] == 1000.0
 
     def test_no_warning_when_all_positions_funded(self, capsys):
         ledger = tracker.new_ledger(capital=10000.0)
@@ -46,6 +84,23 @@ class TestInitialBuy:
         tracker.initial_buy(ledger, "2026-01-01", ["A", "B"], prices, top_n=2)
 
         assert "WARNING" not in capsys.readouterr().out
+
+    def test_empty_target_list_is_a_no_op(self):
+        ledger = tracker.new_ledger(capital=10000.0)
+        out = tracker.initial_buy(ledger, "2026-01-01", [], {}, top_n=2)
+        assert out["positions"] == {}
+        assert out["cash"] == 10000.0
+
+    def test_a_missing_fill_price_is_treated_as_unaffordable_not_a_crash(self, capsys):
+        ledger = tracker.new_ledger(capital=10000.0)
+        prices = {"HASPRICE": 100.0}  # "NOPRICE" deliberately absent
+
+        out = tracker.initial_buy(ledger, "2026-01-01", ["HASPRICE", "NOPRICE"],
+                                   prices, top_n=2)
+
+        assert "NOPRICE" not in out["positions"]
+        assert out["positions"]["HASPRICE"]["qty"] == 100  # floor(10000/100), full pool
+        assert "NOPRICE" in capsys.readouterr().out
 
 
 class TestApplyRebalance:

@@ -96,6 +96,32 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-09-18 02:02 — Fixed a duplicate watchlist call when a stock flickers off and back on a scan
+
+**What changed:** A stock could get flagged as a fresh watchlist call twice in one day if it
+briefly stopped matching a scan for one check and then matched again later (price/volume
+sitting right on the edge of the scan's threshold). On 2026-09-17 this happened to BHARATFORG,
+which fired the watchlist trade signal at 11:31 and again at 12:31 for the same scan, same day.
+The system now remembers everything it has already flagged earlier THAT DAY, not just what it
+saw on the previous check, so a symbol that flickers off and back on no longer counts as new.
+
+**Entry:** Yes — this is specifically an entry-trigger fix. A stock that already triggered a
+watchlist entry once today can no longer trigger a second, duplicate one from the same scan.
+The reset still happens at midnight, so a genuinely new day starts clean.
+
+**Exit (SL):** Not affected.
+
+**Exit (TP):** Not affected.
+
+**Consideration:** This reduces the number of watchlist trades taken on choppy days where a
+stock sits right at a scan's threshold and flickers in and out — expect slightly fewer, but
+never duplicate, watchlist entries per symbol per day going forward. Only 1 of roughly 13-14
+new-hit events on 2026-09-17 was affected; this was not a systemic problem on that day, but the
+code had no protection against a noisier day making it one.
+
+NOTE: Technical detail in `signal_engine/analysis/breakingtrade/store.py`'s `previous_hits()`
+docstring and `signal_engine/PRD.md`'s 2026-09-17 review-fixes entry.
+
 ### 2026-09-10 18:37 — Now also trading the watchlist call itself, as a second, separately-tracked outcome
 
 **What changed:** Until today, a scanner call only ever became a real trade after price PROVED

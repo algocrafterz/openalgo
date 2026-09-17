@@ -907,3 +907,47 @@ Shipped to `strategies/examples/momentum_rank_strategy.py` and the synced deploy
 Committed to git this session (see commit history) - the real ledger/state JSON files under
 `log/strategies/` are deliberately excluded from that commit regardless (live per-instance
 runtime state, not source - see the note two entries above).
+
+## 2026-09-18 — Paper ledger no longer wastes a slot on a too-expensive stock
+
+**Found:** POWERINDIA entered the 2026-09-17 rebalance at Rs30,435/share against an
+Rs8,333 (Rs1,00,000 / 12 slots) equal-weight allocation - it cannot be bought even one
+share at this capital level. The paper ledger's `initial_buy()`/`apply_rebalance()`
+(and the identical inline copy in `momentum_rank_strategy.py`) bought 0 shares and still
+recorded a "position" for it anyway: the slot's entire Rs8,333 sat as invisible idle cash,
+and the fake zero-share holding inflated `open_positions` in every later report (the real
+ledger showed 12 positions when only 11 held anything).
+
+**Why this will keep happening, not just for POWERINDIA:** at Rs1,00,000 / 12 slots, any
+name in the momentum universe priced above ~Rs8,333 is structurally unaffordable in this
+equal-weight scheme - this isn't a one-off data glitch, it's a mismatch between capital
+size and basket composition that recurs for any sufficiently expensive stock the ranking
+picks.
+
+**Fix:** a candidate priced above its slot allocation is now skipped outright (no phantom
+position) and its share of capital is redistributed, split equally, across the OTHER stocks
+being bought in the same rebalance - iterated if the redistribution itself prices out
+another name - so the money stays deployed instead of parked as invisible cash. If literally
+nothing in a rebalance's buy batch is affordable, the cash is retained and naturally
+reused at the next rebalance (per-slot sizing is always recomputed off current total book
+value, never carried forward as a fixed reservation). Cleaned the existing POWERINDIA
+phantom entry out of the live ledger (cash was already correct - 0 shares means 0 rupees
+were ever spent on it, this was purely a stale reporting artifact).
+
+**What this does NOT fix:** the separate, smaller effect of whole-share rounding leaving a
+little cash idle on EVERY position (e.g. a Rs8,333 slot buying 1 share of a Rs4,450 stock
+leaves ~Rs3,883 unspent) - that's an inherent property of whole-share sizing, not a bug, and
+it's already reabsorbed automatically into the next rebalance's per-slot calculation.
+
+**Tests:** `_allocate_equal_weight()` (standalone tracker) / `_paper_allocate_equal_weight()`
+(inline copy) each covered directly - skip-and-redistribute, a redistribution that itself
+prices out a further candidate, all-candidates-unaffordable, empty target list, and a
+missing fill price. Numeric-parity test between the two duplicated implementations still
+passes. 66/66 passing in `strategies/examples/tests/`.
+
+### Status
+
+Shipped to `strategies/examples/momentum_rank_strategy.py` and the synced deployed copy
+`strategies/scripts/momentum_rank_strategy_20260916144143.py` (gitignored, local-only sync -
+not part of the commit). `log/strategies/momentum_rank_paper_ledger.json`'s stale
+POWERINDIA entry removed; `cash` unchanged.
