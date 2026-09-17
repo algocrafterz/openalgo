@@ -31,8 +31,12 @@ $wsl = "C:\Windows\System32\wsl.exe"
 $distro = "Ubuntu-24.04"
 
 $workdir = "/home/anand/github/openalgo"
-$ctlScript = "./signal_engine/analysis/breakingtrade/poller.sh"
-$scanScript = "./signal_engine/analysis/breakingtrade/scan.sh"
+# Invoked as "bash <script>", not "./<script>" -- both poller.sh and scan.sh
+# are tracked in git as mode 100644 (non-executable), same as openalgoctl.sh
+# was before it silently broke every scheduled start on 2026-09-15/16. "bash
+# <script>" only needs read access, so it can't fail that way.
+$ctlScript = "bash ./signal_engine/analysis/breakingtrade/poller.sh"
+$scanScript = "bash ./signal_engine/analysis/breakingtrade/scan.sh"
 
 $maxLogSizeMB = 5
 
