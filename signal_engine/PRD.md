@@ -216,6 +216,37 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-17)
+
+**Full system check confirmed all fixes from 2026-09-16 held through the first live cycle.**
+8:50 AM `AutoStart` fired automatically and succeeded end-to-end (network check, NTP wait,
+app.py health, broker auto-login via existing session reuse, signal engine start) — the
+first fully automated, unattended boot since the executable-bit fix. `Watchdog` and
+`HeartbeatCheck` both ran clean with nothing to do. Three non-fatal warnings logged during
+boot (a transient empty-funds-data auth check that retried successfully, a SocketIO
+`NoneType.emit` error during master contract refresh, and unrelated Yahoo Finance lookup
+failures for a delisted symbol) — none blocked startup.
+
+**Schedule change (requested) — squareoff moved 3:02 PM -> 2:55 PM, autostop moved
+3:30 PM -> 4:00 PM** (the later stop gives the momentum-rank EOD scan runway after market
+close). Confirmed live: all 5 tasks' triggers now read `AutoStart` 8:50 AM, `Watchdog`
+9:00 AM-4:00 PM, `HeartbeatCheck` 9:05 AM-4:00 PM, `SquareOff` 2:55 PM, `AutoStop` 4:00 PM.
+The 2026-09-16 note about `AutoStop`/`Watchdog` being blocked by a Windows permission error
+no longer applies — a subsequent elevated re-run of `createTaskOpenAlgoScheduler.ps1`
+applied both. Squareoff firing before (not after) the engine's own 3:00 PM exit is still a
+live behavior change — see the flagged note under Startup & Shutdown.
+
+**Found and fixed the same executable-bit bug in the separate BreakingTrade automation.**
+While checking `breakingTradeAutoStart`/`AutoStop`/`Watchdog` (a parallel Task Scheduler
+setup driven by `breakingtradectl.ps1`, controlling the standalone
+`signal_engine.analysis.breakingtrade --watch` process — distinct from the `openalgoctl`
+stack), `poller.sh` and `scan.sh` were found tracked in git as mode `100644`
+(non-executable), identical to what caused the 2026-09-15/16 outage. They were only still
+working because the on-disk copies happened to still be `+x`; the next checkout or edit
+would have silently broken all three breakingtrade tasks the same way, with the same
+false read that "it just isn't running" and no alert. Fixed: executable bit restored and
+`breakingtradectl.ps1` now invokes both as `bash <script>` instead of `./<script>`.
+
 ## Recent Changes (2026-09-16)
 
 **Startup/watchdog stack hardened after a silent 20+ hour outage.** `openalgoctl.sh` lost
@@ -4081,7 +4112,7 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 
 The watchdog uses `start` (idempotent): polls `http://127.0.0.1:5000/`, skips if healthy, restarts the full stack if dead. Maximum recovery time after a crash: **5 minutes**.
 
-**2026-09-17 schedule change — partially blocked by a Windows permission issue.** `openAlgoSquareOff` (2:55 PM) and `openAlgoHeartbeatCheck`'s window (extended to 4:00 PM) applied cleanly — both are owned by the current user since they were created fresh on 2026-09-16. `openAlgoAutoStop` (still firing at its old ~3:00 PM) and `openAlgoWatchdog`'s window (still ending 3:25 PM, not extended) **did not update** — `Register-ScheduledTask` returned "Access is denied" for both, the same restriction hit on 2026-09-16 for tasks that predate this fix. Re-running `createTaskOpenAlgoScheduler.ps1` from an **elevated** ("Run as Administrator") PowerShell window applies the fix, since the script is idempotent.
+**2026-09-17 schedule change — resolved.** `openAlgoSquareOff` (2:55 PM) and `openAlgoHeartbeatCheck`'s window applied cleanly on the first attempt. `openAlgoAutoStop` and `openAlgoWatchdog`'s window initially failed to update (`Register-ScheduledTask` returned "Access is denied" — the same restriction hit on 2026-09-16 for tasks that predate this fix, since they're not owned by the current user's non-elevated context). A subsequent elevated ("Run as Administrator") re-run of `createTaskOpenAlgoScheduler.ps1` applied both. Confirmed live the same day: all 5 tasks' triggers read `AutoStop` 4:00 PM and `Watchdog` 9:00 AM-4:00 PM.
 
 ### Failure alerting and cooldown (2026-08-25)
 
