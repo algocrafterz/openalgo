@@ -130,8 +130,21 @@ class TestBuildDigest:
         assert "SELL (1):\n  X" in digest
         assert "BUY (1):\n  C" in digest
         assert "HOLD, no action (2):\n  A\n  B" in digest
-        assert "Full basket (3 names" in digest
         assert "DIGEST ONLY" in digest
+
+    def test_no_duplicate_full_basket_section(self):
+        # BUY + HOLD already equal the complete target basket with zero
+        # overlap - a separate "Full basket" listing repeated every name.
+        days = [date(2026, 1, 1), date(2026, 1, 2)]
+        digest = core._build_digest(
+            days, target=["ALPHACO", "BETACO", "GAMMACO"], sells=["ZULUCO"],
+            buys=["GAMMACO"], rebalance_number=3)
+        assert "Full basket" not in digest
+        # Each target name appears exactly once in the whole digest -
+        # distinctive multi-char symbols so this can't match a substring of
+        # unrelated digest text (e.g. a single "A" inside "REBALANCE").
+        for sym in ("ALPHACO", "BETACO", "GAMMACO"):
+            assert digest.count(sym) == 1
 
     def test_no_score_shown_anywhere(self):
         # Buying all TOP_N is mandatory (see STRATEGY-ANALYSIS.md's
@@ -153,7 +166,6 @@ class TestBuildDigest:
             buys=["ZEBRA", "APPLE", "MANGO"], rebalance_number=1)
         # Alphabetical, one per line - not a rank order.
         assert "BUY (3):\n  APPLE\n  MANGO\n  ZEBRA" in digest
-        assert "  APPLE\n  MANGO\n  ZEBRA" in digest  # Full basket section too
 
     def test_next_rebalance_estimate_scales_with_rebal_days(self):
         # 10 calendar days spanning 9 sessions -> ~1.11 cal days/session;
@@ -397,6 +409,163 @@ class TestTodayBarIsIncomplete:
     def test_false_after_close_plus_buffer(self):
         now = datetime(2026, 6, 1, 15, 41, tzinfo=core.IST)
         assert core._today_bar_is_incomplete(date(2026, 6, 1), now) is False
+
+
+class TestPaperCheckin:
+    def _ledger(self, last_checkin=None):
+        ledger = core._new_paper_ledger(capital=10000.0)
+        ledger["cash"] = 1000.0
+        ledger["positions"] = {
+            "A": {"qty": 10, "entry_price": 100.0, "entry_date": "2026-01-01"}}
+        ledger["last_checkin_date"] = last_checkin
+        return ledger
+
+    def test_checkin_message_includes_per_symbol_qty_and_pnl(self):
+        ledger = self._ledger()
+        msg = core._paper_checkin_message(ledger, {"A": 110.0}, "2026-01-15", 9)
+
+        assert "PAPER CHECK-IN" in msg
+        assert "Not a rebalance day (9/30 sessions" in msg
+        assert "A: qty 10 @ entry Rs 100.00 -> cur Rs 110.00  (+10.00%)" in msg
+        assert "CHECK-IN ONLY - no order has been placed" in msg
+
+    def test_skips_when_no_positions_exist_yet(self, monkeypatch):
+        monkeypatch.setattr(core, "_load_paper_ledger",
+                            lambda: core._new_paper_ledger())
+        sent = []
+        monkeypatch.setattr(core, "_send_telegram", lambda m: sent.append(m) or True)
+
+        core._maybe_send_paper_checkin("2026-01-15", 9, {}, dry_run=False)
+
+        assert sent == []
+
+    def test_skips_when_not_due_yet(self, monkeypatch, capsys):
+        monkeypatch.setattr(core, "_load_paper_ledger",
+                            lambda: self._ledger(last_checkin="2026-01-12"))
+        sent = []
+        monkeypatch.setattr(core, "_send_telegram", lambda m: sent.append(m) or True)
+
+        # 3 days since last checkin, interval is 7 - not due.
+        core._maybe_send_paper_checkin("2026-01-15", 9, {"A": 110.0}, dry_run=False)
+
+        assert sent == []
+        assert "not due yet" in capsys.readouterr().out
+
+    def test_sends_and_updates_last_checkin_date_when_due(self, monkeypatch):
+        monkeypatch.setattr(core, "_load_paper_ledger",
+                            lambda: self._ledger(last_checkin="2026-01-01"))
+        saved = {}
+        monkeypatch.setattr(core, "_save_paper_ledger", lambda l: saved.update(l))
+        sent = []
+        monkeypatch.setattr(core, "_send_telegram", lambda m: sent.append(m) or True)
+
+        # 14 days since last checkin, interval is 7 - due.
+        core._maybe_send_paper_checkin("2026-01-15", 9, {"A": 110.0}, dry_run=False)
+
+        assert len(sent) == 1
+        assert saved["last_checkin_date"] == "2026-01-15"
+
+    def test_dry_run_does_not_send_or_save(self, monkeypatch):
+        monkeypatch.setattr(core, "_load_paper_ledger",
+                            lambda: self._ledger(last_checkin="2026-01-01"))
+        sent = []
+        saved = []
+        monkeypatch.setattr(core, "_send_telegram", lambda m: sent.append(m) or True)
+        monkeypatch.setattr(core, "_save_paper_ledger", lambda l: saved.append(l))
+
+        core._maybe_send_paper_checkin("2026-01-15", 9, {"A": 110.0}, dry_run=True)
+
+        assert sent == []
+        assert saved == []
+
+    def test_failed_send_leaves_last_checkin_date_unchanged(self, monkeypatch):
+        monkeypatch.setattr(core, "_load_paper_ledger",
+                            lambda: self._ledger(last_checkin="2026-01-01"))
+        saved = []
+        monkeypatch.setattr(core, "_save_paper_ledger", lambda l: saved.append(l))
+        monkeypatch.setattr(core, "_send_telegram", lambda m: False)
+
+        core._maybe_send_paper_checkin("2026-01-15", 9, {"A": 110.0}, dry_run=False)
+
+        assert saved == []
+
+
+class TestPaperLedger:
+    def test_initial_buy_splits_capital_and_warns_when_unfunded(self, capsys):
+        ledger = core._new_paper_ledger(capital=10000.0)
+        prices = {"CHEAP": 50.0, "EXPENSIVE": 99999.0}
+
+        out = core._paper_initial_buy(ledger, "2026-01-01",
+                                      ["CHEAP", "EXPENSIVE"], prices, top_n=2)
+
+        assert out["positions"]["CHEAP"]["qty"] == int(5000.0 // 50.0)
+        assert out["positions"]["EXPENSIVE"]["qty"] == 0
+        assert "WARNING" in capsys.readouterr().out
+
+    def test_apply_rebalance_sells_computes_pnl_and_leaves_holds_untouched(self):
+        ledger = core._new_paper_ledger(capital=100000.0)
+        ledger["cash"] = 0.0
+        ledger["positions"] = {
+            "OLD": {"qty": 10, "entry_price": 100.0, "entry_date": "2026-01-01"},
+            "KEEP": {"qty": 2, "entry_price": 50.0, "entry_date": "2026-01-01"},
+        }
+
+        out = core._paper_apply_rebalance(
+            ledger, "2026-02-01", sells=["OLD"], buys=["NEW"],
+            fill_prices={"OLD": 150.0, "KEEP": 50.0, "NEW": 200.0}, top_n=2)
+
+        assert "OLD" not in out["positions"]
+        assert out["positions"]["KEEP"] == {
+            "qty": 2, "entry_price": 50.0, "entry_date": "2026-01-01"}
+        trade = out["closed_trades"][0]
+        assert trade["pnl"] == 500.0  # (150-100)*10
+        # total_value after sell = 1500 (proceeds) + 100 (KEEP mkt value) = 1600
+        # per_slot = 800 -> NEW qty = 800 // 200 = 4
+        assert out["positions"]["NEW"]["qty"] == 4
+
+    def test_summary_and_lines_reflect_realized_and_unrealized_pnl(self):
+        ledger = core._new_paper_ledger(capital=1000.0)
+        ledger["cash"] = 400.0
+        ledger["positions"] = {
+            "A": {"qty": 10, "entry_price": 50.0, "entry_date": "2026-01-01"}}
+        ledger["closed_trades"] = [{"pnl": 25.0}]
+
+        s = core._paper_summary(ledger, current_prices={"A": 60.0})
+        lines = core._paper_summary_lines(ledger, current_prices={"A": 60.0})
+
+        assert s["realized_pnl"] == 25.0
+        assert s["unrealized_pnl"] == 100.0  # (60-50)*10
+        assert "PAPER PORTFOLIO" in lines[1]
+        assert "1 open, 1 closed" in lines[3]
+
+    def test_matches_standalone_paper_tracker_numerically(self):
+        """Numerical parity with momentum_rank_paper_tracker.py's initial_buy/
+        apply_rebalance/summary - these two implementations must never
+        numerically diverge (see the module comment on why they're
+        duplicated instead of imported)."""
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import momentum_rank_paper_tracker as tracker
+
+        prices1 = {"A": 100.0, "B": 200.0, "C": 300.0}
+        core_ledger = core._new_paper_ledger(capital=100000.0)
+        standalone_ledger = tracker.new_ledger(capital=100000.0)
+        core_out = core._paper_initial_buy(core_ledger, "2026-01-01",
+                                           ["A", "B", "C"], prices1, top_n=3)
+        standalone_out = tracker.initial_buy(standalone_ledger, "2026-01-01",
+                                             ["A", "B", "C"], prices1, top_n=3)
+        assert core_out["positions"] == standalone_out["positions"]
+        assert core_out["cash"] == standalone_out["cash"]
+
+        prices2 = {"A": 110.0, "B": 190.0, "C": 310.0, "D": 150.0}
+        core_out2 = core._paper_apply_rebalance(
+            core_out, "2026-02-01", sells=["C"], buys=["D"],
+            fill_prices=prices2, top_n=3)
+        standalone_out2 = tracker.apply_rebalance(
+            standalone_out, "2026-02-01", sells=["C"], buys=["D"],
+            target=["A", "B", "D"], fill_prices=prices2, top_n=3)
+        assert core_out2["positions"] == standalone_out2["positions"]
+        assert core_out2["cash"] == standalone_out2["cash"]
+        assert core_out2["closed_trades"] == standalone_out2["closed_trades"]
 
 
 class TestCleanBotToken:

@@ -747,3 +747,163 @@ Angel-as-data-source remains an open, deliberately-declined option - revisit onl
 the three alternatives above (fix targeted errors [done], temporary master-contract swap, or
 a dedicated second instance), never a silent live switch. Strategy remains **candidate,
 paper-tracked**, shipped top-12 config unchanged.
+
+---
+
+## 2026-09-17 — Real rebalance sent to Telegram; ₹1,00,000 paper-trading ledger built
+
+### Rebalance #1 sent to the real channel
+
+Reconstructed and sent rebalance #1's digest (2026-09-16, the actual first live rebalance -
+`ADANIENSOL, ADANIPOWER, ATHERENERG, BHARATFORG, BHEL, CUMMINSIND, LAURUSLABS, NATIONALUM,
+PAYTM, POWERINDIA, RADICO, SONACOMS`, buy-only, no prior holding) to the real
+`positional-momentum-rank-live` Telegram channel, using the current (post-fix) digest format.
+
+**Mid-send bug found and fixed:** the user spotted that every symbol appeared twice - once
+under `BUY` and again under a separate `Full basket` section. Root cause: `BUY ∪ HOLD` is
+always exactly equal to the target basket with zero overlap (by construction of
+`diff_basket()`), so a third "Full basket" listing was pure duplication, not new information.
+**Fixed:** removed the "Full basket" section entirely from `_build_digest()` - `SELL`/`BUY`/
+`HOLD` alone now fully and non-redundantly specify the complete instruction. Two tests
+updated, one new (`test_no_duplicate_full_basket_section`, asserts every symbol appears
+exactly once in the whole digest). Resent the corrected message to the channel.
+
+### Paper-trading ledger: ₹1,00,000, equal-weight, tracked automatically going forward
+
+Built `strategies/examples/momentum_rank_paper_tracker.py` - a standalone ledger that records
+what actually following the digest would have earned, without ever placing a real order.
+Methodology mirrors the digest's own instructions exactly, not a fresh backtest: HOLD names
+are left untouched (no re-weighting trade), only SELL/BUY names actually trade, and a new BUY
+is sized off the *current* total book value / `TOP_N` (cash + mark-to-market of names staying
+held), not off the original capital - so a new entry after some drift still targets a genuine
+equal-weight slot of the book as it now stands.
+
+**Initialized with real data.** 2026-09-17 (today) is exactly the "next session open" fill
+day for the 2026-09-16 signal per this doc's own documented fill convention, so the initial
+buy used REAL fetched opening prices, not a synthetic estimate.
+
+**Immediate finding: `POWERINDIA` is completely unfunded at ₹1,00,000 capital.** Per-slot
+allocation is ₹1,00,000 / 12 = ₹8,333.33; `POWERINDIA` traded at ₹30,435 that morning -
+more than 3.6x the slot size, so it bought **zero shares**, not just an underweight position.
+This is a real, structural constraint of running this strategy at this capital level with
+this universe (which includes several high-priced names - `CUMMINSIND` ~₹4,940,
+`RADICO` ~₹4,450 also only afford 1 share each), not a bug: equal-weight-by-value assumes
+capital divides continuously, but real CNC orders are whole shares only. `_paper_initial_buy()`
+/`_paper_apply_rebalance()` now print a `WARNING` whenever a buy allocation can't afford even
+one share, so this is never silently invisible in a ledger that shows a clean ₹0.00 P&L line
+for a position that was never actually established. **Flag for later:** at this capital, the
+paper (and any real) portfolio is effectively ~11 stocks, not 12, until capital grows past
+~₹30k/slot (~₹3.65L total) or `POWERINDIA` drops out of the ranking.
+
+Result after the initial buy (2026-09-17 open prices): ₹100,000 capital, ₹20,133.46 left as
+cash (large cash drag - a direct consequence of whole-share rounding across several
+high-priced names plus the unfunded `POWERINDIA` slot), 12 positions opened (11 funded).
+
+### Automatic tracking wired into the live script
+
+The user asked for a concise paper P&L summary on every future rebalance, automatically -
+not a separate manual step. Since the `/python` host accepts only one uploaded file, the
+ledger math is **duplicated inline** into `momentum_rank_strategy.py` itself
+(`_paper_initial_buy`/`_paper_apply_rebalance`/`_paper_summary`/`_paper_summary_lines`),
+same reason `momentum_score`/`build_factor` are already duplicated rather than imported -
+covered by a numerical-parity test against the standalone tracker
+(`test_matches_standalone_paper_tracker_numerically`), so the two can never silently diverge.
+
+**One deliberate difference from the standalone tracker's fill convention:** the inline
+version fills at the rebalance signal day's CLOSE (`last_price`, already fetched during
+ranking) rather than waiting for the next session's real open. This doc's own 2026-09-12
+verification note already found that substitution changes the *backtest* CAGR by only
+0.24 points (37.67% -> 37.91%) - a negligible difference accepted here in exchange for not
+needing a second, later run just to capture "tomorrow's" price on a script that only checks
+weekly. The standalone tracker keeps the more precise next-open convention for its own
+manual `--report`/backfill use.
+
+`run_once()` now: loads the paper ledger, computes fill prices for every symbol being traded
+(falling back to a symbol's last recorded entry price - clearly logged - if a fresh price
+failed to fetch this run, rather than crashing the rebalance over one stale price), applies
+the rebalance, appends a concise block to the digest -
+
+```
+--------------------------------------------
+PAPER PORTFOLIO (Rs 100,000 tracked since first rebalance):
+  Value: Rs 100,000 (+0.00%) | Realized: Rs +0 | Unrealized: Rs +0
+  Positions: 12 open, 0 closed (see momentum_rank_paper_tracker.py --report for per-symbol detail)
+```
+
+- and only persists the paper ledger update after a successful Telegram send, mirroring the
+existing state-save safety pattern exactly (so a failed send never silently marks a paper
+trade as booked).
+
+**Tests:** 4 new (`TestPaperLedger`, including the parity check), all in
+`test_momentum_rank_core.py`; `test_momentum_rank_paper_tracker.py` (13 tests) covers the
+standalone module's own math independently. **55/55 passing** across the full suite.
+
+### Status
+
+Shipped to `strategies/examples/momentum_rank_strategy.py`, the synced deployed copy, and the
+new `strategies/examples/momentum_rank_paper_tracker.py` (+ synced copy in `strategies/
+scripts/`). Real ledger at `log/strategies/momentum_rank_paper_ledger.json` - not gitignored
+by `log/strategies/.gitignore` (only `*.log` is), but deliberately never committed anyway:
+it's live per-instance runtime state (current real holdings, real P&L), and committing it
+would mean every future `git pull` on ANY OpenAlgo instance overwrites that instance's own
+live paper-tracking with whatever this instance last committed. Same reasoning already
+applied to `momentum_rank_state.json`. Strategy remains **candidate, paper-tracked**; this
+pass adds the actual paper-tracking infrastructure the "paper-tracked"
+label has been asserting since the very first entry in this document.
+
+---
+
+## 2026-09-17 (follow-up) — Weekly paper P&L check-in, decided and shipped
+
+**Question:** the rebalance-triggered paper summary above only fires every ~30 sessions
+(~6 weeks) - the user asked for regular position/P&L visibility and asked explicitly to
+decide the cadence (daily/weekly/monthly).
+
+**Decision: weekly.** Daily was rejected - this is a positional strategy with no intraday
+exit, so nothing actionable happens between rebalances; a daily ping would be pure noise for
+a book that cannot move on any daily decision. Monthly was rejected as too sparse - only 1-2
+check-ins per 6-week rebalance cycle. Weekly matches the cadence this script already checks
+at, gives ~4-5 data points per cycle, and is standard practice for monitoring a multi-week
+swing book.
+
+**Implementation, self-enforced rather than schedule-assumed.** The interval
+(`PAPER_CHECKIN_INTERVAL_DAYS = 7`) is tracked by the script itself via a new
+`last_checkin_date` field in the paper ledger, not just inferred from "whatever the host
+schedule happens to run at" - the same lesson as the earlier "checked once daily" text bug
+that didn't match the real (weekly) schedule. `run_once()`'s existing non-rebalance branch
+(previously a bare `return`) now calls `_maybe_send_paper_checkin()`, which no-ops silently
+if no paper position exists yet, no-ops (with a log line) if fewer than 7 days have passed
+since the last check-in, and otherwise sends the full per-symbol position + P&L breakdown -
+deliberately more detailed than the concise block appended to a rebalance digest, since a
+check-in's entire purpose is that detail:
+
+```
+MOMENTUM-RANK PAPER CHECK-IN - 2026-09-17
+============================================
+Not a rebalance day (1/30 sessions since last rebalance) - this is a position/P&L snapshot only.
+
+Capital: Rs 100,000  |  Value: Rs 100,568 (+0.57%)
+Realized: Rs +0  |  Unrealized: Rs +568  |  Cash: Rs 20,133
+Positions: 12 open, 0 closed
+--------------------------------------------
+  ADANIENSOL: qty 6 @ entry Rs 1,346.00 -> cur Rs 1,348.10  (+0.16%)
+  ...
+--------------------------------------------
+This is a PAPER-TRACKING CHECK-IN ONLY - no order has been placed.
+```
+
+Sent once immediately to the real channel (2026-09-17, +0.57% one day after the initial buy -
+too early to mean anything, this was to demonstrate/verify the feature works end-to-end, not
+a performance claim). `last_checkin_date` now recorded, so the live weekly schedule will not
+send again until 7 days have passed.
+
+**Tests:** 6 new (`TestPaperCheckin`) covering the message format, the not-due-yet skip, the
+no-positions-yet skip, the dry-run no-send-no-save path, and the failed-send-leaves-state-
+unchanged path (mirrors the existing state/paper-ledger safety pattern). **61/61 passing.**
+
+### Status
+
+Shipped to `strategies/examples/momentum_rank_strategy.py` and the synced deployed copy.
+Committed to git this session (see commit history) - the real ledger/state JSON files under
+`log/strategies/` are deliberately excluded from that commit regardless (live per-instance
+runtime state, not source - see the note two entries above).

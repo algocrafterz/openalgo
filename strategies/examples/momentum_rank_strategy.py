@@ -330,6 +330,37 @@ STATE_PATH = Path(_cfg("MOMENTUM_STATE_PATH",
                         "log/strategies/momentum_rank_state.json"))
 DRY_RUN_ENV = _cfg("MOMENTUM_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
 
+# ---------------------------------------------------------------------------
+# Paper-trading ledger: tracks what actually following each digest would have
+# earned, without placing real orders. Same shape and math as the standalone
+# momentum_rank_paper_tracker.py (which stays the manual --report tool for
+# checking P&L anytime) - MUST stay numerically identical to that file's
+# initial_buy()/apply_rebalance()/summary(), duplicated here rather than
+# imported for the same reason build_factor()/momentum_score() are: the
+# /python host only accepts a single uploaded file.
+#
+# Fill price convention differs slightly, deliberately: the standalone
+# tracker uses the next session's real open; this inline version uses the
+# rebalance signal day's CLOSE (already fetched as `last_price` while
+# ranking), since STRATEGY-ANALYSIS.md already measured that substitution to
+# be a negligible difference (CAGR 37.67% -> 37.91% in that test) and it
+# avoids needing a second, later run just to capture "tomorrow's" price.
+# ---------------------------------------------------------------------------
+PAPER_CAPITAL = float(_cfg("MOMENTUM_PAPER_CAPITAL", "100000"))
+PAPER_LEDGER_PATH = Path(_cfg("MOMENTUM_PAPER_LEDGER_PATH",
+                              "log/strategies/momentum_rank_paper_ledger.json"))
+# Weekly, not daily or monthly: this is a positional strategy with no
+# intraday exit - nothing actionable happens between rebalances (~30
+# sessions, ~6 weeks apart), so a daily P&L ping would be pure noise for a
+# book that cannot move on any daily decision. Monthly would mean only 1-2
+# check-ins per rebalance cycle - too sparse to see a trend. Weekly matches
+# this script's own existing check cadence and gives ~4-5 data points per
+# cycle. Tracked here (not just "whatever the host schedule happens to run
+# at") so the cadence is a property of the script itself and stays correct
+# even if the host schedule is later changed - the same lesson as the
+# earlier "checked once daily" text bug not matching the real schedule.
+PAPER_CHECKIN_INTERVAL_DAYS = int(_cfg("MOMENTUM_PAPER_CHECKIN_DAYS", "7"))
+
 
 def _load_state() -> dict:
     if STATE_PATH.exists():
@@ -340,6 +371,174 @@ def _load_state() -> dict:
 def _save_state(state: dict) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, indent=2))
+
+
+def _new_paper_ledger(capital: float = PAPER_CAPITAL) -> dict:
+    return {"capital": capital, "cash": capital, "positions": {},
+            "closed_trades": [], "last_synced_rebalance_count": 0,
+            "last_checkin_date": None}
+
+
+def _load_paper_ledger() -> dict:
+    if PAPER_LEDGER_PATH.exists():
+        return json.loads(PAPER_LEDGER_PATH.read_text())
+    return _new_paper_ledger()
+
+
+def _save_paper_ledger(ledger: dict) -> None:
+    PAPER_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PAPER_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+
+
+def _paper_warn_if_unfunded(sym: str, qty: int, price: float, per_slot: float) -> None:
+    if qty == 0:
+        print(f"[momentum-rank] paper-ledger WARNING: {sym} @ Rs {price:,.2f} "
+              f"costs more than the Rs {per_slot:,.2f} per-slot allocation - "
+              f"bought 0 shares, completely unfunded at this capital level.")
+
+
+def _paper_initial_buy(ledger: dict, as_of: str, target: list[str],
+                       fill_prices: dict[str, float], top_n: int = TOP_N) -> dict:
+    per_slot = ledger["cash"] / top_n
+    positions = dict(ledger["positions"])
+    cash = ledger["cash"]
+    for sym in target:
+        price = fill_prices[sym]
+        qty = int(per_slot // price)
+        _paper_warn_if_unfunded(sym, qty, price, per_slot)
+        cash -= qty * price
+        positions[sym] = {"qty": qty, "entry_price": price, "entry_date": as_of}
+    return {**ledger, "positions": positions, "cash": cash}
+
+
+def _paper_apply_rebalance(ledger: dict, as_of: str, sells: list[str],
+                           buys: list[str], fill_prices: dict[str, float],
+                           top_n: int = TOP_N) -> dict:
+    positions = dict(ledger["positions"])
+    closed = list(ledger["closed_trades"])
+    cash = ledger["cash"]
+    for sym in sells:
+        pos = positions.pop(sym)
+        exit_price = fill_prices[sym]
+        proceeds = pos["qty"] * exit_price
+        cash += proceeds
+        cost_basis = pos["qty"] * pos["entry_price"]
+        pnl = proceeds - cost_basis
+        closed.append({
+            "symbol": sym, "qty": pos["qty"], "entry_date": pos["entry_date"],
+            "entry_price": pos["entry_price"], "exit_date": as_of,
+            "exit_price": exit_price, "pnl": pnl,
+            "pnl_pct": (pnl / cost_basis * 100.0) if cost_basis else 0.0,
+        })
+    remaining_value = sum(pos["qty"] * fill_prices.get(sym, pos["entry_price"])
+                          for sym, pos in positions.items())
+    per_slot = (cash + remaining_value) / top_n
+    for sym in buys:
+        price = fill_prices[sym]
+        qty = int(per_slot // price)
+        _paper_warn_if_unfunded(sym, qty, price, per_slot)
+        cash -= qty * price
+        positions[sym] = {"qty": qty, "entry_price": price, "entry_date": as_of}
+    return {**ledger, "positions": positions, "cash": cash, "closed_trades": closed}
+
+
+def _paper_summary(ledger: dict, current_prices: dict[str, float]) -> dict:
+    market_value = sum(pos["qty"] * current_prices.get(sym, pos["entry_price"])
+                       for sym, pos in ledger["positions"].items())
+    total = ledger["cash"] + market_value
+    realized = sum(t["pnl"] for t in ledger["closed_trades"])
+    unrealized = sum(
+        pos["qty"] * (current_prices.get(sym, pos["entry_price"]) - pos["entry_price"])
+        for sym, pos in ledger["positions"].items())
+    return {
+        "total_value": total, "realized_pnl": realized, "unrealized_pnl": unrealized,
+        "total_return_pct": (total - ledger["capital"]) / ledger["capital"] * 100.0,
+        "open_positions": len(ledger["positions"]),
+        "closed_trades": len(ledger["closed_trades"]),
+    }
+
+
+def _paper_summary_lines(ledger: dict, current_prices: dict[str, float]) -> list[str]:
+    """Very concise paper-P&L block appended to the digest - positions and
+    P&L, not the full per-symbol breakdown (that's what --report is for)."""
+    s = _paper_summary(ledger, current_prices)
+    return [
+        "-" * 44,
+        f"PAPER PORTFOLIO (Rs {ledger['capital']:,.0f} tracked since first "
+        f"rebalance):",
+        f"  Value: Rs {s['total_value']:,.0f} ({s['total_return_pct']:+.2f}%) | "
+        f"Realized: Rs {s['realized_pnl']:+,.0f} | "
+        f"Unrealized: Rs {s['unrealized_pnl']:+,.0f}",
+        f"  Positions: {s['open_positions']} open, {s['closed_trades']} closed "
+        f"(see momentum_rank_paper_tracker.py --report for per-symbol detail)",
+    ]
+
+
+def _paper_checkin_message(ledger: dict, current_prices: dict[str, float],
+                           as_of, elapsed: int) -> str:
+    """Weekly (see PAPER_CHECKIN_INTERVAL_DAYS) position + P&L snapshot, sent
+    on a NON-rebalance check so a trader isn't only hearing from this
+    strategy once every ~6 weeks. Unlike `_paper_summary_lines()` (a few
+    lines appended to a rebalance digest), this includes the full per-symbol
+    quantity and P&L breakdown - the point of a check-in is exactly that
+    detail.
+    """
+    s = _paper_summary(ledger, current_prices)
+    lines = [
+        f"MOMENTUM-RANK PAPER CHECK-IN - {as_of}",
+        "=" * 44,
+        f"Not a rebalance day ({elapsed}/{REBAL_DAYS} sessions since last "
+        f"rebalance) - this is a position/P&L snapshot only.",
+        "",
+        f"Capital: Rs {ledger['capital']:,.0f}  |  "
+        f"Value: Rs {s['total_value']:,.0f} ({s['total_return_pct']:+.2f}%)",
+        f"Realized: Rs {s['realized_pnl']:+,.0f}  |  "
+        f"Unrealized: Rs {s['unrealized_pnl']:+,.0f}  |  Cash: Rs {ledger['cash']:,.0f}",
+        f"Positions: {s['open_positions']} open, {s['closed_trades']} closed",
+        "-" * 44,
+    ]
+    for sym, pos in sorted(ledger["positions"].items()):
+        cur = current_prices.get(sym, pos["entry_price"])
+        pnl_pct = ((cur - pos["entry_price"]) / pos["entry_price"] * 100.0
+                  if pos["entry_price"] else 0.0)
+        lines.append(f"  {sym}: qty {pos['qty']} @ entry Rs {pos['entry_price']:,.2f} "
+                    f"-> cur Rs {cur:,.2f}  ({pnl_pct:+.2f}%)")
+    lines += [
+        "-" * 44,
+        "This is a PAPER-TRACKING CHECK-IN ONLY - no order has been placed.",
+    ]
+    return "\n".join(lines)
+
+
+def _maybe_send_paper_checkin(as_of: str, elapsed: int,
+                              current_prices: dict[str, float],
+                              dry_run: bool) -> None:
+    """Sends a paper P&L check-in on a non-rebalance run, at most once every
+    PAPER_CHECKIN_INTERVAL_DAYS (see that constant for why weekly). Silent
+    no-op if no paper position has ever been opened yet - nothing to report.
+    """
+    ledger = _load_paper_ledger()
+    if not ledger["positions"]:
+        return
+    last_checkin = ledger.get("last_checkin_date")
+    if last_checkin:
+        days_since = (date.fromisoformat(as_of) - date.fromisoformat(last_checkin)).days
+        if days_since < PAPER_CHECKIN_INTERVAL_DAYS:
+            print(f"[momentum-rank] paper check-in not due yet "
+                  f"({days_since}/{PAPER_CHECKIN_INTERVAL_DAYS} days since last)")
+            return
+    message = _paper_checkin_message(ledger, current_prices, as_of, elapsed)
+    print(message)
+    if dry_run:
+        print("[momentum-rank] --dry-run: not sending paper check-in, not "
+              "updating ledger")
+        return
+    if _send_telegram(message):
+        ledger["last_checkin_date"] = as_of
+        _save_paper_ledger(ledger)
+    else:
+        print("[momentum-rank] paper check-in not delivered - "
+              "last_checkin_date left unchanged, will retry next check")
 
 
 def _send_telegram(text: str) -> bool:
@@ -421,9 +620,6 @@ def _build_digest(trading_days: list, target: list[str], sells: list[str],
         *_section("BUY", buys),
         "",
         *_section("HOLD, no action", held_unchanged),
-        "",
-        f"Full basket ({len(target)} names, ~{per_slot_pct:.1f}% each):",
-        *[f"  {s}" for s in sorted(target)],
         "-" * 44,
         f"Cadence: rebalances every {REBAL_DAYS} trading sessions (~6 weeks)",
         "Next check: per this strategy's schedule (currently weekly, not "
@@ -591,6 +787,7 @@ def run_once(dry_run: bool = False) -> None:
     print(f"[momentum-rank] {trading_days[-1]}: {elapsed}/{REBAL_DAYS} sessions "
           f"since last rebalance ({last_rebalance})")
     if elapsed < REBAL_DAYS:
+        _maybe_send_paper_checkin(str(trading_days[-1]), elapsed, last_price, dry_run)
         return
 
     scores = {s: momentum_score(c, LOOKBACK, SKIP) for s, c in closes.items()}
@@ -621,18 +818,47 @@ def run_once(dry_run: bool = False) -> None:
     digest = _build_digest(trading_days, target, sells, buys, rebalance_number,
                             fetch_errors, len(UNIVERSE),
                             today_truncated=today_truncated)
+
+    paper_ledger = _load_paper_ledger()
+    as_of = str(trading_days[-1])
+    fill_prices: dict[str, float] = {}
+    for sym in set(target) | set(sells):
+        if sym in last_price:
+            fill_prices[sym] = last_price[sym]
+        else:
+            # target/buys always have a last_price (rank_universe's min-price
+            # eligibility check requires it) - this can only happen for a
+            # `sell` whose fresh price failed to fetch this run. Fall back to
+            # its own last recorded entry price: P&L-neutral on this trade
+            # rather than crashing the whole rebalance over one stale price.
+            fallback = paper_ledger["positions"].get(sym, {}).get("entry_price")
+            if fallback is not None:
+                print(f"[momentum-rank] paper-ledger: no fresh price for {sym} "
+                      f"this run - using its last recorded entry price "
+                      f"Rs {fallback:.2f} as a placeholder fill")
+                fill_prices[sym] = fallback
+    if not paper_ledger["positions"] and not paper_ledger["closed_trades"]:
+        paper_ledger = _paper_initial_buy(paper_ledger, as_of, target, fill_prices)
+    else:
+        paper_ledger = _paper_apply_rebalance(paper_ledger, as_of, sells, buys,
+                                              fill_prices)
+    digest += "\n" + "\n".join(_paper_summary_lines(paper_ledger, last_price))
     print(digest)
 
     if dry_run:
-        print("[momentum-rank] --dry-run: not sending Telegram, not updating state")
+        print("[momentum-rank] --dry-run: not sending Telegram, not updating "
+              "state, not updating paper ledger")
         return
 
     if _send_telegram(digest):
-        _save_state({"held": target, "last_rebalance_date": str(trading_days[-1]),
+        _save_state({"held": target, "last_rebalance_date": as_of,
                      "rebalance_count": rebalance_number})
+        paper_ledger["last_synced_rebalance_count"] = rebalance_number
+        _save_paper_ledger(paper_ledger)
     else:
-        print("[momentum-rank] digest not delivered - state left unchanged, this "
-              "rebalance will be recomputed and retried on the next check")
+        print("[momentum-rank] digest not delivered - state and paper ledger "
+              "left unchanged, this rebalance will be recomputed and retried "
+              "on the next check")
 
 
 def main() -> None:
