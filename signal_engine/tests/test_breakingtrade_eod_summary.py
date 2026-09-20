@@ -58,6 +58,23 @@ class TestIntradaySummary:
         assert "RIGHT (1)" in message
         assert "1 right, 0 wrong" in message
 
+    def test_title_is_scorecard_not_eod_summary(self, monkeypatch):
+        """Renamed 2026-09-20: this scores direction-only calls that were mostly never real
+        trades, a different thing from notifier.py's day_summary (real P&L) - the old shared
+        "EOD SUMMARY" title let a trader conflate the two."""
+        _store_snapshot("2026-09-07 09:20", "PNBHOUSING", 1166.0)
+        _record_watchlist_alert("PNBHOUSING", "Breakaway Above PDH", "2026-09-07 09:20:50")
+        monkeypatch.setattr(eod_summary, "fetch_ltp", lambda symbol, exchange="NSE": 1182.1)
+
+        eod_summary.alert_intraday_eod_summary("2026-09-07", datetime(2026, 9, 7, 15, 5))
+
+        with alerts._connect() as conn:
+            message = conn.execute(
+                "SELECT message FROM alerts WHERE kind = 'eod_summary' AND scan = 'INTRADAY'"
+            ).fetchone()[0]
+        assert message.startswith("BT WATCHLIST SCORECARD")
+        assert "BT EOD SUMMARY" not in message
+
     def test_scores_a_short_call_that_failed(self, monkeypatch):
         _store_snapshot("2026-09-07 09:20", "MARUTI", 12694.0)
         _record_watchlist_alert("MARUTI", "Breakaway Below PDL", "2026-09-07 09:20:50")

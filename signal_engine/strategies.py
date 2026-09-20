@@ -19,6 +19,11 @@ REGISTRY is now the single statement of what a strategy IS. `channel_base` of No
 "deliberately has no engine channel" - the strategy runs for measurement only and its alerts
 have nowhere to be traded from. config.validate_channels() and startup's config check are
 what turn a gap here into a visible startup message instead of silence.
+
+For the messaging side of adding a new strategy (what Telegram actually sends once it's in
+this registry) see notifier.py's module docstring - short version: nothing there is
+strategy-specific, so registering it here plus its config.yaml channel entries is the whole
+job.
 """
 
 from dataclasses import dataclass

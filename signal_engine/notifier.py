@@ -4,6 +4,29 @@ Sends messages to notify_channel (signal-engine) so you can monitor
 order placement, position lifecycle, risk events, and daily summary.
 
 Uses the same TelegramClient as the listener (set via set_client once connected).
+
+ADDING A NEW STRATEGY THAT GOES THROUGH main.py's PIPELINE (a new PineScript alert, or
+another scanner like BreakingTrade): every function in this module is ALREADY generic across
+strategies - none of them are strategy-specific. A new strategy needs ZERO new message code:
+
+  1. Add it to strategies.REGISTRY (signal_engine/strategies.py) with its `channel_base`.
+  2. Add its `{channel_base}-analyze` / `{channel_base}-live` entries to config.yaml's
+     `telegram.channels`.
+  3. Done. Every notify_* call site already passes `strategy=` through, so order placement,
+     fills, exits, failures and its own day summary all just work, mirrored into its new
+     channel by strategies.channelled() (see _STRATEGY_CHANNEL_BASE below) with no code change
+     here. If a strategy family needs its OWN message vocabulary because it isn't a signal
+     the engine trades at all (see analysis/breakingtrade/eod_summary.py's watchlist scorecard,
+     which scores direction-only calls that were never real trades) - that is the one case
+     where a bespoke sender is correct, not a gap in this module.
+
+A STANDALONE strategy that does NOT go through main.py (its own scheduled script, like
+strategies/examples/momentum_rank_strategy.py) cannot import this module - see that file's
+own docstring for why (portability: it must run from a single file with only the `openalgo`
+SDK and the stdlib). For that case, copy that file's `_clean_bot_token()`/`_send_telegram()`
+block verbatim rather than reinventing the bot-HTTP-API plumbing - see
+analysis/breakingtrade/alerts.py's docstring for the underlying Bot API contract both of them
+implement.
 """
 
 from __future__ import annotations
@@ -125,10 +148,13 @@ EVENT_LEVELS = {
     # Intermediate steps of an entry that ends in its own message anyway.
     "order_placed": "normal",
     "sl_placed": "normal",
-    "be_stop_applied": "normal",
     "exit_no_position": "normal",
     # Outcomes — kept even in quiet.
     "entry_filled": "quiet",
+    # Changes the trader's actual risk exposure (the stop just moved to break-even) - unlike
+    # order_placed/sl_placed above, which just confirm a step already implied by the entry
+    # message, this is new information a quiet channel should not hide.
+    "be_stop_applied": "quiet",
     # A partial exit BOOKS money — it is an outcome, not a step. With extended runner tiers
     # (30/35/35) most trades end as a sequence of these and never send position_closed at all,
     # so suppressing them would make a quiet channel silent about the actual results.
@@ -187,13 +213,37 @@ async def _mirror_to_strategy(event: str, text: str, strategy: str) -> None:
     whether the admin copy is considered delivered."""
     if event not in _MIRRORED_TO_STRATEGY or not strategy or _client is None:
         return
-    channel = _channel_for_strategy(strategy, await _current_phase())
+    phase = await _current_phase()
+    channel = _channel_for_strategy(strategy, phase)
     if channel is None:
         return
     try:
-        await _client.send_message(channel.id, text)
+        await _deliver(_client, channel.id, text, phase)
     except Exception as e:
         logger.warning(f"Could not mirror {event} to {channel.name}: {e}")
+
+
+#: Prepended to every outgoing message by _deliver(), the ONE place every send path in this
+#: module funnels through. Whether a message describes real money or paper money has, until
+#: now, depended entirely on which physical Telegram channel it landed in - nothing in the
+#: text itself said so, except notify_startup_summary()'s one banner line. That is a single
+#: point of failure the night before the first live day: a muted channel, a forwarded
+#: screenshot, or simply misremembering which chat is which, and a paper fill reads as real
+#: money or vice versa. Tagging it here means every CURRENT and FUTURE notify_*/mirror/day
+#: summary/startup message gets it for free - a new notify_* function cannot forget to add it,
+#: because it never has to know it exists.
+_PHASE_TAG = {"live": "[LIVE] ", "analyze": "[PAPER] "}
+
+
+async def _deliver(client, channel_id, text: str, phase: str):
+    """The single low-level Telegram send every path in this module goes through - notify(),
+    _mirror_to_strategy(), _send_and_pin_day_summary(), and _send_oneshot(). Centralising it
+    here is what makes the phase tag (and any future cross-cutting concern) a one-line change
+    instead of four. Returns whatever TelegramClient.send_message returns (the day-summary pin
+    path needs the Message object); raises exactly like it does - callers keep their own
+    try/except.
+    """
+    return await client.send_message(channel_id, f"{_PHASE_TAG.get(phase, '')}{text}")
 
 
 async def notify_event(event: str, text: str, strategy: str = "") -> bool:
@@ -235,11 +285,12 @@ async def notify(text: str, event: str = "") -> bool:
         # listener flushes on connect (see set_client()).
         _queue_until_connected(text, event)
         return False
-    channel = _channel_for_phase(await _current_phase())
+    phase = await _current_phase()
+    channel = _channel_for_phase(phase)
     if channel is None:
         return False
     try:
-        await _client.send_message(channel.id, text)
+        await _deliver(_client, channel.id, text, phase)
         return True
     except asyncio.CancelledError:
         logger.debug("Notifier: send cancelled (event loop shutting down)")
@@ -503,8 +554,11 @@ async def notify_no_progress_exit(
         f"diff={diff:+.2f} progress={progress:.0%} age={age_minutes}min"
     )
     dir_str = f" {_dir(direction)}" if direction else ""
+    # "(stalled)" distinguishes this from TIME EXIT below - both are forced closes with no
+    # SL/TP hit, and without a plain-English qualifier a trader has no way to tell "the price
+    # never moved" apart from "the clock ran out" at a glance.
     await notify_event("no_progress_exit",
-        f"NO-PROGRESS EXIT | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
+        f"NO-PROGRESS EXIT (stalled) | {symbol}{dir_str}{_tag(strategy)} | {_now_ist()}\n"
         f"{entry:.2f} -> {ltp:.2f} ({diff:+.2f}) | Progress: {progress:.0%} | Age: {age_minutes}min",
         strategy=strategy,
     )
@@ -528,10 +582,14 @@ async def notify_orphaned_position(
     else:
         plain_reason = reason
 
+    # "NO POSITION TAKEN ... Final" - the previous wording ("ORDER NOT FILLED") read as still
+    # pending, as if a fill might still arrive. It will not: this is the terminal state, the
+    # engine takes no further automatic action, and a trader must not sit waiting for a fill
+    # that is never coming.
     await notify_event("orphaned_position",
-        f"ORDER NOT FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
-        f"No position taken. {plain_reason}\n"
-        f"Check broker terminal: order {order_id}",
+        f"NO POSITION TAKEN | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
+        f"Final - order did not fill. {plain_reason}\n"
+        f"No further action from the engine. Check broker terminal if unexpected: order {order_id}",
         strategy=strategy,
     )
 
@@ -556,8 +614,10 @@ async def notify_time_exit(
         pnl_str = f"\n{traj} | {_pnl(pnl)}{_r(r_multiple)}"
 
     ctx_str = f"\n{day_context}" if day_context else ""
+    # "(session cutoff)" - see notify_no_progress_exit()'s comment: both are forced closes
+    # with no SL/TP hit, and the qualifier is what tells them apart at a glance.
     await notify_event("time_exit",
-        f"TIME EXIT | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}",
+        f"TIME EXIT (session cutoff) | {symbol}{dir_str}{_tag(strategy)}{dur_str}{pnl_str}{ctx_str}",
         strategy=strategy,
     )
 
@@ -624,12 +684,13 @@ async def _send_and_pin_day_summary(text: str) -> bool:
         # listener flushes on connect (see set_client()).
         _queue_until_connected(text, "day_summary")
         return False
-    channel = _channel_for_phase(await _current_phase())
+    phase = await _current_phase()
+    channel = _channel_for_phase(phase)
     if channel is None:
         return False
 
     try:
-        message = await _client.send_message(channel.id, text)
+        message = await _deliver(_client, channel.id, text, phase)
     except asyncio.CancelledError:
         logger.debug("Notifier: send cancelled (event loop shutting down)")
         return False
@@ -943,7 +1004,8 @@ async def _send_oneshot(msg: str) -> None:
     """
     if not settings.notify_channel:
         return
-    channel = _channel_for_phase(await _current_phase())
+    phase = await _current_phase()
+    channel = _channel_for_phase(phase)
     if channel is None:
         return
 
@@ -961,7 +1023,7 @@ async def _send_oneshot(msg: str) -> None:
             logger.warning("Startup notifier: Telegram not authorized, skipping notification")
             await client.disconnect()
             return
-        await client.send_message(channel.id, msg)
+        await _deliver(client, channel.id, msg, phase)
         await client.disconnect()
     except Exception as e:
         logger.warning(f"Startup notifier: could not send Telegram message: {e}")

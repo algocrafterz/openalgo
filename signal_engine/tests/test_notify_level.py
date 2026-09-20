@@ -92,4 +92,4 @@ class TestWiring:
         # over HTTP - bypass it directly so this test stays offline and deterministic.
         monkeypatch.setattr(notifier, "_current_phase", _fake_phase)
         await notifier.notify("filled", event="entry_filled")
-        assert sent == ["filled"]
+        assert sent == ["[PAPER] filled"]

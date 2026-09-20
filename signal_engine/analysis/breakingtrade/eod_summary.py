@@ -151,7 +151,12 @@ def alert_intraday_eod_summary(day: str, captured_at: datetime) -> bool:
     width = max((len(c["symbol"]) for c in scored), default=8)
 
     date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
-    lines = [f"BT EOD SUMMARY {date_label}"]
+    # "SCORECARD", not "EOD SUMMARY" - this measures direction-only right/wrong on calls that
+    # were mostly never real trades, a different thing from notifier.py's day_summary (real
+    # P&L on real fills) and eod_summary.py's own BTST summary below (real basket P&L). All
+    # three used to share the generic "EOD SUMMARY" title, which let a trader conflate a
+    # watchlist hit-rate with an actual trading result.
+    lines = [f"BT WATCHLIST SCORECARD {date_label}"]
     if right or wrong:
         lines.append(f"{len(scored)} called | {len(right)} right, {len(wrong)} wrong")
     else:

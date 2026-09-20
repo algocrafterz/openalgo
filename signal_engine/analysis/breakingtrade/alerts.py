@@ -43,6 +43,13 @@ exactly like an unconfigured channel always has.
 
 Without a configured channel, alerts are still recorded, just not delivered - and the module
 says so once rather than failing repeatedly.
+
+A FUTURE STANDALONE STRATEGY (its own scheduled single-file script, not run through main.py -
+e.g. strategies/examples/momentum_rank_strategy.py, which shares this same bot token for its
+own channel) cannot import this module - it needs to stay a portable single file. Copy that
+file's `_clean_bot_token()`/`_send_telegram()` pair as the reference pattern for the same Bot
+HTTP API contract implemented here, rather than reinventing the token-cleaning edge cases from
+scratch.
 """
 
 from __future__ import annotations
@@ -206,6 +213,12 @@ _CHANNEL_NAME_BY_GROUP = {
 _MODE_CACHE_TTL_SECONDS = 60
 _mode_cache = {"is_analyze": True, "checked_at": 0.0}
 
+#: Prepended to every outgoing message in send() below - see notifier.py's identical
+#: _PHASE_TAG for the full rationale. Kept as its own copy rather than imported: this module
+#: is a peer of notifier.py, not a dependent of it, and the two-entry dict is cheaper to
+#: duplicate than to couple.
+_PHASE_TAG = {"live": "[LIVE] ", "analyze": "[PAPER] "}
+
 
 def _current_phase() -> str:
     """"analyze" or "live", from OpenAlgo's live analyze/live state, cached briefly.
@@ -307,9 +320,13 @@ def send(text: str, kind: str = None, monospace: bool = False) -> tuple[bool, in
     module's generated text (numbers, symbols, arrows) ever contains either.
     """
     token, chat_id = _credentials(kind)
+    phase = _current_phase()
+    # Same convention as notifier.py's _PHASE_TAG: a message must never depend on which
+    # physical channel it landed in to say whether it describes real money - see that
+    # module's docstring for the incident this defends against.
+    text = f"{_PHASE_TAG.get(phase, '')}{text}"
     if not token or not chat_id:
         group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
-        phase = _current_phase()
         # Keyed by (group, phase), not one flag for everything: a missing BTST channel used
         # to suppress the warning for a later missing WATCHLIST one, so the second gap was
         # invisible and its alerts silently went undelivered with nothing said about it.

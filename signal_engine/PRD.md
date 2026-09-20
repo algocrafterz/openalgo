@@ -236,6 +236,51 @@ this specific lever (wick-depth selectivity) is exhausted; further progress on v
 rejection fades would need a different lever (lower-cost execution, multi-day confluence, or real
 orderflow/footprint confirmation), not another depth sweep.
 
+**Pre-live message clarity pass, the night before the first live day: a phase tag on every
+Telegram send, four wording fixes, and the messaging system's standardization documented.**
+Prompted by reviewing one real example of every message type the engine sends (24 messages,
+across every channel) and asking "would this confuse a trader" with real money starting
+tomorrow. Five changes, all in `notifier.py` / `analysis/breakingtrade/{alerts,eod_summary}.py`:
+
+- **`[PAPER]` / `[LIVE]` tag on every outgoing message.** Until now, whether a message
+  described real or paper money depended entirely on which physical Telegram channel it
+  landed in — nothing in the text itself said so (except the startup banner). Added at a
+  single new low-level chokepoint, `notifier._deliver()`, that all four of the module's
+  independent send paths (`notify()`, `_mirror_to_strategy()`, `_send_and_pin_day_summary()`,
+  `_send_oneshot()`) now funnel through — a new notify_* function or send path gets the tag
+  automatically, it never has to know it exists. `alerts.py`'s `send()` (the BreakingTrade bot
+  path) carries the same tag via its own small copy of the same convention.
+- **`NO-PROGRESS EXIT (stalled)` / `TIME EXIT (session cutoff)`.** Both are forced closes with
+  no SL/TP hit; without the qualifier a trader can't tell "price never moved" apart from "the
+  clock ran out" at a glance.
+- **`orphaned_position`'s wording no longer implies a fill might still arrive.** "ORDER NOT
+  FILLED" read as pending; it is terminal. Now: "NO POSITION TAKEN | ... Final - order did not
+  fill ... No further action from the engine."
+- **`be_stop_applied` promoted from `normal` to `quiet` tier.** The stop moving to break-even
+  changes the trader's actual risk exposure, unlike the purely mechanical `order_placed`/
+  `sl_placed` steps it used to share a level with — a quiet channel shouldn't hide it.
+- **BreakingTrade's watchlist scorecard retitled** `BT WATCHLIST SCORECARD` (was `BT EOD
+  SUMMARY`) — it scores direction-only calls that were mostly never real trades, a different
+  thing from `notifier.py`'s real-P&L day summary and the BTST basket summary; the shared
+  "EOD SUMMARY" title let a trader conflate the three.
+
+**Messaging standardization, documented rather than rebuilt.** Investigated whether to unify
+message formatting for future strategies; found the main pipeline (any strategy wired through
+`main.py`) is *already* fully standardized — every `notify_*` function is strategy-agnostic, so
+adding a new strategy needs zero new message code, just a `strategies.REGISTRY` entry and its
+`config.yaml` channels (now spelled out explicitly in `notifier.py`'s and `strategies.py`'s
+module docstrings). The one real gap was `strategies/examples/momentum_rank_strategy.py`'s
+Telegram-sending code being untested — it can't import `signal_engine.notifier`/`alerts`
+(single-file constraint: OpenAlgo's `/python` Strategy Host takes one uploaded `.py` file), so
+the fix there is a documented copy-paste reference (`_send_telegram()`'s own docstring, cross-
+referenced from `alerts.py`), not a shared import. 3 new regression tests for `_send_telegram()`
+close the coverage gap.
+
+23 new tests (16 in `signal_engine/tests/`, 3 in `strategies/examples/tests/`, plus 4 existing
+assertions updated for the new tag); both suites green (1608 and 69 respectively — run
+separately, per each file's own documented command; a combined run hits a pre-existing
+`openalgo` package-name collision unrelated to this change).
+
 ## Recent Changes (2026-09-18)
 
 **Automated daily EOD regression check, posted to Telegram** (`signal_engine/analysis/eod_review.py`,

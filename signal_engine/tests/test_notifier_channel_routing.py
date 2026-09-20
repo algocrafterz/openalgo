@@ -131,7 +131,8 @@ class TestSendAndPinDaySummary:
         delivered = await notifier._send_and_pin_day_summary("DAY SUMMARY | text")
 
         assert delivered is True
-        assert self.client.sent == [(-100, "DAY SUMMARY | text")]
+        # "[PAPER] " - see notifier.py's _PHASE_TAG; setup() fakes _current_phase as "analyze".
+        assert self.client.sent == [(-100, "[PAPER] DAY SUMMARY | text")]
         assert self.client.pinned == [(-100, 1)]
         assert self.client.unpinned == []
 
@@ -168,7 +169,7 @@ class TestSendAndPinDaySummary:
         delivered = await notifier._send_and_pin_day_summary("text")
 
         assert delivered is True
-        assert self.client.sent == [(-100, "text")]
+        assert self.client.sent == [(-100, "[PAPER] text")]
 
     @pytest.mark.asyncio
     async def test_suppressed_by_notify_level_sends_nothing(self, monkeypatch):

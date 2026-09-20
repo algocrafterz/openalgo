@@ -582,3 +582,58 @@ class TestCleanBotToken:
 
     def test_empty_token_passes_through(self):
         assert core._clean_bot_token("") == ""
+
+
+class TestSendTelegram:
+    """_send_telegram() is the CANONICAL REFERENCE for a future standalone strategy's own
+    Telegram sending (see its own docstring) - it had zero test coverage before this, unlike
+    the token-cleaning helper above and the digest formatter tested elsewhere in this file.
+    A reference pattern that is itself untested is not much of a reference.
+    """
+
+    def test_not_configured_returns_false_without_touching_the_network(self, monkeypatch):
+        monkeypatch.setattr(core, "TG_BOT_TOKEN", "")
+        monkeypatch.setattr(core, "TG_CHAT_ID", "")
+        monkeypatch.setattr(
+            core.urllib.request, "urlopen",
+            lambda *a, **k: pytest.fail("must not call the network"),
+        )
+
+        assert core._send_telegram("hello") is False
+
+    def test_successful_send_returns_true(self, monkeypatch):
+        monkeypatch.setattr(core, "TG_BOT_TOKEN", "123:abc")
+        monkeypatch.setattr(core, "TG_CHAT_ID", "-100")
+        captured = {}
+
+        class _FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            captured["body"] = req.data
+            return _FakeResponse()
+
+        monkeypatch.setattr(core.urllib.request, "urlopen", fake_urlopen)
+
+        assert core._send_telegram("hello") is True
+        assert "123:abc" in captured["url"]
+        assert b'"chat_id": "-100"' in captured["body"]
+
+    def test_network_failure_returns_false_without_raising(self, monkeypatch):
+        monkeypatch.setattr(core, "TG_BOT_TOKEN", "123:abc")
+        monkeypatch.setattr(core, "TG_CHAT_ID", "-100")
+
+        def fake_urlopen(req, timeout):
+            raise core.urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(core.urllib.request, "urlopen", fake_urlopen)
+
+        assert core._send_telegram("hello") is False

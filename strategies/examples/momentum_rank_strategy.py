@@ -592,7 +592,17 @@ def _maybe_send_paper_checkin(as_of: str, elapsed: int,
 
 
 def _send_telegram(text: str) -> bool:
-    """Returns True only if the digest was actually delivered."""
+    """Returns True only if the digest was actually delivered.
+
+    CANONICAL REFERENCE for a future standalone strategy's own Telegram sending: this
+    function plus _clean_bot_token() above are the whole pattern - bot token from .env
+    (shared BREAKINGTRADE_BOT_TOKEN), one fixed chat id, one POST, no dependency on the
+    signal_engine package. Copy this pair verbatim into a new single-file strategy rather
+    than reinventing it or importing signal_engine.notifier/alerts (which would break this
+    file's single-file portability - see the module docstring). See
+    signal_engine/analysis/breakingtrade/alerts.py's docstring for the underlying Bot HTTP
+    API contract both that module and this one implement independently.
+    """
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("[momentum-rank] BREAKINGTRADE_BOT_TOKEN/MOMENTUM_TG_CHAT_ID not set "
               "(checked OS environment and signal_engine/.env) - digest printed "

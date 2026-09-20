@@ -66,7 +66,8 @@ class TestSendMonospace:
 
         _real_send("col1  col2", kind="intraday_transition", monospace=True)
 
-        assert captured["text"] == "```\ncol1  col2\n```"
+        # "[PAPER] " - see send()'s _PHASE_TAG; the autouse fixture fakes analyze mode.
+        assert captured["text"] == "```\n[PAPER] col1  col2\n```"
         assert captured["parse_mode"] == "Markdown"
 
     def test_default_sends_plain_text_with_no_parse_mode(self, monkeypatch):
@@ -85,8 +86,30 @@ class TestSendMonospace:
 
         _real_send("a short note", kind="intraday_transition")
 
-        assert captured["text"] == "a short note"
+        assert captured["text"] == "[PAPER] a short note"
         assert "parse_mode" not in captured
+
+    def test_live_mode_gets_the_live_tag_not_paper(self, monkeypatch):
+        """The tag must reflect the CURRENT phase, not always default to paper - a stale or
+        wrong tag on a real-money alert would be worse than the ambiguity it replaces."""
+        monkeypatch.setattr(alerts, "_env", lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc"})
+        monkeypatch.setattr(alerts.review, "trading_mode", lambda: ("live", False))
+        alerts._mode_cache["checked_at"] = 0.0
+        monkeypatch.setattr(
+            _se_config, "settings",
+            _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-live", id=-200)]),
+        )
+        captured = {}
+
+        def fake_post(url, json, timeout):
+            captured.update(json)
+            return _FakeResponse()
+
+        monkeypatch.setattr(alerts.httpx, "post", fake_post)
+
+        _real_send("a short note", kind="intraday_transition")
+
+        assert captured["text"] == "[LIVE] a short note"
 
 
 def test_alert_is_recorded_even_when_delivery_fails():
