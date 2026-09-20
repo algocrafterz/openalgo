@@ -10,6 +10,7 @@ import pandas as pd
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
+from utils.ist import IST_OFFSET
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -847,7 +848,7 @@ class BrokerData:
                                     today_ts = int(
                                         (
                                             datetime.combine(today, datetime.min.time())
-                                            + timedelta(hours=5, minutes=30)
+                                            + IST_OFFSET
                                         ).timestamp()
                                     )
                                     today_candle = [

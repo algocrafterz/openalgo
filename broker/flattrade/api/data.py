@@ -6,13 +6,14 @@ import time
 import urllib.parse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
+from utils.ist import IST_OFFSET
 from utils.logging import get_logger
 
 # Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
@@ -814,7 +815,7 @@ class BrokerData:
                 # Create today's timestamp at 00:00:00 UTC then add 5:30 hours for IST (to match Angel's format)
                 # This ensures daily candles align with IST trading hours
                 utc_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                ist_today = utc_today + timedelta(hours=5, minutes=30)
+                ist_today = utc_today + IST_OFFSET
                 today_ts = int(ist_today.timestamp())
 
                 # Only get today's data if it's within the requested range

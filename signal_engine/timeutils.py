@@ -2,10 +2,12 @@
 
 The signal engine is India-market-only: every timestamp it reasons about — signal
 arrival, position age, square-off scheduling, daily counter rollover — is in IST.
-Defining the zone once here keeps those decisions consistent; it was previously
-redefined independently in five modules.
+IST itself is defined once in utils.ist (shared with the broker adapters, which
+cannot import from signal_engine); this module re-exports it for signal_engine's
+internal call sites, which historically redefined it independently across five
+modules.
 """
 
-from datetime import datetime, timedelta, timezone
+from utils.ist import IST
 
-IST = timezone(timedelta(hours=5, minutes=30))
+__all__ = ["IST"]

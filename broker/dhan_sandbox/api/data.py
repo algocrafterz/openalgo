@@ -14,6 +14,7 @@ from broker.dhan_sandbox.api.baseurl import get_url
 from broker.dhan_sandbox.mapping.transform_data import map_exchange_type
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
+from utils.ist import IST_OFFSET
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -169,7 +170,7 @@ class BrokerData:
             # We need to adjust to show the correct IST date
             utc_dt = datetime.utcfromtimestamp(timestamp)
             # Add IST offset to get the correct IST date
-            ist_dt = utc_dt + timedelta(hours=5, minutes=30)
+            ist_dt = utc_dt + IST_OFFSET
             # Create timestamp for start of that IST day (00:00:00)
             # This will be 18:30 UTC of previous day
             start_of_day = datetime(ist_dt.year, ist_dt.month, ist_dt.day)
@@ -179,7 +180,7 @@ class BrokerData:
             # For intraday data, convert to IST
             utc_dt = datetime.utcfromtimestamp(timestamp)
             # Add IST offset (+5:30)
-            ist_dt = utc_dt + timedelta(hours=5, minutes=30)
+            ist_dt = utc_dt + IST_OFFSET
             return int(ist_dt.timestamp())
 
     def _get_intraday_chunks(self, start_date, end_date) -> list:

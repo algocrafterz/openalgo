@@ -1,14 +1,13 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from broker.dhan_sandbox.mapping.transform_data import map_exchange
 from database.token_db import get_symbol
+from utils.ist import IST as _IST
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# IST is UTC+5:30
-_IST = timezone(timedelta(hours=5, minutes=30))
 _UTC = timezone.utc
 
 

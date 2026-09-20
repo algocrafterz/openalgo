@@ -4,13 +4,14 @@ import os
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
+from utils.ist import IST_OFFSET
 from utils.logging import get_logger
 
 
@@ -813,7 +814,7 @@ class BrokerData:
                 # convention or it lands 5.5 hours before the previous close.
                 # Matches flattrade/tradesmart/zebu.
                 utc_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                today_ts = int((utc_today + timedelta(hours=5, minutes=30)).timestamp())
+                today_ts = int((utc_today + IST_OFFSET).timestamp())
 
                 # Only get today's data if it's within the requested range
                 if today_ts >= start_ts and today_ts <= end_ts:

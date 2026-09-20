@@ -3,7 +3,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 
@@ -16,6 +16,7 @@ from broker.tradesmart.api.rate_limiter import (
     retry_delay,
 )
 from database.token_db import get_br_symbol, get_token
+from utils.ist import IST_OFFSET
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -763,7 +764,7 @@ class BrokerData:
             # IST-midnight epoch (+5:30) to match the cross-broker daily convention.
             if interval == "D":
                 utc_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                ist_today = utc_today + timedelta(hours=5, minutes=30)
+                ist_today = utc_today + IST_OFFSET
                 today_ts = int(ist_today.timestamp())
 
                 if start_ts <= today_ts <= end_ts and (

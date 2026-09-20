@@ -13,6 +13,7 @@ from broker.fivepaisaxts.database.master_contract_db import SymToken, db_session
 from database.auth_db import get_feed_token
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol
 from utils.httpx_client import get_httpx_client
+from utils.ist import IST_OFFSET
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -694,7 +695,7 @@ class BrokerData:
                         # First set to midnight
                         today = today.replace(hour=0, minute=0, second=0, microsecond=0)
                         # Add 5:30 hours to compensate for IST conversion that happens later
-                        today = today + timedelta(hours=5, minutes=30)
+                        today = today + IST_OFFSET
 
                         today_candle = {
                             "timestamp": int(today.timestamp()),
