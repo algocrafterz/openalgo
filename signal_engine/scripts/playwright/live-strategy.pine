@@ -1,0 +1,286 @@
+//@version=6
+strategy(
+    title           = "TCS Live Footprint Reversal Strategy",
+    overlay         = true,
+    pyramiding      = 0,
+    default_qty_type  = strategy.percent_of_equity,
+    default_qty_value = 5,
+    commission_type   = strategy.commission.percent,
+    commission_value  = 0.05,
+    slippage          = 2,
+    calc_on_every_tick = false
+)
+
+// ════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ════════════════════════════════════════════════════════════════════════════
+
+int     fastLen        = input.int(9,    "Fast EMA",           minval=1)
+int     slowLen        = input.int(21,   "Slow EMA",           minval=1)
+float   atrMult        = input.float(1.5, "ATR SL Multiplier",  minval=0.5, step=0.1)
+float   rrTarget       = input.float(2.0, "Target R:R",         minval=1.0, step=0.5)
+int     swingLen       = input.int(5,    "Swing Low/High",     minval=2, maxval=20)
+float   volumePercent  = input.float(80.0, "Volume Threshold %", minval=10, maxval=100, step=10)
+bool    useHTF         = input.bool(true, "Use HTF Confirmation (15m)")
+bool    showLabels     = input.bool(true, "Show Signal Labels")
+bool    showTable      = input.bool(true, "Show Info Table")
+
+// ════════════════════════════════════════════════════════════════════════════
+// CORE INDICATORS
+// ════════════════════════════════════════════════════════════════════════════
+
+float ema1          = ta.ema(close, fastLen)
+float ema2          = ta.ema(close, slowLen)
+float atr           = ta.atr(14)
+float swingHigh     = ta.highest(high, swingLen)
+float swingLow      = ta.lowest(low, swingLen)
+float rsi           = ta.rsi(close, 14)
+
+// Volume-based analysis
+float avgVol        = ta.sma(volume, 20)
+float volRatio      = volume / avgVol
+bool  highVolume    = volRatio > (volumePercent / 100)
+
+// ════════════════════════════════════════════════════════════════════════════
+// HIGHER TIMEFRAME CONFIRMATION (15m)
+// ════════════════════════════════════════════════════════════════════════════
+
+float htf_ema1      = useHTF ? request.security(syminfo.tickerid, "15", ta.ema(close, 9),   lookahead=barmerge.lookahead_off) : na
+float htf_ema2      = useHTF ? request.security(syminfo.tickerid, "15", ta.ema(close, 21),  lookahead=barmerge.lookahead_off) : na
+float htf_rsi       = useHTF ? request.security(syminfo.tickerid, "15", ta.rsi(close, 14),  lookahead=barmerge.lookahead_off) : na
+
+bool htf_bullish    = useHTF ? not na(htf_ema1) and htf_ema1 > htf_ema2 : true
+bool htf_oversold   = useHTF ? not na(htf_rsi) and htf_rsi < 40 : true
+bool htf_confirm    = htf_bullish and htf_oversold
+
+// ════════════════════════════════════════════════════════════════════════════
+// PATTERN DETECTION: DOUBLE BOTTOM REVERSAL
+// ════════════════════════════════════════════════════════════════════════════
+
+// Detect two lows within 0.5 points
+float recent_low_1  = ta.lowest(low, 3)[2]   // 2 bars ago
+float recent_low_2  = ta.lowest(low, 3)      // current
+
+bool double_bottom  = math.abs(recent_low_1 - recent_low_2) < 0.5 and
+                      recent_low_1 > 0 and
+                      rsi < 45  // Oversold confirmation
+
+// ════════════════════════════════════════════════════════════════════════════
+// FOOTPRINT-BASED DELTA REVERSAL DETECTION
+// ════════════════════════════════════════════════════════════════════════════
+// Approximate delta via OBV (On-Balance-Volume)
+// Real footprint delta comes from Playwright extraction
+
+float obv            = ta.obv(close, volume)
+float obv_ma         = ta.ema(obv, 20)
+bool delta_reversal  = obv > obv_ma and close > ema1  // Buy aggression + price confirmation
+
+// ════════════════════════════════════════════════════════════════════════════
+// ENTRY CONDITIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+// LONG ENTRY: Double-bottom + Volume confirmation + HTF bias
+bool long_entry_signal =
+    double_bottom and
+    highVolume and
+    close > swingLow and
+    (not useHTF or htf_confirm) and
+    barstate.isconfirmed
+
+// Confirmation: EMAs haven't crossed yet (early reversal, not trend continuation)
+bool long_not_in_trend = ema1 < ema2
+
+bool longCond       = long_entry_signal and long_not_in_trend
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXIT CONDITIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+// Dynamic SL/TP based on ATR
+float longEntry     = close
+float longSL        = longEntry - atr * atrMult
+float longTP        = longEntry + (longEntry - longSL) * rrTarget
+float longRR        = (longTP - longEntry) / (longEntry - longSL)
+
+// Position state
+bool inLong         = strategy.position_size > 0
+
+// Short-term exit: early profit-taking on resistance touch
+bool short_exit     = inLong and close > (longEntry + atr * 0.75)
+
+// ════════════════════════════════════════════════════════════════════════════
+// TRADE EXECUTION
+// ════════════════════════════════════════════════════════════════════════════
+
+if longCond and not inLong
+    // Format alert message as JSON for webhook delivery
+    string alertMsg = '{'                                                    +
+        '"symbol"      : "' + syminfo.tickerid                + '",'         +
+        '"action"      : "BUY",'                                            +
+        '"direction"   : "LONG",'                                           +
+        '"entryPrice"  : '  + str.tostring(longEntry, "#.#####")    + ','   +
+        '"slPrice"     : '  + str.tostring(longSL,    "#.#####")    + ','   +
+        '"tpPrice"     : '  + str.tostring(longTP,    "#.#####")    + ','   +
+        '"riskReward"  : "1:' + str.tostring(longRR, "#.##")       + '",'   +
+        '"atrValue"    : '  + str.tostring(atr,      "#.#####")    + ','   +
+        '"volume"      : '  + str.tostring(volume,   "##########") + ','   +
+        '"pattern"     : "DOUBLE_BOTTOM_REVERSAL",'                        +
+        '"timeframe"   : "' + timeframe.period                    + '",'   +
+        '"time"        : "' + str.format_time(time, "yyyy-MM-dd HH:mm:ss", syminfo.timezone) + '",'   +
+        '"htfConfirm"  : '  + (htf_confirm ? "true" : "false")    + ','   +
+        '"volumeRatio" : '  + str.tostring(volRatio, "#.##")      +        +
+        '}'
+
+    strategy.entry("Long", strategy.long, alert_message=alertMsg)
+
+if inLong
+    strategy.exit("Long Exit",
+        id              = "Long",
+        stop            = longSL,
+        limit           = longTP,
+        comment         = "SL/TP")
+
+// ════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION: LABELS
+// ════════════════════════════════════════════════════════════════════════════
+
+if longCond and showLabels
+    string label_text =
+        "🎯 ENTRY SETUP\n" +
+        "Double Bottom Reversal\n" +
+        "Entry : " + str.tostring(longEntry,  format.mintick)     + "\n" +
+        "SL    : " + str.tostring(longSL,     format.mintick)     + "\n" +
+        "TP    : " + str.tostring(longTP,     format.mintick)     + "\n" +
+        "R:R   : 1:" + str.tostring(longRR,   "#.##")             + "\n" +
+        "ATR   : " + str.tostring(atr,        "#.#####")          + "\n" +
+        "Vol   : " + str.tostring(volRatio,   "#.##") + "x avg"
+
+    label.new(bar_index, low - atr * 0.5,
+        text          = label_text,
+        style         = label.style_label_up,
+        color         = color.new(color.green, 20),
+        textcolor     = color.white,
+        size          = size.small,
+        xloc          = xloc.bar_index,
+        yloc          = yloc.price)
+
+if inLong and not short_exit and showLabels
+    label.new(bar_index, high + atr * 0.3,
+        text          = "✓ LONG ACTIVE",
+        style         = label.style_label_down,
+        color         = color.new(color.blue, 40),
+        textcolor     = color.white,
+        size          = size.tiny,
+        xloc          = xloc.bar_index,
+        yloc          = yloc.price)
+
+// ════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION: INFO TABLE
+// ════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = na
+if showTable
+    if na(infoTable)
+        infoTable := table.new(position.top_right, 2, 10,
+            bgcolor       = color.new(color.black, 70),
+            border_width  = 1,
+            border_color  = color.gray,
+            frame_width   = 1)
+
+    if barstate.islast
+        // Row 0: Header
+        table.cell(infoTable, 0, 0, "TCS Live Monitor",
+            bgcolor     = color.new(color.purple, 50),
+            text_color  = color.white,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 0, "",
+            bgcolor     = color.new(color.purple, 50))
+
+        // Row 1: Current Price
+        table.cell(infoTable, 0, 1, "Price",
+            text_color  = color.gray,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 1, str.tostring(close, format.mintick),
+            text_color  = color.white,
+            text_size   = size.small)
+
+        // Row 2: ATR
+        table.cell(infoTable, 0, 2, "ATR (14)",
+            text_color  = color.gray,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 2, str.tostring(atr, "#.#####"),
+            text_color  = color.yellow,
+            text_size   = size.small)
+
+        // Row 3: Volume Ratio
+        table.cell(infoTable, 0, 3, "Vol Ratio",
+            text_color  = color.gray,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 3, str.tostring(volRatio, "#.##") + "x",
+            text_color  = highVolume ? color.lime : color.orange,
+            text_size   = size.small)
+
+        // Row 4: RSI
+        table.cell(infoTable, 0, 4, "RSI (14)",
+            text_color  = color.gray,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 4, str.tostring(rsi, "#.##"),
+            text_color  = rsi < 40 ? color.red : rsi > 60 ? color.lime : color.white,
+            text_size   = size.small)
+
+        // Row 5: Double Bottom
+        table.cell(infoTable, 0, 5, "Double Bot",
+            text_color  = color.gray,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 5, double_bottom ? "✓" : "✗",
+            text_color  = double_bottom ? color.lime : color.red,
+            text_size   = size.small)
+
+        // Row 6: HTF Confirm
+        if useHTF
+            table.cell(infoTable, 0, 6, "HTF Confirm",
+                text_color  = color.gray,
+                text_size   = size.small)
+            table.cell(infoTable, 1, 6, htf_confirm ? "✓" : "✗",
+                text_color  = htf_confirm ? color.lime : color.red,
+                text_size   = size.small)
+
+        // Row 7: Position
+        table.cell(infoTable, 0, 7, "Position",
+            text_color  = color.gray,
+            text_size   = size.small)
+        table.cell(infoTable, 1, 7, inLong ? "LONG" : "FLAT",
+            text_color  = inLong ? color.lime : color.orange,
+            text_size   = size.small)
+
+        // Row 8: Entry Level (if in position)
+        if inLong
+            table.cell(infoTable, 0, 8, "Entry",
+                text_color  = color.gray,
+                text_size   = size.small)
+            table.cell(infoTable, 1, 8, str.tostring(strategy.opentrades.entry_price(0), format.mintick),
+                text_color  = color.green,
+                text_size   = size.small)
+
+        // Row 9: R:R (if in position)
+        if inLong
+            table.cell(infoTable, 0, 9, "R:R Active",
+                text_color  = color.gray,
+                text_size   = size.small)
+            table.cell(infoTable, 1, 9, "1:" + str.tostring(longRR, "#.##"),
+                text_color  = color.cyan,
+                text_size   = size.small)
+
+// ════════════════════════════════════════════════════════════════════════════
+// PLOT: Support & Resistance Levels
+// ════════════════════════════════════════════════════════════════════════════
+
+plot(swingHigh, "Swing High", color.new(color.red, 60),   linewidth=1, style=plot.style_dashed)
+plot(swingLow,  "Swing Low",  color.new(color.green, 60), linewidth=1, style=plot.style_dashed)
+plot(ema1,      "EMA 9",      color.new(color.orange, 0),  linewidth=2)
+plot(ema2,      "EMA 21",     color.new(color.blue, 0),    linewidth=2)
+
+// SL/TP reference (when in position)
+if inLong
+    plot(longSL, "Stop Loss",  color.new(color.red, 40),   linewidth=1, style=plot.style_dashed)
+    plot(longTP, "Take Profit", color.new(color.green, 40), linewidth=1, style=plot.style_dashed)
