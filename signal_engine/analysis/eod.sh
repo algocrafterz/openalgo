@@ -100,6 +100,13 @@ for line in open('$LOGS/errors_$DAY.jsonl'):
     echo "none"
   fi
   echo '```'
+
+  echo
+  echo '## EOD regression check (trade / signal / system) — posted to Telegram'
+  echo
+  echo '```'
+  run -m signal_engine.analysis.eod_review "$DAY" 2>&1 || echo "(eod_review exited non-zero — see CHECK results above)"
+  echo '```'
 } > "$REPORT"
 
 echo "report -> $REPORT"

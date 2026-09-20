@@ -216,6 +216,38 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-18)
+
+**Automated daily EOD regression check, posted to Telegram** (`signal_engine/analysis/eod_review.py`,
+new). Every manual EOD review to date (EOD-ANALYSIS-2026-09-11.md, the 2026-09-17 review fixes
+above) was a human sitting down and cross-checking trades.db against the broker, grepping logs
+for notifier failures, and reading the Telegram channels back by hand — the same three checks,
+run once someone remembered to ask. This automates exactly that, in three categories:
+
+- **TRADE** — the day's ledger holds together (no unfilled entry orders, no unmatched broker
+  fills, nothing still open at EOD — reusing `analysis/ledger.py`'s existing flags) and
+  `reconcile.py`'s engine-vs-broker P&L canary agrees.
+- **SIGNAL** — did messages this system claims to send actually leave: notifier warnings
+  (queue full, flush failure, mirror failure) grepped from today's log; BreakingTrade's own
+  delivered/undelivered count from its `alerts` table; and a read-only check that the Telegram
+  session is still authorized and the admin channel OpenAlgo is currently routing to is
+  reachable (a COPY of `telegram.session`, never the original — same pattern as
+  `tests/test_telegram_integration.py`).
+- **SYSTEM** — config sanity and risk-DB reachability (reusing `smoke_test.py`'s own checks),
+  ERROR+ lines in `errors_DAY.jsonl`, ERROR+ lines in OpenAlgo's own `log/errors.jsonl` for
+  today, and FD/DB-lock signatures in the day's logs.
+
+The verdict posts to `settings.notify_channel` — the SAME admin channel
+(signal-engine-analyze/-live) the live engine's own day summary already uses, picked by
+OpenAlgo's CURRENT analyze/live mode — via the Telegram Bot HTTP API (the shared
+`BREAKINGTRADE_BOT_TOKEN`), not the engine's own Telethon client: this runs as a standalone
+process, and `alerts.py`'s docstring already established why two processes must never share
+one Telethon session file. Falls back to whichever phase's channel IS configured, same rule
+as `notifier.py`'s `_channel_for_phase()`. Wired into `analysis/eod.sh` as a new section (the
+cron job that already runs at 15:25 IST weekdays needs no separate scheduling). Run by hand
+with `PYTHONPATH=. uv run python -m signal_engine.analysis.eod_review [DAY] [--dry-run]`.
+26 new tests, full suite 1592 green.
+
 ## Recent Changes (2026-09-17)
 
 **Full system check confirmed all fixes from 2026-09-16 held through the first live cycle.**
