@@ -67,7 +67,26 @@ function Write-Log {
     param([string]$msg)
 
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$timestamp | $msg" | Out-File $log -Append -Encoding utf8
+    $line = "$timestamp | $msg"
+
+    # Out-File can hit a transient sharing violation when another
+    # openalgoctl.ps1 invocation (e.g. the heartbeat task) appends to the
+    # same log at the same instant. Retry briefly instead of letting the
+    # exception propagate to the top-level catch, which used to abort the
+    # entire start/restart command over a single log line.
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $line | Out-File $log -Append -Encoding utf8
+            return
+        }
+        catch {
+            if ($attempt -eq 5) {
+                Write-Host "$line (log write failed after retries: $($_.Exception.Message))" -ForegroundColor Yellow
+                return
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
 }
 
 # -------- Log Rotation --------
