@@ -1942,6 +1942,20 @@ wheels = [
 ]
 
 [[package]]
+name = "marketprofile"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/59/891ab715d40646f5bf091517146db165b035c1f6f58cf943716299006317/MarketProfile-0.2.0.tar.gz", hash = "sha256:b41c6f6923b9ccbe7f71459fd6246399087e2eae03be84a773925a007b78e04a", size = 25781, upload-time = "2020-01-19T18:05:47.217Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7f/5e/ff25af1dbc01aec9d003e823836f2a67fc274e77e287f67452a0de07810b/MarketProfile-0.2.0-py3-none-any.whl", hash = "sha256:583982452350e2e99c07a1660e38518d3e6f0d825f1b812d5ea2b7452c1e8e00", size = 5604, upload-time = "2020-01-19T18:06:07.325Z" },
+]
+
+[[package]]
 name = "markupsafe"
 version = "2.1.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2356,6 +2370,7 @@ dependencies = [
     { name = "loguru" },
     { name = "logzero" },
     { name = "markdown-it-py" },
+    { name = "marketprofile" },
     { name = "markupsafe" },
     { name = "marshmallow" },
     { name = "matplotlib-inline" },
@@ -2543,6 +2558,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "logzero", specifier = "==1.7.0" },
     { name = "markdown-it-py", specifier = "==4.2.0" },
+    { name = "marketprofile", specifier = ">=0.2.0" },
     { name = "markupsafe", specifier = "==2.1.5" },
     { name = "marshmallow", specifier = "==3.26.2" },
     { name = "matplotlib-inline", specifier = "==0.2.2" },

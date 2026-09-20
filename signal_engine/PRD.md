@@ -216,6 +216,26 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-20)
+
+**value_area_fade selectivity investigation concludes: gap to real cost narrowed from ~16x to
+~2.3-2.7x across six rounds, then sample size — not cost-viability — ended the line of inquiry.**
+Pushed `min_wick_depth_atr` to 4.5/5.0/5.5/6.0 (direct continuation of 2026-09-17/18's v1-v5;
+full tables in `STRATEGY-ANALYSIS.md`, v6 section). The trend from prior rounds continued cleanly
+through depth 5.0 — best full-universe t-stat of the entire investigation (-3.15, vs v5's -5.34),
+best dispersion (89/201 = 44.3% of symbols net-positive, vs v5's 33.8%), gross edge ~8.2-8.8
+bps/trade (~10x v3's original 0.81) — then reversed sharply at depth 5.5, where IS trade count
+(215) fell below the 300-500-trade floor this investigation has used throughout: gross edge
+collapsed to 2.36 bps and the 0bps result flipped from solidly positive to negative. The reversal
+lines up exactly with the sample-size floor, not with any change in the underlying pattern —
+noise, not signal, confirmed by depth 6.0 (n=132) being worse still. Breakeven cost at the best
+depths (4.5-5.0) is ~6-7bps against the real 16bps model — the smallest gap found across all six
+rounds, but the lever that closed most of it (deeper selectivity) ran out of usable sample before
+closing the rest. Recommended config if revisited: `min_wick_depth_atr=5.0` or `4.5`. Verdict:
+this specific lever (wick-depth selectivity) is exhausted; further progress on value-area
+rejection fades would need a different lever (lower-cost execution, multi-day confluence, or real
+orderflow/footprint confirmation), not another depth sweep.
+
 ## Recent Changes (2026-09-18)
 
 **Automated daily EOD regression check, posted to Telegram** (`signal_engine/analysis/eod_review.py`,
@@ -248,7 +268,93 @@ cron job that already runs at 15:25 IST weekdays needs no separate scheduling). 
 with `PYTHONPATH=. uv run python -m signal_engine.analysis.eod_review [DAY] [--dry-run]`.
 26 new tests, full suite 1592 green.
 
+**value_area_fade selectivity sweep continued deeper (2.75/3.0/3.5/4.0 ATR wick depth) — the
+improving trend from 2026-09-17 keeps going, still hasn't crossed into viable.** Direct
+continuation of the previous day's investigation (see 2026-09-17 below for v1-v4). Full-universe
+16bps t-stat improves at every depth tested: -15.20 (depth 2.5) → -12.31 → -10.76 → -7.74 →
+**-5.34 at depth 4.0**, the least-extreme result of any version tried. Gross edge rose from 3.48
+to 5.77 bps/trade; dispersion improved from 18/210 to 71/210 net-positive symbols. More
+importantly, breakeven cost itself moved: depth 2.5 flipped negative by 4bps, depth 4.0 doesn't
+clearly flip negative until somewhere between 4-8bps — closing part of the gap to the real 16bps
+cost (now ~3-4x short, down from ~16x at depth 2.5), though not closing it. Sample size is NOT
+yet the binding constraint (978 IS / 968 OOS trades at depth 4.0, both above the 300-500-trade
+noise floor this investigation uses) — the trend was still improving when the tested range ended,
+not because it plateaued but because that was the specified range. Whether continuing to depth
+5.0+ is worth a further ~65-minute full-universe sweep, chasing a narrowing but still-real gap
+against an increasingly thin sample, is a judgement call for next time. Full tables in
+`STRATEGY-ANALYSIS.md`, v5 section.
+
 ## Recent Changes (2026-09-17)
+
+**9:15 Opening-Candle Scalp ("Open Drive") backtested and it loses — t = -8.04, before-cost edge
+is already flat.** New Python-native adapter (`signal_engine/backtest/strategies/open_drive.py`,
+no PineScript) testing the "open above/below previous Value Area + hold-confirmation + break of
+the opening candle" hypothesis from two independent LLM design passes, across all 212 F&O
+symbols Historify holds 1-minute bars for, 2023-01-02 to 2026-09-13 (IS/OOS split at
+2025-03-19). Result: net R -0.128/trade, t = -8.04 on 1,149 trades — high win rate (73.3%) but a
+backwards payoff (avg TP +0.094R vs avg SL -1.112R), because the stop is anchored to an
+already-oversized opening candle while the target is a flat 1x ATR. The ablation's honest
+surprise: both LLM passes' central filter (open above/below the prior Value Area) HURTS results
+in both the in-sample and out-of-sample windows here — removing it roughly doubles trade count
+and improves gross bps in both. Hold-confirmation, the open≈extreme wick check, and the volume
+filter all show the opposite (in-sample-only improvement when removed = overfitting signature),
+so those stay. Full tables, the 5-minute run's invalidating config bugs, and next-step
+suggestions in `pinescripts/intraday/open-drive/STRATEGY-ANALYSIS.md`.
+
+Building this also surfaced two real bugs, now fixed with regression tests in
+`signal_engine/tests/test_volume_profile.py`: (1) the previous-session Value Area shift logic
+in the new `volume_profile.py` module silently mis-mapped the day after a too-short/skipped
+session; (2) the third-party `MarketProfile` library crashes on a real, non-rare data pattern —
+a legitimately zero-volume price bucket between the POC and one edge, which its bare-truthiness
+"no buckets left" check cannot distinguish from a genuinely empty side.
+
+**Open Drive v2, rebuilt against this repo's own documented volume-profile model, is dramatically
+worse than v1 — t = -81.67, 0 of 210 symbols net-positive.** Rebuilt the adapter to implement the
+actual 6 named setups from `pinescripts/intraday/volume-profile/volume-profile-model.md`
+(VAH-ACC/VAL-ACC acceptance, VAH-RT/VAL-RT retest, VAH-REJ/VAL-REJ rejection) with the model's own
+stop rule (level in play, ATR-buffered) and target rule (nearest structural level: POC/VAH/VAL/
+PDH/PDL/IBH/IBL), instead of v1's invented "break of the opening candle" trigger. Same universe
+and period as v1. Result: 185,153 trades, net R -0.334/trade, t = -81.67, **every single symbol
+net-negative** — worse than v1 on every axis, including a real negative edge even at 0 bps cost
+(v1's was merely flat before cost). Mechanism: the "nearest structural level" target is, on
+1-minute bars, almost always a few paise away (especially the still-forming Initial Balance
+high/low), so 70.5% of trades touch TP for essentially zero R while the 24.5% that hit SL lose a
+full R+ — the model's own text is explicit that its footprint/orderflow confirmation is "the
+ONLY discretionary decision... no footprint confirmation, no trade, regardless of score", and
+automating everything except that human gate does not produce a weaker edge, it produces a
+negative one. One lead survived two independent ablation cuts: **rejection alone** (fading a
+failed break, not betting on continuation) is the least-bad setup in both IS and OOS — still net
+negative, but the only result in this exercise that improved in both windows twice. Full tables
+and the two realistic paths forward (discretionary alert tool with human confirmation, or a
+fresh rejection-only design) in `pinescripts/intraday/open-drive/STRATEGY-ANALYSIS.md`.
+
+**The rejection-only lead, rebuilt as its own strategy with a purpose-built stop/target
+(`signal_engine/backtest/strategies/value_area_fade.py`) — first version with a real signal
+before cost, still not viable at realistic cost.** Target is now POC specifically (floored at a
+minimum R so a close POC can't reproduce v2's "trivially cheap target" bug), no continuation-style
+VWAP filter by default, both of the model's entry windows (09:15-11:00 and 13:00-14:45). At 0 bps
+cost: t = -1.30, total R +423 — statistically indistinguishable from zero, the first result in
+this whole exercise that isn't confidently wrong before cost. But a mere 4 bps (a quarter of the
+16 bps shipped assumption) flips it to t = -18.64, and by 16 bps: t = -68.98, 0 of 210 symbols
+net-positive. Diagnosis is now entirely about frequency vs edge size, not direction: 78,040 trades
+over 906 days (~1 every 2-3 sessions per symbol) against a raw edge of ~1 gross bp/trade — roughly
+an order of magnitude too thin to survive real NSE intraday cost, not a filter-tuning gap. Best
+ablation combo found (VWAP filter on + wider target floor) only reaches ~2 gross bps. Full tables
+in the same `STRATEGY-ANALYSIS.md`, v3 section.
+
+**Made the fade trigger more selective (`min_wick_depth_atr`, requiring the wick to clear a
+minimum ATR-multiple past the level) — best gross edge of all four versions, first genuinely
+positive raw signal in the investigation, still not viable at real cost.** Full-universe result
+at `min_wick_depth_atr=2.5` + VWAP filter on: 8,003 trades (vs v3's 78,040), gross 3.48 bps/trade
+(vs v3's 0.81), t=-15.20 at 16 bps (vs v3's -68.98) — meaningfully better on every axis. At 0 bps:
+t=+1.15, the first *positively* significant result of any version (v3 was merely flat at t=-1.30).
+Breakeven cost is ~1-2 bps against the real 16 bps this repo's cost model uses — an order of
+magnitude short, not a rounding gap. Dispersion improved to 18/210 symbols net-positive (from
+v3's 0/210), still a small minority. Along the way, a 3-symbol sample sweep found a
+different-looking "best config" (looser volume filter, wider stop) that a full-universe ablation
+then showed was noise — reverting both to v3's original defaults scored better at scale. Exactly
+the overfitting trap `harness.ablation()`'s "helps BOTH windows" rule exists to catch.
+Full tables and the overfitting-trap detail in `STRATEGY-ANALYSIS.md`, v4 section.
 
 **Full system check confirmed all fixes from 2026-09-16 held through the first live cycle.**
 8:50 AM `AutoStart` fired automatically and succeeded end-to-end (network check, NTP wait,
