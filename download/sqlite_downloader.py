@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -75,11 +75,13 @@ def fetch_and_store(symbol):
         print(f"[{symbol}] No new rows after filtering.")
         return
 
-    # Convert timestamps from UTC to IST (subtract 5:30 hours)
-    ist_timestamps = df.index - timedelta(hours=5, minutes=30)
-
+    # openalgo's client.history() already returns IST timestamps (it converts
+    # intraday intervals UTC->Asia/Kolkata itself, and daily/weekly/monthly
+    # epochs are pre-baked as IST by the broker adapters) - no further shift
+    # belongs here. This used to also subtract 5:30, which double-shifted
+    # intraday rows back to UTC while mislabeling them "IST".
     df["SYMBOL"] = symbol
-    df["DATE"] = ist_timestamps.strftime("%Y-%m-%d %H:%M:%S")
+    df["DATE"] = df.index.strftime("%Y-%m-%d %H:%M:%S")
     df = df[["SYMBOL", "DATE", "open", "high", "low", "close", "volume"]]
     df.columns = ["SYMBOL", "DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
 
