@@ -5,10 +5,18 @@ description: Run and investigate OpenAlgo's signal_engine end-of-day review for 
 
 # Signal engine EOD analysis
 
-`signal_engine/analysis/eod.sh` already runs on cron at 15:45 IST every weekday and writes
+`signal_engine/analysis/eod.sh` already runs on cron at 15:25 IST every weekday and writes
 `signal_engine/analysis/reports/eod-YYYY-MM-DD.md`. This skill is the human-in-the-loop pass on
 top of that report: don't just read the numbers back, **find out why anything failed and either
 fix it or explain precisely why it isn't a bug.**
+
+A second cron, `signal_engine/analysis/eod_claude_review.sh` at 15:40 IST, already runs this same
+investigation unattended every trading day (report-only — never edits code, see its own header
+for the three enforcement layers), writing
+`signal_engine/analysis/reports/eod-YYYY-MM-DD-claude-review.md`. When invoked interactively,
+check whether that day's file already exists and read it first — it did the same root-causing
+work already; don't re-derive it from scratch. Interactive `/eod` is still what actually applies
+a fix once one is confirmed (that file only ever describes what fix would be needed).
 
 ## 1. Get today's report
 
@@ -128,6 +136,22 @@ These are usually genuine — a Telegram send failing, or a scanner signal that 
 engine. Trace via `signal_engine_analyze_<day>.log` around the failure's timestamp; there's no
 known-benign pattern to short-circuit this one.
 
+### When the question is "which strategy is doing better" (not just "how did today go")
+
+That's a multi-day question — one day's report can't answer it, especially if only one strategy
+happened to fire that day. Use
+`PYTHONPATH=. uv run python -m signal_engine.analysis.weekly_review --since <date> --until <date>`
+for the actual per-strategy comparison (trades/win%/sum R/gross P&L, verified vs unverified kept
+separate). **Check the `verified`/`unverified` column before trusting any of it** — an
+`unverified` day's numbers never touched the broker tradebook and are the engine's own estimate
+only, not something to base a live-promotion decision on. If most recent days show
+`unverified`, don't just report the numbers with a caveat — check `signal_engine/logs/eod_cron.log`
+for why: a `FATAL: another EOD run is in progress` on multiple consecutive days means `eod.sh`'s
+own lock file got stuck (a hung process holding it, not a real overlapping run — this happened
+2026-09-16 to 2026-09-18 and silently blacked out three days of verification before clearing on
+its own). `eod.sh` now self-heals this (a lock older than `STALE_LOCK_SECONDS` is treated as
+abandoned), but confirm that's actually why before assuming the data gap is unexplained.
+
 ## 3. Fix only what's confirmed
 
 - A fix must be traceable to a specific, quoted piece of evidence (a DB row, a log line, a code
@@ -150,7 +174,15 @@ known-benign pattern to short-circuit this one.
 
 ## 4. Summarize for the user
 
-Plain language, short: what ran clean, what was found, what was fixed (with the regression test
-and full-suite result), what's still open and why it's left open (needs a product decision, needs
-more days of data, etc). This is a daily habit — keep the summary skimmable, not a re-derivation
-of the whole investigation each time.
+Two parts, always, in this order:
+
+1. **Technical summary, short**: what ran clean, what was found, what was fixed (with the
+   regression test and full-suite result), what's still open and why (needs a product decision,
+   needs more days of data, etc). Skimmable, not a re-derivation of the whole investigation.
+2. **Layman-terms close, every time** — plain English, no jargon (or one clause defining a term
+   that can't be avoided): how many trades, which strategy, won/lost how much, in money terms a
+   non-technical reader gets immediately. This is a standing preference (not specific to EOD) —
+   see memory `feedback_layman_summary`. It is IN ADDITION to the technical summary above, never
+   instead of it.
+
+This is a daily habit — keep both parts tight, not a re-derivation of the whole investigation.

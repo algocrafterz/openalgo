@@ -40,7 +40,23 @@ if [ "$DOW" -gt 5 ]; then
   exit 0
 fi
 
-# Overlap guard: a hand-run and the cron run must not write the same file at once.
+# Overlap guard: a hand-run and the cron run must not write the same file at once. flock only
+# releases when the holding process's fd closes - a genuinely HUNG process (not a stale
+# pidfile) keeps holding it indefinitely, and every day's cron run after that fails instantly
+# with nothing to show for it but "another EOD run is in progress". 2026-09-16 through
+# 2026-09-18: exactly that - three straight trading days silently lost their broker
+# verification to an unknown hung process before it cleared on its own by 2026-09-21 (see
+# PRD.md). A run this script performs takes seconds to at most a couple of minutes; nothing
+# legitimate should ever hold this lock anywhere near STALE_LOCK_SECONDS, so a lock older than
+# that is abandoned, not active - remove it before trying to acquire a fresh one.
+STALE_LOCK_SECONDS=$((2 * 3600))
+if [ -f "$LOCK" ]; then
+  lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || echo 0) ))
+  if [ "$lock_age" -gt "$STALE_LOCK_SECONDS" ]; then
+    echo "WARNING: $LOCK is ${lock_age}s old (> ${STALE_LOCK_SECONDS}s) - treating as abandoned, not a live run. Removing."
+    rm -f "$LOCK"
+  fi
+fi
 exec 9>"$LOCK"
 if ! flock -n 9; then
   echo "FATAL: another EOD run is in progress ($LOCK)"
