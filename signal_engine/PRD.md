@@ -4337,6 +4337,15 @@ A full review of 2026-09-17's trades and Telegram reporting turned up five separ
 
 All fixes covered by tests; full `signal_engine/tests/` suite (1566 tests) green.
 
+### 2026-09-21 weekly paper-trading review: tradebook snapshot never worked, added weekly_review.py
+
+Reviewing the paper week of 2026-09-14 to 2026-09-18 end to end turned up one bug that had been silent since the EOD pipeline's creation, and one gap in tooling:
+
+- **Broker tradebook snapshot has never actually captured a broker fill.** `analysis/__main__.py`'s `_fetch_tradebook()` called `_post_tolerant("tradebook", {})` with an empty payload -- no `apikey` -- so `restx_api/tradebook.py`'s schema validation rejected every call with HTTP 400, every single day since the snapshot step existed. On top of that, the function then treated `_post_tolerant`'s raw `httpx.Response` as if it were already-parsed JSON (every other `_post_tolerant` caller in `api_client.py` calls `.json()` first), so even a 200 response would have failed the same way. Because `ledger.py`'s `_leg_from_event()` falls back to the fill price the engine saved at order time when no broker snapshot match exists, every daily EOD report since 2026-09-06 has been reading like it has real fill/slippage data -- it does not; it is the engine's own recorded intent, never cross-checked against the broker. Fixed in `_fetch_tradebook()` to send `_auth()` and parse the response correctly. The broker's tradebook is wiped daily, so this cannot recover last week's real fills -- going forward only.
+- **No standing way to review a week without re-reading five daily reports by hand.** Added `analysis/weekly_review.py` (+ `analysis/weekly.sh`, suggested Saturday cron), which aggregates `ledger.py`/`__main__.py`'s same data over a date range, keeps a day's P&L out of the "verified" total whenever that day's tradebook snapshot file is missing, and ends with an auto-generated plain-language paragraph -- so a weekly check no longer requires an LLM to read reports and eyeball numbers.
+
+All fixes covered by tests (`test_analysis_main_snapshot.py`, `test_weekly_review.py`); full `signal_engine/tests/` suite (1624 tests) green.
+
 ### WSL Stability -- ~/.wslconfig (Windows user home)
 
 ```ini
@@ -4471,3 +4480,45 @@ entry triggers here: independent published backtests found only weak-to-null edg
 
 This investigation is closed - not recommended to revisit with another threshold sweep absent a
 genuinely new data source (real orderflow) or a materially lower-cost execution model.
+
+## EOD Reconciliation Mismatch: Root Cause and Fix (2026-09-21)
+
+The 2026-09-21 EOD run flagged a CRITICAL reconciliation mismatch: engine (`trades.db`) reported
++2,092.95 over the day's trades, the broker's own realised P&L (`m2mrealized`) reported +547.18,
+a difference of +1,545.77 - "the day's numbers are NOT trustworthy" per `reconcile.py`.
+
+Root cause, confirmed against `trades.db` and the broker's tradebook for the day: `book_close()`
+in `tracker.py` (the path every tracker-detected close - broker SL-M fill, no-progress market
+exit - goes through) wrote every closing EXIT row with `order_id=pos.entry_order_id` and
+`quantity=pos.original_quantity`, regardless of how much was actually still open or which order
+closed it. For a position with no prior partial exits this is harmless (remaining qty == original
+qty). For a position that had already partially exited (BHARTIARTL: TP1 then TP2 before the final
+leg; RELIANCE: TP1 before the final leg), the final leg's row claimed to close the FULL original
+quantity under the ENTRY's own order_id - a row indistinguishable from a fabricated duplicate of
+the entry. Two downstream effects:
+
+- The ledger's order_id-keyed reconciliation could never find the real broker fill that closed
+  the position (a different order_id - the trailing SL or the no-progress market exit), and
+  reported it as "a broker fill the engine never sent" for all 5 of the day's closed positions.
+- The final leg's exit price came from `pnl_delta / pos.quantity` using the REMAINING quantity at
+  the time (correct), but with the wrong quantity/order recorded downstream, cross-checking the
+  leg against the real broker fill (e.g. BHARTIARTL's true closing fill was 63 @ 1833.80 via the
+  trailing SL, not the synthetic weighted-average price implied by treating it as an 180-share
+  close) was impossible from `trades.db` alone.
+
+Fix: `book_close()` now writes `quantity=pos.quantity` (the remaining size at close, already
+decremented on every partial exit by `main.py`) and `order_id=pos.sl_order_id` (the order that is
+actually live against the position - the trailing stop, or the no-progress market exit, which now
+also stores its id there via `_no_progress_market_exit`), falling back to `db.py`'s existing
+`"-TRACKER-"` marker when truly unknown rather than silently misattributing to the entry. Two
+regression tests added to `test_close_accounting.py`. Full suite (1,630 tests) passes.
+
+Not fixed, and likely not a bug: even after this fix, a gap remains between the engine's own P&L
+math (raw entry/exit price deltas) and the broker's `m2mrealized` (which is presumably net of
+brokerage/STT/exchange charges on turnover the engine's model doesn't account for at all). On the
+day's turnover (5 positions, several with 800+ share quantities) that gap is plausibly large
+enough to explain most of the remaining difference on its own. `reconcile.py`'s
+`TOLERANCE_RUPEES = 1.0` assumes the two numbers should be nearly identical; as long as the engine
+computes gross and the broker reports net, that assumption doesn't hold and this canary will keep
+firing CRITICAL on ordinary days. Worth a follow-up: either net out estimated costs before
+comparing, or widen the tolerance to a turnover-scaled figure.

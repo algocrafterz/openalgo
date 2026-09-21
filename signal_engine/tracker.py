@@ -408,11 +408,20 @@ class PositionTracker:
         # day counters and Telegram but never trades.db - which every performance report and
         # the ledger read - so the next restart's reconciliation books it a second time from
         # the broker's figures. See db.save_tracker_exit().
+        #
+        # quantity is the REMAINING size at close (pos.quantity, decremented by main.py on
+        # every partial exit) - not original_quantity. order_id is the order that actually
+        # closed this leg (pos.sl_order_id: the live stop, or the no-progress market exit,
+        # which also stores its id there - see _no_progress_market_exit), left blank (falls
+        # back to "-TRACKER-") when truly unknown. Reusing entry_order_id/original_quantity
+        # here corrupted the audit trail for every multi-leg position: the ledger's
+        # order_id-keyed reconciliation could never find the real closing broker fill, and
+        # always saw a phantom "trades the engine never sent" of the true size (2026-09-21).
         db.save_tracker_exit(
             strategy=pos.strategy, symbol=pos.symbol, entry=pos.entry_price,
-            sl=pos.sl, tp=pos.tp, quantity=pos.original_quantity or pos.quantity,
+            sl=pos.sl, tp=pos.tp, quantity=pos.quantity,
             exit_price=exit_price, pnl=total_pnl, exit_types=exit_types,
-            order_id=pos.entry_order_id, sig_id=pos.sig_id,
+            order_id=pos.sl_order_id, sig_id=pos.sig_id,
         )
         self.record_exit(
             pnl=pnl_delta, is_partial=False, total_pnl=total_pnl,
@@ -1131,6 +1140,9 @@ class PositionTracker:
         result = await send_order(exit_order)
         if result.status == OrderStatus.SUCCESS:
             logger.info(f"No-progress market exit placed for {pos.symbol}: id={result.order_id}")
+            # book_close() reads sl_order_id as "the order that will close this position" -
+            # the SL was just cancelled above, so this is the only closing order id we have.
+            pos.sl_order_id = result.order_id
             await notifier.notify_no_progress_exit(
                 pos.symbol, ltp, base_entry, progress,
                 strategy=pos.strategy, direction=pos.direction.value,

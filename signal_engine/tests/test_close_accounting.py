@@ -171,6 +171,55 @@ class TestCloseIsWrittenToTheAuditTrail:
         assert save.call_args.kwargs["sig_id"] == ""
 
 
+class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
+    """2026-09-21: every tracker-detected close wrote order_id=entry_order_id and
+    quantity=original_quantity, regardless of how much was actually still open or which
+    order closed it. For a position with prior partial exits this makes the final leg's
+    EXIT row indistinguishable from a fabricated duplicate of the entry - the ledger's
+    order_id-keyed reconciliation can never find the real broker fill that closed it, and
+    reports it as "a broker fill the engine never sent". Confirmed against real BHARTIARTL
+    trades.db + broker tradebook data from that day: the entry order (qty=180) was reused
+    for a final-leg close that actually closed only the remaining 63.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_partially_exited_position_s_final_close_uses_the_remaining_qty(self):
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("BHARTIARTL", qty=180, fill=1842.10)
+        pos.quantity = 63  # two partial exits already reduced it from 180
+        pos.sl_order_id = "TRAILING-SL-3"  # the live stop that will close the remainder
+        tracker.register(pos)
+        book = [{"symbol": "BHARTIARTL", "quantity": 0, "ltp": 1833.8, "today_realized_pnl": 522.90}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=522.90)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        assert save.call_args.kwargs["quantity"] == 63
+        assert save.call_args.kwargs["order_id"] == "TRAILING-SL-3"
+        assert save.call_args.kwargs["order_id"] != pos.entry_order_id
+
+    @pytest.mark.asyncio
+    async def test_a_no_progress_market_exit_s_order_id_is_captured_for_the_close(self):
+        """The market order placed by the no-progress path is the closing fill - it must be
+        readable back off the position when check_positions() detects qty=0 next poll."""
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("PFC", qty=874, fill=345.85)
+        pos.sl_order_id = "SL-ORIGINAL"
+        tracker.register(pos)
+        from signal_engine.models import OrderStatus, TradeResult
+        with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
+             patch("signal_engine.tracker.send_order",
+                   AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
+             patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()):
+            await tracker._no_progress_market_exit(pos, timedelta(minutes=90), 345.75, 345.85, 0.09)
+        assert pos.sl_order_id == "MARKET-EXIT-9"
+
+
 class TestExitTypeNamesTheRealCause:
     @pytest.mark.asyncio
     async def test_a_no_progress_exit_is_not_labelled_sl(self):
