@@ -9,26 +9,26 @@
 # Regenerated on the first startup of each ISO week by
 # signal_engine/scripts/watchlist_screen.py - do not hand-edit; change the
 # screen thresholds there instead.
-# Last run: 2026-09-14 08:51 IST, data through 2026-09-11
+# Last run: 2026-09-21 08:52 IST, data through 2026-09-18
 # Trailing (N/10) = daily-scan hits in the last 10 trading days.
 
-COCHINSHIP  # 2/10
-BANDHANBNK  # 2/10
-KEI  # 2/10
-DLF  # 2/10
-GODREJPROP  # 2/10
-IDEA  # 2/10
-ADANIENT  # 2/10
-COFORGE  # 2/10
-POLYCAB  # 2/10
-TATASTEEL  # 2/10
-ULTRACEMCO  # 2/10
-MARUTI  # 2/10
-BANKBARODA  # 2/10
-CHOLAFIN  # 2/10
-INDUSINDBK  # 2/10
-CDSL  # 2/10
-DIXON  # 2/10
-LTM  # 2/10
-INDIANB  # 2/10
-ADANIPORTS  # 2/10
+INDUSINDBK  # 7/10
+COCHINSHIP  # 7/10
+GODREJPROP  # 7/10
+BANDHANBNK  # 7/10
+LODHA  # 7/10
+TMPV  # 7/10
+PAYTM  # 7/10
+CHOLAFIN  # 7/10
+INDIGO  # 7/10
+COFORGE  # 7/10
+KOTAKBANK  # 7/10
+ULTRACEMCO  # 7/10
+DIXON  # 7/10
+PNB  # 7/10
+MARUTI  # 7/10
+TATASTEEL  # 7/10
+VBL  # 7/10
+KEI  # 7/10
+POLYCAB  # 6/10
+DLF  # 6/10
