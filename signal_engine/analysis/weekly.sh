@@ -26,7 +26,22 @@ LOGS="$REPO/signal_engine/logs"
 LOCK="$LOGS/.weekly.lock"
 mkdir -p "$REPO/signal_engine/analysis/reports" "$LOGS"
 
-# Overlap guard: a hand-run and the cron run must not write the same file at once.
+# Overlap guard: a hand-run and the cron run must not write the same file at once. Same
+# reasoning as eod.sh's lock (see its own comment, and signal_engine/PRD.md's 2026-09-21
+# entries): flock only releases when the holding process's fd closes, so a genuinely HUNG
+# process - not a stale pidfile - keeps holding it indefinitely, and every run after that
+# fails instantly with nothing to show for it. This one only fires weekly, so a stuck lock
+# here would go unnoticed even longer than eod.sh's daily one did. A run this script
+# performs takes seconds; nothing legitimate should ever hold this lock anywhere near
+# STALE_LOCK_SECONDS, so a lock older than that is abandoned, not active.
+STALE_LOCK_SECONDS=$((2 * 3600))
+if [ -f "$LOCK" ]; then
+  lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || echo 0) ))
+  if [ "$lock_age" -gt "$STALE_LOCK_SECONDS" ]; then
+    echo "WARNING: $LOCK is ${lock_age}s old (> ${STALE_LOCK_SECONDS}s) - treating as abandoned, not a live run. Removing."
+    rm -f "$LOCK"
+  fi
+fi
 exec 9>"$LOCK"
 if ! flock -n 9; then
   echo "FATAL: another weekly run is in progress ($LOCK)"
