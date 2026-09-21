@@ -4719,3 +4719,28 @@ human to apply later via `/eod` - same review-with-tests process every fix in th
 Output: `signal_engine/analysis/reports/eod-<date>-claude-review.md` per day (the investigation
 itself), `signal_engine/logs/eod_claude_cron.log` (the wrapper's own operational log). Verified
 with a live end-to-end run before trusting it in cron, not just a syntax check.
+
+## Correction: The Real Cause of the Snapshot Gap Was an Auth Bug, Not (Only) the Lock
+
+Committing `signal_engine/analysis/__main__.py` surfaced a fix that had been sitting uncommitted
+in the working tree since before this session started (author/date unknown - it predates
+2026-09-21's work). It matters enough to correct the record above: **`_fetch_tradebook()` was
+calling OpenAlgo's `/tradebook` endpoint with an empty payload (`{}`), never sending the API key
+at all** - every call was guaranteed a `400 Bad Request` (missing `apikey`) the moment it reached
+OpenAlgo, regardless of the stale-lock issue. Fixed (already, in this working-tree state) to send
+`_auth()` and to surface the actual status code and response body in the error, not just the
+Response object's repr.
+
+This means the "broker tradebook snapshot" section of the "Unverified History Purged" entry above
+over-credited the stale-lock theory. Re-reading `eod_cron.log` more carefully: 2026-09-16/17/18's
+failures show `RuntimeError: tradebook call failed: <Response [400 BAD REQUEST]>` - this auth bug,
+not (only) the lock - with a `FATAL: another EOD run is in progress` line interleaved from a
+separate, concurrent invocation (log writes from two processes sharing one file, not necessarily
+evidence of a multi-day stuck lock). Earlier days (09-07 through 09-15) show
+`httpx.ConnectError: All connection attempts failed` - genuine OpenAlgo-unreachable-at-cron-time,
+unrelated to either bug. **This auth fix, silently present in the working tree, is the actual
+reason 2026-09-21 was the first snapshot to ever succeed** - working-tree edits execute regardless
+of commit status. The lock-staleness fix (`eod.sh`) remains valid, independent hardening; it just
+was not, on its own, what was blocking 09-16-18 specifically. Verified with
+`test_analysis_main_snapshot.py` (3 tests: success sends `apikey`, a 400 raises with the real
+status/body, a non-JSON error body doesn't crash) and the full suite.

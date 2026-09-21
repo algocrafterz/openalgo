@@ -42,13 +42,16 @@ SNAP_DIR = os.path.join(
 # ---------------------------------------------------------------------------
 
 async def _fetch_tradebook() -> list[dict]:
-    from signal_engine.api_client import _post_tolerant
+    from signal_engine.api_client import _auth, _post_tolerant
 
-    data = await _post_tolerant("tradebook", {})
-    if isinstance(data, tuple):
-        data = data[0] if data else {}
-    if not isinstance(data, dict) or data.get("status") != "success":
-        raise RuntimeError(f"tradebook call failed: {data}")
+    response = await _post_tolerant("tradebook", _auth())
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if response.status_code >= 400 or not isinstance(data, dict) or data.get("status") != "success":
+        body = data.get("message", data) if isinstance(data, dict) and data else (response.text or "")
+        raise RuntimeError(f"tradebook call failed: HTTP {response.status_code}: {body}")
     return list(data.get("data") or [])
 
 
