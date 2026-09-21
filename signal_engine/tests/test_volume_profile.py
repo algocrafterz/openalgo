@@ -70,6 +70,35 @@ def test_value_area_shifts_one_session_forward():
     assert (pv == 101.0).all() and (vh == 101.0).all()   # heavy_day's POC==VAL==VAH
 
 
+def test_value_area_at_two_sessions_back_for_multi_day_confluence():
+    day1 = _session("2026-06-01", [100.0] * 2 + [101.0] * 10 + [102.0] * 2,
+                    [100] * 2 + [1000] * 10 + [100] * 2)
+    day2 = _session("2026-06-02", [200.0] * 6, [200] * 6)
+    day3 = _session("2026-06-03", [300.0] * 6, [200] * 6)
+    df = pd.concat([day1, day2, day3]).sort_index()
+    day = pd.Series(df.index.date, index=df.index)
+
+    per_day = vp.session_value_area(df, day, value_area_pct=70.0)
+    poc1, val1, vah1 = vp.value_area_at(per_day, day, 1)
+    poc2, val2, vah2 = vp.value_area_at(per_day, day, 2)
+
+    import datetime
+    third_day = datetime.date(2026, 6, 3)
+    # N-1 (day3 reads day2's flat 200.0 profile) vs N-2 (day3 reads day1's 101.0
+    # profile) must disagree - proof the two lookbacks aren't accidentally aliased
+    # to the same shift.
+    assert (poc1.loc[day == third_day] == 200.0).all()
+    assert (poc2.loc[day == third_day] == 101.0).all()
+    assert (val1.loc[day == third_day] == 200.0).all()
+    # day1's heavy middle bucket (10000 vol) alone already clears 70% of its 10400
+    # total, so VAH/VAL/POC all pin at 101.0 - same shape as
+    # test_value_area_shifts_one_session_forward's heavy_day fixture.
+    assert (vah2.loc[day == third_day] == 101.0).all()
+    # Not enough history two sessions back for day2 - must read NaN, not day1 again.
+    second_day = datetime.date(2026, 6, 2)
+    assert poc2.loc[day == second_day].isna().all()
+
+
 def test_zero_volume_bucket_between_poc_and_edge_is_skipped_not_crashed():
     # Reproduces a real MarketProfile library bug (see volume_profile.py's comment):
     # a LEGITIMATE zero-volume bucket sitting between the POC and one edge is

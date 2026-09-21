@@ -521,3 +521,114 @@ Further progress on this specific idea (value-area rejection fades) would need a
 entirely - a genuinely lower-cost execution model, or a different selectivity dimension than wick
 depth (e.g. multi-day confluence, sector/index confirmation, or the model's own footprint
 confirmation via a real orderflow data source) - not a deeper sweep of the one already tried.
+
+---
+
+## v7: Multi-Session Selectivity - Market Profile Day-Type, Confluence, and HTF Trend
+
+v6 named three candidate directions for the next lever: multi-day confluence, a different
+selectivity dimension, or real orderflow confirmation. Orderflow was re-confirmed unavailable
+before this round started - Historify's `market_data` table stores only
+open/high/low/close/volume/oi (`database/historify_db.py`), and no Indian broker's historical API
+replays depth or footprint, so that path stays closed. This round instead implements three
+OFF-by-default filters in `value_area_fade.py`, each a raw ratio computed in `prepare()` and
+thresholded in `entry()` (same discipline as `min_wick_depth_atr`, so none of them invalidate the
+prepare() cache when swept):
+
+- **`day_type_ib_ratio_max`** - Market Profile's own day-type classification (Normal/balance vs
+  Trend day), via the PRIOR session's day-range / Initial-Balance-range ratio
+  (`indicators.initial_balance_ratio`, IB = first 60 minutes). Theory: fades are documented as a
+  balance-day tactic, not a trend-day one.
+- **`va_confluence_atr_mult`** - does the level being faded also roughly agree with session N-2's
+  POC/VAL/VAH, not just N-1's (`volume_profile.value_area_at(..., lookback=2)`)? Multi-day
+  agreement is a recognised Market Profile confluence signal.
+- **`htf_trend_atr_mult`** - skip a fade betting against a strong multi-day trend
+  (`indicators.prev_daily_trend_z`: prior close vs a daily EMA, in average-daily-range units).
+  ICT-style liquidity-sweep/FVG signals were deliberately NOT implemented as a lever here:
+  independent published backtests (StatOasis, and a public multi-market SMC/ICT study) found only
+  weak-to-null edges for those signals (t~0.9-1.1) even on lower-cost, higher-liquidity markets
+  than NSE intraday - not promising enough to spend a sample-limited sweep on.
+
+**Method**: `Backtest.ablation()` against the most robust full-sample base from v5/v6
+(`min_wick_depth_atr=4.0, use_vwap_filter=True`, full 212-symbol universe, 2023-01-02 to
+2026-09-13, 16 bps real cost), each filter swept individually at a coarse 3-point grid first (per
+`harness.py`'s own stated philosophy: coarse grids, not fine ones). Only a variant that helps
+gross bps in BOTH the IS and OOS windows gets a follow-up cost-sensitivity/dispersion check;
+stacking is the last step, not the first.
+
+| Variant | n_IS | bps_IS | n_OOS | bps_OOS | helps |
+|---|---|---|---|---|---|
+| base (depth 4.0) | 978 | 1.96 | 968 | 9.63 | - |
+| day_type<=2.0 | 840 | 4.28 | 842 | 8.75 | IS only |
+| day_type<=2.5 | 906 | 3.78 | 911 | 8.37 | IS only |
+| day_type<=3.0 | 942 | 1.69 | 947 | 9.74 | OOS only |
+| va_confl<=0.5atr | 127 | 9.85 | 134 | 4.21 | IS only |
+| va_confl<=1.0atr | 213 | 6.46 | 222 | 7.71 | IS only |
+| va_confl<=1.5atr | 293 | 3.51 | 304 | 6.51 | IS only |
+| htf_trend>=1.0atr | 752 | 2.72 | 708 | 12.53 | **BOTH** |
+| htf_trend>=1.5atr | 835 | 2.13 | 805 | 10.03 | **BOTH** |
+| htf_trend>=2.0atr | 888 | 2.09 | 866 | 10.43 | **BOTH** |
+
+**Day-type and confluence are rejected outright** - every threshold shows the IS-only or OOS-only
+signature this investigation has treated as the mark of noise since v4's own overfitting trap, not
+a change of market behaviour. `va_confluence`'s sample also collapses fast (293 IS trades at its
+loosest 1.5-ATR threshold, already brushing the 300-500 floor) for a filter that never clears the
+bar anyway - not worth pursuing further at any threshold.
+
+**HTF trend passes the mechanical "helps BOTH" bar at all three thresholds, but does not by itself
+close (or even clearly narrow) the cost gap at depth 4.0.** Cost sensitivity for the three
+htf_trend variants at depth 4.0:
+
+| Config | n (ALL) | gross bps | t (6bps) | t (8bps) | net R (8bps) | Symbols +ve |
+|---|---|---|---|---|---|---|
+| htf_trend>=1.0atr | 1,460 | - | -1.48 | -2.22 | -0.032 | 79/209 |
+| htf_trend>=1.5atr | 1,640 | - | -1.89 | -2.68 | - | 78/210 |
+| htf_trend>=2.0atr | 1,754 | - | -1.32 | -2.14 | - | 74/210 |
+
+Already negative at 6 bps, well below the real 16 bps hurdle, and no better than v5/v6's own
+depth-4.0 baseline trajectory (documented above: 4bps net R +0.004/t=-0.30, 8bps net R
+-0.037/t=-1.98) - within noise of a config that already existed, not a new result. `ablation()`'s
+"helps BOTH" check only compares gross bps to the base; it does not by itself mean a filter
+improves cost-viability, and this is the concrete case where that gap between the two matters.
+Since only one filter (htf_trend) cleared the "BOTH" bar, no genuine multi-filter combination was
+tested - stacking three thresholds of the SAME parameter is not a combination.
+
+**HTF trend DOES produce a real, if modest, improvement stacked on depth 4.5** - the other robust
+full-sample base from v6 (n=1,235). A follow-up (`bt.cost_sensitivity()` + `bt.by_symbol()` only,
+not a re-ablation) at `htf_trend_atr_mult` 1.0 and 2.0:
+
+| Config | n (ALL) | gross bps | t (0bps) | breakeven | t (16bps) | Symbols +ve |
+|---|---|---|---|---|---|---|
+| depth 4.5 alone (v6) | 1,235 | 8.76 | +0.89 | ~6-7 bps | -4.23 | 88/208 (42.3%) |
+| depth 4.5 + htf_trend>=1.0atr | 922 | **12.39** | +0.73 | **~8 bps** | -3.85 | **92/206 (44.7%)** |
+| depth 4.5 + htf_trend>=2.0atr | 1,108 | 11.09 | +1.04 | ~7-8 bps | -3.90 | **94/208 (45.2%)** |
+
+Gross edge rises ~25-40% over depth 4.5 alone (8.76 -> 11-12.4 bps), breakeven cost moves from
+~6-7 bps to ~7-8 bps (real cost is still 16 bps - gap narrows from ~2.3x to ~2.1x, not closed), and
+dispersion reaches the best level found in the ENTIRE seven-round investigation (44.7-45.2% of
+symbols net-positive, edging out v6 depth-5.0's previous best of 44.3%). Sample stays adequate
+(n=922-1,108 total; the earlier ablation step's IS/OOS split for this exact htf>=1.0/depth-4.5
+combination was 480 IS / 442 OOS - comfortably above the 300-500 floor, not a repeat of depth
+5.5's collapse). Set against that: the t-stat at real 16 bps cost (-3.85 to -3.90) is WORSE, not
+better, than v6's single best point (depth 5.0 alone, t=-3.15) - more trades and a better gross
+edge did not translate into a tighter confidence interval, because the combined filter still cuts
+the sample by ~10-25% versus depth 4.5 alone.
+
+### Honest conclusion
+
+Two of three new levers (day-type, multi-day confluence) are rejected outright on this
+investigation's own established discipline - clean IS-only/OOS-only overfitting signatures, not
+a change in the underlying edge. The third (HTF trend) is real but modest: it improves gross edge,
+breakeven cost, and dispersion when stacked on depth 4.5, reaching the best breadth of any config
+in this seven-round investigation, but it does not clearly beat the single best point already
+found (v6's depth 5.0, t=-3.15) on the metric this investigation has used throughout to judge
+statistical confidence, and it does not close the remaining gap to real cost (still ~2.1-2.7x,
+narrowed but not closed). Market-profile multi-session context and ICT-style liquidity/FVG
+signals do not appear to be the missing ingredient v6 hoped for; the one piece of evidence still
+untested and structurally unavailable is real orderflow/footprint confirmation - the same gap v2's
+model documentation flagged as the discretionary, unautomatable gate from the start. Absent that
+data source, this investigation has now tried every OHLCV-derivable lever proposed for this
+strategy (single-session selectivity, multi-day confluence, day-type, and HTF trend) without
+finding one that closes a real ~16bps NSE intraday cost hurdle - the honest reading is that no
+cost-viable edge exists in OHLCV-only data for this setup at this cost level, not that the next
+threshold or the next lever will find it.

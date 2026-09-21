@@ -5,6 +5,7 @@ stateful hooks to replay.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -156,6 +157,81 @@ def test_min_wick_depth_zero_reproduces_unfiltered_behaviour():
     strat, c = _prepared_ctx(rows, p)
     last = len(c.index) - 1
     assert strat.entry(c, last, p, 1) is not None
+
+
+def test_day_type_filter_blocks_a_trend_day_allows_a_balance_day():
+    # Prior session (the one whose VAL/VAH is being faded) is a Trend day: it spends
+    # its first hour in a narrow IB then runs far beyond it, closing near the extreme.
+    trend_ib = [(100 + k * 0.02, 100 + k * 0.02 + 0.05, 100 + k * 0.02 - 0.05,
+                 100 + k * 0.02, 50) for k in range(60)]     # tight first-hour IB
+    trend_run = [(101.2 + k * 0.3, 101.2 + k * 0.3 + 0.05, 101.2 + k * 0.3 - 0.05,
+                  101.2 + k * 0.3, 50) for k in range(10)]    # runs far beyond IB
+    trend_day = _bars("2026-06-04", "09:15", trend_ib + trend_run)
+    balance_day = _bars("2026-06-05", "09:15",
+                        [(100.0, 100.5, 99.5, 100.0, 50) for _ in range(30)])  # IB ~ day range
+
+    rows = [(99.0, 101.5, 95.0, 101.0, 50)]   # a valid VAL-REJ wick, independent of day type
+    p = params(day_type_ib_ratio_max=2.0)
+
+    frames = _quiet_context_days(n_days=1) + [trend_day, _bars("2026-06-10", "09:15", rows)]
+    df = pd.concat(frames).sort_index()
+    strat = ValueAreaFade()
+    prepared = strat.prepare(df, p)
+    c = Ctx(prepared, "TEST")
+    last = len(c.index) - 1
+    assert strat.entry(c, last, p, 1) is None   # prior day was a Trend day - blocked
+
+    frames = _quiet_context_days(n_days=1) + [balance_day, _bars("2026-06-10", "09:15", rows)]
+    df = pd.concat(frames).sort_index()
+    prepared = strat.prepare(df, p)
+    c = Ctx(prepared, "TEST")
+    last = len(c.index) - 1
+    assert strat.entry(c, last, p, 1) is not None   # prior day was a Normal day - allowed
+
+
+def test_va_confluence_filter_requires_agreement_with_session_n_minus_2():
+    # Session N-2 has a flat, well-separated value area at 90.0 - far from the level
+    # (VAL~100) being faded on the test day, so confluence must fail.
+    far_context = _bars("2026-06-01", "09:15",
+                        [(90.0, 90.5, 89.5, 90.0, 50) for _ in range(30)])
+    near_va_day = _bars("2026-06-02", "09:15",
+                        [(100.0, 100.5, 99.5, 100.0, 50) for _ in range(30)])
+    rows = [(99.0, 101.5, 95.0, 101.0, 50)]   # VAL-REJ against near_va_day's VAL=100
+    p = params(va_confluence_atr_mult=1.0)
+
+    df = pd.concat([far_context, near_va_day, _bars("2026-06-10", "09:15", rows)]).sort_index()
+    strat = ValueAreaFade()
+    prepared = strat.prepare(df, p)
+    c = Ctx(prepared, "TEST")
+    last = len(c.index) - 1
+    assert strat.entry(c, last, p, 1) is None   # N-2's value area (90.0) is far away
+
+    # Same setup, but N-2 also sits at 100.0 - agrees with N-1, confluence passes.
+    near_context = _bars("2026-06-01", "09:15",
+                         [(100.0, 100.5, 99.5, 100.0, 50) for _ in range(30)])
+    df = pd.concat([near_context, near_va_day, _bars("2026-06-10", "09:15", rows)]).sort_index()
+    prepared = strat.prepare(df, p)
+    c = Ctx(prepared, "TEST")
+    last = len(c.index) - 1
+    assert strat.entry(c, last, p, 1) is not None
+
+
+def test_htf_trend_filter_blocks_a_long_fade_into_a_strong_downtrend():
+    # A long steady multi-day downtrend so `prior_htf_z` reads a large negative value
+    # by the test day, then a valid VAL-REJ wick (a fade UP, against that downtrend).
+    down_days = [_bars(f"2026-05-{d:02d}", "09:15",
+                       [(p, p + 0.05, p - 0.05, p, 50) for _ in range(30)])
+                 for d, p in zip(range(1, 26), [200 - k * 6 for k in range(25)])]
+    rows = [(99.0, 101.5, 95.0, 101.0, 50)]
+    p = params(htf_trend_atr_mult=1.0, htf_ema_len=5, atr_len=5)
+
+    df = pd.concat(down_days + [_bars("2026-06-10", "09:15", rows)]).sort_index()
+    strat = ValueAreaFade()
+    prepared = strat.prepare(df, p)
+    c = Ctx(prepared, "TEST")
+    last = len(c.index) - 1
+    assert np.isfinite(c["prior_htf_z"][last]) and c["prior_htf_z"][last] < -1.0
+    assert strat.entry(c, last, p, 1) is None   # long fade into an established downtrend
 
 
 def test_r_fallback_mode_ignores_poc_entirely():

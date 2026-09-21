@@ -58,6 +58,30 @@ TIMING
 PREVIOUS VALUE AREA
     From `signal_engine.backtest.volume_profile.prev_session_value_area()`. See that
     module's docstring for what it does and does not capture.
+
+MULTI-SESSION SELECTIVITY (v7)
+    Three additional OFF-by-default filters, added after v1-v6 (see
+    STRATEGY-ANALYSIS.md) established that single-session wick-depth selectivity
+    alone narrows the gap to real trading cost from ~16x to ~2.3-2.7x but does not
+    close it, and exhausts its own sample at depth ~5.0. All three are computable
+    from OHLCV alone - no orderflow/footprint data is available for backtesting here
+    (Historify's `market_data` table stores only open/high/low/close/volume/oi; no
+    Indian broker's historical API replays depth or footprint) - and each is a raw
+    ratio computed in prepare(), thresholded in entry(), exactly like
+    `min_wick_depth_atr`, so `prepare_key()` only grows for the two that change a
+    COMPUTED VALUE (`ib_minutes`, `htf_ema_len`), not for the thresholds themselves.
+
+    - `day_type_ib_ratio_max`: Market Profile's own guidance is that value-area fades
+      are a Normal/balance-day tactic, not a Trend-day one. Gates on the PRIOR
+      session's day-range/Initial-Balance-range ratio (`indicators.initial_balance_ratio`).
+    - `va_confluence_atr_mult`: does the level being faded roughly agree with session
+      N-2's value area (POC/VAL/VAH), not just N-1's? Multi-day agreement is a
+      recognised Market Profile confluence signal ("naked POC" reasoning in reverse).
+    - `htf_trend_atr_mult`: skip a fade betting against a strong multi-day trend
+      (`indicators.prev_daily_trend_z`) - independent research into ICT-style
+      liquidity/FVG signals found weak-to-null edges even on lower-cost, higher-
+      liquidity markets than NSE intraday, so this stays a simple HTF-trend-strength
+      gate rather than an ICT-specific entry trigger.
 """
 
 from __future__ import annotations
@@ -114,6 +138,21 @@ class FadeParams:
     tp_r_cap: float = 4.0
     tp_r_fallback: float = 1.5    # tp_mode="r", or POC unavailable/behind price
 
+    # ---- v7: multi-session selectivity, all OFF by default (0.0) -------------
+    # day-type: require the PRIOR session's day-range/IB-range ratio at or below
+    # this to count as a Normal/balance day. 0.0 = filter off.
+    ib_minutes: int = 60
+    day_type_ib_ratio_max: float = 0.0
+
+    # multi-day confluence: require the level being faded to sit within this many
+    # ATRs of session N-2's POC/VAL/VAH, not just N-1's. 0.0 = filter off.
+    va_confluence_atr_mult: float = 0.0
+
+    # HTF trend: skip a fade betting against a multi-day trend this strong, in units
+    # of average daily range. 0.0 = filter off.
+    htf_ema_len: int = 20
+    htf_trend_atr_mult: float = 0.0
+
 
 class ValueAreaFade(Strategy):
     name = "Value-Area Rejection Fade (VAL-REJ / VAH-REJ, mean reversion to POC)"
@@ -131,8 +170,14 @@ class ValueAreaFade(Strategy):
         day = d["day"]
         h, low, c, v = d["High"], d["Low"], d["Close"], d["Volume"]
 
-        ppoc, pval, pvah = vp.prev_session_value_area(d, day, p.value_area_pct)
+        # Computed once, reused for BOTH the N-1 value area (existing) and the N-2
+        # value area (v7 confluence) - value_area_at() is a cheap reindex/shift/map,
+        # but session_value_area() itself runs MarketProfile per session and should
+        # not be paid for twice.
+        per_day_va = vp.session_value_area(d, day, p.value_area_pct)
+        ppoc, pval, pvah = vp.value_area_at(per_day_va, day, 1)
         d["ppoc"], d["pval"], d["pvah"] = ppoc, pval, pvah
+        d["ppoc2"], d["pval2"], d["pvah2"] = vp.value_area_at(per_day_va, day, 2)
 
         rng_safe = (h - low).replace(0, np.nan)
         d["clv"] = (c - low) / rng_safe
@@ -150,14 +195,21 @@ class ValueAreaFade(Strategy):
         atr_safe = atr.replace(0, np.nan)
         d["wick_depth_up"] = (pval - low) / atr_safe
         d["wick_depth_dn"] = (h - pvah) / atr_safe
+
+        # v7: raw multi-session ratios, thresholded in entry() - same discipline as
+        # wick_depth above, so these can be ablated without invalidating the cache.
+        d["prior_ib_ratio"] = ind.initial_balance_ratio(d, day, p.ib_minutes)
+        d["prior_htf_z"] = ind.prev_daily_trend_z(d, day, p.htf_ema_len, p.atr_len)
         return d
 
     def prepare_key(self, p: FadeParams) -> tuple:
         # Deliberately NOT the filter toggles or their thresholds - only fields
         # that change a COMPUTED VALUE belong here, so ablation() reuses one
         # prepare() pass per symbol instead of re-running the volume-profile
-        # reconstruction for every variant.
-        return (p.value_area_pct, p.vol_ma_len, p.atr_len)
+        # reconstruction for every variant. ib_minutes/htf_ema_len change a computed
+        # VALUE (prior_ib_ratio/prior_htf_z), same reasoning as atr_len - the
+        # thresholds that read them (day_type_ib_ratio_max/htf_trend_atr_mult) do not.
+        return (p.value_area_pct, p.vol_ma_len, p.atr_len, p.ib_minutes, p.htf_ema_len)
 
     # ---- entry --------------------------------------------------------------
 
@@ -183,6 +235,11 @@ class ValueAreaFade(Strategy):
             if not (np.isfinite(depth) and depth >= p.min_wick_depth_atr):
                 return None
 
+        if p.day_type_ib_ratio_max > 0.0:
+            ratio = c["prior_ib_ratio"][i]
+            if not (np.isfinite(ratio) and ratio <= p.day_type_ib_ratio_max):
+                return None
+
         if p.use_clv:
             clv = c["clv"][i]
             if not np.isfinite(clv):
@@ -204,9 +261,31 @@ class ValueAreaFade(Strategy):
             if direction == -1 and px >= vwap:
                 return None
 
+        if p.htf_trend_atr_mult > 0.0:
+            z = c["prior_htf_z"][i]
+            if not np.isfinite(z):
+                return None
+            # Don't fade UP into an established DOWNTREND, or fade DOWN into an
+            # established UPTREND - a rejection is a weaker bet against a multi-day
+            # trend this strong, not that it never works (see module docstring).
+            if direction == 1 and z <= -p.htf_trend_atr_mult:
+                return None
+            if direction == -1 and z >= p.htf_trend_atr_mult:
+                return None
+
         level = c["pval"][i] if direction == 1 else c["pvah"][i]
         if not np.isfinite(level):
             return None
+
+        if p.va_confluence_atr_mult > 0.0:
+            atr_now = c["atr"][i]
+            if not (np.isfinite(atr_now) and atr_now > 0):
+                return None
+            candidates = (c["ppoc2"][i], c["pval2"][i], c["pvah2"][i])
+            near = any(np.isfinite(x) and abs(level - x) <= p.va_confluence_atr_mult * atr_now
+                       for x in candidates)
+            if not near:
+                return None
 
         atr = c["atr"][i]
         if not np.isfinite(atr) or atr <= 0:

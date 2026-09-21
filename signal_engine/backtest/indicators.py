@@ -89,6 +89,46 @@ def prev_day_levels(df: pd.DataFrame, day: pd.Series) -> tuple[pd.Series, pd.Ser
     return day.map(d["h"].shift(1)), day.map(d["l"].shift(1))
 
 
+def initial_balance_ratio(df: pd.DataFrame, day: pd.Series, ib_minutes: int) -> pd.Series:
+    """Day range / Initial-Balance range for the PRIOR completed session, shifted one
+    session forward and broadcast to every bar of the next session.
+
+    Market Profile's own day-type classification: a Normal/balance day stays close to
+    its opening IB range (ratio near 1-2), a Trend day extends well beyond it (ratio
+    much larger and typically closes near the extreme). Requires `from_open` from
+    `add_session_columns`. NaN for the first session in the frame or a session whose
+    IB window (the first `ib_minutes`) has no bars.
+    """
+    ib_mask = df["from_open"] < ib_minutes
+    ib_high = df["High"].where(ib_mask).groupby(day).transform("max")
+    ib_low = df["Low"].where(ib_mask).groupby(day).transform("min")
+    day_high = df["High"].groupby(day).transform("max")
+    day_low = df["Low"].groupby(day).transform("min")
+    ib_range = (ib_high - ib_low).replace(0, np.nan)
+    ratio = (day_high - day_low) / ib_range
+    per_day = ratio.groupby(day).first()
+    return day.map(per_day.shift(1))
+
+
+def prev_daily_trend_z(df: pd.DataFrame, day: pd.Series, ema_len: int,
+                        range_len: int = 14) -> pd.Series:
+    """How far the PRIOR session's close sits from a daily EMA of closes, in units of
+    the recent average daily range - shifted one session forward and broadcast to
+    every bar of the next session.
+
+    Positive = prior close above its daily EMA (uptrend); negative = below
+    (downtrend); magnitude is in "typical day ranges", so it is comparable across
+    symbols at very different price levels rather than being a raw price distance.
+    NaN until `max(ema_len, range_len)` sessions of history exist.
+    """
+    daily_close = df["Close"].groupby(day).last()
+    daily_ema = daily_close.ewm(span=ema_len, adjust=False).mean()
+    daily_range = df["High"].groupby(day).max() - df["Low"].groupby(day).min()
+    daily_atr = daily_range.rolling(range_len, min_periods=5).mean().replace(0, np.nan)
+    z = (daily_close - daily_ema) / daily_atr
+    return day.map(z.shift(1))
+
+
 def opening_range(df: pd.DataFrame, day: pd.Series, minutes: int) -> tuple[pd.Series, pd.Series]:
     """Rolling OR high/low. Requires the `from_open` column from add_session_columns."""
     inside = df["from_open"] < minutes

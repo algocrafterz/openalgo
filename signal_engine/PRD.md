@@ -4436,3 +4436,38 @@ sqlite3 signal_engine/data/trades.db \
 sqlite3 signal_engine/data/trades.db \
   "SELECT substr(executed_at,1,10) date, count(*) total, sum(status='SUCCESS') ok, sum(status='REJECTED') rej FROM trades WHERE executed_at >= date('now','-14 days') GROUP BY 1 ORDER BY 1 DESC;"
 ```
+
+## Open-Drive / Value-Area-Fade Backtest: Investigation Concluded (2026-09-21)
+
+Backtest-only research (never went live) into an intraday value-area rejection fade, across the
+full 212-symbol F&O universe, 2023-01-02 to 2026-09-13. Seven rounds (v1-v7, full detail in
+`signal_engine/pinescripts/intraday/open-drive/STRATEGY-ANALYSIS.md`) progressively narrowed the
+gap between the strategy's gross edge and real NSE intraday trading cost (~16 bps round-trip) from
+~16x down to ~2.1x, but never closed it:
+
+- v1-v3 established the base setup and its cost problem (raw signal too weak or fires far too
+  often to survive real cost).
+- v4-v6 tuned single-session wick-depth selectivity, narrowing the gap to ~2.3-2.7x before running
+  out of sample (trade count fell below this investigation's own 300-500-trade noise floor at
+  deeper thresholds, and the result visibly reversed sign there - a hard stop, not a judgement call).
+- v7 (final round) added three Market Profile / HTF-derived filters, all computable from OHLCV
+  alone (no orderflow/footprint data is available for backtesting here - Historify's `market_data`
+  table stores only open/high/low/close/volume/oi, and no Indian broker's historical API replays
+  depth or footprint history): a day-type filter (Normal/balance vs Trend day), multi-day
+  value-area confluence (does the faded level agree with the session two days back, not just one),
+  and an HTF trend filter. Day-type and confluence were rejected outright (clean IS-only/OOS-only
+  overfitting signatures at every threshold). HTF trend was the only filter that passed, and
+  stacked on the best base it narrowed the gap further to ~2.1x with the best symbol dispersion of
+  any round (44.7-45.2% net-positive) - but its t-stat at real cost was still worse than the
+  single best config already found in v6.
+
+**Conclusion: no cost-viable edge exists in OHLCV-only data for this setup at this cost level.**
+Every lever derivable from price/volume bars (selectivity, multi-day confluence, day-type, HTF
+trend) has now been tried without closing the gap. The one untested, structurally unavailable
+ingredient is real orderflow/footprint confirmation - not available from any Indian broker's
+historical API. ICT-style liquidity-sweep/fair-value-gap concepts were deliberately not built as
+entry triggers here: independent published backtests found only weak-to-null edges for them
+(t~0.9-1.1) even on lower-cost, higher-liquidity markets than NSE intraday.
+
+This investigation is closed - not recommended to revisit with another threshold sweep absent a
+genuinely new data source (real orderflow) or a materially lower-cost execution model.

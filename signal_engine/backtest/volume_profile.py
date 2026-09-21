@@ -109,6 +109,36 @@ def session_value_area(df: pd.DataFrame, day: pd.Series,
     return out.sort_index()
 
 
+def value_area_at(
+    per_day: pd.DataFrame, day: pd.Series, lookback: int = 1,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """POC/VAL/VAH from `lookback` sessions back, broadcast to every bar of the
+    session `lookback` ahead - the only form of a value area a strategy's `prepare()`
+    may read (reading the CURRENT session's own value area inside entry() would be
+    lookahead, since it is not final until the session closes).
+
+    `per_day` is `session_value_area()`'s own output - passed in rather than
+    recomputed here so a caller needing more than one lookback (e.g. multi-day
+    confluence: this session's value area AND the one before it) pays for the
+    expensive MarketProfile reconstruction once, not once per lookback.
+
+    Returns (poc, val, vah) aligned to df.index. A session with no value area that far
+    back (start of the frame, or a skipped short session in the gap) reads NaN.
+    """
+    # Reindex onto EVERY day present in the frame, not just the ones that produced a
+    # profile - otherwise a day with too few bars to build its own value area (a
+    # holiday-shortened session) is simply absent as a row, `shift(n)` walks that gap
+    # by ROW POSITION rather than by calendar day, and the day AFTER it silently reads
+    # the wrong value area (or, if it is the last day in the frame, a KeyError from
+    # `day.map` finding no row for its own date at all).
+    all_days = pd.Index(sorted(pd.unique(day)), name="day")
+    shifted = per_day.reindex(all_days).shift(lookback)
+    poc = day.map(shifted["poc"])
+    val = day.map(shifted["val"])
+    vah = day.map(shifted["vah"])
+    return poc, val, vah
+
+
 def prev_session_value_area(
     df: pd.DataFrame, day: pd.Series, value_area_pct: float = 70.0,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -119,16 +149,4 @@ def prev_session_value_area(
     area (first session in the frame, or a skipped short session before it) reads NaN.
     """
     per_day = session_value_area(df, day, value_area_pct)
-    # Reindex onto EVERY day present in the frame, not just the ones that produced a
-    # profile - otherwise a day with too few bars to build its own value area (a
-    # holiday-shortened session) is simply absent as a row, `shift(1)` walks that gap
-    # by ROW POSITION rather than by calendar day, and the day AFTER it silently reads
-    # the wrong prior value area (or, if it is the last day in the frame, a KeyError
-    # from `day.map` finding no row for its own date at all).
-    all_days = pd.Index(sorted(pd.unique(day)), name="day")
-    per_day = per_day.reindex(all_days)
-    shifted = per_day.shift(1)
-    ppoc = day.map(shifted["poc"])
-    pval = day.map(shifted["val"])
-    pvah = day.map(shifted["vah"])
-    return ppoc, pval, pvah
+    return value_area_at(per_day, day, 1)
