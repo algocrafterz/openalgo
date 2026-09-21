@@ -4513,12 +4513,209 @@ also stores its id there via `_no_progress_market_exit`), falling back to `db.py
 `"-TRACKER-"` marker when truly unknown rather than silently misattributing to the entry. Two
 regression tests added to `test_close_accounting.py`. Full suite (1,630 tests) passes.
 
-Not fixed, and likely not a bug: even after this fix, a gap remains between the engine's own P&L
-math (raw entry/exit price deltas) and the broker's `m2mrealized` (which is presumably net of
-brokerage/STT/exchange charges on turnover the engine's model doesn't account for at all). On the
-day's turnover (5 positions, several with 800+ share quantities) that gap is plausibly large
-enough to explain most of the remaining difference on its own. `reconcile.py`'s
-`TOLERANCE_RUPEES = 1.0` assumes the two numbers should be nearly identical; as long as the engine
-computes gross and the broker reports net, that assumption doesn't hold and this canary will keep
-firing CRITICAL on ordinary days. Worth a follow-up: either net out estimated costs before
-comparing, or widen the tolerance to a turnover-scaled figure.
+**Correction, same day:** the paragraph originally here speculated the remaining gap was
+brokerage/STT/exchange charges the engine doesn't model. That's wrong and is superseded by the
+next section below - `sandbox/execution_engine.py` charges nothing at all (no brokerage/commission
+computation exists in it), and the true story turned out to be two separate double-counting bugs,
+one on each side of the reconciliation, not a costs gap.
+
+## EOD P&L: Three Numbers For One Day, Only One Correct (2026-09-21, same day)
+
+Follow-up the same evening: the OpenAlgo dashboard showed Realised P&L = 547.18, the Telegram DAY
+SUMMARY showed Net +2,093 (Trades: 8, W:7 L:1, 88% win rate), and neither matched the other, let
+alone the truth. Ground truth is `db/sandbox.db`'s `sandbox_trades` table - every actual fill,
+disputable by nobody:
+
+```
+BHARTIARTL  SHORT 180 @ 1842.10  ->  BUY 54 @ 1837.50, BUY 63 @ 1832.40, BUY 63 @ 1833.80
+RELIANCE    SHORT 245 @ 1237.10  ->  BUY 73 @ 1233.30, BUY 172 @ 1234.80
+PFC / NTPC / HDFCBANK: single-leg, one exit fill each
+```
+
+Summed by hand from those fills: **true day P&L = +1,619.65.** Both displayed numbers were wrong,
+for two independent reasons:
+
+1. **Telegram's +2,093 (signal_engine, `trades.db`):** `_book_broker_close()` in `tracker.py`
+   treated the broker's per-symbol "realised" figure as the FINAL leg's own delta and added it on
+   top of `pos.realized_pnl` (the correctly-tracked sum of prior partial legs). For BHARTIARTL:
+   859.50 (TP1 248.40 + TP2 611.10, both correct - confirmed against the fills above) + 718.80
+   (broker "realised", not actually that leg's delta) = 1,578.30 booked, against 1,382.40 true.
+   Fixed: once `pos.realized_pnl != 0` (partial-exit history exists), the final leg's delta is now
+   derived from price - `ltp` (which the broker sets to its own execution price on a full close,
+   confirmed against `sandbox/execution_engine.py`'s "Position closed completely" branch) against
+   the position's entry price and remaining quantity - instead of trusting the broker's realised
+   figure at all. Verified against every position that closed that day: all five now reproduce the
+   true per-fill P&L exactly. Two regression tests added
+   (`TestFinalLegDoesNotDoubleCountPriorPartialExits`); full suite (1,632 tests) passes.
+
+2. **Dashboard's 547.18 (OpenAlgo sandbox, `sandbox_funds.today_realized_pnl`):** confirmed via
+   `sandbox_positions` that the sandbox's OWN per-position `today_realized_pnl` also undercounts
+   for BHARTIARTL (718.80) and RELIANCE (673.00) - in both cases landing on neither the correct
+   cumulative total nor any single leg's own value, while the three single-leg positions (PFC,
+   NTPC, HDFCBANK) are exactly correct. `execution_engine.py`'s partial-close and full-close
+   branches both look correctly additive (`position.today_realized_pnl = (... or 0) + realized_pnl`
+   in both branches, using the right per-order `old_quantity`/`avg_price`/`close_quantity`), so
+   the loss is happening somewhere else in the sandbox's state handling - `position_manager.py`'s
+   catch-up/session-boundary reset (`_index_positionbook`-adjacent code that zeroes
+   `today_realized_pnl` for positions "last updated before today's session boundary") is the most
+   likely suspect but was not confirmed line-by-line. **Not fixed** - `sandbox/`,
+   `database/sandbox_db.py` and the `/dashboard` P&L widget are shared OpenAlgo infrastructure
+   used by every broker/user of the platform, not scoped to signal_engine's paper trading, and
+   this needs its own investigation before touching it. Until it's fixed, the OpenAlgo dashboard's
+   Realised P&L will keep undercounting on any day with a multi-leg (partial-exit) close.
+
+With fix (1) in place, the Telegram DAY SUMMARY is the one number that is now independently
+correct - computed entirely from signal_engine's own tracked fills and no longer dependent on the
+sandbox's buggy bookkeeping. The dashboard widget remains wrong until the sandbox-side bug above
+is separately investigated and fixed.
+
+**Decision, same day:** the user does not want the OpenAlgo sandbox bug (item 2 above) fixed -
+`sandbox/`, `database/`, `blueprints/`, etc. are OpenAlgo core, maintained by the OpenAlgo project,
+out of scope here (see memory `feedback_no_openalgo_core_changes`). Three more fixes followed,
+entirely within `signal_engine/`, to make trades.db's own number the one reliable P&L without
+touching OpenAlgo at all:
+
+- **`main.py`'s `_handle_exit_locked` wrote a SECOND EXIT row for every signal-driven full exit.**
+  `book_close()` already writes the authoritative row (via `save_tracker_exit()`); the unconditional
+  `save(signal, exit_order, trade_result)` right after it wrote a duplicate with the raw signal's
+  empty context. Didn't manifest 2026-09-21 (every close that day was broker-detected, not
+  signal-driven) but is a live latent bug for the common case. Fixed: `save()` is now skipped after
+  a successful full exit; still called for partial exits (the only row they get).
+- **`db.fetch_day_trades()` counted every partial-exit leg as its own "trade" at 0 P&L**, since a
+  partial leg's row has no `pnl` in its context and silently defaulted to 0.0 - inflating the
+  Telegram DAY SUMMARY's "Trades: N" (8 instead of 5) and, since 0.0 >= 0 reads as a win, its win
+  rate too (reported 88%; the real number across 5 closed positions was 80%, 4 winners). Fixed:
+  rows with no `pnl`/`realized_pnl` key in context are now skipped - the partial leg's own P&L was
+  never lost, it's already folded into the final row's cumulative total by `book_close()`.
+- **`reconcile.py` is now mode-aware.** A mismatch in analyze mode is now recognized as the
+  known OpenAlgo sandbox limitation above (`Reconciliation.is_known_sandbox_limitation`) - logged,
+  but no longer escalated to Telegram as a CRITICAL "day's numbers are NOT trustworthy" claim,
+  and no longer a `[FAIL]` in the EOD report (`eod_review.check_reconciliation()`). A live-mode
+  mismatch is unchanged: a real broker's own realised P&L is trustworthy, so it's still CRITICAL.
+
+All three: regression tests added (`test_main_exit.py`, `test_day_summary_from_db.py`,
+`test_reconcile.py`), full suite (1,634 tests) passes.
+
+**Data correction, same day:** the two `trades.db` rows written before the `book_close()` fix
+above (BHARTIARTL id=421, RELIANCE id=415) were hand-corrected to what the fixed code would have
+written, verified against `sandbox_trades`' real fills: `quantity` 180→63 / 245→172 (remaining at
+close, not original), `order_id` corrected to the actual closing order (BHARTIARTL
+`26092117577881`, the trailing SL that filled at 1833.80; RELIANCE `26092174202960`, the TP1-buffer
+SL that filled at 1234.80), `fill_price` and `context.pnl` corrected to 1382.40 / 673.00. Backed up
+first to `signal_engine/data/trades.db.bak-2026-09-21-correction`. This was a one-off manual
+correction of two known-wrong historical rows, not a migration — the code fix above prevents the
+same error going forward; nothing else needed backfilling (PFC/NTPC/HDFCBANK were single-leg and
+already correct).
+
+**2026-09-21 corrected final results** (`db.fetch_day_trades("analyze", "2026-09-21")`, verified
+exactly against every fill in `sandbox_trades`):
+
+| Symbol | Qty | Entry | Exit | P&L | Result | Exit path |
+|---|---|---|---|---|---|---|
+| BHARTIARTL | 180 | 1844.40 | 1833.80 | +1,382.40 | WIN | TP1 + TP2 + trailing SL |
+| RELIANCE | 245 | 1237.20 | 1234.80 | +673.00 | WIN | TP1 + trailing SL |
+| NTPC | 1095 | 326.70 | 326.40 | +438.00 | WIN | no-progress exit |
+| PFC | 874 | 346.30 | 345.75 | +87.40 | WIN | no-progress exit |
+| HDFCBANK | 409 | 739.00 | 737.15 | -961.15 | LOSS | no-progress exit |
+
+**5 trades, 4 wins / 1 loss (80% win rate), net +₹1,619.65.** Plus 1 declined signal (VEDL,
+correctly rejected by sizing — entry too expensive for the risk budget) and 5 BreakingTrade
+scanner signals that stayed informational-only (0 became trades, by design).
+
+Before vs. after, for the record:
+
+| | Before fix | After fix (true) |
+|---|---|---|
+| Telegram Day Summary | +₹2,093 / 8 trades / 88% win rate | +₹1,619.65 / 5 trades / 80% win rate |
+| OpenAlgo dashboard Realised P&L | ₹547.18 | still wrong (known OpenAlgo sandbox limitation, out of scope — see `feedback_no_openalgo_core_changes` memory) |
+| Ground truth (`sandbox_trades`, hand-summed) | +₹1,619.65 | +₹1,619.65 (unchanged — it was always right, nothing read directly from it before today) |
+
+**Same day, follow-up:** the other 3 positions (PFC, NTPC, HDFCBANK) had the identical order_id bug
+as BHARTIARTL/RELIANCE (final EXIT row reused the entry's order_id) — their `total_pnl` was already
+correct (single-leg, so `quantity` numerically matched), but `ledger.py`'s own separate order_id-
+keyed join (used for the EOD report's EXECUTION QUALITY/POSITIONS/BY-STRATEGY tables, and by
+`weekly_review.py`) couldn't match their real closing fill either, silently zeroing their
+R-multiple and excluding their P&L from "gross P&L". Backfilled their `order_id` to the real
+closing order too (PFC `26092177983763`, NTPC `26092114047537`, HDFCBANK `26092113551803`). With
+all 5 corrected, `ledger.py`'s own reconstruction now agrees exactly with `db.fetch_day_trades()`:
+5/5 positions matched, 0 "broker fills the engine never sent", win 80.0%, gross P&L +1,620,
+`BY STRATEGY: BREAKOUT 5 trades 80% win +1.79R`.
+
+**Bigger finding, same day:** `weekly_review.py --since 2026-09-04 --until 2026-09-21` (per-strategy
+comparison across the recent paper-trading window — the actual purpose of running strategies in
+analyze mode is to compare them before promoting one to live) shows only **1 of the last 12
+calendar days (2026-09-21) as `verified`** against the broker tradebook; every trading day from
+2026-09-07 through 2026-09-18 is `unverified` (signal-side estimate only, per `ledger.py`'s own
+verified/unverified discipline). Root cause found in `signal_engine/logs/eod_cron.log`: it is
+**not** an OpenAlgo/API problem — 09-16, 09-17, and 09-18's snapshot attempts all failed
+immediately with `FATAL: another EOD run is in progress (.eod.lock)`, `eod.sh`'s own overlap guard
+(a `flock` on `signal_engine/logs/.eod.lock`). Since `flock` releases when the holding process
+exits, something held that lock across multiple consecutive days without ever releasing it (a hung
+process, not a stale pidfile) until it cleared on its own by 2026-09-21. The exact process/cause is
+not recoverable after the fact (nothing was still holding it or logged when it let go).
+
+**Fixed, same day:** `eod.sh` now checks the lock file's mtime before trying to acquire it -
+anything older than `STALE_LOCK_SECONDS` (2 hours; a normal run takes seconds to a couple of
+minutes, so nothing legitimate should ever be anywhere near that) is removed as abandoned rather
+than treated as a live run. Verified both branches (a synthetic 3-hour-old lock file gets removed;
+a fresh one is left alone) and a live end-to-end run. The 7 already-unverified days' broker-side
+numbers are still very likely unrecoverable (the tradebook API is same-day only) — any live-
+promotion decision needs to wait for enough NEW verified days going forward, not lean on the
+unverified week behind it.
+
+## Unverified History Purged From trades.db (2026-09-21, same day)
+
+Checking `signal_engine/data/tradebook/` against every day that had rows in `trades.db` found the
+unverified-data problem above was far bigger than the recent week: **only 2026-09-21 has ever had
+a broker tradebook snapshot, in the database's entire history back to 2026-03-09** (410 rows total,
+14 of them 2026-09-21's). Every other day's P&L/win-loss/R numbers were the engine's own unconfirmed
+estimate, never checked against a real broker fill - a much larger fraction of the audit trail was
+"not trustworthy" than the reconciliation-mismatch investigation alone suggested.
+
+User's explicit instruction: remove all records that aren't trustworthy, so `trades.db` can't cause
+confusion by mixing unverified history with the now-correct, strategy-attributable, broker-verified
+data - and treat 2026-09-21 as the baseline going forward. Confirmed the exact scope (396 unverified
+rows, 2026-03-09 through 2026-09-18) before acting, given the irreversible size of this relative to
+what the conversation had been discussing (the recent week, not six months). Executed:
+
+1. Backed up first: `signal_engine/data/trades.db.bak-pre-unverified-purge-20260921-200236`
+   (alongside the earlier `trades.db.bak-2026-09-21-correction` from the same-day P&L fix).
+2. `DELETE FROM trades WHERE date(executed_at) < '2026-09-21'` — 396 rows removed.
+3. `PRAGMA integrity_check` (ok) and `VACUUM` (233KB → 45KB).
+4. Verified via `db.fetch_day_trades()`, `weekly_review.py`, and the full test suite (1,634 tests,
+   all use isolated tmp databases so unaffected either way) that the remaining 14 rows (2026-09-21,
+   5 closed BREAKOUT positions + 1 decline) are intact and correctly attributed.
+
+`trades.db` now contains only 2026-09-21 onward - every row in it is broker-verified and
+strategy-tagged. Future `weekly_review.py`/EOD comparisons build cleanly from here with no
+unverified history mixed in.
+
+## Unattended Daily /eod Review (2026-09-21, same day)
+
+The user asked for `eod.sh` (the 15:25 IST cron) to do what invoking `/eod` interactively does,
+so they don't have to run it by hand every trading day. `eod.sh` itself can't: it's a
+deterministic script (fixed PASS/FAIL thresholds), and root-causing a FAILED check - deciding
+whether it's a real bug, known noise, or an OpenAlgo-side limitation, and what the fix would be -
+needs an LLM reasoning over `trades.db`/the tradebook/the logs, the way `/eod`'s skill does
+interactively. A cron job cannot do that.
+
+What was built instead: `signal_engine/analysis/eod_claude_review.sh`, a new cron entry at 15:40
+IST weekdays (15 min after `eod.sh`, matching its own "before openAlgoAutoStop at 15:30" timing
+note - though this script doesn't actually need OpenAlgo live, since the `/eod` skill's own
+methodology only reads local files: `trades.db`, the tradebook JSON `eod.sh` already snapshotted,
+and the log files - never a live API call). It invokes the `claude` CLI headlessly
+(`-p`/`--dangerously-skip-permissions`, required for a genuinely unattended run) with a prompt
+telling it to follow `.claude/skills/eod/SKILL.md`'s steps 1-2 (get the report, triage every
+FAILED check) and step 4 (technical summary + layman recap), explicitly skipping step 3 (fix).
+
+User chose **report-only** (not autonomous fixing) when asked. That's enforced three ways, not
+just by asking nicely: `--permission-mode plan` (Claude Code's structurally read-only mode - the
+response IS the investigation, nothing executes), `--disallowedTools Edit,Write,NotebookEdit`
+(the mutating tools are not registered at all), and the prompt itself forbidding edits/commits/DB
+mutation as a third layer. If a real bug is found, the report describes the fix needed for a
+human to apply later via `/eod` - same review-with-tests process every fix in this file's
+2026-09-21 entries went through.
+
+Output: `signal_engine/analysis/reports/eod-<date>-claude-review.md` per day (the investigation
+itself), `signal_engine/logs/eod_claude_cron.log` (the wrapper's own operational log). Verified
+with a live end-to-end run before trusting it in cron, not just a syntax check.

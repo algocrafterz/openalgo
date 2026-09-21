@@ -171,6 +171,69 @@ class TestCloseIsWrittenToTheAuditTrail:
         assert save.call_args.kwargs["sig_id"] == ""
 
 
+class TestFinalLegDoesNotDoubleCountPriorPartialExits:
+    """2026-09-21: the same day's Telegram DAY SUMMARY reported Net +2,093 while the OpenAlgo
+    dashboard's Realised P&L showed 547.18 - two numbers for one trading day, neither of which
+    was the true one (confirmed against sandbox_trades: the actual fills sum to +1,619.65).
+
+    _book_broker_close() treated the broker's per-symbol "realised" figure as the final leg's
+    OWN delta and added it on top of pos.realized_pnl (which already held the correctly-tracked
+    partial legs). For BHARTIARTL that produced 859.50 (two correct partials) + 718.80 (broker
+    "realised", itself not a reliable incremental figure once a position has partial-exit
+    history) = 1,578.30 booked, against 1,382.40 true from the broker's own fills (63 @ 1833.80
+    for the final leg, not the 1830.69 implied by treating 718.80 as that leg's delta).
+
+    Fix: once pos.realized_pnl != 0 (partial exits already booked), derive the final leg's
+    delta from price - ltp (which the broker sets to its own execution price on a full close)
+    against the position's own entry price and remaining quantity - instead of trusting the
+    broker's realised-pnl bookkeeping at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_multi_leg_close_uses_ltp_not_the_broker_s_realised_delta(self):
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("BHARTIARTL", qty=180, fill=1842.10)
+        from signal_engine.models import Direction as _Dir
+        pos.direction = _Dir.SHORT
+        pos.quantity = 63  # TP1 (54) + TP2 (63) already exited, 63 remain
+        pos.realized_pnl = 859.50  # 248.40 (TP1) + 611.10 (TP2), correctly tracked by main.py
+        tracker.register(pos)
+        # Broker's per-symbol "realised" (718.80) is the buggy figure from that day - present
+        # to prove it is no longer used once realized_pnl is non-zero. ltp=1833.80 is the real
+        # closing fill price from that day's broker tradebook.
+        book = [{"symbol": "BHARTIARTL", "quantity": 0, "ltp": 1833.80, "today_realized_pnl": 718.80}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=718.80)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        booked_delta = risk.record_close.call_args.args[0]
+        assert booked_delta == pytest.approx(522.90)  # (1842.10 - 1833.80) * 63, not 718.80
+        total_pnl = pos.realized_pnl + booked_delta
+        assert total_pnl == pytest.approx(1382.40)  # true total from the broker's own fills
+
+    @pytest.mark.asyncio
+    async def test_a_single_leg_close_is_unaffected(self):
+        """No partial-exit history (realized_pnl stays at its 0.0 default) - the existing
+        per-symbol-realised path must still be used, matching TestPerSymbolPnlIsPreferred."""
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("PFC", qty=874, fill=345.85)
+        tracker.register(pos)
+        book = [{"symbol": "PFC", "quantity": 0, "ltp": 345.75, "today_realized_pnl": 87.40}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=87.40)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        assert risk.record_close.call_args.args[0] == pytest.approx(87.40)
+
+
 class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
     """2026-09-21: every tracker-detected close wrote order_id=entry_order_id and
     quantity=original_quantity, regardless of how much was actually still open or which

@@ -196,7 +196,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
-            patch("signal_engine.main.save"),
+            patch("signal_engine.main.save") as mock_save,
             patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
             patch("signal_engine.main.settings") as mock_settings,
         ):
@@ -225,6 +225,11 @@ class TestTPHitExitFlow:
         # mocked, assert the pipeline booked the close rather than the notification
         # mechanics. Real-tracker coverage lives in test_main_characterization.py.
         mock_tracker.book_close.assert_awaited_once()
+        # 2026-09-21: this used to ALSO call save() with the raw (empty-context) signal,
+        # writing a second EXIT row for the same close that book_close() already recorded -
+        # double-counting it as a "trade" everywhere trades.db is read. book_close() is the
+        # only writer for a full exit now.
+        mock_save.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_tp_hit_partial_exit_fires_partial_notification(self):
@@ -251,7 +256,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
-            patch("signal_engine.main.save"),
+            patch("signal_engine.main.save") as mock_save,
             patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
             patch("signal_engine.main.settings") as mock_settings,
         ):
@@ -278,6 +283,8 @@ class TestTPHitExitFlow:
         # Partial exit notification, not full exit
         mock_notifier.notify_partial_exit.assert_called_once()
         mock_notifier.notify_position_closed.assert_not_called()
+        # A partial leg writes NO row via book_close() - save() is the only record of it.
+        mock_save.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_partial_exit_cancels_sl_before_exit(self):

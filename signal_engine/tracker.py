@@ -892,12 +892,36 @@ class PositionTracker:
             self._last_realised_pnl = current_realised
 
         per_symbol = book_entry.realised if book_entry is not None else None
-        pnl_delta = portfolio_delta if per_symbol is None else per_symbol
-        if per_symbol is None:
+        ltp = book_entry.ltp if book_entry is not None else None
+        if pos.realized_pnl != 0.0 and ltp:
+            # This position already has partial-exit P&L booked in pos.realized_pnl (main.py
+            # tracks each partial leg's delta from its own confirmed fill price). The broker's
+            # per-symbol "realised" figure is NOT reliably an incremental delta for just the
+            # final leg on top of that - confirmed 2026-09-21: for BHARTIARTL it produced
+            # 859.50 (correct, from the two partials) + 718.80 ("realised") = 1578.30 booked,
+            # against 1382.40 true from the broker's own fills - and the broker's own
+            # today_realized_pnl for that position independently landed on neither number
+            # either, so it isn't safe to treat as a source of truth once a position has
+            # partial-exit history. On a full close the broker/sandbox sets the position's ltp
+            # to its own execution price (see sandbox/execution_engine.py's
+            # "Position closed completely" branch) - compute the final leg's delta from price
+            # instead of trusting the broker's stateful realised-pnl bookkeeping at all.
+            base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+            pnl_delta = (
+                (ltp - base_price) if pos.direction == Direction.LONG else (base_price - ltp)
+            ) * pos.quantity
             logger.debug(
-                f"{key}: broker reported no per-symbol realised P&L - falling back to the "
-                f"portfolio delta ({portfolio_delta:,.2f})"
+                f"{key}: partial-exit history present (realized_pnl={pos.realized_pnl:,.2f}) - "
+                f"deriving the final leg from ltp={ltp:.2f} instead of the broker's realised "
+                f"figure ({per_symbol}) to avoid double-counting"
             )
+        else:
+            pnl_delta = portfolio_delta if per_symbol is None else per_symbol
+            if per_symbol is None:
+                logger.debug(
+                    f"{key}: broker reported no per-symbol realised P&L - falling back to the "
+                    f"portfolio delta ({portfolio_delta:,.2f})"
+                )
 
         # Guard 3: Orphan detection — zero PnL with unconfirmed fill.
         # This fires when Guard 2's order-status API call was unavailable (API error) but

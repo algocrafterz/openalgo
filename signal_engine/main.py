@@ -323,6 +323,17 @@ async def _handle_exit_locked(signal) -> None:
     if trade_result.status == OrderStatus.SUCCESS:
         if not await _book_exit_result(signal, pos, tp_level, exit_qty, is_full_exit, trade_result):
             return
+        if is_full_exit:
+            # book_close() (via _finalize_full_exit -> tracker.book_close ->
+            # db.save_tracker_exit) already wrote the authoritative EXIT row for this close,
+            # with the real computed total_pnl/exit_types in its context. save() below writes
+            # the RAW signal's own context, which is empty for a plain TP-HIT/EXIT alert - a
+            # second EXIT row for the same close, at 0 recorded P&L. fetch_day_trades() reads
+            # every EXIT row, so this silently double-counted the close as its own "trade"
+            # (a phantom win, since 0 >= 0) everywhere trades.db is read: the ledger, the EOD
+            # report, and the Telegram day summary. Partial exits still need this call - it
+            # is the only row ever written for that leg (see db.fetch_day_trades()).
+            return
     else:
         await _handle_exit_order_failure(pos, trade_result)
 

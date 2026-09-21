@@ -83,6 +83,26 @@ class TestFetchDayTrades:
         _exit("SBIN", "ORB", 800.0, 796.0, 10, 805.0, 50.0, ["TP1"])
         assert db.fetch_day_trades("analyze")[0]["sl"] == pytest.approx(796.0)
 
+    def test_a_partial_exit_leg_is_not_counted_as_its_own_trade(self):
+        """2026-09-21: a partial leg's own EXIT row (written by the generic save() at order-
+        placement time, context={}) used to default to total_pnl=0.0 and be counted as a
+        completed trade here - inflating Telegram's "Trades: N" and, since 0.0 >= 0, its win
+        rate too (BHARTIARTL/RELIANCE's partial legs turned 5 real closed positions into a
+        reported 8 "trades" at 88% win rate). The partial leg's own economics are not lost -
+        they are already folded into the final row's cumulative pnl."""
+        _entry("BHARTIARTL", "BREAKOUT", 1842.10, 1849.43, 1836.85, 180)
+        db.save(  # TP1 partial leg - the ONLY row a partial exit writes, raw context
+            Signal(strategy="BREAKOUT", direction=Direction.EXIT, symbol="BHARTIARTL",
+                   entry=0.0, sl=0.0, tp=1836.85, raw_message="x"),
+            Order(symbol="BHARTIARTL", exchange="NSE", action=Action.BUY, quantity=54,
+                  price=0.0, order_type="MARKET", product="MIS", strategy_tag="BREAKOUT"),
+            TradeResult(status=OrderStatus.SUCCESS, order_id="TP1-LEG"),
+        )
+        _exit("BHARTIARTL", "BREAKOUT", 1842.10, 1849.43, 63, 1833.80, 1382.40, ["TP1", "TP2"])
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1
+        assert rows[0]["total_pnl"] == pytest.approx(1382.40)
+
 
 class TestSummaryReadsTheDatabase:
     def _tracker(self):

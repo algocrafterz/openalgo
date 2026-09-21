@@ -55,6 +55,26 @@ class Reconciliation:
     def agrees(self) -> bool:
         return not self.comparable or abs(self.difference) <= TOLERANCE_RUPEES
 
+    @property
+    def is_known_sandbox_limitation(self) -> bool:
+        """True for a mismatch that is the SANDBOX being wrong, not signal_engine.
+
+        Confirmed 2026-09-21: OpenAlgo's own analyze-mode sandbox undercounts
+        `sandbox_positions.today_realized_pnl` for any position with more than one exit leg
+        (a TP1/TP2 before the final close) - checked directly against `db/sandbox.db`, not
+        inferred. `sandbox/execution_engine.py` and `position_manager.py` are OpenAlgo core,
+        maintained by the OpenAlgo project and out of scope for signal_engine to change.
+
+        The same day, `tracker.py`'s book_close() had its OWN separate bug (double-counting
+        a position's partial-exit P&L) - that one WAS signal_engine's and is fixed, verified
+        against every fill in that day's `sandbox_trades` table. With it fixed, trades.db's
+        `total_pnl` is independently correct, so a live-money mismatch is still worth
+        escalating hard - but an analyze-mode one no longer means the engine's number is
+        wrong. It means the free, no-money sandbox's own bookkeeping is off, which is not
+        something a trader needs to be alerted about as if their numbers were unreliable.
+        """
+        return self.mode == "analyze" and self.comparable and not self.agrees
+
     def summary(self) -> str:
         if not self.comparable:
             return (
@@ -102,12 +122,28 @@ async def reconcile_day(mode: str = None, day: str = None) -> Reconciliation:
 async def check_and_alert(mode: str = None, day: str = None) -> Reconciliation:
     """Run the comparison and escalate a mismatch. Returns the result either way.
 
-    A mismatch is CRITICAL and always reaches Telegram - it is never filtered by
+    A LIVE-money mismatch is CRITICAL and always reaches Telegram - it is never filtered by
     notify_level, because it means every other number that day is suspect.
+
+    An ANALYZE-mode mismatch is logged (still visible in errors_<day>.jsonl for anyone
+    auditing) but does not escalate to Telegram as a CRITICAL "day's numbers are NOT
+    trustworthy" claim - see Reconciliation.is_known_sandbox_limitation for why: that
+    framing is no longer true once the engine's own P&L bug is fixed (2026-09-21), and
+    crying wolf about a sandbox-side limitation the trader cannot act on just trains them to
+    ignore this channel.
     """
     result = await reconcile_day(mode, day)
     if result.agrees:
         logger.info(result.summary())
+        return result
+
+    if result.is_known_sandbox_limitation:
+        logger.warning(
+            result.summary().replace("\n", " | ")
+            + " | This is a known OpenAlgo sandbox limitation (undercounts multi-leg closes), "
+            "not a signal_engine defect - trades.db's own total_pnl is the reliable figure. "
+            "Not escalated to Telegram."
+        )
         return result
 
     logger.critical(result.summary().replace("\n", " | "))

@@ -176,6 +176,13 @@ async def check_reconciliation(mode: str, day: str) -> str:
     result = await reconcile.reconcile_day(mode, day)
     if not result.comparable:
         return f"SKIPPED — {result.summary()}"
+    if result.is_known_sandbox_limitation:
+        # See Reconciliation.is_known_sandbox_limitation (reconcile.py): confirmed
+        # 2026-09-21 this is OpenAlgo's own sandbox undercounting multi-leg closes, not a
+        # signal_engine defect - trades.db's total_pnl is independently correct. Informational
+        # in the EOD report, not a [FAIL] - the trader cannot act on a sandbox-side limitation
+        # and it is out of scope for signal_engine to fix (OpenAlgo core).
+        return f"SKIPPED (known OpenAlgo sandbox limitation, not an engine defect) — {result.summary()}"
     if not result.agrees:
         raise RuntimeError(result.summary())
     return result.summary()

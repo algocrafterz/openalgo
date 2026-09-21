@@ -495,6 +495,18 @@ def fetch_day_trades(trade_mode: str, day: str = None) -> list:
             payload = json.loads(context) if context else {}
         except (TypeError, ValueError):
             payload = {}
+        # A partial exit leg (TP1, TP1.5, ...) writes its own EXIT row via the generic
+        # save() at the point the order is placed, carrying the raw signal's context - which
+        # never has a "pnl"/"realized_pnl" key, since the leg's economics aren't computed
+        # there. Only the row for the position's FINAL close (book_close() -> save_tracker_
+        # exit()) carries one. Silently defaulting the missing key to 0.0 used to make every
+        # partial leg count as its own "trade" here, at 0 P&L - inflating "Trades: N" and,
+        # since 0.0 >= 0 reads as a win, the win rate too (2026-09-21: reported Trades: 8,
+        # Win Rate: 88% for what was actually 5 closed positions, 4 of them winners). The
+        # partial leg's own P&L is not lost - it is already folded into the final row's
+        # cumulative pnl by book_close()'s `total_pnl = pos.realized_pnl + pnl_delta`.
+        if "pnl" not in payload and "realized_pnl" not in payload:
+            continue
         entry_row = entries.get((symbol.upper(), strategy.upper()))
         base_entry = entry_row[0] if entry_row else entry
         base_sl = entry_row[1] if entry_row else sl

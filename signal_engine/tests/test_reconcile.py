@@ -73,13 +73,29 @@ class TestReconcileDay:
 
 class TestAlerting:
     @pytest.mark.asyncio
-    async def test_a_mismatch_is_escalated_to_telegram(self):
+    async def test_a_live_mismatch_is_escalated_to_telegram(self):
+        """Live-money mismatch: the broker's own real P&L is trustworthy, so a disagreement
+        is a genuine signal_engine data-integrity concern - keep this CRITICAL."""
         with patch("signal_engine.db.fetch_day_trades", return_value=_trades(986.41)), \
              patch("signal_engine.api_client.fetch_realised_pnl", AsyncMock(return_value=119.31)), \
              patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
-            await reconcile.check_and_alert("analyze")
+            await reconcile.check_and_alert("live")
         notify.assert_awaited_once()
         assert notify.await_args.args[0] == "reconciliation_mismatch"
+
+    @pytest.mark.asyncio
+    async def test_an_analyze_mode_mismatch_is_not_escalated(self):
+        """2026-09-21: OpenAlgo's own analyze-mode sandbox is confirmed to undercount
+        today_realized_pnl on a multi-leg close - a mismatch here means the SANDBOX is
+        wrong, not signal_engine (see Reconciliation.is_known_sandbox_limitation). It must
+        not reach Telegram as a CRITICAL "day's numbers are NOT trustworthy" claim."""
+        with patch("signal_engine.db.fetch_day_trades", return_value=_trades(986.41)), \
+             patch("signal_engine.api_client.fetch_realised_pnl", AsyncMock(return_value=119.31)), \
+             patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
+            r = await reconcile.check_and_alert("analyze")
+        notify.assert_not_awaited()
+        assert not r.agrees
+        assert r.is_known_sandbox_limitation
 
     @pytest.mark.asyncio
     async def test_agreement_sends_nothing(self):
@@ -91,9 +107,11 @@ class TestAlerting:
 
     @pytest.mark.asyncio
     async def test_a_failed_alert_does_not_raise(self):
+        """live mode: analyze mode never reaches notify_event for a mismatch (see above), so
+        this must exercise the mode that actually calls it to mean anything."""
         with patch("signal_engine.db.fetch_day_trades", return_value=_trades(986.41)), \
              patch("signal_engine.api_client.fetch_realised_pnl", AsyncMock(return_value=119.31)), \
              patch("signal_engine.notifier.notify_event",
                    AsyncMock(side_effect=RuntimeError("bot removed"))):
-            r = await reconcile.check_and_alert("analyze")
+            r = await reconcile.check_and_alert("live")
         assert not r.agrees
