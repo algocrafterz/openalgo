@@ -1,0 +1,128 @@
+indicator("Initial Balance (Current Session)", overlay=true)
+
+// Initial Balance for NSE intraday charts, current session only.
+// Default window is 09:15-10:15 IST (first 60 minutes of the regular session).
+// Tracks the running high/low inside the window, locks them when it closes,
+// then plots the midpoint for the rest of the session. No range extensions -
+// only High, Low and Mid are plotted.
+//
+// LipiScript has no barstate.islast, timenow or bar_index, so a script cannot
+// detect "today" on its own - there is no forward-looking or last-bar signal,
+// only the verified dayofmonth built-in. So this gates everything (capture,
+// lock, plot, breakout alerts) to a single reference day: bump "Reference Day
+// of Month" to today's date every trading morning, and no session but that
+// one draws. Without the gate, every session ever loaded on the chart draws
+// its own IB box, which is what made the chart noisy.
+//
+// hour and minute follow the CHART timezone, not the exchange. If the chart is
+// not on Asia/Kolkata, change the start hour/minute inputs, not the code.
+//
+// Use an interval that divides the window evenly: 1, 3, 5, 15 or 30 minutes.
+
+// ==== CURRENT SESSION GATE ====
+refDay = input.int(22, "Reference Day of Month (set to today, every morning)")
+isRefDay = dayofmonth == refDay
+
+// ==== IB WINDOW INPUTS ====
+startHour = input.int(9, "IB Start Hour")
+startMin = input.int(15, "IB Start Minute")
+ibMinutes = input.int(60, "IB Duration Minutes")
+
+// ==== SESSION END INPUTS ====
+sessionEndHour = input.int(15, "Session End Hour")
+sessionEndMin = input.int(30, "Session End Minute")
+
+// ==== DISPLAY INPUTS ====
+stampMode = input.int(0, "Bar Timestamp (0=open time, 1=close time)")
+showMid = input.int(1, "Show Midpoint (0=no, 1=yes)")
+
+// ==== MINUTE OF DAY BOUNDS ====
+minuteOfDay = hour * 60 + minute
+windowOpen = startHour * 60 + startMin
+windowClose = windowOpen + ibMinutes
+sessionEnd = sessionEndHour * 60 + sessionEndMin
+
+// ==== WINDOW AND SESSION CONDITIONS ====
+// An open-stamped 5m bar printed at 10:10 is the last IB bar; one printed at
+// 10:15 is not. A close-stamped feed shifts both comparisons by one bar.
+inWindow = isRefDay and (stampMode == 1 ? minuteOfDay > windowOpen and minuteOfDay <= windowClose : minuteOfDay >= windowOpen and minuteOfDay < windowClose)
+inSession = isRefDay and (stampMode == 1 ? minuteOfDay > windowOpen and minuteOfDay <= sessionEnd : minuteOfDay >= windowOpen and minuteOfDay < sessionEnd)
+
+// ==== PERSISTENT VARIABLES ====
+static float ibHigh = na
+static float ibLow = na
+static float ibMid = na
+static bool ibLocked = false
+static bool longTaken = false
+static bool shortTaken = false
+
+// ==== RESET AT THE START OF EACH TRADING DAY ====
+isNewDay = na(dayofmonth[1]) or dayofmonth != dayofmonth[1]
+
+if isNewDay {
+    ibHigh := na
+    ibLow := na
+    ibMid := na
+    ibLocked := false
+    longTaken := false
+    shortTaken := false
+}
+
+// ==== CAPTURE IB HIGH AND LOW ====
+if inWindow {
+    ibHigh := na(ibHigh) ? high : math.max(ibHigh, high)
+    ibLow := na(ibLow) ? low : math.min(ibLow, low)
+}
+
+// ==== LOCK THE RANGE WHEN THE WINDOW CLOSES ====
+if not inWindow and inSession and not ibLocked and not na(ibHigh) {
+    ibLocked := true
+    ibMid := (ibHigh + ibLow) / 2
+}
+
+// ==== PLOT LEVELS ONLY DURING THE SESSION ====
+// color.new(color.yellow, 50) keeps yellow's RGB untouched and sets alpha to
+// 50 - this is docs-only, not yet confirmed by compile in this repo (only
+// color.rgb(r, g, b) is confirmed, in relative_volume.lipi). If the editor
+// rejects color.new, the confirmed fallback is color.rgb(128, 128, 0), which
+// dims yellow by halving its RGB instead of adding real transparency - report
+// the exact error and I will switch to that. IB Mid uses plotStyle.scatter
+// for the dotted look - plotStyle.cross drew large plus marks spaced across
+// bars, reading as a solid "railroad track" rather than dots; scatter is
+// unconfirmed too, and plotStyle.circles is the next candidate if its dots
+// render wrong.
+//
+// A right-axis text badge like "pHigh"/"pwLow" (title instead of a price
+// number) is not attempted here. That styling is very likely hline()-only,
+// and hline()'s price argument must be a compile-time constant in Pine (and
+// presumably here) - ibHigh/ibMid/ibLow are static vars reassigned every bar,
+// which is exactly the "series" type Pine's hline() rejects. Forcing it risks
+// burning a compile attempt for a near-certain failure (three consecutive
+// compile warnings trigger a 1-hour editor ban). plot()'s title= is already
+// set below; if GoCharting auto-labels flat reference lines that way for some
+// other indicator, it should already apply here with no further change - if
+// it does not, this is a platform limitation, not something to retry.
+plot(inSession and not na(ibHigh) ? ibHigh : na, color=color.new(color.yellow, 50), linewidth=1, title="IB High")
+plot(inSession and not na(ibLow) ? ibLow : na, color=color.new(color.yellow, 50), linewidth=1, title="IB Low")
+plot(inSession and ibLocked and showMid == 1 ? ibMid : na, color=color.new(color.yellow, 50), linewidth=1, style=plotStyle.scatter, title="IB Mid")
+
+// ==== BREAKOUT CONDITIONS (FIRST OCCURRENCE ONLY) ====
+longBreak = inSession and ibLocked and not longTaken and talib.crossover(close, ibHigh)
+shortBreak = inSession and ibLocked and not shortTaken and talib.crossunder(close, ibLow)
+
+// ==== MARK SIGNALS AS TAKEN ====
+if longBreak {
+    longTaken := true
+}
+
+if shortBreak {
+    shortTaken := true
+}
+
+// ==== PLOT BREAKOUT SIGNALS ====
+plotshape(longBreak, shape=shape.triangleup, location=location.belowbar, color=color.yellow, size=size.small, title="IB Breakout Up")
+plotshape(shortBreak, shape=shape.triangledown, location=location.abovebar, color=color.yellow, size=size.small, title="IB Breakdown")
+
+// ==== ALERTS ====
+alertcondition(longBreak, title="IB Breakout Up", message="IB breakout up")
+alertcondition(shortBreak, title="IB Breakdown", message="IB breakdown")
