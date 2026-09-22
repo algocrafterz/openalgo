@@ -81,30 +81,22 @@ if not inWindow and inSession and not ibLocked and not na(ibHigh) {
 }
 
 // ==== PLOT LEVELS ONLY DURING THE SESSION ====
-// color.new(color.yellow, 50) keeps yellow's RGB untouched and sets alpha to
-// 50 - this is docs-only, not yet confirmed by compile in this repo (only
-// color.rgb(r, g, b) is confirmed, in relative_volume.lipi). If the editor
-// rejects color.new, the confirmed fallback is color.rgb(128, 128, 0), which
-// dims yellow by halving its RGB instead of adding real transparency - report
-// the exact error and I will switch to that. IB Mid uses plotStyle.scatter
-// for the dotted look - plotStyle.cross drew large plus marks spaced across
-// bars, reading as a solid "railroad track" rather than dots; scatter is
-// unconfirmed too, and plotStyle.circles is the next candidate if its dots
-// render wrong.
+// color.new(color.orange, 50) keeps orange's RGB untouched and sets alpha to
+// 50 - already confirmed compiling as color.new(color.yellow, 50). IB Mid was
+// plotStyle.scatter (dots); switched to a plain line since no dashed/dotted
+// plot() line style is documented or verified - only hline() has
+// hlineStyle.dotted, and it needs a compile-time constant price, which ibMid
+// is not (a static var reassigned once a day), so that route stays closed.
 //
-// A right-axis text badge like "pHigh"/"pwLow" (title instead of a price
-// number) is not attempted here. That styling is very likely hline()-only,
-// and hline()'s price argument must be a compile-time constant in Pine (and
-// presumably here) - ibHigh/ibMid/ibLow are static vars reassigned every bar,
-// which is exactly the "series" type Pine's hline() rejects. Forcing it risks
-// burning a compile attempt for a near-certain failure (three consecutive
-// compile warnings trigger a 1-hour editor ban). plot()'s title= is already
-// set below; if GoCharting auto-labels flat reference lines that way for some
-// other indicator, it should already apply here with no further change - if
-// it does not, this is a platform limitation, not something to retry.
-plot(inSession and not na(ibHigh) ? ibHigh : na, color=color.new(color.yellow, 50), linewidth=1, title="IB High")
-plot(inSession and not na(ibLow) ? ibLow : na, color=color.new(color.yellow, 50), linewidth=1, title="IB Low")
-plot(inSession and ibLocked and showMid == 1 ? ibMid : na, color=color.new(color.yellow, 50), linewidth=1, style=plotStyle.scatter, title="IB Mid")
+// Confirmed on-chart: plot()'s title= does not produce a right-axis price
+// badge like "pHigh"/"pwLow" in GoCharting, for this script or
+// orb_current_session.lipi. That auto-labelling is specific to certain
+// built-in studies, not something plot() triggers - a platform limitation,
+// not a script bug. Not retrying with hline()/label.new() for the reason
+// above; three consecutive compile warnings trigger a 1-hour editor ban.
+plot(inSession and not na(ibHigh) ? ibHigh : na, color=color.new(color.orange, 50), linewidth=1, title="IB High")
+plot(inSession and not na(ibLow) ? ibLow : na, color=color.new(color.orange, 50), linewidth=1, title="IB Low")
+plot(inSession and ibLocked and showMid == 1 ? ibMid : na, color=color.new(color.orange, 50), linewidth=1, title="IB Mid")
 
 // ==== BREAKOUT CONDITIONS (FIRST OCCURRENCE ONLY) ====
 longBreak = inSession and ibLocked and not longTaken and talib.crossover(close, ibHigh)
