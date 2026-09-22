@@ -502,7 +502,19 @@ def _finalise(p: Position) -> Position:
 
 
 def _unmatched_position(order_id: str, f: dict) -> Position:
-    """A broker fill the engine never asked for: manual trade, or auto square-off."""
+    """A broker fill the engine never asked for: manual trade, or auto square-off.
+
+    `day` is derived from the fill's own broker timestamp, not hardcoded to `date.min` -
+    every caller (eod_review.py's check_trade_ledger, weekly_review.py's per-day buckets)
+    filters positions with `p.day == <the day being reviewed>` before deciding whether an
+    unmatched fill is today's problem. `date.min` made that filter permanently False, so a
+    genuine same-day unmatched fill could never trip the regression check, and pooling every
+    tradebook snapshot ever taken (load_snapshots() is not date-scoped) meant every PRIOR
+    day's already-reconciled fills silently re-appeared as "unmatched" in every later day's
+    report once more than one snapshot file existed on disk (confirmed 2026-09-22: 13 of
+    2026-09-21's fills showed up as unmatched in the 2026-09-22 ledger report).
+    """
+    fill_day = _parse_ts(f.get("timestamp"))
     leg = Leg(
         kind="EXIT",
         at=None,
@@ -518,7 +530,7 @@ def _unmatched_position(order_id: str, f: dict) -> Position:
     return Position(
         strategy="",
         symbol=f.get("symbol", ""),
-        day=date.min,
+        day=fill_day.date() if fill_day else date.min,
         direction=1,
         entry=leg,
         flags=[FLAG_UNMATCHED_FILL],

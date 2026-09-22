@@ -4744,3 +4744,64 @@ of commit status. The lock-staleness fix (`eod.sh`) remains valid, independent h
 was not, on its own, what was blocking 09-16-18 specifically. Verified with
 `test_analysis_main_snapshot.py` (3 tests: success sends `apikey`, a 400 raises with the real
 status/body, a non-JSON error body doesn't crash) and the full suite.
+
+## EOD Review (2026-09-22): Two Bugs, Both in the Ledger's Handling of Partial Exits
+
+The 2026-09-22 EOD report showed "broker fills the engine never sent: 13 <-- investigate" and a
+[FAIL] reconciliation mismatch: engine (`trades.db`) -439.15 over 5 trades, broker -276.97, diff
+-162.18. Both traced back to how a partial-exit leg is dated and persisted - two separate bugs,
+not one.
+
+**Bug 1 - `_unmatched_position()` hardcoded `day=date.min`.** `load_fills(load_snapshots())`
+pools EVERY tradebook snapshot file ever captured (not scoped to `--since`), by design - it is how
+`weekly_review.py` gets multi-day fills. The three callers that need a single day's view
+(`__main__.py`'s markdown report, `eod_review.py`'s `check_trade_ledger` regression check,
+`weekly_review.py`'s per-day buckets) all defend against that by filtering `p.day == target`
+downstream. But `ledger._unmatched_position()` always set `day=date.min` regardless of the fill's
+own timestamp, so `p.day == target` could never be true for an unmatched fill - not today's, not
+any day's. Confirmed: with only `tradebook_2026-09-21.json` (13 fills) and
+`tradebook_2026-09-22.json` (10 fills) on disk, all 13 of 2026-09-21's already-reconciled fills
+re-appeared as "unmatched" in the 2026-09-22 report, because 2026-09-21 wasn't in that day's
+engine events (`--since 2026-09-22`) but was still in the pooled fills. The regression check
+itself never failed on this (its `p.day == target` filter silently ate every unmatched-fill
+Position, real or stale), which is the more serious half of this bug: a genuine same-day
+"broker filled something the engine never sent" could never have tripped the automated check.
+Fix: `_unmatched_position()` now parses `day` from the fill's own broker timestamp
+(`f["timestamp"]`), falling back to `date.min` only when unparseable. `__main__.py`'s `main()`
+also now filters `positions` to `p.day >= since` before building the report, so a day-scoped
+report doesn't display stale prior-day noise even before any regression-check filtering happens.
+
+**Bug 2 - a partial-exit leg's `trades.db` row silently drops its own pnl.** Row-level check (per
+the `/eod` skill's step 2): INFY's entry (294 @ 1028.6, order `26092224377768`) closed in two
+legs, 88 @ ~1026.8 (TP1, order `26092281366297`) then 206 @ 1027.5 (order `26092204744596`).
+The 206-share leg's row carried `context={"pnl": 384.99..., "exit_types": ["TP1"]}` correctly -
+it went through `book_close()` (this was the FULL exit, closing the position). The 88-share leg's
+row carried `fill_price=NULL, context={}` - it went through `main.py`'s `_handle_exit_locked`'s
+plain `save(signal, exit_order, trade_result)` call, which is (by design, per the comment already
+there) the only row ever written for a partial leg. That save() persists `signal.context` (the
+raw TP-HIT alert's own context - empty by construction) and `trade_result.fill_price` (only ever
+set for ENTRY orders in `main.py`, never for exits). The partial leg's real economics -
+`pnl_delta` from `_book_realised_pnl_delta()`, already computed and used for the Telegram partial-
+exit notification and `pos.realized_pnl` - were never attached to the persisted row at all. Net
+effect: any strategy using multi-TP partial exits (BREAKOUT, ORB, RSI-TP-MR's tp_levels config)
+undercounts its own `trades.db`-derived P&L total by every partial leg's pnl, every day, which is
+a real and recurring contributor to reconciliation "gaps" previously chalked up to
+brokerage/slippage. Fix: `_book_exit_result()` in `main.py` now sets
+`trade_result.fill_price = approx_exit_price` (the same TP-price approximation `book_close()`
+already uses for a full exit) and `signal.context = {"pnl": pnl_delta, "exit_types": [tp_level or
+"TP"]}` right before the partial-exit branch returns, so the trailing `save()` persists the real
+numbers instead of a blank stub.
+
+Not fixed, and out of scope for this pass: re-deriving 2026-09-22's own P&L totals from the
+corrected accounting (the day's `trades.db` rows are historical now; the fix only prevents this
+from recurring). The 24 "OpenAlgo app error" FAIL for 2026-09-22 was read and classified per the
+skill's known-benign pattern (exact-N-repeated synthetic scheduler-healthcheck messages clustered
+at 01:15 IST, none during market hours) plus the already-documented sandbox fund-release quirk
+(`project_sandbox_pnl_undercount_limitation`) at 12:20/15:15 IST, both exactly matching prior
+days' confirmed-benign classifications - nothing new there.
+
+Two regression tests added: `test_analysis_ledger.py`'s
+`test_unmatched_fill_is_dated_from_the_fill_itself_not_date_min` and
+`test_a_prior_days_already_reconciled_fill_does_not_pollute_a_later_days_review` (Bug 1);
+`test_main_partial_exit.py`'s `test_tp1_partial_exit_row_carries_its_own_pnl_and_fill_price`
+(Bug 2). Full suite (1,637 tests) passes.

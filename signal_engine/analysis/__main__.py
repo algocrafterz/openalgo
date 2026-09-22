@@ -253,6 +253,12 @@ def main() -> None:
     fills = load_fills(load_snapshots())
     print(f"engine events: {len(events)}   broker orders with fills: {len(fills)}")
     positions = build_ledger(events, fills)
+    if since:
+        # load_snapshots() pools every tradebook file ever captured, not just the requested
+        # window - an UNMATCHED_FILL position now carries the broker fill's own date (see
+        # ledger._unmatched_position), so this drops prior days' already-reconciled fills
+        # instead of re-flagging them as "investigate" in every later day's report.
+        positions = [p for p in positions if p.day >= since]
     declined = load_declined(db_path=args.db, since=since)
     report(positions, show_positions=args.positions)
     report_by_strategy(positions, declined)

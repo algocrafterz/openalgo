@@ -21,6 +21,34 @@ WHAT STOCKKHOJ DOES NOT SPECIFY (each is an input here, not a constant)
     - how the reversal is confirmed (a specific candle shape)            -> close_position_pct
     - the stop and target                                                -> stop_mode, tp_r
     - what "uptrend" means precisely                                     -> ema_mid/ema_slow alignment
+    - whether the run-up must have consolidated before the pullback,
+      rather than diving straight from new-high to dip                  -> require_base, base_lookback_bars,
+                                                                            base_max_range_pct
+    - whether an already-extended move should be excluded               -> max_ext_pct
+
+FOLDED IN FROM signal_engine/pinescripts/ideas/ideas-evaluated.txt, idea #4 (9/21 EMA cross + base +
+pullback + defend + breakout, reviewed 2026-09-22)
+    That idea's own thesis is that an EMA cross alone is not tradeable - what separates its
+    "valid setup" example from its two "skip" examples is (a) a tight base/consolidation
+    forming after the move and before the pullback, and (b) the move not having already run
+    too far before the pullback (its "second cross - too late" example is +37% run-up before
+    the entry trigger, all the upside gone). Both are directly applicable here since this
+    strategy already has the identical shape (extension -> pullback -> reversal) with neither
+    filter: `require_base`/`base_lookback_bars`/`base_max_range_pct` add the consolidation
+    check, `max_ext_pct` caps the extension so an already-exhausted move is excluded. Both
+    default OFF/uncapped (no behavior change to the shipped config) so the ablation, once this
+    strategy is finally backtested, can show whether they help.
+
+REGIME FILTER, ADDED 2026-09-22 AFTER THE FIRST BACKTEST
+    The first run confirmed the risk this doc's "Known risks" section named: shipped
+    defaults are significantly profitable IS (2019-12 to 2023-12, the post-COVID bull
+    run) and significantly LOSING OOS (2023-12 onward) - a genuine regime split, not
+    noise (both windows individually clear |t|>1.97). `use_regime` reuses the same
+    Nifty-50-vs-its-50-EMA gate `ib_extension.py` already ships (`load_regime()`,
+    imported rather than duplicated) so a long is only taken when the index itself is
+    not in a KNOWN downtrend. Default `False` - no change to the already-tested shipped
+    baseline - so the next ablation can show whether it actually narrows the IS/OOS gap
+    rather than just being assumed to.
 
 WHY IT MIGHT COMPLEMENT THE EXISTING BOOK
     RSI2 mean-reversion (signal_engine/pinescripts/swing/rsi-tp-mr/) buys weakness
@@ -43,6 +71,7 @@ import numpy as np
 import pandas as pd
 
 from signal_engine.backtest import indicators as ind
+from signal_engine.backtest.strategies.ib_extension import load_regime
 from signal_engine.backtest.strategies.swing_base import SwingStrategy
 from signal_engine.backtest.types import Ctx, EntrySignal, Position
 
@@ -58,6 +87,14 @@ class EmaPullbackParams:
     # ---- "was extended" filter ------------------------------------------
     ext_pct: float = 3.0                # close must have cleared EMA20 by this % ...
     lookback_bars: int = 10             # ... at least once in the N bars BEFORE the pullback
+    max_ext_pct: float = 0.0            # idea #4: cap the run-up so an already-exhausted move
+                                         # (e.g. +37% before the pullback) is excluded; 0 = uncapped
+
+    # ---- "tight base" filter (idea #4: cross -> base -> pullback -> defend -> breakout) ----
+    require_base: bool = False          # off by default - no behavior change until ablated in
+    base_lookback_bars: int = 5         # sessions immediately before the pullback bar ...
+    base_max_range_pct: float = 4.0     # ... whose High-Low range (as % of EMA20) must stay
+                                         # within this band for the run to count as "based"
 
     # ---- pullback + reversal bar -----------------------------------------
     touch_band_pct: float = 1.0         # low must come within this % ABOVE EMA20
@@ -74,11 +111,22 @@ class EmaPullbackParams:
     # ---- filters -----------------------------------------------------
     min_price: float = 50.0             # penny prints make the % bands meaningless
 
+    # ---- regime gate (added after the first backtest confirmed a bull-market bet) ----
+    use_regime: bool = False            # off = shipped-baseline behavior, unchanged
+
 
 class EmaPullback(SwingStrategy):
     name = "EMA-20 pullback continuation (stockkhoj.in swing scan)"
     tag = "EMAPB"
     pine = ""  # Python-only candidate; no PineScript port exists (or may ever be needed)
+
+    def __init__(self, regime: pd.Series | None = None) -> None:
+        # Same Nifty-50-vs-50-EMA regime `ib_extension.py` already loads, reused rather
+        # than duplicated. Loaded once per instance regardless of p.use_regime, same as
+        # IbExtension - `regime=<series>` stays available for a caller that wants to
+        # isolate the filter with a specific series; `p.use_regime=False` (the shipped
+        # default here) is the on/off switch actually used at entry time.
+        self.regime = load_regime() if regime is None else regime
 
     # ---- preparation -----------------------------------------------------
 
@@ -94,12 +142,23 @@ class EmaPullback(SwingStrategy):
         if p.require_fast_above_mid:
             uptrend &= ema_f > ema_m
 
-        extended = d["Close"] > ema_f * (1 + p.ext_pct / 100.0)
         # extension must predate the pullback bar itself: shift(1) drops today off the
         # window, then look back lookback_bars sessions before that.
-        was_extended = (
-            extended.shift(1).rolling(p.lookback_bars, min_periods=1).max().fillna(0).astype(bool)
+        ext_pct_in_window = (
+            ((d["Close"] - ema_f) / ema_f * 100.0)
+            .shift(1).rolling(p.lookback_bars, min_periods=1).max()
         )
+        was_extended = (ext_pct_in_window >= p.ext_pct).fillna(False)
+        too_extended = (p.max_ext_pct > 0) & (ext_pct_in_window > p.max_ext_pct).fillna(False)
+        extension_ok = was_extended & ~too_extended
+
+        # idea #4's "base": the base_lookback_bars sessions immediately BEFORE the pullback
+        # bar must have stayed inside a tight band, rather than running straight into the dip.
+        base_hh = d["High"].rolling(p.base_lookback_bars, min_periods=1).max()
+        base_ll = d["Low"].rolling(p.base_lookback_bars, min_periods=1).min()
+        base_width_pct = (base_hh - base_ll) / ema_f * 100.0
+        base_ok = (base_width_pct.shift(1) <= p.base_max_range_pct).fillna(False) if p.require_base \
+            else pd.Series(True, index=d.index)
 
         touched = (d["Low"] <= ema_f * (1 + p.touch_band_pct / 100.0)) & (
             d["Low"] >= ema_m * (1 - p.pullback_floor_pct / 100.0)
@@ -108,7 +167,7 @@ class EmaPullback(SwingStrategy):
         close_in_upper_range = (d["Close"] - d["Low"]) >= (p.close_position_pct / 100.0) * day_range
         green_reversal = (d["Close"] > d["Open"]) & (d["Close"] > ema_f) & close_in_upper_range.fillna(False)
 
-        pullback_bar = uptrend & was_extended & touched & green_reversal
+        pullback_bar = uptrend & extension_ok & base_ok & touched & green_reversal
 
         d["ema_f"] = ema_f
         d["ema_m"] = ema_m
@@ -117,13 +176,23 @@ class EmaPullback(SwingStrategy):
         d["p_signal"] = pullback_bar.shift(1, fill_value=False)
         d["p_low"] = d["Low"].shift(1)
         d["p_ema_m"] = ema_m.shift(1)
+
+        # load_regime() already shifts by one day (Nifty regime as of D-1's close), so
+        # mapping it onto day D's bar is itself the no-lookahead read entry_at_open needs.
+        if self.regime is not None:
+            r = self.regime.copy()
+            r.index = pd.to_datetime(r.index).date
+            d["regime"] = d["day"].map(r).fillna(0.0)      # +1 bull, -1 bear, 0 unknown
+        else:
+            d["regime"] = 0.0
+
         return d.dropna(subset=["ema_f", "ema_m", "ema_s"])
 
     def prepare_key(self, p: EmaPullbackParams) -> tuple:
         return (
             p.ema_fast, p.ema_mid, p.ema_slow, p.require_fast_above_mid,
-            p.ext_pct, p.lookback_bars, p.touch_band_pct, p.pullback_floor_pct,
-            p.close_position_pct,
+            p.ext_pct, p.lookback_bars, p.max_ext_pct, p.touch_band_pct, p.pullback_floor_pct,
+            p.close_position_pct, p.require_base, p.base_lookback_bars, p.base_max_range_pct,
         )
 
     # ---- entry -------------------------------------------------------------
@@ -132,6 +201,10 @@ class EmaPullback(SwingStrategy):
         if direction != 1:
             return None  # long-only: no cash-market swing shorting (T+1 settlement)
         if i < 1 or not c["p_signal"][i]:
+            return None
+        # 0 = unknown regime (prepare()'s fillna(0.0), or a date load_regime() has no
+        # coverage for) and must PASS, not block - only a KNOWN bearish regime rejects.
+        if p.use_regime and c["regime"][i] == -1.0:
             return None
 
         op = c["Open"][i]

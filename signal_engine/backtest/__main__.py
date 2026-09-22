@@ -45,6 +45,7 @@ def _register():
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.ibs_meanrev import IbsMeanRev, IbsMeanRevParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
+    from signal_engine.backtest.strategies.liquidity_sweep import LiquiditySweep, LiquiditySweepParams
     from signal_engine.backtest.strategies.nr_breakout import NrBreakout, NrBreakoutParams
     from signal_engine.backtest.strategies.open_drive import OpenDrive, OpenDriveParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
@@ -62,6 +63,7 @@ def _register():
     REGISTRY["ib_extension"] = (IbExtension, IbExtParams, "intraday")
     REGISTRY["ibs_meanrev"] = (IbsMeanRev, IbsMeanRevParams, "swing")
     REGISTRY["key_level"] = (KeyLevel, KeyLevelParams, "intraday")
+    REGISTRY["liquidity_sweep"] = (LiquiditySweep, LiquiditySweepParams, "swing")
     REGISTRY["nr_breakout"] = (NrBreakout, NrBreakoutParams, "intraday")
     REGISTRY["open_drive"] = (OpenDrive, OpenDriveParams, "intraday")
     REGISTRY["orb"] = (Orb, OrbParams, "intraday")

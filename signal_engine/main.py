@@ -598,6 +598,17 @@ async def _book_exit_result(
     tracker.record_exit(
         pnl=pnl_delta, is_partial=True, new_realised_pnl=current_realised,
     )
+    # A partial leg's row is written by the plain save() below, not book_close() - it is
+    # the ONLY persisted row for this leg (see the comment in _handle_exit_locked). Without
+    # this, that row carries the raw TP-HIT alert's own context (empty) and result.fill_price
+    # (never set for exit orders - only entries fetch it), so trades.db silently drops this
+    # leg's pnl entirely. Confirmed 2026-09-22: INFY's 88-share partial leg (order
+    # 26092281366297) landed with fill_price=NULL, context={} - the EOD ledger's own
+    # engine-side P&L total then undercounted the round trip by this leg's pnl, which is
+    # exactly the gap the day's reconciliation check flagged. Mirrors what book_close()
+    # already attaches for a full exit (exit_price=approx_exit_price, pnl=total_pnl).
+    trade_result.fill_price = approx_exit_price
+    signal.context = {"pnl": pnl_delta, "exit_types": [tp_level or "TP"]}
     return True
 
 

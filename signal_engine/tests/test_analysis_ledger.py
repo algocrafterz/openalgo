@@ -7,7 +7,7 @@ mode observed in the live audit trail or the Telegram export.
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -159,6 +159,42 @@ def test_broker_fill_the_engine_never_sent(tmp_path):
     pos = build_ledger(load_engine_events(db_path=db),
                        load_fills([_trade("E1", 10, 100.0), _trade("ZZ9", 10, 99.0)]))
     assert any(FLAG_UNMATCHED_FILL in p.flags for p in pos)
+
+
+def test_unmatched_fill_is_dated_from_the_fill_itself_not_date_min(tmp_path):
+    """2026-09-22 EOD bug: `_unmatched_position` hardcoded `day=date.min`, so
+    `p.day == target` (used by eod_review.py's check_trade_ledger and weekly_review.py's
+    per-day buckets) could never match - a genuine same-day unmatched fill could never trip
+    the regression check. Must carry the broker fill's own date instead.
+    """
+    db = _make_db(tmp_path, [_ev("LONG", oid="E1", at="2026-09-22T09:50:00+05:30")])
+    fills = load_fills([
+        _trade("E1", 10, 100.0),
+        {**_trade("ZZ9", 5, 1026.8), "timestamp": "2026-09-22 10:25:07"},
+    ])
+    pos = build_ledger(load_engine_events(db_path=db), fills)
+    unmatched = [p for p in pos if FLAG_UNMATCHED_FILL in p.flags]
+    assert len(unmatched) == 1
+    assert unmatched[0].day == date(2026, 9, 22)
+
+
+def test_a_prior_days_already_reconciled_fill_does_not_pollute_a_later_days_review(tmp_path):
+    """load_snapshots() pools every tradebook file ever captured, not just the day under
+    review. Confirmed 2026-09-22: 13 fills from 2026-09-21's snapshot (already reconciled in
+    that day's own report) showed up as "broker fills the engine never sent" in the
+    2026-09-22 ledger, because 2026-09-21 wasn't in that day's engine events but was still
+    in the pooled fills. Filtering positions to `p.day == target` (what the day-scoped
+    callers already do) must exclude them once `day` is derived correctly.
+    """
+    db = _make_db(tmp_path, [_ev("LONG", oid="E1", at="2026-09-22T09:50:00+05:30")])
+    fills = load_fills([
+        _trade("E1", 10, 100.0),
+        {**_trade("YESTERDAY", 13, 415.65), "timestamp": "2026-09-21 15:10:00"},
+    ])
+    pos = build_ledger(load_engine_events(db_path=db, since=date(2026, 9, 22)), fills)
+    target = date(2026, 9, 22)
+    unmatched_today = [p for p in pos if p.day == target and FLAG_UNMATCHED_FILL in p.flags]
+    assert unmatched_today == []
 
 
 def test_exit_without_a_preceding_entry(tmp_path):
