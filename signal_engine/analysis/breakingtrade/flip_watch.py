@@ -44,10 +44,16 @@ _EXPECTED_DIR = {"LONG": "up", "SHORT": "down"}
 _EXPECTED_TAIL = {"LONG": "buy_tail", "SHORT": "sell_tail"}
 
 
-def _open_positions(today: str) -> dict:
-    """{symbol: {direction, entry, sl, tp, executed_at}} for BREAKINGTRADE symbols still open
+def _open_positions(today: str, strategy: str = STRATEGY) -> dict:
+    """{symbol: {direction, entry, sl, tp, executed_at}} for `strategy` symbols still open
     today - the latest SUCCESS row per symbol is LONG/SHORT (an EXIT row, if present, is always
-    the true latest and marks the symbol closed)."""
+    the true latest and marks the symbol closed).
+
+    `strategy` defaults to this module's own BREAKINGTRADE - flip_watch.check() (alert-only
+    structure-flip warnings) stays scoped to that by default, unchanged. tp_watch.py passes
+    BREAKINGTRADE-WATCHLIST explicitly too, so staged-TP monitoring covers both strategies the
+    scanner trades - see tp_watch.py's module docstring.
+    """
     try:
         conn = sqlite3.connect(_TRADES_DB, timeout=10)
     except sqlite3.Error:
@@ -60,7 +66,7 @@ def _open_positions(today: str) -> dict:
             WHERE upper(strategy) = ? AND status = 'SUCCESS' AND date(executed_at) = ?
             ORDER BY id
             """,
-            (STRATEGY, today),
+            (strategy.upper(), today),
         ).fetchall()
     except sqlite3.OperationalError:
         # trades.db not created yet (nothing has ever traded) - nothing open.

@@ -90,6 +90,13 @@ _ADDED_COLUMNS = (
     # structure-flip warning) link straight back to the exact message a symbol was first
     # called on, instead of making the reader search the channel by eye.
     ("message_id", "INTEGER"),
+    # 2026-09-23: BREAKINGTRADE and BREAKINGTRADE-WATCHLIST can both be open on the SAME
+    # symbol at once (confirmed real: both fired on BANDHANBNK on 2026-09-23) - without this,
+    # tp_watch.py's _last_level_hit() query (kind='tp_hit' AND symbol=?) can't tell which
+    # strategy's staged-TP progress a row belongs to, so the two positions' TP1/TP1.5/TP2
+    # state would collide. Nullable: existing rows and any alert kind that isn't per-strategy
+    # (health, btst, ...) simply leave it unset.
+    ("strategy", "TEXT"),
 )
 
 
@@ -382,6 +389,7 @@ def record(
     symbol: str = None,
     direction: str = None,
     scan: str = None,
+    strategy: str = None,
     deliver: bool = True,
     delivered: bool = False,
     message_id: int | None = None,
@@ -411,7 +419,7 @@ def record(
     with _connect() as conn:
         conn.execute(
             "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, "
-            "delivered, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "delivered, message_id, strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 (when or datetime.now()).replace(microsecond=0).isoformat(sep=" "),
                 kind,
@@ -421,6 +429,7 @@ def record(
                 message,
                 int(delivered),
                 message_id,
+                strategy,
             ),
         )
     return delivered

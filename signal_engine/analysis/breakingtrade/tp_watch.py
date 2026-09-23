@@ -3,15 +3,18 @@ runner-SL-trailing mechanism ORB/BREAKOUT already use, instead of a separate one
 
 WHY THIS EXISTS
 
-trigger.plan_trade() computes three target levels (1.0R/1.5R/2.0R of the IB range) and a
-day-type-aware split, but alert_trade_signal() only ever sent the first level as a flat TP -
-the rest was computed and discarded, so every BreakingTrade position exited 100% at TP1 with
-no partial booking and no SL trailing as price ran. The engine already has real, hardened
-infrastructure for exactly this - staged partial exits via ExitQtyPct, and a runner stop that
-ratchets to each TP level hit (main.py's _resolve_exit_qty / compute_next_tp / TP_LEVEL_R
-multipliers) - built for ORB/BREAKOUT, which are PineScript strategies watching every tick on
-their own chart and firing a "TP HIT" alert the instant a level crosses. This module is the
-BreakingTrade-side equivalent of that PineScript alert, driven from Python instead.
+trigger.plan_trade() / trigger.plan_trade_watchlist() both compute the same three target levels
+(1.0R/1.5R/2.0R of the IB range) and a day-type-aware split, but alert_trade_signal() only ever
+sent the first level as a flat TP - the rest was computed and discarded, so every BreakingTrade
+/ BreakingTrade-Watchlist position exited 100% at TP1 with no partial booking and no SL trailing
+as price ran. The engine already has real, hardened infrastructure for exactly this - staged
+partial exits via ExitQtyPct, and a runner stop that ratchets to each TP level hit (main.py's
+_resolve_exit_qty / compute_next_tp / TP_LEVEL_R multipliers) - built for ORB/BREAKOUT, which
+are PineScript strategies watching every tick on their own chart and firing a "TP HIT" alert
+the instant a level crosses. This module is the BreakingTrade-side equivalent of that PineScript
+alert, driven from Python instead - for BOTH BreakingTrade strategies (see _WATCHED_STRATEGIES
+below; BREAKINGTRADE-WATCHLIST was excluded until 2026-09-23, meaning those positions had no
+way to exit at their own stated target at all - see _WATCHED_STRATEGIES' comment).
 
 CADENCE: NOT TIED TO THE SCANNER'S 5-15 MINUTE SCHEDULE
 check() needs nothing from a scan poll - only an open position (trades.db) and a live quote
@@ -40,7 +43,17 @@ from datetime import datetime
 
 from signal_engine.analysis.breakingtrade import alerts, eod_summary, flip_watch
 
-STRATEGY = "BREAKINGTRADE"
+# Both strategies the scanner trades, paired with the alert `kind` their TP-hit exit routes
+# to - the same (strategy, channel) pairing __main__.py's _emit_trade_signals() uses for their
+# ENTRY signals, kept in sync with alerts.py's _CHANNEL_GROUP_BY_KIND. Originally BREAKINGTRADE
+# only: BREAKINGTRADE-WATCHLIST positions had no mechanism to ever report a TP hit, so they
+# could only close via SL, the no-progress stall logic, or the scheduled time-exit - never a
+# clean exit at the price their own signal promised. Confirmed 2026-09-23, fixed by watching
+# both here instead of just one.
+_WATCHED_STRATEGIES = (
+    ("BREAKINGTRADE", "trade_signal"),
+    ("BREAKINGTRADE-WATCHLIST", "trade_signal_watchlist"),
+)
 
 # Same R-multiples as main.py's _TP_LEVEL_R_MULTIPLIERS (TP1/TP1.5/TP2 subset - BreakingTrade's
 # own ladder, trigger.TARGET_IB_MULTIPLES, is exactly (1.0, 1.5, 2.0), so it lines up with the
@@ -88,10 +101,14 @@ def _exit_qty_pct_of_remaining(split: tuple, level_index: int) -> float:
     return min(100.0, (split[level_index] / remaining_before) * 100.0)
 
 
-def _last_level_hit(symbol: str, since: str) -> str | None:
+def _last_level_hit(symbol: str, since: str, strategy: str) -> str | None:
     """Highest TP level already fired for this position's current entry - read from our own
     delivery record (alerts table), not trades.db, since trades.db has no dedicated tp_level
     column to query against.
+
+    Filtered by `strategy` too, not just `symbol`: BREAKINGTRADE and BREAKINGTRADE-WATCHLIST
+    can both be open on the same symbol at once (confirmed real: BANDHANBNK on 2026-09-23) -
+    without this, the two positions' TP1/TP1.5/TP2 progress would be read as one shared state.
 
     Only DELIVERED rows count as "hit". If Telegram delivery ever fails, the engine never
     received the exit instruction - counting the attempt as done anyway would dedup out any
@@ -108,9 +125,9 @@ def _last_level_hit(symbol: str, since: str) -> str | None:
     # so against a live position that is half the remainder exited, five times over.
     with alerts._connect() as conn:
         rows = conn.execute(
-            f"SELECT scan FROM alerts WHERE kind = 'tp_hit' AND symbol = ? "
+            f"SELECT scan FROM alerts WHERE kind = 'tp_hit' AND symbol = ? AND strategy = ? "
             f"AND {alerts.SINCE_CLAUSE} AND delivered = 1",
-            (symbol, since),
+            (symbol, strategy, since),
         ).fetchall()
     hit = {r[0] for r in rows}
     last = None
@@ -120,17 +137,24 @@ def _last_level_hit(symbol: str, since: str) -> str | None:
     return last
 
 
-def _send_tp_hit(symbol: str, direction: str, price: float, level: str, exit_qty_pct: float) -> None:
+def _send_tp_hit(
+    symbol: str, direction: str, price: float, level: str, exit_qty_pct: float,
+    strategy: str, kind: str,
+) -> None:
     """Canonical EXIT alert, the exact shape normalizer.py already produces for ORB's PineScript
     TP-HIT alerts (Entry/SL as 0.0 placeholders - the engine looks up the real position from its
     own tracker, not from this message) - so no special case is needed anywhere downstream.
+
+    Sent on `kind` (trade_signal for BREAKINGTRADE, trade_signal_watchlist for
+    BREAKINGTRADE-WATCHLIST) so the exit lands on the SAME channel its entry did - matching
+    every other per-strategy channel split in this module (see alerts.py's docstring).
 
     Always records the attempt (delivered or not) - see _last_level_hit for why the delivered
     flag, not the record itself, is what gates a retry.
     """
     message = "\n".join(
         [
-            f"{STRATEGY} EXIT",
+            f"{strategy} EXIT",
             f"Symbol: {symbol}",
             "Entry: 0.0",
             "SL: 0.0",
@@ -139,39 +163,39 @@ def _send_tp_hit(symbol: str, direction: str, price: float, level: str, exit_qty
             f"ExitQtyPct: {exit_qty_pct:.1f}",
         ]
     )
-    delivered, message_id = alerts.send(message, "trade_signal")
+    delivered, message_id = alerts.send(message, kind)
     alerts.record(
-        "tp_hit", message, symbol=symbol, direction=direction, scan=level,
+        "tp_hit", message, symbol=symbol, direction=direction, scan=level, strategy=strategy,
         deliver=False, delivered=delivered, message_id=message_id,
     )
 
 
 def check(captured_at: datetime) -> int:
-    """For every open BreakingTrade position, check whether price has reached its next staged
-    target; if so, send the exit alert that drives a real partial (or final) exit through the
-    engine's existing multi-TP pipeline. Returns how many exit alerts were sent this poll."""
-    positions = flip_watch._open_positions(captured_at.strftime("%Y-%m-%d"))
-    if not positions:
-        return 0
-
+    """For every open BreakingTrade / BreakingTrade-Watchlist position, check whether price has
+    reached its next staged target; if so, send the exit alert that drives a real partial (or
+    final) exit through the engine's existing multi-TP pipeline. Returns how many exit alerts
+    were sent this poll, across both strategies."""
+    today = captured_at.strftime("%Y-%m-%d")
     sent = 0
-    for symbol, pos in positions.items():
-        last_level = _last_level_hit(symbol, pos["executed_at"])
-        level = _next_level(last_level)
-        if level is None:
-            continue  # already booked out at the final target
+    for strategy, kind in _WATCHED_STRATEGIES:
+        positions = flip_watch._open_positions(today, strategy=strategy)
+        for symbol, pos in positions.items():
+            last_level = _last_level_hit(symbol, pos["executed_at"], strategy)
+            level = _next_level(last_level)
+            if level is None:
+                continue  # already booked out at the final target
 
-        ltp = eod_summary.fetch_ltp(symbol)
-        if ltp is None:
-            continue
+            ltp = eod_summary.fetch_ltp(symbol)
+            if ltp is None:
+                continue
 
-        expected = _expected_price(pos["entry"], pos["tp"], level, pos["direction"])
-        crossed = ltp >= expected if pos["direction"] == "LONG" else ltp <= expected
-        if not crossed:
-            continue
+            expected = _expected_price(pos["entry"], pos["tp"], level, pos["direction"])
+            crossed = ltp >= expected if pos["direction"] == "LONG" else ltp <= expected
+            if not crossed:
+                continue
 
-        level_index = _LEVEL_SEQUENCE.index(level)
-        exit_qty_pct = _exit_qty_pct_of_remaining(DEFAULT_SPLIT, level_index)
-        _send_tp_hit(symbol, pos["direction"], ltp, level, exit_qty_pct)
-        sent += 1
+            level_index = _LEVEL_SEQUENCE.index(level)
+            exit_qty_pct = _exit_qty_pct_of_remaining(DEFAULT_SPLIT, level_index)
+            _send_tp_hit(symbol, pos["direction"], ltp, level, exit_qty_pct, strategy, kind)
+            sent += 1
     return sent

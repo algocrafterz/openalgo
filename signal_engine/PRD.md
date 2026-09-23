@@ -4900,3 +4900,54 @@ Three regression tests added to `test_normalizer.py`'s new `TestPhaseTagStrippin
 (`test_strips_paper_tag_and_parses_correctly`, `test_strips_live_tag`,
 `test_a_bare_bracketed_strategy_name_is_not_mistaken_for_a_phase_tag`). Full suite
 (1,643 tests) passes.
+
+## BREAKINGTRADE-WATCHLIST Had No Way to Exit at Its Own Take-Profit (2026-09-23)
+
+Full audit requested of every message type sent to the BreakingTrade channels, to confirm each
+has what it needs to place a paper trade in OpenAlgo. Entry signals for both strategies were
+already confirmed fixed by the phase-tag fix above (re-verified directly, including
+`tp_watch.py`'s TP-hit EXIT message, which goes through the same tagged `send()` path). Every
+other alert kind on the same channel (`structure_flip`, `intraday_transition`, `health`, `btst`)
+was confirmed to safely fail parsing by design - their first line deliberately can't collide
+with `STRATEGY LONG/SHORT/EXIT`, per `alerts.py`'s own docstrings.
+
+**Found while tracing the exit side:** `tp_watch.py` (the module that watches an open position's
+price and fires the "take profit now" alert that actually drives the exit - see `main.py`'s own
+comment, "no TP or EXIT alert can arrive... the engine has no way to be told to close") was
+hardcoded to `STRATEGY = "BREAKINGTRADE"` only. `flip_watch._open_positions()`, which it reused,
+filtered `WHERE upper(strategy) = 'BREAKINGTRADE'` with no way to ask for the other strategy.
+Both `trigger.plan_trade()` and `trigger.plan_trade_watchlist()` compute the identical 1.0R/1.5R/
+2.0R target ladder (`target_levels()`), so BREAKINGTRADE-WATCHLIST positions had real staged
+targets - just nothing that would ever tell the engine one had been reached. In practice this
+didn't leave a position stuck forever (the no-progress stall logic can still lock in partial
+profit, and the scheduled time-exit closes it regardless) but it meant a WATCHLIST position could
+never book a clean exit *at* the price its own signal promised - only ever via SL, a stall-driven
+partial lock, or a forced time-exit.
+
+Fix:
+- `flip_watch._open_positions(today, strategy=...)` takes an explicit strategy now (default
+  unchanged, so `flip_watch.check()`'s own alert-only structure-flip warnings stay
+  BREAKINGTRADE-scoped, per that module's own "Day 1 of paper week, no measurement yet" charter -
+  not extended to WATCHLIST since nobody asked for that and it isn't an auto-exit anyway).
+- `tp_watch.py` now iterates `_WATCHED_STRATEGIES = (("BREAKINGTRADE", "trade_signal"),
+  ("BREAKINGTRADE-WATCHLIST", "trade_signal_watchlist"))`, watching both and sending each
+  strategy's TP-hit exit through its own channel `kind` - matching how their entries are already
+  routed, so the exit lands on the same channel a trader watching either strategy already reads.
+- `alerts.py`'s `alerts` table gained a `strategy` column (`_ADDED_COLUMNS`, the same
+  add-if-missing idiom `message_id` already uses). Needed because BREAKINGTRADE and
+  BREAKINGTRADE-WATCHLIST can be open on the SAME symbol at once (confirmed real: both fired on
+  BANDHANBNK on 2026-09-23) - without it, `_last_level_hit()`'s dedup query (`symbol` alone) would
+  read the two positions' independent TP1/TP1.5/TP2 progress as one shared state.
+- Works unchanged in LIVE mode too, not just analyze: nothing here hardcodes the phase - `send()`
+  already resolves `trade_signal`/`trade_signal_watchlist` to whichever of the `-analyze`/`-live`
+  channel pair OpenAlgo is actually running as, the same plumbing entries already use. The LIVE
+  channels stay `enabled: false` in config.yaml until someone deliberately promotes them.
+
+Eight regression tests added/updated: `test_breakingtrade_tp_watch.py`'s new
+`TestBothStrategiesWatched` (a WATCHLIST position gets its own TP-hit alert; two strategies on
+one symbol progress independently; a WATCHLIST exit routes to the watchlist `send()` kind) and
+`TestMessageParsesCorrectly.test_watchlist_tp_hit_message_parses_too`;
+`test_tp_watch_dedupe.py`'s new `TestStrategyDisambiguation`; three existing test files
+(`test_breakingtrade_tp_watch.py`, `test_tp_watch_dedupe.py`, `test_alert_dedupe_timestamps.py`)
+updated for `_last_level_hit`/`_send_tp_hit`'s new required `strategy`/`kind` arguments. Full
+suite (1,648 tests) passes.

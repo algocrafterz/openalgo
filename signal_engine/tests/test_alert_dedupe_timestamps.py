@@ -28,15 +28,15 @@ def _tmp_store(tmp_path, monkeypatch):
     with alerts._connect() as conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS alerts (
             created_at TEXT, kind TEXT, symbol TEXT, direction TEXT, scan TEXT,
-            message TEXT, delivered INTEGER, message_id INTEGER)""")
+            message TEXT, delivered INTEGER, message_id INTEGER, strategy TEXT)""")
 
 
-def _record(kind, created_at, symbol="AXISBANK", scan="TP1", delivered=1):
+def _record(kind, created_at, symbol="AXISBANK", scan="TP1", delivered=1, strategy="BREAKINGTRADE"):
     with alerts._connect() as conn:
         conn.execute(
-            "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered)"
-            " VALUES (?, ?, ?, 'LONG', ?, '', ?)",
-            (created_at, kind, symbol, scan, delivered),
+            "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered, "
+            "strategy) VALUES (?, ?, ?, 'LONG', ?, '', ?, ?)",
+            (created_at, kind, symbol, scan, delivered, strategy),
         )
         conn.commit()
 
@@ -78,9 +78,9 @@ class TestEntryConfirmationFiresOnce:
 class TestTpLadderStillDedupes:
     def test_tp1_is_seen_so_the_ladder_advances(self):
         _record("tp_hit", ALERT_SPACE, scan="TP1")
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) == "TP1"
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") == "TP1"
         assert tp_watch._next_level("TP1") == "TP1.5"
 
     def test_an_undelivered_attempt_is_retried(self):
         _record("tp_hit", ALERT_SPACE, scan="TP1", delivered=0)
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) is None
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") is None

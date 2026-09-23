@@ -32,16 +32,16 @@ def store(tmp_path, monkeypatch):
     with alerts._connect() as conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS alerts (
             created_at TEXT, kind TEXT, symbol TEXT, direction TEXT, scan TEXT,
-            message TEXT, delivered INTEGER, message_id INTEGER)""")
+            message TEXT, delivered INTEGER, message_id INTEGER, strategy TEXT)""")
     return alerts
 
 
-def _record(alerts, created_at, level, delivered=1, symbol="AXISBANK"):
+def _record(alerts, created_at, level, delivered=1, symbol="AXISBANK", strategy="BREAKINGTRADE"):
     with alerts._connect() as conn:
         conn.execute(
-            "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered)"
-            " VALUES (?, 'tp_hit', ?, 'LONG', ?, '', ?)",
-            (created_at, symbol, level, delivered),
+            "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, delivered, "
+            "strategy) VALUES (?, 'tp_hit', ?, 'LONG', ?, '', ?, ?)",
+            (created_at, symbol, level, delivered, strategy),
         )
         conn.commit()
 
@@ -54,7 +54,7 @@ class TestLastLevelHitAcrossTimestampFormats:
     def test_a_space_separated_alert_matches_an_iso_entry_time(self, store):
         """The whole bug: these two describe the same day, three hours apart."""
         _record(store, ALERT_SPACE, "TP1")
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) == "TP1"
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") == "TP1"
 
     def test_an_alert_from_before_the_entry_is_still_excluded(self):
         """The filter has a real job - a previous position's TP must not count."""
@@ -62,35 +62,35 @@ class TestLastLevelHitAcrossTimestampFormats:
 
     def test_an_earlier_alert_is_ignored(self, store):
         _record(store, "2026-09-11 09:30:00", "TP1")
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) is None
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") is None
 
     def test_the_highest_level_wins(self, store):
         _record(store, ALERT_SPACE, "TP1")
         _record(store, "2026-09-11 14:55:00", "TP1.5")
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) == "TP1.5"
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") == "TP1.5"
 
     def test_an_undelivered_alert_does_not_count(self, store):
         """If Telegram never delivered it, the engine never got the exit instruction."""
         _record(store, ALERT_SPACE, "TP1", delivered=0)
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) is None
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") is None
 
     def test_another_symbol_does_not_count(self, store):
         _record(store, ALERT_SPACE, "TP1", symbol="SBIN")
-        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO) is None
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") is None
 
     def test_both_formats_work_for_the_entry_side_too(self, store):
         _record(store, ALERT_SPACE, "TP1")
-        assert tp_watch._last_level_hit("AXISBANK", "2026-09-11 11:46:43") == "TP1"
+        assert tp_watch._last_level_hit("AXISBANK", "2026-09-11 11:46:43", "BREAKINGTRADE") == "TP1"
 
     def test_an_unparseable_entry_time_does_not_crash(self, store):
         _record(store, ALERT_SPACE, "TP1")
-        tp_watch._last_level_hit("AXISBANK", "not-a-timestamp")
+        tp_watch._last_level_hit("AXISBANK", "not-a-timestamp", "BREAKINGTRADE")
 
 
 class TestTheLadderAdvances:
     def test_after_tp1_the_next_level_is_tp1_5(self, store):
         _record(store, ALERT_SPACE, "TP1")
-        last = tp_watch._last_level_hit("AXISBANK", ENTRY_ISO)
+        last = tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE")
         assert tp_watch._next_level(last) == "TP1.5"
 
     def test_after_the_final_level_nothing_more_is_sent(self, store):
@@ -98,5 +98,19 @@ class TestTheLadderAdvances:
                         ("2026-09-11 14:55:00", "TP1.5"),
                         ("2026-09-11 14:58:00", "TP2")):
             _record(store, ts, lvl)
-        last = tp_watch._last_level_hit("AXISBANK", ENTRY_ISO)
+        last = tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE")
         assert tp_watch._next_level(last) is None
+
+
+class TestStrategyDisambiguation:
+    """2026-09-23: BREAKINGTRADE and BREAKINGTRADE-WATCHLIST can both be open on the same
+    symbol at once (confirmed real: BANDHANBNK, 2026-09-23) - each must track its OWN TP
+    progress, not a shared one keyed by symbol alone."""
+
+    def test_two_strategies_on_the_same_symbol_track_independent_progress(self, store):
+        _record(store, ALERT_SPACE, "TP1", strategy="BREAKINGTRADE")
+        _record(store, ALERT_SPACE, "TP1", strategy="BREAKINGTRADE-WATCHLIST")
+        _record(store, "2026-09-11 14:55:00", "TP1.5", strategy="BREAKINGTRADE-WATCHLIST")
+
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE") == "TP1"
+        assert tp_watch._last_level_hit("AXISBANK", ENTRY_ISO, "BREAKINGTRADE-WATCHLIST") == "TP1.5"

@@ -55,6 +55,23 @@ def _open_long(symbol="TCS", entry=2283.1, sl=2270.0, tp1=2296.1, executed_at="2
     return entry, sl, tp1
 
 
+def _open_both_strategies_long(
+    symbol="TCS", entry=2283.1, sl=2270.0, tp1=2296.1, executed_at="2026-09-07 09:55:04",
+):
+    """Same symbol, same entry/sl/tp1, open under BOTH strategies at once - the real
+    2026-09-23 BANDHANBNK scenario this whole fix exists for."""
+    from signal_engine.analysis.breakingtrade import flip_watch
+
+    _make_trades_db(
+        flip_watch._TRADES_DB,
+        [
+            ("BREAKINGTRADE", "LONG", symbol, entry, sl, tp1, "SUCCESS", executed_at),
+            ("BREAKINGTRADE-WATCHLIST", "LONG", symbol, entry, sl, tp1, "SUCCESS", executed_at),
+        ],
+    )
+    return entry, sl, tp1
+
+
 class TestLevelSequence:
     def test_first_level_is_tp1(self):
         assert tp_watch._next_level(None) == "TP1"
@@ -123,12 +140,12 @@ class TestExitQtyPctConversion:
 
 class TestLastLevelHit:
     def test_no_alerts_means_no_level_hit_yet(self):
-        assert tp_watch._last_level_hit("TCS", "2026-09-07 09:55:04") is None
+        assert tp_watch._last_level_hit("TCS", "2026-09-07 09:55:04", "BREAKINGTRADE") is None
 
     def test_returns_the_highest_level_recorded(self):
-        tp_watch._send_tp_hit("TCS", "LONG", 2296.1, "TP1", 50.0)
-        tp_watch._send_tp_hit("TCS", "LONG", 2302.6, "TP1.5", 60.0)
-        assert tp_watch._last_level_hit("TCS", "2026-09-07 09:55:04") == "TP1.5"
+        tp_watch._send_tp_hit("TCS", "LONG", 2296.1, "TP1", 50.0, "BREAKINGTRADE", "trade_signal")
+        tp_watch._send_tp_hit("TCS", "LONG", 2302.6, "TP1.5", 60.0, "BREAKINGTRADE", "trade_signal")
+        assert tp_watch._last_level_hit("TCS", "2026-09-07 09:55:04", "BREAKINGTRADE") == "TP1.5"
 
 
 class TestCheck:
@@ -217,6 +234,70 @@ class TestCheck:
         assert tp_watch.check(datetime(2026, 9, 7, 10, 25)) == 1
 
 
+class TestBothStrategiesWatched:
+    """2026-09-23: this module only ever watched BREAKINGTRADE - a BREAKINGTRADE-WATCHLIST
+    position had no mechanism to ever report reaching its own stated TP. Fixed by watching
+    both strategies, each on its own channel/kind and its own independent TP-ladder progress.
+    """
+
+    def test_a_watchlist_position_gets_its_own_tp_hit_alert(self, monkeypatch):
+        from signal_engine.analysis.breakingtrade import flip_watch
+
+        entry, sl, tp1 = 345.85, 341.20, 350.50
+        _make_trades_db(
+            flip_watch._TRADES_DB,
+            [("BREAKINGTRADE-WATCHLIST", "LONG", "PFC", entry, sl, tp1, "SUCCESS",
+              "2026-09-07 09:55:04")],
+        )
+        monkeypatch.setattr(eod_summary, "fetch_ltp", lambda symbol, exchange="NSE": tp1)
+
+        sent = tp_watch.check(datetime(2026, 9, 7, 10, 25))
+
+        assert sent == 1
+        with alerts._connect() as conn:
+            kind, strategy, message = conn.execute(
+                "SELECT kind, strategy, message FROM alerts WHERE kind = 'tp_hit'"
+            ).fetchone()
+        assert strategy == "BREAKINGTRADE-WATCHLIST"
+        assert "BREAKINGTRADE-WATCHLIST EXIT" in message
+
+    def test_two_strategies_on_the_same_symbol_progress_independently(self, monkeypatch):
+        """The real 2026-09-23 BANDHANBNK scenario: both strategies open on one symbol.
+        Reaching TP1 must advance only the strategy that actually reached it."""
+        entry, sl, tp1 = _open_both_strategies_long()
+        monkeypatch.setattr(eod_summary, "fetch_ltp", lambda symbol, exchange="NSE": tp1)
+
+        sent = tp_watch.check(datetime(2026, 9, 7, 10, 25))
+
+        # Both positions are at TP1 simultaneously - one alert each, not one shared/deduped.
+        assert sent == 2
+        with alerts._connect() as conn:
+            rows = conn.execute(
+                "SELECT strategy, scan FROM alerts WHERE kind = 'tp_hit' ORDER BY strategy"
+            ).fetchall()
+        assert rows == [("BREAKINGTRADE", "TP1"), ("BREAKINGTRADE-WATCHLIST", "TP1")]
+
+    def test_a_watchlist_exit_routes_to_the_watchlist_send_kind(self, monkeypatch):
+        from signal_engine.analysis.breakingtrade import flip_watch
+
+        entry, sl, tp1 = 345.85, 341.20, 350.50
+        _make_trades_db(
+            flip_watch._TRADES_DB,
+            [("BREAKINGTRADE-WATCHLIST", "LONG", "PFC", entry, sl, tp1, "SUCCESS",
+              "2026-09-07 09:55:04")],
+        )
+        monkeypatch.setattr(eod_summary, "fetch_ltp", lambda symbol, exchange="NSE": tp1)
+        sent_kinds = []
+        monkeypatch.setattr(
+            alerts, "send",
+            lambda text, kind=None, monospace=False: (sent_kinds.append(kind), (True, 999))[1],
+        )
+
+        tp_watch.check(datetime(2026, 9, 7, 10, 25))
+
+        assert sent_kinds == ["trade_signal_watchlist"]
+
+
 class TestMessageParsesCorrectly:
     """The whole feature is worthless if the message this module sends can't actually be
     parsed by the engine - this is the integration seam with parser.py/models.py."""
@@ -238,3 +319,23 @@ class TestMessageParsesCorrectly:
         assert signal.symbol == "TCS"
         assert signal.tp_level == "TP1"
         assert signal.exit_qty_pct == pytest.approx(0.5)  # parser converts 0-100 -> 0.0-1.0
+
+    def test_watchlist_tp_hit_message_parses_too(self):
+        """The strategy name in the first line changes for BREAKINGTRADE-WATCHLIST -
+        confirm the longer, hyphenated name doesn't trip up _parse_header()."""
+        message = "\n".join(
+            [
+                "BREAKINGTRADE-WATCHLIST EXIT",
+                "Symbol: PFC",
+                "Entry: 0.0",
+                "SL: 0.0",
+                "TP: 350.5",
+                "TPLevel: TP1",
+                "ExitQtyPct: 50.0",
+            ]
+        )
+        signal = parser.parse(message)
+        assert signal is not None
+        assert signal.strategy == "BREAKINGTRADE-WATCHLIST"
+        assert signal.symbol == "PFC"
+        assert signal.tp_level == "TP1"
