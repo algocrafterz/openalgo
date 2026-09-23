@@ -278,9 +278,74 @@ class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
         with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
              patch("signal_engine.tracker.send_order",
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
+             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)), \
              patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()):
             await tracker._no_progress_market_exit(pos, timedelta(minutes=90), 345.75, 345.85, 0.09)
         assert pos.sl_order_id == "MARKET-EXIT-9"
+
+
+class TestNoProgressExitBooksItsOwnFill:
+    """2026-09-22: _no_progress_market_exit() placed its own exit order, then discarded that
+    order's confirmed fill and left booking to the NEXT check_positions() poll, which derives
+    P&L from the broker's realised-P&L delta - a portfolio-level snapshot, not this order's
+    actual fill. Confirmed against real data: INFY's no-progress exit filled at 1024.40 on a
+    LONG entry of 1021.80x40 (a real -104.00 loss), but the deferred delta path booked +281.00
+    instead - a fabricated gain the trader-facing Telegram "CLOSED" message also carried.
+    """
+
+    @pytest.mark.asyncio
+    async def test_books_the_real_fill_not_the_broker_delta(self):
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("INFY", qty=40, fill=1021.80)
+        pos.direction = Direction.SHORT  # the actual 2026-09-22 position was SHORT
+        pos.sl_order_id = "SL-ORIGINAL"
+        tracker.register(pos)
+        from signal_engine.models import OrderStatus, TradeResult
+
+        with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
+             patch("signal_engine.tracker.send_order",
+                   AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
+             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=1024.40)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=281.00)), \
+             patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()) as notify_closed, \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
+             patch.object(tracker, "maybe_send_day_summary", AsyncMock()):
+            await tracker._no_progress_market_exit(pos, timedelta(minutes=95), 1024.40, 1021.80, 0.10)
+
+        # The real fill-derived loss, NOT the +281.00 the broker's portfolio-level delta
+        # (mocked above, matching the confirmed same-second value) would have produced.
+        assert save.call_args.kwargs["pnl"] == pytest.approx(-104.00)
+        # notify_position_closed(symbol, pnl, ...) — pnl is positional, not a kwarg.
+        assert notify_closed.await_args.args[1] == pytest.approx(-104.00)
+        assert notify_closed.await_args.kwargs["exit_price"] == pytest.approx(1024.40)
+        # The position is fully closed here, not left for the next poll to discover.
+        assert tracker.find_position("INFY", "BREAKINGTRADE") is None
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_the_deferred_path_when_the_fill_cannot_be_confirmed(self):
+        """If the order status API can't confirm the fill, don't guess - leave the position
+        tracked so the next poll's broker-delta close still runs (better than nothing)."""
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("INFY", qty=40, fill=1021.80)
+        pos.sl_order_id = "SL-ORIGINAL"
+        tracker.register(pos)
+        from signal_engine.models import OrderStatus, TradeResult
+
+        with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
+             patch("signal_engine.tracker.send_order",
+                   AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
+             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)), \
+             patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save:
+            await tracker._no_progress_market_exit(pos, timedelta(minutes=95), 1024.40, 1021.80, 0.10)
+
+        save.assert_not_called()  # not booked here - the next poll's _book_broker_close does it
+        assert tracker.find_position("INFY", "BREAKINGTRADE") is pos
+        assert pos.exit_types == ["NO-PROGRESS"]  # tagged regardless, so the deferred path
+        # doesn't fall back to labelling it "SL" (see TestExitTypeNamesTheRealCause)
 
 
 class TestExitTypeNamesTheRealCause:

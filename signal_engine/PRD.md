@@ -4805,3 +4805,59 @@ Two regression tests added: `test_analysis_ledger.py`'s
 `test_a_prior_days_already_reconciled_fill_does_not_pollute_a_later_days_review` (Bug 1);
 `test_main_partial_exit.py`'s `test_tp1_partial_exit_row_carries_its_own_pnl_and_fill_price`
 (Bug 2). Full suite (1,637 tests) passes.
+
+## No-Progress Exit P&L Fabrication and Stale SL on Broker-Detected Close (2026-09-23)
+
+The 2026-09-23 `/eod` review confirmed and fixed the two bugs the 2026-09-22 unattended
+Claude review had already root-caused but left unapplied (report-only run, per its own charter).
+
+**Bug 1 - a real loss booked as a fabricated gain.** `tracker.py::_no_progress_market_exit`
+placed its own market exit order, then discarded that order's own confirmed fill and left
+booking to the *next* `check_positions()` poll's `_book_broker_close()`, which derives P&L from
+the broker's realised-P&L delta - a portfolio-level snapshot that can be stale or shared with
+another close in the same poll cycle. Confirmed against real 2026-09-22 data: INFY's SHORT
+no-progress exit filled at 1024.40 on an entry of 1021.80x40 - a real **-104.00** loss - but the
+deferred delta path booked **+281.00** instead, off a phantom implied exit price that was never
+traded. That fabricated number reached `trades.db`, the day P&L, and the trader-facing Telegram
+"CLOSED" message.
+
+Fix: `_no_progress_market_exit` now calls `fetch_order_fill_price()` on its own order
+immediately after it fills, and if confirmed, computes the real `pnl_delta` from that price and
+calls `book_close()` directly - the same pattern the signal-driven exit paths in `main.py`
+already use. If the fill can't be confirmed, it falls back to the old deferred behavior
+unchanged (better an approximate close than none). Either way the position is now tagged
+`pos.exit_types.append("NO-PROGRESS")` up front, fixing a second, related mislabeling: every
+no-progress market exit that fell through to the deferred path was being reported as an `"SL"`
+hit (the fallback's default when `exit_types` is empty) - confirmed this explains why all four
+of 2026-09-11's no-progress closes were logged as SL hits.
+
+**Bug 2 - a stale stop-loss order left resting after an out-of-band close.** When the broker
+closes a position without the engine's own SL/TP order triggering it - e.g. OpenAlgo's
+`catch_up_processor` force-settling a stale MIS position - `tracker.py::_record_closed_trade`
+(the shared path `_book_broker_close()` uses to book any broker-detected close) never cancelled
+`pos.sl_order_id`. Confirmed 2026-09-22: SBIN's SL-M order `26092255072374` rested live on the
+broker for ~4 hours after the engine's own close was booked, until OpenAlgo's unrelated EOD
+squareoff eventually cancelled it - and *that* delayed cancel's margin release then errored
+("Refusing to release... only 0.00 is reserved"), because the margin had already been freed by
+the earlier settlement. That single ERROR line was the one system-check FAIL in that day's EOD
+regression report.
+
+Fix: `_record_closed_trade` now attempts `cancel_order(pos.sl_order_id, ...)` (wrapped so a
+raising cancel can't block booking the close) before recording the close, mirroring the same
+defensive cancel `_release_orphan()` already does for a rejected fill. A normal SL-HIT close
+cancels the very order that just filled, which the broker safely no-ops - so this is safe on
+every path, not just the out-of-band one.
+
+Not fixed, and out of scope: the underlying reason OpenAlgo's sandbox settled SBIN out-of-band
+in the first place, and why its positionbook read a stale/zero realised figure at that instant -
+both sit in OpenAlgo core, not signal_engine (per standing project preference, see
+`feedback_no_openalgo_core_changes`).
+
+Four regression tests added, `test_close_accounting.py`'s `TestNoProgressExitBooksItsOwnFill`
+(`test_books_the_real_fill_not_the_broker_delta`,
+`test_falls_back_to_the_deferred_path_when_the_fill_cannot_be_confirmed`) and
+`test_tracker_close_detection.py`'s `TestSLCancelledOnBrokerDetectedClose`
+(`test_a_broker_detected_close_cancels_the_resting_sl`), plus one existing test
+(`test_guard2_processes_real_close_when_position_was_seen_filled`) updated to assert the new
+(correct) cancel-attempt behavior instead of the old "already gone, don't bother" assumption.
+Full suite (1,640 tests) passes.

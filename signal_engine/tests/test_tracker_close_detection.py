@@ -573,5 +573,46 @@ class TestGuard2Timeout:
 
         # Must NOT be treated as orphan — slot released via record_close, not record_rejection
         mock_orphan.assert_not_awaited()
-        mock_cancel.assert_not_awaited()  # SL not cancelled (already gone with the close)
+        # SL cancel is attempted defensively (2026-09-23 fix) — orderstatus never resolved,
+        # so the engine cannot actually know the SL is already gone; cancel_order safely
+        # no-ops broker-side if it is. See TestSLCancelledOnBrokerDetectedClose.
+        mock_cancel.assert_awaited_once_with("SL_REAL", ORB)
         assert tracker.tracked_count == 0  # position recorded as closed
+
+
+class TestSLCancelledOnBrokerDetectedClose:
+    """2026-09-22: an out-of-band close (OpenAlgo's own catch_up processor force-settling a
+    stale MIS position, NOT the engine's own SL/TP order triggering) left the engine's SL-M
+    order resting live on the broker with nothing to protect - _record_closed_trade() never
+    cancelled it. It sat there for ~4 hours (SBIN, order 26092255072374) until OpenAlgo's own
+    EOD squareoff finally cancelled it, and that delayed cancel's margin release then errored
+    because the margin had already been freed by the earlier settlement - the one system
+    error that day's EOD regression check flagged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_broker_detected_close_cancels_the_resting_sl(self):
+        engine = _make_engine()
+        engine._state(ORB).open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = _make_position(
+            symbol="SBIN", fill_price=800.0, sl_order_id="SL-M-STILL-LIVE", entry_time=_AGED,
+        )
+        tracker.register(pos)
+        # positionbook shows SBIN already flat — settled out-of-band, not via this SL.
+        book = [{"symbol": "SBIN", "quantity": 0, "ltp": 810.0, "today_realized_pnl": 100.0}]
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=100.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
+            patch("signal_engine.tracker.db.save_tracker_exit"),
+            patch.object(tracker, "_position_too_young", return_value=False),
+            patch.object(tracker, "_maybe_send_day_summary", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        mock_cancel.assert_awaited_once_with("SL-M-STILL-LIVE", ORB)
+        assert tracker.tracked_count == 0

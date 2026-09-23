@@ -13,6 +13,7 @@ from signal_engine.api_client import (
     cancel_order,
     close_all_positions,
     fetch_open_position,
+    fetch_order_fill_price,
     fetch_order_status,
     fetch_positionbook,
     fetch_realised_pnl,
@@ -941,7 +942,32 @@ class PositionTracker:
     async def _record_closed_trade(
         self, key: str, pos, age: timedelta, pnl_delta: float, _settings
     ) -> None:
-        """Book a close the broker performed (SL-M fill) via the shared close path."""
+        """Book a close the broker performed (SL-M fill, or an out-of-band settlement) via the
+        shared close path.
+
+        Cancel any resting SL first. A normal SL-HIT close cancels the very order that just
+        filled, which the broker safely no-ops. But an out-of-band close - e.g. OpenAlgo's own
+        catch_up processor force-settling a stale MIS position - leaves the engine's SL-M order
+        still resting live with nothing left to protect; nothing else in this path ever cancels
+        it. Confirmed 2026-09-22: SBIN's SL-M order 26092255072374 sat live on the broker for
+        ~4 hours after the engine's own close was booked here, until OpenAlgo's unrelated EOD
+        squareoff finally cancelled it - and that delayed cancel's margin release then errored
+        ("Refusing to release ... only 0.00 is reserved"), because the margin had already been
+        freed by the earlier out-of-band settlement.
+        """
+        if pos.sl_order_id:
+            try:
+                cancelled = await cancel_order(pos.sl_order_id, pos.strategy)
+            except Exception as e:  # noqa: BLE001 - a cancel failure must not block booking the close
+                logger.error(f"check_positions: cancel_order raised for SL {pos.sl_order_id} on {key}: {e}")
+                cancelled = False
+            if cancelled:
+                logger.info(f"check_positions: cancelled resting SL {pos.sl_order_id} for {key}")
+            else:
+                logger.debug(
+                    f"check_positions: SL {pos.sl_order_id} for {key} was not cancellable "
+                    "(already filled/closed, or already gone)"
+                )
         # Implied exit fill price from the PnL delta — the broker does not report one.
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         if pos.quantity > 0:
@@ -1152,7 +1178,14 @@ class PositionTracker:
         return minutes_needed > minutes_to_exit
 
     async def _no_progress_market_exit(self, pos, age, ltp, base_entry, progress) -> None:
-        """Close a stalled position at market."""
+        """Close a stalled position at market, booking the close from its own confirmed fill.
+
+        Tag the position before sending anything: _record_closed_trade()'s deferred fallback
+        below defaults an untagged close to ["SL"], and every no-progress market exit is not
+        an SL hit (confirmed 2026-09-22: SBIN and three others that day were all reported as
+        SL when none were).
+        """
+        pos.exit_types.append("NO-PROGRESS")
         exit_order = build_exit_order(
             symbol=pos.symbol,
             exchange=pos.exchange,
@@ -1162,23 +1195,67 @@ class PositionTracker:
             direction=pos.direction,
         )
         result = await send_order(exit_order)
-        if result.status == OrderStatus.SUCCESS:
-            logger.info(f"No-progress market exit placed for {pos.symbol}: id={result.order_id}")
-            # book_close() reads sl_order_id as "the order that will close this position" -
-            # the SL was just cancelled above, so this is the only closing order id we have.
-            pos.sl_order_id = result.order_id
-            await notifier.notify_no_progress_exit(
-                pos.symbol, ltp, base_entry, progress,
-                strategy=pos.strategy, direction=pos.direction.value,
-                age_minutes=int(age.total_seconds() / 60),
-            )
-        else:
+        if result.status != OrderStatus.SUCCESS:
             logger.error(f"No-progress market exit failed for {pos.symbol}: {result.message}")
             await notifier.notify_sl_failed(
                 pos.symbol,
                 f"No-progress market exit failed after {age.total_seconds()/60:.0f}min: {result.message}",
                 strategy=pos.strategy,
             )
+            return
+
+        logger.info(f"No-progress market exit placed for {pos.symbol}: id={result.order_id}")
+        # book_close() reads sl_order_id as "the order that will close this position" -
+        # the SL was just cancelled above, so this is the only closing order id we have.
+        pos.sl_order_id = result.order_id
+        await notifier.notify_no_progress_exit(
+            pos.symbol, ltp, base_entry, progress,
+            strategy=pos.strategy, direction=pos.direction.value,
+            age_minutes=int(age.total_seconds() / 60),
+        )
+
+        # Book the close now, from this order's own confirmed fill - do not leave it for the
+        # next check_positions() poll to discover qty=0 and derive P&L from the broker's
+        # realised-P&L delta instead. Confirmed 2026-09-22: INFY's no-progress exit filled at
+        # 1024.40 (a real -104.00 loss on entry 1021.80x40) but the deferred delta path booked
+        # +281.00 instead, off a phantom implied exit price (1014.775) that was never traded -
+        # the broker-delta is a portfolio-level snapshot that can be stale or shared with
+        # another close in the same poll cycle, neither of which applies to an order this
+        # function itself just placed and can confirm directly.
+        fill_price = await fetch_order_fill_price(result.order_id, pos.strategy)
+        if fill_price is None:
+            logger.warning(
+                f"No-progress exit for {pos.symbol}: could not confirm fill price for order "
+                f"{result.order_id} - falling back to the next poll's broker-delta close"
+            )
+            return
+
+        base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+        pnl_delta = (
+            (fill_price - base_price) if pos.direction == Direction.LONG
+            else (base_price - fill_price)
+        ) * pos.quantity
+
+        async with self._pnl_lock:
+            if self._positions.get(self._key(pos.symbol, pos.strategy)) is not pos:
+                return  # a concurrent path already closed and unregistered this position
+            current_realised = await fetch_realised_pnl()
+            self._last_realised_pnl = current_realised
+
+        from signal_engine.config import settings as _settings
+
+        self._risk_engine.record_close(pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
+        await self.book_close(
+            pos,
+            pnl_delta=pnl_delta,
+            exit_price=fill_price,
+            exit_types=pos.exit_types[:],
+            hold_minutes=int(age.total_seconds() / 60),
+            max_trades=_settings.max_trades_per_day,
+            new_realised_pnl=current_realised,
+        )
+        self.unregister(pos.symbol, pos.strategy)
+        await self.maybe_send_day_summary()
 
     async def _no_progress_break_even(self, pos, age, ltp, base_entry, be_price, progress) -> None:
         """Move the stop to break-even (or the profit-lock price) on a stalled position."""
