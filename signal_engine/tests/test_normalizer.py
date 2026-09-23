@@ -20,6 +20,44 @@ class TestNormalizeBasic:
         assert normalize(text) == text
 
 
+class TestPhaseTagStripping:
+    """2026-09-23: alerts.py's send() prepends "[PAPER] "/"[LIVE] " to every message it posts
+    to the BreakingTrade channels - and the engine's own listener reads those same messages
+    back to decide whether to trade. Untagged, parse() never saw the mismatch: confirmed
+    against real 2026-09-23 data, 32 BREAKINGTRADE/BREAKINGTRADE-WATCHLIST signals over 3 days,
+    0 converted to a trade, because _parse_header() read the tag as the strategy name and the
+    real strategy name as the direction.
+    """
+
+    def test_strips_paper_tag_and_parses_correctly(self):
+        text = (
+            "[PAPER] BREAKINGTRADE LONG\nSymbol: BANDHANBNK\nEntry: 191.92\n"
+            "SL: 185.42\nTP: 198.46"
+        )
+        result = normalize(text)
+        assert result.startswith("BREAKINGTRADE LONG")
+        signal = parse(result)
+        assert signal is not None
+        assert signal.strategy == "BREAKINGTRADE"
+        assert signal.direction.value == "LONG"
+        assert signal.symbol == "BANDHANBNK"
+
+    def test_strips_live_tag(self):
+        text = "[LIVE] BREAKINGTRADE-WATCHLIST SHORT\nSymbol: FORTIS\nEntry: 889.8\nSL: 898.68\nTP: 884.55"
+        result = normalize(text)
+        assert result.startswith("BREAKINGTRADE-WATCHLIST SHORT")
+        signal = parse(result)
+        assert signal is not None
+        assert signal.direction.value == "SHORT"
+
+    def test_a_bare_bracketed_strategy_name_is_not_mistaken_for_a_phase_tag(self):
+        """Only the exact PAPER/LIVE tag is stripped - a strategy that happens to use brackets
+        in its own name must not be silently mangled."""
+        text = "[CUSTOM] STRATEGY LONG\nSymbol: TCS\nEntry: 3800\nSL: 3750\nTP: 3900"
+        result = normalize(text)
+        assert result.startswith("[CUSTOM] STRATEGY LONG")
+
+
 class TestEmojiStripping:
     def test_strips_green_circle_prefix(self):
         result = normalize("\U0001f7e2 ORB LONG\nSymbol: SBIN\nEntry: 600\nSL: 590\nTP: 620")

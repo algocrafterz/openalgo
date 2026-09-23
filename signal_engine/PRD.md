@@ -4861,3 +4861,42 @@ Four regression tests added, `test_close_accounting.py`'s `TestNoProgressExitBoo
 (`test_guard2_processes_real_close_when_position_was_seen_filled`) updated to assert the new
 (correct) cancel-attempt behavior instead of the old "already gone, don't bother" assumption.
 Full suite (1,640 tests) passes.
+
+## BREAKINGTRADE / BREAKINGTRADE-WATCHLIST: 0 of 32 Signals Converted, Phase-Tag Parsing Bug (2026-09-23)
+
+Asked for BREAKINGTRADE/BREAKINGTRADE-WATCHLIST/BTST performance. `trades.db` (verified since
+the 2026-09-21 purge, see "Unverified History Purged" above) showed **zero** rows for either
+strategy across all 3 verified trading days, despite both channels being `enabled: true` in
+`config.yaml` and the scanner clearly emitting signals (5 on 09-21, 19 on 09-22, 8 on 09-23 -
+32 total, 0 trades). Traced instead of taken at face value.
+
+**Root cause, confirmed against the real code path, not inferred:** `alerts.py::send()`
+unconditionally prepends a phase tag (`"[PAPER] "` in analyze mode, `_PHASE_TAG`) to every
+message it posts to the BreakingTrade Telegram channels. Unlike BREAKOUT/ORB (PineScript alerts
+posted directly by TradingView, never touching this code), BreakingTrade's trade-signal alerts
+are self-referential: this same module both POSTS the signal and is the channel the engine's
+own Telethon listener READS BACK to decide whether to trade - so the tag lands on the live
+payload, not just a display copy. `parser.py::_parse_header()` reads the first line's second
+token as the direction; with the tag prepended, `parts = ["[PAPER]", "BREAKINGTRADE", "LONG"]`
+makes `parts[1]` ("BREAKINGTRADE") the value checked against `{LONG, SHORT, EXIT}`, which fails
+- `parse()` silently returns `None` for every one of these signals. Reproduced directly:
+`parse(normalize("[PAPER] BREAKINGTRADE LONG\nSymbol: BANDHANBNK\n..."))` returns `None`;
+strip the tag and it parses cleanly. `git log -S"_PHASE_TAG" -- .../alerts.py` dates the
+regression to `9f94056a9`, 2026-09-20 21:08 - the evening before the 09-21 purge, which is why
+the "verified" era has never seen a single BreakingTrade trade.
+
+Fix: `normalizer.py::_clean_lines()` now strips a leading `[PAPER] `/`[LIVE] ` tag
+(`_PHASE_TAG_RE`) before any other processing - the normalizer's actual job ("preprocesses
+noisy signal messages into canonical parser format"), and the same chokepoint every other
+decoration (emoji, separators) is already stripped at.
+
+Not affected: BTST is unrelated to this bug - it is explicitly never auto-traded
+(`breakingtrade_btst_channels` is deliberately outside the engine's `channels:` list, per
+config.yaml's own comment), tracked instead in `breakingtrade.db`'s `paper_trades` table by a
+human's manual daily pick. Its 103 closed paper trades (2026-08-19 to 2026-09-23) are genuine:
+47.6% win rate, average +0.02%/trade, +2.26% cumulative - essentially flat, not a data gap.
+
+Three regression tests added to `test_normalizer.py`'s new `TestPhaseTagStripping`
+(`test_strips_paper_tag_and_parses_correctly`, `test_strips_live_tag`,
+`test_a_bare_bracketed_strategy_name_is_not_mistaken_for_a_phase_tag`). Full suite
+(1,643 tests) passes.

@@ -11,6 +11,7 @@ Canonical format:
     Time: 09:20        (optional)
 
 The normalizer handles:
+- Phase tag stripping ("[PAPER] "/"[LIVE] ", prepended by alerts.py/notifier.py's send paths)
 - Emoji/unicode decoration stripping
 - Separator line removal (dashes, equals, underscores)
 - TP HIT alerts: "[STRATEGY] TP1 HIT | SYMBOL" -> canonical "STRATEGY EXIT" format (0.0 placeholders)
@@ -41,6 +42,17 @@ _EMOJI_RE = re.compile(
 
 # Separator-only lines: dashes, equals, underscores, box-drawing chars
 _SEPARATOR_RE = re.compile(r"^[\-=_\s\u2500-\u257F]+$")
+
+# Phase tag alerts.py/notifier.py's send()/_deliver() prepend to EVERY outgoing message
+# ("[PAPER] "/"[LIVE] ", see alerts.py's _PHASE_TAG) so a screenshot alone always says whether
+# it describes real money. BreakingTrade's trade-signal alerts are self-referential - the same
+# module both posts them and the engine's own Telethon listener reads them back - so this tag
+# lands on the actual signal payload, not just a display copy. _parse_header() reads
+# parts[1] as the direction; with the tag as parts[0] that becomes "BREAKINGTRADE" instead of
+# "LONG"/"SHORT", which is not a valid Direction, so parse() silently returned None for every
+# BREAKINGTRADE/BREAKINGTRADE-WATCHLIST signal from the 2026-09-20 21:08 phase-tag rollout
+# onward - confirmed 2026-09-23: 32 signals, 0 trades over the 3 days since.
+_PHASE_TAG_RE = re.compile(r"^\[(?:PAPER|LIVE)\]\s*")
 
 # Legacy alias: "Target:" -> "TP:"
 _TARGET_ALIAS_RE = re.compile(r"^Target\s*:\s*(.+)$", re.IGNORECASE)
@@ -100,10 +112,11 @@ def normalize(text: str | None) -> str:
 
 
 def _clean_lines(text: str | None) -> list:
-    """Strip emoji decorations, whitespace, and separator-only lines."""
+    """Strip the phase tag, emoji decorations, whitespace, and separator-only lines."""
     if not text or not text.strip():
         return []
-    cleaned = _EMOJI_RE.sub("", text)
+    cleaned = _PHASE_TAG_RE.sub("", text.strip(), count=1)
+    cleaned = _EMOJI_RE.sub("", cleaned)
     lines = [line.strip() for line in cleaned.strip().splitlines()]
     return [line for line in lines if line and not _SEPARATOR_RE.match(line)]
 
