@@ -43,7 +43,10 @@ interface FilterState {
   action: string[]
   exchange: string[]
   product: string[]
+  strategy: string[]
 }
+
+const UNTAGGED = '__untagged__'
 
 // Sort configuration types
 type SortKey = 'timestamp' | 'symbol' | 'action'
@@ -112,8 +115,24 @@ export default function TradeBook() {
     action: [],
     exchange: [],
     product: [],
+    strategy: [],
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Distinct strategy tags present on the page, for the filter dropdown
+  const availableStrategies = useMemo(() => {
+    const names = new Set<string>()
+    let hasUntagged = false
+    for (const trade of trades) {
+      if (trade.strategy) {
+        names.add(trade.strategy)
+      } else {
+        hasUntagged = true
+      }
+    }
+    const sorted = Array.from(names).sort()
+    return hasUntagged ? [...sorted, UNTAGGED] : sorted
+  }, [trades])
 
   // Sort state - Default: most recent first
   const [sortConfig, setSortConfig] = useState<SortConfig>({
@@ -128,6 +147,8 @@ export default function TradeBook() {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
+      if (filters.strategy.length > 0 && !filters.strategy.includes(trade.strategy || UNTAGGED))
+        return false
       return true
     })
 
@@ -157,7 +178,10 @@ export default function TradeBook() {
   }
 
   const hasActiveFilters =
-    filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
+    filters.action.length > 0 ||
+    filters.exchange.length > 0 ||
+    filters.product.length > 0 ||
+    filters.strategy.length > 0
 
   const toggleFilter = (type: keyof FilterState, value: string) => {
     setFilters((prev) => {
@@ -171,7 +195,7 @@ export default function TradeBook() {
   }
 
   const clearFilters = () => {
-    setFilters({ action: [], exchange: [], product: [] })
+    setFilters({ action: [], exchange: [], product: [], strategy: [] })
   }
 
   const fetchTrades = useCallback(
@@ -234,6 +258,7 @@ export default function TradeBook() {
         'Price',
         'Trade Value',
         'Order ID',
+        'Strategy',
         'Time',
       ]
       const rows = sortedAndFilteredTrades.map((t) => [
@@ -245,6 +270,7 @@ export default function TradeBook() {
         sanitizeCSV(t.average_price),
         sanitizeCSV(t.trade_value),
         sanitizeCSV(t.orderid),
+        sanitizeCSV(t.strategy || ''),
         sanitizeCSV(t.timestamp),
       ])
 
@@ -362,6 +388,25 @@ export default function TradeBook() {
                     </div>
                   </div>
                 )}
+
+                {/* Strategy */}
+                {availableStrategies.length > 0 && (
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Strategy
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {availableStrategies.map((strategy) => (
+                        <FilterChip
+                          key={strategy}
+                          type="strategy"
+                          value={strategy}
+                          label={strategy === UNTAGGED ? 'Untagged' : strategy}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <DialogFooter>
@@ -427,6 +472,15 @@ export default function TradeBook() {
                 {v}
               </Badge>
             ))}
+          {filters.strategy.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {v === UNTAGGED ? 'Untagged' : v}
+            </Badge>
+          ))}
           <Button
             variant="outline"
             size="sm"
@@ -528,6 +582,7 @@ export default function TradeBook() {
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
+                    <TableHead>Strategy</TableHead>
                     <TableHead
                       onClick={() => requestSort('timestamp')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -577,6 +632,9 @@ export default function TradeBook() {
                         {formatCurrency(trade.trade_value)}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {trade.strategy || '-'}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {formatTime(trade.timestamp)}
                       </TableCell>

@@ -90,6 +90,11 @@ class StrategyOrderTag(Base):
     symbol = Column(String(64), nullable=False)
     exchange = Column(String(20), nullable=False)
     product = Column(String(20), nullable=False)
+    # "live" / "analyze" / "unknown" (pre-upgrade rows, backfilled by
+    # upgrade/migrate_strategy_book_mode.py, never guessed). Nullable because
+    # a fresh ADD COLUMN leaves existing rows NULL until backfilled; write
+    # paths always store an explicit value, never NULL, going forward.
+    mode = Column(String(20), nullable=True)
     # Cumulative quantity already booked for this order, so a repeated or
     # partial-fill update only contributes its unseen delta.
     applied_quantity = Column(Float, nullable=False, default=0.0)
@@ -127,7 +132,13 @@ class StrategyPosition(Base):
     __tablename__ = "strategy_positions"
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "strategy", "symbol", "exchange", "product", name="uq_strategy_leg"
+            "user_id",
+            "strategy",
+            "symbol",
+            "exchange",
+            "product",
+            "mode",
+            name="uq_strategy_leg",
         ),
     )
 
@@ -137,6 +148,10 @@ class StrategyPosition(Base):
     symbol = Column(String(64), nullable=False, index=True)
     exchange = Column(String(20), nullable=False)
     product = Column(String(20), nullable=False)
+    # "live" / "analyze" / "unknown" - part of the leg's identity so a paper
+    # and a live position of the same (strategy, symbol, exchange, product)
+    # never merge into one row. See upgrade/migrate_strategy_book_mode.py.
+    mode = Column(String(20), nullable=False, default="unknown")
     # Signed: positive long, negative short.
     quantity = Column(Float, nullable=False, default=0.0)
     average_price = Column(Float, nullable=False, default=0.0)
@@ -168,7 +183,16 @@ _TAG_RETENTION = timedelta(days=env_int("STRATEGY_TAG_RETENTION_DAYS", 30, minim
 
 
 def _prune_old_tags() -> None:
-    """Drop order tags well past the point where new fills could arrive."""
+    """Drop order tags well past the point where new fills could arrive.
+
+    Commits unconditionally, even when nothing matched: a bulk DELETE opens a
+    write transaction the moment it runs, matches or not, and leaves it open
+    on this module's scoped session until something commits it. Skipping the
+    commit on a 0-row result (the common case - the 30-day retention window
+    rarely has anything to prune) held that transaction's write lock on the
+    shared SQLite file indefinitely, since nothing else on this session was
+    guaranteed to commit soon after.
+    """
     try:
         cutoff = datetime.now() - _TAG_RETENTION
         removed = (
@@ -176,8 +200,8 @@ def _prune_old_tags() -> None:
             .filter(StrategyOrderTag.created_at < cutoff)
             .delete(synchronize_session=False)
         )
+        db_session.commit()
         if removed:
-            db_session.commit()
             logger.info(f"Strategy book: pruned {removed} order tag(s) past retention")
     except Exception:
         db_session.rollback()
@@ -207,6 +231,17 @@ def _migrate_add_columns():
                     )
                 )
                 logger.info("Strategy book DB: added applied_notional column")
+            if "mode" not in existing:
+                # Nullable, no rebuild needed - `mode` is not part of a unique
+                # constraint on this table (only strategy_positions.mode is,
+                # and that column/constraint change is handled by the
+                # standalone upgrade/migrate_strategy_book_mode.py script, not
+                # here - see that script for why a rebuild cannot happen as an
+                # app-startup self-heal). This is a defense-in-depth backstop
+                # for the strategy_order_tags side only, in case the app is
+                # started before that script has run.
+                conn.execute(text("ALTER TABLE strategy_order_tags ADD COLUMN mode VARCHAR(20)"))
+                logger.info("Strategy book DB: added strategy_order_tags.mode column")
     except Exception:
         logger.exception("Strategy book DB: column migration failed")
 
@@ -228,7 +263,13 @@ def _session_date() -> str:
 
 
 def record_order_tag(
-    orderid: str, user_id: str, strategy: str, symbol: str, exchange: str, product: str
+    orderid: str,
+    user_id: str,
+    strategy: str,
+    symbol: str,
+    exchange: str,
+    product: str,
+    mode: str = "",
 ) -> bool:
     """Remember which strategy placed an order. Ignores duplicates.
 
@@ -237,15 +278,28 @@ def record_order_tag(
     (still empty) buffer drained, and only then would the fill be buffered -
     leaving it orphaned until it expired. Holding one lock across both makes
     the two orderings the only possible ones, and both are handled.
+
+    `mode` is "live"/"analyze" (from the OrderEvent that carried this tag) and
+    is never stored blank - an empty/missing value becomes "unknown" rather
+    than NULL, so it is always a valid, filterable bucket distinct from both
+    real modes (never silently merged into either one's figures).
     """
     if not orderid or not strategy:
         return False
     with _fill_lock:
-        return _record_order_tag_locked(orderid, user_id, strategy, symbol, exchange, product)
+        return _record_order_tag_locked(
+            orderid, user_id, strategy, symbol, exchange, product, mode
+        )
 
 
 def _record_order_tag_locked(
-    orderid: str, user_id: str, strategy: str, symbol: str, exchange: str, product: str
+    orderid: str,
+    user_id: str,
+    strategy: str,
+    symbol: str,
+    exchange: str,
+    product: str,
+    mode: str = "",
 ) -> bool:
     try:
         existing = db_session.query(StrategyOrderTag).filter_by(orderid=str(orderid)).one_or_none()
@@ -255,6 +309,7 @@ def _record_order_tag_locked(
             StrategyOrderTag(
                 orderid=str(orderid),
                 user_id=user_id or "",
+                mode=(mode or "unknown"),
                 strategy=strategy,
                 symbol=symbol or "",
                 exchange=exchange or "",
@@ -367,6 +422,46 @@ def get_order_tag(orderid: str) -> StrategyOrderTag | None:
         return None
 
 
+# SQLite's default build caps bound parameters per statement around 999-32766
+# depending on version; 500 stays comfortably under that for an IN() clause
+# built from live orderbook/tradebook page sizes.
+_ORDERID_LOOKUP_CHUNK_SIZE = 500
+
+
+def get_strategies_for_orderids(orderids: list[str] | None) -> dict[str, str]:
+    """Bulk orderid -> strategy lookup, for tagging a live orderbook/tradebook page.
+
+    Display-only: any failure (uninitialized book, DB error) returns an empty
+    dict rather than raising, so a strategy-book hiccup never breaks the order
+    book itself. One query per chunk instead of one per row.
+    """
+    if not orderids:
+        return {}
+    if not _initialized:
+        return {}
+
+    unique_ids = [str(oid) for oid in dict.fromkeys(orderids) if oid]
+    if not unique_ids:
+        return {}
+
+    result: dict[str, str] = {}
+    try:
+        for start in range(0, len(unique_ids), _ORDERID_LOOKUP_CHUNK_SIZE):
+            chunk = unique_ids[start : start + _ORDERID_LOOKUP_CHUNK_SIZE]
+            rows = (
+                db_session.query(StrategyOrderTag.orderid, StrategyOrderTag.strategy)
+                .filter(StrategyOrderTag.orderid.in_(chunk))
+                .all()
+            )
+            for orderid, strategy in rows:
+                result[orderid] = strategy
+        return result
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not bulk-read strategy tags for orderbook/tradebook display")
+        return {}
+
+
 def apply_fill(
     orderid: str,
     filled_quantity: float,
@@ -415,6 +510,8 @@ def _apply_fill_locked(
     signed = delta if str(action).upper() == "BUY" else -delta
     today = _session_date()
 
+    tag_mode = tag.mode or "unknown"
+
     try:
         leg = (
             db_session.query(StrategyPosition)
@@ -424,6 +521,7 @@ def _apply_fill_locked(
                 symbol=tag.symbol,
                 exchange=tag.exchange,
                 product=tag.product,
+                mode=tag_mode,
             )
             .one_or_none()
         )
@@ -434,6 +532,7 @@ def _apply_fill_locked(
                 symbol=tag.symbol,
                 exchange=tag.exchange,
                 product=tag.product,
+                mode=tag_mode,
                 trade_date=today,
             )
             db_session.add(leg)
@@ -471,6 +570,7 @@ def _apply_fill_locked(
             "symbol": leg.symbol,
             "exchange": leg.exchange,
             "product": leg.product,
+            "mode": leg.mode,
             "quantity": round(float(leg.quantity), 4),
             "average_price": round(float(leg.average_price), 4),
             "realized_pnl": round(float(leg.realized_pnl), 4),
@@ -483,8 +583,16 @@ def _apply_fill_locked(
         return None
 
 
-def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -> list[dict]:
-    """Every tracked leg, optionally narrowed to one user and/or strategy.
+def get_strategy_legs(
+    user_id: str | None = None, strategy: str | None = None, mode: str | None = None
+) -> list[dict]:
+    """Every tracked leg, optionally narrowed to one user, strategy and/or mode.
+
+    `mode` ("live"/"analyze"/"unknown") is left unfiltered by default so
+    Flow's own reader (`services/strategy_pnl_service.get_strategy_pnl`, which
+    never passes it) keeps seeing every leg for a strategy regardless of
+    mode - unchanged, pre-existing behavior. Callers that care about the
+    live/paper distinction (the Strategy P&L page) pass it explicitly.
 
     Raises:
         StrategyBookUnavailable: the book is not initialized or cannot be read.
@@ -505,12 +613,15 @@ def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -
             query = query.filter_by(user_id=user_id)
         if strategy:
             query = query.filter_by(strategy=strategy)
+        if mode:
+            query = query.filter_by(mode=mode)
         return [
             {
                 "strategy": r.strategy,
                 "symbol": r.symbol,
                 "exchange": r.exchange,
                 "product": r.product,
+                "mode": r.mode,
                 "quantity": float(r.quantity or 0),
                 "average_price": float(r.average_price or 0),
                 "realized_pnl": float(r.realized_pnl or 0),

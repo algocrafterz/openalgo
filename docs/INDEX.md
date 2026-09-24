@@ -43,6 +43,7 @@ need → drill into the specific file. Don't load everything at once.
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |
 | Health monitoring | [HEALTH_MONITORING_IMPLEMENTATION.md](HEALTH_MONITORING_IMPLEMENTATION.md) · [HEALTH_MONITOR_REACT_FRONTEND.md](HEALTH_MONITOR_REACT_FRONTEND.md) |
+| Strategy P&L (`/strategy-pnl`) — a **local fork modification to core**, read before merging upstream | [strategy-pnl-fork-modification.md](strategy-pnl-fork-modification.md) |
 
 ## Architecture, design & specs (contributors)
 

@@ -125,6 +125,14 @@ def get_tradebook_with_auth(
         trade_data = broker_funcs["map_trade_data"](trade_data=trade_data)
         trade_data = broker_funcs["transform_tradebook_data"](trade_data)
 
+        # Tag each trade with the strategy that placed its order (sandbox
+        # already carries this; live trades never do since the broker has no
+        # concept of it - looked up from the strategy book recorded at
+        # order.placed).
+        from services.strategy_tag_enrichment import attach_strategy
+
+        trade_data = attach_strategy(trade_data)
+
         # Format numeric values to 2 decimal places
         formatted_trades = format_trade_data(trade_data)
 

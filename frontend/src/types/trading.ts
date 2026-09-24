@@ -23,6 +23,7 @@ export interface Order {
   orderid: string
   order_status: 'complete' | 'rejected' | 'cancelled' | 'open' | 'pending' | 'trigger pending'
   timestamp: string
+  strategy?: string // Tag from the placing /api/v1/placeorder call, if any
 }
 
 export interface Trade {
@@ -35,6 +36,7 @@ export interface Trade {
   product: string
   orderid: string
   timestamp: string
+  strategy?: string // Tag from the placing /api/v1/placeorder call, if any
 }
 
 export interface Holding {

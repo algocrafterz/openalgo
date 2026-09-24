@@ -140,6 +140,7 @@ export default function OrderBook() {
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [strategyFilter, setStrategyFilter] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Sort state - Default: most recent first
@@ -161,13 +162,34 @@ export default function OrderBook() {
     product: 'MIS' as string,
   })
 
+  const UNTAGGED = '__untagged__'
+
+  // Distinct strategy tags present on the page, for the filter dropdown
+  const availableStrategies = useMemo(() => {
+    const names = new Set<string>()
+    let hasUntagged = false
+    for (const order of orders) {
+      if (order.strategy) {
+        names.add(order.strategy)
+      } else {
+        hasUntagged = true
+      }
+    }
+    const sorted = Array.from(names).sort()
+    return hasUntagged ? [...sorted, UNTAGGED] : sorted
+  }, [orders])
+
   // Filter and Sort orders
   const sortedAndFilteredOrders = useMemo(() => {
     // 1. Filter Logic
-    const filtered =
+    let filtered =
       statusFilter.length === 0
         ? orders
         : orders.filter((order) => statusFilter.includes(order.order_status))
+
+    if (strategyFilter.length > 0) {
+      filtered = filtered.filter((order) => strategyFilter.includes(order.strategy || UNTAGGED))
+    }
 
     // 2. Sort Logic
     return [...filtered].sort((a, b) => {
@@ -198,7 +220,7 @@ export default function OrderBook() {
       }
       return 0
     })
-  }, [orders, statusFilter, sortConfig])
+  }, [orders, statusFilter, strategyFilter, sortConfig])
 
   const requestSort = (key: SortKey) => {
     setSortConfig((prev) => ({
@@ -207,7 +229,7 @@ export default function OrderBook() {
     }))
   }
 
-  const hasActiveFilters = statusFilter.length > 0
+  const hasActiveFilters = statusFilter.length > 0 || strategyFilter.length > 0
 
   const toggleStatusFilter = (status: string) => {
     setStatusFilter((prev) => {
@@ -218,8 +240,18 @@ export default function OrderBook() {
     })
   }
 
+  const toggleStrategyFilter = (strategy: string) => {
+    setStrategyFilter((prev) => {
+      if (prev.includes(strategy)) {
+        return prev.filter((s) => s !== strategy)
+      }
+      return [...prev, strategy]
+    })
+  }
+
   const clearFilters = () => {
     setStatusFilter([])
+    setStrategyFilter([])
   }
 
   const fetchOrders = useCallback(
@@ -379,6 +411,7 @@ export default function OrderBook() {
         'Type',
         ...(isCrypto ? [] : ['Product']),
         'Order ID',
+        'Strategy',
         'Status',
         'Time',
       ]
@@ -392,6 +425,7 @@ export default function OrderBook() {
         sanitizeCSV(o.pricetype),
         ...(isCrypto ? [] : [sanitizeCSV(o.product)]),
         sanitizeCSV(o.orderid),
+        sanitizeCSV(o.strategy || ''),
         sanitizeCSV(o.order_status),
         sanitizeCSV(o.timestamp),
       ])
@@ -482,6 +516,31 @@ export default function OrderBook() {
                       <FilterChip status="cancelled" label="Cancelled" />
                     </div>
                   </div>
+
+                  {/* Strategy */}
+                  {availableStrategies.length > 0 && (
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Strategy
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableStrategies.map((strategy) => (
+                          <Button
+                            key={strategy}
+                            variant={strategyFilter.includes(strategy) ? 'default' : 'outline'}
+                            size="sm"
+                            className={cn(
+                              'rounded-full',
+                              strategyFilter.includes(strategy) && 'bg-pink-500 hover:bg-pink-600'
+                            )}
+                            onClick={() => toggleStrategyFilter(strategy)}
+                          >
+                            {strategy === UNTAGGED ? 'Untagged' : strategy}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <DialogFooter>
@@ -540,6 +599,15 @@ export default function OrderBook() {
                   className="bg-pink-500/10 text-pink-600 border-pink-500/30"
                 >
                   {status}
+                </Badge>
+              ))}
+              {strategyFilter.map((strategy) => (
+                <Badge
+                  key={strategy}
+                  variant="secondary"
+                  className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+                >
+                  {strategy === UNTAGGED ? 'Untagged' : strategy}
                 </Badge>
               ))}
               <Button
@@ -676,6 +744,7 @@ export default function OrderBook() {
                         <TableHead className="w-[80px]">Type</TableHead>
                         {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
                         <TableHead className="w-[140px]">Order ID</TableHead>
+                        <TableHead className="w-[100px]">Strategy</TableHead>
                         <TableHead
                           className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
                           onClick={() => requestSort('order_status')}
@@ -744,6 +813,9 @@ export default function OrderBook() {
                               </TableCell>
                             )}
                             <TableCell className="font-mono text-xs">{order.orderid}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {order.strategy || '-'}
+                            </TableCell>
                             <TableCell>
                               <div className={cn('flex items-center gap-1', status.color)}>
                                 <StatusIcon className="h-4 w-4" />

@@ -47,6 +47,7 @@ def on_order_placed(event) -> None:
         symbol=getattr(event, "symbol", "") or "",
         exchange=getattr(event, "exchange", "") or "",
         product=getattr(event, "product", "") or "",
+        mode=getattr(event, "mode", "") or "",
     )
 
 
@@ -64,6 +65,7 @@ def on_batch_completed(event) -> None:
         return
 
     user_id = _user_id(event)
+    mode = getattr(event, "mode", "") or ""
     # A split or options batch is one contract, so the event carries the leg
     # identity. A basket spans several, so each result supplies its own and the
     # event has none - hence per-leg values win and the event is the fallback.
@@ -92,6 +94,7 @@ def on_batch_completed(event) -> None:
                     symbol=leg.get("symbol") or default_symbol,
                     exchange=leg.get("exchange") or default_exchange,
                     product=leg.get("product") or default_product,
+                    mode=mode,
                 )
             continue
 
@@ -117,6 +120,7 @@ def on_batch_completed(event) -> None:
             symbol=symbol,
             exchange=exchange,
             product=product,
+            mode=mode,
         )
 
 

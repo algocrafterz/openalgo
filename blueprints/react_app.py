@@ -196,6 +196,11 @@ def react_tradebook():
     return serve_react_app()
 
 
+@react_bp.route("/strategy-pnl")
+def react_strategy_pnl():
+    return serve_react_app()
+
+
 @react_bp.route("/holdings")
 def react_holdings():
     return serve_react_app()

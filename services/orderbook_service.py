@@ -162,6 +162,13 @@ def get_orderbook_with_auth(
         order_stats = broker_funcs["calculate_order_statistics"](order_data)
         order_data = broker_funcs["transform_order_data"](order_data)
 
+        # Tag each order with the strategy that placed it (sandbox already
+        # carries this; live orders never do since the broker has no concept
+        # of it - looked up from the strategy book recorded at order.placed).
+        from services.strategy_tag_enrichment import attach_strategy
+
+        order_data = attach_strategy(order_data)
+
         # Format numeric values to 2 decimal places
         formatted_orders = format_order_data(order_data)
         formatted_stats = format_statistics(order_stats)
