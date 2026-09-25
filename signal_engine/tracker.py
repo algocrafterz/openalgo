@@ -613,7 +613,6 @@ class PositionTracker:
             or self._positionbook_outage_alerted
         ):
             return
-        self._positionbook_outage_alerted = True
         message = (
             f"POSITION TRACKING BLIND\n{self._positionbook_failures} consecutive positionbook "
             f"failures. Close detection, no-progress gates and the time exit are all stalled "
@@ -621,9 +620,20 @@ class PositionTracker:
         )
         logger.critical(message.replace("\n", " "))
         try:
-            await notifier.notify_event("positionbook_outage", message)
+            delivered = await notifier.notify_event("positionbook_outage", message)
         except Exception as e:  # noqa: BLE001 - alerting must not break the poll loop
             logger.warning(f"Could not send positionbook outage alert: {e}")
+            return
+        if not delivered:
+            # Same class of bug as 2026-09-09's day summary (see notifier.notify()): marking
+            # this "alerted" on a silent no-op (notifier not ready, channel unconfigured)
+            # would permanently suppress the one alert that exists to say tracking is blind -
+            # leave the flag unset so the next failed poll retries the send.
+            logger.warning(
+                "Positionbook outage alert NOT delivered (notifier not ready) - will retry"
+            )
+            return
+        self._positionbook_outage_alerted = True
 
     async def _note_positionbook_success(self) -> None:
         """Clear the outage counter, announcing recovery if one was reported."""
@@ -632,10 +642,14 @@ class PositionTracker:
             failures = self._positionbook_failures
             logger.info(f"Positionbook recovered after {failures} failed polls")
             try:
-                await notifier.notify_event(
+                delivered = await notifier.notify_event(
                     "positionbook_recovered",
                     f"Position tracking RESUMED after {failures} failed polls.",
                 )
+                if not delivered:
+                    logger.warning(
+                        "Positionbook recovery alert NOT delivered (notifier not ready)"
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Could not send positionbook recovery alert: {e}")
         self._positionbook_failures = 0
