@@ -39,15 +39,39 @@ a side-by-side comparison across all strategies.
    to get right. Trade-off: a query scans the requested date range on every
    request — fine at single-user SQLite scale.
 
-2. **No historical backfill in v1.** `StrategyClosedTrade` only has rows from
-   the moment this feature shipped forward — nothing reconstructs trades that
-   closed before that. A backfill from `signal_engine/data/trades.db` /
-   `database/sandbox_db.SandboxTrades` is possible later but is
-   strategy-source-specific (Flow, Python Strategy Host, and webhook-tagged
-   orders have no equivalent trade-level log outside `strategy_book_db`
-   itself) and was deliberately deferred rather than shipped half-covering
-   the strategy universe. **A strategy's day-by-day history starts on the day
-   it first traded after this feature deployed.**
+2. **Backfill exists, but only for signal_engine-driven strategies.**
+   `StrategyClosedTrade` is written forward-only by `_apply_fill_locked()` —
+   nothing reconstructs trades automatically. On launch day this meant every
+   strategy showed zero data, including trades that closed hours earlier the
+   same day, which is a bad first impression for a "day-by-day performance"
+   feature. **Corrected after initial ship** (2026-09-25): a one-time,
+   manually-run script, `upgrade/backfill_strategy_daily_performance.py`,
+   reads `signal_engine/data/trades.db`'s `direction='EXIT'` rows — written
+   by `signal_engine/db.py:save_tracker_exit()`, called from
+   `signal_engine/tracker.py`, entirely independent of
+   `_apply_fill_locked()` — and backfills `strategy_closed_trades` from
+   them. Each EXIT row carries an accurate realized P&L in its `context` JSON
+   column (`{"pnl": ..., "exit_types": [...]}`), so this is a real
+   backfill, not an approximation; direction (LONG/SHORT) is derived from the
+   sign of `pnl` relative to `(exit_price - entry_price)`, needing no
+   correlation back to the original entry row. Idempotent (safe to re-run;
+   dedupes on user_id/strategy/symbol/mode/trade_date/exit_price/
+   realized_pnl) and deliberately **not** registered in
+   `upgrade/migrate_all.py` — same reasoning as `upgrade/rotate_pepper.py`:
+   operator-run, not unattended.
+
+   **This does NOT cover Flow or Python Strategy Host trades** — those close
+   through the ordinary `_apply_fill_locked()` path with no separate
+   per-trade exit log anywhere else to backfill from, so for them the
+   original "starts from deploy day forward" limitation still applies. Two
+   earlier claims in this conversation about this data source were wrong and
+   are worth recording so the mistake isn't repeated: first, a subagent
+   research summary claimed `trades.db` had `exit_price`/`pnl` *columns* —
+   false, checked directly via `PRAGMA table_info`, no such columns exist.
+   Second, a follow-up claim that therefore *no* per-trade source existed at
+   all was also wrong — the data is real, just shaped as a JSON blob inside
+   `context` on a `direction='EXIT'` row, findable only by actually reading
+   rows rather than trusting the column list.
 
 3. **₹-denominated metrics, not %-normalized.** Strategies here have no
    isolated allocated capital to divide by (unlike a mutual fund's NAV), so
@@ -70,6 +94,20 @@ a side-by-side comparison across all strategies.
    the client never passes `mode`, keeping this consistent with the existing
    Strategy P&L page's behavior of always showing the *currently active*
    mode.
+
+   **Live mode support is architectural, not yet directly observed.** Both
+   pages read through the same `mode` column
+   (`live`/`analyze`/`unknown`) that `upgrade/migrate_strategy_book_mode.py`
+   introduced for the *existing* Strategy P&L page, which has already been in
+   production use for live mode. `_apply_fill_locked()` — the hook this
+   feature's ledger write was added to — does not branch on mode at all; it
+   books whatever `tag.mode` the order was tagged with. So a live-mode
+   closing fill should write a `StrategyClosedTrade` row exactly like an
+   analyze-mode one does. However, every trade backfilled and reconciled
+   during this feature's initial rollout (2026-09-25) was `mode=analyze` —
+   the account was not trading live that session — so this is a code-review
+   conclusion, not something watched happen end-to-end in live mode yet.
+   Confirm on the next live trading session before fully trusting it.
 
 6. **This extends the existing approved core-fork exception**, it does not
    open a new one. Per CLAUDE.md, "never touch OpenAlgo core" — Strategy P&L
@@ -169,9 +207,19 @@ the rebuilt `dist/`. Not verified: the rendered page's actual content in a
 logged-in browser session (no test credentials available from this
 environment) — do that manually once convenient.
 
+## Backfill run log
+
+- **2026-09-25**: `uv run python upgrade/backfill_strategy_daily_performance.py --date 2026-09-25` — backfilled 19/19 signal_engine EXIT rows (BREAKOUT, BREAKINGTRADE, BREAKINGTRADE-WATCHLIST, ORB, all `mode=analyze`). Verified idempotent (re-run: 0 inserted, 19 skipped) and cross-checked the resulting portfolio `net_profit` against the sum of per-strategy rows.
+- **2026-09-25 (same day, follow-up fix)**: user reported the new page's Net P&L (-2,529.59) didn't match the existing Strategy P&L page's Total (-2,773.19). Root-caused to a genuine **signal_engine bug**, not a backfill bug: `tracker.py`'s `check_positions()` (~line 1020) computes a closed leg's `pnl_delta` from the broker/sandbox's own reported "realised" figure on the single-close path, rather than from OpenAlgo's actually-booked fill prices — and for BREAKOUT/TCS that figure was wrong (-578.00 vs. the correct -821.60, verified by hand from `StrategyOrderTag.applied_notional / applied_quantity` on the entry and exit orders). This is an existing, deeper signal_engine issue with its own documented history (see the code comments at that line referencing 2026-09-11 and 2026-09-21 incidents) — **not fixed here**, deliberately, since it needs its own focused investigation.
+
+  What *was* fixed here: the backfill script now cross-checks every leg against `strategy_positions.realized_pnl` (verified against actual fills — see `docs/strategy-pnl-fork-modification.md`'s conclusion) and uses the verified figure whenever a leg closed in exactly one trade that day (unambiguous). For a leg that closed in multiple trades the same day, the position-level total can't be safely split between them, so the individual signal_engine figures are kept and a warning is logged instead — the mismatch stays visible, not silently swallowed either way. Re-ran the backfill for 2026-09-25 after this fix: 1 leg (BREAKOUT/TCS) corrected, portfolio net_profit now -2,773.19, matching the P&L page exactly. Verified via the new `--verify` flag.
+
 ## Future work (not built here — deliberately out of scope for v1)
 
-- Historical backfill from `signal_engine/data/trades.db` / `SandboxTrades`.
+- **Investigate `tracker.py`'s `pnl_delta` computation on the single-close path** (~line 1020, `check_positions()`) — it trusts the broker/sandbox's own reported "realised" figure over a price-derived calculation, and that figure was wrong for at least one real trade (BREAKOUT/TCS, 2026-09-25 — see Backfill run log). The reconciliation fix above works around this for the daily-performance feature specifically; the underlying signal_engine bug is still live and could be silently under/over-stating `context.pnl` (and therefore any Telegram P&L alert or other consumer of that field) for other trades nobody has cross-checked. Worth its own investigation, not a quick fix.
+- **Wire `upgrade/backfill_strategy_daily_performance.py --verify --date <today>` into the daily `eod` workflow** so a strategy_positions vs. strategy_closed_trades mismatch is caught automatically every trading day, rather than only when someone happens to compare two pages by eye — which is how the TCS mismatch above was actually found. Not wired up yet.
+- Backfill for Flow / Python Strategy Host trades — no per-trade exit log exists anywhere to source this from today; would need one added at the point those paths close a position, mirroring what `save_tracker_exit()` already does for signal_engine.
+- Backfill for dates further back than `signal_engine/data/trades.db` retains (check retention before assuming full history is recoverable).
 - Per-strategy allocated-capital config for %-normalized Sharpe/Sortino/Calmar/CAGR.
 - Rolling-window metrics (trailing 20/50 trades) for trend detection.
 - Trade-level drill-down UI (currently day-level only).
