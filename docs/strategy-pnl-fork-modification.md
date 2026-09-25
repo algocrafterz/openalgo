@@ -1,6 +1,10 @@
 # Strategy P&L — Fork Modification (Core OpenAlgo Changes)
 
 **Status:** Implemented and deployed to production. 2026-09-24 to 2026-09-25.
+Verified live against a trading session on 2026-09-25 — this page's Realized
+P&L figure checked out against an independent trade-ledger recomputation; two
+open OpenAlgo core bugs were found in the process (not in this feature's own
+code) — see "Known OpenAlgo core P&L bugs" below.
 
 This is a **local fork modification to OpenAlgo core**, not a `signal_engine/`-only
 change. It exists because `signal_engine/` (this repo's custom trading pipeline)
@@ -101,6 +105,76 @@ automation config, nothing to do with the free-text `strategy` tag on
 - **No per-row Live/Paper badge** on Order Book/Trade Book — the app's
   existing global Navbar mode badge already covers this, so a duplicate
   would be redundant.
+
+## Known OpenAlgo core P&L bugs (found 2026-09-25, still open)
+
+Found while verifying this page's numbers against a live trading session. Both
+are in OpenAlgo core (sandbox engine), not in this fork's `signal_engine/` or
+in the Strategy P&L files above — out of scope to fix here, but worth
+checking against the fixed-issues list on any future upstream sync, and worth
+reporting upstream if not already known.
+
+### Bug 1 — sandbox position silently zeroed without a covering trade
+
+Around 12:19:41-42 IST, two open sandbox positions (BHARTIARTL/BREAKOUT short
+168 @ 1797.1; INFY/BREAKINGTRADE long 90 @ 1000.0) had their resting SL-M
+order **cancelled** (not filled — `sandbox_orders.filled_quantity=0`,
+`order_status='cancelled'`, order ids `26092504800203` and `26092507423916`).
+Immediately after, OpenAlgo's live `/api/v1/positionbook` and
+`sandbox_positions.quantity` began reporting both as flat (0) — but
+`sandbox_trades` (the append-only execution ledger) has no covering BUY/SELL
+for either. As of 14:00 IST the same day, ~1h40m later, nothing had
+self-corrected: both are still reported flat everywhere except
+`strategy_positions` (this feature's table), which still correctly shows them
+open because it only updates on a real fill event and none occurred.
+
+Net effect: two real open positions became invisible to the OpenAlgo UI and
+to `signal_engine`'s tracker (which polls the same, now-wrong, positionbook
+and concluded they had closed - it cancelled the stale SL and logged an EXIT,
+in good faith, off a corrupted read). They are now unmonitored and
+unprotected for the rest of that session. Coincided with a `signal_engine`-
+side positionbook `403` outage (12:18:07-12:19:13 IST, see `tracker.py`'s
+`_note_positionbook_failure`) — plausibly the same root incident, but the
+zeroing is a core OpenAlgo behavior, not something `signal_engine` triggered
+or can correct from outside.
+
+Repro signature: cross-check `sandbox_trades` (grouped by symbol+strategy,
+net quantity) against `sandbox_positions.quantity` and the live
+`/api/v1/positionbook` response for the same symbol - a nonzero ledger net
+with a zero reported position is this bug.
+
+### Bug 2 — `sandbox_funds.today_realized_pnl` drifts from the trade ledger
+
+Dashboard's "Realized P&L" card reads `m2mrealized` from `/api/v1/funds`,
+which is `sandbox_funds.today_realized_pnl` - an incrementally-updated
+counter, not something recomputed from trades. On 2026-09-25 it read
+**-3672.51**, while an independent bottom-up FIFO recomputation from
+`sandbox_trades` for the same day gave **-2773.19** - a **-899.32** gap that
+did not change across a 1h40m window with no new trades. The FIFO figure
+exactly matched the sum of `strategy_positions.today_realized_pnl` (also
+-2773.19) and a manual sum of the Strategy P&L page's Realized column -
+three independent methods agreeing, against one drifted counter.
+
+This is the same class of issue already tracked in `signal_engine/PRD.md`'s
+P&L reliability history (the sandbox `today_realized_pnl` undercount noted
+2026-09-21) - evidently still present. No partial-exit (>2-leg) closes
+occurred on 2026-09-25, so this specific occurrence was not the previously-
+identified multi-leg trigger; Bug 1's phantom close may be a second, separate
+trigger for the same counter.
+
+**Which number to trust:** Strategy P&L's Realized figure (this page, or
+`strategy_positions.today_realized_pnl` summed). It is the only one verified
+against the raw execution ledger. Do not trust Dashboard's "Realized P&L" for
+reconciliation purposes.
+
+**Positions page "Total P&L" is a different, non-comparable metric** (see
+`frontend/src/pages/Positions.tsx`): it sums a per-symbol `pnl` field across
+*every* returned row, not just open ones, and that field does not appear to
+clear to 0 once a position closes - so it converges to neither the realized
+total nor 0, even with zero genuinely-open positions. It answers a different
+question ("mark-to-market of the position book as OpenAlgo currently sees
+it") and will not match Strategy P&L's realized/total by design, independent
+of the two bugs above.
 
 ## Upgrade safety checklist
 

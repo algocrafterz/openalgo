@@ -180,6 +180,44 @@ function StrategyRow({
   )
 }
 
+function PortfolioTotal({
+  strategies,
+  formatCurrency,
+}: {
+  strategies: StrategyPnl[]
+  formatCurrency: (v: number) => string
+}) {
+  const totals = useMemo(
+    () =>
+      strategies.reduce(
+        (acc, s) => ({
+          realized: acc.realized + s.realized,
+          unrealized: acc.unrealized + s.unrealized,
+          today_total: acc.today_total + s.today_total,
+          total: acc.total + s.total,
+        }),
+        { realized: 0, unrealized: 0, today_total: 0, total: 0 }
+      ),
+    [strategies]
+  )
+
+  return (
+    <Card>
+      <CardContent className="py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="font-semibold">All strategies combined</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-right text-sm">
+            <Stat label="Realized" value={totals.realized} formatCurrency={formatCurrency} />
+            <Stat label="Unrealized" value={totals.unrealized} formatCurrency={formatCurrency} />
+            <Stat label="Today" value={totals.today_total} formatCurrency={formatCurrency} />
+            <Stat label="Total P&L" value={totals.total} formatCurrency={formatCurrency} bold />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function StrategyList({
   strategies,
   expanded,
@@ -280,6 +318,10 @@ export default function StrategyPnL() {
             as flat rather than being a sign something is broken.
           </span>
         </div>
+      )}
+
+      {strategies.length > 0 && (
+        <PortfolioTotal strategies={strategies} formatCurrency={formatCurrency} />
       )}
 
       <Card>
