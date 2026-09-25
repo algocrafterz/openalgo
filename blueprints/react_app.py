@@ -201,6 +201,11 @@ def react_strategy_pnl():
     return serve_react_app()
 
 
+@react_bp.route("/strategy-pnl/daily")
+def react_strategy_daily_performance():
+    return serve_react_app()
+
+
 @react_bp.route("/holdings")
 def react_holdings():
     return serve_react_app()

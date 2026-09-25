@@ -38,6 +38,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -159,6 +160,52 @@ class StrategyPosition(Base):
     today_realized_pnl = Column(Float, nullable=False, default=0.0)
     trade_date = Column(String(10), nullable=True)
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+
+class StrategyClosedTrade(Base):
+    """One row per realized closing fill - the trade-level ledger day-by-day
+    performance metrics (win rate, profit factor, streaks) are computed from.
+
+    `StrategyPosition.today_realized_pnl` is a *netted* per-leg number and
+    cannot answer "how many trades won vs lost today" - this table captures
+    each individual closing event instead. Written inside
+    `_apply_fill_locked`'s closing branch, in the same commit as the leg
+    update it accompanies, so the two can never drift apart from a partial
+    failure. Append-only; nothing here is ever updated or deleted, so a day's
+    figures are always the sum of what actually closed that day, not a
+    snapshot that could go stale.
+    """
+
+    __tablename__ = "strategy_closed_trades"
+    __table_args__ = (
+        Index(
+            "idx_closed_trades_strategy_mode_date",
+            "user_id",
+            "strategy",
+            "mode",
+            "trade_date",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(64), nullable=False, index=True)
+    strategy = Column(String(120), nullable=False, index=True)
+    symbol = Column(String(64), nullable=False)
+    exchange = Column(String(20), nullable=False)
+    product = Column(String(20), nullable=False)
+    mode = Column(String(20), nullable=False)
+    # The side that was closed - "LONG" for a long position sold/exited,
+    # "SHORT" for a short position covered/bought back.
+    direction = Column(String(10), nullable=False)
+    closed_quantity = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    realized_pnl = Column(Float, nullable=False)
+    # Session date (03:00 IST rollover), matching StrategyPosition.trade_date -
+    # a trade closed at 02:00 IST groups with the prior session's day, not the
+    # calendar date, so it lines up with the rest of the strategy book.
+    trade_date = Column(String(10), nullable=False, index=True)
+    closed_at = Column(DateTime, nullable=False, default=datetime.now)
 
 
 def init_strategy_book_db() -> None:
@@ -554,6 +601,22 @@ def _apply_fill_locked(
             realized = closing * (price - avg) * direction
             leg.realized_pnl = float(leg.realized_pnl or 0) + realized
             leg.today_realized_pnl = float(leg.today_realized_pnl or 0) + realized
+            db_session.add(
+                StrategyClosedTrade(
+                    user_id=tag.user_id,
+                    strategy=tag.strategy,
+                    symbol=tag.symbol,
+                    exchange=tag.exchange,
+                    product=tag.product,
+                    mode=tag_mode,
+                    direction="LONG" if direction > 0 else "SHORT",
+                    closed_quantity=round(closing, 4),
+                    entry_price=round(avg, 4),
+                    exit_price=round(price, 4),
+                    realized_pnl=round(realized, 4),
+                    trade_date=today,
+                )
+            )
             remaining = abs(signed) - closing
             leg.quantity = qty + signed
             if abs(leg.quantity) < 1e-9:
@@ -676,3 +739,53 @@ def reset_strategy(user_id: str, strategy: str) -> int:
         db_session.rollback()
         logger.exception(f"Could not reset strategy {strategy}")
         return 0
+
+
+def get_closed_trades(
+    user_id: str | None = None,
+    strategy: str | None = None,
+    mode: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """Every closed-trade row matching the filters, oldest first.
+
+    Backs day-by-day performance analytics, not a live trigger - unlike
+    get_strategy_legs, a read failure here degrades to an empty history
+    rather than raising, since an empty chart is the correct failure mode for
+    a hiccup in a historical-reporting query.
+    """
+    try:
+        query = db_session.query(StrategyClosedTrade)
+        if user_id:
+            query = query.filter_by(user_id=user_id)
+        if strategy:
+            query = query.filter_by(strategy=strategy)
+        if mode:
+            query = query.filter_by(mode=mode)
+        if start_date:
+            query = query.filter(StrategyClosedTrade.trade_date >= start_date)
+        if end_date:
+            query = query.filter(StrategyClosedTrade.trade_date <= end_date)
+        query = query.order_by(StrategyClosedTrade.trade_date, StrategyClosedTrade.id)
+        return [
+            {
+                "strategy": r.strategy,
+                "symbol": r.symbol,
+                "exchange": r.exchange,
+                "product": r.product,
+                "mode": r.mode,
+                "direction": r.direction,
+                "closed_quantity": float(r.closed_quantity or 0),
+                "entry_price": float(r.entry_price or 0),
+                "exit_price": float(r.exit_price or 0),
+                "realized_pnl": float(r.realized_pnl or 0),
+                "trade_date": r.trade_date,
+                "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+            }
+            for r in query.all()
+        ]
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not read closed trades")
+        return []

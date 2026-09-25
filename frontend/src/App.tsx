@@ -36,6 +36,7 @@ const Positions = lazy(() => import('@/pages/Positions'))
 const OrderBook = lazy(() => import('@/pages/OrderBook'))
 const TradeBook = lazy(() => import('@/pages/TradeBook'))
 const StrategyPnL = lazy(() => import('@/pages/StrategyPnL'))
+const StrategyDailyPerformance = lazy(() => import('@/pages/StrategyDailyPerformance'))
 const Holdings = lazy(() => import('@/pages/Holdings'))
 const Token = lazy(() => import('@/pages/Token'))
 const Search = lazy(() => import('@/pages/Search'))
@@ -190,6 +191,7 @@ function App() {
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
                 <Route path="/strategy-pnl" element={<StrategyPnL />} />
+                <Route path="/strategy-pnl/daily" element={<StrategyDailyPerformance />} />
                 <Route path="/holdings" element={<HoldingsRoute />} />
                 {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />

@@ -110,3 +110,80 @@ def test_no_auth_token_redirects_to_logout(monkeypatch):
         response = client.get("/api/strategy-pnl")
 
     assert response.status_code == 302
+
+
+def test_daily_route_passes_query_params_and_returns_metrics(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    captured = {}
+
+    def fake_get_daily_performance(strategy, period):
+        captured["strategy"] = strategy
+        captured["period"] = period
+        return True, {"status": "success", "mode": "live", "trades_count": 0}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_get_daily_performance)
+
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+
+        response = client.get("/api/strategy-pnl/daily?strategy=ORB&period=90d")
+
+    assert response.status_code == 200
+    assert captured == {"strategy": "ORB", "period": "90d"}
+    assert response.get_json()["status"] == "success"
+
+
+def test_daily_route_defaults_period_to_30d_and_strategy_to_none(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    captured = {}
+
+    def fake_get_daily_performance(strategy, period):
+        captured["strategy"] = strategy
+        captured["period"] = period
+        return True, {"status": "success"}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_get_daily_performance)
+
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+
+        client.get("/api/strategy-pnl/daily")
+
+    assert captured == {"strategy": None, "period": "30d"}
+
+
+def test_compare_route_returns_strategy_list(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    monkeypatch.setattr(
+        strategy_pnl_module,
+        "get_strategy_comparison",
+        lambda period: (
+            True,
+            {"status": "success", "mode": "live", "period": period, "strategies": []},
+            200,
+        ),
+    )
+
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+
+        response = client.get("/api/strategy-pnl/compare?period=ytd")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["period"] == "ytd"
+    assert body["strategies"] == []
+
+
+def test_daily_route_unauthenticated_is_rejected():
+    app = _app()
+    with app.test_client() as client:
+        response = client.get("/api/strategy-pnl/daily")
+
+    assert response.status_code in (302, 401)

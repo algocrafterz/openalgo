@@ -44,6 +44,7 @@ need → drill into the specific file. Don't load everything at once.
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |
 | Health monitoring | [HEALTH_MONITORING_IMPLEMENTATION.md](HEALTH_MONITORING_IMPLEMENTATION.md) · [HEALTH_MONITOR_REACT_FRONTEND.md](HEALTH_MONITOR_REACT_FRONTEND.md) |
 | Strategy P&L (`/strategy-pnl`) — a **local fork modification to core**, read before merging upstream | [strategy-pnl-fork-modification.md](strategy-pnl-fork-modification.md) |
+| Strategy Daily Performance — day-by-day metrics dashboard, extends the Strategy P&L fork modification | [strategy-daily-performance.md](strategy-daily-performance.md) |
 
 ## Architecture, design & specs (contributors)
 
