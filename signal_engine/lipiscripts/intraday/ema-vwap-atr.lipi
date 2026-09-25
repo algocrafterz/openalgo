@@ -1,0 +1,18 @@
+indicator("EMA-VWAP ATR Displacement", "EMA-VWAP ATR", false)
+
+emaLength = input.int(9, "EMA Length", minval=1)
+atrLength = input.int(14, "ATR Length", minval=1)
+
+emaValue = talib.ema(close, emaLength)
+vwapValue = talib.vwap(hlc3)
+atrValue = talib.atr(atrLength)
+
+displacement = (emaValue - vwapValue) / atrValue
+
+plot(displacement, "EMA-VWAP / ATR", displacement >= 0 ? color.green : color.red, 2)
+
+hline(0, "Zero", color=color.gray)
+hline(0.5, "+0.5 ATR", color=color.silver)
+hline(-0.5, "-0.5 ATR", color=color.silver)
+hline(1.0, "+1.0 ATR", color=color.silver)
+hline(-1.0, "-1.0 ATR", color=color.silver)

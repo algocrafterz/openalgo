@@ -1,10 +1,12 @@
 """Tests for order executor — RED phase first."""
 
+import dataclasses
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from signal_engine.config import settings as _real_settings
 from signal_engine.executor import (
     build_exit_order,
     build_order,
@@ -122,7 +124,9 @@ class TestBuildExitOrder:
     """Tests for build_exit_order — MARKET order to close LONG or SHORT positions."""
 
     def test_long_exit_action_is_sell(self):
-        order = build_exit_order("RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR", direction=Direction.LONG)
+        order = build_exit_order(
+            "RELIANCE", "NSE", 50, "CNC", "RSI-TP-MR", direction=Direction.LONG
+        )
         assert order.action == Action.SELL
 
     def test_short_exit_action_is_buy(self):
@@ -179,8 +183,13 @@ class TestPlaceSlOrder:
 
         with patch("signal_engine.executor.send_order", side_effect=_send):
             await place_sl_order(
-                symbol="RELIANCE", exchange="NSE", direction=direction,
-                quantity=10, sl_price=sl_price, product="MIS", strategy_tag="ORB",
+                symbol="RELIANCE",
+                exchange="NSE",
+                direction=direction,
+                quantity=10,
+                sl_price=sl_price,
+                product="MIS",
+                strategy_tag="ORB",
             )
         return captured["order"]
 
@@ -226,8 +235,13 @@ class TestPlaceSlOrder:
 
         with patch("signal_engine.executor.send_order", side_effect=_send):
             await place_sl_order(
-                symbol="RELIANCE", exchange="NSE", direction=Direction.LONG,
-                quantity=42, sl_price=2485.0, product="MIS", strategy_tag="ORB",
+                symbol="RELIANCE",
+                exchange="NSE",
+                direction=Direction.LONG,
+                quantity=42,
+                sl_price=2485.0,
+                product="MIS",
+                strategy_tag="ORB",
             )
         assert captured["order"].quantity == 42
 
@@ -244,6 +258,113 @@ class TestPlaceSlOrder:
         assert order.strategy_tag == "ORB"
         assert order.product == "MIS"
 
+
+class TestPlaceSlOrderAmbiguousTimeout:
+    """2026-09-24: place_sl_order's retry loop blindly retried on every TIMEOUT, even
+    though a client-side TIMEOUT does not mean the broker never got the order. Confirmed
+    live: 5 consecutive "failed" SL retries for NAUKRI and SOLARINDS had ALL actually
+    succeeded on the broker, stacking 5 duplicate resting SL-M orders per symbol. These
+    tests pin the fix: check the orderbook for a matching resting order before retrying
+    (or giving up) after a TIMEOUT.
+    """
+
+    @pytest.mark.asyncio
+    async def test_timeout_then_confirmed_resting_order_stops_retrying(self):
+        timeout_result = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+        send_mock = AsyncMock(return_value=timeout_result)
+        matching_order = {
+            "symbol": "RELIANCE",
+            "action": "SELL",
+            "quantity": 10,
+            "trigger_price": 2485.0,
+            "order_status": "trigger pending",
+            "orderid": "RECOVERED_SL1",
+        }
+        test_settings = dataclasses.replace(
+            _real_settings, bracket_max_sl_retries=5, bracket_retry_delay=0.0
+        )
+        with (
+            patch("signal_engine.executor.send_order", send_mock),
+            patch("signal_engine.executor.settings", test_settings),
+            patch(
+                "signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=[matching_order])
+            ),
+        ):
+            result = await place_sl_order(
+                symbol="RELIANCE",
+                exchange="NSE",
+                direction=Direction.LONG,
+                quantity=10,
+                sl_price=2485.0,
+                product="MIS",
+                strategy_tag="ORB",
+            )
+        assert result.status == OrderStatus.SUCCESS
+        assert result.order_id == "RECOVERED_SL1"
+        send_mock.assert_awaited_once()  # recovered on the first TIMEOUT — no further retries
+
+    @pytest.mark.asyncio
+    async def test_timeout_with_no_matching_order_still_exhausts_retries(self):
+        """No resting order found -> unchanged behaviour: retry to exhaustion, then fail."""
+        timeout_result = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+        send_mock = AsyncMock(return_value=timeout_result)
+        test_settings = dataclasses.replace(
+            _real_settings, bracket_max_sl_retries=3, bracket_retry_delay=0.0
+        )
+        with (
+            patch("signal_engine.executor.send_order", send_mock),
+            patch("signal_engine.executor.settings", test_settings),
+            patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=[])),
+        ):
+            result = await place_sl_order(
+                symbol="RELIANCE",
+                exchange="NSE",
+                direction=Direction.LONG,
+                quantity=10,
+                sl_price=2485.0,
+                product="MIS",
+                strategy_tag="ORB",
+            )
+        assert result.status == OrderStatus.TIMEOUT
+        assert send_mock.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_orderbook_match_requires_same_quantity(self):
+        """A resting order for a different quantity must never be adopted."""
+        timeout_result = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+        send_mock = AsyncMock(return_value=timeout_result)
+        wrong_qty_order = {
+            "symbol": "RELIANCE",
+            "action": "SELL",
+            "quantity": 999,
+            "trigger_price": 2485.0,
+            "order_status": "trigger pending",
+            "orderid": "NOT_THIS_ONE",
+        }
+        test_settings = dataclasses.replace(
+            _real_settings, bracket_max_sl_retries=2, bracket_retry_delay=0.0
+        )
+        with (
+            patch("signal_engine.executor.send_order", send_mock),
+            patch("signal_engine.executor.settings", test_settings),
+            patch(
+                "signal_engine.api_client.fetch_orderbook",
+                AsyncMock(return_value=[wrong_qty_order]),
+            ),
+        ):
+            result = await place_sl_order(
+                symbol="RELIANCE",
+                exchange="NSE",
+                direction=Direction.LONG,
+                quantity=10,
+                sl_price=2485.0,
+                product="MIS",
+                strategy_tag="ORB",
+            )
+        assert result.status == OrderStatus.TIMEOUT
+        assert send_mock.await_count == 2
+
+
 class TestSendBracketLegs:
     def _success_result(self, order_id="SL001"):
         return MagicMock(status=OrderStatus.SUCCESS, order_id=order_id)
@@ -259,7 +380,9 @@ class TestSendBracketLegs:
 
         with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
             mock_send.return_value = sl_result
-            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+            result_sl, result_tp = await send_bracket_legs(
+                signal, quantity=10, entry_order_id="E001"
+            )
 
         assert result_sl.order_id == "SL001"
         assert result_tp is None
@@ -272,7 +395,9 @@ class TestSendBracketLegs:
 
         with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
             mock_send.return_value = failure
-            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+            result_sl, result_tp = await send_bracket_legs(
+                signal, quantity=10, entry_order_id="E001"
+            )
 
         assert result_sl.status == OrderStatus.REJECTED
         assert result_tp is None
@@ -286,7 +411,9 @@ class TestSendBracketLegs:
 
         with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
             mock_send.return_value = failure
-            result_sl, result_tp = await send_bracket_legs(signal, quantity=10, entry_order_id="E001")
+            result_sl, result_tp = await send_bracket_legs(
+                signal, quantity=10, entry_order_id="E001"
+            )
 
         # Should have retried bracket_max_retries times (3 by default from config)
         assert result_sl.status == OrderStatus.REJECTED

@@ -30,6 +30,7 @@ from signal_engine.tracker import PositionTracker, TrackedPosition
 # Harness
 # --------------------------------------------------------------------------
 
+
 def _settings_stub(**overrides):
     """Stand-in for signal_engine.config.settings with every attribute main.py reads."""
     base = {
@@ -51,6 +52,8 @@ def _settings_stub(**overrides):
         "slippage_factor": 0.10,
         "test_qty_cap": 0,
         "allow_off_hours_testing": False,
+        "entry_timeout_recovery_attempts": 1,
+        "entry_timeout_recovery_delay_seconds": 0,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -58,8 +61,14 @@ def _settings_stub(**overrides):
 
 def _order_stub():
     return Order(
-        symbol="RELIANCE", exchange="NSE", action=Action.SELL, quantity=1,
-        price=0.0, order_type="MARKET", product="MIS", strategy_tag="ORB",
+        symbol="RELIANCE",
+        exchange="NSE",
+        action=Action.SELL,
+        quantity=1,
+        price=0.0,
+        order_type="MARKET",
+        product="MIS",
+        strategy_tag="ORB",
     )
 
 
@@ -93,9 +102,17 @@ def _real_tracker():
 
 def _position(**overrides) -> TrackedPosition:
     defaults = {
-        "symbol": "RELIANCE", "strategy": "ORB", "exchange": "NSE", "product": "MIS",
-        "entry_price": 2500.0, "quantity": 50, "sl": 2485.0, "tp": 2540.0,
-        "direction": Direction.LONG, "entry_order_id": "E1", "sl_order_id": "SL1",
+        "symbol": "RELIANCE",
+        "strategy": "ORB",
+        "exchange": "NSE",
+        "product": "MIS",
+        "entry_price": 2500.0,
+        "quantity": 50,
+        "sl": 2485.0,
+        "tp": 2540.0,
+        "direction": Direction.LONG,
+        "entry_order_id": "E1",
+        "sl_order_id": "SL1",
         "fill_price": 2500.0,
     }
     defaults.update(overrides)
@@ -104,8 +121,13 @@ def _position(**overrides) -> TrackedPosition:
 
 def _exit_signal(**overrides) -> Signal:
     defaults = {
-        "strategy": "ORB", "direction": Direction.EXIT, "symbol": "RELIANCE",
-        "entry": 0.0, "sl": 0.0, "tp": 0.0, "raw_message": "exit",
+        "strategy": "ORB",
+        "direction": Direction.EXIT,
+        "symbol": "RELIANCE",
+        "entry": 0.0,
+        "sl": 0.0,
+        "tp": 0.0,
+        "raw_message": "exit",
     }
     defaults.update(overrides)
     return Signal(**defaults)
@@ -113,8 +135,13 @@ def _exit_signal(**overrides) -> Signal:
 
 def _entry_signal(**overrides) -> Signal:
     defaults = {
-        "strategy": "ORB", "direction": Direction.LONG, "symbol": "RELIANCE",
-        "entry": 2500.0, "sl": 2485.0, "tp": 2540.0, "raw_message": "entry",
+        "strategy": "ORB",
+        "direction": Direction.LONG,
+        "symbol": "RELIANCE",
+        "entry": 2500.0,
+        "sl": 2485.0,
+        "tp": 2540.0,
+        "raw_message": "entry",
     }
     defaults.update(overrides)
     return Signal(**defaults)
@@ -132,8 +159,10 @@ class Harness:
 
     def record(self, name):
         """Wrap an AsyncMock so its invocation order is captured in self.calls."""
+
         def _hook(*_a, **_kw):
             self.calls.append(name)
+
         return _hook
 
 
@@ -153,6 +182,7 @@ def harness(settings=None, tracker=None, **stubs):
         "fetch_open_position": AsyncMock(return_value=0),
         "fetch_order_status": AsyncMock(return_value="complete"),
         "fetch_order_fill_price": AsyncMock(return_value=2500.0),
+        "fetch_orderbook": AsyncMock(return_value=[]),
         "fetch_available_capital": AsyncMock(return_value=100000.0),
         # Analyze-mode affordability gate (main._sandbox_can_fund). Plenty, so the gate is a
         # no-op here - the tests that exercise it live in test_sandbox_affordability.py.
@@ -177,9 +207,7 @@ def harness(settings=None, tracker=None, **stubs):
     # Close notifications are emitted by PositionTracker.book_close, entry/partial
     # notifications by main — patch both module references with the same mock so a
     # test can assert on either without caring which module owns the call.
-    h.notifier = stack.enter_context(
-        patch("signal_engine.main.notifier", new_callable=AsyncMock)
-    )
+    h.notifier = stack.enter_context(patch("signal_engine.main.notifier", new_callable=AsyncMock))
     stack.enter_context(patch("signal_engine.tracker.notifier", h.notifier))
     for name, stub in defaults.items():
         setattr(h, name, stack.enter_context(patch(f"signal_engine.main.{name}", stub)))
@@ -189,6 +217,7 @@ def harness(settings=None, tracker=None, **stubs):
 # --------------------------------------------------------------------------
 # Exit path: guards that abort before any broker order
 # --------------------------------------------------------------------------
+
 
 class TestExitGuards:
     @pytest.mark.asyncio
@@ -255,6 +284,7 @@ class TestExitGuards:
 # Exit path: engine-restart recovery
 # --------------------------------------------------------------------------
 
+
 class TestExitRestartRecovery:
     @pytest.mark.asyncio
     async def test_recovers_entry_context_from_trades_db(self):
@@ -302,6 +332,7 @@ class TestExitRestartRecovery:
 # Exit path: SL HIT reconcile (broker already closed the position)
 # --------------------------------------------------------------------------
 
+
 class TestSlHitReconcile:
     @pytest.mark.asyncio
     async def test_sl_hit_places_no_order_and_closes_books(self):
@@ -316,7 +347,9 @@ class TestSlHitReconcile:
 
             h.send_order.assert_not_awaited()
             h.cancel_order.assert_awaited_once_with("SL1", "ORB")
-            h.risk.record_close.assert_called_once_with(pnl=-750.0, strategy="ORB", symbol="RELIANCE")
+            h.risk.record_close.assert_called_once_with(
+                pnl=-750.0, strategy="ORB", symbol="RELIANCE"
+            )
             h.notifier.notify_position_closed.assert_awaited_once()
 
         assert tracker.find_position("RELIANCE", "ORB") is None
@@ -338,6 +371,7 @@ class TestSlHitReconcile:
 # --------------------------------------------------------------------------
 # Exit path: order placement, retries, failure handling
 # --------------------------------------------------------------------------
+
 
 class TestExitOrderPlacement:
     @pytest.mark.asyncio
@@ -406,6 +440,7 @@ class TestExitOrderPlacement:
 # Exit path: partial exits
 # --------------------------------------------------------------------------
 
+
 class TestPartialExitEdges:
     @pytest.mark.asyncio
     async def test_invalid_remainder_converts_to_full_exit(self):
@@ -465,6 +500,7 @@ class TestPartialExitEdges:
 # --------------------------------------------------------------------------
 # Entry path: pre-flight rejections
 # --------------------------------------------------------------------------
+
 
 class TestEntryPreflightRejections:
     @pytest.mark.asyncio
@@ -526,6 +562,7 @@ class TestEntryPreflightRejections:
 # Entry path: margin handling
 # --------------------------------------------------------------------------
 
+
 class TestEntryMargin:
     @pytest.mark.asyncio
     async def test_margin_api_error_aborts_the_trade(self):
@@ -549,9 +586,7 @@ class TestEntryMargin:
         h.risk.get_sizing_capital.return_value = 100000.0
         h.risk.calculate_quantity.return_value = 10
         with h.stack:
-            with patch(
-                "signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=0)
-            ):
+            with patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=0)):
                 await _handle_entry(_entry_signal())
             h.notifier.notify_order_rejected.assert_awaited_once()
             h.send_order.assert_not_awaited()
@@ -562,9 +597,7 @@ class TestEntryMargin:
         h.risk.get_sizing_capital.return_value = 100000.0
         h.risk.calculate_quantity.return_value = 10
         with h.stack:
-            with patch(
-                "signal_engine.main.adjust_qty_for_margin", new=AsyncMock()
-            ) as adj:
+            with patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock()) as adj:
                 await _handle_entry(_entry_signal())
             adj.assert_not_awaited()
             h.send_order.assert_awaited()
@@ -575,9 +608,7 @@ class TestEntryMargin:
         h.risk.get_sizing_capital.return_value = 100000.0
         h.risk.calculate_quantity.return_value = 50
         with h.stack:
-            with patch(
-                "signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=50)
-            ):
+            with patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=50)):
                 await _handle_entry(_entry_signal())
             assert h.build_order.call_args[0][1] == 3
 
@@ -586,13 +617,12 @@ class TestEntryMargin:
 # Entry path: post-fill handling
 # --------------------------------------------------------------------------
 
+
 class TestEntryPostFill:
     def _sized(self, h, qty=10):
         h.risk.get_sizing_capital.return_value = 100000.0
         h.risk.calculate_quantity.return_value = qty
-        return patch(
-            "signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=qty)
-        )
+        return patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=qty))
 
     @pytest.mark.asyncio
     async def test_bracket_sl_failure_alerts_but_keeps_position(self):
@@ -641,10 +671,96 @@ class TestEntryPostFill:
         pos = tracker.find_position("RELIANCE", "ORB")
         assert pos is not None and pos.fill_price == 0.0
 
+    @pytest.mark.asyncio
+    async def test_entry_timeout_with_broker_fill_is_recovered_and_tracked(self):
+        """2026-09-24: NAUKRI/SOLARINDS both timed out client-side yet filled on the
+        broker seconds later. A matching completed order in the orderbook must recover
+        the position instead of leaving it orphaned (no SL, no tracking)."""
+        tracker = _real_tracker()
+        timeout_result = TradeResult(
+            order_id="", status=OrderStatus.TIMEOUT, message="Request timed out"
+        )
+        # build_order is globally stubbed to _order_stub(): symbol=RELIANCE, action=SELL, qty=1.
+        matching_order = {
+            "symbol": "RELIANCE",
+            "action": "SELL",
+            "quantity": 1,
+            "order_status": "complete",
+            "orderid": "RECOVERED1",
+        }
+        h = harness(
+            tracker=tracker,
+            settings=_settings_stub(
+                entry_timeout_recovery_attempts=2, entry_timeout_recovery_delay_seconds=0
+            ),
+            send_order=AsyncMock(return_value=timeout_result),
+            fetch_orderbook=AsyncMock(return_value=[matching_order]),
+        )
+        with h.stack, self._sized(h):
+            await _handle_entry(_entry_signal())
+        pos = tracker.find_position("RELIANCE", "ORB")
+        assert pos is not None
+        assert pos.entry_order_id == "RECOVERED1"
+
+    @pytest.mark.asyncio
+    async def test_entry_timeout_with_no_broker_fill_is_treated_as_rejected(self):
+        """No matching completed order in the orderbook -> genuine failure, unchanged
+        behaviour: notify rejection, nothing tracked."""
+        tracker = _real_tracker()
+        timeout_result = TradeResult(
+            order_id="", status=OrderStatus.TIMEOUT, message="Request timed out"
+        )
+        h = harness(
+            tracker=tracker,
+            settings=_settings_stub(
+                entry_timeout_recovery_attempts=2, entry_timeout_recovery_delay_seconds=0
+            ),
+            send_order=AsyncMock(return_value=timeout_result),
+            fetch_orderbook=AsyncMock(return_value=[]),
+        )
+        with h.stack, self._sized(h):
+            await _handle_entry(_entry_signal())
+            h.notifier.notify_order_rejected.assert_awaited_once()
+        assert tracker.tracked_count == 0
+
+    @pytest.mark.asyncio
+    async def test_entry_timeout_recovery_ignores_already_tracked_order_id(self):
+        """A matching order id already owned by another tracked position must never be
+        adopted a second time — guards against a same-quantity coincidence."""
+        tracker = _real_tracker()
+        tracker.register(
+            _position(symbol="RELIANCE", strategy="ORB", entry_order_id="ALREADY_TRACKED")
+        )
+        timeout_result = TradeResult(
+            order_id="", status=OrderStatus.TIMEOUT, message="Request timed out"
+        )
+        # build_order is globally stubbed to _order_stub(): symbol=RELIANCE, action=SELL, qty=1.
+        matching_order = {
+            "symbol": "RELIANCE",
+            "action": "SELL",
+            "quantity": 1,
+            "order_status": "complete",
+            "orderid": "ALREADY_TRACKED",
+        }
+        h = harness(
+            tracker=tracker,
+            settings=_settings_stub(
+                entry_timeout_recovery_attempts=1, entry_timeout_recovery_delay_seconds=0
+            ),
+            send_order=AsyncMock(return_value=timeout_result),
+            fetch_orderbook=AsyncMock(return_value=[matching_order]),
+        )
+        with h.stack, self._sized(h):
+            await _handle_entry(_entry_signal())
+            h.notifier.notify_order_rejected.assert_awaited_once()
+        # still exactly the one pre-existing tracked position — no duplicate registered
+        assert tracker.tracked_count == 1
+
 
 # --------------------------------------------------------------------------
 # Pure helpers
 # --------------------------------------------------------------------------
+
 
 class TestAdjustQtyForMargin:
     @pytest.mark.asyncio
@@ -782,9 +898,7 @@ class TestSizingLogBranches:
         """max_sl_pct_for_sizing caps the risk-per-share used in the sizing log."""
         h = harness(settings=_settings_stub(max_sl_pct_for_sizing=0.002))
         with h.stack:
-            with patch(
-                "signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=10)
-            ):
+            with patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=10)):
                 # risk/share = 15.0, cap = 2500 * 0.002 = 5.0 -> capped
                 await _handle_entry(_entry_signal())
             h.send_order.assert_awaited()
@@ -804,7 +918,9 @@ class TestPartialExitDefensiveGuard:
                 await _handle_exit(_exit_signal(tp_level="TP1"))
             h.notifier.notify_position_closed.assert_awaited_once()
             h.notifier.notify_partial_exit.assert_not_awaited()
-            h.risk.record_close.assert_called_once_with(pnl=400.0, strategy="ORB", symbol="RELIANCE")
+            h.risk.record_close.assert_called_once_with(
+                pnl=400.0, strategy="ORB", symbol="RELIANCE"
+            )
         assert tracker.find_position("RELIANCE", "ORB") is None
         assert tracker._day_trades == 1
 

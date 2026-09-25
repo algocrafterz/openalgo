@@ -1,5 +1,6 @@
 """Shared test fixtures and factories for signal engine tests."""
 
+import httpx
 import pytest
 
 from signal_engine.models import Direction, Signal
@@ -45,3 +46,41 @@ def _never_touch_the_real_trades_db(tmp_path, monkeypatch):
     """
     monkeypatch.setattr("signal_engine.db._DB_PATH", str(tmp_path / "trades.db"))
     monkeypatch.setattr("signal_engine.tracker._DAY_SUMMARY_MARKER", str(tmp_path / "day_summary"))
+
+
+async def _blocked_post(self, url, *_args, **_kwargs):
+    """Replacement for httpx.AsyncClient.post — see _block_real_openalgo_api_calls.
+
+    Blocks the outbound REQUEST, not construction: test_resource_lifecycle.py legitimately
+    builds real httpx.AsyncClient instances to test the shared-client singleton's identity
+    and close() behaviour, and never issues a request while doing it.
+    """
+    raise RuntimeError(
+        f"A test tried to POST {url!r} via a real httpx.AsyncClient, which would hit the "
+        "live OpenAlgo API. Mock send_order/place_sl_order (or the specific api_client "
+        "fetch_*/cancel_* function) at its call site's module — e.g. "
+        "signal_engine.main.send_order or signal_engine.tracker.place_sl_order, not just "
+        "signal_engine.executor.send_order, since main.py/tracker.py each hold their own "
+        "'from signal_engine.executor import send_order'-style binding that a patch on the "
+        "executor module does not reach. A test that needs to exercise the real HTTP layer "
+        "(e.g. test_api_client.py) patches httpx.AsyncClient itself, which temporarily "
+        "overrides this fixture for its own scope."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _block_real_openalgo_api_calls(monkeypatch):
+    """Make a real HTTP call to the live OpenAlgo API impossible from a test.
+
+    The network-call counterpart to _never_touch_the_real_trades_db above, for the exact
+    same reason: it already happened. 2026-09-24: an ordinary `pytest signal_engine/tests/`
+    run placed 20+ real SELL SL-M orders against INFY and TCS on the LIVE OpenAlgo sandbox —
+    quantity=50, trigger=2485.0, strategy=ORB, all values traced straight back to this
+    file's own make_signal()/tracker_fixtures.py defaults. No test intended to place a real
+    order; some send_order/place_sl_order mock either wasn't applied for that code path or
+    targeted the wrong module-qualified name (see the RuntimeError message above for why that
+    is easy to get wrong here). The trades.db incident above was fixed by making the real
+    path structurally unreachable rather than trusting every test to mock every writer;
+    this is that same guarantee for outbound HTTP.
+    """
+    monkeypatch.setattr(httpx.AsyncClient, "post", _blocked_post)

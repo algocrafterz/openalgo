@@ -60,9 +60,7 @@ def _require_section(yml: dict, section: str) -> dict:
     """Extract a required top-level section from the YAML config."""
     value = yml.get(section)
     if value is None:
-        raise ConfigError(
-            f"Missing required section '{section}' in config.yaml"
-        )
+        raise ConfigError(f"Missing required section '{section}' in config.yaml")
     if not isinstance(value, dict):
         raise ConfigError(
             f"Section '{section}' in config.yaml must be a mapping, got {type(value).__name__}"
@@ -73,9 +71,7 @@ def _require_section(yml: dict, section: str) -> dict:
 def _require_key(section_data: dict, section_name: str, key: str):
     """Extract a required key from a config section. Raises on missing."""
     if key not in section_data:
-        raise ConfigError(
-            f"Missing required key '{section_name}.{key}' in config.yaml"
-        )
+        raise ConfigError(f"Missing required key '{section_name}.{key}' in config.yaml")
     return section_data[key]
 
 
@@ -90,6 +86,7 @@ class TelegramChannel:
     intraday-breakout while telegram.channels listed only smidestn and intraday-orb, and
     nothing recorded that this was on purpose.
     """
+
     name: str
     id: int | str  # numeric chat ID or @username
     enabled: bool = True
@@ -189,6 +186,10 @@ class Settings:
     # API (from yaml)
     api_timeout: float
     margin_api_retries: int
+    entry_timeout_recovery_attempts: (
+        int  # polls of the orderbook after an ambiguous entry-order timeout
+    )
+    entry_timeout_recovery_delay_seconds: float
 
     # Bracket orders (from yaml)
     bracket_enabled: bool
@@ -196,6 +197,12 @@ class Settings:
     bracket_sl_order_type: str
     bracket_max_sl_retries: int
     bracket_retry_delay: float
+    bracket_sl_reretry_interval_seconds: (
+        float  # cooldown between poll-loop re-attempts once the initial bracket exhausts
+    )
+    bracket_max_sl_reretries: (
+        int  # poll-loop re-attempts before giving up and alerting as permanently unprotected
+    )
     bracket_tp_exit_retries: int
     tp1_runner_sl_buffer: float  # fraction of R to set below TP1 for runner SL after partial exit
     use_extended_runner_tiers: bool  # ratchet runner SL to the last TP level hit, not always TP1
@@ -232,8 +239,10 @@ class Settings:
     no_progress_enabled: bool
     no_progress_check_after_minutes: int
     no_progress_min_progress_pct: float
-    no_progress_profit_lock_ratio: float  # 0.0 = strict break-even; 0.4 = lock 40% of unrealized profit
-    no_progress_ab_test_disable: bool     # When true, the entire no-progress check is skipped
+    no_progress_profit_lock_ratio: (
+        float  # 0.0 = strict break-even; 0.4 = lock 40% of unrealized profit
+    )
+    no_progress_ab_test_disable: bool  # When true, the entire no-progress check is skipped
     # Early no-progress gate — independent of the main gate. Fires earlier with
     # a lower progress threshold to catch catastrophic stalls.
     no_progress_early_check_enabled: bool
@@ -272,7 +281,9 @@ def _parse_no_progress(cfg: dict) -> dict:
         "no_progress_use_fill_price": bool(cfg.get("use_fill_price_for_progress", True)),
         "no_progress_loss_cut_enabled": bool(cfg.get("loss_cut_enabled", False)),
         "no_progress_loss_cut_min_age_minutes": int(cfg.get("loss_cut_min_age_minutes", 20)),
-        "no_progress_loss_cut_progress_threshold": float(cfg.get("loss_cut_progress_threshold", -0.80)),
+        "no_progress_loss_cut_progress_threshold": float(
+            cfg.get("loss_cut_progress_threshold", -0.80)
+        ),
     }
 
 
@@ -390,9 +401,7 @@ def _parse_channel(raw: dict) -> TelegramChannel:
         ch_id = int(raw_id)
     except (ValueError, TypeError):
         ch_id = str(raw_id)
-    return TelegramChannel(
-        name=raw.get("name", ""), id=ch_id, enabled=_channel_enabled(raw)
-    )
+    return TelegramChannel(name=raw.get("name", ""), id=ch_id, enabled=_channel_enabled(raw))
 
 
 #: Phase suffixes a strategy channel carries. Mirrors listener._PHASE_SUFFIXES; kept here
@@ -497,9 +506,7 @@ def _parse_mode_profiles(yml: dict) -> dict[str, dict]:
     if not isinstance(raw, dict):
         return {}
     return {
-        str(mode).lower(): dict(values)
-        for mode, values in raw.items()
-        if isinstance(values, dict)
+        str(mode).lower(): dict(values) for mode, values in raw.items() if isinstance(values, dict)
     }
 
 
@@ -575,7 +582,9 @@ def _telegram_fields(telegram: dict) -> dict:
         "telegram_channels": tuple(_parse_channel(ch) for ch in telegram.get("channels", [])),
         "notify_channel": _parse_phase_channels(telegram.get("notify_channel")),
         "notify_level": str(telegram.get("notify_level", "normal")).strip().lower(),
-        "breakingtrade_btst_channels": _parse_phase_channels(telegram.get("breakingtrade_btst_channels")),
+        "breakingtrade_btst_channels": _parse_phase_channels(
+            telegram.get("breakingtrade_btst_channels")
+        ),
     }
 
 
@@ -643,6 +652,10 @@ def _bracket_fields(bracket: dict) -> dict:
         "bracket_sl_order_type": str(_require_key(bracket, "bracket", "sl_order_type")),
         "bracket_max_sl_retries": int(_require_key(bracket, "bracket", "max_sl_retries")),
         "bracket_retry_delay": float(bracket.get("retry_delay", 0.5)),
+        "bracket_sl_reretry_interval_seconds": float(
+            bracket.get("sl_reretry_interval_seconds", 30.0)
+        ),
+        "bracket_max_sl_reretries": int(bracket.get("max_sl_reretries", 6)),
         "bracket_tp_exit_retries": int(bracket.get("tp_exit_retries", 3)),
         "tp1_runner_sl_buffer": float(bracket.get("tp1_runner_sl_buffer", 0.3)),
         "use_extended_runner_tiers": bool(bracket.get("use_extended_runner_tiers", False)),
@@ -700,6 +713,10 @@ def _build_settings() -> Settings:
         listener_base_backoff=int(_require_key(listener, "listener", "base_backoff")),
         api_timeout=float(_require_key(api, "api", "timeout")),
         margin_api_retries=int(api.get("margin_retries", 3)),
+        entry_timeout_recovery_attempts=int(api.get("entry_timeout_recovery_attempts", 3)),
+        entry_timeout_recovery_delay_seconds=float(
+            api.get("entry_timeout_recovery_delay_seconds", 2.0)
+        ),
         strategy_profiles=_parse_strategy_profiles(yml),
         mode_profiles=_parse_mode_profiles(yml),
         blacklist=blacklist,

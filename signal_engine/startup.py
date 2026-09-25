@@ -25,6 +25,7 @@ from signal_engine.tracker import TimeExitScheduler, TrackedPosition
 # CLI flag handling
 # ---------------------------------------------------------------------------
 
+
 def run_health_check_cli(argv) -> bool:
     """Handle --smoke-test / --dry-run. Returns True if the flag was handled.
 
@@ -34,6 +35,7 @@ def run_health_check_cli(argv) -> bool:
         return False
 
     from signal_engine.smoke_test import run_dry_run, run_smoke_test
+
     is_dry = "--dry-run" in argv
 
     async def _run_checks():
@@ -161,6 +163,7 @@ def log_startup_banner() -> None:
 # Startup health checks
 # ---------------------------------------------------------------------------
 
+
 async def run_startup_health_checks():
     """Run pre-flight checks before accepting any signals.
 
@@ -178,8 +181,12 @@ async def run_startup_health_checks():
     startup_report = await run_startup_checks()
     startup_report.print()
 
-    failed_critical = [c for c in startup_report.checks if not c.passed and c.name in _CRITICAL_CHECKS]
-    failed_warnings = [c for c in startup_report.checks if not c.passed and c.name in _WARNING_CHECKS]
+    failed_critical = [
+        c for c in startup_report.checks if not c.passed and c.name in _CRITICAL_CHECKS
+    ]
+    failed_warnings = [
+        c for c in startup_report.checks if not c.passed and c.name in _WARNING_CHECKS
+    ]
 
     if failed_warnings:
         warn_lines = "\n".join(f"  WARN {c.name}: {c.message}" for c in failed_warnings)
@@ -247,6 +254,7 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         return
 
     from signal_engine.api_client import fetch_positionbook
+
     positions = await fetch_positionbook()
     if positions is None:
         logger.warning("Position reconciliation: could not fetch positionbook, skipping")
@@ -255,9 +263,9 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
     configured_product = settings.product  # MIS or CNC — the default for restored positions
     products = _configured_products()
     open_broker_positions = [
-        p for p in positions
-        if int(p.get("quantity", 0)) != 0
-        and p.get("product", "").upper() in products
+        p
+        for p in positions
+        if int(p.get("quantity", 0)) != 0 and p.get("product", "").upper() in products
     ]
     open_broker_symbols = {p.get("symbol", "") for p in open_broker_positions}
     by_symbol = {p.get("symbol", ""): p for p in positions}
@@ -281,14 +289,24 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         )
         logger.warning(note)
         db.save_reconciled_exit(
-            pos["strategy"], symbol, pos["entry"], pos["sl"], pos["tp"],
-            pos["quantity"], fill_price, pnl, note,
+            pos["strategy"],
+            symbol,
+            pos["entry"],
+            pos["sl"],
+            pos["tp"],
+            pos["quantity"],
+            fill_price,
+            pnl,
+            note,
             sig_id=pos.get("sig_id"),
         )
         risk_engine.record_close(pnl, strategy=pos["strategy"], symbol=symbol)
         try:
             await notifier.notify_position_closed(
-                symbol, pnl, strategy=pos["strategy"], exit_price=fill_price,
+                symbol,
+                pnl,
+                strategy=pos["strategy"],
+                exit_price=fill_price,
                 entry_price=pos["entry"],
                 day_context="(reconciled after restart - exact fill time unknown)",
             )
@@ -335,7 +353,9 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
                 )
                 risk_engine.set_open_positions(strategy, actual)
             else:
-                logger.info(f"[{strategy}] Position reconciliation: stored={stored} matches broker={actual}")
+                logger.info(
+                    f"[{strategy}] Position reconciliation: stored={stored} matches broker={actual}"
+                )
     else:
         # LIVE: one shared counter across every strategy — every strategy name resolves
         # to the same pooled bucket (RiskEngine._key), so correct it ONCE against the
@@ -443,6 +463,13 @@ def _restore_tracker_positions(
     from it keeps the old blank, which is honest — the engine simply does not know of a stop
     for it.
 
+    2026-09-24: when multiple strategies traded the same symbol today (see
+    _lookup_entry_legs), this restores ONE TrackedPosition per entry leg instead of
+    collapsing them into one under the broker's combined quantity. Only the first leg can
+    carry the recovered sl_order_id — _match_open_sl_orders keeps just one working-stop id
+    per symbol — but PositionTracker._retry_missing_sl (added the same day) re-protects any
+    other leg from the next poll cycle on, so a blank id here is temporary, not permanent.
+
     Returns the number of positions restored.
     """
     sl_orders = sl_orders or {}
@@ -456,63 +483,63 @@ def _restore_tracker_positions(
         bexch = bp.get("exchange", settings.exchange)
         bprod = configured_product
 
-        found, strategy_for_pos = _lookup_entry_trade(
-            bsymbol, broker_qty=bqty, is_long=(bdir == Direction.LONG)
-        )
-        if found is None:
+        legs = _lookup_entry_legs(bsymbol, broker_qty=bqty, is_long=(bdir == Direction.LONG))
+        if not legs:
             logger.warning(
                 f"Tracker restore [{bsymbol}]: no entry trade in trades.db today "
                 "— skipping (TP/SL alerts will use fallback path)"
             )
             continue
-        if tracker.find_position(bsymbol, strategy_for_pos) is not None:
-            continue
 
-        tracker.register(TrackedPosition(
-            symbol=bsymbol,
-            strategy=strategy_for_pos,
-            exchange=bexch,
-            product=bprod,
-            entry_price=found["entry"],
-            quantity=bqty,
-            sl=found["sl"],
-            tp=found["tp"],
-            direction=bdir,
-            entry_order_id=found["order_id"],
-            sl_order_id=sl_orders.get(bsymbol.upper(), ""),
-            fill_price=float(bp.get("average_price", 0) or 0),
-            ever_seen_nonzero_qty=True,
-            sig_id=found.get("sig_id", ""),
-        ))
-        restored += 1
         recovered_sl = sl_orders.get(bsymbol.upper(), "")
-        sl_note = (
-            f" sl_order={recovered_sl}" if recovered_sl
-            else " sl_order=UNKNOWN (no working stop found in the orderbook)"
-        )
-        logger.info(
-            f"Tracker restored [{bsymbol}:{strategy_for_pos}]: qty={bqty} "
-            f"entry={found['entry']} sl={found['sl']} tp={found['tp']}{sl_note}"
-        )
+        for i, (strategy_for_pos, found) in enumerate(legs):
+            if tracker.find_position(bsymbol, strategy_for_pos) is not None:
+                continue
+
+            # Single-entry case (the common one): the broker's whole netted quantity is
+            # this leg's. Split case: each leg gets its OWN recorded quantity, not the
+            # combined total.
+            leg_qty = found["quantity"] if len(legs) > 1 else bqty
+
+            tracker.register(
+                TrackedPosition(
+                    symbol=bsymbol,
+                    strategy=strategy_for_pos,
+                    exchange=bexch,
+                    product=bprod,
+                    entry_price=found["entry"],
+                    quantity=leg_qty,
+                    sl=found["sl"],
+                    tp=found["tp"],
+                    direction=bdir,
+                    entry_order_id=found["order_id"],
+                    sl_order_id=recovered_sl if i == 0 else "",
+                    fill_price=float(bp.get("average_price", 0) or 0),
+                    ever_seen_nonzero_qty=True,
+                    sig_id=found.get("sig_id", ""),
+                )
+            )
+            restored += 1
+            if i == 0:
+                sl_note = (
+                    f" sl_order={recovered_sl}"
+                    if recovered_sl
+                    else " sl_order=UNKNOWN (no working stop found in the orderbook)"
+                )
+            else:
+                sl_note = " sl_order=UNKNOWN (multi-leg restore — poll loop will re-protect)"
+            logger.info(
+                f"Tracker restored [{bsymbol}:{strategy_for_pos}]: qty={leg_qty} "
+                f"entry={found['entry']} sl={found['sl']} tp={found['tp']}{sl_note}"
+            )
     return restored
 
 
-def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True):
-    """Find today's entry trade for a symbol and say which strategy it belongs to.
+def _gather_candidate_entries(bsymbol: str) -> list:
+    """Today's most recent SUCCESS entry row for every known strategy that traded `bsymbol`.
 
-    Returns (trade_row_or_None, strategy_name).
-
-    This used to try "ORB" first and then settings.strategy_profiles in DICT ORDER, taking
-    the first hit — so a symbol traded by two strategies today was attributed to whichever
-    happened to be checked first, and the restored position carried the wrong strategy's
-    entry/SL/TP into every later exit decision. Now every candidate row is collected and
-    scored against what the BROKER actually reports:
-
-      1. quantity and direction both match  - unambiguous, take it
-      2. direction matches                  - the side is right, the size may be a partial
-      3. otherwise                          - most recent executed_at wins
-
-    Ties inside a tier are broken by executed_at, latest first.
+    Returns a list of (strategy, row) tuples, one per strategy with a matching row — shared
+    by _lookup_entry_trade (single best match) and _lookup_entry_legs (multi-leg restore).
     """
     candidates = []
     seen = set()
@@ -524,7 +551,30 @@ def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True)
         row = fetch_last_entry_trade(bsymbol, strategy)
         if row is not None:
             candidates.append((strategy, row))
+    return candidates
 
+
+def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True):
+    """Find today's SINGLE best-matching entry trade for a symbol.
+
+    Returns (trade_row_or_None, strategy_name). This used to try "ORB" first and then
+    settings.strategy_profiles in DICT ORDER, taking the first hit — so a symbol traded by
+    two strategies today was attributed to whichever happened to be checked first, and the
+    restored position carried the wrong strategy's entry/SL/TP into every later exit
+    decision. Now every candidate row is collected and scored against what the BROKER
+    actually reports:
+
+      1. quantity and direction both match  - unambiguous, take it
+      2. direction matches                  - the side is right, the size may be a partial
+      3. otherwise                          - most recent executed_at wins
+
+    Ties inside a tier are broken by executed_at, latest first.
+
+    Callers restoring a position for real should use _lookup_entry_legs instead — this
+    single-result form is what it falls back to when a clean multi-leg split isn't possible,
+    and is kept directly callable for its own coverage.
+    """
+    candidates = _gather_candidate_entries(bsymbol)
     if not candidates:
         return None, "ORB"
 
@@ -547,6 +597,54 @@ def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True)
     return row, strategy
 
 
+def _lookup_entry_legs(bsymbol: str, broker_qty: int = 0, is_long: bool = True) -> list:
+    """Find today's entry trade(s) for a symbol, split per strategy leg when the broker
+    position is really the sum of several.
+
+    Returns a list of (strategy, row) tuples — one element in the common case, several when
+    multiple strategies each entered this symbol today, in the SAME direction as the broker
+    currently holds, with their own quantities summing EXACTLY to the broker's current
+    netted quantity. Anything less clean (a partial fill, a manually adjusted broker
+    quantity, three-or-more-way ambiguity) falls back to _lookup_entry_trade's single
+    best-match behaviour, unchanged — a clean split should never be guessed at.
+
+    2026-09-24: _restore_tracker_positions used to call _lookup_entry_trade directly and
+    collapse a same-symbol multi-strategy day into ONE TrackedPosition holding the broker's
+    combined quantity under a single arbitrarily-chosen entry. When that merged position
+    later closed (a mass restart-triggered exit batch, in the incident that found this),
+    exactly one trades.db exit row was written — for the chosen entry's full combined
+    quantity — permanently orphaning every other entry's own exit. Confirmed for 7 symbols
+    that day (APLAPOLLO, ASIANPAINT, BAJFINANCE, HINDZINC, ICICIPRULI, JIOFIN, PRESTIGE),
+    each with exactly two entries (BREAKINGTRADE + BREAKINGTRADE-WATCHLIST) whose quantities
+    summed exactly to the broker's reported total.
+    """
+    candidates = _gather_candidate_entries(bsymbol)
+    if not candidates:
+        return []
+
+    wanted_direction = "LONG" if is_long else "SHORT"
+    same_direction = [
+        (s, r) for s, r in candidates if str(r.get("direction", "")).upper() == wanted_direction
+    ]
+    if (
+        len(same_direction) > 1
+        and broker_qty > 0
+        and sum(int(r.get("quantity", 0) or 0) for _, r in same_direction) == broker_qty
+    ):
+        logger.info(
+            f"Tracker restore [{bsymbol}]: {len(same_direction)} strategies traded this "
+            f"symbol today ({', '.join(s for s, _ in same_direction)}), quantities sum "
+            f"exactly to the broker's {broker_qty} - restoring one position per entry "
+            "instead of merging them"
+        )
+        # Oldest first: an arbitrary but stable and deterministic choice for which leg is
+        # "first" (and so gets the one recoverable sl_order_id, if any — see caller).
+        return sorted(same_direction, key=lambda item: item[1].get("executed_at") or "")
+
+    row, strategy = _lookup_entry_trade(bsymbol, broker_qty=broker_qty, is_long=is_long)
+    return [(strategy, row)] if row is not None else []
+
+
 def _invert_timestamp(executed_at) -> tuple:
     """Sort key that puts the LATEST executed_at first under an ascending sort.
 
@@ -555,18 +653,22 @@ def _invert_timestamp(executed_at) -> tuple:
     """
     if not executed_at:
         return (1, "")
-    return (0, "".join(chr(0x10FFFF - ord(c)) if ord(c) < 0x10FFFF else c
-                       for c in str(executed_at)))
+    return (
+        0,
+        "".join(chr(0x10FFFF - ord(c)) if ord(c) < 0x10FFFF else c for c in str(executed_at)),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Engine lifecycle
 # ---------------------------------------------------------------------------
 
+
 def _resolve_broker_name() -> str:
     """Best-effort broker name for the startup message — never blocks startup."""
     try:
         from signal_engine.scripts.openalgoscheduler import get_broker_name
+
         return get_broker_name()
     except Exception:
         return "unknown"
@@ -678,9 +780,7 @@ def _start_time_exit_scheduler(tracker):
     """Start the square-off scheduler if enabled. Returns (scheduler, task) or (None, None)."""
     if not settings.time_exit_enabled:
         return None, None
-    scheduler = TimeExitScheduler(
-        tracker, settings.time_exit_hour, settings.time_exit_minute
-    )
+    scheduler = TimeExitScheduler(tracker, settings.time_exit_hour, settings.time_exit_minute)
     task = asyncio.create_task(scheduler.start())
     logger.info(
         f"Time exit enabled: {settings.time_exit_hour:02d}:{settings.time_exit_minute:02d} IST"

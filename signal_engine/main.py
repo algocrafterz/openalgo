@@ -19,6 +19,7 @@ from signal_engine.api_client import (
     fetch_open_position,
     fetch_order_fill_price,
     fetch_order_status,
+    fetch_orderbook,
     fetch_realised_pnl,
     fetch_trading_mode,
 )
@@ -41,9 +42,7 @@ from signal_engine.timeutils import IST
 from signal_engine.tracker import PositionTracker, TrackedPosition, _compute_r
 from signal_engine.validator import validate
 
-_OPENALGO_DB = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "db", "openalgo.db")
-)
+_OPENALGO_DB = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "db", "openalgo.db"))
 
 
 def _is_be_series(symbol: str, exchange: str) -> bool:
@@ -459,8 +458,11 @@ async def _abort_exit_on_rejected_entry(signal, pos) -> bool:
     risk_engine.record_rejection(strategy=pos.strategy, symbol=pos.symbol)
     tracker.unregister(signal.symbol, signal.strategy)
     await notifier.notify_orphaned_position(
-        pos.symbol, pos.strategy, pos.direction.value,
-        pos.entry_order_id, f"exit blocked: entry order {status_lower}",
+        pos.symbol,
+        pos.strategy,
+        pos.direction.value,
+        pos.entry_order_id,
+        f"exit blocked: entry order {status_lower}",
     )
     return True
 
@@ -470,7 +472,9 @@ async def _reconcile_sl_hit(signal, pos) -> None:
 
     Do NOT place another SELL (would create naked short). Just clean up tracker.
     """
-    logger.info(f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker")
+    logger.info(
+        f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker"
+    )
     if pos.sl_order_id:
         await cancel_order(pos.sl_order_id, pos.strategy)
     pnl_delta, current_realised = await _book_realised_pnl_delta()
@@ -566,7 +570,9 @@ async def _book_exit_result(
     logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
 
     pnl_delta, current_realised = await _book_realised_pnl_delta()
-    logger.info(f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})")
+    logger.info(
+        f"EXIT PnL for {pos.symbol}: delta={pnl_delta:,.2f} (realised={current_realised:,.2f})"
+    )
 
     base_price = pos.fill_price or pos.entry_price
     hold_min = _hold_minutes(pos)
@@ -576,8 +582,13 @@ async def _book_exit_result(
     if is_full_exit:
         # book_close advances the day counters and the realised-P&L snapshot.
         await _finalize_full_exit(
-            signal, pos, tp_level, pnl_delta, hold_min,
-            approx_exit_price, current_realised,
+            signal,
+            pos,
+            tp_level,
+            pnl_delta,
+            hold_min,
+            approx_exit_price,
+            current_realised,
         )
         await tracker.maybe_send_day_summary()
         return True
@@ -585,18 +596,31 @@ async def _book_exit_result(
     remaining = pos.quantity - exit_qty
     if remaining <= 0:
         await _finalize_invalid_partial(
-            signal, pos, tp_level, exit_qty, pnl_delta, current_realised,
-            hold_min, approx_exit_price,
+            signal,
+            pos,
+            tp_level,
+            exit_qty,
+            pnl_delta,
+            current_realised,
+            hold_min,
+            approx_exit_price,
         )
         return False
 
     await _finalize_partial_exit(
-        pos, tp_level, exit_qty, remaining, pnl_delta,
-        base_price, hold_min,
+        pos,
+        tp_level,
+        exit_qty,
+        remaining,
+        pnl_delta,
+        base_price,
+        hold_min,
     )
     # Partial exit: accumulate P&L only — the trade is counted at its final close.
     tracker.record_exit(
-        pnl=pnl_delta, is_partial=True, new_realised_pnl=current_realised,
+        pnl=pnl_delta,
+        is_partial=True,
+        new_realised_pnl=current_realised,
     )
     # A partial leg's row is written by the plain save() below, not book_close() - it is
     # the ONLY persisted row for this leg (see the comment in _handle_exit_locked). Without
@@ -613,8 +637,13 @@ async def _book_exit_result(
 
 
 async def _finalize_full_exit(
-    signal, pos, tp_level, pnl_delta: float, hold_min: int,
-    approx_exit_price, current_realised: float,
+    signal,
+    pos,
+    tp_level,
+    pnl_delta: float,
+    hold_min: int,
+    approx_exit_price,
+    current_realised: float,
 ) -> None:
     """Book the close, unregister the position, and free the risk slot."""
     await tracker.book_close(
@@ -632,8 +661,14 @@ async def _finalize_full_exit(
 
 
 async def _finalize_invalid_partial(
-    signal, pos, tp_level, exit_qty: int, pnl_delta: float, current_realised: float,
-    hold_min: int, approx_exit_price,
+    signal,
+    pos,
+    tp_level,
+    exit_qty: int,
+    pnl_delta: float,
+    current_realised: float,
+    hold_min: int,
+    approx_exit_price,
 ) -> None:
     """Defensive: a partial exit that leaves no shares is booked as a full close."""
     logger.warning(
@@ -655,8 +690,13 @@ async def _finalize_invalid_partial(
 
 
 async def _finalize_partial_exit(
-    pos, tp_level, exit_qty: int, remaining: int, pnl_delta: float,
-    base_price: float, hold_min: int,
+    pos,
+    tp_level,
+    exit_qty: int,
+    remaining: int,
+    pnl_delta: float,
+    base_price: float,
+    hold_min: int,
 ) -> None:
     """Reduce the tracked qty, re-protect the runner, and notify."""
     pos.quantity = remaining
@@ -671,11 +711,19 @@ async def _finalize_partial_exit(
     next_tp_label = next_tp_info[0] if next_tp_info else None
     next_tp_price = next_tp_info[1] if next_tp_info else None
     await notifier.notify_partial_exit(
-        pos.symbol, exit_qty, remaining, tp_level or "", pnl_delta,
-        strategy=pos.strategy, new_sl=pos.sl,
-        next_tp_label=next_tp_label, next_tp_price=next_tp_price,
-        direction=pos.direction.value, r_multiple=r_partial,
-        entry_price=base_price, hold_minutes=hold_min,
+        pos.symbol,
+        exit_qty,
+        remaining,
+        tp_level or "",
+        pnl_delta,
+        strategy=pos.strategy,
+        new_sl=pos.sl,
+        next_tp_label=next_tp_label,
+        next_tp_price=next_tp_price,
+        direction=pos.direction.value,
+        r_multiple=r_partial,
+        entry_price=base_price,
+        hold_minutes=hold_min,
     )
     # Accumulate partial P&L and record exit label for final TradeRecord
     pos.realized_pnl += pnl_delta
@@ -693,10 +741,17 @@ async def _finalize_partial_exit(
 # exactly those three. Looking up context["vah"] silently missed every value-area runner and
 # dropped it onto the TP1-buffer fallback.
 _LEVEL_CONTEXT_KEYS = {
-    "ORH": "orh", "ORM": "orm", "ORL": "orl",
-    "IBH": "ibh", "IBM": "ibm", "IBL": "ibl",
-    "VAH": "pvah", "POC": "ppoc", "VAL": "pval",
-    "PDH": "pdh", "PDL": "pdl",
+    "ORH": "orh",
+    "ORM": "orm",
+    "ORL": "orl",
+    "IBH": "ibh",
+    "IBM": "ibm",
+    "IBL": "ibl",
+    "VAH": "pvah",
+    "POC": "ppoc",
+    "VAL": "pval",
+    "PDH": "pdh",
+    "PDL": "pdl",
 }
 
 
@@ -862,8 +917,10 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
     """
     logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
     broker_qty = await fetch_open_position(
-        pos.symbol, pos.strategy,
-        pos.exchange, pos.product,
+        pos.symbol,
+        pos.strategy,
+        pos.exchange,
+        pos.product,
     )
     if broker_qty == 0:
         logger.info(
@@ -928,6 +985,10 @@ async def _handle_entry(signal) -> None:
 
     # Send to OpenAlgo (routes to live broker or sandbox automatically)
     trade_result = await send_order(order)
+    if trade_result.status == OrderStatus.TIMEOUT:
+        recovered = await _recover_ambiguous_entry_timeout(signal, order)
+        if recovered is not None:
+            trade_result = recovered
     await _notify_entry_outcome(signal, trade_result, rr)
 
     if trade_result.status == OrderStatus.SUCCESS:
@@ -1065,7 +1126,9 @@ async def _resolve_entry_quantity(
     if is_analyze:
         if not await _sandbox_can_fund(signal, quantity):
             return None
-        logger.info(f"Analyze mode: skipping margin check for {signal.symbol}, using risk-based qty={quantity}")
+        logger.info(
+            f"Analyze mode: skipping margin check for {signal.symbol}, using risk-based qty={quantity}"
+        )
     else:
         try:
             quantity = await adjust_qty_for_margin(signal, quantity, capital)
@@ -1137,7 +1200,8 @@ def _log_entry_sizing(
     risk_total = quantity * risk_per_share
     cap_note = (
         f" [SL capped {risk_per_share:.2f}->{effective_sl:.2f} for sizing]"
-        if effective_sl < risk_per_share else ""
+        if effective_sl < risk_per_share
+        else ""
     )
     # Margin scaling drift (T1) — only mentioned when it actually happened.
     risk_based_quantity = risk_based_quantity or quantity
@@ -1145,7 +1209,8 @@ def _log_entry_sizing(
         f" [margin-scaled {risk_based_quantity} -> {quantity}, "
         f"actual risk {risk_total / sizing_capital:.2%} vs intended "
         f"{settings.risk_per_trade:.2%}]"
-        if risk_based_quantity != quantity else ""
+        if risk_based_quantity != quantity
+        else ""
     )
 
     # Implied leverage, and whether the product's margin can fund it at all.
@@ -1166,7 +1231,7 @@ def _log_entry_sizing(
         f"reward/sh={reward_per_share:.2f} R:R=1:{rr:.1f} "
         f"qty=floor({risk_amount:,.0f}/{adjusted_rps:.2f})={quantity} "
         f"value={pos_value:,.0f} leverage={leverage:.1f}x "
-        f"total_risk={risk_total:,.0f}({risk_total/sizing_capital:.2%})"
+        f"total_risk={risk_total:,.0f}({risk_total / sizing_capital:.2%})"
         f"{scale_note}{lev_note}"
     )
     return rr
@@ -1241,6 +1306,66 @@ def _build_entry_order(signal, quantity: int, is_analyze: bool):
     return build_order(signal, quantity, product="CNC" if off_hours_product_override else "")
 
 
+async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None":
+    """Check whether an entry order that TIMED OUT/ERRORed client-side actually filled.
+
+    send_order's TIMEOUT/ERROR only means the HTTP response never arrived in time — not
+    that OpenAlgo/the broker never processed the order. 2026-09-24: NAUKRI and SOLARINDS
+    both timed out on entry, yet their orders showed status=complete on the broker's own
+    orderbook ~6-9s later. _handle_entry treated the timeout as "no position" and never
+    called _establish_position — so both fills sat on the broker completely untracked: no
+    SL, no TP monitoring, no risk-slot accounting, invisible to the engine and to the
+    trader. Poll the orderbook for a completed order matching this signal before
+    conceding the entry genuinely never happened.
+
+    Matches on symbol + action + quantity + order_status=complete. Risk-based position
+    sizing makes the (symbol, action, quantity) triple change with every signal, so a
+    same-day collision with an unrelated earlier fill for the same symbol is very unlikely
+    in practice — orderbook rows don't carry a timestamp field consistent enough across
+    brokers to filter on instead.
+    """
+    action = order.action.value
+    for attempt in range(1, settings.entry_timeout_recovery_attempts + 1):
+        await asyncio.sleep(settings.entry_timeout_recovery_delay_seconds)
+        orderbook = await fetch_orderbook()
+        if orderbook is None:
+            continue
+        for o in orderbook:
+            if not isinstance(o, dict):
+                continue
+            if str(o.get("symbol", "")).upper() != signal.symbol.upper():
+                continue
+            if str(o.get("action", "")).upper() != action:
+                continue
+            try:
+                if int(o.get("quantity", 0)) != order.quantity:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            status = str(o.get("order_status") or o.get("status") or "").lower()
+            if status not in ("complete", "filled"):
+                continue
+            order_id = str(o.get("orderid") or o.get("order_id") or "")
+            if not order_id:
+                continue
+            if any(p.entry_order_id == order_id for p in tracker._positions.values()):
+                continue  # already tracked under some other signal — not this one's fill
+            logger.warning(
+                f"Entry order timeout for {signal.symbol} was ambiguous — order DID fill on "
+                f"the broker (id={order_id}, attempt {attempt}/"
+                f"{settings.entry_timeout_recovery_attempts}) — recovering the position that "
+                "would otherwise have been orphaned"
+            )
+            return TradeResult(
+                order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
+            )
+    logger.info(
+        f"Entry timeout recovery for {signal.symbol}: no matching completed order found "
+        f"after {settings.entry_timeout_recovery_attempts} checks — treating as a genuine failure"
+    )
+    return None
+
+
 async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
     """Announce the broker's response to the entry order."""
     if trade_result.status == OrderStatus.SUCCESS:
@@ -1251,14 +1376,22 @@ async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
             risk_engine.effective_max_open_positions_for(signal.strategy),
         )
         await notifier.notify_order_placed(
-            signal.symbol, signal.direction.value,
-            strategy=signal.strategy, signal_price=signal.entry,
-            sl=signal.sl, tp=signal.tp, rr=rr,
+            signal.symbol,
+            signal.direction.value,
+            strategy=signal.strategy,
+            signal_price=signal.entry,
+            sl=signal.sl,
+            tp=signal.tp,
+            rr=rr,
             slot_context=slot_context,
         )
     else:
-        logger.warning(f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}")
-        await notifier.notify_order_rejected(signal.symbol, trade_result.message, strategy=signal.strategy)
+        logger.warning(
+            f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}"
+        )
+        await notifier.notify_order_rejected(
+            signal.symbol, trade_result.message, strategy=signal.strategy
+        )
 
 
 async def _establish_position(signal, quantity: int, trade_result) -> bool:
@@ -1283,26 +1416,34 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
     # Always notify LIVE so trader knows position is active and SL is protecting it.
     # fill_price=0 triggers "fill pending" wording in the message.
     await notifier.notify_entry_filled(
-        signal.symbol, signal.direction.value, entry_fill_price or 0.0,
-        quantity, signal.entry, strategy=signal.strategy, sl=signal.sl, tp=signal.tp,
-    )
-
-    tracker.register(TrackedPosition(
-        symbol=signal.symbol,
+        signal.symbol,
+        signal.direction.value,
+        entry_fill_price or 0.0,
+        quantity,
+        signal.entry,
         strategy=signal.strategy,
-        exchange=signal.exchange or settings.exchange,
-        product=signal.product or settings.product,
-        entry_price=signal.entry,
-        quantity=quantity,
         sl=signal.sl,
         tp=signal.tp,
-        direction=signal.direction,
-        entry_order_id=trade_result.order_id,
-        sl_order_id=sl_order_id,
-        fill_price=entry_fill_price or 0.0,
-        context=signal.context or {},
-        sig_id=signal.sig_id or "",
-    ))
+    )
+
+    tracker.register(
+        TrackedPosition(
+            symbol=signal.symbol,
+            strategy=signal.strategy,
+            exchange=signal.exchange or settings.exchange,
+            product=signal.product or settings.product,
+            entry_price=signal.entry,
+            quantity=quantity,
+            sl=signal.sl,
+            tp=signal.tp,
+            direction=signal.direction,
+            entry_order_id=trade_result.order_id,
+            sl_order_id=sl_order_id,
+            fill_price=entry_fill_price or 0.0,
+            context=signal.context or {},
+            sig_id=signal.sig_id or "",
+        )
+    )
     return True
 
 
@@ -1328,9 +1469,13 @@ async def _place_entry_bracket(signal, quantity: int, entry_order_id: str) -> st
     sl_result, _ = await send_bracket_legs(signal, quantity, entry_order_id)
     sl_order_id = sl_result.order_id if sl_result else ""
     if sl_result and sl_result.status == OrderStatus.SUCCESS:
-        await notifier.notify_sl_placed(signal.symbol, sl_order_id, strategy=signal.strategy, sl_price=signal.sl)
+        await notifier.notify_sl_placed(
+            signal.symbol, sl_order_id, strategy=signal.strategy, sl_price=signal.sl
+        )
     else:
-        await notifier.notify_sl_failed(signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy)
+        await notifier.notify_sl_failed(
+            signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy
+        )
     return sl_order_id
 
 
@@ -1357,8 +1502,8 @@ async def _auto_close_on_tp_overshoot(
     negative reward and a disproportionately wide SL.
     """
     fill_overshot_tp = entry_fill_price and (
-        (signal.direction == Direction.LONG  and entry_fill_price >= signal.tp) or
-        (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
+        (signal.direction == Direction.LONG and entry_fill_price >= signal.tp)
+        or (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
     )
     if not fill_overshot_tp:
         return False

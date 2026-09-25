@@ -20,8 +20,11 @@ from signal_engine.startup import _match_open_sl_orders
 
 def _order(order_id, symbol, action="SELL", order_type="SL-M", status="open"):
     return {
-        "orderid": order_id, "symbol": symbol, "action": action,
-        "pricetype": order_type, "order_status": status,
+        "orderid": order_id,
+        "symbol": symbol,
+        "action": action,
+        "pricetype": order_type,
+        "order_status": status,
     }
 
 
@@ -78,10 +81,8 @@ class TestRestoredPositionsCarryTheirSl:
         tracker = _Tracker()
         broker_positions = [{"symbol": "SBIN", "quantity": 100, "average_price": 800.0}]
         entry = {"entry": 800.0, "sl": 796.0, "tp": 810.0, "order_id": "E-1"}
-        with patch("signal_engine.startup._lookup_entry_trade", return_value=(entry, "ORB")):
-            _restore_tracker_positions(
-                tracker, broker_positions, "MIS", sl_orders={"SBIN": "SL-9"}
-            )
+        with patch("signal_engine.startup._lookup_entry_legs", return_value=[("ORB", entry)]):
+            _restore_tracker_positions(tracker, broker_positions, "MIS", sl_orders={"SBIN": "SL-9"})
         assert tracker.registered[0].sl_order_id == "SL-9"
 
     def test_no_recovered_id_leaves_it_blank(self):
@@ -100,6 +101,6 @@ class TestRestoredPositionsCarryTheirSl:
         tracker = _Tracker()
         broker_positions = [{"symbol": "SBIN", "quantity": 100, "average_price": 800.0}]
         entry = {"entry": 800.0, "sl": 796.0, "tp": 810.0, "order_id": "E-1"}
-        with patch("signal_engine.startup._lookup_entry_trade", return_value=(entry, "ORB")):
+        with patch("signal_engine.startup._lookup_entry_legs", return_value=[("ORB", entry)]):
             _restore_tracker_positions(tracker, broker_positions, "MIS", sl_orders={})
         assert tracker.registered[0].sl_order_id == ""

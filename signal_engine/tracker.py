@@ -44,8 +44,12 @@ def _dedupe_breakingtrade_overlap(records: list) -> list:
     """
     confirmed_symbols = {r.symbol.upper() for r in records if r.strategy.upper() == "BREAKINGTRADE"}
     return [
-        r for r in records
-        if not (r.strategy.upper() == "BREAKINGTRADE-WATCHLIST" and r.symbol.upper() in confirmed_symbols)
+        r
+        for r in records
+        if not (
+            r.strategy.upper() == "BREAKINGTRADE-WATCHLIST"
+            and r.symbol.upper() in confirmed_symbols
+        )
     ]
 
 
@@ -58,9 +62,9 @@ def _compute_r(total_pnl: float, qty: int, entry: float, sl: float) -> float | N
 
 
 # Guard 2 verdicts for an unconfirmed entry fill.
-_FILL_PROCEED = "proceed"      # order traded (or is proven filled) — book the close
-_FILL_WAIT = "wait"            # status still unresolved — retry on the next poll
-_FILL_ORPHANED = "orphaned"    # order never traded — slot released, no trade recorded
+_FILL_PROCEED = "proceed"  # order traded (or is proven filled) — book the close
+_FILL_WAIT = "wait"  # status still unresolved — retry on the next poll
+_FILL_ORPHANED = "orphaned"  # order never traded — slot released, no trade recorded
 
 
 def _break_even_base(pos) -> float:
@@ -70,8 +74,9 @@ def _break_even_base(pos) -> float:
 
 def _profit_lock_price(pos, ltp: float, base_entry: float, lock_ratio: float) -> float:
     """Stop price for a stalled position — break-even, or a locked fraction of open profit."""
-    in_profit = (pos.direction == Direction.LONG and ltp > base_entry) or \
-                (pos.direction != Direction.LONG and ltp < base_entry)
+    in_profit = (pos.direction == Direction.LONG and ltp > base_entry) or (
+        pos.direction != Direction.LONG and ltp < base_entry
+    )
     if lock_ratio <= 0 or not in_profit:
         return base_entry
     unrealized = abs(ltp - base_entry)
@@ -118,15 +123,16 @@ def _index_positionbook(book) -> dict:
 @dataclass
 class TradeRecord:
     """Completed trade summary — one record per position lifecycle, appended to _completed_trades."""
+
     symbol: str
-    direction: str          # "LONG" / "SHORT"
-    strategy: str           # e.g. "ORB" — lets the EOD summary group/compare by strategy
-    entry_price: float      # fill_price if available, else signal entry
+    direction: str  # "LONG" / "SHORT"
+    strategy: str  # e.g. "ORB" — lets the EOD summary group/compare by strategy
+    entry_price: float  # fill_price if available, else signal entry
     exit_price: float | None  # final exit price (None for time/force exits)
     original_qty: int
-    total_pnl: float        # cumulative P&L across all exit legs (partial + final)
+    total_pnl: float  # cumulative P&L across all exit legs (partial + final)
     r_multiple: float | None
-    exit_types: list[str]   # e.g. ["TP1", "TP2"], ["SL"], ["TIME"], ["EXIT"]
+    exit_types: list[str]  # e.g. ["TP1", "TP2"], ["SL"], ["TIME"], ["EXIT"]
 
 
 @dataclass
@@ -143,9 +149,11 @@ class TrackedPosition:
     entry_order_id: str = ""
     sl_order_id: str = ""
     exit_pending: bool = False  # True while an exit handler is actively processing this position
-    fill_price: float = 0.0     # Actual broker fill price for the entry order (0 = unknown)
+    fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
     original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
-    realized_pnl: float = 0.0   # P&L accumulated from partial exits (for W/L classification at full close)
+    realized_pnl: float = (
+        0.0  # P&L accumulated from partial exits (for W/L classification at full close)
+    )
     exit_types: list[str] = field(default_factory=list)  # labels appended at each exit leg
     entry_time: datetime = field(default_factory=lambda: datetime.now(IST))
     be_stop_applied: bool = False  # True after no-progress detection moved SL to break-even
@@ -161,6 +169,11 @@ class TrackedPosition:
     # entry (falsely OPEN_AT_EOD/NO_EXIT_EVENT) and the close (falsely NO_ENTRY) as broken —
     # 2026-09-17: every BREAKOUT position that closed via tracker detection did exactly this.
     sig_id: str = ""
+    # Poll-loop SL re-retry bookkeeping (see PositionTracker._retry_missing_sl). Only
+    # relevant while sl_order_id == "" — a position whose initial bracket placement
+    # exhausted all bracket.max_sl_retries attempts.
+    sl_retry_count: int = 0
+    last_sl_retry_at: datetime | None = None
 
 
 #: Remembers which date's day summary has already gone out. A file rather than in-memory
@@ -401,7 +414,9 @@ class PositionTracker:
             exit_price=exit_price,
             original_qty=pos.original_quantity or pos.quantity,
             total_pnl=total_pnl,
-            r_multiple=_compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl),
+            r_multiple=_compute_r(
+                total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl
+            ),
             exit_types=exit_types,
         )
         self.add_trade_record(record)
@@ -419,19 +434,33 @@ class PositionTracker:
         # order_id-keyed reconciliation could never find the real closing broker fill, and
         # always saw a phantom "trades the engine never sent" of the true size (2026-09-21).
         db.save_tracker_exit(
-            strategy=pos.strategy, symbol=pos.symbol, entry=pos.entry_price,
-            sl=pos.sl, tp=pos.tp, quantity=pos.quantity,
-            exit_price=exit_price, pnl=total_pnl, exit_types=exit_types,
-            order_id=pos.sl_order_id, sig_id=pos.sig_id,
+            strategy=pos.strategy,
+            symbol=pos.symbol,
+            entry=pos.entry_price,
+            sl=pos.sl,
+            tp=pos.tp,
+            quantity=pos.quantity,
+            exit_price=exit_price,
+            pnl=total_pnl,
+            exit_types=exit_types,
+            order_id=pos.sl_order_id,
+            sig_id=pos.sig_id,
         )
         self.record_exit(
-            pnl=pnl_delta, is_partial=False, total_pnl=total_pnl,
+            pnl=pnl_delta,
+            is_partial=False,
+            total_pnl=total_pnl,
             new_realised_pnl=new_realised_pnl,
         )
         await notifier.notify_position_closed(
-            pos.symbol, total_pnl, strategy=pos.strategy, exit_price=exit_price,
-            direction=pos.direction.value, r_multiple=record.r_multiple,
-            entry_price=base_price, hold_minutes=hold_minutes,
+            pos.symbol,
+            total_pnl,
+            strategy=pos.strategy,
+            exit_price=exit_price,
+            direction=pos.direction.value,
+            r_multiple=record.r_multiple,
+            entry_price=base_price,
+            hold_minutes=hold_minutes,
             exit_types=exit_types,
             day_context=self.day_context_line(max_trades),
         )
@@ -474,8 +503,7 @@ class PositionTracker:
         # capital (see RiskEngine's per-strategy isolation), so the consolidated Capital: X -> Y
         # line is only ever meaningful per strategy, never pooled across them.
         strategy_capital = {
-            r.strategy: self._risk_engine.last_known_capital_for(r.strategy)
-            for r in records
+            r.strategy: self._risk_engine.last_known_capital_for(r.strategy) for r in records
         }
         sent = await notifier.notify_day_summary(
             trades=counts["trades"],
@@ -525,18 +553,27 @@ class PositionTracker:
                 f"Day summary: could not read trades.db ({e}) - falling back to this "
                 "session's in-memory counters, which exclude anything before the last restart"
             )
-            memory = self._completed_trades, {
-                "trades": self._day_trades, "wins": self._day_wins,
-                "losses": self._day_losses, "net_pnl": self._day_pnl,
-                "time_exits": self._day_time_exits,
-            }
+            memory = (
+                self._completed_trades,
+                {
+                    "trades": self._day_trades,
+                    "wins": self._day_wins,
+                    "losses": self._day_losses,
+                    "net_pnl": self._day_pnl,
+                    "time_exits": self._day_time_exits,
+                },
+            )
             return (*memory, True) if want_degraded else memory
 
         records = [
             TradeRecord(
-                symbol=r["symbol"], direction="LONG", strategy=r["strategy"],
-                entry_price=r["entry"], exit_price=r["exit_price"],
-                original_qty=r["quantity"], total_pnl=r["total_pnl"],
+                symbol=r["symbol"],
+                direction="LONG",
+                strategy=r["strategy"],
+                entry_price=r["entry"],
+                exit_price=r["exit_price"],
+                original_qty=r["quantity"],
+                total_pnl=r["total_pnl"],
                 r_multiple=_compute_r(r["total_pnl"], r["quantity"], r["entry"], r["sl"]),
                 exit_types=r["exit_types"],
             )
@@ -587,8 +624,10 @@ class PositionTracker:
             return
         now = datetime.now(IST)
         time_exit_today = now.replace(
-            hour=_settings.time_exit_hour, minute=_settings.time_exit_minute,
-            second=0, microsecond=0,
+            hour=_settings.time_exit_hour,
+            minute=_settings.time_exit_minute,
+            second=0,
+            microsecond=0,
         )
         if (time_exit_today - now).total_seconds() / 60 <= 30:
             await self.send_day_summary()
@@ -683,8 +722,9 @@ class PositionTracker:
 
         for strategy, loss in losses.items():
             self._risk_engine.update_unrealised(loss, strategy)
-        self._reported_unrealised = {s for s in losses if s in
-                                     {p.strategy for p in self._positions.values()}}
+        self._reported_unrealised = {
+            s for s in losses if s in {p.strategy for p in self._positions.values()}
+        }
 
     async def _check_mode_flip(self) -> None:
         """Notice a mid-session OpenAlgo mode change and alert on it.
@@ -700,7 +740,9 @@ class PositionTracker:
         if new_phase is None:
             return
         try:
-            await notifier.notify_event("mode_flip_halt", f"ENTRIES HALTED\n{mode_guard.halt_reason()}")
+            await notifier.notify_event(
+                "mode_flip_halt", f"ENTRIES HALTED\n{mode_guard.halt_reason()}"
+            )
         except Exception as e:
             logger.warning(f"Could not send mode-flip alert: {e}")
 
@@ -740,6 +782,7 @@ class PositionTracker:
             del self._positions[key]
 
         await self._maybe_send_day_summary(closed_keys)
+        await self._retry_missing_sl(book_data, _settings)
 
         # No-progress check: move SL to entry for stuck positions
         # ab_test_disable short-circuits the entire check without changing thresholds —
@@ -750,6 +793,70 @@ class PositionTracker:
             and self._positions
         ):
             await self._check_no_progress(book_data)
+
+    async def _retry_missing_sl(self, book_data: dict, _settings) -> None:
+        """Re-attempt SL placement for positions whose initial bracket exhausted.
+
+        _place_entry_bracket's 5-attempt retry (executor.place_sl_order) runs its whole
+        window in a few seconds — too fast to outlast a broker-side rate-limit window
+        (e.g. Flattrade's per-minute cap). 2026-09-24: JIOFIN's second entry hit exactly
+        that and was left with sl_order_id="" for the rest of the session, with nothing
+        ever retrying it again. This piggybacks on the poll loop's existing 5s cadence to
+        keep trying — cooled down per position so it doesn't hammer the API every cycle,
+        and capped so a genuinely broken broker connection still surfaces as an alert
+        instead of retrying forever.
+        """
+        if not _settings.bracket_enabled:
+            return
+        now = datetime.now(IST)
+        for key, pos in list(self._positions.items()):
+            if pos.sl_order_id or pos.exit_pending or pos.quantity <= 0:
+                continue
+            entry = book_data.get(pos.symbol)
+            if entry is None or entry.quantity == 0:
+                continue  # not confirmed open yet, or already closed — nothing to protect
+            if pos.sl_retry_count >= _settings.bracket_max_sl_reretries:
+                continue  # already exhausted and alerted below
+            if pos.last_sl_retry_at is not None:
+                elapsed = (now - pos.last_sl_retry_at).total_seconds()
+                if elapsed < _settings.bracket_sl_reretry_interval_seconds:
+                    continue
+
+            pos.sl_retry_count += 1
+            pos.last_sl_retry_at = now
+            with logger.contextualize(symbol=pos.symbol):
+                logger.info(
+                    f"Retrying missing SL for {key} "
+                    f"(re-attempt {pos.sl_retry_count}/{_settings.bracket_max_sl_reretries})"
+                )
+                result = await place_sl_order(
+                    symbol=pos.symbol,
+                    exchange=pos.exchange,
+                    direction=pos.direction,
+                    quantity=pos.quantity,
+                    sl_price=pos.sl,
+                    product=pos.product,
+                    strategy_tag=pos.strategy,
+                )
+                if result.status == OrderStatus.SUCCESS:
+                    pos.sl_order_id = result.order_id
+                    logger.info(f"SL re-placed for {key}: id={result.order_id}")
+                    await notifier.notify_sl_placed(
+                        pos.symbol,
+                        result.order_id,
+                        strategy=pos.strategy,
+                        sl_price=pos.sl,
+                    )
+                elif pos.sl_retry_count >= _settings.bracket_max_sl_reretries:
+                    logger.error(
+                        f"SL re-retry exhausted for {key} after "
+                        f"{pos.sl_retry_count} attempts — still unprotected"
+                    )
+                    await notifier.notify_sl_failed(
+                        pos.symbol,
+                        f"re-retry exhausted after {pos.sl_retry_count} attempts: {result.message}",
+                        strategy=pos.strategy,
+                    )
 
     async def _check_one_position(self, key: str, pos, book_data: dict, _settings) -> bool:
         """Evaluate one tracked position. True if its tracker entry should be removed."""
@@ -825,7 +932,7 @@ class PositionTracker:
                 logger.debug(
                     f"check_positions: {key} order status={order_status!r} "
                     f"positionbook not yet updated — waiting "
-                    f"(age={age.total_seconds()/60:.0f}min)"
+                    f"(age={age.total_seconds() / 60:.0f}min)"
                 )
             return _FILL_WAIT
 
@@ -840,7 +947,7 @@ class PositionTracker:
             # Guard 3 (zero-PnL orphan check) doesn't misfire on break-even closes.
             logger.warning(
                 f"check_positions: {key} order status={order_status!r} unresolved "
-                f"after {age.total_seconds()/60:.0f}min but position was confirmed "
+                f"after {age.total_seconds() / 60:.0f}min but position was confirmed "
                 "in positionbook — processing as real close (not orphan)"
             )
             pos.fill_price = pos.entry_price
@@ -849,12 +956,13 @@ class PositionTracker:
         # Never appeared in positionbook with qty > 0 — order never filled.
         logger.error(
             f"check_positions: {key} order status={order_status!r} still unresolved "
-            f"after {age.total_seconds()/60:.0f}min and never seen in positionbook "
+            f"after {age.total_seconds() / 60:.0f}min and never seen in positionbook "
             "— treating as orphaned rejection, releasing slot"
         )
         await self._release_orphan(
-            key, pos,
-            f"order status={order_status!r} unresolved after {age.total_seconds()/60:.0f}min, "
+            key,
+            pos,
+            f"order status={order_status!r} unresolved after {age.total_seconds() / 60:.0f}min, "
             "never seen in positionbook",
         )
         return _FILL_ORPHANED
@@ -878,8 +986,11 @@ class PositionTracker:
 
             db.flag_data_quality(pos.entry_order_id, db.DATA_QUALITY_EXECUTION_ISSUE, reason)
         await notifier.notify_orphaned_position(
-            pos.symbol, pos.strategy, pos.direction.value,
-            pos.entry_order_id, reason,
+            pos.symbol,
+            pos.strategy,
+            pos.direction.value,
+            pos.entry_order_id,
+            reason,
         )
 
     async def _book_broker_close(
@@ -908,7 +1019,26 @@ class PositionTracker:
 
         per_symbol = book_entry.realised if book_entry is not None else None
         ltp = book_entry.ltp if book_entry is not None else None
-        if pos.realized_pnl != 0.0 and ltp:
+        # ANALYZE mode: the sandbox sets a fully-closed position's ltp to its own execution
+        # price on both an order-driven close and an expiry settlement
+        # (sandbox/execution_engine.py's "Position closed completely" branches;
+        # sandbox/position_manager.py's settlement_price assignment), and MTM never overwrites
+        # it afterward for a qty=0 position - so a price-derived delta is available and
+        # reliable on every ordinary ANALYZE close, not only ones with prior partial-exit
+        # history. (The one path that does NOT set it is the 3 AM MIS session-settlement
+        # square-off, sandbox/position_manager.py's process_session_settlement() - not a
+        # concern here since signal_engine's own time-exit always closes MIS positions well
+        # before that safety net runs; the `ltp and` guard below still protects against it if
+        # that ever changes.) This matters because the sandbox's own "realised" bookkeeping
+        # has its own confirmed bug independent of partial exits - BREAKOUT/TCS closed
+        # 2026-09-25 with no partial-exit history and the sandbox's figure was -578.00 against
+        # -821.60 true from the actual booked fills (see docs/strategy-daily-performance.md's
+        # 2026-09-25 entry). LIVE mode's ltp is a real broker's last TRADED market price (see
+        # broker/flattrade/mapping/order_data.py's "lp" mapping) - NOT a guarantee of the
+        # closing order's own fill price - so live mode keeps trusting the broker's own
+        # realised figure below, unchanged.
+        sandbox_mode = self._trade_mode_for_db() == "analyze"
+        if ltp and (pos.realized_pnl != 0.0 or sandbox_mode):
             # This position already has partial-exit P&L booked in pos.realized_pnl (main.py
             # tracks each partial leg's delta from its own confirmed fill price). The broker's
             # per-symbol "realised" figure is NOT reliably an incremental delta for just the
@@ -917,22 +1047,34 @@ class PositionTracker:
             # against 1382.40 true from the broker's own fills - and the broker's own
             # today_realized_pnl for that position independently landed on neither number
             # either, so it isn't safe to treat as a source of truth once a position has
-            # partial-exit history. On a full close the broker/sandbox sets the position's ltp
-            # to its own execution price (see sandbox/execution_engine.py's
-            # "Position closed completely" branch) - compute the final leg's delta from price
-            # instead of trusting the broker's stateful realised-pnl bookkeeping at all.
+            # partial-exit history. Compute the final leg's delta from price instead of
+            # trusting the broker's stateful realised-pnl bookkeeping at all.
             base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
             pnl_delta = (
                 (ltp - base_price) if pos.direction == Direction.LONG else (base_price - ltp)
             ) * pos.quantity
             logger.debug(
-                f"{key}: partial-exit history present (realized_pnl={pos.realized_pnl:,.2f}) - "
-                f"deriving the final leg from ltp={ltp:.2f} instead of the broker's realised "
-                f"figure ({per_symbol}) to avoid double-counting"
+                f"{key}: deriving pnl_delta from price (ltp={ltp:.2f}) instead of the "
+                f"broker/sandbox's realised figure ({per_symbol}) - "
+                f"{'partial-exit history present' if pos.realized_pnl != 0.0 else 'analyze mode'}"
             )
         else:
             pnl_delta = portfolio_delta if per_symbol is None else per_symbol
-            if per_symbol is None:
+            if sandbox_mode and not ltp:
+                # The one case the ANALYZE-mode price-derivation above cannot cover: the
+                # sandbox reported quantity=0 with no (or zero) ltp, so there is no execution
+                # price to derive from - this falls back to the sandbox's own "realised"
+                # figure, which is exactly the unreliable source the fix above exists to
+                # avoid. Should not happen on an ordinary close (see the comment above this
+                # branch) - logged at WARNING, not DEBUG, so it doesn't reproduce the
+                # BREAKOUT/TCS incident silently if it ever does.
+                logger.warning(
+                    f"{key}: ANALYZE mode but the sandbox reported no ltp (closing execution "
+                    f"price) - falling back to its realised figure ({per_symbol}), which is "
+                    "not reliably correct (see the 2026-09-25 BREAKOUT/TCS incident this "
+                    "branch normally avoids)"
+                )
+            elif per_symbol is None:
                 logger.debug(
                     f"{key}: broker reported no per-symbol realised P&L - falling back to the "
                     f"portfolio delta ({portfolio_delta:,.2f})"
@@ -973,7 +1115,9 @@ class PositionTracker:
             try:
                 cancelled = await cancel_order(pos.sl_order_id, pos.strategy)
             except Exception as e:  # noqa: BLE001 - a cancel failure must not block booking the close
-                logger.error(f"check_positions: cancel_order raised for SL {pos.sl_order_id} on {key}: {e}")
+                logger.error(
+                    f"check_positions: cancel_order raised for SL {pos.sl_order_id} on {key}: {e}"
+                )
                 cancelled = False
             if cancelled:
                 logger.info(f"check_positions: cancelled resting SL {pos.sl_order_id} for {key}")
@@ -985,8 +1129,11 @@ class PositionTracker:
         # Implied exit fill price from the PnL delta — the broker does not report one.
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         if pos.quantity > 0:
-            exit_price = base_price + (pnl_delta / pos.quantity) if pos.direction == Direction.LONG \
+            exit_price = (
+                base_price + (pnl_delta / pos.quantity)
+                if pos.direction == Direction.LONG
                 else base_price - (pnl_delta / pos.quantity)
+            )
         else:
             exit_price = None
 
@@ -1078,22 +1225,28 @@ class PositionTracker:
 
         gates: list[tuple] = []
         if _settings.no_progress_loss_cut_enabled:
-            gates.append((
-                timedelta(minutes=_settings.no_progress_loss_cut_min_age_minutes),
-                _settings.no_progress_loss_cut_progress_threshold,  # negative threshold
-                "loss-cut",
-            ))
+            gates.append(
+                (
+                    timedelta(minutes=_settings.no_progress_loss_cut_min_age_minutes),
+                    _settings.no_progress_loss_cut_progress_threshold,  # negative threshold
+                    "loss-cut",
+                )
+            )
         if _settings.no_progress_early_check_enabled:
-            gates.append((
-                timedelta(minutes=early_minutes),
-                _settings.no_progress_early_min_progress_pct,
-                "early",
-            ))
-        gates.append((
-            timedelta(minutes=_settings.no_progress_check_after_minutes),
-            _settings.no_progress_min_progress_pct,
-            "main",
-        ))
+            gates.append(
+                (
+                    timedelta(minutes=early_minutes),
+                    _settings.no_progress_early_min_progress_pct,
+                    "early",
+                )
+            )
+        gates.append(
+            (
+                timedelta(minutes=_settings.no_progress_check_after_minutes),
+                _settings.no_progress_min_progress_pct,
+                "main",
+            )
+        )
         return gates
 
     def _evaluate_no_progress(self, pos, now, gates, book_data: dict, _settings):
@@ -1144,10 +1297,13 @@ class PositionTracker:
         be_price = _profit_lock_price(pos, ltp, base_entry, _settings.no_progress_profit_lock_ratio)
         use_market_exit = self._should_market_exit(now, age, progress, _settings)
 
-        action_label = "market-exit" if use_market_exit else \
-                       ("profit-lock" if be_price != base_entry else "break-even")
+        action_label = (
+            "market-exit"
+            if use_market_exit
+            else ("profit-lock" if be_price != base_entry else "break-even")
+        )
         logger.info(
-            f"No-progress [{pos.symbol}] gate={fired_label}: age={age.total_seconds()/60:.0f}min "
+            f"No-progress [{pos.symbol}] gate={fired_label}: age={age.total_seconds() / 60:.0f}min "
             f"ltp={ltp:.2f} entry={progress_base:.2f} tp={pos.tp:.2f} "
             f"progress={progress:.1%} < {fired_threshold:.0%} "
             f"-> {action_label}"
@@ -1160,7 +1316,9 @@ class PositionTracker:
         if pos.sl_order_id:
             cancelled = await cancel_order(pos.sl_order_id, pos.strategy)
             if not cancelled:
-                logger.warning(f"No-progress: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
+                logger.warning(
+                    f"No-progress: failed to cancel SL {pos.sl_order_id} for {pos.symbol}"
+                )
             pos.sl_order_id = ""
 
         pos.be_stop_applied = True  # prevent re-triggering regardless of path
@@ -1181,7 +1339,8 @@ class PositionTracker:
         time_exit_today = now.replace(
             hour=_settings.time_exit_hour,
             minute=_settings.time_exit_minute,
-            second=0, microsecond=0,
+            second=0,
+            microsecond=0,
         )
         minutes_to_exit = max(0, (time_exit_today - now).total_seconds() / 60)
         age_min = age.total_seconds() / 60
@@ -1213,7 +1372,7 @@ class PositionTracker:
             logger.error(f"No-progress market exit failed for {pos.symbol}: {result.message}")
             await notifier.notify_sl_failed(
                 pos.symbol,
-                f"No-progress market exit failed after {age.total_seconds()/60:.0f}min: {result.message}",
+                f"No-progress market exit failed after {age.total_seconds() / 60:.0f}min: {result.message}",
                 strategy=pos.strategy,
             )
             return
@@ -1223,8 +1382,12 @@ class PositionTracker:
         # the SL was just cancelled above, so this is the only closing order id we have.
         pos.sl_order_id = result.order_id
         await notifier.notify_no_progress_exit(
-            pos.symbol, ltp, base_entry, progress,
-            strategy=pos.strategy, direction=pos.direction.value,
+            pos.symbol,
+            ltp,
+            base_entry,
+            progress,
+            strategy=pos.strategy,
+            direction=pos.direction.value,
             age_minutes=int(age.total_seconds() / 60),
         )
 
@@ -1246,7 +1409,8 @@ class PositionTracker:
 
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         pnl_delta = (
-            (fill_price - base_price) if pos.direction == Direction.LONG
+            (fill_price - base_price)
+            if pos.direction == Direction.LONG
             else (base_price - fill_price)
         ) * pos.quantity
 
@@ -1286,10 +1450,16 @@ class PositionTracker:
         if sl_result.status == OrderStatus.SUCCESS:
             pos.sl = be_price
             pos.sl_order_id = sl_result.order_id
-            logger.info(f"Break-even SL placed for {pos.symbol}: {be_price:.2f} id={sl_result.order_id}")
+            logger.info(
+                f"Break-even SL placed for {pos.symbol}: {be_price:.2f} id={sl_result.order_id}"
+            )
             await notifier.notify_be_stop_applied(
-                pos.symbol, be_price, ltp, progress,
-                strategy=pos.strategy, direction=pos.direction.value,
+                pos.symbol,
+                be_price,
+                ltp,
+                progress,
+                strategy=pos.strategy,
+                direction=pos.direction.value,
                 age_minutes=int(age.total_seconds() / 60),
                 entry_price=base_entry,
                 original_sl=original_sl if original_sl != be_price else None,
@@ -1298,7 +1468,7 @@ class PositionTracker:
             logger.error(f"No-progress: break-even SL failed for {pos.symbol}: {sl_result.message}")
             await notifier.notify_sl_failed(
                 pos.symbol,
-                f"Break-even SL failed after {age.total_seconds()/60:.0f}min no-progress: {sl_result.message}",
+                f"Break-even SL failed after {age.total_seconds() / 60:.0f}min no-progress: {sl_result.message}",
                 strategy=pos.strategy,
             )
 
@@ -1420,24 +1590,30 @@ class PositionTracker:
         total_pnl = pos.realized_pnl + per_pos_pnl
         r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
         hold_min = int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
-        self._completed_trades.append(TradeRecord(
-            symbol=pos.symbol,
-            direction=pos.direction.value,
-            strategy=pos.strategy,
-            entry_price=base_price,
-            exit_price=None,
-            original_qty=pos.original_quantity or pos.quantity,
-            total_pnl=total_pnl,
-            r_multiple=r,
-            exit_types=pos.exit_types[:] + ["TIME"],
-        ))
+        self._completed_trades.append(
+            TradeRecord(
+                symbol=pos.symbol,
+                direction=pos.direction.value,
+                strategy=pos.strategy,
+                entry_price=base_price,
+                exit_price=None,
+                original_qty=pos.original_quantity or pos.quantity,
+                total_pnl=total_pnl,
+                r_multiple=r,
+                exit_types=pos.exit_types[:] + ["TIME"],
+            )
+        )
         self._risk_engine.record_close(pnl=total_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
         await notifier.notify_time_exit(
-            pos.symbol, strategy=pos.strategy, direction=pos.direction.value,
-            pnl=total_pnl, r_multiple=r,
-            entry_price=base_price, hold_minutes=hold_min,
+            pos.symbol,
+            strategy=pos.strategy,
+            direction=pos.direction.value,
+            pnl=total_pnl,
+            r_multiple=r,
+            entry_price=base_price,
+            hold_minutes=hold_min,
             day_context=self.day_context_line(_settings.max_trades_per_day),
         )
         logger.info(f"Time exit: cleared tracker entry {key}")
@@ -1505,11 +1681,7 @@ class TimeExitScheduler:
                 self._last_date = now.date()
 
             # Check if it's time to exit
-            if (
-                not self._fired_today
-                and now.hour == self._hour
-                and now.minute >= self._minute
-            ):
+            if not self._fired_today and now.hour == self._hour and now.minute >= self._minute:
                 logger.info(
                     f"Time exit triggered at {now.strftime('%H:%M')} IST "
                     f"(configured: {self._hour:02d}:{self._minute:02d})"
@@ -1518,9 +1690,8 @@ class TimeExitScheduler:
                 self._fired_today = True
 
             # Also fire if past the configured time (in case scheduler started late)
-            if (
-                not self._fired_today
-                and (now.hour > self._hour or (now.hour == self._hour and now.minute > self._minute + 5))
+            if not self._fired_today and (
+                now.hour > self._hour or (now.hour == self._hour and now.minute > self._minute + 5)
             ):
                 # Distinguish: catch-up during market hours vs system woke from sleep after close
                 past_market_close = now.hour > 15 or (now.hour == 15 and now.minute >= 30)

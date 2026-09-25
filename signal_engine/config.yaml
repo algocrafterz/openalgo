@@ -627,6 +627,18 @@ api:
   timeout: 5.0                   # Request timeout in seconds
   margin_retries: 3              # Retries for Margin API on network error (not on app errors)
 
+  # [tune] A client-side timeout on the ENTRY order does not mean the broker never
+  # processed it - only that the response didn't arrive before `timeout` above expired.
+  # 2026-09-24: NAUKRI and SOLARINDS both timed out on their entry order, yet the order
+  # completed on the broker ~6-9s later - and because main.py treated any non-SUCCESS
+  # status as "never happened", both fills sat on the broker fully untracked: no SL, no
+  # TP monitoring, no risk-slot accounting, invisible to the engine. After a TIMEOUT,
+  # main._recover_ambiguous_entry_timeout() polls the orderbook this many times, this
+  # many seconds apart, for a matching completed order before conceding the entry
+  # genuinely failed.
+  entry_timeout_recovery_attempts: 3
+  entry_timeout_recovery_delay_seconds: 2.0
+
 # ── Bracket Orders ────────────────────────────────────────
 bracket:
   # CRITICAL: disabling removes all broker-side SL protection. Keep enabled=true in production.
@@ -643,6 +655,16 @@ bracket:
   # [tune] SL placement retry settings. Safety-critical — 5 retries × 0.5s = 2.5s window.
   max_sl_retries: 5
   retry_delay: 0.5               # Seconds between SL placement retries
+
+  # [tune] If the initial bracket above exhausts (e.g. broker-side rate limiting/timeouts
+  # all land inside the same ~few-second burst), the position tracker's poll loop keeps
+  # retrying a still-open, still-unprotected position at this cadence until it succeeds or
+  # max_sl_reretries is hit. 30s x 6 = 3 minutes of coverage, well past a one-minute
+  # broker rate-limit window. 2026-09-24: JIOFIN's second entry exhausted all 5 initial
+  # retries inside a Flattrade "exceeds Limit 120/min" congestion window and sat
+  # unprotected for the rest of the session with nothing to ever retry it.
+  sl_reretry_interval_seconds: 30
+  max_sl_reretries: 6
 
   # [tune] Retry count for TP market exit orders. 3 retries covers brief network glitches.
   tp_exit_retries: 3

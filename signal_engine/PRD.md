@@ -4951,3 +4951,270 @@ one symbol progress independently; a WATCHLIST exit routes to the watchlist `sen
 (`test_breakingtrade_tp_watch.py`, `test_tp_watch_dedupe.py`, `test_alert_dedupe_timestamps.py`)
 updated for `_last_level_hit`/`_send_tp_hit`'s new required `strategy`/`kind` arguments. Full
 suite (1,648 tests) passes.
+
+## Ambiguous-Timeout Execution Gaps: Orphaned Fills and Duplicate SL Orders (2026-09-24)
+
+Routine mid-session check of the ongoing paper trade ("BREAKINGTRADE" gap-down-rescue day)
+found Flattrade's broker API hitting its own per-minute rate limit ("Order Recieved 183 in a
+current minute exceeds Limit 120 for user") during a burst of signals around 10:25-10:33. This
+is OpenAlgo-core/broker-side congestion, out of scope to fix directly, but it exposed three
+real signal_engine bugs in how the engine handles the resulting `httpx` timeouts - all stem
+from the same root cause: **a client-side TIMEOUT does not mean the broker never processed the
+order**, only that the response didn't arrive within `api.timeout` (5s). The engine was treating
+every timeout as "this never happened."
+
+1. **SL placement exhausts and never retries again.** JIOFIN's second entry (`BREAKINGTRADE`,
+   751 qty) hit 5 straight `place_sl_order` timeouts inside the same ~23s congested window (5
+   retries x ~5s each) and was left with `sl_order_id=""` for the rest of the session - nothing
+   in `tracker.py` ever revisited it. Fixed: `PositionTracker._retry_missing_sl()` runs every
+   poll cycle (5s) and re-attempts SL placement for any tracked position with no SL, cooled down
+   per-position (`bracket.sl_reretry_interval_seconds`, default 30s) and capped
+   (`bracket.max_sl_reretries`, default 6 -> 3 minutes of coverage, well past a one-minute
+   rate-limit window) so a genuinely dead broker connection still surfaces as an alert instead of
+   retrying forever. New fields on `TrackedPosition`: `sl_retry_count`, `last_sl_retry_at`.
+
+2. **Entry-order timeouts silently orphan real fills.** NAUKRI and SOLARINDS's second entries
+   both timed out client-side, yet their orders showed `order_status=complete` on the broker's
+   own orderbook 6-9s later. `_handle_entry` treated any non-SUCCESS status as "no position" and
+   never called `_establish_position` - so both fills sat on the broker fully untracked: no SL,
+   no TP monitoring, no risk-slot accounting, invisible to the engine and the trader. Confirmed
+   directly against the live orderbook (`26092490500066` NAUKRI BUY 23 complete,
+   `26092477772427` SOLARINDS BUY 2 complete - both after their logged TIMEOUT). Fixed:
+   `main._recover_ambiguous_entry_timeout()` polls the orderbook (`api.entry_timeout_recovery_
+   attempts` x `entry_timeout_recovery_delay_seconds`, default 3 x 2s) for a completed order
+   matching symbol+action+quantity before conceding the entry genuinely failed; a match already
+   owned by another tracked position is never re-adopted. Scoped to `OrderStatus.TIMEOUT` only -
+   a generic `ERROR` (e.g. DNS failure) usually means the request never left the client at all,
+   a different ambiguity not worth conflating here.
+
+3. **SL retries stack duplicates instead of recovering.** Manually re-protecting NAUKRI/SOLARINDS
+   after finding bug #2 hit the SAME congestion live: every one of 5 `place_sl_order` retries for
+   each symbol reported TIMEOUT, yet the orderbook showed all 5 as real resting SL-M orders (10
+   duplicate live stops created by one remediation script). Cleaned up manually (cancelled 4 of 5
+   per symbol, kept one). Fixed at the source: `place_sl_order` now checks the orderbook
+   (`executor._find_resting_sl_order`, matching symbol+action+quantity+trigger_price) after any
+   TIMEOUT, before sleeping into the next retry - a confirmed resting order is adopted instead of
+   retried past.
+
+Immediate session remediation (manual, via `executor.place_sl_order`/`api_client.cancel_order`
+one-off scripts, before the code fix above was in place): placed the missing SL for JIOFIN's
+751-qty leg (id `26092482351708`, trigger 228.70); placed and de-duplicated SL protection for
+NAUKRI's 23-qty leg and SOLARINDS's 2-qty leg (kept `26092490698178` / `26092441627343`, the rest
+cancelled). The running engine process itself was left on the old code at the user's choice (paper
+session in progress) - the fix applies from the next restart.
+
+New config (`bracket:` and `api:` in `config.yaml`, all with defaults via `.get()` so an older
+deployment's yaml still loads): `bracket.sl_reretry_interval_seconds` (30), `bracket.
+max_sl_reretries` (6), `api.entry_timeout_recovery_attempts` (3), `api.
+entry_timeout_recovery_delay_seconds` (2.0).
+
+Tests: `test_tracker_sl_reretry.py` (5, new file); `test_main_characterization.py`'s
+`TestEntryPostFill` gained 3; `test_executor.py`'s new `TestPlaceSlOrderAmbiguousTimeout` (3).
+Full suite (1,661 tests) passes, aside from one pre-existing order-dependent flake in
+`test_entry_halt_gate.py` unrelated to this change (passes standalone and on a clean full run;
+confirmed present before any of today's edits via `git stash`).
+
+## Full-Day Reconciliation (2026-09-24): Restart-Merge Bug Fixed, DB Corrections Computed and Pending
+
+Requested full reconciliation of the day's `trades.db` against the tradebook, to fix any errors
+before using today's numbers to decide whether to promote a strategy to live. The day's own
+`eod-2026-09-24-claude-review.md` had already root-caused three regression-check FAILs (read it
+first) - this entry covers what was fixed on top of that triage, and what's confirmed but not
+yet applied.
+
+**Confirmed and FIXED (code): the restart-merge bug.** `startup.py`'s `_restore_tracker_positions`
+used to call `_lookup_entry_trade` (singular) and collapse EVERY entry for a symbol into one
+`TrackedPosition` under the broker's netted quantity - so when two strategies traded the same
+symbol the same day (BREAKINGTRADE + BREAKINGTRADE-WATCHLIST, the normal shape for that pair),
+only one entry survived a restart's reconciliation. Confirmed for 7 symbols that restarted at
+11:50 IST today (APLAPOLLO, ASIANPAINT, BAJFINANCE, HINDZINC, ICICIPRULI, JIOFIN, PRESTIGE): each
+had exactly two entries whose quantities summed exactly to the broker's reported total, and the
+eventual close (a mass 12:02:38-46 exit batch, itself a restart artifact - 18 positions closed in
+8 seconds, all sharing a fabricated `held=12min`) wrote ONE exit row under ONE entry's order_id
+for the FULL combined quantity, permanently orphaning the other entry's own exit.
+
+Fix: `_lookup_entry_legs` (new) detects when multiple strategies traded a symbol today in the
+SAME direction as the broker currently holds, with their own quantities summing EXACTLY to the
+broker's reported total - and only then restores one `TrackedPosition` per entry, each keeping
+its own quantity. Anything less clean (a partial fill, a manual broker adjustment, three-way
+ambiguity) falls back unchanged to the existing single-best-match logic
+(`_lookup_entry_trade`, kept as-is and still directly tested) rather than guessing at a split.
+Only the first (oldest) leg can carry the one recoverable `sl_order_id`
+(`_match_open_sl_orders` tracks one working stop per symbol, a pre-existing limitation) - any
+other leg is re-protected by `PositionTracker._retry_missing_sl` (the same-day fix above) from
+the next 5s poll cycle, instead of staying permanently blank.
+
+Five regression tests added to `test_startup_reconciliation_fixes.py`'s new
+`TestMultiLegRestoreSplitsEachEntry`, using APLAPOLLO's real numbers (WATCHLIST 46 @ 2176.1,
+BREAKINGTRADE 38 @ 2180.9, broker qty 84) rather than synthetic ones; `test_startup_sl_recovery.py`
+updated for `_restore_tracker_positions`'s new call target. Full suite (1,663 tests) passes clean
+- no flake this run.
+
+**Confirmed, computed, but NOT YET APPLIED: the `trades.db` corrections for those 7 symbols.**
+The write was blocked by the session's safety classifier (a direct trades.db mutation outside the
+normal application code path) and needs the user's explicit go-ahead - the exact correction is
+fully computed and ready:
+
+- For each symbol, the existing exit row's `quantity` and `context.pnl` are corrected down to
+  just its own leg's share, and a new exit row is inserted for the previously-orphaned leg - both
+  using the SAME real closing price and timestamp (12:02:4X), with the leg split computed
+  **proportionally by quantity from the already-verified total P&L**, not re-derived from a
+  price formula: recomputing entry-price x quantity at the recorded exit price does NOT reproduce
+  the already-recorded total (confirmed for APLAPOLLO: signal-entry-based recompute gives 1,100.40,
+  the actual recorded figure is 1,270.92) - meaning the system's real pnl derivation for this mass
+  batch used the broker's own realised-P&L figure, not a clean price delta. Proportional-by-quantity
+  split preserves that verified total exactly (never introduces a new, unverified number) while
+  fixing the actual bug: previously 100% of it was attributed to one leg and 0% to the other.
+- HDFCLIFE additionally needs its BREAKINGTRADE entry row (id 495) backfilled first - it shows
+  `status=TIMEOUT` with no `order_id`/`fill_price` at all (the same ambiguous-timeout class fixed
+  earlier today), but the tradebook confirms it filled: BUY 54 @ 532.15, orderid `26092417362286`.
+- Net effect on the two strategies' AGGREGATE totals is small (BREAKINGTRADE +11.10,
+  BREAKINGTRADE-WATCHLIST -11.10 across these 7 symbols) - BREAKINGTRADE happened to be the
+  "chosen"/surviving leg for 6 of 7, WATCHLIST for the 7th (HDFCLIFE), and the two roughly cancel
+  today. That is NOT guaranteed on a different day and does not make the underlying bug
+  low-priority: uncorrected, these 7 entries permanently read as "no exit event"/"still open" in
+  every future reconciliation report for as long as the row stays wrong.
+- Full computed correction script: `/tmp/fix_restart_merge.py` (this machine, this session) -
+  reads/writes only `signal_engine/data/trades.db`, wrapped in one transaction, prints a full
+  before/after audit trail. A backup of the pre-correction `trades.db` was taken before any
+  attempt (`/tmp/trades.db.bak_pre_correction_*`).
+
+**Found, NOT a code bug, needs a human decision: RELIANCE:BREAKOUT's numbers are contaminated by
+an unrelated incident, not by this bug.** The tradebook shows real ORB-tagged BUY/SELL activity
+interleaved with RELIANCE's genuine BREAKOUT position between 11:01-11:45 (matching earlier the
+same day's separately-documented pytest-HTTP-leak incident - see conftest.py's
+`_block_real_openalgo_api_calls`, added today after the SAME leak hit INFY/TCS). That leaked
+activity traded the SAME netted broker position as the real BREAKOUT trade, so trades.db's
+RELIANCE rows (entry id 455, exits id 491/496/514, total +1,214.40) reflect a REAL broker outcome
+but one that cannot be cleanly separated into "what BREAKOUT actually did" vs "what the leak did"
+- they are not a gap to fill, they are inseparably mixed. Recommended: `flag_data_quality` on all
+four rows' order_ids with `DATA_QUALITY_EXECUTION_ISSUE` (excludes them from `fetch_clean_trades`
+without deleting the record) rather than attempt a reconstruction that can't be verified. Not
+applied for the same reason as above (blocked write, needs explicit permission).
+
+**Found, NOT fixed, needs a human decision: JIOFIN/NAUKRI/SOLARINDS show extra
+`AUTO_SQUARE_OFF` buyback activity beyond the expected merge-bug pattern.** JIOFIN's tradebook
+shows SIX separate `BREAKINGTRADE SELL 751 @ 228.7` fills (not one) plus an `AUTO_SQUARE_OFF BUY
+4,506 @ 227.19` correcting the resulting massive oversell - meaning the "5 failed" SL-placement
+timeouts logged earlier today for JIOFIN (see the Ambiguous-Timeout entry above) actually
+succeeded on the broker every time, the same ambiguous-timeout pattern already fixed in
+`executor.py`, just discovered here with a much larger blast radius than the NAUKRI/SOLARINDS
+case that prompted the fix. NAUKRI and SOLARINDS show a smaller version of the same shape (one
+extra `AUTO_SQUARE_OFF` buyback each). Recommended: flag these three symbols'
+`data_quality` too, for the same reason as RELIANCE - the true economic outcome across six
+overlapping fills plus a corrective buyback is not confidently reconstructable from the data
+alone. Not applied - needs the same explicit permission as above.
+
+**Bottom line for the live-promotion decision this was requested for:** do not use today's raw
+per-strategy numbers as-is. `weekly_review --since 2026-09-24 --until 2026-09-24` currently
+reports BREAKINGTRADE (13 trades, 50% win, -493 gross), BREAKINGTRADE-WATCHLIST (18 trades, 55%
+win, +2,686 gross) and BREAKOUT (8 trades, 62% win, +2,419 gross) - but 91 of the day's 130 total
+trade rows fall under an unattributed `?` strategy bucket (almost certainly the same pytest-leak
+contamination), BREAKOUT's total includes the ~+1,214 RELIANCE contamination above, and
+BREAKINGTRADE/BREAKINGTRADE-WATCHLIST both need the 7-symbol correction plus the JIOFIN/NAUKRI/
+SOLARINDS exclusion before they're trustworthy. Beyond today's specific mess: which strategy
+performs best is inherently a multi-day question (one day's sample, especially one with an
+engine restart and a broker rate-limit event, cannot answer it) - use `weekly_review` over the
+full verified history once the corrections above are applied and confirmed clean.
+
+## Follow-up: corrections actually applied (2026-09-24, same day)
+
+The corrections the entry above described but couldn't apply (write permission) were reviewed
+row-by-row against `trades.db` and the tradebook, confirmed accurate, and applied:
+
+**10-symbol restart-merge split** (APLAPOLLO, ASIANPAINT, BAJFINANCE, HINDZINC, ICICIPRULI,
+PRESTIGE, HDFCLIFE, JIOFIN, NAUKRI, SOLARINDS): each merged exit row split into its two real
+legs, proportional to quantity, preserving the already-verified total P&L exactly (every split
+checked to re-sum to the original total before committing). The exit rows' `order_id` was also
+corrected from the stale SL-order id `startup.py` had recorded to the REAL closing order id from
+the tradebook. Backup taken before each batch (`/tmp/trades.db.bak_*`).
+
+**Cause C backfill** (3 rows: NAUKRI, SOLARINDS, HDFCLIFE's second `BREAKINGTRADE` entries):
+these showed `status=TIMEOUT`, no `order_id`, no `fill_price` in `trades.db` despite the broker's
+tradebook confirming all three filled. Backfilled from the tradebook's own recorded order
+id/price.
+
+**Investigated further and found JIOFIN/NAUKRI have a second, SEPARATE contamination beyond
+the restart-merge split** (SOLARINDS does not - its post-merge history is clean): a resting SL
+order placed during this session's earlier manual remediation (see the "Ambiguous-Timeout"
+entry above) survived the restart-merge close uncancelled, because only ONE leg's `sl_order_id`
+gets recorded/cancelled per symbol - the merge bug's fix (`_lookup_entry_legs`, above) restores
+one `TrackedPosition` per leg going forward but this was already in flight before the restart.
+That order later triggered against an already-flat position, creating a phantom short:
+- **JIOFIN**: SIX separate 751-share `SELL` fills at 13:28:21 (my earlier remediation order
+  `26092482351708` plus five broker-side duplicates from the same congestion window), net -4,506
+  shares, closed by OpenAlgo's own `AUTO_SQUARE_OFF` buyback at 14:45:01.
+- **NAUKRI**: one 23-share `SELL` fill at 15:03:37 (remediation order `26092490698178`), closed
+  by `AUTO_SQUARE_OFF` at 15:15:04.
+
+Neither ever touched `trades.db` (no signal ever drove them), so there is nothing to correct
+there - they are real broker-side (paper) events with no signal_engine trade behind them,
+correctly absent from `trades.db` and therefore correctly showing up only in `weekly_review`'s
+unattributed `?` bucket, never mixed into either strategy's numbers.
+
+**RELIANCE**: flagged (`data_quality=execution_issue`) rather than reconstructed. Its two later
+exit rows (60 qty @ 11:10:11, 200 qty @ 12:02:41/`AUTO_SQUARE_OFF`) close quantity with no
+traceable matching entry in today's `trades.db` - entangled with the pytest-HTTP-leak sandbox
+activity on the same symbol closely enough that a confident reconstruction isn't possible from
+the data alone. `fetch_clean_trades()`'s read-side filter now excludes these two rows from
+scored/performance output; the raw rows are untouched.
+
+**Result**: `weekly_review --since 2026-09-24 --until 2026-09-24`, all three strategies now
+"verified" (checked against the broker's own tradebook snapshot):
+
+| Strategy | Trades | Win% | Sum R | Gross P&L |
+|---|---|---|---|---|
+| BREAKINGTRADE | 13 | 46% | -0.20 | -688 |
+| BREAKINGTRADE-WATCHLIST | 18 | 44% | +3.23 | +3,811 |
+| BREAKOUT | 8 | 62% | +1.35 | +2,419 |
+
+Unattributed `?` bucket dropped from 91 to 78 rows (the 13 corrected/backfilled rows now match
+cleanly) - the remainder is the AUTO_SQUARE_OFF cascades and the original leaked test orders
+themselves, correctly isolated from both strategies' real numbers rather than contaminating
+either. Full test suite: 1,663 passed, 0 failed.
+
+**Still true, unchanged by the corrections**: today alone remains a poor sample for a
+live-promotion decision - one engine restart, one broker rate-limit event, and one test-leak
+incident all landed in the same session. Use `weekly_review` over a longer, clean window before
+deciding.
+
+## Single-Close Path Trusted a Stale Sandbox P&L Figure (2026-09-25)
+
+`tracker.py`'s `_book_broker_close()` already derived a closed position's `pnl_delta` from
+price instead of the broker/sandbox's own "realised" figure once a position had prior
+partial-exit history (2026-09-21 fix, `TestFinalLegDoesNotDoubleCountPriorPartialExits`). The
+single-close path (no partial exits) still trusted that "realised" figure unconditionally.
+
+Found via the Strategy Daily Performance feature (see `docs/strategy-daily-performance.md`'s
+2026-09-25 entry): BREAKOUT/TCS closed with no partial-exit history and the sandbox's own
+figure was **-578.00**; the true P&L, computed by hand from `StrategyOrderTag.applied_notional
+/ applied_quantity` on the actual booked entry and exit orders, was **-821.60**. A ₹243.60
+understatement on one trade, silently - `context.pnl` (and therefore the Telegram CLOSED
+message, the day summary, and anything else reading that field) carried the wrong number.
+
+**Fix**: in ANALYZE mode, the single-close path now derives `pnl_delta` from price the same
+way the partial-exit path already does - `sandbox/execution_engine.py`'s "Position closed
+completely" branches set a fully-closed position's `ltp` to its own execution price on both an
+order-driven close and an expiry settlement, and MTM never overwrites it afterward for a qty=0
+position, so this is reliable on every ordinary ANALYZE close, not only ones with partial-exit
+history. (The 3 AM MIS session-settlement square-off, `position_manager.py`'s
+`process_session_settlement()`, is the one path that does NOT set `ltp` - not a live concern
+since signal_engine's own time-exit always closes MIS positions well before that safety net
+runs, but the code falls back safely to the broker/sandbox figure if `ltp` is ever missing,
+logged at WARNING rather than silently, since that fallback is exactly the unreliable path this
+fix exists to avoid.) **LIVE mode is deliberately unchanged**: a real broker's positionbook
+`ltp` is the last TRADED market price (`broker/flattrade/mapping/order_data.py`'s `"lp"`
+mapping), not a guarantee of the closing order's own fill price, so a live broker's own
+realised figure remains the trusted source there - this is the same live-vs-analyze reasoning
+already established for the account-level dashboard figure
+(`sandbox_funds.today_realized_pnl`), now applied to this per-symbol positionbook one too.
+
+New tests: `test_close_accounting.py::TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure` (3
+cases - ANALYZE derives from price, LIVE still trusts the broker's figure, ANALYZE with a
+missing `ltp` falls back safely and loudly). Full suite: 1,667 passed, 0 failed. Reviewed by
+`ecc:code-reviewer` before landing; its two MEDIUM findings (missing-`ltp` fallback was silent
+and untested; the "always" claim about sandbox `ltp` didn't cover the session-settlement path)
+are both addressed above. The daily-performance feature's backfill/reconciliation workaround
+(`upgrade/backfill_strategy_daily_performance.py`) stays in place - it is still needed for
+trades closed before this fix deployed, and remains a useful independent cross-check going
+forward.

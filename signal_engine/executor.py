@@ -59,7 +59,11 @@ async def send_order(order: Order) -> TradeResult:
     try:
         async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
             response = await client.post(url, json=payload)
-            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            data = (
+                response.json()
+                if response.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
             return _interpret_placeorder(order, response, data)
     except httpx.TimeoutException:
         logger.error(f"Timeout sending order for {order.symbol}")
@@ -133,6 +137,7 @@ def build_exit_order(
     For SHORT positions: BUY to cover.
     """
     from signal_engine.models import Direction as _Direction
+
     if direction is None:
         direction = _Direction.LONG
     action = Action.SELL if direction == _Direction.LONG else Action.BUY
@@ -189,18 +194,78 @@ async def place_sl_order(
     for attempt in range(1, settings.bracket_max_sl_retries + 1):
         result = await send_order(sl_order)
         if result.status == OrderStatus.SUCCESS:
-            logger.info(f"SL placed for {symbol}: id={result.order_id} trigger={trigger_price} (attempt {attempt})")
+            logger.info(
+                f"SL placed for {symbol}: id={result.order_id} trigger={trigger_price} (attempt {attempt})"
+            )
             break
         logger.warning(
             f"SL attempt {attempt}/{settings.bracket_max_sl_retries} failed for {symbol}: {result.message}"
         )
+        if result.status == OrderStatus.TIMEOUT:
+            # A client-side TIMEOUT does not mean the broker never got the order — only
+            # that the response never arrived in time. Blindly retrying stacks duplicate
+            # LIVE SL-M orders on top of one that actually went through. Confirmed
+            # 2026-09-24: 5 consecutive "failed" SL retries each for NAUKRI and SOLARINDS
+            # had ALL actually succeeded on the broker — every attempt reported TIMEOUT,
+            # yet the orderbook showed 5 resting SL-M orders per symbol. Check before
+            # retrying (or giving up) so a genuine broker fill is adopted, not duplicated.
+            recovered = await _find_resting_sl_order(sl_order, trigger_price)
+            if recovered is not None:
+                result = recovered
+                logger.info(
+                    f"SL for {symbol} confirmed live on the broker despite client timeout: "
+                    f"id={recovered.order_id} (attempt {attempt})"
+                )
+                break
         if attempt < settings.bracket_max_sl_retries:
             await asyncio.sleep(settings.bracket_retry_delay)
 
     if result.status != OrderStatus.SUCCESS:
-        logger.error(f"SL failed after {settings.bracket_max_sl_retries} attempts for {symbol} — no SL protection")
+        logger.error(
+            f"SL failed after {settings.bracket_max_sl_retries} attempts for {symbol} — no SL protection"
+        )
 
     return result
+
+
+async def _find_resting_sl_order(order: Order, trigger_price: float) -> TradeResult | None:
+    """Look for a resting SL-M order on the broker matching `order`, to recover from an
+    ambiguous client-side TIMEOUT before place_sl_order retries and creates a duplicate.
+
+    Matches on symbol + action + quantity + trigger_price (within a tick) among orders
+    still working (not yet filled/cancelled/rejected).
+    """
+    from signal_engine.api_client import fetch_orderbook
+
+    book = await fetch_orderbook()
+    if not book:
+        return None
+    for o in book:
+        if not isinstance(o, dict):
+            continue
+        if str(o.get("symbol", "")).upper() != order.symbol.upper():
+            continue
+        if str(o.get("action", "")).upper() != order.action.value:
+            continue
+        try:
+            if int(o.get("quantity", 0)) != order.quantity:
+                continue
+        except (TypeError, ValueError):
+            continue
+        try:
+            if abs(float(o.get("trigger_price", 0) or 0) - trigger_price) > _TICK_SIZE:
+                continue
+        except (TypeError, ValueError):
+            continue
+        status = str(o.get("order_status") or o.get("status") or "").lower()
+        if status not in ("trigger pending", "open", "pending"):
+            continue
+        order_id = str(o.get("orderid") or o.get("order_id") or "")
+        if order_id:
+            return TradeResult(
+                order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
+            )
+    return None
 
 
 async def send_bracket_legs(

@@ -40,6 +40,16 @@ def _pos(symbol="ADANIENSOL", qty=68, fill=1372.90):
     )
 
 
+@pytest.fixture(autouse=True)
+def _default_to_live_trade_mode(monkeypatch):
+    """_book_broker_close's choice between the broker's realised figure and a price-derived
+    delta now depends on db._TRADE_MODE (see TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure)
+    - pin it explicitly so this file's tests don't depend on whatever another test file left
+    the module-level flag set to."""
+    from signal_engine import db
+    monkeypatch.setattr(db, "_TRADE_MODE", "live")
+
+
 class TestPositionbookCarriesPerSymbolPnl:
     def test_realised_pnl_is_indexed_per_symbol(self):
         book = [{"symbol": "ADANIENSOL", "quantity": 0, "ltp": 1370.6,
@@ -217,8 +227,10 @@ class TestFinalLegDoesNotDoubleCountPriorPartialExits:
 
     @pytest.mark.asyncio
     async def test_a_single_leg_close_is_unaffected(self):
-        """No partial-exit history (realized_pnl stays at its 0.0 default) - the existing
-        per-symbol-realised path must still be used, matching TestPerSymbolPnlIsPreferred."""
+        """No partial-exit history (realized_pnl stays at its 0.0 default) and LIVE mode
+        (see _default_to_live_trade_mode) - the existing per-symbol-realised path must still
+        be used, matching TestPerSymbolPnlIsPreferred. ANALYZE mode's single-close path has
+        its own fix and its own test - TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure."""
         risk = MagicMock()
         tracker = PositionTracker(risk)
         pos = _pos("PFC", qty=874, fill=345.85)
@@ -232,6 +244,108 @@ class TestFinalLegDoesNotDoubleCountPriorPartialExits:
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
             await tracker.check_positions()
         assert risk.record_close.call_args.args[0] == pytest.approx(87.40)
+
+
+class TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure:
+    """2026-09-25: BREAKOUT/TCS closed in ANALYZE mode with no prior partial-exit history, so
+    TestFinalLegDoesNotDoubleCountPriorPartialExits's fix never engaged - the single-close
+    path still trusted the sandbox's per-symbol "realised" figure unconditionally, same as
+    every test in TestPerSymbolPnlIsPreferred assumes. That figure was -578.00; the true P&L,
+    computed by hand from StrategyOrderTag.applied_notional / applied_quantity on the actual
+    entry and exit orders, was -821.60. See docs/strategy-daily-performance.md's 2026-09-25
+    entry ("EOD P&L: ... follow-up fix") for the full incident and the backfill workaround
+    that was applied for the daily-performance feature specifically, pending this fix here.
+
+    Fix: in ANALYZE mode the sandbox always sets a fully-closed position's ltp to its own
+    execution price (sandbox/execution_engine.py's "Position closed completely" branches), so
+    the single-close path can - and must - derive pnl_delta from price the same way the
+    partial-exit path already does (TestFinalLegDoesNotDoubleCountPriorPartialExits). LIVE
+    mode is deliberately NOT changed: a real broker's positionbook ltp is the last TRADED
+    market price (see broker/flattrade/mapping/order_data.py's "lp" mapping), not a guarantee
+    of the closing order's own fill price, so a live broker's own realised-pnl figure remains
+    the trusted source there.
+    """
+
+    @pytest.mark.asyncio
+    async def test_analyze_mode_derives_pnl_from_price_not_the_sandbox_s_realised_figure(
+        self, monkeypatch
+    ):
+        from signal_engine import db
+
+        monkeypatch.setattr(db, "_TRADE_MODE", "analyze")
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("TCS", qty=20, fill=3600.00)
+        tracker.register(pos)
+        # today_realized_pnl (-578.00) is the sandbox's buggy figure from that day - present
+        # to prove it is no longer trusted in ANALYZE mode. ltp=3558.92 is the real closing
+        # price: (3558.92 - 3600.00) * 20 == -821.60, the true fill-derived loss.
+        book = [{"symbol": "TCS", "quantity": 0, "ltp": 3558.92, "today_realized_pnl": -578.00}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-578.00)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        assert risk.record_close.call_args.args[0] == pytest.approx(-821.60)
+
+    @pytest.mark.asyncio
+    async def test_live_mode_single_close_still_trusts_the_broker_s_realised_figure(
+        self, monkeypatch
+    ):
+        """Same shape as above, LIVE mode - must NOT switch to price-derived."""
+        from signal_engine import db
+
+        monkeypatch.setattr(db, "_TRADE_MODE", "live")
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("TCS", qty=20, fill=3600.00)
+        tracker.register(pos)
+        book = [{"symbol": "TCS", "quantity": 0, "ltp": 3558.92, "today_realized_pnl": -578.00}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-578.00)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        assert risk.record_close.call_args.args[0] == pytest.approx(-578.00)
+
+    @pytest.mark.asyncio
+    async def test_analyze_mode_falls_back_to_the_broker_figure_when_ltp_is_missing(
+        self, monkeypatch
+    ):
+        """The one case the ANALYZE-mode price-derivation above cannot cover: the sandbox
+        reports quantity=0 with no ltp, so there is no execution price to derive pnl from.
+        This falls back to the sandbox's realised figure exactly as it did before the fix -
+        which is not reliably correct, so this must be logged loudly (WARNING), not silently
+        reproduce the BREAKOUT/TCS incident with no trace. loguru bypasses stdlib logging, so
+        caplog sees nothing here - add a real sink, matching test_sizing_transparency.py."""
+        from loguru import logger as _loguru_logger
+
+        from signal_engine import db
+
+        monkeypatch.setattr(db, "_TRADE_MODE", "analyze")
+        lines = []
+        sink_id = _loguru_logger.add(lines.append, level="WARNING", format="{message}")
+        try:
+            risk = MagicMock()
+            tracker = PositionTracker(risk)
+            pos = _pos("TCS", qty=20, fill=3600.00)
+            tracker.register(pos)
+            book = [{"symbol": "TCS", "quantity": 0, "ltp": 0, "today_realized_pnl": -578.00}]
+            with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+                 patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-578.00)), \
+                 patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+                 patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+                 patch.object(tracker, "_position_too_young", return_value=False), \
+                 patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+                await tracker.check_positions()
+        finally:
+            _loguru_logger.remove(sink_id)
+        assert risk.record_close.call_args.args[0] == pytest.approx(-578.00)
+        assert any("no ltp" in line for line in lines)
 
 
 class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
