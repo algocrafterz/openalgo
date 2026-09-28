@@ -22,7 +22,13 @@ import pytz
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.sandbox_db import SandboxPositions, SandboxTrades, db_session, get_config
+from database.sandbox_db import (
+    SandboxOrders,
+    SandboxPositions,
+    SandboxTrades,
+    db_session,
+    get_config,
+)
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
@@ -423,6 +429,26 @@ class PositionManager:
         position.margin_blocked = Decimal("0")
 
         db_session.commit()
+
+        # This settlement mutates the sandbox position directly with no order
+        # placed and no order.placed/order.update event published, so the
+        # per-strategy book (database/strategy_book_db.py) never hears the
+        # contract expired - reconciled directly here at the settlement
+        # price, same pattern as close_position/catch_up_mis_squareoff.
+        try:
+            from database.strategy_book_db import close_all_legs_for_position
+
+            close_all_legs_for_position(
+                user_id=position.user_id,
+                symbol=symbol,
+                exchange=position.exchange,
+                product=position.product,
+                mode="analyze",
+                exit_price=float(settlement_price),
+                book_today_pnl=True,
+            )
+        except Exception:
+            logger.exception(f"Could not reconcile strategy book for expired {symbol}")
 
         # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
         # This hides expired contracts from current session
@@ -1021,13 +1047,22 @@ class PositionManager:
                 "quantity": quantity,
                 "price_type": "MARKET",
                 "product": product,
-                "strategy": "AUTO_SQUARE_OFF",
+                # Deliberately untagged: this order closes the account's NET
+                # broker position, which more than one strategy could share,
+                # so it cannot honestly claim single ownership through the
+                # normal order.placed tag (a literal "AUTO_SQUARE_OFF" tag
+                # used to open a bogus strategy bucket of its own while the
+                # real strategy's leg stayed open forever). The real
+                # strategy leg(s) are reconciled directly below instead.
             }
 
             success, response, status_code = order_manager.place_order(order_data)
 
             if success:
                 logger.info(f"Position close order placed: {symbol} {action} {quantity}")
+                self._reconcile_strategy_book_on_close(
+                    symbol, exchange, product, response.get("orderid")
+                )
                 return (
                     True,
                     {
@@ -1051,6 +1086,39 @@ class PositionManager:
                     "mode": "analyze",
                 },
                 500,
+            )
+
+    def _reconcile_strategy_book_on_close(self, symbol, exchange, product, orderid):
+        """Close out any per-strategy leg(s) left open by this square-off.
+
+        The reverse order placed above carries no strategy tag (see
+        close_position), so the per-strategy book
+        (database/strategy_book_db.py) never hears about the close through
+        the normal order.placed/order.update path and would otherwise show a
+        phantom open leg forever - reconciled directly here at the actual
+        fill price instead.
+        """
+        if not orderid:
+            return
+        try:
+            filled_order = SandboxOrders.query.filter_by(orderid=orderid).first()
+            if not filled_order or not filled_order.average_price:
+                return
+
+            from database.strategy_book_db import close_all_legs_for_position
+
+            close_all_legs_for_position(
+                user_id=self.user_id,
+                symbol=symbol,
+                exchange=exchange,
+                product=product,
+                mode="analyze",
+                exit_price=float(filled_order.average_price),
+                book_today_pnl=True,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Could not reconcile strategy book after closing {symbol}: {e}"
             )
 
     def get_tradebook(self):
@@ -1126,116 +1194,6 @@ class PositionManager:
                 },
                 500,
             )
-
-    def process_session_settlement(self):
-        """
-        Process session expiry settlement (at SESSION_EXPIRY_TIME):
-        1. Auto square-off MIS positions
-        2. Move CNC positions to holdings (T+1 settlement)
-        3. Keep NRML positions as carry forward
-
-        This should be called at session expiry time (e.g., 3:00 AM IST)
-        """
-        try:
-            import os
-            from datetime import date, datetime
-
-            from database import db
-            from database.sandbox_db import SandboxHoldings
-
-            # Get session expiry time from config
-            session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-            logger.info(f"Processing session settlement at {session_expiry_str}")
-
-            # Get all open positions
-            positions = SandboxPositions.query.filter_by(user_id=self.user_id).all()
-
-            for position in positions:
-                if position.quantity == 0:
-                    continue  # Skip closed positions
-
-                if position.product == "MIS":
-                    # Auto square-off MIS positions at market close
-                    # Create a reverse order to square off
-                    action = "SELL" if position.quantity > 0 else "BUY"
-                    quantity = abs(position.quantity)
-
-                    # Use last traded price or average price for square-off
-                    price = float(position.average_price) if position.average_price else 0
-
-                    # Update position to closed
-                    position.quantity = 0
-                    position.pnl = float(position.realized_pnl)
-                    db.session.commit()
-
-                    logger.info(f"Auto squared-off MIS position: {position.symbol} qty: {quantity}")
-
-                elif position.product == "CNC" and position.quantity > 0:
-                    # Move CNC buy positions to holdings (T+1 settlement)
-                    # CNC sell positions are already closed (no short delivery allowed)
-
-                    # Check if holdings exist
-                    holdings = SandboxHoldings.query.filter_by(
-                        user_id=self.user_id, symbol=position.symbol, exchange=position.exchange
-                    ).first()
-
-                    if holdings:
-                        # Update existing holdings. Compute the weighted average
-                        # BEFORE mutating quantity -- the previous version
-                        # incremented quantity first, which double-counted the
-                        # new shares in the denominator and applied the old
-                        # average to the inflated total, skewing the cost basis
-                        # low on every repeat settlement of the same symbol
-                        # (100@100 + 100@110 gave 103.33 instead of 105).
-                        old_quantity = holdings.quantity
-                        new_quantity = old_quantity + position.quantity
-                        holdings.average_price = (
-                            holdings.average_price * old_quantity
-                            + position.average_price * position.quantity
-                        ) / new_quantity
-                        holdings.quantity = new_quantity
-                    else:
-                        # Create new holdings
-                        holdings = SandboxHoldings(
-                            user_id=self.user_id,
-                            symbol=position.symbol,
-                            exchange=position.exchange,
-                            quantity=position.quantity,
-                            average_price=position.average_price,
-                            settlement_date=date.today(),
-                        )
-                        db.session.add(holdings)
-
-                    # Clear the CNC position
-                    position.quantity = 0
-                    position.pnl = float(position.realized_pnl)
-                    db.session.commit()
-
-                    logger.debug(
-                        f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}"
-                    )
-
-                # NRML positions remain as-is (carry forward)
-
-            return (
-                True,
-                {"status": "success", "message": "Session settlement completed", "mode": "analyze"},
-                200,
-            )
-
-        except Exception as e:
-            logger.exception(f"Error in EOD settlement: {e}")
-            db.session.rollback()
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": f"Error in EOD settlement: {str(e)}",
-                    "mode": "analyze",
-                },
-                500,
-            )
-
 
 def update_all_positions_mtm():
     """Background task to update MTM for all positions"""
@@ -1412,6 +1370,29 @@ def cleanup_expired_contracts():
                         position.margin_blocked = Decimal("0")
 
                         db_session.commit()
+
+                        # Same reconciliation as _settle_expired_position:
+                        # this mutates the position directly with no
+                        # order.placed/order.update ever published, so the
+                        # per-strategy book never hears it.
+                        try:
+                            from database.strategy_book_db import (
+                                close_all_legs_for_position,
+                            )
+
+                            close_all_legs_for_position(
+                                user_id=user_id,
+                                symbol=symbol,
+                                exchange=position.exchange,
+                                product=position.product,
+                                mode="analyze",
+                                exit_price=float(settlement_price),
+                                book_today_pnl=True,
+                            )
+                        except Exception:
+                            logger.exception(
+                                f"Could not reconcile strategy book for expired {symbol}"
+                            )
 
                         # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
                         # This hides expired contracts from current session.

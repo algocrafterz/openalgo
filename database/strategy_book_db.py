@@ -704,6 +704,121 @@ def get_strategy_legs(
         raise StrategyBookUnavailable("Could not read the strategy book") from exc
 
 
+def close_all_legs_for_position(
+    user_id: str,
+    symbol: str,
+    exchange: str,
+    product: str,
+    mode: str,
+    exit_price: float,
+    book_today_pnl: bool = True,
+) -> list[dict]:
+    """Force-close every open strategy leg for one (symbol, exchange, product,
+    mode) key at a single exit price, bypassing the order-tag/apply_fill path.
+
+    Some square-offs never go through a tagged order at all, or deliberately
+    go through an untagged one - an auto square-off order closes the
+    account's *net* broker position, which more than one strategy could
+    share, so it cannot honestly claim single ownership via the normal
+    order.placed tag. Without this, the strategy book keeps showing a
+    phantom open leg forever after the real position has gone flat (see
+    sandbox/position_manager.py's close_position and
+    sandbox/catch_up_processor.py's catch_up_mis_squareoff, both of which
+    call this instead of relying on apply_fill).
+
+    Every matching non-flat leg is closed at the same exit_price - exact
+    when, as is typical, only one strategy holds the symbol; an
+    approximation when several do, since a single square-off/settlement
+    event has only one price to attribute.
+
+    book_today_pnl=False mirrors catch_up_mis_squareoff's own funds
+    accounting: a stale multi-day-old position's P&L belongs to all-time
+    realized only, not today's figure, since it did not close "today" from
+    the trader's perspective.
+    """
+    if not _initialized:
+        return []
+    with _fill_lock:
+        try:
+            legs = (
+                db_session.query(StrategyPosition)
+                .filter_by(
+                    user_id=user_id,
+                    symbol=symbol,
+                    exchange=exchange,
+                    product=product,
+                    mode=mode,
+                )
+                .filter(StrategyPosition.quantity != 0)
+                .all()
+            )
+        except Exception:
+            db_session.rollback()
+            logger.exception(
+                f"Could not read strategy legs to reconcile {symbol}/{exchange}/{product}"
+            )
+            return []
+
+        if not legs:
+            return []
+
+        today = _session_date()
+        closed: list[dict] = []
+        try:
+            for leg in legs:
+                qty = float(leg.quantity or 0)
+                avg = float(leg.average_price or 0)
+                direction = 1.0 if qty > 0 else -1.0
+                realized = abs(qty) * (float(exit_price) - avg) * direction
+
+                leg.realized_pnl = float(leg.realized_pnl or 0) + realized
+                if book_today_pnl:
+                    if leg.trade_date != today:
+                        leg.today_realized_pnl = 0.0
+                        leg.trade_date = today
+                    leg.today_realized_pnl = float(leg.today_realized_pnl or 0) + realized
+
+                db_session.add(
+                    StrategyClosedTrade(
+                        user_id=leg.user_id,
+                        strategy=leg.strategy,
+                        symbol=leg.symbol,
+                        exchange=leg.exchange,
+                        product=leg.product,
+                        mode=leg.mode,
+                        direction="LONG" if direction > 0 else "SHORT",
+                        closed_quantity=round(abs(qty), 4),
+                        entry_price=round(avg, 4),
+                        exit_price=round(float(exit_price), 4),
+                        realized_pnl=round(realized, 4),
+                        trade_date=leg.trade_date or today,
+                    )
+                )
+                leg.quantity = 0.0
+                leg.average_price = 0.0
+                closed.append(
+                    {
+                        "strategy": leg.strategy,
+                        "symbol": leg.symbol,
+                        "exchange": leg.exchange,
+                        "product": leg.product,
+                        "mode": leg.mode,
+                        "realized_pnl": round(realized, 4),
+                    }
+                )
+            db_session.commit()
+            if closed:
+                logger.info(
+                    f"Strategy book: reconciled {len(closed)} stale leg(s) for "
+                    f"{symbol}/{exchange}/{product} at exit_price={exit_price}"
+                )
+            return closed
+        except Exception:
+            db_session.rollback()
+            logger.exception(f"Could not reconcile strategy legs for {symbol}/{exchange}/{product}")
+            return []
+
+
 def list_strategies(user_id: str | None = None) -> list[str]:
     try:
         query = db_session.query(StrategyPosition.strategy).distinct()

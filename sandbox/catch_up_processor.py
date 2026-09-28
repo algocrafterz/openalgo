@@ -130,6 +130,30 @@ def catch_up_mis_squareoff():
                 db_session.commit()
                 logger.info(f"Catch-up: Settled stale MIS position {symbol} for {user_id}")
 
+                # This settlement mutates the sandbox position directly and
+                # never places an order, so order.placed/order.update never
+                # fire and the per-strategy book (database/strategy_book_db.py)
+                # never hears the position closed - it would otherwise keep
+                # showing this as a phantom open leg indefinitely. book_today_pnl
+                # is False for the same reason today_realized_pnl is skipped
+                # above: this position did not close "today".
+                try:
+                    from database.strategy_book_db import close_all_legs_for_position
+
+                    close_all_legs_for_position(
+                        user_id=user_id,
+                        symbol=symbol,
+                        exchange=position.exchange,
+                        product="MIS",
+                        mode="analyze",
+                        exit_price=float(settlement_price),
+                        book_today_pnl=False,
+                    )
+                except Exception:
+                    logger.exception(
+                        f"Catch-up: could not reconcile strategy book for stale MIS {symbol}"
+                    )
+
             except Exception as e:
                 db_session.rollback()
                 logger.exception(f"Error settling stale MIS position {position.symbol}: {e}")
