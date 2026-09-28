@@ -527,6 +527,7 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
     non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
     """
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
+    attempt_started = datetime.now(IST)
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
         trade_result = await send_order(exit_order)
         if trade_result.status == OrderStatus.SUCCESS:
@@ -535,9 +536,74 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
             f"EXIT attempt {_attempt}/{settings.bracket_tp_exit_retries} failed for "
             f"{pos.symbol}: {trade_result.message}"
         )
+        if trade_result.status == OrderStatus.TIMEOUT:
+            # A client-side TIMEOUT does not mean the broker never got the order -
+            # only that the response never arrived in time. Blindly retrying risks
+            # double-booking the exit (duplicate fill in trades.db, wrong P&L
+            # delta, and per the Indian-broker OCO quirk documented on
+            # _cancel_sl_before_exit, a second SELL can even be treated as a new
+            # SHORT). Confirmed for SL-M orders in production 2026-09-24 (see
+            # executor.py's _find_resting_sl_order); a MARKET exit is exposed to
+            # the identical risk. Check before retrying so a genuine broker fill
+            # is adopted, not duplicated.
+            recovered = await _find_recent_market_exit_fill(exit_order, attempt_started)
+            if recovered is not None:
+                trade_result = recovered
+                logger.info(
+                    f"EXIT for {pos.symbol} confirmed live on the broker despite client "
+                    f"timeout: id={recovered.order_id} (attempt {_attempt})"
+                )
+                break
         if _attempt < settings.bracket_tp_exit_retries:
             await asyncio.sleep(settings.bracket_retry_delay)
     return trade_result
+
+
+async def _find_recent_market_exit_fill(order, since: datetime) -> TradeResult | None:
+    """Look for a MARKET exit that actually filled on the broker despite a
+    client-side TIMEOUT, before _send_exit_with_retries resends and double-books
+    the exit (see the TIMEOUT branch above for why this matters).
+
+    Matches on symbol + action + quantity among COMPLETE orders timestamped at or
+    after `since` (when this exit attempt sequence started). Unlike a resting
+    SL-M order, a filled MARKET order shows "complete" immediately, so recency is
+    the only way to avoid matching an unrelated earlier fill of the same
+    symbol/qty/action.
+    """
+    from signal_engine.api_client import fetch_orderbook
+
+    book = await fetch_orderbook()
+    if not book:
+        return None
+    for o in book:
+        if not isinstance(o, dict):
+            continue
+        if str(o.get("symbol", "")).upper() != order.symbol.upper():
+            continue
+        if str(o.get("action", "")).upper() != order.action.value:
+            continue
+        try:
+            if int(o.get("quantity", 0)) != order.quantity:
+                continue
+        except (TypeError, ValueError):
+            continue
+        status = str(o.get("order_status") or o.get("status") or "").lower()
+        if status != "complete":
+            continue
+        ts_raw = o.get("timestamp") or o.get("order_timestamp")
+        if ts_raw:
+            try:
+                ts = datetime.strptime(str(ts_raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+                if ts < since:
+                    continue
+            except ValueError:
+                pass  # unparseable timestamp - fall through rather than discard a real match
+        order_id = str(o.get("orderid") or o.get("order_id") or "")
+        if order_id:
+            return TradeResult(
+                order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
+            )
+    return None
 
 
 async def _book_realised_pnl_delta() -> tuple[float, float]:

@@ -1025,11 +1025,9 @@ class PositionTracker:
         # sandbox/position_manager.py's settlement_price assignment), and MTM never overwrites
         # it afterward for a qty=0 position - so a price-derived delta is available and
         # reliable on every ordinary ANALYZE close, not only ones with prior partial-exit
-        # history. (The one path that does NOT set it is the 3 AM MIS session-settlement
-        # square-off, sandbox/position_manager.py's process_session_settlement() - not a
-        # concern here since signal_engine's own time-exit always closes MIS positions well
-        # before that safety net runs; the `ltp and` guard below still protects against it if
-        # that ever changes.) This matters because the sandbox's own "realised" bookkeeping
+        # history. (The `ltp and` guard below still protects against a future settlement
+        # path that doesn't set it, should one ever be added.) This matters because the
+        # sandbox's own "realised" bookkeeping
         # has its own confirmed bug independent of partial exits - BREAKOUT/TCS closed
         # 2026-09-25 with no partial-exit history and the sandbox's figure was -578.00 against
         # -821.60 true from the actual booked fills (see docs/strategy-daily-performance.md's
