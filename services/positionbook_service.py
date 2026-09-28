@@ -113,7 +113,13 @@ def get_positionbook_with_auth(
                 400,
             )
 
-        return sandbox_get_positions(api_key, original_data)
+        success, response, status_code = sandbox_get_positions(api_key, original_data)
+        if success:
+            from services.strategy_tag_enrichment import attach_strategy_to_positions
+
+            response = dict(response)
+            response["data"] = attach_strategy_to_positions(response.get("data") or [])
+        return success, response, status_code
 
     broker_funcs = import_broker_module(broker)
     if broker_funcs is None:
@@ -152,6 +158,13 @@ def get_positionbook_with_auth(
 
         # Format numeric values to 2 decimal places
         formatted_positions = format_position_data(positions_data)
+
+        # Tag each position with the strategy/strategies holding it - looked
+        # up from the strategy book since a netted position carries no
+        # strategy of its own (see attach_strategy_to_positions).
+        from services.strategy_tag_enrichment import attach_strategy_to_positions
+
+        formatted_positions = attach_strategy_to_positions(formatted_positions)
 
         return True, {"status": "success", "data": formatted_positions}, 200
     except Exception as e:

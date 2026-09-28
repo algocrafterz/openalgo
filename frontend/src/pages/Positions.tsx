@@ -40,6 +40,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -59,7 +60,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -71,7 +71,10 @@ interface FilterState {
   product: string[]
   direction: string[]
   exchange: string[]
+  strategy: string[]
 }
+
+const UNTAGGED_STRATEGY = '__untagged__'
 
 interface Preferences {
   grouping: GroupingType
@@ -164,6 +167,7 @@ export default function Positions() {
     product: [],
     direction: [],
     exchange: [],
+    strategy: [],
   })
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [sortColumn, setSortColumn] = useState<SortColumn>(null)
@@ -196,6 +200,7 @@ export default function Positions() {
             product: prefs.filters.product || [],
             direction: prefs.filters.direction || [],
             exchange: prefs.filters.exchange || [],
+            strategy: prefs.filters.strategy || [],
           })
       }
     } catch (_e) {}
@@ -305,6 +310,25 @@ export default function Positions() {
     [grouping]
   )
 
+  // Distinct strategy tags present on the page, for the filter dropdown
+  const availableStrategies = useMemo(() => {
+    const names = new Set<string>()
+    let hasUntagged = false
+    for (const pos of enhancedPositions) {
+      const tags = (pos.strategy || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (tags.length > 0) {
+        tags.forEach((t) => names.add(t))
+      } else {
+        hasUntagged = true
+      }
+    }
+    const sorted = Array.from(names).sort()
+    return hasUntagged ? [...sorted, UNTAGGED_STRATEGY] : sorted
+  }, [enhancedPositions])
+
   // Filter positions (use enhancedPositions for real-time LTP/PnL)
   const filteredPositions = useMemo(() => {
     return enhancedPositions.filter((pos) => {
@@ -321,6 +345,15 @@ export default function Positions() {
       }
 
       if (filters.exchange.length > 0 && !filters.exchange.includes(pos.exchange)) return false
+
+      if (filters.strategy.length > 0) {
+        const tags = (pos.strategy || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const rowTags = tags.length > 0 ? tags : [UNTAGGED_STRATEGY]
+        if (!filters.strategy.some((s) => rowTags.includes(s))) return false
+      }
 
       return true
     })
@@ -417,7 +450,7 @@ export default function Positions() {
   }
 
   const clearFilters = () => {
-    setFilters({ product: [], direction: [], exchange: [] })
+    setFilters({ product: [], direction: [], exchange: [], strategy: [] })
     setGrouping('none')
     setCollapsedGroups(new Set())
   }
@@ -438,6 +471,7 @@ export default function Positions() {
     filters.product.length > 0 ||
     filters.direction.length > 0 ||
     filters.exchange.length > 0 ||
+    filters.strategy.length > 0 ||
     grouping !== 'none'
 
   const handleClosePosition = async (position: Position) => {
@@ -483,6 +517,7 @@ export default function Positions() {
         'Symbol',
         'Exchange',
         ...(isCrypto ? [] : ['Product']),
+        'Strategy',
         'Quantity',
         'Avg Price',
         'LTP',
@@ -493,6 +528,7 @@ export default function Positions() {
         sanitizeCSV(p.symbol),
         sanitizeCSV(p.exchange),
         ...(isCrypto ? [] : [sanitizeCSV(p.product)]),
+        sanitizeCSV(p.strategy || ''),
         sanitizeCSV(p.quantity),
         sanitizeCSV(p.average_price),
         sanitizeCSV(p.ltp),
@@ -727,6 +763,25 @@ export default function Positions() {
                     <FilterChip type="exchange" value="CDS" label="CDS" />
                   </div>
                 </div>
+
+                {/* Strategy */}
+                {availableStrategies.length > 0 && (
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Strategy
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {availableStrategies.map((strategy) => (
+                        <FilterChip
+                          key={strategy}
+                          type="strategy"
+                          value={strategy}
+                          label={strategy === UNTAGGED_STRATEGY ? 'Untagged' : strategy}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <DialogFooter>
@@ -814,6 +869,15 @@ export default function Positions() {
               {v}
             </Badge>
           ))}
+          {filters.strategy.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {v === UNTAGGED_STRATEGY ? 'Untagged' : v}
+            </Badge>
+          ))}
           <Button
             variant="outline"
             size="sm"
@@ -874,10 +938,12 @@ export default function Positions() {
               icon={ChartCandlestick}
               title="No positions match your filters"
               description="Try adjusting or clearing your filters to see results."
-              action={hasActiveFilters ?
-                <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Clear Filters
-                </Button> : undefined
+              action={
+                hasActiveFilters ? (
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -888,6 +954,7 @@ export default function Positions() {
                     <SortableHeader column={0} label="Symbol" className="w-[140px]" />
                     <TableHead className="w-[80px]">Exchange</TableHead>
                     {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
+                    <TableHead className="w-[100px]">Strategy</TableHead>
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
                     <SortableHeader column={4} label="Avg Price" className="w-[120px] text-right" />
                     <TableHead className="w-[120px] text-right">LTP</TableHead>
@@ -910,7 +977,7 @@ export default function Positions() {
                             className="bg-muted/50 cursor-pointer hover:bg-muted"
                             onClick={() => toggleGroup(groupKey)}
                           >
-                            <TableCell colSpan={6}>
+                            <TableCell colSpan={7}>
                               <div className="flex items-center gap-3 py-1 font-semibold">
                                 {isCollapsed ? (
                                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -970,6 +1037,9 @@ export default function Positions() {
                                   </Badge>
                                 </TableCell>
                               )}
+                              <TableCell className="w-[100px] text-sm text-muted-foreground">
+                                {position.strategy || '-'}
+                              </TableCell>
                               <TableCell
                                 className={cn(
                                   'w-[80px] text-right font-medium',
@@ -1029,7 +1099,7 @@ export default function Positions() {
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
+                    <TableCell colSpan={7} className="text-right text-muted-foreground">
                       Total P&L:
                     </TableCell>
                     <TableCell

@@ -9,6 +9,7 @@ export interface Position {
   pnlpercent: number
   lot_size?: number // contract_value multiplier (e.g. 0.01 for ETHUSD.P)
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
+  strategy?: string // strategy tag(s) holding this position, comma-separated when shared
 }
 
 export interface Order {
