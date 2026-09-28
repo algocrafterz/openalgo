@@ -65,7 +65,7 @@ function LegsTable({
           <TableHead className="text-right">Qty</TableHead>
           <TableHead className="text-right">Avg Price</TableHead>
           <TableHead className="text-right">LTP</TableHead>
-          <TableHead className="text-right">Realized</TableHead>
+          <TableHead className="text-right">Today Realized</TableHead>
           <TableHead className="text-right">Unrealized</TableHead>
         </TableRow>
       </TableHeader>
@@ -87,7 +87,7 @@ function LegsTable({
               {leg.ltp === null ? '-' : formatCurrency(leg.ltp)}
             </TableCell>
             <TableCell className="text-right">
-              <PnlText value={leg.realized} formatted={formatCurrency(leg.realized)} />
+              <PnlText value={leg.today_realized} formatted={formatCurrency(leg.today_realized)} />
             </TableCell>
             <TableCell className="text-right">
               <PnlText value={leg.unrealized} formatted={formatCurrency(leg.unrealized)} />
@@ -164,11 +164,19 @@ function StrategyRow({
             )}
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-right text-sm">
-          <Stat label="Realized" value={strategy.realized} formatCurrency={formatCurrency} />
+        <div className="grid grid-cols-3 gap-x-6 gap-y-1 text-right text-sm">
+          <Stat
+            label="Today Realized"
+            value={strategy.today_realized}
+            formatCurrency={formatCurrency}
+          />
           <Stat label="Unrealized" value={strategy.unrealized} formatCurrency={formatCurrency} />
-          <Stat label="Today" value={strategy.today_total} formatCurrency={formatCurrency} />
-          <Stat label="Total" value={strategy.total} formatCurrency={formatCurrency} bold />
+          <Stat
+            label="Today Total"
+            value={strategy.today_total}
+            formatCurrency={formatCurrency}
+            bold
+          />
         </div>
       </button>
       {isOpen && (
@@ -191,12 +199,11 @@ function PortfolioTotal({
     () =>
       strategies.reduce(
         (acc, s) => ({
-          realized: acc.realized + s.realized,
+          today_realized: acc.today_realized + s.today_realized,
           unrealized: acc.unrealized + s.unrealized,
           today_total: acc.today_total + s.today_total,
-          total: acc.total + s.total,
         }),
-        { realized: 0, unrealized: 0, today_total: 0, total: 0 }
+        { today_realized: 0, unrealized: 0, today_total: 0 }
       ),
     [strategies]
   )
@@ -206,11 +213,19 @@ function PortfolioTotal({
       <CardContent className="py-4">
         <div className="flex items-center justify-between gap-4">
           <div className="font-semibold">All strategies combined</div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-right text-sm">
-            <Stat label="Realized" value={totals.realized} formatCurrency={formatCurrency} />
+          <div className="grid grid-cols-3 gap-x-6 gap-y-1 text-right text-sm">
+            <Stat
+              label="Today Realized"
+              value={totals.today_realized}
+              formatCurrency={formatCurrency}
+            />
             <Stat label="Unrealized" value={totals.unrealized} formatCurrency={formatCurrency} />
-            <Stat label="Today" value={totals.today_total} formatCurrency={formatCurrency} />
-            <Stat label="Total P&L" value={totals.total} formatCurrency={formatCurrency} bold />
+            <Stat
+              label="Today Total"
+              value={totals.today_total}
+              formatCurrency={formatCurrency}
+              bold
+            />
           </div>
         </div>
       </CardContent>
@@ -299,8 +314,9 @@ export default function StrategyPnL() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Strategy P&L</h1>
           <p className="text-muted-foreground">
-            Per-strategy realized and unrealized P&L, tracked from the strategy tag on each order.
-            Live and paper (Analyze mode) trades are tracked separately.
+            Today's realized and unrealized P&L per strategy, tracked from the strategy tag on each
+            order. Live and paper (Analyze mode) trades are tracked separately. For historical,
+            multi-day performance, see the Performance page.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={refresh} disabled={isFetching}>
