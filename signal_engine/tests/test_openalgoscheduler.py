@@ -678,7 +678,11 @@ class TestHealthcheck:
         def _boom():
             raise OSError("BROKER_TOTP_SECRET is not set")
 
-        sched = self._patch(monkeypatch, validate_auto_login_env=_boom)
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=_boom,
+            _ensure_openalgo_api_usable=lambda context: True,
+        )
         sched._run_healthcheck()  # must not raise
 
     def test_session_still_valid_sends_no_alert(self, monkeypatch):
@@ -687,6 +691,7 @@ class TestHealthcheck:
         calls = []
         sched = self._patch(
             monkeypatch,
+            _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (True, "Session reused (no TOTP needed) for user: anand123hai", "tok"),
             notify_failure=lambda stage, detail: calls.append(("fail", stage, detail)),
@@ -705,6 +710,7 @@ class TestHealthcheck:
 
         sched = self._patch(
             monkeypatch,
+            _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (True, "Auto-login successful for anand123hai", "tok"),
             send_telegram_notification=_send,
@@ -719,6 +725,7 @@ class TestHealthcheck:
         calls = []
         sched = self._patch(
             monkeypatch,
+            _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (False, "Invalid credentials", None),
             notify_failure=lambda stage, detail: calls.append((stage, detail)),
@@ -735,6 +742,7 @@ class TestHealthcheck:
         calls = []
         sched = self._patch(
             monkeypatch,
+            _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=_boom,
             notify_failure=lambda stage, detail: calls.append((stage, detail)),
@@ -743,3 +751,385 @@ class TestHealthcheck:
             sched._run_healthcheck()
         assert calls, "no alert was sent on configuration error during re-login"
         assert "BROKER_PASSWORD missing" in calls[0][1]
+
+    def test_api_smoke_test_failure_alerts_and_exits(self, monkeypatch):
+        """If OpenAlgo's own API is unusable even after self-heal, healthcheck
+        must alert and exit non-zero - the exact gap that let 2026-09-28's
+        ~90 minute outage run silently until a human noticed the missing trades."""
+        calls = []
+        sched = self._patch(
+            monkeypatch,
+            _ensure_openalgo_api_usable=lambda context: (
+                calls.append(context) or False
+            ),
+        )
+        with pytest.raises(SystemExit):
+            sched._run_healthcheck()
+        assert calls == ["healthcheck"]
+
+
+class TestMasterContractCallOk:
+    """_master_contract_call_ok must read both load functions' actual success contracts."""
+
+    def test_true_bool_is_ok(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_call_ok
+        assert _master_contract_call_ok(True) is True
+
+    def test_false_bool_is_not_ok(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_call_ok
+        assert _master_contract_call_ok(False) is False
+
+    def test_error_dict_is_not_ok(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_call_ok
+        assert _master_contract_call_ok({"status": "error", "message": "boom"}) is False
+
+    def test_opaque_success_value_is_ok(self):
+        """async_master_contract_download() returns a broker-specific opaque value on
+        success (whatever master_contract_download() returned) - anything that isn't
+        an explicit error dict or False must be treated as success."""
+        from signal_engine.scripts.openalgoscheduler import _master_contract_call_ok
+        assert _master_contract_call_ok({"status": "ok"}) is True
+        assert _master_contract_call_ok("some-broker-specific-value") is True
+        assert _master_contract_call_ok(None) is True
+
+
+def _ready_status(total_symbols="152238"):
+    """A master_contract_status row shaped like a genuinely completed download."""
+    return {"status": "success", "is_ready": True, "total_symbols": total_symbols}
+
+
+def _must_not_be_called(*args, **kwargs):
+    raise AssertionError("get_status must not be called when the load call already failed")
+
+
+class TestMasterContractLoadConfirmed:
+    """_master_contract_load_confirmed is the authoritative check: it must trust the
+    database row master_contract_status, not the load call's own return value - a call
+    can report success while a killed thread left the row stuck at "downloading" (the
+    exact 2026-09-28 shape), or while a partial download silently skipped an exchange.
+    """
+
+    def test_failed_call_short_circuits_without_checking_status(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", _must_not_be_called, {"status": "error"}, should_download=True
+        )
+        assert confirmed is False
+
+    def test_cached_load_success_trusts_the_calls_own_bool(self):
+        """load_existing_master_contract() already checked is_ready itself - no need
+        to re-query the database for the cache-load path."""
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", _must_not_be_called, True, should_download=False
+        )
+        assert confirmed is True
+        assert "cache" in detail.lower()
+
+    def test_download_confirmed_when_status_row_is_ready_with_symbols(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        get_status = MagicMock(return_value=_ready_status())
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", get_status, {"status": "ok"}, should_download=True
+        )
+        assert confirmed is True
+        get_status.assert_called_once_with("flattrade")
+
+    def test_stuck_downloading_status_is_not_confirmed(self):
+        """Regression guard for the exact 2026-09-28 shape: the call returns without
+        raising, but the killed background thread never got to update_status(...,
+        "success", ...), so the row is still "downloading"."""
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        get_status = MagicMock(
+            return_value={"status": "downloading", "is_ready": False, "total_symbols": "0"}
+        )
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", get_status, {"status": "ok"}, should_download=True
+        )
+        assert confirmed is False
+        assert "downloading" in detail
+
+    def test_success_status_but_zero_symbols_is_not_confirmed(self):
+        """A partial download that silently skipped every exchange (download_csv_data()
+        swallows per-exchange failures) could still land status="success" - the symbol
+        count is the last line of defense."""
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        get_status = MagicMock(return_value=_ready_status(total_symbols="0"))
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", get_status, {"status": "ok"}, should_download=True
+        )
+        assert confirmed is False
+
+    def test_missing_status_row_is_not_confirmed(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        get_status = MagicMock(return_value=None)
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", get_status, {"status": "ok"}, should_download=True
+        )
+        assert confirmed is False
+
+    def test_non_numeric_symbol_count_is_not_confirmed(self):
+        from signal_engine.scripts.openalgoscheduler import _master_contract_load_confirmed
+
+        get_status = MagicMock(return_value=_ready_status(total_symbols="not-a-number"))
+        confirmed, detail = _master_contract_load_confirmed(
+            "flattrade", get_status, {"status": "ok"}, should_download=True
+        )
+        assert confirmed is False
+
+
+class TestStartMasterContractLoadSynchronous:
+    """Regression guard for 2026-09-28: this must run synchronously, confirm the
+    result against the database row, and report its real outcome - not fire a daemon
+    Thread and return immediately. The old behavior let the download die silently when
+    the short-lived CLI process exited right after starting it, leaving
+    master_contract_status stuck at "downloading" for ~90 minutes while every
+    /api/v1/funds and /api/v1/analyzer call 403'd.
+    """
+
+    def test_download_success_runs_inline_and_returns_true(self):
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        calls = []
+
+        def download(broker):
+            calls.append(broker)
+            return {"status": "ok"}
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(True, "stale")),
+            download, MagicMock(),
+            _get_master_contract_status=lambda broker: _ready_status(),
+        )
+        assert result is True
+        assert calls == ["flattrade"], "download must run synchronously, exactly once"
+
+    def test_download_failure_retries_once_then_succeeds(self):
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        attempts = []
+
+        def download(broker):
+            attempts.append(broker)
+            if len(attempts) == 1:
+                return {"status": "error", "message": "network blip"}
+            return {"status": "ok"}
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(True, "stale")),
+            download, MagicMock(),
+            _get_master_contract_status=lambda broker: _ready_status(),
+        )
+        assert result is True
+        assert len(attempts) == 2, "a failed download must get exactly one retry"
+
+    def test_download_failure_twice_returns_false(self):
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        attempts = []
+
+        def download(broker):
+            attempts.append(broker)
+            return {"status": "error"}
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(True, "stale")),
+            download, MagicMock(),
+            _get_master_contract_status=_must_not_be_called,
+        )
+        assert result is False
+        assert len(attempts) == 2, "must give up after one retry, not loop forever"
+
+    def test_reported_success_but_status_stuck_downloading_is_retried_then_fails(self):
+        """Regression guard for the exact 2026-09-28 incident: the call itself never
+        raises and never returns an explicit error, but the database row it was
+        supposed to finish writing is stuck at "downloading" both times - this must
+        not be reported as success."""
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        attempts = []
+
+        def download(broker):
+            attempts.append(broker)
+            return {"status": "ok"}  # call "succeeds" - the DB row is what's actually stuck
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(True, "stale")),
+            download, MagicMock(),
+            _get_master_contract_status=lambda broker: {
+                "status": "downloading", "is_ready": False, "total_symbols": "0",
+            },
+        )
+        assert result is False
+        assert len(attempts) == 2, "a call that 'succeeds' but leaves the row unconfirmed must retry"
+
+    def test_reported_success_but_zero_symbols_is_not_confirmed(self):
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(True, "stale")),
+            lambda broker: {"status": "ok"}, MagicMock(),
+            _get_master_contract_status=lambda broker: _ready_status(total_symbols="0"),
+        )
+        assert result is False
+
+    def test_cached_load_failure_does_not_retry(self):
+        """Retrying a cache-load failure can't succeed differently - no cached data
+        means no cached data on the second try either."""
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        attempts = []
+
+        def load_existing(broker):
+            attempts.append(broker)
+            return False
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(False, "cached")),
+            MagicMock(), load_existing,
+            _get_master_contract_status=_must_not_be_called,
+        )
+        assert result is False
+        assert len(attempts) == 1
+
+    def test_force_download_skips_smart_check(self):
+        """The self-heal path must always redownload, never fall back to the cached
+        path a smart-download check might otherwise pick."""
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        should_download_fn = MagicMock(side_effect=AssertionError("must not be called"))
+        download = MagicMock(return_value={"status": "ok"})
+        load_existing = MagicMock(side_effect=AssertionError("must not be called"))
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), should_download_fn,
+            download, load_existing, force_download=True,
+            _get_master_contract_status=lambda broker: _ready_status(),
+        )
+        assert result is True
+        download.assert_called_once_with("flattrade")
+
+    def test_exception_from_target_is_caught_and_counted_as_failure(self):
+        from signal_engine.scripts.openalgoscheduler import _start_master_contract_load
+
+        def download(broker):
+            raise RuntimeError("boom")
+
+        result = _start_master_contract_load(
+            "flattrade", MagicMock(), MagicMock(return_value=(True, "stale")),
+            download, MagicMock(),
+            _get_master_contract_status=_must_not_be_called,
+        )
+        assert result is False
+
+
+class TestVerifyOpenAlgoApi:
+    """_verify_openalgo_api retries with backoff before giving up."""
+
+    def test_succeeds_first_try_no_delay_needed(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        calls = []
+
+        async def _smoke():
+            calls.append(1)
+            return True, "OK"
+
+        monkeypatch.setattr(sched, "_openalgo_api_smoke_test", _smoke)
+        ok, detail = sched._verify_openalgo_api(max_attempts=3, retry_delay=0)
+        assert ok is True
+        assert detail == "OK"
+        assert len(calls) == 1
+
+    def test_recovers_on_a_later_attempt(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        calls = []
+
+        async def _smoke():
+            calls.append(1)
+            if len(calls) < 3:
+                return False, "403"
+            return True, "recovered"
+
+        monkeypatch.setattr(sched, "_openalgo_api_smoke_test", _smoke)
+        ok, detail = sched._verify_openalgo_api(max_attempts=3, retry_delay=0)
+        assert ok is True
+        assert detail == "recovered"
+        assert len(calls) == 3
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        calls = []
+
+        async def _smoke():
+            calls.append(1)
+            return False, "still 403"
+
+        monkeypatch.setattr(sched, "_openalgo_api_smoke_test", _smoke)
+        ok, detail = sched._verify_openalgo_api(max_attempts=3, retry_delay=0)
+        assert ok is False
+        assert detail == "still 403"
+        assert len(calls) == 3
+
+
+class TestEnsureOpenAlgoApiUsable:
+    """_ensure_openalgo_api_usable: self-heal once, alert on the outcome either way."""
+
+    def test_passes_immediately_without_self_heal(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        heal_calls = []
+        monkeypatch.setattr(sched, "_verify_openalgo_api", lambda **kw: (True, "OK"))
+        monkeypatch.setattr(sched, "_self_heal_master_contract", lambda: heal_calls.append(1))
+
+        assert sched._ensure_openalgo_api_usable("startup") is True
+        assert heal_calls == [], "must not self-heal when the first check already passed"
+
+    def test_self_heals_and_recovers(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        calls = {"verify": 0}
+        recovered_msgs = []
+
+        def _verify(**kw):
+            calls["verify"] += 1
+            if calls["verify"] == 1:
+                return False, "403 forbidden"
+            return True, "recovered"
+
+        async def _send(msg):
+            recovered_msgs.append(msg)
+            return True
+
+        monkeypatch.setattr(sched, "_verify_openalgo_api", _verify)
+        monkeypatch.setattr(sched, "_self_heal_master_contract", lambda: True)
+        monkeypatch.setattr(sched, "send_telegram_notification", _send)
+
+        assert sched._ensure_openalgo_api_usable("healthcheck") is True
+        assert calls["verify"] == 2
+        assert len(recovered_msgs) == 1
+        assert "recovered" in recovered_msgs[0].lower()
+
+    def test_alerts_when_self_heal_does_not_recover(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        fail_calls = []
+        monkeypatch.setattr(sched, "_verify_openalgo_api", lambda **kw: (False, "still broken"))
+        monkeypatch.setattr(sched, "_self_heal_master_contract", lambda: False)
+        monkeypatch.setattr(
+            sched, "notify_failure",
+            lambda stage, detail: fail_calls.append((stage, detail)),
+        )
+
+        assert sched._ensure_openalgo_api_usable("startup") is False
+        assert fail_calls, "must alert when self-heal does not recover the API"
+        assert fail_calls[0][0] == "startup-api-smoke-test"
+        assert "still broken" in fail_calls[0][1]

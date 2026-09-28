@@ -216,6 +216,76 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-28)
+
+**~90 minutes of paper trades silently dropped this morning: OpenAlgo's own `/api/v1/funds` and
+`/api/v1/analyzer` 403'd continuously from 09:10 to 10:36 IST while the broker session itself
+was fine the whole time — root cause was a daemon thread killed by its own process exit, fixed
+in `openalgoscheduler.py` with a synchronous, database-confirmed master-contract load, a real
+API-layer smoke test, and self-heal.**
+
+**What happened.** OpenAlgo (the Flask app, not signal_engine) had been down overnight; its own
+auto-login found the broker session dead at 08:45 IST and re-authenticated successfully. That
+login kicked off a master-contract redownload in a **daemon `Thread`**, then the short-lived
+`openalgoscheduler.py startup` process exited a couple of seconds later — killing the thread
+after only 6 of the 8 exchange CSV files. `master_contract_status` stayed stuck at
+`"downloading"` for the next ~90 minutes (nothing polled it to trip the existing 5-minute
+stuck-download detector). Every `signal_engine` call to OpenAlgo's `/api/v1/funds` and
+`/api/v1/analyzer` returned 403 "Invalid openalgo apikey" that whole window — VEDL, CANBK,
+FORTIS, ITC, TCS, SBIN, INFY, RELIANCE and more were all parsed correctly and then skipped with
+"Cannot fetch capital from OpenAlgo". `openalgoscheduler.py`'s own 15-minute healthcheck kept
+logging a live broker balance the entire time (`Auth verified: available cash = 20290.61`), so
+nothing about the existing broker-session monitoring ever noticed — it was checking the wrong
+layer. A manual browser login at 10:38 (which runs inside the long-lived `app.py` process,
+where a background thread survives) fixed it by accident; the first real order landed at 10:45.
+
+**Fix, in `signal_engine/scripts/openalgoscheduler.py` (no OpenAlgo core files touched):**
+
+- **`_start_master_contract_load()` is now synchronous, not fire-and-forget.** The old
+  `Thread(..., daemon=True).start()` raced this CLI process's own exit and lost. It now calls
+  the download in-line and does not return until the load has actually finished one way or the
+  other — this is one-shot-per-day critical infrastructure every trade depends on, not
+  best-effort background work. One retry on a download failure.
+- **The result is confirmed against the database row, not trusted from the call's return
+  value** (`_master_contract_load_confirmed()`). `broker.*.database.master_contract_db`'s
+  `download_csv_data()` catches and logs a per-exchange CSV failure without re-raising, so a
+  call can report success having silently skipped an exchange — and on 2026-09-28 the call
+  never even reached its own success/error branch at all. The check now reads
+  `master_contract_status` back (`status == "success"`, `is_ready`, `total_symbols > 0`) after
+  every attempt, broker-agnostically (no hardcoded exchange list or symbol-count threshold that
+  would misfire on a small crypto broker's much smaller universe).
+- **A real API-layer smoke test** (`_openalgo_api_smoke_test()`) calls the exact
+  `/api/v1/analyzer` + `/api/v1/funds` endpoints and API key `main.py` depends on for every
+  trade — closing the gap that let `verify_broker_auth()` (broker-only) report "fine" for 90
+  minutes straight. Retries with backoff (`_verify_openalgo_api()`).
+- **Self-heal**: if the smoke test still fails after retries, `_self_heal_master_contract()`
+  forces a fresh master-contract redownload (bypassing the smart-download check) and re-tests
+  once more before giving up.
+- **Wired into both `startup` and the 15-minute `healthcheck`** (`_ensure_openalgo_api_usable()`)
+  — the healthcheck version runs every cycle regardless of broker-session state, since that was
+  exactly the blind spot today exposed. Recovers quietly with a Telegram notice, or alerts via
+  the existing `notify_failure()` path and exits non-zero (so `openalgoctl.sh`'s cooldown/alert
+  logic engages) if self-heal doesn't fix it.
+
+26 new tests in `signal_engine/tests/test_openalgoscheduler.py` (`TestMasterContractCallOk`,
+`TestMasterContractLoadConfirmed`, `TestStartMasterContractLoadSynchronous`,
+`TestVerifyOpenAlgoApi`, `TestEnsureOpenAlgoApiUsable`, plus one new `TestHealthcheck` case) —
+suite now 79 tests, all green; full `signal_engine/tests/` (1684+ tests) unaffected. The 17
+pre-existing failures in `test/test_auto_login.py` (a stale legacy test file out of sync with
+`auto_login()`'s and `build_startup_summary()`'s current signatures) predate this change,
+confirmed via `git stash`.
+
+**In plain terms:** the morning auto-login used to fire off the symbol-list download and walk
+away without checking it finished — like starting a download and closing the laptop lid. If it
+got cut off partway through, OpenAlgo's own API quietly stopped accepting the paper-trading
+bot's requests, and nothing was watching for that specific failure — the health check was only
+listening to the broker, which was never the one that broke. Now the login waits for the
+download to actually finish and double-checks it against the database instead of trusting what
+the download function claims, there's a direct test that calls the paper-trading bot's own two
+critical endpoints exactly the way it does in production, and if either check fails, the system
+retries, force-redownloads if needed, and only gives up (loudly, over Telegram) after genuinely
+trying to fix itself first.
+
 ## Recent Changes (2026-09-20)
 
 **value_area_fade selectivity investigation concludes: gap to real cost narrowed from ~16x to
