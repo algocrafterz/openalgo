@@ -10,7 +10,12 @@ code) — see "Known OpenAlgo core P&L bugs" below.
 class of bug, not a one-off — see "Square-off/settlement reconciliation gap"),
 added a Strategy column to the Positions page, and did a full merge-conflict
 risk assessment against `upstream/main` ahead of the next OpenAlgo version
-bump. See the three new sections below.
+bump. See the three new sections below. Deployed: `frontend/dist/` rebuilt
+and verified the Positions chunk contains the new column code, served from
+the correct path (`blueprints/react_app.py`'s `FRONTEND_DIST`) — a build
+that lands while a browser tab is already open needs a hard reload of that
+tab to pick it up, since client-side page navigation in this SPA never
+re-fetches the JS bundle.
 
 This is a **local fork modification to OpenAlgo core**, not a `signal_engine/`-only
 change. It exists because `signal_engine/` (this repo's custom trading pipeline)
