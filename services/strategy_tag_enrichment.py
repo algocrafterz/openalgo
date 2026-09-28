@@ -68,7 +68,22 @@ def attach_strategy_to_positions(rows: list[dict[str, Any]]) -> list[dict[str, A
 
     strategies_by_key: dict[tuple[Any, Any, Any], list[str]] = {}
     for leg in legs:
-        if abs(float(leg.get("quantity") or 0)) <= 1e-9:
+        quantity = abs(float(leg.get("quantity") or 0))
+        today_realized = float(leg.get("today_realized_pnl") or 0)
+        if quantity <= 1e-9 and today_realized == 0:
+            # Flat, and not touched today. A leg's (strategy, symbol,
+            # exchange, product, mode) row persists forever once closed -
+            # there is no per-day scoping on its own - so an unfiltered
+            # match would resurface a stale, unrelated strategy for a
+            # symbol some *other* strategy closed days ago (confirmed:
+            # NATIONALUM currently carries both an ORB row from 2026-09-25
+            # and today's real BREAKINGTRADE row). The Positions page only
+            # shows a closed (qty=0) row when it was traded today, so the
+            # strategy lookup must be scoped the same way.
+            # Note: a same-day close at exactly break-even P&L is skipped
+            # too, since today_realized_pnl would read 0 - an accepted
+            # rare edge case rather than re-deriving the IST session
+            # boundary here.
             continue
         key = (leg.get("symbol"), leg.get("exchange"), leg.get("product"))
         names = strategies_by_key.setdefault(key, [])

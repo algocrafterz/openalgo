@@ -15,11 +15,12 @@ import uuid
 import pytest
 
 from database.strategy_book_db import (
+    apply_fill,
     get_strategies_for_orderids,
     init_strategy_book_db,
     record_order_tag,
 )
-from services.strategy_tag_enrichment import attach_strategy
+from services.strategy_tag_enrichment import attach_strategy, attach_strategy_to_positions
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -121,3 +122,113 @@ def test_attach_strategy_leaves_existing_strategy_value_untouched():
 
 def test_attach_strategy_handles_empty_list():
     assert attach_strategy([]) == []
+
+
+def _open_leg(strategy, symbol, exchange, product, mode, qty, price, action):
+    oid = _oid()
+    assert record_order_tag(
+        orderid=oid,
+        user_id="",
+        strategy=strategy,
+        symbol=symbol,
+        exchange=exchange,
+        product=product,
+        mode=mode,
+    )
+    apply_fill(oid, filled_quantity=qty, average_price=price, action=action)
+
+
+def test_attach_strategy_to_positions_matches_an_open_leg(monkeypatch):
+    import database.settings_db as settings_db
+
+    monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: True)
+
+    symbol = "POS" + uuid.uuid4().hex[:8].upper()
+    strategy = f"POSEN-OPEN-{uuid.uuid4().hex[:8]}"
+    _open_leg(strategy, symbol, "NSE", "MIS", "analyze", qty=10, price=100.0, action="BUY")
+
+    result = attach_strategy_to_positions(
+        [{"symbol": symbol, "exchange": "NSE", "product": "MIS", "quantity": 10}]
+    )
+
+    assert result[0]["strategy"] == strategy
+
+
+def test_attach_strategy_to_positions_matches_a_leg_closed_today(monkeypatch):
+    """A position row with quantity=0 still appears on the Positions page
+    when it was closed today - the strategy that closed it must not read as
+    blank just because the leg has gone flat.
+    """
+    import database.settings_db as settings_db
+
+    monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: True)
+
+    symbol = "POS" + uuid.uuid4().hex[:8].upper()
+    strategy = f"POSEN-CLOSED-{uuid.uuid4().hex[:8]}"
+    open_oid, close_oid = _oid(), _oid()
+    for oid in (open_oid, close_oid):
+        assert record_order_tag(
+            orderid=oid,
+            user_id="",
+            strategy=strategy,
+            symbol=symbol,
+            exchange="NSE",
+            product="MIS",
+            mode="analyze",
+        )
+    apply_fill(open_oid, filled_quantity=10, average_price=100.0, action="BUY")
+    apply_fill(close_oid, filled_quantity=10, average_price=105.0, action="SELL")
+
+    result = attach_strategy_to_positions(
+        [{"symbol": symbol, "exchange": "NSE", "product": "MIS", "quantity": 0}]
+    )
+
+    assert result[0]["strategy"] == strategy
+
+
+def test_attach_strategy_to_positions_ignores_a_stale_closed_leg_from_another_day(
+    monkeypatch,
+):
+    """A (strategy, symbol, exchange, product, mode) row persists forever
+    once closed, with no per-day scoping of its own. If a DIFFERENT
+    strategy closed the same symbol on a prior day, that row must not
+    resurface today just because it shares the key - confirmed in
+    production for NATIONALUM (a stale ORB row from three days earlier sat
+    alongside today's real BREAKINGTRADE close).
+    """
+    import database.settings_db as settings_db
+    import database.strategy_book_db as book
+
+    monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: True)
+
+    symbol = "POS" + uuid.uuid4().hex[:8].upper()
+    stale_strategy = f"POSEN-STALE-{uuid.uuid4().hex[:8]}"
+
+    # Force this leg's close to be recorded under an earlier session date,
+    # so get_strategy_legs() reads its today_realized_pnl back as 0 - the
+    # same mechanism that ages out a real multi-day-old row.
+    monkeypatch.setattr(book, "_session_date", lambda: "2020-01-01")
+    open_oid, close_oid = _oid(), _oid()
+    for oid in (open_oid, close_oid):
+        assert record_order_tag(
+            orderid=oid,
+            user_id="",
+            strategy=stale_strategy,
+            symbol=symbol,
+            exchange="NSE",
+            product="MIS",
+            mode="analyze",
+        )
+    apply_fill(open_oid, filled_quantity=5, average_price=50.0, action="BUY")
+    apply_fill(close_oid, filled_quantity=5, average_price=55.0, action="SELL")
+    monkeypatch.undo()
+
+    result = attach_strategy_to_positions(
+        [{"symbol": symbol, "exchange": "NSE", "product": "MIS", "quantity": 0}]
+    )
+
+    assert result[0]["strategy"] == ""
+
+
+def test_attach_strategy_to_positions_handles_empty_list():
+    assert attach_strategy_to_positions([]) == []
