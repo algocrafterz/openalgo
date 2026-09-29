@@ -303,6 +303,50 @@ window, fixed by having `services/strategy_performance_service.py` also
 fetch holdings and feed their LTP into the same lookup - see "Files touched"
 above.
 
+## Crash/restart recovery and stale-data warnings (added 2026-09-29)
+
+**Gap.** The strategy book is fed only by live `order.update` events. A fill
+that happens while the app is down, or while an order-update feed is
+disconnected, is never re-delivered: websocket adapters do not replay on
+reconnect and the polling adapter seeds its baseline silently. The book then
+keeps an open leg that is really flat, or misses a closed trade. The startup
+`audit_ledger_consistency` cannot see this, because it only compares a leg
+with its own ledger rows.
+
+**Fix: `services/strategy_book_reconciler.py`.**
+- `replay_missed_fills` re-applies fills from the broker order book through
+  the existing idempotent `apply_fill` (per-order applied-quantity watermark),
+  oldest first so an exit is never booked before its entry. Only orders whose
+  tag mode matches the current mode are touched.
+- `find_mismatches` compares open legs with the broker position book (legs on
+  one symbol are summed; CNC legs absent from positions are skipped because
+  they may be in holdings).
+- A leg that still disagrees after replay is only flagged, never force-closed
+  at a guessed price.
+- Runs at boot (`app.py`, right after `app.db_ready.set()`) and in the
+  background whenever a P&L or Performance endpoint is read, at most once per
+  `STRATEGY_BOOK_RECONCILE_MIN_INTERVAL_SEC` (default 60) per mode, on one
+  shared single-thread executor.
+
+**Warnings.** `/api/strategy-pnl`, `/daily` and `/compare` return a
+`data_health` object (`status` ok/stale/unverified, `warnings`, `mismatches`,
+`recovered_fills`, `last_reconciled_at` in IST, `feed_connected`). Status is
+stale when a leg mismatches the broker, the broker check failed, or live order
+updates are disconnected and the last check is older than
+`STRATEGY_BOOK_FEED_DOWN_MAX_AGE_SEC` (default 600). Both pages render it via
+`frontend/src/components/DataHealthBanner.tsx`. The Performance page also
+polls every 60 seconds now.
+
+**Limits.** Recovery runs at boot and while a page is open. An exit with no
+order behind it (for example a stale-MIS catch-up settlement) cannot be
+reconstructed and stays a warning. Tests:
+`test/test_strategy_book_reconciler.py`,
+`test/test_strategy_pnl_data_health_route.py`.
+
+**Merge note.** New core files: `services/strategy_book_reconciler.py`,
+`frontend/src/components/DataHealthBanner.tsx`. Small edits in `app.py` (boot
+hook) and `blueprints/strategy_pnl.py` (`_with_data_health`).
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump

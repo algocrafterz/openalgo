@@ -1,5 +1,23 @@
 import { webClient } from './client'
 
+export interface DataHealthMismatch {
+  symbol: string
+  exchange: string
+  product: string
+  book_quantity: number
+  broker_quantity: number
+  strategies: string[]
+}
+
+export interface DataHealth {
+  status: 'ok' | 'stale' | 'unverified'
+  warnings: string[]
+  mismatches: DataHealthMismatch[]
+  recovered_fills: number
+  last_reconciled_at: string | null
+  feed_connected: boolean
+}
+
 export interface StrategyLeg {
   symbol: string
   exchange: string
@@ -30,6 +48,7 @@ export interface StrategyPnlResponse {
   strategies?: StrategyPnl[]
   count?: number
   message?: string
+  data_health?: DataHealth
 }
 
 export type PerformancePeriod = '1d' | '7d' | '30d' | '90d' | 'ytd' | 'all'
@@ -50,6 +69,7 @@ export interface StrategyDailyPerformance {
   strategy?: string | null
   period?: PerformancePeriod
   message?: string
+  data_health?: DataHealth
   start_date?: string
   end_date?: string
   trades_count?: number
@@ -127,6 +147,7 @@ export interface StrategyComparisonResponse {
   period?: PerformancePeriod
   strategies?: StrategyComparisonRow[]
   message?: string
+  data_health?: DataHealth
 }
 
 async function unwrap<T extends { status: 'success' | 'error'; message?: string }>(

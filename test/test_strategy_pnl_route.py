@@ -7,6 +7,7 @@ Run with: uv run pytest test/test_strategy_pnl_route.py -v
 import os
 import sys
 
+import pytest
 from flask import Flask
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,6 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import blueprints.auth as auth_bp_module  # noqa: E402
 import blueprints.strategy_pnl as strategy_pnl_module  # noqa: E402
 from limiter import limiter  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_background_reconcile(monkeypatch):
+    """The routes kick off a broker reconcile; keep these tests off the network."""
+    monkeypatch.setattr(strategy_pnl_module, "schedule_reconcile", lambda mode, creds: False)
 
 
 def _app():

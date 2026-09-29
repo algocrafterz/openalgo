@@ -18,6 +18,7 @@ import {
   type SymbolPnl,
   strategyPnlApi,
 } from '@/api/strategyPnl'
+import { DataHealthBanner } from '@/components/DataHealthBanner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -51,6 +52,7 @@ const PERIODS: { value: PerformancePeriod; label: string }[] = [
 ]
 
 const PORTFOLIO_VALUE = '__portfolio__'
+const POLL_MS = 60_000
 
 function fmtRatio(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
@@ -404,14 +406,20 @@ export default function StrategyDailyPerformance() {
   const [selectedStrategy, setSelectedStrategy] = useState<string>(PORTFOLIO_VALUE)
   const strategyParam = selectedStrategy === PORTFOLIO_VALUE ? null : selectedStrategy
 
+  // Closed trades are only pushed on fill events, so a missed event (socket
+  // down, app restarted) would leave the page stale until reload. A slow poll
+  // also picks up fills the server-side reconcile recovers from the broker.
+  // TanStack Query pauses this while the tab is hidden.
   const compareQuery = useQuery({
     queryKey: ['strategy-daily-compare', period],
     queryFn: () => strategyPnlApi.compare(period),
+    refetchInterval: POLL_MS,
   })
 
   const dailyQuery = useQuery({
     queryKey: ['strategy-daily', strategyParam, period],
     queryFn: () => strategyPnlApi.daily(strategyParam, period),
+    refetchInterval: POLL_MS,
   })
 
   const refresh = useCallback(() => {
@@ -477,6 +485,8 @@ export default function StrategyDailyPerformance() {
           </Button>
         </div>
       </div>
+
+      <DataHealthBanner health={daily?.data_health ?? compareQuery.data?.data_health} />
 
       <div className="flex items-start gap-2 rounded-lg border border-muted-foreground/20 bg-muted/40 p-3 text-sm text-muted-foreground">
         <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />

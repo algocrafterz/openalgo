@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type StrategyLeg, type StrategyPnl, strategyPnlApi } from '@/api/strategyPnl'
+import { DataHealthBanner } from '@/components/DataHealthBanner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -324,6 +325,8 @@ export default function StrategyPnL() {
           Refresh
         </Button>
       </div>
+
+      <DataHealthBanner health={data?.data_health} />
 
       {strategies.length > 0 && (
         <div className="flex items-start gap-2 rounded-lg border border-muted-foreground/20 bg-muted/40 p-3 text-sm text-muted-foreground">

@@ -796,6 +796,15 @@ def setup_environment(app):
             # Signal that DB tables are ready (unblocks cache restoration)
             app.db_ready.set()
 
+            # Replay fills missed while the app was down and verify open legs
+            # against the broker, off the startup path.
+            try:
+                from services.strategy_book_reconciler import schedule_boot_reconcile
+
+                schedule_boot_reconcile()
+            except Exception:
+                logger.exception("Failed to schedule strategy book boot reconcile")
+
             # Initialize schedulers AFTER database initialization
             try:
                 init_python_strategy()
