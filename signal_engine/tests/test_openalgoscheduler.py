@@ -1,5 +1,6 @@
 """Tests for openalgoscheduler — broker-neutral startup/shutdown automation."""
 
+import asyncio
 import importlib
 from unittest.mock import MagicMock
 
@@ -757,8 +758,13 @@ class TestHealthcheck:
         must alert and exit non-zero - the exact gap that let 2026-09-28's
         ~90 minute outage run silently until a human noticed the missing trades."""
         calls = []
+
+        def _no_totp():
+            raise OSError("BROKER_TOTP_SECRET is not set")
+
         sched = self._patch(
             monkeypatch,
+            validate_auto_login_env=_no_totp,
             _ensure_openalgo_api_usable=lambda context: (
                 calls.append(context) or False
             ),
@@ -766,6 +772,21 @@ class TestHealthcheck:
         with pytest.raises(SystemExit):
             sched._run_healthcheck()
         assert calls == ["healthcheck"]
+
+    def test_relogin_runs_before_api_smoke_test(self, monkeypatch):
+        """A revoked token 403s every OpenAlgo API call, so the smoke test can only
+        pass after the re-login. Regression guard for 2026-09-29 10:00, where the
+        smoke test ran first, failed, and exited without ever trying the login."""
+        order = []
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
+            auto_login=lambda: order.append("login") or (True, "fresh login", "tok"),
+            _ensure_openalgo_api_usable=lambda context: order.append("smoke") or True,
+            send_telegram_notification=lambda msg: asyncio.sleep(0),
+        )
+        sched._run_healthcheck()
+        assert order == ["login", "smoke"]
 
 
 class TestMasterContractCallOk:
@@ -1133,3 +1154,39 @@ class TestEnsureOpenAlgoApiUsable:
         assert fail_calls, "must alert when self-heal does not recover the API"
         assert fail_calls[0][0] == "startup-api-smoke-test"
         assert "still broken" in fail_calls[0][1]
+
+
+class TestDetachServerlessSocketio:
+    """Broker master-contract modules crash on socketio.emit when the SocketIO object
+    was never bound to an app (the scheduler CLI process). Detach only in that case."""
+
+    def _fake_module(self, monkeypatch, sio):
+        import sys
+        import types
+
+        mod = types.ModuleType("broker.fakebroker.database.master_contract_db")
+        mod.socketio = sio
+        monkeypatch.setitem(sys.modules, "broker.fakebroker.database.master_contract_db", mod)
+        return mod
+
+    def test_serverless_socketio_is_detached(self, monkeypatch):
+        from signal_engine.scripts.openalgoscheduler import _detach_serverless_socketio
+
+        mod = self._fake_module(monkeypatch, MagicMock(server=None))
+        assert _detach_serverless_socketio("fakebroker") is True
+        assert mod.socketio is None
+
+    def test_live_socketio_is_left_alone(self, monkeypatch):
+        from signal_engine.scripts.openalgoscheduler import _detach_serverless_socketio
+
+        sio = MagicMock(server=object())
+        mod = self._fake_module(monkeypatch, sio)
+        assert _detach_serverless_socketio("fakebroker") is False
+        assert mod.socketio is sio
+
+    def test_missing_socketio_or_module_is_safe(self, monkeypatch):
+        from signal_engine.scripts.openalgoscheduler import _detach_serverless_socketio
+
+        self._fake_module(monkeypatch, None)
+        assert _detach_serverless_socketio("fakebroker") is False
+        assert _detach_serverless_socketio("no_such_broker") is False

@@ -294,6 +294,36 @@ def _master_contract_load_confirmed(broker_name, get_status, call_result, should
     return True, f"confirmed ready with {total_symbols} symbols"
 
 
+def _detach_serverless_socketio(broker_name) -> bool:
+    """Null out a broker master-contract module's `socketio` when it has no server.
+
+    Broker master_contract_db modules do `from extensions import socketio` and finish
+    with `if socketio: socketio.emit(...)`. In this short-lived CLI process the
+    SocketIO object exists but was never bound to a Flask app, so `.server` is None:
+    the guard passes and emit() raises AttributeError AFTER the download has already
+    succeeded, which the module's own except block then re-raises (2026-09-29 10:01,
+    Flattrade). Setting the module attribute to None takes the module's own
+    "no socketio, just log" branch. A live server (app.py process) is left alone.
+
+    Returns:
+        True if the attribute was detached, False if left as is or not importable.
+    """
+    import importlib
+
+    logger = _log()
+    try:
+        module = importlib.import_module(f"broker.{broker_name}.database.master_contract_db")
+    except Exception:
+        logger.warning("Could not import master contract module for %s", broker_name)
+        return False
+    sio = getattr(module, "socketio", None)
+    if sio is None or getattr(sio, "server", None) is not None:
+        return False
+    module.socketio = None
+    logger.info("Detached serverless socketio from %s master contract module", broker_name)
+    return True
+
+
 def _start_master_contract_load(
     broker_name, init_broker_status, should_download_master_contract,
     async_master_contract_download, load_existing_master_contract,
@@ -337,6 +367,7 @@ def _start_master_contract_load(
         from database.master_contract_status_db import get_status as _get_master_contract_status
 
     init_broker_status(broker_name)
+    _detach_serverless_socketio(broker_name)
 
     if force_download:
         should_download, reason = True, "forced by self-heal"
@@ -353,7 +384,7 @@ def _start_master_contract_load(
             result = target(broker_name)
         except Exception:
             logger.exception(
-                "Master contract %s raised an exception (attempt %d/%d)",
+                "Master contract %s raised an exception (attempt %s/%s)",
                 label, attempt, max_attempts,
             )
             result = {"status": "error", "message": "raised exception"}
@@ -363,13 +394,13 @@ def _start_master_contract_load(
         )
         if confirmed:
             logger.info(
-                "Master contract %s completed and confirmed (attempt %d/%d): %s",
+                "Master contract %s completed and confirmed (attempt %s/%s): %s",
                 label, attempt, max_attempts, detail,
             )
             return True
 
         logger.error(
-            "Master contract %s not confirmed (attempt %d/%d): %s",
+            "Master contract %s not confirmed (attempt %s/%s): %s",
             label, attempt, max_attempts, detail,
         )
         # Retrying a cache-load failure (no download exists yet) can't succeed any
@@ -602,7 +633,7 @@ def _verify_openalgo_api(max_attempts: int = 3, retry_delay: float = 5.0) -> tup
         if ok:
             if attempt > 1:
                 logger.warning(
-                    "OpenAlgo API smoke test recovered on attempt %d/%d: %s",
+                    "OpenAlgo API smoke test recovered on attempt %s/%s: %s",
                     attempt, max_attempts, detail,
                 )
             else:
@@ -610,7 +641,7 @@ def _verify_openalgo_api(max_attempts: int = 3, retry_delay: float = 5.0) -> tup
             return True, detail
 
         logger.error(
-            "OpenAlgo API smoke test FAILED (attempt %d/%d): %s", attempt, max_attempts, detail
+            "OpenAlgo API smoke test FAILED (attempt %s/%s): %s", attempt, max_attempts, detail
         )
         if attempt < max_attempts:
             time.sleep(retry_delay)
@@ -995,45 +1026,12 @@ def _run_shutdown(reason: str = "scheduled"):
         logger.exception("Telegram notification failed (non-fatal)")
 
 
-def _run_healthcheck():
-    """Periodic check: is the stored broker session still alive?
+def _healthcheck_broker_session():
+    """Verify the broker session and re-login via TOTP if it is dead.
 
-    openalgoctl.sh's run() supervisor only calls _run_startup() (a real login)
-    once, at process start. Indian broker tokens expire daily at ~03:00 IST
-    regardless of when the process started, so a stack started before that
-    rollover and kept running (the normal case) drifts onto a dead session for
-    the rest of the day with nothing to notice or recover — every quote call
-    fails silently until someone restarts the stack. That is exactly what
-    happened on 2026-09-09: session died before market open, stayed dead until
-    a manual restart at 15:05 IST, ~6 hours in which paper orders were
-    rejected or stuck unfilled (see breakout.md's 2026-09-09 postmortem).
-
-    auto_login() is already safe to call repeatedly: _totp_session_token()
-    checks the existing token with verify_broker_auth() first and only
-    performs a fresh TOTP login when that check fails, so calling it every
-    few minutes costs one cheap funds-API call in the common case (session
-    still valid) and only pays for a real login when the session is actually
-    dead. This wraps it with quiet-by-default logging and alerts only on a
-    genuine state change — session found dead, recovered, or re-login
-    failing — not a message every cycle.
-
-    Exit code 0 = session confirmed alive or recovered.
-    Exit code 1 = session dead AND auto re-login also failed — the caller
-    (openalgoctl.sh) is expected to alert/cooldown same as a bootstrap
-    failure, so a repeatedly-dead broker doesn't get hammered with logins.
+    Exits the process (code 1) if the re-login fails.
     """
     logger = _log()
-
-    # Independent of broker auth mode (TOTP vs OAuth-only) - this checks OpenAlgo's own
-    # API layer, a different failure mode from "is the broker session alive" below. See
-    # 2026-09-28: the broker session was fine and verified every 15 minutes by this same
-    # healthcheck, while /api/v1/funds and /api/v1/analyzer 403'd for ~90 minutes because
-    # a master-contract download died mid-flight after the earlier login. Runs on every
-    # cycle, self-heals via a forced master-contract reload, and alerts either way.
-    if not _ensure_openalgo_api_usable("healthcheck"):
-        logger.error("Healthcheck: OpenAlgo API smoke test failed and self-heal did not recover it")
-        sys.exit(1)
-
     try:
         validate_auto_login_env()
     except OSError:
@@ -1072,6 +1070,51 @@ def _run_healthcheck():
         ))
     except Exception:
         logger.exception("Recovery notification failed (non-fatal)")
+
+
+def _run_healthcheck():
+    """Periodic check: is the stored broker session still alive?
+
+    openalgoctl.sh's run() supervisor only calls _run_startup() (a real login)
+    once, at process start. Indian broker tokens expire daily at ~03:00 IST
+    regardless of when the process started, so a stack started before that
+    rollover and kept running (the normal case) drifts onto a dead session for
+    the rest of the day with nothing to notice or recover — every quote call
+    fails silently until someone restarts the stack. That is exactly what
+    happened on 2026-09-09: session died before market open, stayed dead until
+    a manual restart at 15:05 IST, ~6 hours in which paper orders were
+    rejected or stuck unfilled (see breakout.md's 2026-09-09 postmortem).
+
+    auto_login() is already safe to call repeatedly: _totp_session_token()
+    checks the existing token with verify_broker_auth() first and only
+    performs a fresh TOTP login when that check fails, so calling it every
+    few minutes costs one cheap funds-API call in the common case (session
+    still valid) and only pays for a real login when the session is actually
+    dead. This wraps it with quiet-by-default logging and alerts only on a
+    genuine state change — session found dead, recovered, or re-login
+    failing — not a message every cycle.
+
+    Exit code 0 = session confirmed alive or recovered.
+    Exit code 1 = session dead AND auto re-login also failed — the caller
+    (openalgoctl.sh) is expected to alert/cooldown same as a bootstrap
+    failure, so a repeatedly-dead broker doesn't get hammered with logins.
+    """
+    logger = _log()
+    # Broker session FIRST: a revoked or expired token makes every OpenAlgo API call
+    # 403, so the smoke test below would fail and its master-contract self-heal cannot
+    # fix a dead login. On 2026-09-29 the 10:00 healthcheck ran the smoke test first,
+    # exited 1 without ever attempting the TOTP re-login, and the engine stayed down.
+    _healthcheck_broker_session()
+
+    # Independent of broker auth mode (TOTP vs OAuth-only) - this checks OpenAlgo's own
+    # API layer, a different failure mode from "is the broker session alive" below. See
+    # 2026-09-28: the broker session was fine and verified every 15 minutes by this same
+    # healthcheck, while /api/v1/funds and /api/v1/analyzer 403'd for ~90 minutes because
+    # a master-contract download died mid-flight after the earlier login. Runs on every
+    # cycle, self-heals via a forced master-contract reload, and alerts either way.
+    if not _ensure_openalgo_api_usable("healthcheck"):
+        logger.error("Healthcheck: OpenAlgo API smoke test failed and self-heal did not recover it")
+        sys.exit(1)
 
 
 def _run_squareoff():
