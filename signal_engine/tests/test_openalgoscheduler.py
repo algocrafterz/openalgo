@@ -773,6 +773,34 @@ class TestHealthcheck:
             sched._run_healthcheck()
         assert calls == ["healthcheck"]
 
+    def test_confirmed_session_but_api_rejected_exits_with_stale_app_code(self, monkeypatch):
+        """Broker session fine, OpenAlgo API still 403: the app holds a stale auth cache.
+        The supervisor must be told (exit 3) so it restarts app.py, not cooldown a login."""
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
+            auto_login=lambda: (True, "fresh login", "tok"),
+            _ensure_openalgo_api_usable=lambda context: False,
+            send_telegram_notification=lambda msg: asyncio.sleep(0),
+        )
+        with pytest.raises(SystemExit) as exc:
+            sched._run_healthcheck()
+        assert exc.value.code == sched.EXIT_APP_STATE_STALE == 3
+
+    def test_unconfirmed_session_and_api_rejected_exits_1(self, monkeypatch):
+        """If the session could not be checked, do not claim the app is the culprit."""
+        def _no_totp():
+            raise OSError("BROKER_TOTP_SECRET is not set")
+
+        sched = self._patch(
+            monkeypatch,
+            validate_auto_login_env=_no_totp,
+            _ensure_openalgo_api_usable=lambda context: False,
+        )
+        with pytest.raises(SystemExit) as exc:
+            sched._run_healthcheck()
+        assert exc.value.code == 1
+
     def test_relogin_runs_before_api_smoke_test(self, monkeypatch):
         """A revoked token 403s every OpenAlgo API call, so the smoke test can only
         pass after the re-login. Regression guard for 2026-09-29 10:00, where the
@@ -1156,6 +1184,47 @@ class TestEnsureOpenAlgoApiUsable:
         assert "still broken" in fail_calls[0][1]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_session_registration(monkeypatch):
+    """auto_login tests must never write an active_sessions row to the real database."""
+    import signal_engine.scripts.openalgoscheduler as sched
+
+    monkeypatch.setattr(sched, "_register_trading_session", MagicMock(return_value=True))
+
+
+class TestRegisterTradingSession:
+    """Guard against 2026-09-29: a CLI login left no post-03:00 active_sessions row, so a
+    stale browser cookie revoked the fresh broker token."""
+
+    def _real(self):
+        import importlib
+
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        # the autouse fixture replaced the attribute; reload gives the real function
+        return importlib.reload(sched)._register_trading_session
+
+    def test_fresh_login_always_registers(self):
+        fn = self._real()
+        reg = MagicMock()
+        assert fn("u", "flattrade", True, _register=reg) is True
+        args, kwargs = reg.call_args
+        assert args[0] == "u" and kwargs["broker"] == "flattrade"
+        assert kwargs["ip_address"] == "signal_engine-auto-login"
+
+    def test_reused_session_registers_only_when_no_fresh_row(self):
+        fn = self._real()
+        reg = MagicMock()
+        assert fn("u", "b", False, _register=reg, _has_fresh=lambda u: True) is False
+        reg.assert_not_called()
+        assert fn("u", "b", False, _register=reg, _has_fresh=lambda u: False) is True
+        reg.assert_called_once()
+
+    def test_failure_is_swallowed(self):
+        fn = self._real()
+        assert fn("u", "b", True, _register=MagicMock(side_effect=RuntimeError("db"))) is False
+
+
 class TestDetachServerlessSocketio:
     """Broker master-contract modules crash on socketio.emit when the SocketIO object
     was never bound to an app (the scheduler CLI process). Detach only in that case."""
@@ -1190,3 +1259,42 @@ class TestDetachServerlessSocketio:
         self._fake_module(monkeypatch, None)
         assert _detach_serverless_socketio("fakebroker") is False
         assert _detach_serverless_socketio("no_such_broker") is False
+
+
+class TestRevokeBrokerSessionAtStop:
+    """The 4 PM scheduled stop must leave no token or session to carry into tomorrow."""
+
+    def test_scheduled_stop_revokes_token_and_clears_sessions(self):
+        from signal_engine.scripts.openalgoscheduler import _revoke_broker_session_at_stop
+
+        upsert, clear = MagicMock(), MagicMock()
+        user = MagicMock()
+        user.username = "anand"
+        assert _revoke_broker_session_at_stop(
+            "scheduled", _upsert_auth=upsert,
+            _find_user_by_username=lambda: user, _clear_sessions=clear,
+        ) is True
+        upsert.assert_called_once_with("anand", "", "", revoke=True)
+        clear.assert_called_once_with("anand")
+
+    def test_non_scheduled_stop_leaves_session_alone(self):
+        from signal_engine.scripts.openalgoscheduler import _revoke_broker_session_at_stop
+
+        upsert = MagicMock()
+        assert _revoke_broker_session_at_stop(
+            "manual", _upsert_auth=upsert,
+            _find_user_by_username=lambda: MagicMock(), _clear_sessions=MagicMock(),
+        ) is False
+        upsert.assert_not_called()
+
+    def test_no_user_or_db_error_is_swallowed(self):
+        from signal_engine.scripts.openalgoscheduler import _revoke_broker_session_at_stop
+
+        assert _revoke_broker_session_at_stop(
+            "scheduled", _upsert_auth=MagicMock(),
+            _find_user_by_username=lambda: None, _clear_sessions=MagicMock(),
+        ) is False
+        assert _revoke_broker_session_at_stop(
+            "scheduled", _upsert_auth=MagicMock(side_effect=RuntimeError("db")),
+            _find_user_by_username=lambda: MagicMock(username="u"), _clear_sessions=MagicMock(),
+        ) is False

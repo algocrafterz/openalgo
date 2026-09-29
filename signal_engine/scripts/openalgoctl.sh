@@ -241,6 +241,26 @@ wait_for_health() {
     log "Server is ready (took ${elapsed}s)"
 }
 
+# Exit code openalgoscheduler.py healthcheck uses for "broker session confirmed alive,
+# but the running OpenAlgo app still rejects our API calls" (EXIT_APP_STATE_STALE).
+HEALTHCHECK_EXIT_APP_STALE=3
+
+# Restart only app.py (not the signal engine) to drop its in-process auth caches.
+# Updates APP_PID/PID_FILE so the run loop's liveness check follows the new process.
+restart_app_only() {
+    local venv_python="$PROJECT_DIR/.venv/bin/python3"
+    log "Restarting app.py only (signal engine keeps running)..."
+    pkill -TERM -f "$venv_python app.py" 2>/dev/null || true
+    sleep 3
+    pkill -9 -f "$venv_python app.py" 2>/dev/null || true
+
+    "$UV_BIN" run app.py &
+    APP_PID=$!
+    echo "$APP_PID" > "$PID_FILE"
+    echo "$SIGNAL_PID" >> "$PID_FILE"
+    wait_for_health "$APP_PID"
+}
+
 # --- Core bootstrap: start server + login + signal engine ---
 #     Writes PID file as soon as each process starts.
 
@@ -516,8 +536,24 @@ cmd_run() {
                 elif "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler healthcheck; then
                     rm -f "$AUTH_COOLDOWN_FILE"
                 else
-                    log "ERROR: Session healthcheck re-login failed — writing auth cooldown"
-                    record_auth_failure
+                    _hc_rc=$?
+                    if [ "$_hc_rc" -eq "$HEALTHCHECK_EXIT_APP_STALE" ]; then
+                        # Broker session is fine but the running app rejects our API
+                        # calls: it holds a stale in-memory auth cache that a login from
+                        # another process cannot clear. Restart app.py, then re-verify.
+                        log "Healthcheck: broker session OK but OpenAlgo API rejects it — restarting app.py"
+                        if restart_app_only \
+                            && "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler healthcheck; then
+                            rm -f "$AUTH_COOLDOWN_FILE"
+                            log "Healthcheck: recovered after app.py restart"
+                        else
+                            log "ERROR: Healthcheck still failing after app.py restart — writing auth cooldown"
+                            record_auth_failure
+                        fi
+                    else
+                        log "ERROR: Session healthcheck re-login failed — writing auth cooldown"
+                        record_auth_failure
+                    fi
                 fi
             fi
         done

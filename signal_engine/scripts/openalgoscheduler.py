@@ -447,6 +447,52 @@ def _auto_login_deps(
     }
 
 
+AUTOLOGIN_SESSION_IP = "signal_engine-auto-login"
+
+
+def _register_trading_session(username, broker_name, fresh_login, _register=None, _has_fresh=None):
+    """Record an active-session row so a stale browser cookie cannot revoke this login.
+
+    OpenAlgo's daily-expiry guard (utils.session._has_fresher_session) only spares the
+    shared broker token when an active_sessions row newer than today's 03:00 IST
+    boundary exists. A CLI/TOTP login writes the token but no such row. On 2026-09-29
+    the 08:45 auto-login was fine, then a browser tab still holding the previous
+    evening's manual-login cookie hit the app at 09:55, found no fresher session, and
+    revoked the fresh token for every device - taking the whole stack down.
+
+    Args:
+        fresh_login: True after a real TOTP login (always registers, replacing our
+            previous row). False when an existing session was reused (registers only
+            if no post-boundary session exists yet).
+
+    Returns:
+        True if a row was registered, False otherwise. Never raises: this is a
+        protective extra and must not fail the login itself.
+    """
+    logger = _log()
+    try:
+        if _register is None:
+            from database.auth_db import register_session as _register
+        if not fresh_login:
+            if _has_fresh is None:
+                from utils.session import has_login_this_trading_session as _has_fresh
+            if _has_fresh(username):
+                return False
+        import secrets
+
+        _register(
+            username, secrets.token_hex(32),
+            device_info="signal_engine auto-login",
+            ip_address=AUTOLOGIN_SESSION_IP,
+            broker=broker_name,
+        )
+        logger.info("Registered auto-login session for %s (protects token from stale-cookie revoke)", username)
+        return True
+    except Exception:
+        logger.exception("Could not register auto-login session (non-fatal)")
+        return False
+
+
 def auto_login(
     _authenticate_with_totp=None,
     _upsert_auth=None,
@@ -456,6 +502,7 @@ def auto_login(
     _async_master_contract_download=None,
     _load_existing_master_contract=None,
     _get_existing_auth=None,
+    _register_session=None,
 ) -> tuple:
     """Perform automated broker login.
 
@@ -519,6 +566,8 @@ def auto_login(
         )
         if not ok:
             return False, msg, None
+        register = _register_session or _register_trading_session
+        register(username, broker_name, fresh_login=not msg)
         if msg:  # session reused — nothing further to set up
             return True, msg, auth_token
 
@@ -1004,6 +1053,47 @@ def _run_startup():
         logger.exception("Weekly watchlist screen failed (non-fatal)")
 
 
+def _revoke_broker_session_at_stop(
+    reason, _upsert_auth=None, _find_user_by_username=None, _clear_sessions=None
+) -> bool:
+    """Revoke the stored broker token and drop active sessions on a scheduled stop.
+
+    Broker tokens die at 03:00 IST anyway, so nothing may carry yesterday's login into
+    tomorrow's session: not the DB token, and not a browser cookie that a stale app
+    process could later use to trip the daily-expiry revoke against a fresh token
+    (2026-09-29). Clearing at the 4 PM stop means the next 08:50 start always begins
+    from a clean slate and must do a real auto-login. Only the scheduled stop does
+    this; a manual or diagnostic stop leaves the session alone.
+
+    Must run AFTER the shutdown summary is built (it reads broker data with the token).
+
+    Returns:
+        True if the token was revoked, False if skipped or on failure. Never raises.
+    """
+    logger = _log()
+    if reason != "scheduled":
+        logger.info("Stop reason '%s' is not the scheduled stop - leaving broker session as is", reason)
+        return False
+    try:
+        if _upsert_auth is None:
+            from database.auth_db import upsert_auth as _upsert_auth
+        if _find_user_by_username is None:
+            from database.user_db import find_user_by_username as _find_user_by_username
+        if _clear_sessions is None:
+            from database.auth_db import clear_user_sessions as _clear_sessions
+        user = _find_user_by_username()
+        if not user:
+            logger.warning("Scheduled stop: no admin user found, nothing to revoke")
+            return False
+        _upsert_auth(user.username, "", "", revoke=True)
+        _clear_sessions(user.username)
+        logger.info("Scheduled stop: revoked broker token and cleared sessions for %s", user.username)
+        return True
+    except Exception:
+        logger.exception("Scheduled stop: could not revoke broker session (non-fatal)")
+        return False
+
+
 def _run_shutdown(reason: str = "scheduled"):
     """Shutdown flow: build summary, notify, exit."""
     from utils.logging import get_logger
@@ -1015,6 +1105,8 @@ def _run_shutdown(reason: str = "scheduled"):
     for line in summary.splitlines():
         if line.strip():
             logger.info(line)
+
+    _revoke_broker_session_at_stop(reason)
 
     try:
         sent = asyncio.run(send_telegram_notification(summary))
@@ -1030,6 +1122,10 @@ def _healthcheck_broker_session():
     """Verify the broker session and re-login via TOTP if it is dead.
 
     Exits the process (code 1) if the re-login fails.
+
+    Returns:
+        True if the broker session is confirmed alive (reused or freshly re-logged
+        in), False if it could not be checked (OAuth-only broker, no TOTP secret).
     """
     logger = _log()
     try:
@@ -1040,7 +1136,7 @@ def _healthcheck_broker_session():
         # there is nothing for a periodic check to do beyond what the human
         # who did the manual browser login already knows.
         logger.debug("Healthcheck: TOTP auto-login not configured, skipping")
-        return
+        return False
 
     try:
         success, message, auth_token = auto_login()
@@ -1056,7 +1152,7 @@ def _healthcheck_broker_session():
 
     if message and "reused" in message.lower():
         logger.debug("Healthcheck: %s", message)
-        return
+        return True
 
     # Non-reuse success means _totp_session_token() actually performed a
     # fresh TOTP login just now — the stored session was dead until this
@@ -1070,6 +1166,12 @@ def _healthcheck_broker_session():
         ))
     except Exception:
         logger.exception("Recovery notification failed (non-fatal)")
+    return True
+
+
+# Healthcheck exit code: broker session confirmed alive but the running OpenAlgo app
+# still rejects our API calls. openalgoctl.sh reads this to restart app.py.
+EXIT_APP_STATE_STALE = 3
 
 
 def _run_healthcheck():
@@ -1104,7 +1206,7 @@ def _run_healthcheck():
     # 403, so the smoke test below would fail and its master-contract self-heal cannot
     # fix a dead login. On 2026-09-29 the 10:00 healthcheck ran the smoke test first,
     # exited 1 without ever attempting the TOTP re-login, and the engine stayed down.
-    _healthcheck_broker_session()
+    session_confirmed = _healthcheck_broker_session()
 
     # Independent of broker auth mode (TOTP vs OAuth-only) - this checks OpenAlgo's own
     # API layer, a different failure mode from "is the broker session alive" below. See
@@ -1114,7 +1216,11 @@ def _run_healthcheck():
     # cycle, self-heals via a forced master-contract reload, and alerts either way.
     if not _ensure_openalgo_api_usable("healthcheck"):
         logger.error("Healthcheck: OpenAlgo API smoke test failed and self-heal did not recover it")
-        sys.exit(1)
+        # Broker session is good yet OpenAlgo's own API still rejects us: the running app
+        # process is holding a stale in-memory auth cache (a login from this CLI process
+        # cannot clear it). Tell the supervisor to restart app.py instead of treating
+        # this as a login failure.
+        sys.exit(EXIT_APP_STATE_STALE if session_confirmed else 1)
 
 
 def _run_squareoff():
