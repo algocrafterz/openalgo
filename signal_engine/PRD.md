@@ -216,6 +216,67 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-09-29)
+
+**Signal engine down from ~09:55 to 10:36 IST: a stale browser cookie from the previous
+evening's manual login made OpenAlgo revoke the fresh 08:45 broker token, and the healthcheck
+that should have recovered it could not, because it never attempted a login. Fixed in
+`openalgoscheduler.py`, `openalgoctl.sh` and `openalgoctl.ps1`.**
+
+**What happened.**
+1. 08:45: auto-login did a real TOTP login and stored a fresh token. A CLI login writes the
+   token but no `active_sessions` row.
+2. 09:55: a browser tab still holding the previous evening's cookie hit the app. The daily
+   expiry rule (`utils/session.py`, `_has_fresher_session`) spares the shared token only when an
+   `active_sessions` row newer than 03:00 IST exists. None did, so the app revoked the fresh
+   token, cleared its caches and force-logged-out every device. Flattrade calls then failed with
+   "Session Expired: Invalid Session Key" and every `/api/v1/` call returned 403.
+3. 10:00: the 15-minute healthcheck ran the API smoke test BEFORE the broker-session step. The
+   smoke test failed, self-heal only re-downloaded the master contract (which cannot fix a dead
+   login), and the script exited 1 without ever trying the TOTP re-login. "Startup failed
+   (attempt 1)" was alerted and a 300s cooldown written.
+4. Secondary: the master-contract download crashed at its last step (`socketio.emit` on a
+   SocketIO object with no server, in the CLI process), so it was reported as an error even
+   though the data had loaded.
+5. Even after a successful manual re-login, the running app kept 403ing because it held the
+   revoked/negative token in its in-process cache; only an app restart cleared it.
+
+**Fixes.**
+- `_register_trading_session()`: after every TOTP login (and on session reuse when no
+  post-03:00 row exists) an `active_sessions` row is registered, so a stale cookie only logs out
+  that one device and the fresh token survives.
+- `_run_healthcheck()` now does the broker-session login first, then the API smoke test.
+- Healthcheck exits with code 3 (`EXIT_APP_STATE_STALE`) when the broker session is confirmed
+  alive but the API still rejects us; `openalgoctl.sh` then runs `restart_app_only` (app.py
+  only, signal engine untouched) and re-verifies.
+- `_detach_serverless_socketio()` nulls the broker module's `socketio` when it has no server,
+  so the download completes cleanly in the CLI process.
+- `_revoke_broker_session_at_stop()`: the scheduled 4 PM stop revokes the stored broker token
+  and clears sessions (scheduled stop only, after the shutdown summary is built), so the next
+  08:50 start always begins from a clean slate.
+- `openalgoctl.ps1`: the 08:50 start task skips only when the app is healthy AND
+  `openalgoctl.sh run` is running (checked inside WSL). A healthy but unsupervised leftover
+  app.py is replaced by a real supervised start; success is counted only from a new app.py PID.
+- Log calls in the scheduler use `%s` instead of `%d`: `utils.logging` stringifies args, so
+  `%d` printed as literal `%d/%d` and hid the smoke-test failure detail.
+
+**Not fixed / unverified.** The revoke-at-stop, the session row, the exit-3 app restart and the
+leftover-app replacement have unit tests but have not run in a real 4 PM to 08:50 cycle. The
+09:00 "Existing session valid" false positive was not reproduced. The same `socketio.emit`
+crash still exists in OpenAlgo core (`master_contract_cache_hook`, broker master_contract_db);
+core was left untouched and it is non-fatal. The running supervisor keeps the old
+`openalgoctl.sh` until the 4 PM stop. Tomorrow, check `openalgoctl.log` for "Registered
+auto-login session", a passed smoke test after 08:50, and "revoked broker token and cleared
+sessions" at 16:00.
+
+**In plain terms:** the morning login worked, but a browser tab left open from yesterday
+evening later told OpenAlgo "this login is from before today's reset", and OpenAlgo threw away
+today's good login. The safety check that should have logged back in was checking the wrong
+thing first, so it gave up instead of retrying. Now the morning login leaves a note saying "a
+new login happened today", so yesterday's tab can only log itself out. The check logs back in
+before anything else, restarts the app if it is still holding a stale login, the 4 PM stop wipes
+the day's login, and the 08:50 start no longer trusts an app someone left running overnight.
+
 ## Recent Changes (2026-09-28)
 
 **~90 minutes of paper trades silently dropped this morning: OpenAlgo's own `/api/v1/funds` and
