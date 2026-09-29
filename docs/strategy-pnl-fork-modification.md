@@ -347,6 +347,26 @@ reconstructed and stays a warning. Tests:
 `frontend/src/components/DataHealthBanner.tsx`. Small edits in `app.py` (boot
 hook) and `blueprints/strategy_pnl.py` (`_with_data_health`).
 
+## Live prices on the Strategy P&L page (added 2026-09-29)
+
+The page now marks open legs to live prices the same way the Positions page
+does: `useLivePrice` (WebSocket LTP while the market is open, MultiQuotes
+fallback every 30s, paused while the tab is hidden), with a Live/Paused badge
+next to the title.
+
+- Only unrealized P&L is re-marked in the browser, using the server's own
+  formula (`quantity x (ltp - average_price)`), so a live figure and the next
+  server refresh agree. Strategy and portfolio totals roll up from the legs.
+  Realized P&L and open quantity still come from the server (order events plus
+  the 30s poll), since they change only on fills.
+- Legs with no live price keep the server's numbers; a leg the server could not
+  price is priced as soon as a live price arrives.
+- The formula ignores contract multipliers (for example Delta Exchange lot
+  sizes), matching `pnl_from_book`.
+- New core files: `frontend/src/lib/strategyPnlLive.ts` (pure helpers) and
+  `frontend/src/lib/strategyPnlLive.test.ts`. Edited:
+  `frontend/src/pages/StrategyPnL.tsx`.
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump

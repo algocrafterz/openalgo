@@ -5,6 +5,8 @@ import {
   ChevronRight,
   Gauge,
   Loader2,
+  Pause,
+  Radio,
   RefreshCw,
   TrendingDown,
   TrendingUp,
@@ -24,7 +26,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { applyLivePrices, legPriceKey, openLegItems } from '@/lib/strategyPnlLive'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -305,7 +309,34 @@ export default function StrategyPnL() {
     })
   }
 
-  const strategies = data?.status === 'success' ? (data.strategies ?? []) : []
+  const serverStrategies = useMemo(
+    () => (data?.status === 'success' ? (data.strategies ?? []) : []),
+    [data]
+  )
+
+  // Same live-price pipeline as the Positions page: WebSocket LTP when the
+  // market is open, MultiQuotes as fallback, paused while the tab is hidden.
+  // Only unrealized P&L is re-marked here; realized figures come from fills and
+  // the server refresh above.
+  const legItems = useMemo(() => openLegItems(serverStrategies), [serverStrategies])
+  const {
+    data: pricedLegs,
+    isLive,
+    isPaused,
+  } = useLivePrice(legItems, {
+    enabled: legItems.length > 0,
+    useMultiQuotesFallback: true,
+    staleThreshold: 5000,
+    multiQuotesRefreshInterval: 30000,
+    pauseWhenHidden: true,
+  })
+  const strategies = useMemo(() => {
+    const prices = new Map<string, number>()
+    for (const item of pricedLegs) {
+      if (item.ltp) prices.set(legPriceKey(item.exchange, item.symbol), item.ltp)
+    }
+    return applyLivePrices(serverStrategies, prices)
+  }, [serverStrategies, pricedLegs])
   const fetchError =
     data?.status === 'error' ? data.message : error ? 'Failed to load strategy P&L' : null
 
@@ -313,7 +344,26 @@ export default function StrategyPnL() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Strategy P&L</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight">Strategy P&L</h1>
+            {isPaused ? (
+              <Badge
+                variant="outline"
+                className="bg-amber-500/10 text-amber-600 border-amber-500/30 gap-1"
+              >
+                <Pause className="h-3 w-3" />
+                Paused
+              </Badge>
+            ) : isLive ? (
+              <Badge
+                variant="outline"
+                className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
+              >
+                <Radio className="h-3 w-3 animate-pulse" />
+                Live
+              </Badge>
+            ) : null}
+          </div>
           <p className="text-muted-foreground">
             Today's realized and unrealized P&L per strategy, tracked from the strategy tag on each
             order. Live and paper (Analyze mode) trades are tracked separately. For historical,
