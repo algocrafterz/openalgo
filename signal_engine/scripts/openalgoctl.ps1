@@ -187,17 +187,56 @@ function Invoke-Ctl {
     }
 }
 
+# -------- Detect the supervisor and app.py inside WSL --------
+#
+# "App answers on the health URL" is NOT proof the stack is being supervised: an
+# app.py left running after a manual evening session answers just as well, yet nothing
+# is watching it, no login ran for today, and its in-memory auth cache may hold a dead
+# token. On 2026-09-29 that was tolerated at the 08:50 start and a stale browser
+# cookie later revoked the fresh broker token. The '[o]' bracket trick keeps pgrep
+# from matching its own command line.
+
+function Test-Supervisor {
+    # Returns $true / $false, or $null when WSL could not be queried (unknown).
+    try {
+        $out = & $wsl -d $distro -- bash -lc "pgrep -f '[o]penalgoctl.sh run' >/dev/null && echo SUP || echo NOSUP" 2>$null
+        $text = ("$out").Replace([string][char]0, "").Trim()
+        if ($text -eq "SUP") { return $true }
+        if ($text -eq "NOSUP") { return $false }
+    }
+    catch {}
+    return $null
+}
+
+function Get-AppPid {
+    try {
+        $out = & $wsl -d $distro -- bash -lc "pgrep -f '[.]venv/bin/python3 app.py' | head -1" 2>$null
+        return ("$out").Replace([string][char]0, "").Trim()
+    }
+    catch { return "" }
+}
+
 # -------- Start: launch 'run' in a hidden window, poll health --------
 
 function Invoke-Start {
 
-    # Check if already running
+    # Check if already running. Healthy AND supervised is the only "already running";
+    # a healthy but unsupervised app.py is a leftover and gets replaced by a real start
+    # ($null = WSL unqueryable: keep the old skip behaviour rather than churn a live stack).
+    $staleAppPid = $null
     try {
         $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
         if ($response.StatusCode -eq 200) {
-            Write-Log "START SKIPPED: OpenAlgo already running at $healthUrl"
-            Write-Host "OpenAlgo already running." -ForegroundColor Yellow
-            return
+            if ((Test-Supervisor) -eq $false) {
+                $staleAppPid = Get-AppPid
+                if (-not $staleAppPid) { $staleAppPid = "none" }
+                Write-Log "App answers on $healthUrl but no supervisor is running (leftover app.py PID '$staleAppPid') - starting a fresh supervised stack."
+            }
+            else {
+                Write-Log "START SKIPPED: OpenAlgo already running at $healthUrl"
+                Write-Host "OpenAlgo already running." -ForegroundColor Yellow
+                return
+            }
         }
     }
     catch {}
@@ -262,7 +301,11 @@ title OpenAlgo Service
 
         try {
             $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
-            if ($response.StatusCode -eq 200) {
+            # A leftover app.py keeps answering until openalgoctl.sh kills it, so when
+            # replacing one, only count health from a NEW app.py process.
+            $newAppPid = Get-AppPid
+            $replaced = ($null -eq $staleAppPid) -or ($newAppPid -and $newAppPid -ne $staleAppPid)
+            if ($response.StatusCode -eq 200 -and $replaced) {
                 Write-Log "START SUCCESS: OpenAlgo running at $healthUrl"
                 Write-Host "OpenAlgo started successfully." -ForegroundColor Green
                 return
