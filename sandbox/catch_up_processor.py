@@ -49,7 +49,12 @@ def catch_up_mis_squareoff():
     be added to today_realized_pnl - only to accumulated/all-time realized_pnl
     """
     try:
-        from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
+        from database.sandbox_db import (
+            SandboxFunds,
+            SandboxPositions,
+            SandboxTrades,
+            db_session,
+        )
         from sandbox.fund_manager import FundManager
 
         # Get today's date at midnight IST
@@ -63,6 +68,21 @@ def catch_up_mis_squareoff():
             .filter(SandboxPositions.quantity != 0, SandboxPositions.created_at < today_start)
             .all()
         )
+
+        # The sandbox reuses one row per symbol, so a symbol that reopens today
+        # keeps its original created_at and would look "from a previous day".
+        # A position that traded today is live, not stale.
+        naive_today_start = datetime.combine(today, datetime.min.time())
+        stale_mis_positions = [
+            p
+            for p in stale_mis_positions
+            if SandboxTrades.query.filter_by(
+                user_id=p.user_id, symbol=p.symbol, exchange=p.exchange, product="MIS"
+            )
+            .filter(SandboxTrades.trade_timestamp >= naive_today_start)
+            .first()
+            is None
+        ]
 
         if not stale_mis_positions:
             logger.debug("Catch-up: No stale MIS positions found")
@@ -141,7 +161,6 @@ def catch_up_mis_squareoff():
                     from database.strategy_book_db import close_all_legs_for_position
 
                     close_all_legs_for_position(
-                        user_id=user_id,
                         symbol=symbol,
                         exchange=position.exchange,
                         product="MIS",

@@ -42,6 +42,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -216,6 +217,7 @@ def init_strategy_book_db() -> None:
     _prune_old_tags()
     _initialized = True
     logger.debug("Strategy book DB initialized")
+    _log_ledger_consistency_audit()
 
 
 def is_initialized() -> bool:
@@ -705,7 +707,6 @@ def get_strategy_legs(
 
 
 def close_all_legs_for_position(
-    user_id: str,
     symbol: str,
     exchange: str,
     product: str,
@@ -735,15 +736,34 @@ def close_all_legs_for_position(
     accounting: a stale multi-day-old position's P&L belongs to all-time
     realized only, not today's figure, since it did not close "today" from
     the trader's perspective.
+
+    Deliberately takes no ``user_id``: an order placed through ``/api/v1``
+    (how every strategy leg in this single-user deployment - see CLAUDE.md -
+    is actually created) carries no ``user_id`` in its request body, so every
+    ``StrategyPosition``/``StrategyOrderTag`` row is recorded with
+    ``user_id=""``. A caller here always has the real session user_id (from
+    ``sandbox_positions.user_id`` or ``SandboxPositionManager.user_id``),
+    which never equals that empty string. Filtering on it used to make every
+    call silently match zero rows - the reconciliation ran, logged nothing,
+    and the phantom leg was never closed (see the "Open qty" bug fixed
+    2026-09-28 on the Strategy P&L page).
     """
     if not _initialized:
-        return []
+        # Callers can run in a process that never went through app startup
+        # (the scheduler's short-lived master-contract/catch-up process), so
+        # initialise here instead of silently leaving a phantom open leg.
+        try:
+            init_strategy_book_db()
+        except Exception:
+            logger.exception(
+                f"Could not initialise strategy book to reconcile {symbol}/{exchange}/{product}"
+            )
+            return []
     with _fill_lock:
         try:
             legs = (
                 db_session.query(StrategyPosition)
                 .filter_by(
-                    user_id=user_id,
                     symbol=symbol,
                     exchange=exchange,
                     product=product,
@@ -904,3 +924,93 @@ def get_closed_trades(
         db_session.rollback()
         logger.exception("Could not read closed trades")
         return []
+
+
+# Absorbs float accumulation noise (weighted-average-cost math over many
+# fills), not real drift - see audit_ledger_consistency.
+_LEDGER_AUDIT_TOLERANCE = 0.05
+
+
+def audit_ledger_consistency(modes: tuple[str, ...] = ("analyze", "live")) -> list[dict]:
+    """Find every flat leg whose accumulated realized_pnl does not match the
+    sum of its own StrategyClosedTrade rows.
+
+    A flat (quantity == 0) leg's realized_pnl is only ever incremented by
+    apply_fill's closing branch or close_all_legs_for_position - both write a
+    matching StrategyClosedTrade row in the same commit, so in a healthy book
+    the two always agree exactly. A mismatch means some close updated the
+    running total without writing its ledger row - the exact defect class
+    that left phantom "open" quantity on the Strategy P&L page and silently
+    dropped trades from the Performance page for three weeks before anyone
+    noticed (see docs/strategy-pnl-fork-modification.md). Called from
+    init_strategy_book_db() so a recurrence surfaces in log/errors.jsonl on
+    the next restart, not the next time someone happens to eyeball the
+    numbers.
+
+    Restricted to mode in ``modes`` (default "analyze"/"live") by design: 42
+    legacy mode="unknown" legs (pre-dating StrategyClosedTrade entirely - see
+    LEDGER_RELIABLE_SINCE in services/strategy_metrics_service.py) are a
+    known, permanent, accepted gap - already excluded from every page, and
+    re-flagging the exact same 42 rows on every single restart forever would
+    bury a real, new regression in expected noise. Pass modes=() to audit
+    everything, including that legacy population, for a one-off manual check.
+
+    Does not check legs still open (quantity != 0) - an open leg's
+    realized_pnl legitimately reflects only its partial closes so far and has
+    nothing to fully reconcile against yet.
+    """
+    if not _initialized:
+        return []
+    try:
+        query = (
+            db_session.query(StrategyPosition)
+            .filter(StrategyPosition.quantity == 0)
+            .filter(StrategyPosition.realized_pnl != 0)
+        )
+        if modes:
+            query = query.filter(StrategyPosition.mode.in_(modes))
+        positions = query.all()
+        mismatches = []
+        for pos in positions:
+            ledger_sum = db_session.query(func.sum(StrategyClosedTrade.realized_pnl)).filter_by(
+                strategy=pos.strategy,
+                symbol=pos.symbol,
+                exchange=pos.exchange,
+                product=pos.product,
+                mode=pos.mode,
+            ).scalar() or 0.0
+            diff = float(pos.realized_pnl or 0) - float(ledger_sum)
+            if abs(diff) > _LEDGER_AUDIT_TOLERANCE:
+                mismatches.append(
+                    {
+                        "strategy": pos.strategy,
+                        "symbol": pos.symbol,
+                        "exchange": pos.exchange,
+                        "product": pos.product,
+                        "mode": pos.mode,
+                        "leg_realized_pnl": round(float(pos.realized_pnl or 0), 4),
+                        "ledger_sum": round(float(ledger_sum), 4),
+                        "diff": round(diff, 4),
+                    }
+                )
+        return mismatches
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not audit strategy book ledger consistency")
+        return []
+
+
+def _log_ledger_consistency_audit() -> None:
+    """Log (ERROR, so it reaches log/errors.jsonl) any leg the ledger audit
+    flags. Never raises - a failed audit must not block startup."""
+    try:
+        mismatches = audit_ledger_consistency()
+        if mismatches:
+            logger.error(
+                f"Strategy book: {len(mismatches)} leg(s) have a realized_pnl "
+                f"that does not match their closed-trade ledger - a close is "
+                f"updating the running total without writing its ledger row. "
+                f"First few: {mismatches[:5]}"
+            )
+    except Exception:
+        logger.exception("Strategy book: ledger consistency audit failed to run")

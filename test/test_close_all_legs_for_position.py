@@ -8,6 +8,13 @@ sandbox/catch_up_processor.py's catch_up_mis_squareoff all flattened the real
 position with no order.placed/order.update event ever firing - see
 docs/strategy-pnl-fork-modification.md's "Bug 1" for the incident.
 
+The function no longer takes a user_id (same date, second fix): every real
+StrategyPosition/StrategyOrderTag row is recorded with user_id="" (orders
+placed through /api/v1 never carry one in this single-user deployment - see
+CLAUDE.md), while every call site here passes the real session user_id, so
+filtering on it made the reconciliation match zero rows and silently no-op -
+the "Open qty" phantom-leg bug that motivated dropping the parameter.
+
 Run with: uv run pytest test/test_close_all_legs_for_position.py -v
 """
 
@@ -64,7 +71,6 @@ def test_closes_a_long_leg_at_the_given_exit_price():
     _open_leg(strategy, symbol, exchange, product, mode, qty=10, price=100.0, action="BUY")
 
     closed = close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -90,7 +96,6 @@ def test_closes_a_short_leg_with_correct_sign():
     _open_leg(strategy, symbol, exchange, product, mode, qty=5, price=200.0, action="SELL")
 
     closed = close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -111,7 +116,6 @@ def test_book_today_pnl_false_leaves_todays_figure_untouched():
     _open_leg(strategy, symbol, exchange, product, mode, qty=10, price=100.0, action="BUY")
 
     close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -136,7 +140,6 @@ def test_writes_a_closed_trade_ledger_row():
     _open_leg(strategy, symbol, exchange, product, mode, qty=20, price=50.0, action="BUY")
 
     close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -155,7 +158,6 @@ def test_writes_a_closed_trade_ledger_row():
 
 def test_no_matching_leg_is_a_safe_no_op():
     closed = close_all_legs_for_position(
-        user_id="",
         symbol="DOES-NOT-EXIST",
         exchange="NSE",
         product="MIS",
@@ -188,7 +190,6 @@ def test_already_flat_leg_is_not_reopened_or_reclosed():
     assert leg_before["quantity"] == 0
 
     closed = close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -217,7 +218,6 @@ def test_closes_every_strategy_sharing_the_same_symbol_independently():
     _open_leg(strat_b, symbol, exchange, product, mode, qty=5, price=200.0, action="BUY")
 
     closed = close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -241,7 +241,6 @@ def test_mode_isolation_only_closes_the_matching_mode():
     _open_leg(strategy, symbol, exchange, product, "live", qty=7, price=100.0, action="BUY")
 
     closed = close_all_legs_for_position(
-        user_id="",
         symbol=symbol,
         exchange=exchange,
         product=product,
@@ -254,3 +253,47 @@ def test_mode_isolation_only_closes_the_matching_mode():
     assert _leg(strategy, symbol, exchange, product, "analyze")["quantity"] == 0
     live_leg = _leg(strategy, symbol, exchange, product, "live")
     assert live_leg["quantity"] == 7  # untouched
+
+
+def test_closes_a_leg_regardless_of_the_callers_user_id():
+    """Regression test for the "Open qty" phantom-leg bug (fixed 2026-09-28):
+    close_all_legs_for_position() takes no user_id at all now, because every
+    real leg is recorded with user_id="" (see module docstring) while every
+    production caller has the real session user_id - a filter on it always
+    matched zero rows and silently left the leg open forever.
+    """
+    strategy = f"CLOSEALL-USERID-{uuid.uuid4().hex[:8]}"
+    symbol = "CLSUSERID" + uuid.uuid4().hex[:6].upper()
+    exchange, product, mode = "NSE", "MIS", "analyze"
+    _open_leg(strategy, symbol, exchange, product, mode, qty=13, price=4097.3, action="SELL")
+
+    closed = close_all_legs_for_position(
+        symbol=symbol,
+        exchange=exchange,
+        product=product,
+        mode=mode,
+        exit_price=4077.4,
+        book_today_pnl=True,
+    )
+
+    assert len(closed) == 1
+    leg = _leg(strategy, symbol, exchange, product, mode)
+    assert leg["quantity"] == 0
+
+
+def test_closes_leg_even_when_book_not_initialized(monkeypatch):
+    """The scheduler runs the stale-MIS catch-up in its own short-lived
+    process, which never calls init_strategy_book_db(). The close must
+    initialise the book itself, not silently no-op (2026-09-29 ORB INFY
+    phantom -45 open qty)."""
+    import database.strategy_book_db as book
+
+    _open_leg("UNINIT-STRAT", "UNINITSYM", "NSE", "MIS", "analyze", 45, 100.0, "SELL")
+    monkeypatch.setattr(book, "_initialized", False)
+
+    closed = close_all_legs_for_position(
+        symbol="UNINITSYM", exchange="NSE", product="MIS", mode="analyze", exit_price=90.0
+    )
+
+    assert len(closed) == 1
+    assert _leg("UNINIT-STRAT", "UNINITSYM", "NSE", "MIS", "analyze")["quantity"] == 0

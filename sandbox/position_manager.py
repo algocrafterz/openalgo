@@ -439,7 +439,6 @@ class PositionManager:
             from database.strategy_book_db import close_all_legs_for_position
 
             close_all_legs_for_position(
-                user_id=position.user_id,
                 symbol=symbol,
                 exchange=position.exchange,
                 product=position.product,
@@ -1108,7 +1107,6 @@ class PositionManager:
             from database.strategy_book_db import close_all_legs_for_position
 
             close_all_legs_for_position(
-                user_id=self.user_id,
                 symbol=symbol,
                 exchange=exchange,
                 product=product,
@@ -1381,7 +1379,6 @@ def cleanup_expired_contracts():
                             )
 
                             close_all_legs_for_position(
-                                user_id=user_id,
                                 symbol=symbol,
                                 exchange=position.exchange,
                                 product=position.product,
