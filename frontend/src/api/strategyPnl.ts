@@ -32,7 +32,7 @@ export interface StrategyPnlResponse {
   message?: string
 }
 
-export type PerformancePeriod = '7d' | '30d' | '90d' | 'ytd' | 'all'
+export type PerformancePeriod = '1d' | '7d' | '30d' | '90d' | 'ytd' | 'all'
 
 export interface DailyPnlPoint {
   date: string
@@ -78,6 +78,34 @@ export interface StrategyDailyPerformance {
   calendar_days?: number
   daily_pnl?: DailyPnlPoint[]
   equity_curve?: EquityPoint[]
+  est_costs?: number | null
+  net_after_costs?: number | null
+  expectancy_r?: number | null
+  total_r?: number | null
+  r_covered?: number
+  r_total?: number
+  by_symbol?: SymbolPnl[]
+  trades?: PerformanceTrade[]
+}
+
+export interface SymbolPnl {
+  symbol: string
+  trades: number
+  net_pnl: number
+  win_rate: number
+}
+
+export interface PerformanceTrade {
+  strategy: string
+  symbol: string
+  direction: 'LONG' | 'SHORT'
+  closed_quantity: number
+  entry_price: number
+  exit_price: number
+  realized_pnl: number
+  closed_at: string | null
+  cost: number | null
+  r_multiple: number | null
 }
 
 export interface StrategyComparisonRow {

@@ -15,11 +15,16 @@ from typing import Any
 from database.settings_db import get_analyze_mode
 from database.strategy_book_db import get_closed_trades, list_strategies
 from services.strategy_metrics_service import compute_metrics, resolve_period
+from services.strategy_trade_enrichment import (
+    enrich_trades,
+    summarize_enrichment,
+    symbol_breakdown,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-VALID_PERIODS = {"7d", "30d", "90d", "ytd", "all"}
+VALID_PERIODS = {"1d", "7d", "30d", "90d", "ytd", "all"}
 
 
 def _current_mode() -> str:
@@ -42,17 +47,21 @@ def get_daily_performance(strategy: str | None, period: str) -> tuple[bool, dict
     trades_in_range = [t for t in trades if start_date <= t["trade_date"] <= end_date]
 
     metrics = compute_metrics(trades_in_range, start_date, end_date)
-    return (
-        True,
-        {
-            "status": "success",
-            "mode": mode,
-            "strategy": strategy,
-            "period": period,
-            **metrics,
-        },
-        200,
-    )
+    enriched = enrich_trades(trades_in_range, start_date, end_date)
+    response = {
+        "status": "success",
+        "mode": mode,
+        "strategy": strategy,
+        "period": period,
+        **metrics,
+        **summarize_enrichment(enriched),
+        "by_symbol": symbol_breakdown(trades_in_range),
+    }
+    if period == "1d":
+        # Ratios like Sharpe mean nothing over one day; the trades themselves
+        # are what the 1D view shows.
+        response["trades"] = sorted(enriched, key=lambda t: t["closed_at"] or "", reverse=True)
+    return True, response, 200
 
 
 def get_strategy_comparison(period: str) -> tuple[bool, dict[str, Any], int]:

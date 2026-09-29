@@ -26,6 +26,21 @@ import pandas as pd
 
 TRADING_DAYS_PER_YEAR = 252
 
+# StrategyClosedTrade (the ledger this page reads) was added 2026-09-25 and
+# only writes a row on every close from that date forward. A handful of
+# trades from 2026-09-08 to 2026-09-24 were later hand-reconstructed into it
+# (see docs/strategy-pnl-fork-modification.md), but only for the specific
+# symbol/strategy legs that happened to get stuck open by a separate bug -
+# every other trade that closed normally in that window has no row at all.
+# Including that window would silently mix a complete ledger (09-25 onward)
+# with a non-random partial one (a few reconstructed trades, mostly
+# force-closes, standing in for a much larger population that isn't there),
+# skewing win rate, trade counts and the equity curve. Clamped out here
+# rather than deleted from the table - the reconstructed rows are individually
+# accurate and worth keeping for anyone who deliberately wants that window,
+# just never as a default or in an aggregate/comparison view.
+LEDGER_RELIABLE_SINCE = date(2026, 9, 25)
+
 
 def _daily_pnl_series(closed_trades: list[dict], start_date: str, end_date: str) -> pd.Series:
     """One realized-PnL total per calendar day across [start_date, end_date],
@@ -80,7 +95,7 @@ def _finite(value: float) -> float | None:
 def resolve_period(
     period: str, closed_trades: list[dict], today: date | None = None
 ) -> tuple[str, str]:
-    """Maps a period keyword ("7d"/"30d"/"90d"/"ytd"/"all") to an ISO
+    """Maps a period keyword ("1d"/"7d"/"30d"/"90d"/"ytd"/"all") to an ISO
     [start_date, end_date] range.
 
     "all" is bounded by the earliest closed trade, not a fixed lookback -
@@ -88,7 +103,9 @@ def resolve_period(
     means there is nothing to show before this feature's own deploy date.
     """
     today = today or datetime.now().date()
-    if period == "7d":
+    if period == "1d":
+        start = today
+    elif period == "7d":
         start = today - timedelta(days=6)
     elif period == "90d":
         start = today - timedelta(days=89)
@@ -103,6 +120,7 @@ def resolve_period(
             start = today
     else:  # default: 30d
         start = today - timedelta(days=29)
+    start = max(start, LEDGER_RELIABLE_SINCE)
     return start.isoformat(), today.isoformat()
 
 

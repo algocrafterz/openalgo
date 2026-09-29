@@ -133,35 +133,61 @@ def test_empty_trade_list_returns_zeroed_metrics_not_an_error():
 @pytest.mark.parametrize(
     "period,expected_start",
     [
-        ("7d", "2026-03-20"),
-        ("30d", "2026-02-25"),
-        ("90d", "2025-12-27"),
-        ("ytd", "2026-01-01"),
+        ("1d", "2026-12-26"),
+        ("7d", "2026-12-20"),
+        ("30d", "2026-11-27"),
+        ("90d", "2026-09-28"),  # naturally lands after the floor - unclamped
     ],
 )
 def test_resolve_period_fixed_windows(period, expected_start):
     from datetime import date
 
-    today = date(2026, 3, 26)
+    today = date(2026, 12, 26)
     start, end = resolve_period(period, closed_trades=[], today=today)
 
     assert start == expected_start
-    assert end == "2026-03-26"
+    assert end == "2026-12-26"
 
 
-def test_resolve_period_all_starts_at_earliest_trade():
+def test_resolve_period_ytd_is_clamped_to_the_reliable_ledger_start():
+    """Jan 1 predates StrategyClosedTrade (added 2026-09-25) entirely, so a
+    literal year-to-date window would silently include the known-incomplete
+    2026-09-08..09-24 backfilled window (see LEDGER_RELIABLE_SINCE) - ytd
+    must clamp to the floor, not the calendar year start."""
     from datetime import date
 
-    trades = [_trade(10, "2026-01-15"), _trade(20, "2026-02-01")]
-    start, end = resolve_period("all", trades, today=date(2026, 3, 26))
+    start, end = resolve_period("ytd", closed_trades=[], today=date(2026, 12, 26))
 
-    assert start == "2026-01-15"
-    assert end == "2026-03-26"
+    assert start == "2026-09-25"
+    assert end == "2026-12-26"
+
+
+def test_resolve_period_all_starts_at_earliest_trade_within_the_reliable_window():
+    from datetime import date
+
+    trades = [_trade(10, "2026-10-01"), _trade(20, "2026-10-15")]
+    start, end = resolve_period("all", trades, today=date(2026, 10, 26))
+
+    assert start == "2026-10-01"
+    assert end == "2026-10-26"
+
+
+def test_resolve_period_all_clamps_out_pre_ledger_trades():
+    """A trade dated before LEDGER_RELIABLE_SINCE exists (hand-reconstructed
+    for a handful of legs - see the module docstring) but must never become
+    the reported start; that window is known-incomplete."""
+    from datetime import date
+
+    trades = [_trade(10, "2026-09-10"), _trade(20, "2026-10-01")]
+    start, end = resolve_period("all", trades, today=date(2026, 10, 26))
+
+    assert start == "2026-09-25"
+    assert end == "2026-10-26"
 
 
 def test_resolve_period_all_with_no_trades_is_a_single_day():
     from datetime import date
 
-    start, end = resolve_period("all", [], today=date(2026, 3, 26))
+    start, end = resolve_period("all", [], today=date(2026, 10, 26))
 
-    assert start == end == "2026-03-26"
+    assert start == end == "2026-10-26"

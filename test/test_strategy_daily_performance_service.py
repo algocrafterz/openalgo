@@ -1,111 +1,52 @@
-"""
-Unit tests for services/strategy_daily_performance_service.py - the
-orchestration layer between the closed-trade ledger and the metrics math.
+"""get_daily_performance response shape: enrichment fields on every period,
+and the per-trade list only for the 1D view.
 
 Run with: uv run pytest test/test_strategy_daily_performance_service.py -v
 """
 
-import services.strategy_daily_performance_service as perf
+from datetime import date
+
+import pytest
+
+import services.strategy_daily_performance_service as svc
 
 
-def _trade(strategy, pnl, trade_date):
-    return {"strategy": strategy, "realized_pnl": pnl, "trade_date": trade_date}
+def _t(symbol, pnl, closed_at, trade_date=None):
+    return {
+        "strategy": "ORB", "symbol": symbol, "exchange": "NSE", "product": "MIS",
+        "mode": "analyze", "direction": "LONG", "closed_quantity": 10.0,
+        "entry_price": 100.0, "exit_price": 100.0 + pnl / 10, "realized_pnl": pnl,
+        "trade_date": trade_date or date.today().isoformat(), "closed_at": closed_at,
+    }
 
 
-def test_invalid_period_is_rejected():
-    success, response, status = perf.get_daily_performance(strategy="ORB", period="bogus")
-
-    assert success is False
-    assert status == 400
-    assert response["status"] == "error"
-
-
-def test_live_mode_is_resolved_from_analyze_mode_flag(monkeypatch):
-    monkeypatch.setattr(perf, "get_analyze_mode", lambda: False)
-    captured = {}
-
-    def fake_get_closed_trades(strategy=None, mode=None, **_kwargs):
-        captured["strategy"] = strategy
-        captured["mode"] = mode
-        return [_trade("ORB", 100, "2026-01-01")]
-
-    monkeypatch.setattr(perf, "get_closed_trades", fake_get_closed_trades)
-
-    success, response, status = perf.get_daily_performance(strategy="ORB", period="30d")
-
-    assert success is True
-    assert status == 200
-    assert captured == {"strategy": "ORB", "mode": "live"}
-    assert response["mode"] == "live"
-    assert response["strategy"] == "ORB"
-
-
-def test_analyze_mode_is_resolved_from_analyze_mode_flag(monkeypatch):
-    monkeypatch.setattr(perf, "get_analyze_mode", lambda: True)
-    monkeypatch.setattr(perf, "get_closed_trades", lambda **_kwargs: [])
-
-    _success, response, _status = perf.get_daily_performance(strategy="ORB", period="30d")
-
-    assert response["mode"] == "analyze"
-
-
-def test_daily_performance_computes_metrics_from_fetched_trades(monkeypatch):
-    monkeypatch.setattr(perf, "get_analyze_mode", lambda: False)
+@pytest.fixture(autouse=True)
+def _patch(monkeypatch, tmp_path):
+    today = date.today().isoformat()
+    trades = [
+        _t("AAA", 100.0, f"{today}T10:00:00"),
+        _t("BBB", -50.0, f"{today}T11:00:00"),
+    ]
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: list(trades))
+    monkeypatch.setattr(svc, "_current_mode", lambda: "analyze")
     monkeypatch.setattr(
-        perf,
-        "get_closed_trades",
-        lambda **_kwargs: [
-            _trade("ORB", 100, "2026-01-01"),
-            _trade("ORB", -40, "2026-01-02"),
-        ],
+        "services.strategy_trade_enrichment.SIGNAL_TRADES_DB", tmp_path / "absent.db"
     )
-
-    _success, response, _status = perf.get_daily_performance(strategy="ORB", period="all")
-
-    assert response["trades_count"] == 2
-    assert response["net_profit"] == 60.0
+    monkeypatch.setattr("services.strategy_metrics_service.LEDGER_RELIABLE_SINCE", date(2020, 1, 1))
 
 
-def test_compare_skips_strategies_with_no_closed_trades(monkeypatch):
-    monkeypatch.setattr(perf, "get_analyze_mode", lambda: False)
-    monkeypatch.setattr(perf, "list_strategies", lambda: ["ORB", "EMPTY-STRAT"])
-
-    def fake_get_closed_trades(strategy=None, **_kwargs):
-        if strategy == "ORB":
-            return [_trade("ORB", 100, "2026-01-01")]
-        return []
-
-    monkeypatch.setattr(perf, "get_closed_trades", fake_get_closed_trades)
-
-    _success, response, _status = perf.get_strategy_comparison(period="all")
-
-    names = [row["strategy"] for row in response["strategies"]]
-    assert names == ["ORB"]
+def test_one_day_includes_trade_list_newest_first():
+    ok, r, code = svc.get_daily_performance(None, "1d")
+    assert ok and code == 200
+    assert [t["symbol"] for t in r["trades"]] == ["BBB", "AAA"]
+    assert r["trades"][0]["cost"] is not None
+    assert r["trades"][0]["r_multiple"] is None
 
 
-def test_compare_sorts_by_net_profit_descending(monkeypatch):
-    monkeypatch.setattr(perf, "get_analyze_mode", lambda: False)
-    monkeypatch.setattr(perf, "list_strategies", lambda: ["WORSE", "BETTER"])
-
-    def fake_get_closed_trades(strategy=None, **_kwargs):
-        if strategy == "BETTER":
-            return [_trade("BETTER", 500, "2026-01-01")]
-        return [_trade("WORSE", 50, "2026-01-01")]
-
-    monkeypatch.setattr(perf, "get_closed_trades", fake_get_closed_trades)
-
-    _success, response, _status = perf.get_strategy_comparison(period="all")
-
-    names = [row["strategy"] for row in response["strategies"]]
-    assert names == ["BETTER", "WORSE"]
-
-
-def test_compare_with_no_strategies_returns_empty_list(monkeypatch):
-    monkeypatch.setattr(perf, "get_analyze_mode", lambda: False)
-    monkeypatch.setattr(perf, "list_strategies", lambda: [])
-
-    success, response, status = perf.get_strategy_comparison(period="30d")
-
-    assert success is True
-    assert status == 200
-    assert response["strategies"] == []
+def test_other_periods_omit_trade_list_but_carry_enrichment():
+    ok, r, _ = svc.get_daily_performance(None, "7d")
+    assert ok and "trades" not in r
+    assert r["est_costs"] > 0
+    assert r["net_after_costs"] == pytest.approx(50.0 - r["est_costs"], abs=0.01)
+    assert r["expectancy_r"] is None and r["r_covered"] == 0 and r["r_total"] == 2
+    assert [s["symbol"] for s in r["by_symbol"]] == ["AAA", "BBB"]
