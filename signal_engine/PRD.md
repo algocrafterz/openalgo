@@ -5349,3 +5349,33 @@ are both addressed above. The daily-performance feature's backfill/reconciliatio
 (`upgrade/backfill_strategy_daily_performance.py`) stays in place - it is still needed for
 trades closed before this fix deployed, and remains a useful independent cross-check going
 forward.
+
+## Sandbox Cancel Releases Phantom Margin; Test Suite Polluted The Production Error Log (2026-09-29)
+
+**Observation (OpenAlgo core, not fixed here - see feedback: never touch core).**
+`sandbox/order_manager.py` `cancel_order()` (around lines 965-1023) treats `margin_blocked == 0`
+as "an old order from before the column existed" and recalculates margin to release. A protective
+exit order (SL-M SELL against a long, or SL-M BUY against a short) legitimately blocks nothing,
+so cancelling one releases margin that was never held. Seen 2026-09-29 (IST): ICICIBANK's SL-M
+SELL was cancelled at 11:43:44 and released a made-up 60,278.24; the position close then tried to
+release its real 60,408.16 while only 50,698.38 was reserved, and `fund_manager.release_margin`
+refused it (the ERROR line in log/errors.jsonl). HINDPETRO at 11:41 and 11:42 showed the same
+pattern (11,919.60 and 17,067.48), each reversed by the periodic `reconcile_margin`.
+
+Impact: temporary and self-healing. Final `used_margin` equalled the sum of open-position margins
+(84,637.60) at the time of checking. No P&L, order, trade or position figure is affected. The
+cost is a short window of inflated available cash plus a spurious ERROR log line.
+
+Upstream check (2026-09-29): marketcalls/openalgo `main` is 2.0.2.6 (we run 2.0.2.1). The same
+fallback branch is present unchanged in upstream `main`, and no upstream issue or PR covers it.
+
+To do when upgrading past 2.0.2.6: re-check `cancel_order()` in `sandbox/order_manager.py` for a
+guard that skips the release for exit orders (SL/SL-M with an opposite-side position). If still
+absent, raise an upstream issue with the ICICIBANK trace above. Verify after upgrade by cancelling
+an SL-M exit order in analyze mode and confirming `sandbox_funds.used_margin` does not change.
+
+**Test-suite noise.** `signal_engine/tests/conftest.py` never redirected `LOG_DIR`, so every error
+the tests provoke on purpose (mock RuntimeErrors, simulated NSE outages, fake 403s) was appended to
+the production log/errors.jsonl, and startup truncation to 1000 lines could evict real errors.
+The conftest now sets `LOG_DIR=log/test` before any project import, matching `test/conftest.py`.
+Verified: running the scheduler and watchlist suites left log/errors.jsonl unchanged.

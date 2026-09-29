@@ -1,10 +1,19 @@
 """Shared test fixtures and factories for signal engine tests."""
 
-import httpx
-import pytest
+import os
 
-from signal_engine.models import Direction, Signal
-from signal_engine.strategies import ORB
+# utils.logging attaches a JSON handler on $LOG_DIR/errors.jsonl at import time, so every
+# error these tests deliberately provoke (mock RuntimeErrors, simulated outages) was landing
+# in the operator's production log, and setup_logging's startup truncation to 1000 lines could
+# evict real errors. Assigned unconditionally and BEFORE any project import below, the same
+# guarantee test/conftest.py gives the OpenAlgo core suite.
+os.environ["LOG_DIR"] = "log/test"
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+from signal_engine.models import Direction, Signal  # noqa: E402
+from signal_engine.strategies import ORB  # noqa: E402
 
 
 def make_signal(**overrides) -> Signal:
