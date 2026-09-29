@@ -144,9 +144,12 @@ the failure mode that rule exists to prevent.)
 Both under the existing `blueprints/strategy_pnl.py` (session-authed, UI-only,
 same rate-limit pattern as `/api/strategy-pnl`):
 
-- `GET /api/strategy-pnl/daily?strategy=<name>&period=30d|90d|ytd|all` — full
+- `GET /api/strategy-pnl/daily?strategy=<name>&period=1d|7d|30d|90d|ytd|all` — full
   metrics table + daily P&L series + equity curve for one strategy, or the
-  whole portfolio if `strategy` is omitted.
+  whole portfolio if `strategy` is omitted. Also returns `est_costs`,
+  `net_after_costs`, `expectancy_r`, `total_r`, `r_covered`/`r_total` and
+  `by_symbol` (see "2026-09-29 additions"); for `period=1d` only, a `trades`
+  list of that day's closed trades, newest first.
 - `GET /api/strategy-pnl/compare?period=...` — the same metrics, condensed,
   for every strategy in the current mode side by side.
 
@@ -206,6 +209,59 @@ serves the SPA shell; `dist/assets/StrategyDailyPerformance-*.js` exists in
 the rebuilt `dist/`. Not verified: the rendered page's actual content in a
 logged-in browser session (no test credentials available from this
 environment) — do that manually once convenient.
+
+## 2026-09-29 additions
+
+**1D period, 7D default.** `resolve_period("1d")` is today only. The 1D view
+drops Sharpe, Sortino, Calmar, drawdown, streaks, the equity curve and the
+calendar (all meaningless over one day; the API still returns them, the page
+hides them) and shows summary cards plus a table of today's closed trades
+instead. The dropdown order is 1D, 7D, 30D, 90D, YTD, All; the page opens on
+7D. The strategy comparison table also hides its Sharpe and Max Drawdown
+columns on 1D. `VALID_PERIODS` in `services/strategy_daily_performance_service.py`
+gates the period, so a running app that predates this change answers
+"Invalid period: 1d" until it is restarted.
+
+**Enrichment** (`services/strategy_trade_enrichment.py`, tests in
+`test/test_strategy_trade_enrichment.py`). Nothing is invented: an
+unknowable value is `None` and the page shows "-" plus how many trades the
+figure covers.
+
+- **Expectancy in R / total R.** The strategy book stores no stop, so each
+  closed trade is matched to the signal engine's own record
+  (`signal_engine/data/trades.db`, read-only, status SUCCESS, LONG/SHORT entry
+  rows with a non-zero stop) by strategy, symbol, direction, mode, session
+  date and entry price within 0.5 percent. Risk = |signal entry - stop| x
+  closed quantity; R = realized P&L / risk. No match, or two matches with
+  different (entry, stop), gives no R for that trade. Expectancy in R is the
+  mean over covered trades only; `r_covered`/`r_total` is shown next to it.
+  If the signal DB is missing (a deployment without signal_engine) R is simply
+  unavailable.
+- **Estimated charges and net after charges.** Uses the existing
+  `portfolio/costs.py` schedules (`india_intraday` for MIS, `india_delivery`
+  for CNC; NSE and BSE only) with 2 orders per closed-trade row. Slippage is
+  not included (the sandbox fills at the requested price). A trade on an
+  instrument the schedules do not model has no cost, and if any trade in the
+  range has none, `net_after_costs` is `None` rather than a partial sum.
+  Partial exits each count two orders, which slightly overstates flat
+  brokerage on multi-exit trades; the 0.03 percent rate leg dominates at
+  these sizes so the effect is small. Hand-check: INFY short 45 @ 986 costs
+  about 46.86 (brokerage 31.4, STT 11.1, exchange 2.6, stamp 1.3).
+- **P&L by symbol.** Net P&L, trade count and win rate per symbol; the page
+  shows the top 5 contributors and 5 biggest detractors.
+
+**Live vs Analyze.** Every ledger row (`strategy_closed_trades`,
+`strategy_positions`) carries `mode`, and every service reads only the
+current mode (`_current_mode()` from the global Analyze toggle); legacy
+`mode='unknown'` rows are excluded from both. Both pages now show a
+`StrategyModeBadge` (`ANALYZE (paper)` blue / `LIVE (real money)` red) taken
+from the `mode` the server returned for the data on screen, not from the
+client toggle. The Strategy P&L page's old green "Live" badge (which only
+meant auto-refreshing) was renamed "Streaming" so the two cannot be confused.
+There is deliberately no combined all-modes view.
+`test/test_strategy_performance_mode_isolation.py` books one analyze, one live
+and one unknown trade and asserts each mode sees only its own, on both the
+daily and comparison endpoints.
 
 ## Backfill run log
 

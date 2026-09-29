@@ -109,7 +109,10 @@ corruption, but it needs a human to reconcile rather than a blind
 - `sandbox/catch_up_processor.py` (2026-09-28) —
   `catch_up_mis_squareoff()` now also calls `close_all_legs_for_position()`
   (`book_today_pnl=False`, matching its own funds accounting) after settling
-  a stale MIS position, for the same reason.
+  a stale MIS position, for the same reason. (2026-09-29) It also skips any
+  MIS row that has a trade dated today: the sandbox reuses one
+  `sandbox_positions` row per symbol, so a symbol reopened today keeps its
+  original `created_at` and was being force-settled as "from a previous day".
 - `services/strategy_performance_service.py` (2026-09-28) — also fetches
   holdings (`services/holdings_service.get_holdings()`) and merges their LTP
   into the position-book lookup `pnl_from_book()` uses to mark unrealized
@@ -244,6 +247,42 @@ above for the full list. The two stale legs from this incident were also
 manually reconciled in the live database at their actual sandbox settlement
 price (recovered from `sandbox_positions.ltp`, which the original settlement
 had left unchanged).
+
+#### Bug 1 follow-up (2026-09-29): same-day position settled as stale, and the reconcile silently skipped
+
+Symptom: Strategy P&L showed ORB "Open qty -45" with no real position, while
+the order book and trade book still showed the entry. ORB shorted INFY 45 @
+986 at 09:55 IST; at 10:25 IST the sandbox position went flat with no exit
+order and the SL-M BUY stayed "trigger pending".
+
+Two independent causes, both fixed:
+
+1. **`catch_up_mis_squareoff()` settled a live position.** It selects
+   `product='MIS' AND quantity != 0 AND created_at < today`. INFY's row was
+   created 2026-09-22 and reused when ORB reopened it, so the 10:25 catch-up
+   (run by the scheduler after its mid-morning broker re-login) settled it at
+   `ltp` with P&L 0. Fix: exclude rows with a `sandbox_trades` entry dated
+   today for the same user/symbol/exchange/MIS. Test:
+   `test/sandbox/test_catch_up_stale_mis.py`.
+2. **The strategy book was never told.** The catch-up ran inside the
+   scheduler's short-lived process, which never calls
+   `init_strategy_book_db()`, so `close_all_legs_for_position()` hit its
+   `if not _initialized: return []` guard and returned without logging. This
+   also meant the 2026-09-28 fix above only worked when the catch-up ran
+   inside the Flask app. Fix: the function now initialises the book on demand
+   (logging and returning `[]` only if that fails). Test:
+   `test_closes_leg_even_when_book_not_initialized` in
+   `test/test_close_all_legs_for_position.py`.
+
+Live data repair (2026-09-29): the orphan SL-M order was cancelled through
+`OrderManager.cancel_order()` (margin released) and the phantom ORB/INFY leg
+set to quantity 0. No `strategy_closed_trades` row was written for it, since
+the real exit price is unknowable and any row would be invented; the leg's own
+`realized_pnl` is unchanged. The signal engine's `trades.db` still lists that
+ORB INFY entry as SUCCESS with no exit; the EOD review may flag it.
+
+Merge risk: `sandbox/catch_up_processor.py` now has a second local change
+(the trade-dated-today filter, plus its `SandboxTrades` import).
 
 ### Bug 2 — `sandbox_funds.today_realized_pnl` drifts from the trade ledger
 

@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type StrategyLeg, type StrategyPnl, strategyPnlApi } from '@/api/strategyPnl'
 import { DataHealthBanner } from '@/components/DataHealthBanner'
+import { StrategyModeBadge } from '@/components/StrategyModeBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -346,6 +347,7 @@ export default function StrategyPnL() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Strategy P&L</h1>
+            <StrategyModeBadge mode={data?.mode} />
             {isPaused ? (
               <Badge
                 variant="outline"
@@ -360,7 +362,7 @@ export default function StrategyPnL() {
                 className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
               >
                 <Radio className="h-3 w-3 animate-pulse" />
-                Live
+                Streaming
               </Badge>
             ) : null}
           </div>

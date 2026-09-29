@@ -19,6 +19,7 @@ import {
   strategyPnlApi,
 } from '@/api/strategyPnl'
 import { DataHealthBanner } from '@/components/DataHealthBanner'
+import { StrategyModeBadge } from '@/components/StrategyModeBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -445,7 +446,10 @@ export default function StrategyDailyPerformance() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Strategy Daily Performance</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight">Strategy Daily Performance</h1>
+            <StrategyModeBadge mode={daily?.mode} />
+          </div>
           <p className="text-muted-foreground">
             Day-by-day strategy performance with professional trade evaluation metrics - win rate,
             profit factor, expectancy in R, estimated charges, Sharpe/Sortino/Calmar, drawdown and
@@ -508,8 +512,8 @@ export default function StrategyDailyPerformance() {
       ) : !daily || daily.trades_count === 0 ? (
         <EmptyState
           icon={Gauge}
-          title="No closed trades in this range"
-          description="Metrics appear once a strategy has at least one closed (exited) trade in the selected period."
+          title={`No closed ${daily?.mode === 'live' ? 'live' : 'Analyze-mode'} trades in this range`}
+          description="Metrics appear once a strategy has at least one closed (exited) trade in the selected period. Live and Analyze trades are never combined: switch mode to see the other."
         />
       ) : (
         <>
