@@ -64,14 +64,47 @@ class RecordingSink:
 
 
 class DispatchSink:
-    """Hands each Signal to the engine's dispatch path (validate, risk, sizing, orders)."""
+    """Hands each Signal to the engine's dispatch path (validate, risk, sizing, orders).
+
+    paper_only is a hard safety for a strategy that has not passed the acceptance gates: every
+    submit, entry or exit, is checked against OpenAlgo's CURRENT mode and refused unless it is
+    ANALYZE. The check runs per signal, not once at start-up, so a mode flipped to live while
+    the engine runs stops dispatch on the next signal. An unreadable mode fails closed.
+    """
 
     dispatches = True
 
-    def __init__(self, dispatch: Callable[[Signal], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        dispatch: Callable[[Signal], Awaitable[None]],
+        paper_only: bool = False,
+        phase: Callable[[], Awaitable[str]] | None = None,
+    ) -> None:
         self._dispatch = dispatch
+        self.paper_only = paper_only
+        self._phase = phase
+
+    async def _paper_allowed(self, signal: Signal) -> bool:
+        from signal_engine import mode_guard
+
+        try:
+            phase = await (self._phase or mode_guard.current_phase)()
+        except Exception:  # noqa: BLE001 - an unreadable mode must fail closed
+            logger.exception(f"paper-only check for {signal.strategy} could not read the mode")
+            return False
+        startup = mode_guard.startup_phase()
+        if phase == "analyze" and startup in (None, "analyze"):
+            return True
+        logger.critical(
+            f"paper-only strategy {signal.strategy} REFUSED {signal.direction.value} "
+            f"{signal.symbol} sig_id={signal.sig_id}: OpenAlgo mode is {phase}, engine "
+            f"started in {startup}; only analyze is allowed"
+        )
+        return False
 
     async def submit(self, signal: Signal) -> None:
+        if self.paper_only and not await self._paper_allowed(signal):
+            return
         logger.info(
             f"dispatch {signal.strategy} {signal.direction.value} {signal.symbol} "
             f"sig_id={signal.sig_id} tp_level={signal.tp_level}"

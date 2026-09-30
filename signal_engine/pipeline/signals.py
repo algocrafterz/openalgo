@@ -17,10 +17,20 @@ def _ist(ts: pd.Timestamp) -> pd.Timestamp:
     return ts.tz_convert(IST)
 
 
-def sig_id(symbol: str, bar_time: pd.Timestamp) -> str:
-    """Stable per-trade key, same shape the Pine alerts used: TCS-20260930-0955."""
+#: The tag whose sig_id keeps the exact shape the Pine alerts used.
+PINE_TAG = "BREAKOUT"
+
+
+def sig_id(symbol: str, bar_time: pd.Timestamp, strategy: str = PINE_TAG) -> str:
+    """Stable per-trade key. Pine shape for the default tag: TCS-20260930-0955.
+
+    Any other tag is prefixed (BREAKOUT-PY-TCS-20260930-0955). Two strategies can fire the same
+    symbol on the same bar, and an unprefixed key would make the later one look already seen
+    (runner dedupe reads trades.db) and would pair the wrong rows in the P&L ledger.
+    """
     t = _ist(bar_time)
-    return f"{symbol}-{t:%Y%m%d}-{t:%H%M}"
+    base = f"{symbol}-{t:%Y%m%d}-{t:%H%M}"
+    return base if strategy == PINE_TAG else f"{strategy}-{base}"
 
 
 def fire_to_signal(
@@ -43,6 +53,6 @@ def fire_to_signal(
         exchange=exchange,
         product=product,
         time=f"{t:%H:%M}",
-        sig_id=sig_id(fire.symbol, fire.bar_time),
+        sig_id=sig_id(fire.symbol, fire.bar_time, strategy),
         context=context,
     )

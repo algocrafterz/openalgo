@@ -89,7 +89,7 @@ def _skip(
 ) -> None:
     report.skipped[symbol] = reason
     logger.info(f"pipeline skip {symbol} bar {bar_open:%H:%M}: {reason}")
-    if deps is not None and _shadow(deps):
+    if deps is not None and _records_events(deps):
         deps.state.record_shadow(
             bar_open.date(), deps.strategy.name, symbol, bar_open, "skip", reason=reason
         )
@@ -98,6 +98,16 @@ def _skip(
 def _shadow(deps: CycleDeps) -> bool:
     """True when this cycle feeds the shadow-vs-Pine comparison (a sink that only records)."""
     return bool(getattr(deps.sink, "records_shadow", False))
+
+
+def _records_events(deps: CycleDeps) -> bool:
+    """True when the runner's own signal and skip events are written for the comparison report.
+
+    A recording (shadow) sink always does. A dispatching sink does too, so a strategy that
+    trades in paper (BREAKOUT-PY) can be lined up against Pine the same way. Only the shadow
+    sink ignores trades.db for dedupe (see _shadow); a dispatching one must respect it.
+    """
+    return _shadow(deps) or bool(getattr(deps.sink, "dispatches", False))
 
 
 async def run_cycle(bar_close: pd.Timestamp, deps: CycleDeps) -> CycleReport:
@@ -149,7 +159,7 @@ async def run_cycle(bar_close: pd.Timestamp, deps: CycleDeps) -> CycleReport:
             f"pipeline cycle {bar_close:%H:%M} stale: data {lag:.0f}s after the bar closed "
             f"(limit {deps.stale_limit_s:.0f}s); {len(frames)} symbol(s) not evaluated"
         )
-        if _shadow(deps):
+        if _records_events(deps):
             for s in frames:
                 deps.state.record_shadow(
                     day, deps.strategy.name, s, bar_open, "skip",
@@ -207,7 +217,7 @@ async def _dispatch(fire: Fire, bar_open, deps: CycleDeps, report: CycleReport) 
     if verdict is not None:
         _skip(report, bar_open, symbol, verdict.reason, deps)
         return
-    key = sig_id(symbol, fire.bar_time)
+    key = sig_id(symbol, fire.bar_time, deps.strategy.name)
     if deps.state.seen_sig_id(key, include_trades=not _shadow(deps)):
         _skip(report, bar_open, symbol, f"sig_id already seen ({key})", deps)
         return
@@ -221,7 +231,7 @@ async def _dispatch(fire: Fire, bar_open, deps: CycleDeps, report: CycleReport) 
         report.skipped[symbol] = "submit error"
         return
     deps.state.record_sig_id(key)
-    if _shadow(deps):
+    if _records_events(deps):
         deps.state.record_shadow(
             bar_open.date(), deps.strategy.name, symbol, fire.bar_time, "signal",
             direction=signal.direction.value, sig_id=key,

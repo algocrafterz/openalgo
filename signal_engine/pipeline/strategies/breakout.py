@@ -43,7 +43,6 @@ def _clean(value) -> float | int | None:
 
 
 class BreakoutStrategy:
-    name = "BREAKOUT"
     interval_min = 5
     needs_1m = True
 
@@ -53,7 +52,11 @@ class BreakoutStrategy:
         tick_source: Callable[[str], float] = tick_size,
         warmup_sessions: int = DEFAULT_WARMUP_SESSIONS,
         inputs_builder: Callable[..., pd.DataFrame] | None = None,
+        name: str = "BREAKOUT",
     ) -> None:
+        #: The strategy tag the Fires are sent under. The rules are identical for every tag;
+        #: a second tag exists only to keep a second book (capital, slots, P&L) apart.
+        self.name = name
         self.params = params or BreakoutParams()
         self._tick = tick_source
         self._build_inputs = inputs_builder or build_breakout_inputs

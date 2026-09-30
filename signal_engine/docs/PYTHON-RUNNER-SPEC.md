@@ -366,6 +366,50 @@ reference), but it is a real open question to understand before step 3: the Pyth
 score or confirmation filter than Pine, or the two may differ in how a bar's signal is stamped. One day is not
 enough to conclude; compare several sessions and read the pine-only reasons.
 
+### BREAKOUT-PY: paper trading beside Pine (2026-10-01)
+
+**State.** The same BREAKOUT core paper-trades under its own tag, `BREAKOUT-PY`, while the Pine `BREAKOUT` runs
+exactly as before. `runner.strategies.BREAKOUT-PY` is `signal_source: python`, `exit_plan: tp1_only`,
+`exit_owner: ladder`, `paper_only: true`. It takes effect at the next engine restart.
+
+**Why a separate tag.** One tag would share capital, slots, the duplicate window, trades.db rows and the P&L
+ledger with Pine, so the two could not be compared and Pine's counters would be disturbed. With its own tag the
+risk engine gives it its own day-start capital pool and slot counters in ANALYZE mode, the tracker keys its
+position as (symbol, BREAKOUT-PY), and a same-symbol Pine position is left alone (per-strategy symbol limit).
+Analyze caps are already `max_open_positions: 0` and `max_trades_per_day: 0` (unlimited, per strategy), so no
+cap change is needed for a fourth sandbox strategy.
+
+**Wiring.** `strategies.REGISTRY` (`channel_base` None, `tradeable` False: no Telegram channel of its own, so
+lifecycle messages go to the admin notify channel and it appears in the consolidated day summary; False also keeps
+it out of the live worst-case sizing floor), `blacklist` and `strategy_profiles` (same BHEL block and 0.20% stop
+floor as BREAKOUT), `pipeline/service.STRATEGY_FACTORIES` (`BreakoutStrategy(name="BREAKOUT-PY")`). The tag flows
+through `fire_to_signal`, `sig_id` and the cycle's own dedupe.
+
+**sig_id.** Pine shape (`TCS-20260930-0955`) is kept for `BREAKOUT`; any other tag is prefixed
+(`BREAKOUT-PY-TCS-20260930-0955`). Without this, Pine's row for the same symbol and bar made the runner's
+matching signal look "already seen" (the runner's dedupe reads trades.db) and would have paired the wrong rows
+in the sig_id-keyed P&L ledger.
+
+**Paper-only is enforced in code, not just config.** `runner.strategies.<TAG>.paper_only` is a required key.
+(1) `check_consistency` refuses to start a python-sourced strategy with `paper_only: false`: live promotion must
+be a deliberate code change after the acceptance gates. (2) `service.start` does not launch a paper-only strategy
+when the engine started in live mode (critical log naming it). (3) `DispatchSink` checks OpenAlgo's CURRENT mode
+on EVERY submit, entries and exits, and refuses unless it is analyze, with a critical log; an unreadable mode or
+an engine started in live mode also refuses (fail closed). So a mode flipped to live mid-session stops dispatch
+on the next signal, in addition to the mode guard's halt.
+
+**Pine BREAKOUT is not in `runner.strategies`.** It was listed as pine/tracker for the 2026-09-30 shadow run.
+With BREAKOUT-PY running the same core, a second session would only double the per-cycle evaluation (9-20 s of
+a 25 s deadline). A strategy absent from the runner block is simply not runner-managed: its alerts are not
+dropped and the tracker owns its exits. The shadow comparison now reads BREAKOUT-PY's own events, which a
+dispatching sink also writes (signal and skip, same store):
+`uv run python -m signal_engine.pipeline.shadow_report --day YYYY-MM-DD --runner-strategy BREAKOUT-PY`.
+
+**Known, not fixed.** OpenAlgo's sandbox positionbook nets by symbol and product; per-strategy attribution
+lives in this engine (tracker, trades.db, `openposition` called with the strategy tag). The existing ORB and
+BREAKOUT pair already share names this way. Watch for a same-symbol BREAKOUT and BREAKOUT-PY position in the
+sandbox: a full exit of one sells its own quantity, and the broker-side position shows the net.
+
 ## 9. Definition of done
 
 - Runner disabled by default; enabling it needs explicit config.

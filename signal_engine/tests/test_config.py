@@ -1,9 +1,9 @@
 """Tests for config loader — fail-fast on missing or invalid values."""
 
 
-import pytest
 import copy
 
+import pytest
 import yaml
 
 from signal_engine.config import (
@@ -14,7 +14,6 @@ from signal_engine.config import (
     _telegram_fields,
     enabled_channels,
 )
-
 
 #: A complete, valid `runner` section; every full-config fixture below carries a copy.
 RUNNER_CFG = {
@@ -27,7 +26,7 @@ RUNNER_CFG = {
     "max_concurrent_requests": 8,
     "warmup_sessions": 20,
     "universe": "fno_all",
-    "strategies": {"BREAKOUT": {"signal_source": "pine", "exit_plan": "tp1_only", "exit_owner": "tracker"}},
+    "strategies": {"BREAKOUT": {"signal_source": "pine", "exit_plan": "tp1_only", "exit_owner": "tracker", "paper_only": True}},
 }
 
 class TestConfigFileMissing:

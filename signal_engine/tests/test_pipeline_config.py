@@ -26,11 +26,14 @@ def load(tmp_path, monkeypatch, mutate=None, drop_section=False):
 
 
 class TestRealConfig:
-    def test_shipped_config_is_shadow_only_breakout_stays_on_pine(self):
-        # Enabled since 2026-09-30 for the shadow run. The invariant that matters: while BREAKOUT
-        # fails the acceptance gates it must stay on Pine/tracker, so the runner only records.
-        entry = settings.runner.strategies["BREAKOUT"]
-        assert (entry.signal_source, entry.exit_owner) == ("pine", "tracker")
+    def test_shipped_config_pine_breakout_is_untouched_and_python_is_paper_only(self):
+        # The invariants that matter while BREAKOUT fails the acceptance gates: the Pine tag is
+        # never Python-sourced or Ladder-managed, and every Python-sourced strategy is paper-only.
+        pine = settings.runner.strategies.get("BREAKOUT")
+        assert pine is None or (pine.signal_source, pine.exit_owner) == ("pine", "tracker")
+        for tag, entry in settings.runner.strategies.items():
+            if entry.signal_source == "python":
+                assert entry.paper_only is True, tag
 
     def test_shipped_shadow_universe_is_an_explicit_unique_list(self):
         universe = settings.runner.universe
@@ -50,6 +53,20 @@ class TestLoad:
         st = r.strategies["BREAKOUT"]
         assert (st.signal_source, st.exit_plan) == ("pine", "tp1_only")
         assert st.exit_owner == "tracker"
+
+    def test_paper_only_is_required_and_a_bool(self, tmp_path, monkeypatch):
+        with pytest.raises(ConfigError, match="paper_only"):
+            load(tmp_path, monkeypatch, lambda c: c["strategies"]["BREAKOUT"].pop("paper_only"))
+
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["paper_only"] = "yes"
+
+        with pytest.raises(ConfigError, match="paper_only"):
+            load(tmp_path, monkeypatch, mut)
+
+    def test_paper_only_is_loaded(self, tmp_path, monkeypatch):
+        r = load(tmp_path, monkeypatch).runner
+        assert r.strategies["BREAKOUT"].paper_only is True
 
     def test_exit_owner_is_required(self, tmp_path, monkeypatch):
         with pytest.raises(ConfigError, match="exit_owner"):

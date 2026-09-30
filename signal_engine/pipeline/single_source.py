@@ -70,6 +70,12 @@ def check_consistency(cfg: RunnerSettings, known_strategies: Iterable[str]) -> N
                 f"{tag} is signal_source python but the runner is disabled "
                 f"(runner.enabled is false; Pine alerts would be dropped and nothing would generate signals)"
             )
+        if entry.signal_source == "python" and not entry.paper_only:
+            problems.append(
+                f"{tag} is signal_source python with paper_only false: a Python-sourced "
+                f"strategy may not trade live until it passes docs/STRATEGY-ACCEPTANCE-CRITERIA.md "
+                f"and that promotion is written into the code, so paper_only must be true"
+            )
         if entry.exit_owner == "ladder" and entry.signal_source != "python":
             problems.append(
                 f"{tag} has exit_owner ladder but signal_source {entry.signal_source} "
@@ -83,7 +89,8 @@ def describe(cfg: RunnerSettings) -> list[str]:
     """One line per strategy, for the start-up log."""
     state = "enabled" if cfg.enabled else "disabled"
     return [
-        f"signal source {tag}: {e.signal_source} (runner {state}, exit plan {e.exit_plan})"
+        f"signal source {tag}: {e.signal_source} (runner {state}, exit plan {e.exit_plan}, "
+        f"exit owner {e.exit_owner}, {'paper only' if e.paper_only else 'live allowed'})"
         for tag, e in cfg.strategies.items()
     ]
 

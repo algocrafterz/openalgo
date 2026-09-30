@@ -47,6 +47,11 @@ BREAKINGTRADE = "BREAKINGTRADE"
 
 BREAKOUT = "BREAKOUT"
 
+# The Python signal runner's BREAKOUT, paper-traded beside the Pine BREAKOUT. Same strategy core
+# (strategy_core.breakout), its own tag so its capital pool, slots, trades.db rows and P&L never
+# mix with Pine's. Paper only: the runner refuses to dispatch it outside OpenAlgo's ANALYZE mode.
+BREAKOUT_PY = "BREAKOUT-PY"
+
 # WATCHLIST outcome of the BreakingTrade scanner: entered at the scan-hit price with no
 # confirming close (trigger.plan_trade_watchlist), against BREAKINGTRADE's confirmed entry.
 # Its own tag, channel and risk slots so paper P&L can compare the two entry philosophies.
@@ -74,6 +79,12 @@ class StrategyMeta:
 REGISTRY: dict[str, StrategyMeta] = {
     ORB: StrategyMeta(ORB, "intraday-orb", True),
     BREAKOUT: StrategyMeta(BREAKOUT, "intraday-breakout", True),
+    BREAKOUT_PY: StrategyMeta(
+        BREAKOUT_PY, None, False,
+        "Python runner BREAKOUT, paper only (ANALYZE mode). No channel of its own: lifecycle "
+        "messages go to the admin notify channel, and it is listed in the consolidated day "
+        "summary. tradeable=False keeps it out of the live-mode worst-case sizing floor.",
+    ),
     BREAKINGTRADE: StrategyMeta(BREAKINGTRADE, "intraday-breakingtrade", True),
     BREAKINGTRADE_WATCHLIST: StrategyMeta(
         BREAKINGTRADE_WATCHLIST, "intraday-breakingtrade-watchlist", True

@@ -91,14 +91,21 @@ def _pine_only_reason(
     return "runner did not process this bar (engine down, or symbol never evaluated)"
 
 
+def _pine_shaped(sig_id: str, runner_strategy: str | None) -> str:
+    """The runner's key with its strategy prefix removed, so it lines up with a Pine row."""
+    prefix = f"{runner_strategy}-" if runner_strategy else ""
+    return sig_id[len(prefix):] if prefix and sig_id.startswith(prefix) else sig_id
+
+
 def compare(
     events: list[ShadowEvent],
     pine: list[PineSignal],
     *,
     universe: set[str],
     last_bars: dict[str, pd.Timestamp],
+    runner_strategy: str | None = None,
 ) -> Comparison:
-    signals = {e.sig_id: e for e in events if e.kind == "signal"}
+    signals = {_pine_shaped(e.sig_id, runner_strategy): e for e in events if e.kind == "signal"}
     skips = {(e.symbol, e.bar_time): e.reason for e in events if e.kind == "skip"}
     rep = Comparison()
     pine_ids = {p.sig_id for p in pine}
@@ -134,7 +141,12 @@ def format_report(rep: Comparison, day: dt.date, strategy: str) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Shadow runner vs Pine BREAKOUT for one day.")
     ap.add_argument("--day", type=dt.date.fromisoformat, default=dt.datetime.now(IST).date())
-    ap.add_argument("--strategy", default="BREAKOUT")
+    ap.add_argument("--strategy", default="BREAKOUT", help="the Pine strategy tag in trades.db")
+    ap.add_argument(
+        "--runner-strategy",
+        default=None,
+        help="the runner tag to read events for (default: same as --strategy), e.g. BREAKOUT-PY",
+    )
     ap.add_argument("--state-db", default=STATE_DB_PATH)
     ap.add_argument("--trades-db", default=None)
     ap.add_argument("--symbols", nargs="*", help="override the runner universe from config")
@@ -152,12 +164,16 @@ def _universe(args: argparse.Namespace) -> set[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    runner = args.runner_strategy or args.strategy
     pine = load_pine_signals(args.day, args.strategy, args.trades_db)
     with RunnerStateStore(args.state_db) as store:
-        events = store.shadow_events(args.day, args.strategy)
-        last_bars = store.last_bars(args.day, args.strategy)
-    rep = compare(events, pine, universe=_universe(args), last_bars=last_bars)
-    sys.stdout.write(format_report(rep, args.day, args.strategy) + "\n")
+        events = store.shadow_events(args.day, runner)
+        last_bars = store.last_bars(args.day, runner)
+    rep = compare(
+        events, pine, universe=_universe(args), last_bars=last_bars, runner_strategy=runner
+    )
+    label = args.strategy if runner == args.strategy else f"{runner} vs {args.strategy}"
+    sys.stdout.write(format_report(rep, args.day, label) + "\n")
     return 0
 
 

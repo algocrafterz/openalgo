@@ -107,6 +107,11 @@ class RunnerStrategy:
     #: Who manages exits for open positions: "tracker" (no-progress, profit-lock, structural
     #: runner stop) or "ladder" (the runner's shared exits.Ladder is the only stop rule).
     exit_owner: str = "tracker"
+    #: True = the runner may only dispatch this strategy into OpenAlgo's ANALYZE mode (enforced
+    #: per signal in pipeline.sink.DispatchSink and at start-up). config.yaml must state it for
+    #: every strategy; this default only serves code that builds a RunnerStrategy directly, and
+    #: it is the safe direction.
+    paper_only: bool = True
 
 
 @dataclass(frozen=True)
@@ -739,6 +744,9 @@ def _runner_strategies(raw) -> dict:
         source = _require_key(body, name, "signal_source")
         plan = _require_key(body, name, "exit_plan")
         owner = _require_key(body, name, "exit_owner")
+        paper_only = _require_key(body, name, "paper_only")
+        if not isinstance(paper_only, bool):
+            raise ConfigError(f"{name}.paper_only must be true or false, got {paper_only!r}")
         if source not in VALID_SIGNAL_SOURCES:
             raise ConfigError(
                 f"Invalid {name}.signal_source '{source}'. "
@@ -752,7 +760,7 @@ def _runner_strategies(raw) -> dict:
             raise ConfigError(
                 f"Invalid {name}.exit_owner '{owner}'. Must be one of: {', '.join(VALID_EXIT_OWNERS)}"
             )
-        out[str(tag).upper()] = RunnerStrategy(source, plan, owner)
+        out[str(tag).upper()] = RunnerStrategy(source, plan, owner, paper_only)
     return out
 
 

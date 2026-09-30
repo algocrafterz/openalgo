@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 from loguru import logger
@@ -35,7 +35,12 @@ from signal_engine.pipeline.strategy import Strategy
 from signal_engine.timeutils import IST
 
 #: Strategy tags the pipeline can run. A configured tag not listed here refuses to start.
-STRATEGY_FACTORIES: dict[str, Callable[[], Strategy]] = {"BREAKOUT": BreakoutStrategy}
+#: BREAKOUT-PY is the same strategy core under its own tag: a second book (capital, slots, P&L)
+#: for paper-trading the Python signals beside the Pine BREAKOUT.
+STRATEGY_FACTORIES: dict[str, Callable[[], Strategy]] = {
+    "BREAKOUT": BreakoutStrategy,
+    "BREAKOUT-PY": lambda: BreakoutStrategy(name="BREAKOUT-PY"),
+}
 
 SAFETY_BARS = 2
 _LOOKBACK_WEEKDAYS = 5
@@ -69,7 +74,7 @@ def build_sink(
         raise single_source.SingleSourceError(
             f"{tag}: signal_source is python but no dispatcher was provided"
         )
-    return DispatchSink(dispatch)
+    return DispatchSink(dispatch, paper_only=entry.paper_only)
 
 
 def build_exits(cfg: RunnerSettings, tag: str, positions, broker_qty) -> ExitDriver | None:
@@ -208,6 +213,13 @@ async def start(
     unknown = [t for t in cfg.strategies if t not in STRATEGY_FACTORIES]
     if unknown:
         raise RunnerStartError(f"no pipeline strategy for: {', '.join(unknown)}")
+    cfg = _without_live_paper_only(cfg, trade_mode)
+    if not cfg.strategies:
+        logger.critical(
+            "Python signal runner NOT started: every configured strategy is paper-only and "
+            f"OpenAlgo is in {trade_mode} mode"
+        )
+        return None
     clock = clock or WallClock()
     source = source or OpenAlgoHistorySource(
         timeout_s=cfg.history_timeout_seconds, max_concurrent=cfg.max_concurrent_requests
@@ -256,6 +268,26 @@ async def start(
         service.tasks.append(asyncio.create_task(run_days(make, clock), name=f"runner-{tag}"))
         logger.info(f"Python signal runner started for {tag} ({cfg.strategies[tag].signal_source})")
     return service
+
+
+def _without_live_paper_only(cfg: RunnerSettings, trade_mode: str) -> RunnerSettings:
+    """Drop every paper-only strategy when the engine is not in analyze mode, naming each one.
+
+    The sink refuses per signal as well; this stops the session loop and its history traffic
+    from running for a strategy that can never dispatch.
+    """
+    if trade_mode == "analyze":
+        return cfg
+    kept = {}
+    for tag, entry in cfg.strategies.items():
+        if entry.paper_only:
+            logger.critical(
+                f"Python signal runner: {tag} is paper-only and OpenAlgo is in {trade_mode} "
+                f"mode, so it is NOT started"
+            )
+            continue
+        kept[tag] = entry
+    return replace(cfg, strategies=kept)
 
 
 async def _broker_qty(pos) -> int:
