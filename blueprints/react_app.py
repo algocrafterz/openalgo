@@ -206,6 +206,16 @@ def react_strategy_daily_performance():
     return serve_react_app()
 
 
+@react_bp.route("/backtest-results")
+def react_backtest_results():
+    return serve_react_app()
+
+
+@react_bp.route("/backtest-results/<idea_id>")
+def react_backtest_results_idea(idea_id):
+    return serve_react_app()
+
+
 @react_bp.route("/holdings")
 def react_holdings():
     return serve_react_app()

@@ -43,6 +43,7 @@ export const navItems: NavItem[] = [
   { href: '/positions', label: 'Positions', icon: TrendingUp },
   { href: '/strategy-pnl', label: 'P&L', icon: PieChart },
   { href: '/strategy-pnl/daily', label: 'Performance', icon: BarChart3 },
+  { href: '/backtest-results', label: 'Backtests', icon: FlaskConical },
   { href: '/trading', label: 'Trading', icon: CandlestickChart },
   { href: '/platforms', label: 'Platforms', icon: Layers },
   { href: '/strategy', label: 'Strategy', icon: Code2 },
