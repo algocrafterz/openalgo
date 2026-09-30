@@ -120,7 +120,7 @@ class TestRequiredYamlKeys:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
     def _write_yaml(self, tmp_path, monkeypatch, content: dict):
@@ -193,7 +193,7 @@ class TestInvalidSizingMode:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
     def _write_yaml(self, tmp_path, monkeypatch, content: dict):
@@ -280,6 +280,7 @@ class TestValidConfigLoadsSuccessfully:
                 "enabled": True,
                 "sl_order_type": "SL-M",
                 "max_sl_retries": 3,
+                "max_entry_slippage_r": 0.5,
             },
         }
 
@@ -306,6 +307,7 @@ class TestValidConfigLoadsSuccessfully:
         assert s.bracket_enabled is True
         assert s.bracket_sl_order_type == "SL-M"
         assert s.bracket_max_sl_retries == 3
+        assert s.max_entry_slippage_r == 0.5
 
     def test_missing_bracket_section_raises(self, tmp_path, monkeypatch):
         cfg = self._full_config()
@@ -353,7 +355,7 @@ class TestSectorsYamlLoading:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
     def test_sectors_loaded_from_separate_file(self, tmp_path, monkeypatch):
@@ -434,7 +436,7 @@ class TestTieredBlacklistParsing:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
     def _write(self, tmp_path, monkeypatch, cfg: dict) -> None:
@@ -538,7 +540,7 @@ class TestNoProgressAbTestDisable:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
-            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3},
+            "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
     def _write(self, tmp_path, monkeypatch, cfg: dict) -> None:

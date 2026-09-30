@@ -206,6 +206,7 @@ class Settings:
     bracket_tp_exit_retries: int
     tp1_runner_sl_buffer: float  # fraction of R to set below TP1 for runner SL after partial exit
     use_extended_runner_tiers: bool  # ratchet runner SL to the last TP level hit, not always TP1
+    max_entry_slippage_r: float  # auto-close a fill worse than the signal by more than this many R; 0 = off
 
     # Strategy profiles (from yaml) — per-strategy TP levels and product defaults
     # Keys: strategy tag (e.g. "ORB", "RSI-TP-MR")
@@ -659,6 +660,7 @@ def _bracket_fields(bracket: dict) -> dict:
         "bracket_tp_exit_retries": int(bracket.get("tp_exit_retries", 3)),
         "tp1_runner_sl_buffer": float(bracket.get("tp1_runner_sl_buffer", 0.3)),
         "use_extended_runner_tiers": bool(bracket.get("use_extended_runner_tiers", False)),
+        "max_entry_slippage_r": float(_require_key(bracket, "bracket", "max_entry_slippage_r")),
     }
 
 

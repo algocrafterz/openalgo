@@ -478,13 +478,18 @@ btst:
   capital: 100000
 
 # ── Time Exit ────────────────────────────────────────────
-# [tune] Close all open positions before broker auto square-off (typically 15:10-15:20 IST).
-# Penalty for broker-forced square-off is Rs 20-50/order.
+# [tune] Close all open positions before broker auto square-off. Flattrade squares off MIS at
+# 15:00 IST (user-confirmed 2026-09-30). Other brokers: 15:05-15:15 for stocks in NSE's Closing
+# Auction Session (all F&O names, live since 2026-08-03) and 15:20-15:25 for the rest. Continuous
+# trading itself ends at 15:15 for these stocks; SL and SL-M orders do not exist in the auction.
+# Penalty for broker-forced square-off is Rs 20-50/order plus GST.
+# The backtest engine enforces the same limit (RunConfig.mis_squareoff_min): no trade may be open
+# at or after 15:00. See docs/STRATEGY-ACCEPTANCE-CRITERIA.md G6.1 and G6.9.
 time_exit:
   enabled: true
   hour: 14                       # IST hour (24h format)
   minute: 45                     # 14:45 — moved earlier from 15:00 (2026-08-25). Wider buffer
-                                 # before the 15:10 broker auto square-off, and it clears the
+                                 # before the 15:00 Flattrade auto square-off, and it clears the
                                  # last-half-hour spread widening. Keep breakout.pine's
                                  # timeExitHour/Minute inputs in step with this.
 
@@ -677,6 +682,15 @@ bracket:
   # 0.1 was too tight (TMPV 2026-04-13: ₹0.80 gap triggered by normal TP1 wick).
   # Set to 0.0 to place SL exactly at TP1.
   tp1_runner_sl_buffer: 0.3
+
+  # [tune] Auto-close an entry whose MARKET fill is worse than the signal price by more than
+  # this many R (R = |signal entry - signal SL|). TP, the runner stop and R figures are all
+  # anchored to the signal price, so a fill this far off leaves TP1 near or below cost and
+  # the runner stop under the real entry. TCS 2026-09-30: fill 0.83R above signal -> "TP1 HIT"
+  # partial sold below cost, runner stopped out 6s later, -1.1R. Sizing budgets 0.10R of
+  # slippage (slippage_factor); BREAKOUT history (37 fills to 2026-09-30) averages 0.01R with
+  # 2 fills at or above 0.5R. 0 disables the guard.
+  max_entry_slippage_r: 0.5
 
   # [tune] Extended runner tiers: gates the runner-SL ratchet in main.py's
   # _replace_runner_sl(). When a strategy's TP2 becomes a partial exit (see breakout.pine's

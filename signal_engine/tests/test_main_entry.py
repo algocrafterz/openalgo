@@ -211,6 +211,7 @@ class TestPipelineFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.bracket_enabled = False
             mock_settings.bracket_cnc_sl_enabled = False
 
@@ -294,6 +295,7 @@ class TestCncBracketSkip:
             mock_settings.exchange = "NSE"
             mock_settings.product = "CNC"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
@@ -339,6 +341,7 @@ class TestCncBracketSkip:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
@@ -382,6 +385,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
@@ -421,6 +425,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
@@ -458,6 +463,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
@@ -501,6 +507,7 @@ class TestBracketOrderFlow:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0  # disabled for this test
 
             await handle_message(_valid_message())
@@ -575,6 +582,7 @@ class TestFillOvershotTP:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0
             mock_settings.mis_margin_pct = 0.20
             mock_settings.max_sl_pct_for_sizing = 0.0
@@ -628,6 +636,7 @@ class TestFillOvershotTP:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0
             mock_settings.mis_margin_pct = 0.20
             mock_settings.max_sl_pct_for_sizing = 0.0
@@ -674,6 +683,7 @@ class TestFillOvershotTP:
             mock_settings.exchange = "NSE"
             mock_settings.product = "MIS"
             mock_settings.test_qty_cap = 0
+            mock_settings.max_entry_slippage_r = 0.5
             mock_settings.min_capital_for_entry = 0
             mock_settings.mis_margin_pct = 0.20
             mock_settings.max_sl_pct_for_sizing = 0.0

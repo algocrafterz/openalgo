@@ -45,6 +45,7 @@ def _settings_stub(**overrides):
         "max_trades_per_day": 8,
         "tp1_runner_sl_buffer": 0.1,
         "use_extended_runner_tiers": False,
+        "max_entry_slippage_r": 0.5,
         "broker_mis_rejected": set(),
         "min_capital_for_entry": 0.0,
         "risk_per_trade": 0.01,

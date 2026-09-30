@@ -124,7 +124,10 @@ def engine_differential(frames: dict[str, pd.DataFrame], exit_min: int = 15 * 60
     run = RunConfig(skip_open_minutes=0, entry_cutoff_min=exit_min - 5,
                     time_exit_min=exit_min, max_trades_per_day=1,
                     one_trade_per_direction=True, allow_shorts=False,
-                    cost_bps=0.0, min_sl_pct=0.0)
+                    cost_bps=0.0, min_sl_pct=0.0, mis_squareoff_min=24 * 60)
+    # mis_squareoff_min is pushed past the session: this probe checks the engine's ARITHMETIC
+    # against a hand-computed exit at the first bar at or after exit_min. The broker square-off
+    # guard (which would cap that exit at 14:50) belongs to MIS strategy runs, not to this test.
     strat = _BuyTheOpen()
 
     direct, engine_r = [], []

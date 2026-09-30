@@ -215,15 +215,22 @@ class TestPlaceSlOrder:
 
     @pytest.mark.asyncio
     async def test_long_sl_rounds_up_for_early_trigger(self):
-        """LONG SL below entry must round UP so trigger fires before stated SL level."""
+        """LONG SL below entry must round UP so trigger fires before stated SL level.
+
+        RELIANCE at ~Rs 2,485 is in NSE's 0.10 tick tier (NSE/CMTR/67133), so 2485.023 goes to
+        2485.1; the old fixed 0.05 tick gave 2485.05, which is not a valid 0.10 price.
+        """
         order = await self._capture(Direction.LONG, 2485.023)
-        assert order.trigger_price == 2485.05
+        assert order.trigger_price == 2485.1
 
     @pytest.mark.asyncio
     async def test_short_sl_rounds_down_for_early_trigger(self):
-        """SHORT SL above entry must round DOWN so trigger fires before stated SL level."""
+        """SHORT SL above entry must round DOWN so trigger fires before stated SL level.
+
+        In the 0.10 tick tier 2515.077 goes to 2515.0 (the old fixed 0.05 tick gave 2515.05).
+        """
         order = await self._capture(Direction.SHORT, 2515.077)
-        assert order.trigger_price == 2515.05
+        assert order.trigger_price == 2515.0
 
     @pytest.mark.asyncio
     async def test_quantity_passed_through(self):

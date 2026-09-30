@@ -82,7 +82,7 @@ class Backtest:
                         f"{sym}: raw frame was released (release_raw=True) and no "
                         f"cached prepare() exists for this parameter set; construct "
                         f"Backtest with release_raw=False to vary strategy params")
-                self._prep[key] = Ctx(self.strategy.prepare(df, p), symbol=sym)
+                self._prep[key] = Ctx(self.strategy.prepare_for(sym, df, p), symbol=sym)
                 if self.release_raw:
                     self.frames[sym] = None
             out += [t for t in self.engine(self._prep[key], self.strategy, p, run) if keep(t.day)]

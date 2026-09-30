@@ -8,23 +8,38 @@ import httpx
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine.features.instruments import safe_tick
 from signal_engine.models import Action, Direction, Order, OrderStatus, Signal, TradeResult
 
-# NSE equity tick size is 0.05
-_TICK_SIZE = 0.05
+# Float noise allowance when dividing a price by its tick (2079.7 / 0.1 is 20796.999999999996).
+_TICK_EPS = 1e-9
 
 
 def round_to_tick(price: float, direction: str = "nearest") -> float:
-    """Round price to valid NSE tick size (0.05).
+    """Round price to a valid NSE tick.
+
+    NSE ticks are tiered by price (0.01 / 0.05 / 0.10 / 0.50 / 1.00 / 5.00, NSE/CMTR/67133) and
+    the tier comes from the PREVIOUS month's last close, which is not known here. The price is
+    rounded to the coarsest tick that could apply (features.instruments.safe_tick), which is also
+    valid under every finer tier. A fixed 0.05 was wrong above Rs 1,000: TCS 2079.75 is not a
+    multiple of 0.10.
 
     direction: 'nearest', 'down', or 'up'
     """
+    tick = safe_tick(price)
+    steps = price / tick
     if direction == "down":
-        return round(math.floor(price / _TICK_SIZE) * _TICK_SIZE, 2)
+        n = math.floor(steps + _TICK_EPS)
     elif direction == "up":
-        return round(math.ceil(price / _TICK_SIZE) * _TICK_SIZE, 2)
+        n = math.ceil(steps - _TICK_EPS)
     else:
-        return round(round(price / _TICK_SIZE) * _TICK_SIZE, 2)
+        n = math.floor(steps + 0.5 + _TICK_EPS)
+    return round(n * tick, 2)
+
+
+def _trigger_matches(order_trigger: float, wanted: float) -> bool:
+    """True when a resting order's trigger is within one tick of the wanted trigger price."""
+    return abs(order_trigger - wanted) <= safe_tick(wanted) + _TICK_EPS
 
 
 def build_order(
@@ -253,7 +268,7 @@ async def _find_resting_sl_order(order: Order, trigger_price: float) -> TradeRes
         except (TypeError, ValueError):
             continue
         try:
-            if abs(float(o.get("trigger_price", 0) or 0) - trigger_price) > _TICK_SIZE:
+            if not _trigger_matches(float(o.get("trigger_price", 0) or 0), trigger_price):
                 continue
         except (TypeError, ValueError):
             continue

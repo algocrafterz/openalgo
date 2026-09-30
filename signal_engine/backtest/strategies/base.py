@@ -42,6 +42,12 @@ class Strategy(ABC):
         be shifted here, not in entry(). Use signal_engine.backtest.indicators.
         """
 
+    def prepare_for(self, symbol: str, df: pd.DataFrame, p) -> pd.DataFrame:
+        """Symbol-aware prepare(). The harness calls THIS; override it when the strategy
+        needs the symbol (broker tick size, extra data such as 1-minute bars). The default
+        ignores the symbol and calls prepare(), so existing adapters are unchanged."""
+        return self.prepare(df, p)
+
     @abstractmethod
     def entry(self, c: Ctx, i: int, p, direction: int) -> EntrySignal | None:
         """Return a signal to fill at bar i+1's open, or None.

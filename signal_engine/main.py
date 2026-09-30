@@ -1476,7 +1476,7 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
     # captured here is gone for good and slippage becomes unmeasurable after the fact.
     trade_result.fill_price = entry_fill_price
 
-    if await _auto_close_on_tp_overshoot(signal, quantity, entry_fill_price, sl_order_id):
+    if await _auto_close_on_bad_fill(signal, quantity, entry_fill_price, sl_order_id):
         return False
 
     # Always notify LIVE so trader knows position is active and SL is protecting it.
@@ -1559,24 +1559,52 @@ async def _fetch_entry_fill(signal, entry_order_id: str) -> float | None:
     return entry_fill_price
 
 
-async def _auto_close_on_tp_overshoot(
+def entry_slippage_r(signal, entry_fill_price) -> float:
+    """Adverse entry slippage in units of the signal's risk (|entry - sl|).
+
+    Positive means the fill was worse than the signal price (paid up on a long, sold lower on
+    a short); negative means it was better. 0.0 when the fill or the risk distance is unknown.
+    """
+    risk = abs(signal.entry - signal.sl)
+    if not entry_fill_price or risk <= 0:
+        return 0.0
+    if signal.direction == Direction.LONG:
+        return (entry_fill_price - signal.entry) / risk
+    return (signal.entry - entry_fill_price) / risk
+
+
+async def _auto_close_on_bad_fill(
     signal, quantity: int, entry_fill_price, sl_order_id: str
 ) -> bool:
-    """Close immediately if the fill landed past TP. True if the position was closed.
+    """Close immediately if the fill is unusable. True if the position was closed.
 
-    High slippage can push the fill past the TP target, leaving the position with
-    negative reward and a disproportionately wide SL.
+    Two cases: the fill landed past TP (negative reward, disproportionately wide SL), or
+    adverse slippage exceeded max_entry_slippage_r. The second matters because TP, the runner
+    stop and every R figure are anchored to the SIGNAL price, not the fill: TCS 2026-09-30
+    filled 0.83R above the signal, so the "TP1 hit" partial exit sold below cost and the
+    runner stop (2090.21) sat under the real entry (2091.00). max_entry_slippage_r = 0 disables
+    the slippage case.
     """
     fill_overshot_tp = entry_fill_price and (
         (signal.direction == Direction.LONG and entry_fill_price >= signal.tp)
         or (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
     )
-    if not fill_overshot_tp:
+    slippage_r = entry_slippage_r(signal, entry_fill_price)
+    slippage_excessive = (
+        settings.max_entry_slippage_r > 0 and slippage_r > settings.max_entry_slippage_r
+    )
+    if not (fill_overshot_tp or slippage_excessive):
         return False
 
+    if fill_overshot_tp:
+        reason = f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} - auto-closed"
+    else:
+        reason = (
+            f"fill {entry_fill_price:.2f} slipped {slippage_r:.2f}R from signal "
+            f"{signal.entry:.2f} (max {settings.max_entry_slippage_r:.2f}R) - auto-closed"
+        )
     logger.error(
-        f"Fill overshot TP for {signal.symbol}: fill={entry_fill_price:.2f} "
-        f"tp={signal.tp:.2f} direction={signal.direction.value} — auto-closing position"
+        f"Bad entry fill for {signal.symbol}: {reason} direction={signal.direction.value}"
     )
     if sl_order_id:
         await cancel_order(sl_order_id, signal.strategy)
@@ -1592,7 +1620,7 @@ async def _auto_close_on_tp_overshoot(
     risk_engine.record_close(0.0, strategy=signal.strategy, symbol=signal.symbol)
     await notifier.notify_order_rejected(
         signal.symbol,
-        f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} — auto-closed",
+        reason,
         strategy=signal.strategy,
     )
     return True

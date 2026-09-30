@@ -38,6 +38,20 @@ class RunConfig:
     # Modelling it here keeps the backtest honest about what would actually trade.
     min_sl_pct: float = 0.002
 
+    #: Optional strategy_core.exits.ExitPlan. None keeps the legacy single-stop / single-target
+    #: path. When set, positions whose signal carries meta["targets"] are managed by the shared
+    #: Ladder (partial targets with stop moves). Engine-level, so one prepared run can be
+    #: re-scored under many plans without re-preparing the strategy.
+    exit_plan: Any = None
+
+    #: Broker MIS auto square-off, in minutes after midnight IST. Flattrade squares off at
+    #: 15:00 (confirmed by the user 2026-09-30); other brokers are 15:05 to 15:25. No backtest
+    #: trade may still be open then, so the engine caps the time exit: the bar that closes the
+    #: position must itself close at least `squareoff_margin_min` before this time (14:50 for
+    #: 5-minute bars, i.e. a 14:55 close). A larger `time_exit_min` is cut down to that bar.
+    mis_squareoff_min: int = 15 * 60
+    squareoff_margin_min: int = 5
+
     def with_(self, **kw) -> RunConfig:
         return replace(self, **kw)
 
@@ -64,6 +78,8 @@ class Position:
     risk: float
     tag: str
     entry_bar: int
+    targets: tuple = ()     # absolute target prices from the signal, for the shared Ladder
+    ladder: Any = None      # strategy_core.exits.Ladder when an ExitPlan manages this position
 
 
 @dataclass
@@ -83,6 +99,7 @@ class Trade:
     reason: str = ""
     r_gross: float = 0.0
     r_net: float = 0.0
+    legs: int = 1           # number of exit fills (1 unless a ladder scaled out)
 
     @property
     def risk_pct(self) -> float:

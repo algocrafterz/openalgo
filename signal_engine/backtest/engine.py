@@ -25,6 +25,7 @@ import numpy as np
 
 from signal_engine.backtest.strategies.base import Strategy
 from signal_engine.backtest.types import Ctx, Position, RunConfig, Trade
+from signal_engine.strategy_core.exits import Ladder
 
 
 def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
@@ -42,16 +43,38 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
     strategy.reset_symbol(p)
     cost_frac = run.cost_bps / 100.0 / 100.0    # bps -> fraction of notional
 
+    # Broker MIS square-off guard: the exit bar must CLOSE margin minutes before the broker's
+    # auto square-off, so the latest allowed exit-bar stamp is square-off - margin - bar length.
+    steps = np.diff(times.values).astype("timedelta64[m]").astype(int) if n > 1 else []
+    steps = [s for s in steps if 0 < s <= 60]
+    bar_min = int(np.median(steps)) if steps else 5
+    time_exit_min = min(run.time_exit_min,
+                        run.mis_squareoff_min - run.squareoff_margin_min - bar_min)
+
     def close_out(reason: str, price: float, i: int) -> None:
         nonlocal pos
-        move = (price - pos.entry) if pos.direction == 1 else (pos.entry - price)
+        legs = 1
+        if pos.ladder is not None:
+            # Scaled-out position: P&L is the size-weighted sum of its fills. Costs below are
+            # still charged once on the entry notional - partial legs sell the same total
+            # notional, so the proportional cost model is unchanged.
+            pos.ladder.close_all(price, reason)
+            fills = pos.ladder.fills
+            weight = sum(f.frac for f in fills)
+            move = sum(f.frac * ((f.price - pos.entry) if pos.direction == 1
+                                 else (pos.entry - f.price)) for f in fills)
+            price = sum(f.frac * f.price for f in fills) / weight
+            reason = "TP" if fills[-1].reason.startswith("TP") else fills[-1].reason
+            legs = len(fills)
+        else:
+            move = (price - pos.entry) if pos.direction == 1 else (pos.entry - price)
         r_gross = move / pos.risk
         trades.append(Trade(
             symbol=c.symbol, day=days[i], direction=pos.direction, tag=pos.tag,
             entry_time=times[pos.entry_bar], entry=pos.entry,
             signal_price=pos.signal_price, sl=pos.sl, tp=pos.tp, risk=pos.risk,
             exit_time=times[i], exit=float(price), reason=reason,
-            r_gross=r_gross, r_net=r_gross - cost_frac * pos.entry / pos.risk))
+            r_gross=r_gross, r_net=r_gross - cost_frac * pos.entry / pos.risk, legs=legs))
         pos = None
 
     for i in range(n):
@@ -74,7 +97,13 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
                                # alert carries the signal bar's close. The fill's drift
                                # away from it is a real cost and stays in the result.
                                risk=abs(float(sig_px) - float(sig.sl)),
-                               tag=sig.tag, entry_bar=i)
+                               tag=sig.tag, entry_bar=i,
+                               targets=tuple(sig.meta.get("targets", ())))
+                if run.exit_plan is not None and pos.targets:
+                    # Anchored to the ACTUAL fill: breakeven and buffer distances are
+                    # measured from what was paid, not from the alert price.
+                    pos.ladder = Ladder(sig.direction, fill, float(sig.sl), pos.targets,
+                                        run.exit_plan)
                 trades_today += 1
                 # The gap between the signal close and this open can carry price clean
                 # through the stop before the order is even placed. The live system
@@ -94,7 +123,23 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
                     close_out("SL_GAP_ENTRY", fill, i)
 
         # 2. manage an open position on this bar
-        if pos is not None:
+        if pos is not None and pos.ladder is not None:
+            # Shared exit model (strategy_core.exits): partial targets and stop moves.
+            pos.ladder.step(o[i], h[i], low[i])
+            if pos.ladder.done:
+                last = pos.ladder.fills[-1]
+                close_out(last.reason, last.price, i)
+            else:
+                reason = ""
+                if mins[i] >= time_exit_min:
+                    reason = "TIME_EXIT"
+                elif i + 1 >= n or days[i + 1] != days[i]:
+                    reason = "EOD"
+                else:
+                    reason = strategy.custom_exit(c, i, p, pos) or ""
+                if reason:
+                    close_out(reason, close[i], i)
+        elif pos is not None:
             d = pos.direction
             new_stop = strategy.trail(c, i, p, pos)
             if new_stop is not None and not np.isnan(new_stop):
@@ -113,7 +158,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
                 close_out("TP", pos.tp, i)
             else:
                 reason = ""
-                if mins[i] >= run.time_exit_min:
+                if mins[i] >= time_exit_min:
                     reason = "TIME_EXIT"
                 elif i + 1 >= n or days[i + 1] != days[i]:
                     reason = "EOD"
@@ -134,7 +179,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig) -> list[Trade]:
             continue
         if from_open[i] < run.skip_open_minutes:
             continue
-        if mins[i] >= run.entry_cutoff_min or mins[i] >= run.time_exit_min:
+        if mins[i] >= run.entry_cutoff_min or mins[i] >= time_exit_min:
             continue
 
         for d in (1, -1):
