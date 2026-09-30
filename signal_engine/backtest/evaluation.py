@@ -28,6 +28,7 @@ them in gate order.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -134,7 +135,7 @@ _GATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("G3.1", "stability", "Chronological hold-out", False, "no out-of-sample split"),
     ("G3.2", "stability", "Out-of-sample result", False, "no out-of-sample split"),
     ("G3.3", "stability", "Walk-forward", False, "needs trades spanning four full windows"),
-    ("G3.4", "stability", "Symbol hold-out", False, "no symbol hold-out is recorded"),
+    ("G3.4", "stability", "Symbol hold-out", False, "needs at least 10 symbols with trades"),
     ("G3.5", "stability", "Leakage and embargo", False, "needs an out-of-sample split"),
     ("G4.1", "parameter_sensitivity", "Parameter perturbation", True, "needs a parameter sweep"),
     ("G4.2", "robustness", "Latency", False, "needs a delayed-entry rerun"),
@@ -177,6 +178,7 @@ _GATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("G9.4", "deployment", "Retirement", False, "needs live data"),
     ("X.1", "complexity", "Strategy parameter count", False, "no parameters recorded"),
     ("X.2", "regime_robustness", "Regime dispersion", False, "no regime block supplied"),
+    ("X.3", "regime_robustness", "Regime activation hypothesis", False, "no regime block supplied"),
 )
 
 #: Gates the swing engine does not face: MIS session, square-off and auction rules.
@@ -377,6 +379,51 @@ def _g32(x: _Inputs) -> _Result:
         threshold,
         f"OOS {oos:+.3f}R ({len(parts[1])} trades) vs in-sample {in_sample:+.3f}R "
         f"({len(parts[0])} trades)",
+    )
+
+
+MIN_HOLDOUT_SYMBOLS = 10  # G3.4
+MIN_HOLDOUT_TRADES = 100  # G3.4, per half
+
+
+def symbol_half(symbol: str) -> int:
+    """Deterministic 0/1 split of a symbol, stable across runs and machines."""
+    return hashlib.sha1(symbol.encode()).digest()[0] & 1
+
+
+def _g34(x: _Inputs) -> _Result:
+    """Symbol hold-out: does the edge hold on symbols chosen without looking at results.
+
+    Parameters are fixed in a record, so no re-fit is involved: the trade list is split by
+    a hash of the symbol and both halves must be net positive, the weaker at least
+    MIN_OOS_FRACTION_OF_IS of the stronger.
+    """
+    threshold = f"both symbol halves net > 0, weaker >= {MIN_OOS_FRACTION_OF_IS:.0%} of stronger"
+    symbols = {t.symbol for t in x.trades}
+    if len(symbols) < MIN_HOLDOUT_SYMBOLS:
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            f"{len(symbols)} symbols traded; need {MIN_HOLDOUT_SYMBOLS}",
+        )
+    halves = [[t for t in x.trades if symbol_half(t.symbol) == h] for h in (0, 1)]
+    if min(len(h) for h in halves) < MIN_HOLDOUT_TRADES:
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            f"a symbol half has under {MIN_HOLDOUT_TRADES} trades",
+        )
+    means = [float(_r_net(h).mean()) for h in halves]
+    weak, strong = min(means), max(means)
+    holds = weak > 0 and weak >= MIN_OOS_FRACTION_OF_IS * strong
+    return (
+        "pass" if holds else "fail",
+        _num(weak),
+        threshold,
+        f"half A {means[0]:+.3f}R ({len(halves[0])} trades), "
+        f"half B {means[1]:+.3f}R ({len(halves[1])} trades)",
     )
 
 
@@ -657,6 +704,41 @@ def _regime_dispersion(x: _Inputs) -> _Result:
     )
 
 
+def _regime_activation(x: _Inputs) -> _Result:
+    """X.3: which regimes a strategy could be enabled in. A hypothesis, never a rule.
+
+    Lists adequately sampled regimes that are net positive (enable) and net negative
+    (disable) per dimension. Choosing these from the same history that measured them is a
+    fitted filter, so the gate only reports; a condition is adopted only after the filtered
+    strategy is tested out-of-sample and clears the acceptance criteria as its own
+    candidate.
+    """
+    threshold = "hypothesis only; validate the filtered strategy out-of-sample"
+    if x.regimes is None:
+        return "not_evaluated", None, threshold, "no regime block supplied for this run"
+    parts: list[str] = []
+    for dim in ("trend", "vol"):
+        rows = [r for r in x.regimes.get(dim, []) if not r["low_sample"]]
+        if len(rows) < 2:
+            continue
+        on = [r["regime"] for r in rows if r["net_r"] > 0]
+        off = [r["regime"] for r in rows if not r["net_r"] > 0]
+        if off and on:
+            parts.append(f"{dim}: enable {', '.join(on)}; disable {', '.join(off)}")
+        elif on:
+            parts.append(f"{dim}: no regime condition needed, all sampled regimes positive")
+        else:
+            parts.append(f"{dim}: no sampled regime is positive, a filter cannot rescue it")
+    if not parts:
+        return "report", None, threshold, "fewer than two adequately sampled regimes"
+    return (
+        "report",
+        len(parts),
+        threshold,
+        "; ".join(parts) + ". Validate out-of-sample before use.",
+    )
+
+
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G1.1": _g11,
     "G1.2": _g12,
@@ -672,6 +754,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G3.1": _g31,
     "G3.2": _g32,
     "G3.3": _g33,
+    "G3.4": _g34,
     "G3.5": _g35,
     "G4.4": _g44,
     "G4.5": _g45,
@@ -680,6 +763,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G6.9": _g69,
     "X.1": _params_count,
     "X.2": _regime_dispersion,
+    "X.3": _regime_activation,
 }
 
 

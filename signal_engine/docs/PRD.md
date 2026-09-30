@@ -5556,3 +5556,28 @@ No OpenAlgo core files touched.
 **In plain terms:** the Python runner will watch the market alongside Pine from the next restart and write down
 what it would have done, without trading. A report lines its calls up against Pine's. On the one day checked they
 did not agree at all, which is the thing to understand next.
+
+## Python Signal Runner: BREAKOUT-PY Paper Trading (2026-10-01)
+
+The Python runner's BREAKOUT now paper-trades under its own strategy tag, `BREAKOUT-PY`, beside the unchanged Pine
+`BREAKOUT`, in OpenAlgo's ANALYZE (sandbox) mode. Same strategy core, separate book: its own capital pool, slot and
+trade counters, tracker position, trades.db rows and P&L. Exits are owned by the shared Ladder (`tp1_only`).
+
+- **Paper-only is enforced in code.** `runner.strategies.BREAKOUT-PY.paper_only: true` is a required key; start-up
+  refuses a python-sourced strategy without it, the runner does not launch it when the engine started in live mode,
+  and the dispatch sink refuses every entry and exit unless OpenAlgo's current mode is analyze (fail closed, critical
+  log). A mode flipped to live mid-session stops dispatch on the next signal.
+- **sig_id is prefixed for the new tag** (`BREAKOUT-PY-TCS-20260930-0955`) so it never collides with a Pine row for the
+  same symbol and bar.
+- **Pine BREAKOUT is untouched.** It is no longer listed in `runner.strategies` (no second shadow session; that would
+  double the per-cycle evaluation). Compare against Pine with
+  `shadow_report --runner-strategy BREAKOUT-PY`.
+- No caps changed: analyze mode is already unlimited per strategy. BREAKOUT-PY has no Telegram channel of its own
+  (admin channel and the consolidated day summary only). Details: `docs/PYTHON-RUNNER-SPEC.md`.
+
+## Backtest Evaluation: Symbol Hold-Out, Regime Activation, Evolution Verdict (2026-10-01)
+
+- G3.4 symbol hold-out: trades are split by a hash of the symbol; both halves must be net positive. Report-grade evidence that the edge is not a few names.
+- X.3 regime activation: lists the regimes a strategy could be enabled in. A hypothesis only; a regime filter is adopted only after the filtered strategy passes out-of-sample as a separate candidate.
+- `research/evolution.py`: classifies an idea's run history as improving, stagnating, regressing or exhausted, with a stop or continue action.
+- Still deferred: G4.1 parameter perturbation grid (needs raw frames kept or a parameter-keyed cache), G0.4/G0.5/G4.7 data coverage and survivorship (needs the data layer to report what it dropped).

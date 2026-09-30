@@ -27,6 +27,7 @@ signal_engine/backtest/splits.py       purge and embargo at the IS/OOS cut (G3.5
 signal_engine/backtest/stats.py        Newey-West t, deflated Sharpe, MinTRL, PBO, walk-forward (G2.3 to G2.7, G3.3)
 signal_engine/backtest/regime.py       versioned market-regime labels; evaluation.py scores them as X.2
 signal_engine/backtest/evaluation.py   scores a run against the G0-G9 gates, no composite score
+signal_engine/research/evolution.py    per-idea trajectory: improving, stagnating, regressing, exhausted
         |
 signal_engine/backtest/tearsheet.py    build_run_record: the canonical run-record dict
 signal_engine/backtest/record_run.py   CLI: runs an idea, writes research/ideas/<idea>/runs/<id>.json

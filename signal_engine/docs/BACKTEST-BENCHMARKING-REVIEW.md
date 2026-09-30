@@ -91,7 +91,8 @@ appear only on runs made after this change.
 | P2 coverage, named exclusions, survivorship per run | Deferred | G0.4, G0.5, G4.7 stay not_evaluated | Needs the data layer to return what it dropped |
 | P3 walk-forward | Done | `stats.walk_forward`, gate G3.3: at least 4 windows of 6 months, 60 percent positive; parameters held fixed | Rolling stability only, not a re-fit per window |
 | P3 PBO / CSCV | Partial | `stats.pbo_cscv` is implemented and tested | G2.4 needs P&L for every variant on a common grid; stays not_evaluated |
-| P3 symbol hold-out (G3.4) | Deferred | | Needs a symbol split policy decided first |
+| P3 symbol hold-out (G3.4) | Done | `evaluation.symbol_half` splits symbols by a SHA-1 hash, stable across runs; both halves must be net positive and the weaker at least 40 percent of the stronger; needs 10 symbols and 100 trades per half | Parameters are fixed in a record, so this tests generalisation across names, not a re-fit |
+| Regime activation hypothesis (X.3) | Done, report only | `evaluation._regime_activation` lists regimes to enable and disable per dimension from the record's regime block | Never a rule: the filtered strategy must be recorded as its own candidate and clear the criteria out-of-sample |
 | Optimization 1 cost sensitivity | Done | see above | |
 | Optimization 2 intraday baseline | Done | see above | |
 | Optimization 3 `release_raw` blocks the grid | Deferred | | Same as the perturbation grid |

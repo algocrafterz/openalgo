@@ -1,0 +1,95 @@
+"""Strategy evolution: is an idea improving, stagnating, regressing or exhausted.
+
+Reads an idea's run records in date order and classifies the trajectory of one primary
+metric. The rules are mechanical on purpose: they cannot say a strategy is good, only
+whether more tuning is still buying progress. The aim is to stop endless optimisation of
+a weak idea while keeping real improvement visible.
+
+Primary metric is the net edge over the random-entry baseline (`excess_net_bps`) when
+every run carries one, otherwise net bps per trade.
+
+States:
+  insufficient_history  fewer than MIN_RUNS runs
+  exhausted             MIN_EXHAUSTED_RUNS or more, none ever positive, best never
+                        cleared zero, and recent gains are within noise
+  regressing            latest is clearly below the best run
+  improving             latest clearly above the first of the recent window
+  stagnating            none of the above: changes are within noise
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+MIN_RUNS = 3
+MIN_EXHAUSTED_RUNS = 4
+#: A change smaller than this many bps is treated as noise.
+NOISE_BPS = 5.0
+RECENT_WINDOW = 3
+
+
+def _metric(run: dict[str, Any], name: str) -> float | None:
+    if name == "excess_net_bps":
+        return (run.get("baseline") or {}).get("excess_net_bps")
+    return (run.get("metrics") or {}).get("net_bps")
+
+
+def assess_evolution(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Classify the trajectory of a run history. Inputs are not modified."""
+    ordered = sorted(runs, key=lambda r: (r.get("date", ""), r.get("run_id", "")))
+    metric = (
+        "excess_net_bps"
+        if ordered and all(_metric(r, "excess_net_bps") is not None for r in ordered)
+        else "net_bps"
+    )
+    series = [(r["run_id"], _metric(r, metric)) for r in ordered if _metric(r, metric) is not None]
+    base = {"metric": metric, "runs": len(series), "series": series}
+
+    if len(series) < MIN_RUNS:
+        return {
+            **base,
+            "state": "insufficient_history",
+            "action": "keep_iterating",
+            "best_run": None,
+            "reason": f"{len(series)} comparable runs; need {MIN_RUNS} to judge a trend",
+        }
+
+    values = [v for _, v in series]
+    best_id, best = max(series, key=lambda s: s[1])
+    window = values[-RECENT_WINDOW:]
+    delta = window[-1] - window[0]
+
+    if len(series) >= MIN_EXHAUSTED_RUNS and best <= 0 and delta < NOISE_BPS:
+        state, action = "exhausted", "stop_and_reject"
+        reason = (
+            f"{len(series)} runs, best {best:.1f} bps never above zero, "
+            f"recent change {delta:+.1f} bps is within noise"
+        )
+    elif best - values[-1] > NOISE_BPS:
+        state, action = "regressing", "revert_to_best"
+        reason = f"latest {values[-1]:.1f} bps is {best - values[-1]:.1f} below best ({best_id})"
+    elif delta > NOISE_BPS:
+        state, action = "improving", "keep_iterating"
+        reason = f"recent window moved {delta:+.1f} bps"
+    else:
+        state = "stagnating"
+        action = "change_structure_or_stop" if best > 0 else "stop_unless_new_idea"
+        reason = f"recent window moved {delta:+.1f} bps, within noise"
+    return {**base, "state": state, "action": action, "best_run": best_id, "reason": reason}
+
+
+def main() -> None:
+    """Print the verdict for every idea that has runs."""
+    import json
+    from pathlib import Path
+
+    for idea in sorted((Path(__file__).parent / "ideas").glob("idea-*")):
+        runs = [json.loads(p.read_text()) for p in sorted((idea / "runs").glob("*.json"))]
+        if runs:
+            out = assess_evolution(runs)
+            print(f"{idea.name}: {out['state']} -> {out['action']} ({out['reason']})")
+
+
+if __name__ == "__main__":
+    main()

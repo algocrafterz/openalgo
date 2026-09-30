@@ -182,7 +182,9 @@ class TestSignificance:
         n = 50
         assert hurdle_t(n) > ev.t_threshold(n)  # the Sidak hurdle is the binding one here
         between = (ev.t_threshold(n) + hurdle_t(n)) / 2
-        row = _row(_evaluate(_book(), metrics={"trades": 300, "t_stat": between}, n_trials=n), "G2.2")
+        row = _row(
+            _evaluate(_book(), metrics={"trades": 300, "t_stat": between}, n_trials=n), "G2.2"
+        )
         assert row["status"] == "fail"
         assert f"{hurdle_t(n):.2f}" in row["evidence"]
 
@@ -431,3 +433,49 @@ class TestRegimeDispersion:
     def test_g44_evidence_no_longer_claims_terciles_are_missing(self):
         row = _row(_evaluate(_book()), "G4.4")
         assert "terciles" not in row["evidence"]
+
+
+class TestSymbolHoldout:
+    def test_uniform_edge_passes(self):
+        row = _row(_evaluate(_book(n=400, symbols=20)), "G3.4")
+        assert row["status"] == "pass"
+
+    def test_edge_only_in_one_half_fails(self):
+        trades = _book(n=400, symbols=20)
+        for t in trades:
+            half = ev.symbol_half(t.symbol)
+            t.r_net = 0.4 if half == 0 else -0.3
+        row = _row(_evaluate(trades), "G3.4")
+        assert row["status"] == "fail"
+
+    def test_too_few_symbols_not_evaluated(self):
+        row = _row(_evaluate(_book(n=100, symbols=3)), "G3.4")
+        assert row["status"] == "not_evaluated"
+
+    def test_split_is_deterministic_and_balanced(self):
+        halves = [ev.symbol_half(f"S{i}.NS") for i in range(200)]
+        assert halves == [ev.symbol_half(f"S{i}.NS") for i in range(200)]
+        assert 70 < sum(halves) < 130
+
+
+class TestRegimeActivation:
+    def _block(self, trend_rows):
+        return {"trend": trend_rows, "vol": [], "unclassified_trades": 0}
+
+    def _r(self, name, net, low=False):
+        return {"regime": name, "trades": 200, "net_r": net, "low_sample": low}
+
+    def test_reports_enable_and_disable_sets_as_hypothesis(self):
+        block = self._block([self._r("up", 0.2), self._r("down", -0.2), self._r("flat", 0.1)])
+        row = _row(_evaluate(_book(), regimes=block), "X.3")
+        assert row["status"] == "report"
+        assert "trend: enable up, flat; disable down" in row["evidence"]
+        assert "out-of-sample" in row["evidence"]
+
+    def test_all_positive_means_no_conditioning_needed(self):
+        block = self._block([self._r("up", 0.2), self._r("down", 0.1)])
+        row = _row(_evaluate(_book(), regimes=block), "X.3")
+        assert "no regime condition needed" in row["evidence"]
+
+    def test_no_regime_block_not_evaluated(self):
+        assert _row(_evaluate(_book()), "X.3")["status"] == "not_evaluated"
