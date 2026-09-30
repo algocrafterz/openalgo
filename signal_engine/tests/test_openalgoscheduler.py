@@ -1298,3 +1298,56 @@ class TestRevokeBrokerSessionAtStop:
             "scheduled", _upsert_auth=MagicMock(side_effect=RuntimeError("db")),
             _find_user_by_username=lambda: MagicMock(username="u"), _clear_sessions=MagicMock(),
         ) is False
+
+
+class TestAuthRetryOnNetworkError:
+    """_authenticate_with_network_retry retries transient DNS/connect failures only."""
+
+    @staticmethod
+    def _run(sched, results, monkeypatch, attempts=4):
+        codes = iter(range(100000, 100100))
+        seen = []
+
+        def _auth(password, totp):
+            seen.append(totp)
+            return results[min(len(seen), len(results)) - 1]
+
+        monkeypatch.setattr(sched, "generate_totp", lambda secret: str(next(codes)))
+        out = sched._authenticate_with_network_retry(
+            _auth, "pw", "secret", max_attempts=attempts, retry_delay=0
+        )
+        return out, seen
+
+    def test_is_transient_matches_dns_and_connect_errors(self):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        assert sched._is_transient_network_error("[Errno -3] Temporary failure in name resolution")
+        assert sched._is_transient_network_error("Connection refused")
+        assert sched._is_transient_network_error("Read timed out")
+        assert not sched._is_transient_network_error("Invalid Input: Invalid OTP")
+        assert not sched._is_transient_network_error(None)
+
+    def test_retries_dns_failure_then_succeeds_with_fresh_totp(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        dns = (None, None, "[Errno -3] Temporary failure in name resolution")
+        (tok, feed, err), seen = self._run(sched, [dns, dns, ("tok", "feed", None)], monkeypatch)
+        assert (tok, feed, err) == ("tok", "feed", None)
+        assert len(seen) == 3
+        assert len(set(seen)) == 3  # a new TOTP is generated per attempt
+
+    def test_does_not_retry_auth_rejection(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        bad = (None, None, "Invalid Input: Invalid OTP")
+        (_, _, err), seen = self._run(sched, [bad], monkeypatch)
+        assert err == "Invalid Input: Invalid OTP"
+        assert len(seen) == 1
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        dns = (None, None, "[Errno -3] Temporary failure in name resolution")
+        (_, _, err), seen = self._run(sched, [dns], monkeypatch, attempts=3)
+        assert "name resolution" in err
+        assert len(seen) == 3

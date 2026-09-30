@@ -13,6 +13,7 @@ Usage:
 import asyncio
 import os
 import sys
+import time
 from datetime import datetime
 
 import pyotp
@@ -190,6 +191,54 @@ def _oauth_session_token(broker_name: str, username: str, get_existing_auth) -> 
     return True, "", auth_token
 
 
+_TRANSIENT_NETWORK_MARKERS = (
+    "name resolution",
+    "temporary failure",
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "network is unreachable",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_network_error(error) -> bool:
+    """True for DNS/connect/timeout failures that a retry can fix (not auth rejections)."""
+    if not error:
+        return False
+    text = str(error).lower()
+    return any(marker in text for marker in _TRANSIENT_NETWORK_MARKERS)
+
+
+def _authenticate_with_network_retry(
+    authenticate_with_totp, password, totp_secret,
+    max_attempts: int = 4, retry_delay: float = 15.0,
+) -> tuple:
+    """Call the broker TOTP login, retrying only transient network failures.
+
+    A fresh TOTP is generated for every attempt so a retry never reuses a code
+    that has aged out of its 30s window. Auth rejections (bad OTP/password)
+    are returned immediately - retrying those would just hammer the broker.
+
+    Returns the broker's (auth_token, feed_token, error) tuple.
+    """
+    logger = _log()
+    result = (None, None, "no authentication attempt made")
+    for attempt in range(1, max_attempts + 1):
+        result = authenticate_with_totp(password, generate_totp(totp_secret))
+        error = result[2]
+        if not error or not _is_transient_network_error(error):
+            return result
+        if attempt < max_attempts:
+            logger.warning(
+                "Broker login hit a network error (attempt %d/%d): %s - retrying in %ss",
+                attempt, max_attempts, error, retry_delay,
+            )
+            time.sleep(retry_delay)
+    return result
+
+
 def _totp_session_token(
     broker_name: str, username: str, get_existing_auth,
     authenticate_with_totp, upsert_auth,
@@ -215,10 +264,9 @@ def _totp_session_token(
     except OSError as e:
         return False, str(e), None
 
-    totp_code = generate_totp(env["totp_secret"])
-    logger.info("TOTP code generated")
-
-    auth_token, feed_token, error = authenticate_with_totp(env["broker_password"], totp_code)
+    auth_token, feed_token, error = _authenticate_with_network_retry(
+        authenticate_with_totp, env["broker_password"], env["totp_secret"]
+    )
     if error:
         logger.error("Broker authentication failed: %s", error)
         return False, error, None
