@@ -28,6 +28,11 @@ class SwingStrategy(ABC):
         Anything that must be known BEFORE today's open has to be shifted here.
         """
 
+    def prepare_for(self, symbol: str, df: pd.DataFrame, p) -> pd.DataFrame:
+        """Symbol-aware prepare(). The harness calls THIS, as it does for the intraday
+        base; the default ignores the symbol and calls prepare()."""
+        return self.prepare(df, p)
+
     @abstractmethod
     def entry_at_open(self, c: Ctx, i: int, p, direction: int) -> EntrySignal | None:
         """Return a signal to fill at bar i's OPEN, or None.

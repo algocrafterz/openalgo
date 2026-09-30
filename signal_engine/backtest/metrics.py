@@ -32,9 +32,23 @@ from scipy import stats as _st
 #: NSE sessions in a year, for annualising.
 TRADING_DAYS = 252
 
-_EMPTY = {"n": 0, "win": np.nan, "gross_bps": np.nan, "net_R": np.nan, "t": np.nan,
-          "t_naive": np.nan, "total_R": 0.0, "payoff": np.nan, "stop_pct": np.nan,
-          "max_dd_R": 0.0, "days": 0, "R_per_day": np.nan, "sharpe": np.nan}
+_EMPTY = {
+    "n": 0,
+    "win": np.nan,
+    "gross_bps": np.nan,
+    "net_R": np.nan,
+    "t": np.nan,
+    "t_naive": np.nan,
+    "total_R": 0.0,
+    "payoff": np.nan,
+    "stop_pct": np.nan,
+    "max_dd_R": 0.0,
+    "days": 0,
+    "R_per_day": np.nan,
+    "sharpe": np.nan,
+    "long_trades": 0,
+    "short_trades": 0,
+}
 
 
 def _chronological(trades):
@@ -69,6 +83,19 @@ def hurdle_t(n_trials: int, alpha: float = 0.05, dof: int = 200) -> float:
     return float(abs(_st.t.ppf(per / 2.0, dof)))
 
 
+def with_flat_cost(trades, bps: float) -> list:
+    """Copies of `trades` with `r_net` restated at a flat round-trip cost of `bps`.
+
+    Both engines charge `cost_frac * entry / risk` against `r_gross`, so net at any cost
+    level is one vector operation on a single trade set; nothing needs re-simulating.
+    Inputs are not modified.
+    """
+    from dataclasses import replace
+
+    frac = bps / 1e4
+    return [replace(t, r_net=t.r_gross - frac * t.entry / t.risk) for t in trades]
+
+
 def summary(trades, label: str = "") -> dict:
     if not trades:
         return {"label": label, **_EMPTY}
@@ -79,14 +106,16 @@ def summary(trades, label: str = "") -> dict:
     day = np.array([t.day for t in trades])
     wins, losses = r[r > 0], r[r <= 0]
     eq = np.cumsum(r)
-    naive = (r.mean() / (r.std(ddof=1) / np.sqrt(len(r)))
-             if len(r) > 2 and r.std() > 0 else np.nan)
+    naive = r.mean() / (r.std(ddof=1) / np.sqrt(len(r))) if len(r) > 2 and r.std() > 0 else np.nan
 
     # Portfolio view: one number per session, so a Sharpe means what it usually means.
     daily = pd.Series(r).groupby(day).sum()
     n_days = int(daily.size)
-    sharpe = (float(daily.mean() / daily.std(ddof=1)) * np.sqrt(TRADING_DAYS)
-              if n_days > 2 and daily.std(ddof=1) > 0 else np.nan)
+    sharpe = (
+        float(daily.mean() / daily.std(ddof=1)) * np.sqrt(TRADING_DAYS)
+        if n_days > 2 and daily.std(ddof=1) > 0
+        else np.nan
+    )
 
     return {
         "label": label,
@@ -98,12 +127,15 @@ def summary(trades, label: str = "") -> dict:
         "t_naive": round(float(naive), 2) if np.isfinite(naive) else np.nan,
         "total_R": round(float(r.sum()), 1),
         "payoff": round(float(wins.mean() / abs(losses.mean())), 2)
-        if len(wins) and len(losses) else np.nan,
+        if len(wins) and len(losses)
+        else np.nan,
         "stop_pct": round(float(np.median(rp)), 3),
         "max_dd_R": round(float(np.max(np.maximum.accumulate(eq) - eq)) if len(eq) else 0.0, 1),
         "days": n_days,
         "R_per_day": round(float(daily.mean()), 3) if n_days else np.nan,
         "sharpe": round(sharpe, 2) if np.isfinite(sharpe) else np.nan,
+        "long_trades": sum(1 for t in trades if t.direction == 1),
+        "short_trades": sum(1 for t in trades if t.direction == -1),
     }
 
 
@@ -119,10 +151,18 @@ def by_symbol(trades) -> pd.DataFrame:
     rows: dict[str, list[float]] = {}
     for t in trades:
         rows.setdefault(t.symbol, []).append(t.r_net)
-    return pd.DataFrame([
-        {"symbol": s.replace(".NS", ""), "n": len(v),
-         "total_R": round(float(np.sum(v)), 1), "net_R": round(float(np.mean(v)), 3)}
-        for s, v in rows.items()], columns=cols).sort_values("total_R", ascending=False)
+    return pd.DataFrame(
+        [
+            {
+                "symbol": s.replace(".NS", ""),
+                "n": len(v),
+                "total_R": round(float(np.sum(v)), 1),
+                "net_R": round(float(np.mean(v)), 3),
+            }
+            for s, v in rows.items()
+        ],
+        columns=cols,
+    ).sort_values("total_R", ascending=False)
 
 
 def by_reason(trades) -> pd.DataFrame:
@@ -130,7 +170,11 @@ def by_reason(trades) -> pd.DataFrame:
     df = pd.DataFrame([{"reason": t.reason, "r": t.r_net} for t in trades])
     if df.empty:
         return df
-    g = df.groupby("reason").agg(n=("r", "size"), net_R=("r", "mean"), total_R=("r", "sum")).round(3)
+    g = (
+        df.groupby("reason")
+        .agg(n=("r", "size"), net_R=("r", "mean"), total_R=("r", "sum"))
+        .round(3)
+    )
     g["pct"] = (100 * g["n"] / len(df)).round(1)
     return g.sort_values("n", ascending=False)
 
@@ -155,9 +199,24 @@ def table(rows) -> str:
 
 def trades_frame(trades) -> pd.DataFrame:
     """Full trade log, for inspecting individual trades or exporting."""
-    return pd.DataFrame([{
-        "symbol": t.symbol, "day": t.day, "dir": "LONG" if t.direction == 1 else "SHORT",
-        "tag": t.tag, "entry_time": t.entry_time, "entry": t.entry, "sl": t.sl,
-        "tp": t.tp, "exit_time": t.exit_time, "exit": t.exit, "reason": t.reason,
-        "risk_pct": round(t.risk_pct, 3), "r_gross": round(t.r_gross, 3),
-        "r_net": round(t.r_net, 3)} for t in _chronological(trades)])
+    return pd.DataFrame(
+        [
+            {
+                "symbol": t.symbol,
+                "day": t.day,
+                "dir": "LONG" if t.direction == 1 else "SHORT",
+                "tag": t.tag,
+                "entry_time": t.entry_time,
+                "entry": t.entry,
+                "sl": t.sl,
+                "tp": t.tp,
+                "exit_time": t.exit_time,
+                "exit": t.exit,
+                "reason": t.reason,
+                "risk_pct": round(t.risk_pct, 3),
+                "r_gross": round(t.r_gross, 3),
+                "r_net": round(t.r_net, 3),
+            }
+            for t in _chronological(trades)
+        ]
+    )

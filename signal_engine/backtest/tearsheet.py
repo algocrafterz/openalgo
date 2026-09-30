@@ -38,7 +38,11 @@ import numpy as np
 import pandas as pd
 
 from signal_engine.backtest.concurrency import apply_position_cap, concurrency_profile
+from signal_engine.backtest.costs import CostModel, cost_profile
+from signal_engine.backtest.evaluation import evaluate
 from signal_engine.backtest.metrics import clustered_t, hurdle_t
+from signal_engine.backtest.regime import regime_block
+from signal_engine.backtest.splits import purge_and_embargo
 
 #: Cap per series, so a record stays small enough to load on a phone.
 MAX_SERIES_POINTS = 500
@@ -226,12 +230,32 @@ def build_run_record(
     baseline: dict[str, Any] | None = None,
     validation: Sequence[str] = (),
     notes: str = "",
+    horizon: str = "intraday",
+    regime_days: pd.DataFrame | None = None,
+    regime_source: dict[str, Any] | None = None,
+    cost_model: CostModel | None = None,
+    embargo_sessions: int = 0,
 ) -> dict[str, Any]:
     """Build a schema-v2 run record from `Trade` objects. Inputs are not modified.
 
     `position_caps` (slot counts, e.g. `(3, 5, 10)`) adds the concurrency profile and the
     result with only that many positions open at once. Every trade then needs an
     `entry_time`. Leave it empty to skip.
+
+    `horizon` (intraday, swing or positional) selects which acceptance gates apply to the
+    `evaluation` profile attached to the record.
+
+    `regime_days` (from `regime.build_regime_days`) adds the optional `regimes` block: results
+    per market regime, each trade placed by its entry day. `regime_source` records where the
+    regime inputs came from. Leave `regime_days` empty to skip.
+
+    `cost_model` adds the optional `cost_model` block: the same trades priced per trade with
+    the statutory schedule at the deployed notional (G1.1, G1.3). The headline metrics stay on
+    the engine's flat cost so runs remain comparable with earlier records.
+
+    `embargo_sessions` (with `oos_start`) purges in-sample trades that exit on or after the
+    cut and skips the first sessions of the out-of-sample window (G3.5); what was removed is
+    written into `split`. Zero keeps the plain split by entry day.
     """
     if n_trials < 1:
         raise ValueError(f"n_trials must be >= 1, got {n_trials}")
@@ -268,12 +292,35 @@ def build_run_record(
     if oos_start is not None:
         in_sample, out_of_sample = _split(trades, oos_start)
         record["split"] = {"type": "oos", "oos_start": oos_start}
+        if embargo_sessions:
+            in_sample, out_of_sample, info = purge_and_embargo(trades, oos_start, embargo_sessions)
+            record["split"].update(info)
         record["in_sample"] = _core(in_sample)
         record["out_of_sample"] = _core(out_of_sample)
     if caps:
         profile, record["position_caps"] = _position_caps(trades, caps)
         metrics["peak_concurrent"] = profile["peak"]
         metrics["median_concurrent"] = profile["median"]
+    if regime_days is not None:
+        record["regimes"] = regime_block(trades, regime_days, source=regime_source)
+    if cost_model is not None:
+        profile = cost_profile(trades, cost_model, costs["round_trip_bps"])
+        if profile is not None:
+            record["cost_model"] = profile
+    record["evaluation"] = evaluate(
+        trades,
+        metrics=metrics,
+        n_trials=n_trials,
+        horizon=horizon,
+        cost_bps=costs["round_trip_bps"],
+        cost_model=costs.get("model"),
+        oos_start=oos_start,
+        position_caps=record.get("position_caps"),
+        params=record["params"],
+        regimes=record.get("regimes"),
+        cost_profile=record.get("cost_model"),
+        split=record.get("split"),
+    )
     if baseline is not None:
         record["baseline"] = dict(baseline)
     if validation:

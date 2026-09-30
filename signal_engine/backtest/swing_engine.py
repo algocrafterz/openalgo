@@ -39,8 +39,11 @@ from signal_engine.backtest.types import Ctx, Position, Trade
 class SwingRunConfig:
     """Engine-level settings for a multi-day book."""
 
+    #: Swing books hold overnight as CNC delivery, and Indian cash equity cannot be
+    #: shorted overnight. Both flags are validated in __post_init__, so a swing run
+    #: cannot silently produce short trades that could never be executed.
     allow_longs: bool = True
-    allow_shorts: bool = True
+    allow_shorts: bool = False
 
     #: Round-trip cost in basis points of notional. NSE reference points:
     #: cash delivery ~22 bps (STT 10 bps each way dominates); stock futures ~8 bps.
@@ -55,6 +58,14 @@ class SwingRunConfig:
     #: Hard cap on holding period. Without it a trend exit can hold for years and one
     #: trade dominates the sample.
     max_hold_bars: int = 120
+
+    def __post_init__(self) -> None:
+        if self.allow_shorts or not self.allow_longs:
+            raise ValueError(
+                "swing engine is long-only (allow_longs=True, allow_shorts=False): "
+                "Indian cash equity cannot be shorted overnight. Use the intraday "
+                "engine for two-sided strategies."
+            )
 
     def with_(self, **kw) -> SwingRunConfig:
         return replace(self, **kw)

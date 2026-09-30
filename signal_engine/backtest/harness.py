@@ -22,14 +22,14 @@ import pandas as pd
 from signal_engine.backtest import metrics
 from signal_engine.backtest.data import sessions
 from signal_engine.backtest.engine import simulate
-from signal_engine.backtest.types import Ctx, RunConfig
+from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION, Ctx, RunConfig
 
 
 class Backtest:
     """Binds one strategy to one set of symbol frames."""
 
     def __init__(self, strategy, frames: dict[str, pd.DataFrame],
-                 run: RunConfig | None = None, is_fraction: float = 0.60,
+                 run: RunConfig | None = None, is_fraction: float = 1.0 - HOLDOUT_OOS_FRACTION,
                  engine=simulate, release_raw: bool = False):
         # `engine` swaps the simulator without touching the reporting. The intraday
         # `engine.simulate` forces an EOD exit, so a multi-day strategy passes
@@ -125,10 +125,15 @@ class Backtest:
             for v in values])
 
     def cost_sensitivity(self, p, bps=(6, 8, 10, 12), window: str = "all") -> pd.DataFrame:
-        """Where the sign flips. For a marginal strategy this IS the result."""
+        """Where the sign flips. For a marginal strategy this IS the result.
+
+        The book is simulated once, at `self.run.cost_bps`; each level restates net from the
+        trades' own gross (`metrics.with_flat_cost`), so the cost of the report no longer
+        grows with the number of levels.
+        """
+        trades = self.trades(p, window)
         return pd.DataFrame([
-            metrics.summary(self.trades(p, window, run=self.run.with_(cost_bps=b)), f"{b:.0f} bps")
-            for b in bps])
+            metrics.summary(metrics.with_flat_cost(trades, b), f"{b:.0f} bps") for b in bps])
 
     def by_symbol(self, p, window: str = "all") -> pd.DataFrame:
         return metrics.by_symbol(self.trades(p, window))

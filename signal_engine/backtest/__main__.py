@@ -146,13 +146,6 @@ def main() -> None:
     bps = (0, 10, 20, 24, 35) if swing else (0, 8, 16, 24)
     print(bt.cost_sensitivity(p, bps=bps).to_string(index=False))
 
-    if swing:
-        print("\n=== by direction (full period) ===")
-        for lbl, kw in (("longs only", {"allow_shorts": False}),
-                        ("shorts only", {"allow_longs": False})):
-            print(pd.DataFrame([metrics.summary(
-                bt.trades(p, "all", run=bt.run.with_(**kw)), lbl)]).to_string(index=False))
-
     if args.full:
         print("\n=== per symbol ===")
         ps = bt.by_symbol(p)

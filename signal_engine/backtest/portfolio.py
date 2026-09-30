@@ -31,6 +31,8 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pandas as pd
 
+from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
+
 
 @dataclass(frozen=True)
 class PortfolioConfig:
@@ -45,7 +47,7 @@ class PortfolioConfig:
     #: Drop names priced below this at the rebalance.
     min_price: float = 20.0
     #: Fraction of the date range used for parameter choice.
-    is_fraction: float = 0.60
+    is_fraction: float = 1.0 - HOLDOUT_OOS_FRACTION
     #: Dual-momentum absolute filter (Antonacci). A pick must ALSO have a positive
     #: factor score, not just top-N relative rank - a name that is merely the best
     #: of a falling universe is excluded. Its slot then sits in CASH (0% that period)

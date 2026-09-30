@@ -144,10 +144,10 @@ class TestWriteRun:
 
 
 class TestOosStart:
-    def test_splits_the_last_quarter_of_the_sessions(self):
+    def test_splits_the_last_30_percent_of_the_sessions(self):
         days = [f"2026-01-{d:02d}" for d in range(1, 29)]
         trades = [_trade(date(2026, 1, d), 1, 1) for d in range(1, 29)]
-        assert rr.default_oos_start(days, trades) == days[21]
+        assert rr.default_oos_start(days, trades) == days[19]
 
     def test_falls_back_to_trade_days_when_the_session_cut_has_no_trades_after_it(self):
         days = [f"2026-01-{d:02d}" for d in range(1, 29)]
@@ -195,6 +195,51 @@ class TestStrategyKey:
     )
     def test_unsupported_or_missing_module_is_none(self, idea):
         assert rr.strategy_key(idea, SUPPORTED) is None
+
+
+def _regime_inputs():
+    import numpy as np
+
+    from signal_engine.backtest.regime_data import RegimeInputs
+
+    idx = pd.bdate_range("2024-01-01", periods=800)
+    rng = np.random.default_rng(3)
+    close = pd.Series(20000 * np.exp(np.cumsum(rng.normal(0.0004, 0.008, len(idx)))), index=idx)
+    vix = pd.Series(15 + rng.normal(0, 1, len(idx)), index=idx)
+    return RegimeInputs(close=close, vix=vix, source={"vix_source": "test"})
+
+
+class TestRegimesInRecord:
+    def _record(self, root, **kw):
+        return rr.record_idea(
+            root,
+            "IDEA-009",
+            execute=_fake_execute,
+            run_date="2026-09-30",
+            supported=SUPPORTED,
+            **kw,
+        )
+
+    def test_no_regimes_unless_a_loader_is_given(self, root):
+        rec = json.loads(self._record(root).read_text())
+        assert "regimes" not in rec
+
+    def test_loader_adds_a_valid_regimes_block_with_agreement(self, root):
+        rec = json.loads(self._record(root, regimes=_regime_inputs).read_text())
+        assert br._validate_run(rec) == []
+        block = rec["regimes"]
+        assert block["source"]["vix_source"] == "test"
+        assert set(block["source"]["vol_agreement"]) == {"days", "exact", "opposite"}
+        assert 0 <= block["unclassified_trades"] <= rec["metrics"]["trades"]
+
+    def test_loader_failure_still_records_and_says_so(self, root):
+        def broken():
+            raise RuntimeError("offline")
+
+        rec = json.loads(self._record(root, regimes=broken).read_text())
+        assert "regimes" not in rec
+        assert "Regime analysis not recorded" in rec["notes"]
+        assert "offline" in rec["notes"]
 
 
 class TestRecordIdea:

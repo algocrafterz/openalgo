@@ -1,0 +1,38 @@
+# Strategy specification. Copy next to idea.md and complete EVERY field.
+# A spec that is incomplete or vague is rejected before any backtest runs
+# (research/spec.py). Write rules a program could code without guessing:
+#   not "buy when momentum is strong"
+#   but "5-min close > VWAP; EMA9 > EMA20; enter at the next candle open"
+# Keep it to the strategy as it is today. Experiments, rejected variants and
+# observations belong in idea.md and the run records, not here.
+
+name: Short strategy name
+market: e.g. NSE cash equity, F&O-eligible names
+timeframe: e.g. 5m          # bar size: 5m, 15min, 1h, 1d
+trading_style: intraday     # intraday | swing | positional
+direction: both             # long_only | short_only | both ; swing and positional must be long_only
+
+entry:
+  - Condition with a number or threshold
+  - Which bar the order fills on, e.g. next candle open
+exit:
+  - Condition with a number or threshold
+stop_loss:
+  - e.g. 1 ATR(14) below entry
+take_profit:                # or the single word: none
+  - e.g. 2R target
+position_sizing: e.g. risk 1% of capital per trade
+max_holding_period: e.g. 12 bars   # or: same session
+
+filters: none               # symbol or market filters, or the single word: none
+session_filters: none       # time-of-day or calendar filters, or: none
+
+indicators:
+  - e.g. VWAP
+  - e.g. EMA(9)
+parameters:                 # every tunable value, with the value used
+  ema_fast: 9
+
+cost_assumptions: e.g. 16 bps round trip
+constraints: none           # anything else the strategy must respect, or: none
+rationale: One or two sentences on why this should have an edge.

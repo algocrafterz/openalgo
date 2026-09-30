@@ -30,6 +30,8 @@ from typing import Any
 
 import yaml
 
+from signal_engine.research import spec
+
 STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
 VERDICTS = ("none", "edge", "marginal", "no-edge", "inconclusive")
 HORIZONS = ("intraday", "swing", "positional")
@@ -56,6 +58,26 @@ REQUIRED = (
     "last_reviewed",
 )
 PATH_FIELDS = ("strategy_path", "analysis_doc", "backtest_module")
+
+#: Why a rejected idea was rejected. "Rejected" must mean there is evidence that more
+#: tuning will not produce a durable edge, not that one parameter set did badly, so the
+#: reason is stated, not implied. Ideas last reviewed before the cutoff predate the field
+#: and are exempt; any later edit to a rejected idea has to name its basis.
+REJECTION_BASES = (
+    "no-gross-edge",
+    "cost-dominated",
+    "overfit",
+    "not-robust",
+    "concurrency-artifact",
+    "not-a-strategy",
+    "duplicate",
+)
+REJECTION_BASIS_REQUIRED_FROM = "2026-10-01"
+
+#: A lineage step smaller than this many net bps is noise, not progress.
+TREND_MIN_DELTA_BPS = 1.0
+#: How many of the latest parent-to-child steps decide the trend.
+TREND_WINDOW_STEPS = 3
 
 #: A run record is one reproducible backtest execution, stored as
 #: research/ideas/<idea>/runs/<run-id>.json. The required keys are what someone needs to
@@ -93,7 +115,10 @@ RUN_NUMERIC = {
 #: Schema v2 keys, all optional so v1 records stay valid. They carry what the results page
 #: needs: lineage between re-runs of the same idea, the parameters that produced a run, the
 #: number of variants tried (overfitting exposure), and the tearsheet series.
-RUN_HEAVY_KEYS = ("series",)
+RUN_HEAVY_KEYS = ("series", "evaluation", "regimes")
+
+#: Row statuses of an evaluation profile (backtest/evaluation.py owns their meaning).
+EVALUATION_STATUSES = ("pass", "fail", "report", "not_evaluated", "not_applicable")
 _SERIES_POINTS = ("equity_r", "drawdown_r")
 _MONTHLY_KEYS = ("month", "n", "total_r", "net_r")
 
@@ -111,6 +136,93 @@ def _valid_position_cap(row: Any) -> bool:
         and slots >= 1
         and all(_is_num(row.get(k)) for k in ("trades", "gross_bps", "net_bps"))
     )
+
+
+def _valid_evaluation_row(row: Any) -> bool:
+    return (
+        isinstance(row, dict)
+        and isinstance(row.get("gate"), str)
+        and row.get("status") in EVALUATION_STATUSES
+        and isinstance(row.get("hard"), bool)
+    )
+
+
+def _valid_regime_row(row: Any) -> bool:
+    return (
+        isinstance(row, dict)
+        and isinstance(row.get("regime"), str)
+        and isinstance(row.get("trades"), int)
+        and not isinstance(row.get("trades"), bool)
+        and _is_num(row.get("net_r"))
+        and isinstance(row.get("low_sample"), bool)
+    )
+
+
+def _validate_regimes(block: Any) -> list[str]:
+    """The regimes block is optional; when present it holds per-regime result rows."""
+    ok = (
+        isinstance(block, dict)
+        and isinstance(block.get("version"), int)
+        and all(
+            isinstance(block.get(dim), list) and all(_valid_regime_row(r) for r in block[dim])
+            for dim in ("trend", "vol")
+        )
+    )
+    if ok:
+        return []
+    return [
+        "'regimes' must be {version, trend: [...], vol: [...]} where each row has a string "
+        "regime, integer trades, numeric net_r and boolean low_sample"
+    ]
+
+
+_COST_MODEL_NUMBERS = (
+    "capital",
+    "risk_per_trade",
+    "leverage",
+    "slippage_bps_per_side",
+    "flat_bps",
+    "mean_statutory_bps",
+    "mean_total_bps",
+    "net_r",
+    "net_r_slip_2x",
+)
+
+
+def _validate_cost_model(block: Any) -> list[str]:
+    """The per-trade cost model block is optional; when present it must be complete."""
+    ok = (
+        isinstance(block, dict)
+        and isinstance(block.get("model"), str)
+        and isinstance(block.get("product"), str)
+        and all(_is_num(block.get(k)) for k in _COST_MODEL_NUMBERS)
+        and isinstance(block.get("total_bps_at"), dict)
+        and all(_is_num(v) for v in block["total_bps_at"].values())
+    )
+    if ok:
+        return []
+    return [
+        "'cost_model' must be an object with string model and product, numeric "
+        f"{', '.join(_COST_MODEL_NUMBERS)}, and a total_bps_at object of numbers"
+    ]
+
+
+def _validate_evaluation(block: Any) -> list[str]:
+    """The evaluation profile is optional; when present it must be a list of gate rows."""
+    dimensions = block.get("dimensions") if isinstance(block, dict) else None
+    ok = isinstance(dimensions, list) and all(
+        isinstance(d, dict)
+        and isinstance(d.get("name"), str)
+        and isinstance(d.get("rows"), list)
+        and all(_valid_evaluation_row(r) for r in d["rows"])
+        for d in dimensions
+    )
+    if ok:
+        return []
+    return [
+        "'evaluation' must be {dimensions: [{name, rows: [{gate, status, hard}]}]} with status "
+        f"one of {', '.join(EVALUATION_STATUSES)}"
+    ]
 
 
 def _validate_run_v2(run: dict[str, Any]) -> list[str]:
@@ -160,6 +272,18 @@ def _validate_run_v2(run: dict[str, Any]) -> list[str]:
                 "'position_caps' must be a list of {max_positions (int >= 1), trades, "
                 "gross_bps, net_bps} rows"
             )
+    if "cost_model" in run:
+        problems.extend(_validate_cost_model(run["cost_model"]))
+    split = run.get("split")
+    if isinstance(split, dict) and "embargo_sessions" in split:
+        for key in ("embargo_sessions", "purged_in_sample", "embargoed_oos"):
+            value = split.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                problems.append(f"'split.{key}' (embargo) must be an integer >= 0, got {value!r}")
+    if "evaluation" in run:
+        problems.extend(_validate_evaluation(run["evaluation"]))
+    if "regimes" in run:
+        problems.extend(_validate_regimes(run["regimes"]))
     series = run.get("series")
     if "series" in run:
         if not isinstance(series, dict):
@@ -236,7 +360,28 @@ def _validate(idea: dict[str, Any], folder: Path, root: Path) -> list[str]:
         target = idea.get(field)
         if target and not (root / target).exists():
             problems.append(f"{field} '{target}' does not exist")
+    problems.extend(_validate_rejection_basis(idea))
     return problems
+
+
+def _validate_rejection_basis(idea: dict[str, Any]) -> list[str]:
+    basis, status = idea.get("rejection_basis"), idea.get("status")
+    if basis is None:
+        needed = status == "rejected" and str(idea.get("last_reviewed", "")) >= (
+            REJECTION_BASIS_REQUIRED_FROM
+        )
+        return (
+            [
+                f"rejection_basis is required for a rejected idea: one of {', '.join(REJECTION_BASES)}"
+            ]
+            if needed
+            else []
+        )
+    if basis not in REJECTION_BASES:
+        return [f"rejection_basis '{basis}' not one of {', '.join(REJECTION_BASES)}"]
+    if status != "rejected":
+        return ["rejection_basis is only valid when status is rejected"]
+    return []
 
 
 def _validate_run(run: Any) -> list[str]:
@@ -299,6 +444,56 @@ def latest_run(idea: dict[str, Any]) -> dict[str, Any] | None:
     return runs[-1] if runs else None
 
 
+def _step(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+    """What changed from `parent` to `child`: net bps, trades and, if both have it, t."""
+    pm, cm = parent["metrics"], child["metrics"]
+    out: dict[str, Any] = {
+        "parent_run_id": parent["run_id"],
+        "net_bps": round(cm["net_bps"] - pm["net_bps"], 4),
+    }
+    if "t_stat" in pm and "t_stat" in cm:
+        out["t_stat"] = round(cm["t_stat"] - pm["t_stat"], 4)
+    out["trades"] = cm["trades"] - pm["trades"]
+    return out
+
+
+def lineage(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Summarise an idea's run history, oldest first. None when it has never been run.
+
+    The trend follows the latest run's own parent chain (side branches do not count) and
+    sums the last `TREND_WINDOW_STEPS` steps of net bps: improving, regressing, or
+    stagnant when the sum is inside `TREND_MIN_DELTA_BPS`. `trials_sum` adds `n_trials`
+    over every run. Runs recorded without a trial count contribute 1 each, so it is a
+    floor for the number of variants looked at, not the true ledger.
+    """
+    if not runs:
+        return None
+    by_id = {r["run_id"]: r for r in runs}
+    latest = runs[-1]
+    chain = [latest]
+    while chain[-1].get("parent_run_id") in by_id:
+        chain.append(by_id[chain[-1]["parent_run_id"]])
+    chain.reverse()
+    window = chain[-(TREND_WINDOW_STEPS + 1) :]
+    steps = [_step(p, c) for p, c in zip(window, window[1:], strict=False)]
+    total = sum(s["net_bps"] for s in steps)
+    if not steps:
+        trend = "insufficient"
+    elif total >= TREND_MIN_DELTA_BPS:
+        trend = "improving"
+    elif total <= -TREND_MIN_DELTA_BPS:
+        trend = "regressing"
+    else:
+        trend = "stagnant"
+    return {
+        "runs": len(runs),
+        "latest_run_id": latest["run_id"],
+        "trials_sum": sum(int(r.get("n_trials", 1)) for r in runs),
+        "delta_vs_parent": _step(chain[-2], latest) if len(chain) > 1 else None,
+        "trend": trend,
+    }
+
+
 def load_ideas(root: Path) -> list[dict[str, Any]]:
     """Load and validate every idea under `root`/research/ideas. Raises RegistryError."""
     ideas_dir = root / "research" / "ideas"
@@ -317,6 +512,8 @@ def load_ideas(root: Path) -> list[dict[str, Any]]:
             )
             continue
         found = _validate(idea, folder, root)
+        if not found:
+            found = spec.registry_problems(str(idea["id"]), str(idea["status"]), folder)
         problems.extend(f"{folder.name}: {p}" for p in found)
         ident = str(idea.get("id"))
         if ident in seen:
@@ -325,7 +522,10 @@ def load_ideas(root: Path) -> list[dict[str, Any]]:
         runs, run_problems = _load_runs(folder)
         problems.extend(run_problems)
         if not found and not run_problems:
-            ideas.append({**idea, "folder": folder.name, "runs": runs})
+            entry = {**idea, "folder": folder.name, "runs": runs}
+            if runs:
+                entry["lineage"] = lineage(runs)
+            ideas.append(entry)
     if problems:
         raise RegistryError("\n".join(problems))
     return sorted(ideas, key=lambda i: i["id"])
@@ -401,7 +601,13 @@ def render_markdown(ideas: list[dict[str, Any]]) -> str:
 
 def _slim(idea: dict[str, Any]) -> dict[str, Any]:
     """The idea as published in registry.json: run series stay in the run files."""
-    runs = [{k: v for k, v in r.items() if k not in RUN_HEAVY_KEYS} for r in idea.get("runs", [])]
+    runs = []
+    for r in idea.get("runs", []):
+        slim = {k: v for k, v in r.items() if k not in RUN_HEAVY_KEYS}
+        summary = (r.get("evaluation") or {}).get("summary")
+        if summary is not None:
+            slim["evaluation_summary"] = summary
+        runs.append(slim)
     return {**idea, "runs": runs}
 
 

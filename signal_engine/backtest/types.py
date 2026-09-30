@@ -144,6 +144,12 @@ class Ctx:
         return k in self.a
 
 
+#: The one hold-out standard for every backtest entry point (G3.1: the last 30 to 40 percent
+#: of sessions stay untouched). `record_run`, `Backtest` and `PortfolioConfig` all derive
+#: their cut from this, so a run record and an interactive report cannot disagree.
+HOLDOUT_OOS_FRACTION = 0.30
+
+
 def india_intraday_bps(notional: float = 1_00_000.0, slippage_bps_per_side: float = 4.0,
                        exchange: str = "NSE") -> float:
     """Round-trip intraday cost in basis points of the ENTRY notional.
