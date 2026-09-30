@@ -33,9 +33,10 @@ from signal_engine.executor import (
     send_order,
 )
 from signal_engine.logger_setup import setup_logger
-from signal_engine.models import Direction, OrderStatus, TradeResult, ValidationStatus
+from signal_engine.models import Direction, OrderStatus, Signal, TradeResult, ValidationStatus
 from signal_engine.normalizer import normalize
 from signal_engine.parser import parse
+from signal_engine.pipeline import single_source
 from signal_engine.risk_store import RISK_DB_PATH, RiskStore
 from signal_engine.runtime import build_risk_engine
 from signal_engine.timeutils import IST
@@ -681,6 +682,7 @@ async def _book_exit_result(
         pnl_delta,
         base_price,
         hold_min,
+        override_sl=_ladder_sl_override(signal),
     )
     # Partial exit: accumulate P&L only — the trade is counted at its final close.
     tracker.record_exit(
@@ -763,13 +765,14 @@ async def _finalize_partial_exit(
     pnl_delta: float,
     base_price: float,
     hold_min: int,
+    override_sl: float | None = None,
 ) -> None:
     """Reduce the tracked qty, re-protect the runner, and notify."""
     pos.quantity = remaining
     pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
     logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
-    await _replace_runner_sl(pos, remaining, tp_level)
+    await _replace_runner_sl(pos, remaining, tp_level, override_sl=override_sl)
 
     # R for this partial leg only (shows how far into the trade we are)
     r_partial = _compute_r(pnl_delta, exit_qty, base_price, pos.sl)
@@ -866,8 +869,29 @@ def _tp_level_price(pos, tp_level: str) -> float | None:
     return pos.entry_price - multiplier * r_distance
 
 
-async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -> None:
+def _ladder_sl_override(signal) -> float | None:
+    """The Ladder's effective stop carried on a runner-generated EXIT, else None.
+
+    Only a positive finite number in a dict context counts; anything else (Pine alerts, test
+    doubles) falls through to the structural/ratchet rules.
+    """
+    ctx = getattr(signal, "context", None)
+    if not isinstance(ctx, dict):
+        return None
+    value = ctx.get("ladder_sl")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and value > 0 else None
+
+
+async def _replace_runner_sl(
+    pos, remaining: int, tp_level: str | None = None, override_sl: float | None = None
+) -> None:
     """Re-place the runner's SL after a partial TP exit.
+
+    With `override_sl` (the runner Ladder's effective stop) that price is used instead of the
+    rules below, so a runner-managed position has exactly one stop rule. It still only ever
+    tightens, and goes through the same placement and failure notification.
 
     Prefers the structural stop (the level that triggered the entry, floored at break-even);
     falls back to TP1 - tp1_runner_sl_buffer x R for signals with no key level behind them.
@@ -883,6 +907,11 @@ async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -
     """
     is_long = pos.direction == Direction.LONG
     tighter = max if is_long else min
+
+    if override_sl is not None:
+        new_sl_price = tighter(override_sl, pos.sl) if pos.sl else override_sl
+        await _place_runner_sl(pos, remaining, tp_level, new_sl_price, "ladder")
+        return
 
     structural_sl = structural_runner_sl(
         pos.direction, pos.entry_price, pos.tp, getattr(pos, "context", None) or {}
@@ -940,6 +969,13 @@ async def _replace_runner_sl(pos, remaining: int, tp_level: str | None = None) -
     if settings.use_extended_runner_tiers and have_priced_stop and pos.sl:
         new_sl_price = tighter(new_sl_price, pos.sl)
 
+    await _place_runner_sl(pos, remaining, tp_level, new_sl_price, anchor_level)
+
+
+async def _place_runner_sl(
+    pos, remaining: int, tp_level: str | None, new_sl_price: float, anchor_level: str
+) -> None:
+    """Place the runner's SL-M at `new_sl_price` and keep the tracked position in step."""
     logger.info(
         f"Runner SL for {pos.symbol}: {anchor_level} {new_sl_price:.2f} "
         f"(entry {pos.entry_price:.2f}, tp_level={tp_level})"
@@ -1638,11 +1674,29 @@ async def handle_message(text: str) -> None:
         logger.debug("Unparseable message, skipping")
         return
 
+    # Single-source guard: a strategy whose signals come from the Python runner must not also
+    # trade off its Pine alerts (entries AND exits), or every trade would be duplicated.
+    if single_source.should_drop_alert(settings.runner, signal.strategy):
+        dropped = single_source.record_drop(signal.strategy)
+        logger.warning(
+            f"Dropped Pine alert for {signal.strategy} {signal.direction.value} "
+            f"{signal.symbol}: signal_source is python ({dropped} dropped so far)"
+        )
+        return
+
     logger.bind(symbol=signal.symbol).info(
         f"Parsed signal: {signal.strategy} {signal.direction.value} {signal.symbol} "
         f"entry={signal.entry} sl={signal.sl} tp={signal.tp}"
     )
+    await dispatch_signal(signal)
 
+
+async def dispatch_signal(signal: Signal) -> None:
+    """Validate a parsed Signal and route it to the entry or exit path.
+
+    Shared by handle_message (Telegram text) and the Python runner (real Signal objects),
+    so both sources pass through exactly the same gates.
+    """
     # 2. Validate
     result = validate(signal)
     if result.status != ValidationStatus.VALID:
@@ -1670,7 +1724,7 @@ def main() -> None:
         return
 
     startup.log_startup_banner()
-    startup.start_engine(risk_engine, tracker, handle_message)
+    startup.start_engine(risk_engine, tracker, handle_message, dispatch_signal)
 
 
 if __name__ == "__main__":

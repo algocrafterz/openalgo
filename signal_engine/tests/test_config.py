@@ -2,6 +2,8 @@
 
 
 import pytest
+import copy
+
 import yaml
 
 from signal_engine.config import (
@@ -13,6 +15,20 @@ from signal_engine.config import (
     enabled_channels,
 )
 
+
+#: A complete, valid `runner` section; every full-config fixture below carries a copy.
+RUNNER_CFG = {
+    "enabled": False,
+    "bar_interval_minutes": 5,
+    "bar_delay_seconds": 3,
+    "cycle_deadline_seconds": 25,
+    "retry_backoff_seconds": 2,
+    "history_timeout_seconds": 10,
+    "max_concurrent_requests": 8,
+    "warmup_sessions": 20,
+    "universe": "fno_all",
+    "strategies": {"BREAKOUT": {"signal_source": "pine", "exit_plan": "tp1_only", "exit_owner": "tracker"}},
+}
 
 class TestConfigFileMissing:
     def test_raises_when_config_yaml_missing(self, tmp_path, monkeypatch):
@@ -120,6 +136,7 @@ class TestRequiredYamlKeys:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "runner": copy.deepcopy(RUNNER_CFG),
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
@@ -193,6 +210,7 @@ class TestInvalidSizingMode:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "runner": copy.deepcopy(RUNNER_CFG),
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
@@ -276,6 +294,7 @@ class TestValidConfigLoadsSuccessfully:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "runner": copy.deepcopy(RUNNER_CFG),
             "bracket": {
                 "enabled": True,
                 "sl_order_type": "SL-M",
@@ -355,6 +374,7 @@ class TestSectorsYamlLoading:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "runner": copy.deepcopy(RUNNER_CFG),
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
@@ -436,6 +456,7 @@ class TestTieredBlacklistParsing:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "runner": copy.deepcopy(RUNNER_CFG),
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 
@@ -540,6 +561,7 @@ class TestNoProgressAbTestDisable:
             "broker": {"exchange": "NSE", "product": "MIS", "order_type": "MARKET", "mis_margin_pct": 0.20},
             "listener": {"max_retries": 5, "base_backoff": 2},
             "api": {"timeout": 5.0},
+            "runner": copy.deepcopy(RUNNER_CFG),
             "bracket": {"enabled": True, "sl_order_type": "SL-M", "max_sl_retries": 3, "max_entry_slippage_r": 0.5},
         }
 

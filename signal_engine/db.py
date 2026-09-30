@@ -299,6 +299,14 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
         logger.error(f"Failed to save trade: {e}")
 
 
+def sig_id_exists(sig_id: str) -> bool:
+    """True when any trades row (taken or DECLINED) already carries this signal id."""
+    row = _get_connection().execute(
+        "SELECT 1 FROM trades WHERE sig_id = ? LIMIT 1", (sig_id,)
+    ).fetchone()
+    return row is not None
+
+
 def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp: float,
                       quantity: int, exit_price: "float | None", pnl: float,
                       exit_types: list, order_id: str = "", sig_id: "str | None" = None) -> None:

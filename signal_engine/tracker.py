@@ -72,6 +72,16 @@ def _break_even_base(pos) -> float:
     return pos.fill_price if pos.fill_price > 0 else pos.entry_price
 
 
+def _ladder_owns_exits(_settings, strategy: str) -> bool:
+    """True when the runner's Ladder is this strategy's only exit rule.
+
+    The backtest never models no-progress, loss-cut or profit-lock, so a strategy whose exits
+    are owned by the shared Ladder must not have the tracker add exits the backtest never scored.
+    """
+    entry = _settings.runner.strategies.get(strategy.upper())
+    return entry is not None and entry.exit_owner == "ladder"
+
+
 def _profit_lock_price(pos, ltp: float, base_entry: float, lock_ratio: float) -> float:
     """Stop price for a stalled position — break-even, or a locked fraction of open profit."""
     in_profit = (pos.direction == Direction.LONG and ltp > base_entry) or (
@@ -1188,6 +1198,8 @@ class PositionTracker:
 
         for pos in list(self._positions.values()):
             if pos.be_stop_applied:
+                continue
+            if _ladder_owns_exits(_settings, pos.strategy):
                 continue
 
             fired = self._evaluate_no_progress(pos, now, gates, book_data, _settings)

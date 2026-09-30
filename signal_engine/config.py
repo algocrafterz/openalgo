@@ -92,6 +92,39 @@ class TelegramChannel:
     enabled: bool = True
 
 
+VALID_SIGNAL_SOURCES = ("pine", "python")
+VALID_EXIT_PLANS = ("tp1_only", "ladder_30_35_35")
+VALID_EXIT_OWNERS = ("tracker", "ladder")
+UNIVERSE_ALL = "fno_all"
+
+
+@dataclass(frozen=True)
+class RunnerStrategy:
+    """Per-strategy runner settings: exactly one signal source, one exit plan."""
+
+    signal_source: str  # "pine" (TradingView alerts) or "python" (the pipeline runner)
+    exit_plan: str
+    #: Who manages exits for open positions: "tracker" (no-progress, profit-lock, structural
+    #: runner stop) or "ladder" (the runner's shared exits.Ladder is the only stop rule).
+    exit_owner: str = "tracker"
+
+
+@dataclass(frozen=True)
+class RunnerSettings:
+    """The Python signal runner. Off until the acceptance gates pass."""
+
+    enabled: bool
+    bar_interval_minutes: int
+    bar_delay_seconds: float
+    cycle_deadline_seconds: float
+    retry_backoff_seconds: float
+    history_timeout_seconds: float
+    max_concurrent_requests: int
+    warmup_sessions: int
+    universe: str | tuple  # "fno_all" or an explicit tuple of symbols
+    strategies: dict
+
+
 @dataclass(frozen=True)
 class Settings:
     # Secrets from .env
@@ -235,6 +268,8 @@ class Settings:
     time_exit_enabled: bool
     time_exit_hour: int
     time_exit_minute: int
+
+    runner: RunnerSettings
 
     # No-progress detection (from yaml) — move SL to break-even on stuck trades
     no_progress_enabled: bool
@@ -676,6 +711,73 @@ def _time_exit_fields(yml: dict) -> dict:
     }
 
 
+def _positive(section: dict, name: str, key: str, cast):
+    value = cast(_require_key(section, name, key))
+    if value <= 0:
+        raise ConfigError(f"{name}.{key} must be positive, got {value}")
+    return value
+
+
+def _runner_universe(raw) -> str | tuple:
+    if raw == UNIVERSE_ALL:
+        return UNIVERSE_ALL
+    if isinstance(raw, list) and raw and all(isinstance(x, str) and x for x in raw):
+        return tuple(raw)
+    raise ConfigError(
+        f"runner.universe must be '{UNIVERSE_ALL}' or a non-empty list of symbols, got {raw!r}"
+    )
+
+
+def _runner_strategies(raw) -> dict:
+    if not isinstance(raw, dict):
+        raise ConfigError("runner.strategies must be a mapping of strategy tag to settings")
+    out = {}
+    for tag, body in raw.items():
+        name = f"runner.strategies.{tag}"
+        if not isinstance(body, dict):
+            raise ConfigError(f"{name} must be a mapping")
+        source = _require_key(body, name, "signal_source")
+        plan = _require_key(body, name, "exit_plan")
+        owner = _require_key(body, name, "exit_owner")
+        if source not in VALID_SIGNAL_SOURCES:
+            raise ConfigError(
+                f"Invalid {name}.signal_source '{source}'. "
+                f"Must be one of: {', '.join(VALID_SIGNAL_SOURCES)}"
+            )
+        if plan not in VALID_EXIT_PLANS:
+            raise ConfigError(
+                f"Invalid {name}.exit_plan '{plan}'. Must be one of: {', '.join(VALID_EXIT_PLANS)}"
+            )
+        if owner not in VALID_EXIT_OWNERS:
+            raise ConfigError(
+                f"Invalid {name}.exit_owner '{owner}'. Must be one of: {', '.join(VALID_EXIT_OWNERS)}"
+            )
+        out[str(tag).upper()] = RunnerStrategy(source, plan, owner)
+    return out
+
+
+def _runner_fields(yml: dict) -> dict:
+    """The `runner` section. Required, every key explicit, disabled unless config says so."""
+    runner = _require_section(yml, "runner")
+    enabled = _require_key(runner, "runner", "enabled")
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"runner.enabled must be true or false, got {enabled!r}")
+    return {
+        "runner": RunnerSettings(
+            enabled=enabled,
+            bar_interval_minutes=_positive(runner, "runner", "bar_interval_minutes", int),
+            bar_delay_seconds=float(_require_key(runner, "runner", "bar_delay_seconds")),
+            cycle_deadline_seconds=_positive(runner, "runner", "cycle_deadline_seconds", float),
+            retry_backoff_seconds=_positive(runner, "runner", "retry_backoff_seconds", float),
+            history_timeout_seconds=_positive(runner, "runner", "history_timeout_seconds", float),
+            max_concurrent_requests=_positive(runner, "runner", "max_concurrent_requests", int),
+            warmup_sessions=_positive(runner, "runner", "warmup_sessions", int),
+            universe=_runner_universe(_require_key(runner, "runner", "universe")),
+            strategies=_runner_strategies(_require_key(runner, "runner", "strategies")),
+        )
+    }
+
+
 def _build_settings() -> Settings:
     """Assemble the Settings singleton, one builder per config.yaml section."""
     yml = _load_yaml()
@@ -711,6 +813,7 @@ def _build_settings() -> Settings:
         **_broker_fields(broker, yml),
         **_bracket_fields(bracket),
         **_time_exit_fields(yml),
+        **_runner_fields(yml),
         listener_max_retries=int(_require_key(listener, "listener", "max_retries")),
         listener_base_backoff=int(_require_key(listener, "listener", "base_backoff")),
         api_timeout=float(_require_key(api, "api", "timeout")),

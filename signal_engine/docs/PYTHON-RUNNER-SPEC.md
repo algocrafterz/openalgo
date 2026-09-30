@@ -206,18 +206,170 @@ in the same shutdown path. Reuse the existing health checks; add "runner warm-up
 5. Stage capital 25% -> 50% -> 100% (G7.5), at least 10 sessions per stage, with alert escalation on anomalies.
 6. Only then disable Pine's trade alerts. Keep Pine on the chart for visual checks.
 
-## 8. Open decisions for the implementer (record answers in this file)
+## 8. Open decisions for the implementer (answers recorded 2026-09-30)
 
-- History endpoint vs WebSocket-built bars for the live feed (recommended for v1: history endpoint at bar close).
-- Whether `_replace_runner_sl` is bypassed or takes an override (section 4.4).
-- Live universe (about 40 like Pine, or the full F&O list).
-- Exit plan default (`tp1_only` recommended until acceptance says otherwise).
-- Where to persist last-processed-bar state (small SQLite under `signal_engine/data/`, or the existing trades DB).
+- **History endpoint vs WebSocket-built bars:** history endpoint at bar close. Request today only
+  (`start_date = end_date = today`, 5m). Prior-session bars come from Historify at warm-up. No WebSocket in v1.
+- **`_replace_runner_sl`:** add an `override_sl` argument (not a bypass), threaded from
+  `signal.context["ladder_sl"]`, so the tighten-only guard, SL placement and failure notice stay in use and
+  the Ladder is the one stop rule. Built in Phase 5 (`main._ladder_sl_override`, `_place_runner_sl`).
+- **Live universe:** an explicit list in `runner.universe` for the first shadow run, then widen once cycle
+  time is measured. The Pine watchlist is a TradingView list and is not in this repo, so the shipped default
+  is `fno_all` (harmless while `runner.enabled` is false). Backtests stay on the full F&O universe.
+- **Exit plan default:** `tp1_only`.
+- **Where last-processed-bar state lives:** its own `signal_engine/data/runner_state.db`
+  (`pipeline/state.py`), keyed (mode, day, strategy, symbol). Signal-id dedupe also reads `trades.db`
+  (`db.sig_id_exists`, DECLINED rows included), so nothing is duplicated there.
+- **Package name:** `signal_engine/pipeline/` rather than `runner/`, because it is the shared path for
+  backtest, replay, paper and live, not only the runner.
+
+### Build status
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | `Strategy`/`Fire` protocol, `BreakoutStrategy`, `fire_to_signal`, `pretrade`, clock helpers; backtest BREAKOUT adapter re-pointed at `BreakoutStrategy` | done |
+| 2 | `bars` (closed-bar rule, `ReplaySource`, `OpenAlgoHistorySource`, retry-until-present), `RollingContext`, P1/P2 parity | done |
+| 3 | `state`, `cycle`, `runner`, `RecordingSink` (shadow), `runner` config section, single-source guard in `handle_message`, replay CLI | done |
+| 4 | `dispatch_signal` extraction, `DispatchSink`, start-up wiring (`pipeline/service.py`), health checks | done |
+| 5 | `ExitDriver`, `override_sl`, tracker `exit_owner`, `SimSink`, P3 trade parity | done |
+| 6 | Fake-`api_client` replay of the real entry path, `ladder_30_35_35` persistence, process pool | later |
+
+Start-up wiring is in (Phase 4): `startup._run_engine` checks the signal-source config first (refuses to start
+on a mismatch, whether or not the runner is enabled), then starts one session loop per configured strategy
+next to the tracker task, cancels it in the same `finally` and closes the state store in `_close_resources`.
+`runner.enabled: false` (the shipped default) means no task is created. `service.start` fails closed: if the
+history endpoint is unreachable or no symbol warms up it logs at critical level and does not start.
+
+### Phase 4 and 5 decisions (2026-09-30)
+
+- **`exit_owner` lives in `runner.strategies.<TAG>`**, not `strategy_profiles.<TAG>`: the runner block already
+  holds each strategy's `signal_source` and `exit_plan`, and a second per-strategy location would be two
+  places to keep in step. Values `tracker` (default in config.yaml, tracker exits unchanged) or `ladder` (the
+  shared Ladder is the only exit rule; the tracker skips no-progress, loss-cut and profit-lock for that
+  strategy, because the backtest never models them). `ladder` requires `signal_source: python`, enforced at
+  start-up by `single_source.check_consistency`.
+- **Ladder stop hit sends no order.** The broker SL-M owns that exit. If the tracker still holds the position
+  `SAFETY_BARS` (2) bars later, the driver asks the broker: flat -> EXIT `tp_level="SL"` (reconcile the
+  tracker only); still holding -> a plain full EXIT (market close); API error -> retry next bar. This differs
+  from the original plan, which always sent the reconcile EXIT: `_reconcile_sl_hit` cancels the live stop and
+  forgets the position, so it is only safe when the broker is already flat.
+- **Fractions.** The Ladder's fill fractions are of the ORIGINAL position, `_resolve_exit_qty` reads
+  `exit_qty_pct` as a fraction of the CURRENT quantity, so the driver sends `frac / remaining_before` (rounded
+  to 9 places; exactly 1.0 for the last leg so floor() never leaves a share behind).
+- **Lazy Ladder.** Created from the tracker on the first bar that closes after the position's entry time,
+  anchored to the actual fill price (entry price, logged, if the fill is unknown). `tp1_only` can be rebuilt
+  from tracker state alone after a restart; `ladder_30_35_35` needs `tp2`/`tp3` from the position context,
+  which startup restore does not bring back, so such a position is logged once and left to the tracker.
+- **Sink hooks.** `ExecutionSink` gained `on_bar` (before the driver steps a bar) and `after_bar` (after);
+  both are no-ops for real-broker sinks. They exist so `SimSink`, the simulated broker, can fill entries at the
+  next open, trigger stops before targets, and take the time exit after targets, in the engine's order.
+- **After the entry window** the runner keeps cycling, but only for symbols the tracker still holds, until the
+  time exit (`Runner(manage_until_min=...)`, config time_exit). Live stops one bar before the 14:45 time exit
+  (the tracker takes over); the replay runs the time-exit bar so the close matches the engine.
+- **Halt.** A halted cycle (mode guard) steps nothing, exits included: the tracker, the broker SL-M and the
+  time exit still protect open positions, and sending orders in a mismatched mode is the worse risk.
+- **Not handled:** exchange holidays (the session loop skips weekends only; a holiday cycle logs "bar late"
+  per symbol until the deadline), and a Ladder rebuilt after a restart for a multi-leg plan (above).
+
+### Parity results (2026-09-30, real Historify data)
+
+`python -m signal_engine.pipeline.replay --parity --days 20 --limit 10` (10 most liquid symbols, last 20
+sessions to 2026-09-29, P2 reference = 250-session history): 200 symbol-days, 78 fires. P1 200/200 identical,
+P2 200/200 identical (0/78 mismatched fires). `warmup_sessions` stayed at 20; no tuning needed. Small sample:
+rerun with a wider universe before relying on it for G7.2.
+
+### P3 trade parity (2026-09-30)
+
+`python -m signal_engine.pipeline.replay --trade-parity --days 5 --limit 6 --plan <plan>`: the real Runner,
+cycle, RollingContext, ExitDriver and Ladder with `SimSink` as the broker, against `engine.simulate` with the
+same `ExitPlan`, same strategy object, same bars (engine on 250-session history, replay on the 20-session
+window). Real Historify data, 6 most liquid symbols, 5 sessions to 2026-09-29:
+
+| Plan | Engine trades | Replay trades | Matched | Engine only | Replay only | Differing |
+|---|---|---|---|---|---|---|
+| `tp1_only` | 14 | 14 | 14 | 0 | 0 | 0 |
+| `ladder_30_35_35` | 14 | 14 | 14 | 0 | 0 | 0 |
+
+Synthetic-data tests (`tests/test_pipeline_trade_parity.py`) also match exactly for `tp1_only`, the three-leg
+ladder with stop moves (2 and 3 leg exits present), an early time exit and a per-day trade cap. Tolerance:
+prices 1e-4 x price (the engine casts bars to float32), `r_gross` 2e-3.
+
+The first real-data run found one mismatch (BPCL 2026-09-29, an engine trade the replay never took). Cause: an
+entry armed on the LAST bar of the entry window was never filled, because after the window the cycle only
+processed symbols the tracker already held, and a not-yet-filled order is not held. Fixed with
+`ExecutionSink.has_pending` (the cycle keeps processing a symbol with an unfilled order). Live is not exposed
+to the same gap (a MARKET entry fills within seconds, well before the next cycle), which is why it needed
+real data and a simulated broker to surface. Regression test: `TestPendingEntryAfterTheWindow`.
+
+Known gaps in the comparison, not hidden: 14 trades is a small sample (widen with `--days 20 --limit 10`, about
+40 minutes); the pipeline's pre-trade gates (minimum reward:risk, blacklist, price band) are not modelled by the
+engine, so a trade the engine takes can be absent from the replay with a named skip reason (none occurred in
+this sample; `format_diff` prints the skip reason for every engine-only trade); the live path's real order
+placement, sizing and margin are not replayed (Phase 6, fake `api_client`).
+
+### Findings that shape later phases
+
+- `validator.validate` has no staleness check (`stale_signal_seconds` is read only by `listener.py`), so the
+  pipeline carries its own (`pretrade.is_stale`).
+- One `BreakoutStrategy.evaluate` on a 20-session window costs about 0.12 s, dominated by
+  `features.volume.session_volume_factor` (a `stack` over the window). At 40 symbols a cycle is about 5 s
+  sequential; the full 209-symbol universe would exceed the 25 s cycle deadline. Optimise only behind the
+  P1/P2 parity tests.
+- A restart mid-day does not backfill bars missed while the engine was down: such a bar would be stale
+  under `risk.stale_signal_seconds` anyway.
+
+### Shadow run preparation (rollout step 2, 2026-09-30)
+
+**State.** `runner.enabled: true` with BREAKOUT still `signal_source: pine` / `exit_owner: tracker`. The runner
+uses `RecordingSink`, which places nothing; Pine alerts trade exactly as before. It takes effect at the next
+engine restart (config is read at start-up).
+
+**What shadow mode records.** With a sink that has `records_shadow` (only `RecordingSink`), the cycle writes to
+`signal_engine/data/runner_state.db`, table `shadow_events`: every signal it would have sent, every fire it
+rejected (price band, pre-trade gate, entry window, halted), and every bar it could not evaluate (late, stale,
+warm-up failed), each with its reason. In shadow mode the dedupe ignores trades.db (`seen_sig_id(...,
+include_trades=False)`): otherwise a sig_id Pine already sent would look "seen" and the runner's matching signal
+would never be recorded, making every match look like a miss.
+
+**Report.** `uv run python -m signal_engine.pipeline.shadow_report --day YYYY-MM-DD` compares the shadow record
+with Pine's BREAKOUT entry rows in trades.db (read-only, DECLINED rows included) by sig_id and prints matched,
+direction-mismatch, runner-only and pine-only, with a reason for each pine-only row (outside the universe, the
+runner's own skip reason, evaluated and did not fire, or did not process the bar). Informational only.
+
+**Universe decision (40 symbols).** Pine's watchlist lives in TradingView, not in this repo. Built as: the
+symbols Pine has signalled that sit inside the BREAKOUT entry price band (Rs 300-5000, 16 of 21), then filled to
+40 with the most liquid in-band F&O names, ranked by 20-session median rupee turnover (5-minute close x volume,
+summed per session, sessions to 2026-09-29, Historify). Out-of-band names cannot trade, so they were not
+ranked. A pure top-40 by turnover would have covered only 12 of Pine's 21 signalled symbols. `GVT&D` was dropped
+after the history endpoint returned HTTP 500 for it (`M&M` works) and replaced by the next name, `SUNPHARMA`.
+
+**Bug found by the dry run: fixed.** Replay tests passed while every symbol failed against the real history
+endpoint (`'Index' object has no attribute 'date'`). Live bars carry a fixed +05:30 offset; Historify warm-up bars
+carry the Asia/Kolkata zone. `RollingContext._join` concatenated them into an object Index. It now converts
+today's bars to the warm-up frame's timezone first. Regression test:
+`test_live_shaped_today_frame_joins_warmup_bars_into_a_datetime_index`. The parity tests could not see this
+because both sides of those tests came from Historify.
+
+**Measured cycle time (real endpoint, 40 symbols, 24 cycles of 2026-09-30, one process, evaluation in a thread
+pool):** median 13.5 s, typical 9-20 s, one outlier at 61.5 s (11:00 bar). This is worse than the 5 s estimate
+(0.12 s x 40), because evaluation runs in threads under the GIL plus history fetches. Against the 25 s
+`cycle_deadline_seconds` the typical cycle fits, but the outlier would be marked stale live (the replay clock does
+not advance during processing, so the dry run reported 0 stale). Extrapolation: 209 symbols would take roughly
+50-100 s per cycle and does not fit; widening needs a faster evaluate path (process pool, or incremental inputs
+behind the parity tests) first. Watch `pipeline cycle ... in N.NNs` in the engine log tomorrow.
+
+**Dry run comparison (full day 2026-09-30, real history bars, 40 symbols, against the real Pine rows in trades.db):**
+matched 0, runner-only 32, pine-only 13. Of the 13 pine-only rows, 4 were outside the universe (all DECLINED by
+Pine) and 9 were bars the runner evaluated without firing. So on this day the two sources did not agree on a
+single signal. This is informational and is NOT tuned away (broker data is the source of truth, Pine is not the
+reference), but it is a real open question to understand before step 3: the Python port may apply a different
+score or confirmation filter than Pine, or the two may differ in how a bar's signal is stamped. One day is not
+enough to conclude; compare several sessions and read the pine-only reasons.
 
 ## 9. Definition of done
 
 - Runner disabled by default; enabling it needs explicit config.
-- All new code covered at 80% or more, existing suite green (2053 tests at the time of writing).
+- All new code covered at 80% or more, existing suite green (2347 tests after Phase 5; 2053 before the pipeline).
 - Parity replay test passes on at least 20 historical days.
 - Single-source guard tested; no path dispatches from both sources.
 - Docs updated: this file's decisions, `docs/PRD.md`, and a dated note in the strategy log if behaviour changes.

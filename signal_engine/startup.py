@@ -18,6 +18,7 @@ from signal_engine.db import fetch_last_entry_trade, set_trade_mode
 from signal_engine.listener import start_listener
 from signal_engine.logger_setup import set_mode as set_log_mode
 from signal_engine.models import Direction
+from signal_engine.pipeline import service, single_source
 from signal_engine.runtime import apply_trade_mode
 from signal_engine.tracker import TimeExitScheduler, TrackedPosition
 
@@ -674,16 +675,57 @@ def _resolve_broker_name() -> str:
         return "unknown"
 
 
-def start_engine(risk_engine, tracker, handle_message) -> None:
+async def runner_config_ok() -> bool:
+    """Refuse to start when the runner's signal sources are inconsistent.
+
+    Two active sources for one strategy means duplicate orders, and a python source with the
+    runner disabled means nothing generates signals while Pine alerts are dropped. Runs whether
+    or not the runner is enabled, so a bad config is caught before any signal is accepted.
+    """
+    from signal_engine.strategies import REGISTRY
+
+    try:
+        single_source.check_consistency(settings.runner, REGISTRY.keys())
+    except single_source.SingleSourceError as exc:
+        logger.critical(f"Runner configuration inconsistent, refusing to start: {exc}")
+        await notifier.notify_startup_result(all_passed=False, summary=f"Runner config: {exc}")
+        return False
+    single_source.log_active_sources(settings.runner)
+    return True
+
+
+async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
+    """Launch the Python signal runner when enabled. None when disabled or it could not start.
+
+    A failure here never stops the engine: Pine alerts and the tracker keep working, and the
+    reason is logged at critical level (service.start fails closed).
+    """
+    try:
+        return await service.start(
+            settings.runner,
+            dispatch=dispatch_signal,
+            tracker=tracker,
+            trade_mode=trade_mode,
+            time_exit=(settings.time_exit_hour, settings.time_exit_minute),
+            halted=mode_guard.is_halted,
+            stale_limit_s=settings.stale_signal_seconds,
+            product=settings.product,
+        )
+    except (service.RunnerStartError, single_source.SingleSourceError):
+        logger.exception("Python signal runner could not start")
+        return None
+
+
+def start_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> None:
     """Run the engine event loop until shutdown."""
     try:
-        asyncio.run(_run_engine(risk_engine, tracker, handle_message))
+        asyncio.run(_run_engine(risk_engine, tracker, handle_message, dispatch_signal))
     except KeyboardInterrupt:
         logger.info("Signal Engine interrupted")
         sys.exit(0)
 
 
-async def _run_engine(risk_engine, tracker, handle_message) -> None:
+async def _run_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> None:
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
@@ -696,6 +738,10 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
 
     startup_report = await run_startup_health_checks()
     if startup_report is None:
+        shutdown_event.set()
+        return
+
+    if not await runner_config_ok():
         shutdown_event.set()
         return
 
@@ -734,20 +780,23 @@ async def _run_engine(risk_engine, tracker, handle_message) -> None:
 
     tracker_task = asyncio.create_task(tracker.start())
     time_exit_scheduler, time_exit_task = _start_time_exit_scheduler(tracker)
+    runner_service = await _start_runner_service(tracker, trade_mode, dispatch_signal)
 
     try:
         await _serve_until_shutdown(handle_message, shutdown_event)
     finally:
+        if runner_service is not None:
+            runner_service.cancel()
         tracker.stop()
         tracker_task.cancel()
         if time_exit_task is not None:
             time_exit_scheduler.stop()
             time_exit_task.cancel()
-        await _close_resources(risk_engine)
+        await _close_resources(risk_engine, runner_service)
         logger.info("Signal Engine stopped")
 
 
-async def _close_resources(risk_engine) -> None:
+async def _close_resources(risk_engine, runner_service=None) -> None:
     """Release the process's long-lived handles on the way out.
 
     All three are shared singletons rather than per-call objects (that is the point - see
@@ -767,6 +816,12 @@ async def _close_resources(risk_engine) -> None:
         db.reset_connection()
     except Exception as e:  # noqa: BLE001
         logger.debug(f"Shutdown: could not close trades.db: {e}")
+
+    if runner_service is not None:
+        try:
+            runner_service.close()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Shutdown: could not close the runner state store: {e}")
 
     store = getattr(risk_engine, "_store", None)
     if store is not None and hasattr(store, "close"):

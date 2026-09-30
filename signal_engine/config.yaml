@@ -493,6 +493,83 @@ time_exit:
                                  # last-half-hour spread widening. Keep breakout.pine's
                                  # timeExitHour/Minute inputs in step with this.
 
+# ── Python signal runner ─────────────────────────────────
+# Computes strategy signals in Python from broker bars at every bar close and feeds them into
+# the same pipeline the Pine alerts use (docs/PYTHON-RUNNER-SPEC.md).
+#
+# 2026-09-30: ENABLED IN SHADOW MODE (spec rollout step 2). BREAKOUT stays signal_source: pine,
+# so the runner records the signals it WOULD have sent (runner_state.db, shadow_events) and
+# places nothing; Pine alerts keep trading exactly as before. Compare with
+#   uv run python -m signal_engine.pipeline.shadow_report --day YYYY-MM-DD
+# Do NOT set signal_source: python for BREAKOUT: it fails the acceptance gates in
+# docs/STRATEGY-ACCEPTANCE-CRITERIA.md (net -0.48R per trade).
+#
+# signal_source is EXACTLY ONE of pine | python per strategy. Two active sources means duplicate
+# orders, so the engine drops the other source's alerts and refuses to start on a mismatch.
+runner:
+  enabled: true
+  bar_interval_minutes: 5
+  bar_delay_seconds: 3           # wait after the bar boundary for the broker to publish the bar
+  cycle_deadline_seconds: 25     # give up on a late bar after this long and skip the cycle
+  retry_backoff_seconds: 2       # pause between history retries inside one cycle
+  history_timeout_seconds: 10
+  max_concurrent_requests: 8
+  warmup_sessions: 20            # prior sessions of 5-minute bars per symbol
+  # Shadow universe, 40 symbols (2026-09-30). The 16 symbols Pine has signalled that sit inside
+  # the BREAKOUT entry price band (Rs 300-5000), then filled with the most liquid in-band F&O
+  # names by 20-session median rupee turnover (5m close x volume, to 2026-09-29). Pine's own
+  # watchlist lives in TradingView, not in this repo, so its signalled symbols are the best
+  # proxy. Listed most liquid first. GVT&D was dropped: the history endpoint returns HTTP 500
+  # for it. Measured cycle time at 40 symbols is 9-20 s (one 61 s outlier), so do not widen
+  # toward fno_all without a faster evaluate path.
+  universe:
+    - HDFCBANK
+    - RELIANCE
+    - BSE
+    - ICICIBANK
+    - BHARTIARTL
+    - INFY
+    - PAYTM
+    - ATHERENERG
+    - SBIN
+    - TCS
+    - "M&M"
+    - LT
+    - ETERNAL
+    - AXISBANK
+    - MCX
+    - KOTAKBANK
+    - SHRIRAMFIN
+    - HAL
+    - BEL
+    - BAJFINANCE
+    - HINDALCO
+    - LAURUSLABS
+    - KALYANKJIL
+    - ADANIENT
+    - KAYNES
+    - HCLTECH
+    - COALINDIA
+    - ADANIPORTS
+    - INDIGO
+    - PFC
+    - LICI
+    - SUNPHARMA
+    - COFORGE
+    - TVSMOTOR
+    - CHOLAFIN
+    - NTPC
+    - INDUSINDBK
+    - TATAPOWER
+    - JSWENERGY
+    - APOLLOTYRE
+  strategies:
+    BREAKOUT:
+      signal_source: pine        # pine | python
+      exit_plan: tp1_only        # tp1_only | ladder_30_35_35
+      exit_owner: tracker        # tracker | ladder. ladder = the shared Ladder owns the stop and the
+                                 # tracker skips no-progress / profit-lock; needs signal_source python
+
 # ── No-progress Detection ────────────────────────────────
 # [tune] Move SL to break-even (or exit at market) when a trade hasn't progressed toward TP1.
 # Protects capital on "stuck" positions without waiting for the 15:00 time exit.

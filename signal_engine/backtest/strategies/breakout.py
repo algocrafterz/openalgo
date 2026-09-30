@@ -21,7 +21,6 @@ core's cooldown, so it is the engine, not the core, that enforces the session sl
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -31,7 +30,8 @@ from signal_engine.backtest import indicators as ind
 from signal_engine.backtest.strategies.base import Strategy
 from signal_engine.backtest.types import Ctx, EntrySignal
 from signal_engine.features.instruments import tick_size
-from signal_engine.strategy_core.breakout import BreakoutParams, compute_signals
+from signal_engine.pipeline.strategies.breakout import BreakoutStrategy
+from signal_engine.strategy_core.breakout import BreakoutParams
 from signal_engine.strategy_core.inputs import build_breakout_inputs
 
 __all__ = ["Breakout", "BreakoutParams"]
@@ -75,9 +75,14 @@ class Breakout(Strategy):
     def prepare_for(self, symbol: str, df: pd.DataFrame, p: BreakoutParams) -> pd.DataFrame:
         d = ind.add_session_columns(df)
         bars = d[_OHLCV].astype("float64")
-        tick = self._tick(symbol)
-        inputs = build_breakout_inputs(bars, self._minutes(symbol, bars), tick)
-        fires = compute_signals(inputs, replace(p, tick=tick))
+        # The same Strategy object the pipeline runs in replay, paper and live. The input
+        # builder is looked up at call time so a patched module attribute still applies.
+        strategy = BreakoutStrategy(
+            p,
+            tick_source=self._tick,
+            inputs_builder=lambda *a, **k: build_breakout_inputs(*a, **k),
+        )
+        fires = strategy.evaluate(symbol, bars, self._minutes(symbol, bars))
 
         d["fire_dir"] = 0.0
         d["fire_sl"] = np.nan
@@ -85,13 +90,14 @@ class Breakout(Strategy):
         d["fire_tp2"] = np.nan
         d["fire_tp3"] = np.nan
         d["fire_code"] = ""
-        if not fires.empty:
-            d.loc[fires.index, "fire_dir"] = fires["direction"].astype(float)
-            d.loc[fires.index, "fire_sl"] = fires["sl"]
-            d.loc[fires.index, "fire_tp"] = fires["tp1"]
-            d.loc[fires.index, "fire_tp2"] = fires["tp2"]
-            d.loc[fires.index, "fire_tp3"] = fires["tp3"]
-            d.loc[fires.index, "fire_code"] = fires["code"]
+        if fires:
+            idx = pd.DatetimeIndex([f.bar_time for f in fires])
+            d.loc[idx, "fire_dir"] = [float(f.direction) for f in fires]
+            d.loc[idx, "fire_sl"] = [f.sl for f in fires]
+            d.loc[idx, "fire_tp"] = [f.targets[0] for f in fires]
+            d.loc[idx, "fire_tp2"] = [f.targets[1] for f in fires]
+            d.loc[idx, "fire_tp3"] = [f.targets[2] for f in fires]
+            d.loc[idx, "fire_code"] = [f.tag for f in fires]
         return d
 
     def entry(self, c: Ctx, i: int, p: BreakoutParams, direction: int) -> EntrySignal | None:

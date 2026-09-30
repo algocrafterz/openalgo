@@ -5473,3 +5473,86 @@ rejects via a websocket `NOT_OK` ack instead.
 
 **In plain terms:** if the internet lookup blips during the morning login, the system now waits a few
 seconds and tries again (up to about 45 seconds) instead of giving up for 15 minutes.
+
+## Python Signal Runner: Shared Pipeline, Phases 1-3 (2026-09-30)
+
+**What.** New package `signal_engine/pipeline/`: one path from "a bar closed" to "a signal goes out",
+shared by backtest, replay, paper and live. Only the strategy varies (`Strategy` protocol,
+`pipeline/strategies/breakout.py` wrapping `strategy_core`); the data source, clock and execution sink are
+injected adapters. Spec and decisions: `docs/PYTHON-RUNNER-SPEC.md` (section 8 and build status).
+
+**Built (Phases 1-3).** `Fire`/`Strategy`, `fire_to_signal`, `pretrade` gates (validator's stateless checks plus
+entry window, staleness, price band), `bars` (single closed-bar rule, `ReplaySource`, `OpenAlgoHistorySource`
+with IST conversion at the boundary and retry-until-present), `RollingContext`, `RunnerStateStore`
+(restart-safe last bar and sig_id dedupe, also reads `trades.db`), `cycle`, `Runner`, shadow `RecordingSink`,
+replay CLI with P1/P2 parity. The backtest BREAKOUT adapter now calls the same `BreakoutStrategy`.
+
+**Config and guard.** New required `runner:` section in `config.yaml` (`enabled: false`, BREAKOUT stays
+`signal_source: pine`). `handle_message` drops Pine entry and exit alerts for any strategy configured
+`signal_source: python`; the runner refuses to dispatch for a `pine` strategy. Start-up wiring and the
+dispatching sink are Phase 4, so nothing here can place an order.
+
+**Small core-of-signal_engine changes.** `main.handle_message` (single-source drop), `db.sig_id_exists`,
+`config.py` (`RunnerSettings`). No OpenAlgo core files touched.
+
+**In plain terms:** the system can now replay a trading day bar by bar through the same machinery live trading
+will use, and it proves it picks the same signals as running the strategy in one go. It cannot yet trade.
+
+## Python Signal Runner: Dispatch, Start-up Wiring and Exits, Phases 4-5 (2026-09-30)
+
+**What.** The shared pipeline is now connected to the engine and owns exits. `main.dispatch_signal` is the one
+place a Signal is validated and routed (Telegram text and runner Signals both pass through it, so they meet
+the same gates). `pipeline/service.py` builds and runs the runner from `startup._run_engine`: config guard
+first, then health checks (history reachable, warm-up finished; fail closed), one session loop per strategy,
+cancelled and closed with the tracker. Nothing starts unless `runner.enabled: true`, which is still `false`.
+
+**Exits.** `pipeline/exit_driver.py` steps the same `strategy_core.exits.Ladder` the backtest uses, per open
+position, and turns a target fill into an EXIT Signal. The Ladder's stop reaches the broker through
+`signal.context["ladder_sl"]` -> `main._replace_runner_sl(override_sl=...)` (still tighten-only, same SL
+placement and failure notice), so a runner-managed position has one stop rule instead of two. A Ladder stop hit
+sends no order (the broker SL-M owns it); a safety check asks the broker before reconciling or closing. New
+config key `runner.strategies.<TAG>.exit_owner` (`tracker` | `ladder`); for `ladder` the tracker skips
+no-progress, loss-cut and profit-lock, which the backtest never models.
+
+**Proof.** `SimSink` (a simulated broker with the backtest engine's fill rules) plus the real cycle and driver
+produce the same trades as `engine.simulate`: 14 of 14 on real Historify data for both `tp1_only` and
+`ladder_30_35_35` (6 symbols, 5 sessions), and exact on synthetic tests including time exit and the per-day
+cap. That comparison found and fixed a real gap: an entry armed on the last bar of the entry window was never
+filled. See `docs/PYTHON-RUNNER-SPEC.md` (P3 section) for the sample-size caveat.
+
+**Changes to existing files.** `main.py` (`dispatch_signal`, `_ladder_sl_override`, `_place_runner_sl`,
+`override_sl` threading), `tracker.py` (skip for ladder-owned positions, 12 lines), `startup.py` (guard,
+service start and stop, `_close_resources`), `config.py` and `config.yaml` (`exit_owner`). No OpenAlgo core
+files touched.
+
+**In plain terms:** the Python runner can now hand its signals to the same order path as the Telegram alerts,
+and it manages exits with the exact rules the backtest scored, so a paper or live trade is the trade the
+backtest measured. It is still switched off, and BREAKOUT stays on its Pine alerts because it fails the
+acceptance gates. The next step is a shadow run against live bars.
+
+## Python Signal Runner: Shadow Run Preparation (2026-09-30)
+
+**What.** The runner is enabled in shadow mode: `runner.enabled: true`, a 40-symbol explicit universe, BREAKOUT
+still on its Pine alerts. It records the signals it would have sent to `data/runner_state.db` (`shadow_events`)
+and places nothing. Takes effect at the next engine restart. `uv run python -m signal_engine.pipeline.shadow_report
+--day YYYY-MM-DD` compares the record with Pine's BREAKOUT rows in trades.db (matched, runner-only, pine-only,
+with a reason for each disagreement).
+
+**Universe.** Pine's watchlist is not in the repo, so the 16 in-band symbols Pine has signalled plus the most
+liquid in-band F&O names by 20-session median rupee turnover, 40 in all. `GVT&D` is excluded because the history
+endpoint returns HTTP 500 for it.
+
+**Bug fixed.** Run against the real history endpoint, every symbol failed evaluation: live bars carry a
+fixed-offset IST while warm-up bars carry the Asia/Kolkata zone, and joining them gave an object index. Fixed in
+`pipeline/context.py` with a regression test. The earlier replay tests could not catch it.
+
+**Measured.** 40 symbols: 9-20 s per cycle (median 13.5 s, one 61 s outlier) against a 25 s deadline, slower than
+the 5 s estimate; 209 symbols do not fit. On 2026-09-30 the shadow and Pine signals matched on 0 of 45; see
+`docs/PYTHON-RUNNER-SPEC.md` for what that does and does not show.
+
+**Files.** New: `pipeline/shadow_report.py`. Changed: `pipeline/{state,cycle,sink,context}.py`, `config.yaml`.
+No OpenAlgo core files touched.
+
+**In plain terms:** the Python runner will watch the market alongside Pine from the next restart and write down
+what it would have done, without trading. A report lines its calls up against Pine's. On the one day checked they
+did not agree at all, which is the thing to understand next.
