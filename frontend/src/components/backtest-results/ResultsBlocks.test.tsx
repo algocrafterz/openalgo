@@ -1,12 +1,13 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { EvaluationBlock, RegimesBlock } from '@/api/backtestResults'
+import { makeRun } from '@/test/backtestResultsFixtures'
 import { EvaluationTable } from './EvaluationTable'
 import { ExportMenu } from './ExportMenu'
-import { LineagePanel } from './LineagePanel'
 import { RegimeTable } from './RegimeTable'
 import { ResearchNotes } from './ResearchNotes'
 import { StrategyDefinition } from './StrategyDefinition'
+import { VerdictBanner } from './VerdictBanner'
 
 const EVALUATION: EvaluationBlock = {
   version: 1,
@@ -129,11 +130,13 @@ describe('ExportMenu', () => {
 })
 
 describe('EvaluationTable', () => {
-  it('groups gates by dimension and shows every status, including not evaluated', () => {
+  it('groups live gates by dimension and keeps not-evaluated ones listed, folded away', () => {
     render(<EvaluationTable evaluation={EVALUATION} />)
     expect(screen.getByTestId('dimension-edge')).toBeInTheDocument()
     expect(screen.getByTestId('dimension-regime_robustness')).toBeInTheDocument()
-    expect(within(screen.getByTestId('gate-G4.2')).getByText('not evaluated')).toBeInTheDocument()
+    expect(within(screen.getByTestId('gates-dead')).getByTestId('gate-G4.2')).toHaveTextContent(
+      'not evaluated'
+    )
     expect(within(screen.getByTestId('gate-G1.2')).getByText('pass')).toBeInTheDocument()
   })
 
@@ -180,39 +183,43 @@ describe('RegimeTable', () => {
   })
 })
 
-describe('LineagePanel', () => {
-  it('reports the trend, total variants and the change against the parent', () => {
-    render(
-      <LineagePanel
-        lineage={{
-          runs: 4,
-          latest_run_id: 'v4',
-          trials_sum: 4,
-          trend: 'improving',
-          delta_vs_parent: { net_bps: 55.0252, t_stat: 1.909, trades: -3279, parent_run_id: 'v3' },
-        }}
-      />
-    )
-    const panel = screen.getByTestId('lineage')
-    expect(panel).toHaveTextContent('improving')
-    expect(panel).toHaveTextContent('4 runs')
-    expect(panel).toHaveTextContent('4 variants')
-    expect(panel).toHaveTextContent('v3')
+describe('VerdictBanner', () => {
+  const IDEA = { verdict: 'no-edge', status: 'rejected', rejection_basis: 'no-gross-edge' } as const
+  const LINEAGE = {
+    runs: 4,
+    latest_run_id: 'v4',
+    trials_sum: 4,
+    trend: 'improving',
+    edge_status: 'below_bar',
+    edge_bar: 2.5,
+    delta_vs_parent: { net_bps: 55, t_stat: 1.9, trades: -3279, parent_run_id: 'v3' },
+  } as const
+
+  it('leads with no edge and the basis for a rejected idea', () => {
+    render(<VerdictBanner idea={IDEA} run={makeRun()} lineage={LINEAGE} />)
+    expect(screen.getByTestId('verdict-headline')).toHaveTextContent('No edge (no-gross-edge)')
+    expect(screen.getByTestId('verdict-headline')).toHaveTextContent('not justified')
   })
 
-  it('copes with a first run that has no parent', () => {
+  it('says a rising trend below the bar is not an edge', () => {
+    render(<VerdictBanner idea={IDEA} run={makeRun()} lineage={LINEAGE} />)
+    expect(screen.getByTestId('lineage')).toHaveTextContent(/improving, but still below the bar/)
+  })
+
+  it('does not call a first run a trend', () => {
     render(
-      <LineagePanel
-        lineage={{
-          runs: 1,
-          latest_run_id: 'v1',
-          trials_sum: 1,
-          trend: 'insufficient',
-          delta_vs_parent: null,
-        }}
+      <VerdictBanner
+        idea={{ verdict: 'none', status: 'backtested' }}
+        run={makeRun()}
+        lineage={{ ...LINEAGE, runs: 1, trend: 'insufficient', delta_vs_parent: null }}
       />
     )
-    expect(screen.getByTestId('lineage')).toHaveTextContent('too few runs to judge')
+    expect(screen.getByTestId('lineage')).not.toHaveTextContent(/Across/)
+  })
+
+  it('says so when no run is recorded', () => {
+    render(<VerdictBanner idea={IDEA} run={undefined} lineage={null} />)
+    expect(screen.getByTestId('verdict-headline')).toHaveTextContent('No run recorded')
   })
 })
 
@@ -256,5 +263,63 @@ describe('ResearchNotes', () => {
   it('renders nothing when there are no notes', () => {
     const { container } = render(<ResearchNotes notes="" />)
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('EvaluationTable collapsing', () => {
+  const MIXED: EvaluationBlock = {
+    version: 1,
+    dimensions: [
+      {
+        name: 'integrity',
+        rows: [
+          {
+            gate: 'G0.4',
+            title: 'Data coverage',
+            status: 'not_evaluated',
+            hard: false,
+            value: null,
+            threshold: '',
+            evidence: 'needs a coverage report',
+          },
+        ],
+      },
+      {
+        name: 'edge',
+        rows: [
+          {
+            gate: 'G1.2',
+            title: 'Net expectancy',
+            status: 'fail',
+            hard: true,
+            value: -1,
+            threshold: '> 0',
+            evidence: 'negative',
+          },
+          {
+            gate: 'G6.1',
+            title: 'Session',
+            status: 'not_applicable',
+            hard: false,
+            value: null,
+            threshold: '',
+            evidence: 'swing',
+          },
+        ],
+      },
+    ],
+    summary: { counts: { fail: 1, not_evaluated: 1, not_applicable: 1 }, hard_failed: ['G1.2'] },
+  }
+
+  it('shows decision rows in the tables and folds the rest into one expander', () => {
+    render(<EvaluationTable evaluation={MIXED} />)
+    expect(
+      within(screen.getByTestId('dimension-edge')).getByTestId('gate-G1.2')
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('dimension-integrity')).not.toBeInTheDocument()
+    const folded = screen.getByTestId('gates-dead')
+    expect(folded).toHaveTextContent('2 gates not evaluated or not applicable')
+    expect(within(folded).getByTestId('gate-G0.4')).toBeInTheDocument()
+    expect(within(folded).getByTestId('gate-G6.1')).toBeInTheDocument()
   })
 })

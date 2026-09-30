@@ -8,7 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { isKnown, metricText, signClass } from '@/lib/backtestResults'
+import { metricText, netClass } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
 
 interface RunHistoryProps {
@@ -62,12 +62,7 @@ export function RunHistory({ runs, selectedId, onSelect }: RunHistoryProps) {
                       <span className="ml-2 font-sans">(promoted to forward test)</span>
                     )}
                   </TableCell>
-                  <TableCell
-                    className={cn(
-                      'text-right font-mono',
-                      signClass(run.metrics.net_bps, isKnown(run.metrics, run.metrics.net_bps))
-                    )}
-                  >
+                  <TableCell className={cn('text-right font-mono', netClass(run.metrics))}>
                     {metricText(run.metrics, run.metrics.net_bps)}
                   </TableCell>
                   <TableCell className="text-right font-mono">{run.metrics.trades}</TableCell>
@@ -75,7 +70,9 @@ export function RunHistory({ runs, selectedId, onSelect }: RunHistoryProps) {
                   <TableCell className="font-mono text-xs">
                     {run.parent_run_id ?? 'first run'}
                   </TableCell>
-                  <TableCell className="text-sm">{run.change_note || 'n/a'}</TableCell>
+                  <TableCell className="text-sm whitespace-normal break-words min-w-[18rem]">
+                    {run.change_note || 'n/a'}
+                  </TableCell>
                 </TableRow>
               )
             })}

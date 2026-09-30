@@ -56,15 +56,10 @@ function FieldView({ spec, field }: { spec: StrategySpec; field: Field }) {
 export function StrategyDefinition({ spec }: { spec: StrategySpec | null | undefined }) {
   if (!spec) {
     return (
-      <Card data-testid="strategy-definition">
-        <CardHeader>
-          <CardTitle>Strategy definition</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground" data-testid="no-spec">
-          No specification on file for this idea. Its rules are described only in the research
-          notes, which may mix current rules with history.
-        </CardContent>
-      </Card>
+      <p className="text-sm text-muted-foreground max-w-3xl" data-testid="no-spec">
+        No specification on file. The rules exist only in the research notes, which may mix current
+        rules with history.
+      </p>
     )
   }
   const params = Object.entries(spec.parameters ?? {})

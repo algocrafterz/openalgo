@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { makeCard, makeLatest } from '@/test/backtestResultsFixtures'
+import { makeCard, makeLatest, makeRun } from '@/test/backtestResultsFixtures'
 import {
   ALL,
+  buildVerdict,
   coverageNotes,
   distinct,
+  EDGE_T_FLOOR,
   EMPTY_FILTERS,
+  edgeBar,
+  evidenceClass,
   exceedsSlotLimit,
   filterIdeas,
   fmtAge,
@@ -274,5 +278,119 @@ describe('reality checks', () => {
 
   it('never compares numbers of a run that made no trades', () => {
     expect(signsDisagree({ trades: 0, gross_bps: 0, net_bps: 0, t_stat: -1 })).toBe(false)
+  })
+})
+
+describe('evidenceClass', () => {
+  it('reserves green for a positive value that clears the bar', () => {
+    expect(evidenceClass(20, 3.1, 2.5)).toBe('text-green-600')
+  })
+  it('shows a positive value below the bar as amber, not green', () => {
+    expect(evidenceClass(22.2, -0.7, 2.5)).toBe('text-amber-600')
+    expect(evidenceClass(22.2, undefined, 2.5)).toBe('text-amber-600')
+  })
+  it('shows a negative value as red whatever the t-statistic', () => {
+    expect(evidenceClass(-5, 4, 2.5)).toBe('text-red-600')
+  })
+  it('is muted when the value is unknown', () => {
+    expect(evidenceClass(null, 3, 2.5)).toBe('text-muted-foreground')
+    expect(evidenceClass(5, 3, 2.5, false)).toBe('text-muted-foreground')
+  })
+})
+
+describe('edgeBar', () => {
+  it('is the floor unless the trial hurdle is higher', () => {
+    expect(edgeBar({ hurdle_t: 1.97 })).toBe(EDGE_T_FLOOR)
+    expect(edgeBar({ hurdle_t: 3.6 })).toBe(3.6)
+    expect(edgeBar(undefined)).toBe(EDGE_T_FLOOR)
+  })
+})
+
+describe('buildVerdict', () => {
+  const rejected = {
+    verdict: 'no-edge',
+    status: 'rejected',
+    rejection_basis: 'no-gross-edge',
+  } as const
+  const lineage = {
+    runs: 4,
+    latest_run_id: 'v4',
+    trials_sum: 4,
+    trend: 'improving',
+    delta_vs_parent: null,
+  } as const
+  const run = (over: Record<string, unknown> = {}) =>
+    makeRun({
+      metrics: { trades: 3000, gross_bps: 46, net_bps: 22, t_stat: -0.7, hurdle_t: 1.97 },
+      evaluation: {
+        version: 1,
+        dimensions: [
+          {
+            name: 'robustness',
+            rows: [
+              {
+                gate: 'G4.5',
+                title: 'Dispersion',
+                status: 'fail',
+                hard: true,
+                value: 1,
+                threshold: '',
+                evidence: '',
+              },
+            ],
+          },
+          {
+            name: 'statistical_confidence',
+            rows: [
+              {
+                gate: 'G2.2',
+                title: 'Day-clustered t-statistic',
+                status: 'fail',
+                hard: true,
+                value: -0.7,
+                threshold: '',
+                evidence: '',
+              },
+            ],
+          },
+        ],
+        summary: { counts: { fail: 2 }, hard_failed: ['G4.5', 'G2.2'] },
+      },
+      ...over,
+    })
+
+  it('names the lowest-numbered failed hard gate, not the first listed', () => {
+    const v = buildVerdict(rejected, run(), lineage)
+    expect(v.points.join(' ')).toContain('G2.2 Day-clustered t-statistic')
+    expect(v.points.join(' ')).not.toContain('G4.5')
+  })
+
+  it('qualifies a rising trend when the level is below the bar, without server help', () => {
+    const v = buildVerdict(rejected, run(), lineage)
+    expect(v.points.join(' ')).toMatch(/improving, but still below the bar/)
+  })
+
+  it('does not qualify the trend once the level clears the bar', () => {
+    const r = run({
+      metrics: { trades: 3000, gross_bps: 60, net_bps: 40, t_stat: 3.4, hurdle_t: 1.97 },
+    })
+    expect(
+      buildVerdict({ verdict: 'edge', status: 'backtested' }, r, lineage).points.join(' ')
+    ).not.toMatch(/below the bar/)
+  })
+
+  it('flags a thin sample', () => {
+    const r = run({ metrics: { trades: 114, gross_bps: 52, net_bps: 28, t_stat: 0.5 } })
+    expect(buildVerdict(rejected, r, null).points.join(' ')).toContain('Only 114 trades')
+  })
+
+  it('rejected ideas are told to stop, open ones are told the bar is not cleared', () => {
+    expect(buildVerdict(rejected, run(), null).tone).toBe('fail')
+    const open = buildVerdict(
+      { verdict: 'none', status: 'backtested' },
+      run({ evaluation: undefined }),
+      null
+    )
+    expect(open.tone).toBe('warn')
   })
 })

@@ -183,3 +183,34 @@ class TestRegistryIntegration:
         _write_runs(folder, [_run("r1", "2026-09-01", 1.0)])
         data = json.loads(br.render_json(br.load_ideas(tmp_path)))
         assert data["ideas"][0]["lineage"]["runs"] == 1
+
+
+class TestLineageEvidence:
+    """A rising trend says nothing about whether the level is any good."""
+
+    def _chain(self, t_last, hurdle=None):
+        runs = [
+            _run("r1", "2026-09-01", -5.0, t=-1.0),
+            _run("r2", "2026-09-02", 4.0, t=t_last, parent="r1"),
+        ]
+        if hurdle is not None:
+            runs[-1]["metrics"]["hurdle_t"] = hurdle
+        return runs
+
+    def test_improving_but_below_the_bar(self):
+        out = br.lineage(self._chain(1.4))
+        assert out["trend"] == "improving"
+        assert out["edge_status"] == "below_bar"
+        assert out["edge_bar"] == br.EDGE_T_FLOOR
+
+    def test_clears_the_bar(self):
+        assert br.lineage(self._chain(3.2))["edge_status"] == "clears_bar"
+
+    def test_bar_rises_with_the_trial_hurdle(self):
+        out = br.lineage(self._chain(3.2, hurdle=3.6))
+        assert out["edge_bar"] == 3.6
+        assert out["edge_status"] == "below_bar"
+
+    def test_unknown_without_a_t_statistic(self):
+        out = br.lineage([_run("r1", "2026-09-01", 5.0)])
+        assert out["edge_status"] == "unknown"

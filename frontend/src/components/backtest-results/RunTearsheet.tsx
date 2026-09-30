@@ -6,7 +6,7 @@ import {
   isExtrapolated,
   isKnown,
   metricText,
-  signClass,
+  netClass,
   tVsHurdle,
 } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
@@ -50,8 +50,8 @@ function HeadlineStats({ run }: { run: RunRecord }) {
       <Stat
         label="Net bps per trade (after costs)"
         value={net}
-        hint={`Gross ${metricText(m, m.gross_bps)}`}
-        valueClass={signClass(m.net_bps, isKnown(m, m.net_bps))}
+        hint={`Gross ${metricText(m, m.gross_bps)}. Green only when statistically significant.`}
+        valueClass={netClass(m)}
       />
       <Stat label="Trades" value={m.trades === undefined ? 'n/a' : String(m.trades)} />
       <Stat label="Win rate" value={isKnown(m, m.win_rate) ? fmtPercent(m.win_rate) : 'n/a'} />

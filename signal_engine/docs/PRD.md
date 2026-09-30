@@ -5581,3 +5581,9 @@ trade counters, tracker position, trades.db rows and P&L. Exits are owned by the
 - X.3 regime activation: lists the regimes a strategy could be enabled in. A hypothesis only; a regime filter is adopted only after the filtered strategy passes out-of-sample as a separate candidate.
 - `research/evolution.py`: classifies an idea's run history as improving, stagnating, regressing or exhausted, with a stop or continue action.
 - Still deferred: G4.1 parameter perturbation grid (needs raw frames kept or a parameter-keyed cache), G0.4/G0.5/G4.7 data coverage and survivorship (needs the data layer to report what it dropped).
+
+## Backtests Page: Verdict First, Green Only When Significant (2026-10-01)
+
+- A verdict banner opens each idea page: no edge or below the bar, the lowest-numbered failed hard gate, the excess over random entry, out-of-sample result, and the trend qualified by whether the level clears the bar. Built in `frontend/src/lib/backtestResults.ts` (`buildVerdict`), from numbers already on the run.
+- Net bps is green only when its t-statistic clears `max(2.5, hurdle_t)`; positive below the bar is amber (`evidenceClass`). The registry lineage now carries `edge_status` and `edge_bar`, and `research/evolution.py` no longer reports "keep iterating" for a rising line below the bar or for a `no-edge` verdict.
+- The list keeps the decision columns (why, net, t vs bar, vs random entry, OOS) and folds gross, runs, variants, capped net and coverage into one line per idea; the scorecard shows live gates and folds not-evaluated and not-applicable ones into one expander; research notes are collapsed.

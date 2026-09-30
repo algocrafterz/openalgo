@@ -134,7 +134,7 @@ describe('BacktestResults leaderboard', () => {
     renderPage(ok())
     const row = (await screen.findByText('IDEA-003')).closest('tr') as HTMLElement
     expect(within(row).getByText('+4.50')).toHaveClass('text-green-600')
-    expect(within(row).getByText('2.50 vs 1.97')).toBeInTheDocument()
+    expect(within(row).getByText('2.50 vs 2.50')).toBeInTheDocument()
     const negative = (await screen.findByText('IDEA-001')).closest('tr') as HTMLElement
     expect(within(negative).getByText('-1.30')).toHaveClass('text-red-600')
   })
@@ -239,7 +239,7 @@ describe('coverage and reality columns', () => {
   it('shows net at ten slots and the excess over random entry, signed', async () => {
     renderPage(ok([withReality]))
     const row = (await screen.findByText('IDEA-004')).closest('tr') as HTMLElement
-    expect(within(row).getByText('+112.10')).toBeInTheDocument()
+    expect(within(row).getByText(/net at 10 slots \+112\.10/)).toBeInTheDocument()
     expect(within(row).getByText('-28.80')).toBeInTheDocument()
   })
 
@@ -252,9 +252,9 @@ describe('coverage and reality columns', () => {
   it('labels the new columns', async () => {
     renderPage(ok([withReality]))
     await screen.findByText('IDEA-004')
-    expect(screen.getByText('Net at 10 slots')).toBeInTheDocument()
+    expect(screen.getByText('Why')).toBeInTheDocument()
+    expect(screen.getByText('t vs bar')).toBeInTheDocument()
     expect(screen.getByText('vs random entry')).toBeInTheDocument()
-    expect(screen.getByText('Tested')).toBeInTheDocument()
   })
 })
 
@@ -276,7 +276,7 @@ describe('response from a server that predates the coverage fields', () => {
   it('renders the row with n/a instead of throwing', async () => {
     renderPage(ok([olderShape()]))
     const row = (await screen.findByText('IDEA-009')).closest('tr') as HTMLElement
-    expect(within(row).getAllByText('n/a').length).toBeGreaterThanOrEqual(3)
+    expect(within(row).getAllByText('n/a').length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument()
   })
 

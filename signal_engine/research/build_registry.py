@@ -78,6 +78,9 @@ REJECTION_BASIS_REQUIRED_FROM = "2026-10-01"
 TREND_MIN_DELTA_BPS = 1.0
 #: How many of the latest parent-to-child steps decide the trend.
 TREND_WINDOW_STEPS = 3
+#: Day-clustered t-statistic a run must reach before its level counts as evidence of an
+#: edge (acceptance criteria G2.2); a run's own trial hurdle raises it, never lowers it.
+EDGE_T_FLOOR = 2.5
 
 #: A run record is one reproducible backtest execution, stored as
 #: research/ideas/<idea>/runs/<run-id>.json. The required keys are what someone needs to
@@ -457,12 +460,19 @@ def _step(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def edge_bar(metrics: dict[str, Any]) -> float:
+    """The t-statistic a run must reach: the larger of the floor and its trial hurdle."""
+    return max(EDGE_T_FLOOR, float(metrics.get("hurdle_t") or 0.0))
+
+
 def lineage(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Summarise an idea's run history, oldest first. None when it has never been run.
 
     The trend follows the latest run's own parent chain (side branches do not count) and
     sums the last `TREND_WINDOW_STEPS` steps of net bps: improving, regressing, or
-    stagnant when the sum is inside `TREND_MIN_DELTA_BPS`. `trials_sum` adds `n_trials`
+    stagnant when the sum is inside `TREND_MIN_DELTA_BPS`. The trend is about direction
+    only; `edge_status` says whether the latest level clears `edge_bar`, so a rising line
+    that is still below the bar is not mistaken for promise. `trials_sum` adds `n_trials`
     over every run. Runs recorded without a trial count contribute 1 each, so it is a
     floor for the number of variants looked at, not the true ledger.
     """
@@ -485,12 +495,20 @@ def lineage(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
         trend = "regressing"
     else:
         trend = "stagnant"
+    bar = edge_bar(latest["metrics"])
+    t_stat = latest["metrics"].get("t_stat")
+    if t_stat is None:
+        edge_status = "unknown"
+    else:
+        edge_status = "clears_bar" if t_stat >= bar else "below_bar"
     return {
         "runs": len(runs),
         "latest_run_id": latest["run_id"],
         "trials_sum": sum(int(r.get("n_trials", 1)) for r in runs),
         "delta_vs_parent": _step(chain[-2], latest) if len(chain) > 1 else None,
         "trend": trend,
+        "edge_status": edge_status,
+        "edge_bar": bar,
     }
 
 

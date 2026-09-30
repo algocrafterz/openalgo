@@ -137,7 +137,7 @@ describe('BacktestResultsDetail tearsheet', () => {
     const label = within(tearsheet).getByText('Net bps per trade (after costs)')
     const card = label.parentElement as HTMLElement
     expect(within(card).getByText('-1.30')).toHaveClass('text-red-600')
-    expect(within(card).getByText('Gross +8.10')).toBeInTheDocument()
+    expect(within(card).getByText(/Gross \+8\.10/)).toBeInTheDocument()
     expect(within(tearsheet).getByText('41.0%')).toBeInTheDocument()
     expect(within(tearsheet).getByText('12.5R')).toBeInTheDocument()
     expect(within(tearsheet).getAllByText('1.90 vs 1.97').length).toBeGreaterThan(0)

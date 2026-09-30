@@ -9,6 +9,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  edgeBar,
+  evidenceClass,
   fmtAge,
   fmtNum,
   fmtSigned,
@@ -18,8 +20,7 @@ import {
   NA,
   type SortDir,
   type SortKey,
-  signClass,
-  tVsHurdle,
+  THIN_SAMPLE_TRADES,
 } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
 import { Sparkline } from './Sparkline'
@@ -31,21 +32,19 @@ interface Column {
   align?: 'right'
 }
 
-const COLUMNS: Column[] = [
+/** The columns that decide whether an idea is worth more time, in reading order. */
+const LEAD_COLUMNS: Column[] = [
   { key: 'id', label: 'Idea' },
   { key: 'status', label: 'Status' },
   { key: 'verdict', label: 'Verdict' },
-  { key: 'date', label: 'Latest run' },
-  { key: 'runs', label: 'Runs', align: 'right' },
+]
+
+const RESULT_COLUMNS: Column[] = [
   { key: 'trades', label: 'Trades', align: 'right' },
-  { key: 'gross', label: 'Gross bps', align: 'right' },
   { key: 'net', label: 'Net bps', align: 'right' },
 ]
 
-const TAIL_COLUMNS: Column[] = [
-  { key: 'oos', label: 'OOS net bps', align: 'right' },
-  { key: 'trials', label: 'Variants', align: 'right' },
-]
+const OOS_COLUMN: Column = { key: 'oos', label: 'OOS net bps', align: 'right' }
 
 interface LeaderboardTableProps {
   ideas: IdeaCard[]
@@ -88,54 +87,77 @@ function SortHeader({
   )
 }
 
+/** The figures that matter less than the verdict, kept to one muted line under the title. */
+function SecondaryLine({ idea }: { idea: IdeaCard }) {
+  const run = idea.latest_run
+  if (!run) return null
+  const m = run.metrics
+  const parts = [
+    `latest ${run.date}`,
+    `${idea.run_count} run${idea.run_count === 1 ? '' : 's'}`,
+    `gross ${metricText(m, m.gross_bps)}`,
+    `${fmtNum(run.n_trials, 0)} variant${run.n_trials === 1 ? '' : 's'}`,
+    `net at 10 slots ${metricText(m, run.net_bps_cap10)}`,
+    run.period ? `${fmtSpan(run.years)} to ${run.period.end}` : NA,
+    `data ${fmtAge(run.data_age_days)}`,
+  ]
+  return (
+    <div className="text-xs text-muted-foreground max-w-sm whitespace-normal">
+      {parts.join(' | ')}
+    </div>
+  )
+}
+
 function ResultCells({ idea }: { idea: IdeaCard }) {
   const run = idea.latest_run
   if (!run) {
     return (
-      <TableCell colSpan={9} className="text-muted-foreground text-sm">
+      <TableCell colSpan={6} className="text-muted-foreground text-sm">
         No run recorded
       </TableCell>
     )
   }
   const m = run.metrics
+  const bar = edgeBar(m)
+  const thin = m.trades > 0 && m.trades < THIN_SAMPLE_TRADES
   return (
     <>
-      <TableCell className="text-right font-mono">{m.trades}</TableCell>
-      <TableCell className="text-right font-mono">{metricText(m, m.gross_bps)}</TableCell>
+      <TableCell className="font-mono hidden 2xl:table-cell">{run.date}</TableCell>
+      <TableCell className="text-right font-mono">
+        {m.trades}
+        {thin && <div className="text-xs text-amber-600 font-sans">thin sample</div>}
+      </TableCell>
       <TableCell
-        className={cn('text-right font-mono', signClass(m.net_bps, isKnown(m, m.net_bps)))}
+        className={cn(
+          'text-right font-mono',
+          evidenceClass(m.net_bps, m.t_stat, bar, isKnown(m, m.net_bps))
+        )}
       >
         {metricText(m, m.net_bps)}
       </TableCell>
-      <TableCell className="text-right font-mono">{tVsHurdle(m)}</TableCell>
-      <TableCell
-        className={cn(
-          'text-right font-mono',
-          signClass(run.oos_net_bps, isKnown(m, run.oos_net_bps))
-        )}
-      >
-        {metricText(m, run.oos_net_bps)}
-      </TableCell>
-      <TableCell className="text-right font-mono">{fmtNum(run.n_trials, 0)}</TableCell>
-      <TableCell
-        className={cn(
-          'text-right font-mono',
-          signClass(run.net_bps_cap10, isKnown(m, run.net_bps_cap10))
-        )}
-      >
-        {metricText(m, run.net_bps_cap10)}
+      <TableCell className="text-right font-mono">
+        {isKnown(m, m.t_stat) ? `${fmtNum(m.t_stat)} vs ${fmtNum(bar)}` : NA}
       </TableCell>
       <TableCell
         className={cn(
           'text-right font-mono',
-          signClass(run.baseline_excess_bps, isKnown(m, run.baseline_excess_bps))
+          evidenceClass(
+            run.baseline_excess_bps,
+            run.baseline_excess_t,
+            bar,
+            isKnown(m, run.baseline_excess_bps)
+          )
         )}
       >
         {isKnown(m, run.baseline_excess_bps) ? fmtSigned(run.baseline_excess_bps) : NA}
       </TableCell>
-      <TableCell className="font-mono text-sm">
-        <div>{run.period ? `${fmtSpan(run.years)} to ${run.period.end}` : NA}</div>
-        <div className="text-xs text-muted-foreground">{`data ${fmtAge(run.data_age_days)}`}</div>
+      <TableCell
+        className={cn(
+          'text-right font-mono',
+          evidenceClass(run.oos_net_bps, undefined, bar, isKnown(m, run.oos_net_bps))
+        )}
+      >
+        {metricText(m, run.oos_net_bps)}
       </TableCell>
     </>
   )
@@ -143,33 +165,29 @@ function ResultCells({ idea }: { idea: IdeaCard }) {
 
 export function LeaderboardTable({ ideas, sortKey, sortDir, onSort }: LeaderboardTableProps) {
   const navigate = useNavigate()
+  const header = (c: Column) => (
+    <SortHeader key={c.key} column={c} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+  )
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          {COLUMNS.map((c) => (
-            <SortHeader
-              key={c.key}
-              column={c}
-              sortKey={sortKey}
-              sortDir={sortDir}
-              onSort={onSort}
-            />
-          ))}
-          <TableHead className="text-right">t vs hurdle</TableHead>
-          {TAIL_COLUMNS.map((c) => (
-            <SortHeader
-              key={c.key}
-              column={c}
-              sortKey={sortKey}
-              sortDir={sortDir}
-              onSort={onSort}
-            />
-          ))}
-          <TableHead className="text-right">Net at 10 slots</TableHead>
+          {LEAD_COLUMNS.map(header)}
+          <TableHead>Why</TableHead>
+          <TableHead className="hidden 2xl:table-cell">
+            <button
+              type="button"
+              className="font-medium hover:underline"
+              onClick={() => onSort('date')}
+            >
+              Latest run
+            </button>
+          </TableHead>
+          {RESULT_COLUMNS.map(header)}
+          <TableHead className="text-right">t vs bar</TableHead>
           <TableHead className="text-right">vs random entry</TableHead>
-          <TableHead>Tested</TableHead>
-          <TableHead>Trend</TableHead>
+          {header(OOS_COLUMN)}
+          <TableHead className="hidden 2xl:table-cell">Trend</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -179,7 +197,7 @@ export function LeaderboardTable({ ideas, sortKey, sortDir, onSort }: Leaderboar
             className="cursor-pointer"
             onClick={() => navigate(`/backtest-results/${idea.id}`)}
           >
-            <TableCell>
+            <TableCell className="whitespace-normal min-w-[14rem]">
               <Link
                 to={`/backtest-results/${idea.id}`}
                 className="font-medium hover:underline"
@@ -188,6 +206,7 @@ export function LeaderboardTable({ ideas, sortKey, sortDir, onSort }: Leaderboar
                 {idea.id}
               </Link>
               <div className="text-sm text-muted-foreground max-w-xs truncate">{idea.title}</div>
+              <SecondaryLine idea={idea} />
             </TableCell>
             <TableCell>
               <StatusBadge status={idea.status} />
@@ -195,10 +214,11 @@ export function LeaderboardTable({ ideas, sortKey, sortDir, onSort }: Leaderboar
             <TableCell>
               <VerdictBadge verdict={idea.verdict} />
             </TableCell>
-            <TableCell className="font-mono">{idea.latest_run?.date ?? 'n/a'}</TableCell>
-            <TableCell className="text-right font-mono">{idea.run_count}</TableCell>
+            <TableCell className="text-sm whitespace-normal max-w-[10rem]">
+              {idea.rejection_basis ?? <span className="text-muted-foreground">n/a</span>}
+            </TableCell>
             <ResultCells idea={idea} />
-            <TableCell>
+            <TableCell className="hidden 2xl:table-cell">
               {idea.latest_run ? <Sparkline values={idea.latest_run.sparkline} /> : null}
             </TableCell>
           </TableRow>

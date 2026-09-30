@@ -22,6 +22,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from signal_engine.research.build_registry import edge_bar
+
 MIN_RUNS = 3
 MIN_EXHAUSTED_RUNS = 4
 #: A change smaller than this many bps is treated as noise.
@@ -35,8 +37,14 @@ def _metric(run: dict[str, Any], name: str) -> float | None:
     return (run.get("metrics") or {}).get("net_bps")
 
 
-def assess_evolution(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Classify the trajectory of a run history. Inputs are not modified."""
+def assess_evolution(runs: Sequence[dict[str, Any]], verdict: str | None = None) -> dict[str, Any]:
+    """Classify the trajectory of a run history. Inputs are not modified.
+
+    The state is about direction only. The action also weighs level: a rising line whose
+    latest t-statistic is below the edge bar is not worth tuning on its own, and a
+    `no-edge` verdict stops the idea whatever the trend (a gain can come from correcting
+    a rule rather than from finding an edge).
+    """
     ordered = sorted(runs, key=lambda r: (r.get("date", ""), r.get("run_id", "")))
     metric = (
         "excess_net_bps"
@@ -76,7 +84,23 @@ def assess_evolution(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
         state = "stagnating"
         action = "change_structure_or_stop" if best > 0 else "stop_unless_new_idea"
         reason = f"recent window moved {delta:+.1f} bps, within noise"
+    latest = (ordered[-1].get("metrics") or {}) if ordered else {}
+    t_stat = latest.get("t_stat")
+    if state == "improving" and t_stat is not None and t_stat < edge_bar(latest):
+        action = "verify_before_tuning"
+        reason += f", but latest t {t_stat:.2f} is below the bar {edge_bar(latest):.2f}"
+    if verdict == "no-edge" and action != "stop_and_reject":
+        action = "stop_and_reject"
+        reason += "; verdict is no-edge, so more tuning is not justified"
     return {**base, "state": state, "action": action, "best_run": best_id, "reason": reason}
+
+
+def _verdict(idea_dir: Any) -> str | None:
+    """The `verdict:` line of an idea.md front matter, or None."""
+    for line in (idea_dir / "idea.md").read_text(encoding="utf-8").splitlines()[:40]:
+        if line.startswith("verdict:"):
+            return line.split(":", 1)[1].strip()
+    return None
 
 
 def main() -> None:
@@ -87,7 +111,7 @@ def main() -> None:
     for idea in sorted((Path(__file__).parent / "ideas").glob("idea-*")):
         runs = [json.loads(p.read_text()) for p in sorted((idea / "runs").glob("*.json"))]
         if runs:
-            out = assess_evolution(runs)
+            out = assess_evolution(runs, verdict=_verdict(idea))
             print(f"{idea.name}: {out['state']} -> {out['action']} ({out['reason']})")
 
 

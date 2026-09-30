@@ -8,10 +8,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { fmtNum, fmtPercent, isKnown, metricText, signClass } from '@/lib/backtestResults'
+import {
+  edgeBar,
+  evidenceClass,
+  fmtNum,
+  fmtPercent,
+  isKnown,
+  metricText,
+} from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
 
-function SplitColumn({ title, m }: { title: string; m: SplitMetrics }) {
+function SplitColumn({ title, m, bar }: { title: string; m: SplitMetrics; bar: number }) {
   return (
     <div className="rounded-md border p-3 space-y-1">
       <div className="text-sm font-medium">{title}</div>
@@ -19,7 +26,12 @@ function SplitColumn({ title, m }: { title: string; m: SplitMetrics }) {
         <dt className="text-muted-foreground">Trades</dt>
         <dd className="font-mono text-right">{m.trades}</dd>
         <dt className="text-muted-foreground">Net bps</dt>
-        <dd className={cn('font-mono text-right', signClass(m.net_bps, isKnown(m, m.net_bps)))}>
+        <dd
+          className={cn(
+            'font-mono text-right',
+            evidenceClass(m.net_bps, m.t_stat, bar, isKnown(m, m.net_bps))
+          )}
+        >
           {metricText(m, m.net_bps)}
         </dd>
         <dt className="text-muted-foreground">Gross bps</dt>
@@ -50,8 +62,8 @@ function SplitPanel({ run }: { run: RunRecord }) {
         Out-of-sample starts {run.split.oos_start}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <SplitColumn title="In-sample" m={run.in_sample} />
-        <SplitColumn title="Out-of-sample" m={run.out_of_sample} />
+        <SplitColumn title="In-sample" m={run.in_sample} bar={edgeBar(run.metrics)} />
+        <SplitColumn title="Out-of-sample" m={run.out_of_sample} bar={edgeBar(run.metrics)} />
       </div>
     </div>
   )
@@ -79,7 +91,12 @@ function CostTable({ run }: { run: RunRecord }) {
                 {r.round_trip_bps}
                 {r.round_trip_bps === run.costs.round_trip_bps ? ' (modelled)' : ''}
               </TableCell>
-              <TableCell className={cn('text-right font-mono', signClass(r.net_bps, known))}>
+              <TableCell
+                className={cn(
+                  'text-right font-mono',
+                  evidenceClass(r.net_bps, run.metrics.t_stat, edgeBar(run.metrics), known)
+                )}
+              >
                 {metricText(run.metrics, r.net_bps)}
               </TableCell>
             </TableRow>

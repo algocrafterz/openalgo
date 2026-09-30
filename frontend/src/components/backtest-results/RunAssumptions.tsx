@@ -6,7 +6,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-mono break-words">{value}</dd>
+      <dd className="font-mono break-all whitespace-pre-wrap min-w-0">{value}</dd>
     </>
   )
 }
@@ -24,7 +24,7 @@ export function RunAssumptions({ run }: { run: RunRecord }) {
         <CardTitle>Assumptions and provenance</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm">
+        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-1 text-sm">
           <Row label="Universe" value={run.data.universe} />
           <Row label="Test period" value={`${run.period.start} to ${run.period.end}`} />
           <Row label="Bar size" value={run.data.bar_size} />
@@ -41,7 +41,7 @@ export function RunAssumptions({ run }: { run: RunRecord }) {
           {params.length === 0 ? (
             <div className="text-sm text-muted-foreground">None recorded</div>
           ) : (
-            <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm">
+            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-1 text-sm">
               {params.map(([k, v]) => (
                 <Row key={k} label={k} value={formatParam(v)} />
               ))}

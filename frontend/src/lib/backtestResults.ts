@@ -1,4 +1,12 @@
-import type { IdeaCard, LatestRun, RunMetrics, SeriesPoint, Verdict } from '@/api/backtestResults'
+import type {
+  IdeaCard,
+  LatestRun,
+  Lineage,
+  RunMetrics,
+  RunRecord,
+  SeriesPoint,
+  Verdict,
+} from '@/api/backtestResults'
 
 export const NA = 'n/a'
 
@@ -43,6 +51,47 @@ export function fmtPercent(fraction: number | null | undefined): string {
 export function signClass(value: number | null | undefined, known = true): string {
   if (!known || value === null || value === undefined) return 'text-muted-foreground'
   return value > 0 ? 'text-green-600' : value < 0 ? 'text-red-600' : ''
+}
+
+/**
+ * The t-statistic a net figure must reach before it counts as evidence: the acceptance
+ * floor, raised to the run's own trial hurdle when that is higher. Mirrors
+ * `build_registry.edge_bar`.
+ */
+export const EDGE_T_FLOOR = 2.5
+
+/** Below this many trades a result is too thin to lean on, whatever its t-statistic says. */
+export const THIN_SAMPLE_TRADES = 200
+
+export function edgeBar(metrics: { hurdle_t?: number } | null | undefined): number {
+  return Math.max(EDGE_T_FLOOR, metrics?.hurdle_t ?? 0)
+}
+
+/**
+ * Colour for a net figure. Green is reserved for a value that is positive AND
+ * statistically distinguishable from zero; a positive value below the bar is amber, so a
+ * lucky-looking number does not read as success. Negative is red.
+ */
+export function evidenceClass(
+  net: number | null | undefined,
+  t: number | null | undefined,
+  bar: number,
+  known = true
+): string {
+  if (!known || net === null || net === undefined) return 'text-muted-foreground'
+  if (net < 0) return 'text-red-600'
+  if (net === 0) return ''
+  return t !== null && t !== undefined && t >= bar ? 'text-green-600' : 'text-amber-600'
+}
+
+/** `evidenceClass` for a run's headline net bps against its own t-statistic and hurdle. */
+export function netClass(metrics: RunMetrics): string {
+  return evidenceClass(
+    metrics.net_bps,
+    metrics.t_stat,
+    edgeBar(metrics),
+    isKnown(metrics, metrics.net_bps)
+  )
 }
 
 /** Observed t-statistic beside the hurdle for the number of variants tried. */
@@ -266,4 +315,104 @@ export const METRIC_LABELS: Record<string, string> = {
   max_dd_r: 'Max drawdown (R)',
   days: 'Trading days',
   breakeven_cost_bps: 'Break-even cost (bps)',
+}
+
+export type VerdictTone = 'fail' | 'warn' | 'ok' | 'unknown'
+
+export interface RunVerdict {
+  tone: VerdictTone
+  headline: string
+  points: string[]
+}
+
+/** Natural order of gate ids, so G2.2 sorts before G4.5 and G10.1 after G2.2. */
+function gateOrder(gate: string): number[] {
+  return gate
+    .replace(/^[A-Za-z]+/, '')
+    .split('.')
+    .map((n) => Number.parseInt(n, 10) || 0)
+}
+
+function compareGates(a: string, b: string): number {
+  const [x, y] = [gateOrder(a), gateOrder(b)]
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
+/** The failed hard gate with the lowest id: edge and cost gates come before robustness ones. */
+function firstHardFail(run: RunRecord): { gate: string; title: string } | null {
+  const failed = (run.evaluation?.dimensions ?? [])
+    .flatMap((d) => d.rows)
+    .filter((row) => row.hard && row.status === 'fail')
+    .sort((a, b) => compareGates(a.gate, b.gate))
+  return failed.length > 0 ? { gate: failed[0].gate, title: failed[0].title } : null
+}
+
+const TREND_PHRASE: Record<Lineage['trend'], string> = {
+  improving: 'improving',
+  stagnant: 'flat',
+  regressing: 'getting worse',
+  insufficient: 'too few runs to judge',
+}
+
+/**
+ * The answer a reader wants first: is there evidence of an edge, what blocks it, and is
+ * more tuning likely to help. Built only from numbers already on the run, so it never
+ * says more than the tables below it.
+ */
+export function buildVerdict(
+  idea: Pick<IdeaCard, 'verdict' | 'status' | 'rejection_basis'>,
+  run: RunRecord | undefined,
+  lineage: Lineage | null | undefined
+): RunVerdict {
+  if (!run) return { tone: 'unknown', headline: 'No run recorded yet', points: [] }
+  const m = run.metrics
+  const bar = edgeBar(m)
+  const points: string[] = []
+  const t = isKnown(m, m.t_stat) ? m.t_stat : undefined
+  const fail = firstHardFail(run)
+
+  if (t !== undefined) {
+    points.push(`t-statistic ${fmtNum(t)} against a bar of ${fmtNum(bar)}.`)
+  }
+  if (fail) points.push(`First hard gate failed: ${fail.gate} ${fail.title}.`)
+  const base = run.baseline
+  if (base && Number.isFinite(base.excess_net_bps)) {
+    const tail = base.excess_t_stat === undefined ? '' : ` (t ${fmtSigned(base.excess_t_stat)})`
+    points.push(
+      base.excess_net_bps > 0 && (base.excess_t_stat ?? 0) >= bar
+        ? `Beats random entry by ${fmtSigned(base.excess_net_bps, 1)} bps${tail}.`
+        : `Not clearly better than random entry: ${fmtSigned(base.excess_net_bps, 1)} bps${tail}.`
+    )
+  }
+  const oos = run.out_of_sample
+  if (oos && Number.isFinite(oos.net_bps)) {
+    const tail = oos.t_stat === undefined ? '' : `, t ${fmtSigned(oos.t_stat)}`
+    points.push(`Out-of-sample net ${fmtSigned(oos.net_bps, 1)} bps${tail}.`)
+  }
+  if (m.trades > 0 && m.trades < THIN_SAMPLE_TRADES) {
+    points.push(`Only ${m.trades} trades: too few to trust.`)
+  }
+  if (lineage && lineage.runs > 1) {
+    // Judged from this run, not from the server's lineage, so an older server still works.
+    const below = t !== undefined && t < bar
+    points.push(
+      `Across ${lineage.runs} runs the result is ${TREND_PHRASE[lineage.trend]}` +
+        (below ? ', but still below the bar, so progress so far does not show an edge.' : '.')
+    )
+  }
+
+  const rejected = idea.status === 'rejected' || idea.verdict === 'no-edge'
+  if (rejected) {
+    const basis = idea.rejection_basis ? ` (${idea.rejection_basis})` : ''
+    return { tone: 'fail', headline: `No edge${basis}. More tuning is not justified.`, points }
+  }
+  if (fail) return { tone: 'fail', headline: `Not passing: ${fail.gate} ${fail.title}`, points }
+  if (t !== undefined && t >= bar) {
+    return { tone: 'ok', headline: 'Clears the evidence bar. Validate out of sample next.', points }
+  }
+  return { tone: 'warn', headline: 'Below the evidence bar. Not yet proven.', points }
 }

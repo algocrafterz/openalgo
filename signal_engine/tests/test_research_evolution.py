@@ -21,7 +21,7 @@ def test_too_few_runs_is_insufficient():
 
 
 def test_clear_improvement():
-    out = assess_evolution([_run(1, -40, 0.2), _run(2, -10, 0.9), _run(3, 25, 2.1)])
+    out = assess_evolution([_run(1, -40, 0.2), _run(2, -10, 0.9), _run(3, 25, 3.1)])
     assert out["state"] == "improving"
     assert out["action"] == "keep_iterating"
 
@@ -54,5 +54,33 @@ def test_baseline_excess_is_primary_metric_when_present():
 
 
 def test_orders_by_date_not_input_order():
-    out = assess_evolution([_run(3, 25, 2.1), _run(1, -40, 0.2), _run(2, -10, 0.9)])
+    out = assess_evolution([_run(3, 25, 3.1), _run(1, -40, 0.2), _run(2, -10, 0.9)])
     assert out["state"] == "improving"
+
+
+def _with_t(runs, t):
+    for r in runs:
+        r["metrics"]["t_stat"] = t
+        r["metrics"]["hurdle_t"] = 1.97
+    return runs
+
+
+def test_improving_below_the_bar_does_not_say_keep_iterating():
+    runs = _with_t([_run(1, -40), _run(2, -10), _run(3, 25)], 0.9)
+    out = assess_evolution(runs)
+    assert out["state"] == "improving"
+    assert out["action"] == "verify_before_tuning"
+    assert "below the bar" in out["reason"]
+
+
+def test_improving_and_clearing_the_bar_keeps_iterating():
+    runs = _with_t([_run(1, -40), _run(2, -10), _run(3, 25)], 3.4)
+    assert assess_evolution(runs)["action"] == "keep_iterating"
+
+
+def test_no_edge_verdict_overrides_a_rising_trend():
+    runs = _with_t([_run(1, -40), _run(2, -10), _run(3, 25)], 0.9)
+    out = assess_evolution(runs, verdict="no-edge")
+    assert out["state"] == "improving"
+    assert out["action"] == "stop_and_reject"
+    assert "no-edge" in out["reason"]

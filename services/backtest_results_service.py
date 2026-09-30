@@ -133,6 +133,7 @@ def _run_summary(run: dict[str, Any], today: date) -> dict[str, Any]:
         "oos_net_bps": oos.get("net_bps"),
         "net_bps_cap10": _net_at_cap(run, 10),
         "baseline_excess_bps": (run.get("baseline") or {}).get("excess_net_bps"),
+        "baseline_excess_t": (run.get("baseline") or {}).get("excess_t_stat"),
         "period": dict(run["period"]),
         "data": dict(run["data"]),
         **_coverage(run, today),

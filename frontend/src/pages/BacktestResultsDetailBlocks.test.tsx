@@ -125,7 +125,7 @@ describe('BacktestResultsDetail additions', () => {
     await waitFor(() => expect(screen.getByTestId('run-tearsheet')).toBeInTheDocument())
     expect(screen.queryByTestId('evaluation')).not.toBeInTheDocument()
     expect(screen.queryByTestId('regimes')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('lineage')).not.toBeInTheDocument()
+    expect(screen.getByTestId('verdict-banner')).toBeInTheDocument()
     expect(screen.queryByTestId('rejection-basis')).not.toBeInTheDocument()
     expect(screen.queryByTestId('research-notes')).not.toBeInTheDocument()
     expect(screen.getByTestId('no-spec')).toBeInTheDocument()

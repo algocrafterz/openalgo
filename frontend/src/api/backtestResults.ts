@@ -74,6 +74,7 @@ export interface LatestRun {
   oos_net_bps: number | null
   net_bps_cap10?: number | null
   baseline_excess_bps?: number | null
+  baseline_excess_t?: number | null
   /**
    * Coverage fields are optional on purpose: an app server started before the backend
    * gained them still answers with the older shape, and the page must degrade to n/a.
@@ -180,6 +181,9 @@ export interface Lineage {
   latest_run_id: string
   trials_sum: number
   trend: 'improving' | 'stagnant' | 'regressing' | 'insufficient'
+  /** Whether the latest run's t-statistic clears `edge_bar`, independent of the trend. */
+  edge_status?: 'clears_bar' | 'below_bar' | 'unknown'
+  edge_bar?: number
   delta_vs_parent: {
     net_bps: number
     t_stat?: number

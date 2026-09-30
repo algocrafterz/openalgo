@@ -4,12 +4,12 @@ import { Link, useParams } from 'react-router'
 import { backtestResultsApi } from '@/api/backtestResults'
 import { CompareView } from '@/components/backtest-results/CompareView'
 import { DataCoverage } from '@/components/backtest-results/DataCoverage'
-import { LineagePanel } from '@/components/backtest-results/LineagePanel'
 import { ResearchNotes } from '@/components/backtest-results/ResearchNotes'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
 import { RunTearsheet } from '@/components/backtest-results/RunTearsheet'
 import { StrategyDefinition } from '@/components/backtest-results/StrategyDefinition'
 import { StatusBadge, VerdictBadge } from '@/components/backtest-results/VerdictBadge'
+import { VerdictBanner } from '@/components/backtest-results/VerdictBanner'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -64,11 +64,13 @@ export default function BacktestResultsDetail() {
         </h1>
         <div className="flex flex-wrap gap-2">
           <StatusBadge status={idea.status} />
-          <VerdictBadge verdict={idea.verdict} />
-          {idea.rejection_basis && (
+          {/* One chip says it once: a rejected idea with a stated basis shows the basis. */}
+          {idea.rejection_basis ? (
             <Badge variant="outline" data-testid="rejection-basis">
               rejected: {idea.rejection_basis}
             </Badge>
+          ) : (
+            <VerdictBadge verdict={idea.verdict} />
           )}
         </div>
         <p className="text-sm max-w-3xl">{idea.summary}</p>
@@ -80,7 +82,7 @@ export default function BacktestResultsDetail() {
         )}
       </div>
 
-      {data.lineage && <LineagePanel lineage={data.lineage} />}
+      <VerdictBanner idea={idea} run={current} lineage={data.lineage} />
 
       <StrategyDefinition spec={data.spec} />
 
