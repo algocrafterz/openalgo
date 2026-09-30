@@ -10,9 +10,12 @@ import {
   tVsHurdle,
 } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
+import { EvaluationTable } from './EvaluationTable'
+import { ExportMenu } from './ExportMenu'
 import { LineChart } from './LineChart'
 import { MonthlyGrid } from './MonthlyGrid'
 import { RealityChecks } from './RealityChecks'
+import { RegimeTable } from './RegimeTable'
 import { RunAssumptions } from './RunAssumptions'
 import { RunRobustness } from './RunRobustness'
 
@@ -73,10 +76,11 @@ function HeadlineStats({ run }: { run: RunRecord }) {
   )
 }
 
-export function RunTearsheet({ run }: { run: RunRecord }) {
+export function RunTearsheet({ run, ideaId }: { run: RunRecord; ideaId?: string }) {
   const series = run.series ?? {}
   return (
     <div className="space-y-6" data-testid="run-tearsheet">
+      {ideaId && <ExportMenu ideaId={ideaId} runId={run.run_id} hasTrades={run.trades_export} />}
       {isExtrapolated(run.metrics) && (
         <div role="note" className="rounded-md border border-yellow-500/50 p-3 text-sm">
           Only {run.metrics.days} trading days: ratios such as Sharpe are extrapolated from less
@@ -108,6 +112,8 @@ export function RunTearsheet({ run }: { run: RunRecord }) {
           <MonthlyGrid rows={series.monthly ?? []} />
         </CardContent>
       </Card>
+      {run.evaluation && <EvaluationTable evaluation={run.evaluation} />}
+      {run.regimes && <RegimeTable regimes={run.regimes} />}
       <RunRobustness run={run} />
       <RunAssumptions run={run} />
       <p className="text-xs text-muted-foreground" data-testid="caveat">

@@ -25,6 +25,7 @@ import {
   NA,
 } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
+import { ExportMenu } from './ExportMenu'
 import { LineChart } from './LineChart'
 
 const COLOR_A = '#3b82f6'
@@ -129,10 +130,18 @@ function ParamDiffView({ diff }: { diff: NonNullable<BacktestCompareResponse['pa
   )
 }
 
-function CompareBody({ data }: { data: BacktestCompareResponse }) {
+function CompareBody({ data, ideaId }: { data: BacktestCompareResponse; ideaId: string }) {
   const trials = data.n_trials
   return (
     <div className="space-y-6" data-testid="compare-body">
+      <div className="space-y-1">
+        {data.run_a && (
+          <ExportMenu ideaId={ideaId} runId={data.run_a.run_id} label="Export run A" />
+        )}
+        {data.run_b && (
+          <ExportMenu ideaId={ideaId} runId={data.run_b.run_id} label="Export run B" />
+        )}
+      </div>
       {data.comparable === false && (
         <div role="alert" className="rounded-md border border-yellow-500/60 p-3 text-sm space-y-1">
           <div className="font-medium">
@@ -241,7 +250,7 @@ export function CompareView({ ideaId, runs }: { ideaId: string; runs: RunRecord[
                 {data.message ?? 'Comparison failed'}
               </div>
             )}
-            {enabled && data?.status === 'success' && <CompareBody data={data} />}
+            {enabled && data?.status === 'success' && <CompareBody data={data} ideaId={ideaId} />}
           </>
         )}
       </CardContent>

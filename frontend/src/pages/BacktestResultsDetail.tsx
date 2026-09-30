@@ -4,9 +4,13 @@ import { Link, useParams } from 'react-router'
 import { backtestResultsApi } from '@/api/backtestResults'
 import { CompareView } from '@/components/backtest-results/CompareView'
 import { DataCoverage } from '@/components/backtest-results/DataCoverage'
+import { LineagePanel } from '@/components/backtest-results/LineagePanel'
+import { ResearchNotes } from '@/components/backtest-results/ResearchNotes'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
 import { RunTearsheet } from '@/components/backtest-results/RunTearsheet'
+import { StrategyDefinition } from '@/components/backtest-results/StrategyDefinition'
 import { StatusBadge, VerdictBadge } from '@/components/backtest-results/VerdictBadge'
+import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
 function Failure({ message }: { message: string }) {
@@ -61,6 +65,11 @@ export default function BacktestResultsDetail() {
         <div className="flex flex-wrap gap-2">
           <StatusBadge status={idea.status} />
           <VerdictBadge verdict={idea.verdict} />
+          {idea.rejection_basis && (
+            <Badge variant="outline" data-testid="rejection-basis">
+              rejected: {idea.rejection_basis}
+            </Badge>
+          )}
         </div>
         <p className="text-sm max-w-3xl">{idea.summary}</p>
         {idea.result && <p className="text-sm max-w-3xl">Conclusion: {idea.result}</p>}
@@ -70,6 +79,10 @@ export default function BacktestResultsDetail() {
           </p>
         )}
       </div>
+
+      {data.lineage && <LineagePanel lineage={data.lineage} />}
+
+      <StrategyDefinition spec={data.spec} />
 
       {runs.length === 0 || !current ? (
         <div className="text-sm text-muted-foreground" data-testid="no-runs">
@@ -82,10 +95,12 @@ export default function BacktestResultsDetail() {
           <div className="text-sm text-muted-foreground">
             Showing run {current.run_id} ({current.date}). Select another date above to view it.
           </div>
-          <RunTearsheet run={current} />
+          <RunTearsheet run={current} ideaId={ideaId} />
           <CompareView ideaId={ideaId} runs={runs} />
         </>
       )}
+
+      <ResearchNotes notes={data.research_notes} />
     </div>
   )
 }

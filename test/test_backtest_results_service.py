@@ -273,3 +273,159 @@ class TestCapAndBaselineOnTheCard:
         _ok, body, _ = svc.list_results(root)
         latest = next(i for i in body["ideas"] if i["id"] == "IDEA-001")["latest_run"]
         assert latest["net_bps_cap10"] is None and latest["baseline_excess_bps"] is None
+
+
+SPEC_YAML = """name: Sample
+market: NSE cash equity
+timeframe: 5m
+trading_style: intraday
+direction: both
+entry:
+  - 5-min close above VWAP by 0.2 percent
+  - Fill on the next candle open
+exit:
+  - Close below VWAP by 0.1 percent
+stop_loss:
+  - 1.5 ATR(14) below entry
+take_profit:
+  - 2R target
+position_sizing: risk 1 percent of capital per trade
+max_holding_period: 12 bars
+filters: none
+session_filters: none
+indicators:
+  - VWAP
+  - ATR(14)
+parameters:
+  atr_mult: 1.5
+cost_assumptions: 16 bps round trip
+constraints: none
+rationale: Trend persistence after a VWAP break.
+"""
+
+
+class TestIdeaDetailExtras:
+    def test_spec_and_research_notes_are_separate(self, root):
+        folder = root / "research" / "ideas" / "idea-001-sample"
+        (folder / "spec.yaml").write_text(SPEC_YAML, encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok
+        assert body["spec"]["entry"][0] == "5-min close above VWAP by 0.2 percent"
+        assert body["research_notes"] == "Body."
+        assert "id: IDEA-001" not in body["research_notes"]
+
+    def test_idea_without_spec_reports_none(self, root):
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["spec"] is None
+
+    def test_malformed_spec_is_a_registry_error(self, root):
+        folder = root / "research" / "ideas" / "idea-001-sample"
+        (folder / "spec.yaml").write_text("entry: [unclosed", encoding="utf-8")
+        ok, body, status = svc.get_idea_results("IDEA-001", root)
+        assert not ok and status == 500 and body["status"] == "error"
+
+    def test_cache_refreshes_when_a_spec_is_added(self, root):
+        _ok, before, _ = svc.get_idea_results("IDEA-001", root)
+        assert before["spec"] is None
+        folder = root / "research" / "ideas" / "idea-001-sample"
+        (folder / "spec.yaml").write_text(SPEC_YAML, encoding="utf-8")
+        _ok, after, _ = svc.get_idea_results("IDEA-001", root)
+        assert after["spec"]["name"] == "Sample"
+
+    def test_evaluation_regimes_and_lineage_pass_through(self, tmp_path):
+        evaluation = {"version": 1, "dimensions": [], "summary": {"counts": {}, "hard_failed": []}}
+        regimes = {"version": 1, "trend": [], "vol": []}
+        _add_idea(tmp_path, "001", runs=[_run(evaluation=evaluation, regimes=regimes)])
+        ok, body, _ = svc.get_idea_results("IDEA-001", tmp_path)
+        assert ok
+        assert body["runs"][0]["evaluation"] == evaluation
+        assert body["runs"][0]["regimes"] == regimes
+        assert body["lineage"]["runs"] == 1
+
+    def test_old_run_without_new_blocks_still_loads(self, root):
+        _ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert "evaluation" not in body["runs"][0]
+        assert body["runs"][0]["trades_export"] is False
+
+    def test_rejection_basis_is_on_the_idea(self, tmp_path):
+        _add_idea(tmp_path, "001", runs=[_run()])
+        idea_md = tmp_path / "research" / "ideas" / "idea-001-sample" / "idea.md"
+        idea_md.write_text(
+            idea_md.read_text(encoding="utf-8").replace(
+                "last_reviewed: 2026-09-29",
+                "last_reviewed: 2026-09-29\nrejection_basis: no-gross-edge",
+            ),
+            encoding="utf-8",
+        )
+        ok, body, _ = svc.get_idea_results("IDEA-001", tmp_path)
+        assert ok and body["idea"]["rejection_basis"] == "no-gross-edge"
+
+
+class TestExportRun:
+    RUN = "2026-09-30-s-v1"
+
+    def test_json_is_served_exactly_as_stored(self, root):
+        ok, result, status = svc.export_run("IDEA-001", self.RUN, "json", root)
+        assert ok and status == 200
+        stored = root / "research" / "ideas" / "idea-001-sample" / "runs" / f"{self.RUN}.json"
+        assert result.path == stored
+        assert result.mimetype == "application/json"
+        assert result.filename == f"{self.RUN}.json"
+
+    def test_metrics_csv_lists_section_metric_value(self, root):
+        ok, result, _ = svc.export_run("IDEA-001", self.RUN, "metrics", root)
+        assert ok
+        lines = result.body.decode().splitlines()
+        assert lines[0] == "section,metric,value"
+        assert "metrics,net_bps,-1.3" in lines
+        assert "out_of_sample,net_bps,-7.4" in lines
+
+    def test_series_csv_joins_equity_and_drawdown(self, root):
+        ok, result, _ = svc.export_run("IDEA-001", self.RUN, "series", root)
+        assert ok
+        lines = result.body.decode().splitlines()
+        assert lines[0] == "date,equity_r,drawdown_r"
+        assert lines[1] == "2026-01-01,1.0,0.0"
+        assert len(lines) == 29
+
+    def test_trades_404_without_a_sidecar(self, root):
+        ok, body, status = svc.export_run("IDEA-001", self.RUN, "trades", root)
+        assert not ok and status == 404 and body["status"] == "error"
+
+    def test_trades_served_when_a_sidecar_exists(self, root):
+        runs = root / "research" / "ideas" / "idea-001-sample" / "runs"
+        (runs / f"{self.RUN}.trades.csv.gz").write_bytes(b"\x1f\x8b")
+        ok, result, _ = svc.export_run("IDEA-001", self.RUN, "trades", root)
+        assert ok and result.path.name == f"{self.RUN}.trades.csv.gz"
+        _ok, detail, _ = svc.get_idea_results("IDEA-001", root)
+        assert detail["runs"][0]["trades_export"] is True
+
+    @pytest.mark.parametrize("run_id", ["../x", "a/b", "", "a b", "x" * 81])
+    def test_invalid_run_id_is_400(self, root, run_id):
+        ok, _body, status = svc.export_run("IDEA-001", run_id, "json", root)
+        assert not ok and status == 400
+
+    def test_invalid_idea_id_is_400(self, root):
+        ok, _body, status = svc.export_run("../etc", self.RUN, "json", root)
+        assert not ok and status == 400
+
+    def test_unknown_format_is_400(self, root):
+        ok, _body, status = svc.export_run("IDEA-001", self.RUN, "xlsx", root)
+        assert not ok and status == 400
+
+    def test_unknown_run_is_404(self, root):
+        ok, _body, status = svc.export_run("IDEA-001", "no-such-run", "json", root)
+        assert not ok and status == 404
+
+    def test_formula_like_text_cells_are_defused(self):
+        csv_bytes = svc._to_csv([{"a": "=1+1", "b": "ok"}], ("a", "b"))
+        assert csv_bytes.decode().splitlines()[1] == "'=1+1,ok"
+
+    def test_row_builders_match_the_backtest_export_module(self):
+        export = pytest.importorskip("signal_engine.backtest.export")
+        record = _run(
+            in_sample={"trades": 5, "net_bps": 1.0},
+            position_caps=[{"max_positions": 3, "trades": 9, "net_bps": -2.0}],
+        )
+        assert svc.metrics_rows(record) == export.metrics_rows(record)
+        assert svc.series_rows(record) == export.series_rows(record)

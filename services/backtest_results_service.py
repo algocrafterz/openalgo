@@ -9,13 +9,17 @@ All functions return `(success, response, status_code)` like the other services.
 here writes: run records are produced by `signal_engine.backtest.record_run`.
 """
 
+import csv
+import io
 import re
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from signal_engine.research.build_registry import RegistryError, load_ideas
+from signal_engine.research.spec import SpecError, load_spec
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -49,7 +53,11 @@ _cache: dict[str, tuple[tuple, list[dict[str, Any]]]] = {}
 def _signature(root: Path) -> tuple:
     """Changes whenever an idea or a run file is added, edited or removed."""
     ideas = root / "research" / "ideas"
-    files = [*ideas.glob("*/idea.md"), *ideas.glob("*/runs/*.json")]
+    files = [
+        *ideas.glob("*/idea.md"),
+        *ideas.glob("*/spec.yaml"),
+        *ideas.glob("*/runs/*.json"),
+    ]
     return tuple(sorted((str(p), p.stat().st_mtime_ns) for p in files))
 
 
@@ -145,6 +153,7 @@ _IDEA_FIELDS = (
     "last_reviewed",
     "tags",
     "source",
+    "rejection_basis",
 )
 
 
@@ -216,17 +225,188 @@ def _find_idea(idea_id: str, root: Path) -> tuple[dict[str, Any] | None, tuple |
     return idea, None
 
 
+_FRONTMATTER_BLOCK = re.compile(r"\A---\s*\n.*?\n---\s*\n?", re.DOTALL)
+
+#: Run-record sidecars, in the order they are looked for, served only when present.
+_TRADES_SIDECARS = (
+    ("trades.csv.gz", "application/gzip"),
+    ("trades.csv", "text/csv"),
+)
+
+
+def _idea_folder(idea: dict[str, Any], root: Path) -> Path:
+    return root / "research" / "ideas" / idea["folder"]
+
+
+def _trades_sidecar(folder: Path, run_id: str) -> tuple[Path, str] | None:
+    """The per-trade file stored beside a run record, when one exists.
+
+    `run_id` has already been matched against the idea's own runs, so the name cannot
+    contain a path separator.
+    """
+    for suffix, mimetype in _TRADES_SIDECARS:
+        path = folder / "runs" / f"{run_id}.{suffix}"
+        if path.is_file():
+            return path, mimetype
+    return None
+
+
+def _research_notes(folder: Path) -> str:
+    """The body of idea.md: research notes and the decision log, without the front matter."""
+    try:
+        text = (folder / "idea.md").read_text(encoding="utf-8")
+    except OSError:
+        logger.exception("Could not read idea.md in %s", folder)
+        return ""
+    return _FRONTMATTER_BLOCK.sub("", text, count=1).strip()
+
+
+def _load_spec(folder: Path) -> dict[str, Any] | None:
+    """The canonical strategy definition, or None when the idea has no spec.yaml."""
+    try:
+        data = load_spec(folder)
+    except SpecError:
+        logger.exception("Unreadable strategy spec in %s", folder)
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def get_idea_results(
     idea_id: str, root: Path | None = None, today: date | None = None
 ) -> tuple[bool, dict[str, Any], int]:
-    """One idea and its full run history, oldest first, with chart series."""
-    idea, failure = _find_idea(idea_id, root or DEFAULT_ROOT)
+    """One idea and its full run history, oldest first, with chart series.
+
+    Also carries the canonical strategy definition (`spec`, from spec.yaml), kept apart
+    from the research notes (`research_notes`, the idea.md body), and the computed
+    `lineage` of the runs. `spec` is null for an idea with no specification on file.
+    """
+    root = root or DEFAULT_ROOT
+    idea, failure = _find_idea(idea_id, root)
     if failure:
         return failure
     today = today or _today()
+    folder = _idea_folder(idea, root)
     card = {k: idea.get(k) for k in _IDEA_FIELDS}
-    runs = [{**run, **_coverage(run, today)} for run in idea.get("runs") or []]
-    return True, {"status": "success", "idea": card, "runs": runs}, 200
+    runs = [
+        {
+            **run,
+            **_coverage(run, today),
+            "trades_export": _trades_sidecar(folder, run["run_id"]) is not None,
+        }
+        for run in idea.get("runs") or []
+    ]
+    return (
+        True,
+        {
+            "status": "success",
+            "idea": card,
+            "runs": runs,
+            "lineage": idea.get("lineage"),
+            "spec": _load_spec(folder),
+            "research_notes": _research_notes(folder),
+        },
+        200,
+    )
+
+
+EXPORT_FORMATS = ("json", "metrics", "series", "trades")
+
+#: Record sections holding a flat mapping of metric name to value. Mirrors
+#: signal_engine.backtest.export, which is not imported here because it pulls the whole
+#: backtest harness (and scipy) into the web process; a test keeps the two identical.
+_METRIC_SECTIONS = ("metrics", "in_sample", "out_of_sample")
+
+
+def metrics_rows(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten a record's metric blocks into `section, metric, value` rows."""
+    rows: list[dict[str, Any]] = []
+    for section in _METRIC_SECTIONS:
+        block = record.get(section)
+        if isinstance(block, dict):
+            rows.extend({"section": section, "metric": k, "value": v} for k, v in block.items())
+    for cap in record.get("position_caps") or []:
+        section = f"position_caps.{cap['max_positions']}"
+        rows.extend(
+            {"section": section, "metric": k, "value": v}
+            for k, v in cap.items()
+            if k != "max_positions"
+        )
+    return rows
+
+
+def series_rows(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Equity and drawdown curves joined on date, in calendar order."""
+    series = record.get("series") or {}
+    equity = dict(series.get("equity_r") or [])
+    drawdown = dict(series.get("drawdown_r") or [])
+    return [
+        {"date": d, "equity_r": equity.get(d), "drawdown_r": drawdown.get(d)}
+        for d in sorted(equity.keys() | drawdown.keys())
+    ]
+
+
+def _csv_cell(value: Any) -> Any:
+    """Stop a text cell being read as a spreadsheet formula."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
+def _to_csv(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> bytes:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([_csv_cell(row.get(c)) for c in columns])
+    return buffer.getvalue().encode("utf-8")
+
+
+@dataclass(frozen=True)
+class ExportFile:
+    """A download: `path` for a file served as stored, `body` for one built on request."""
+
+    filename: str
+    mimetype: str
+    path: Path | None = None
+    body: bytes | None = None
+
+
+def export_run(
+    idea_id: str, run_id: str, fmt: str, root: Path | None = None
+) -> tuple[bool, ExportFile | dict[str, Any], int]:
+    """One run as a download: the canonical JSON record, metric or series CSV, or trades.
+
+    The JSON record is the canonical result and is served exactly as stored. Trades are
+    served only when a sidecar was stored beside the record; records never hold them.
+    """
+    if not _RUN_ID.match(run_id or ""):
+        return _error("Invalid run id", 400)
+    if fmt not in EXPORT_FORMATS:
+        return _error(f"Unknown export format; use one of: {', '.join(EXPORT_FORMATS)}", 400)
+    root = root or DEFAULT_ROOT
+    idea, failure = _find_idea(idea_id, root)
+    if failure:
+        return failure
+    run = next((r for r in idea.get("runs") or [] if r["run_id"] == run_id), None)
+    if run is None:
+        return _error(f"Run not found: {run_id}", 404)
+    folder = _idea_folder(idea, root)
+    if fmt == "json":
+        path = folder / "runs" / f"{run_id}.json"
+        if not path.is_file():
+            return _error(f"Run not found: {run_id}", 404)
+        return True, ExportFile(f"{run_id}.json", "application/json", path=path), 200
+    if fmt == "metrics":
+        body = _to_csv(metrics_rows(run), ("section", "metric", "value"))
+        return True, ExportFile(f"{run_id}.metrics.csv", "text/csv", body=body), 200
+    if fmt == "series":
+        body = _to_csv(series_rows(run), ("date", "equity_r", "drawdown_r"))
+        return True, ExportFile(f"{run_id}.series.csv", "text/csv", body=body), 200
+    sidecar = _trades_sidecar(folder, run_id)
+    if sidecar is None:
+        return _error("No per-trade export is stored for this run", 404)
+    path, mimetype = sidecar
+    return True, ExportFile(path.name, mimetype, path=path), 200
 
 
 def _get(run: dict[str, Any], path: tuple[str, ...]) -> Any:

@@ -98,6 +98,8 @@ export interface IdeaCard {
   last_reviewed?: string
   tags?: string[]
   source?: { type?: string; author?: string; ref?: string }
+  /** Why a rejected idea was rejected; absent on older ideas. */
+  rejection_basis?: string
   run_count: number
   latest_run: LatestRun | null
 }
@@ -122,6 +124,90 @@ export interface MonthlyRow {
 export interface CostSensitivityPoint {
   round_trip_bps: number
   net_bps: number
+}
+
+export type GateStatus = 'pass' | 'fail' | 'report' | 'not_evaluated' | 'not_applicable'
+
+export interface GateRow {
+  gate: string
+  title: string
+  status: GateStatus
+  hard: boolean
+  value: number | string | null
+  threshold: string
+  evidence: string
+}
+
+export interface GateDimension {
+  name: string
+  rows: GateRow[]
+}
+
+/** Strategy evaluation profile. There is deliberately no composite score. */
+export interface EvaluationBlock {
+  version: number
+  criteria?: string
+  horizon?: string
+  dimensions: GateDimension[]
+  summary: {
+    counts: Partial<Record<GateStatus, number>>
+    hard_failed: string[]
+  }
+}
+
+export interface RegimeRow {
+  regime: string
+  trades: number
+  net_r: number
+  total_r: number
+  win_rate: number
+  max_dd_r: number
+  low_sample: boolean
+}
+
+/** Performance by market regime; each trade is placed by its entry day's regime. */
+export interface RegimesBlock {
+  version: number
+  min_trades?: number
+  unclassified_trades?: number
+  trend: RegimeRow[]
+  vol: RegimeRow[]
+  source?: Record<string, unknown>
+}
+
+export interface Lineage {
+  runs: number
+  latest_run_id: string
+  trials_sum: number
+  trend: 'improving' | 'stagnant' | 'regressing' | 'insufficient'
+  delta_vs_parent: {
+    net_bps: number
+    t_stat?: number
+    trades: number
+    parent_run_id: string
+  } | null
+}
+
+/** The canonical strategy definition (spec.yaml); every field is optional for display. */
+export interface StrategySpec {
+  name?: string
+  market?: string
+  timeframe?: string
+  trading_style?: string
+  direction?: string
+  entry?: string | string[]
+  exit?: string | string[]
+  stop_loss?: string | string[]
+  take_profit?: string | string[]
+  position_sizing?: string | string[]
+  max_holding_period?: string | string[]
+  filters?: string | string[]
+  session_filters?: string | string[]
+  indicators?: string | string[]
+  parameters?: Record<string, unknown>
+  cost_assumptions?: string | string[]
+  constraints?: string | string[]
+  rationale?: string | string[]
 }
 
 export interface RunRecord {
@@ -152,6 +238,10 @@ export interface RunRecord {
   }
   validation?: string[]
   notes?: string
+  evaluation?: EvaluationBlock
+  regimes?: RegimesBlock
+  /** True when a per-trade file is stored beside the record. */
+  trades_export?: boolean
 }
 
 export interface MetricDelta {
@@ -187,6 +277,11 @@ export interface BacktestListResponse extends Envelope {
 export interface BacktestIdeaResponse extends Envelope {
   idea?: Omit<IdeaCard, 'run_count' | 'latest_run'>
   runs?: RunRecord[]
+  lineage?: Lineage | null
+  /** Null when the idea has no spec.yaml on file. */
+  spec?: StrategySpec | null
+  /** The idea.md body: research notes and the decision log, apart from the definition. */
+  research_notes?: string
 }
 
 export interface BacktestCompareResponse extends Envelope {
@@ -217,6 +312,14 @@ async function unwrap<T extends Envelope>(
     }
     return { status: 'error', message: fallbackMessage } as T
   }
+}
+
+export type ExportFormat = 'json' | 'metrics' | 'series' | 'trades'
+
+export function exportUrl(ideaId: string, runId: string, format: ExportFormat): string {
+  const base = webClient.defaults.baseURL ?? ''
+  const path = `/api/backtest-results/${encodeURIComponent(ideaId)}/runs/${encodeURIComponent(runId)}/export`
+  return `${base}${path}?format=${format}`
 }
 
 export const backtestResultsApi = {

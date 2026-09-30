@@ -96,3 +96,62 @@ def test_compare_without_run_ids_is_400(monkeypatch):
     response = client.get("/api/backtest-results/IDEA-001/compare?a=r1")
     assert response.status_code == 400
     assert response.get_json()["status"] == "error"
+
+
+def test_export_requires_a_session():
+    with _app().test_client() as client:
+        path = "/api/backtest-results/IDEA-001/runs/r1/export"
+        assert client.get(path).status_code in (302, 401)
+
+
+def test_export_serves_a_built_csv_as_an_attachment(monkeypatch):
+    seen = {}
+
+    def fake(idea_id, run_id, fmt):
+        seen.update(idea=idea_id, run=run_id, fmt=fmt)
+        return True, route_module_export("r1.metrics.csv", b"section,metric,value\n"), 200
+
+    monkeypatch.setattr(route_module, "export_run", fake)
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get("/api/backtest-results/IDEA-001/runs/r1/export?format=metrics")
+    assert response.status_code == 200
+    assert seen == {"idea": "IDEA-001", "run": "r1", "fmt": "metrics"}
+    assert response.headers["Content-Disposition"] == 'attachment; filename="r1.metrics.csv"'
+    assert response.data == b"section,metric,value\n"
+
+
+def route_module_export(filename, body):
+    from services.backtest_results_service import ExportFile
+
+    return ExportFile(filename, "text/csv", body=body)
+
+
+def test_export_serves_a_stored_file(monkeypatch, tmp_path):
+    from services.backtest_results_service import ExportFile
+
+    record = tmp_path / "r1.json"
+    record.write_text('{"run_id": "r1"}', encoding="utf-8")
+    monkeypatch.setattr(
+        route_module,
+        "export_run",
+        lambda *_a: (True, ExportFile("r1.json", "application/json", path=record), 200),
+    )
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get("/api/backtest-results/IDEA-001/runs/r1/export")
+    assert response.status_code == 200
+    assert response.get_json() == {"run_id": "r1"}
+    assert "attachment" in response.headers["Content-Disposition"]
+
+
+def test_export_defaults_to_json_and_propagates_errors(monkeypatch):
+    seen = {}
+
+    def fake(idea_id, run_id, fmt):
+        seen["fmt"] = fmt
+        return False, {"status": "error", "message": "Run not found: r1"}, 404
+
+    monkeypatch.setattr(route_module, "export_run", fake)
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get("/api/backtest-results/IDEA-001/runs/r1/export")
+    assert seen["fmt"] == "json"
+    assert response.status_code == 404
