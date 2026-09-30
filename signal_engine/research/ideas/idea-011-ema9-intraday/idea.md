@@ -11,6 +11,7 @@ source:
 summary: Nine-EMA retest strategy from a HowToTrade.com explainer, implemented as ema9-intraday.pine.
 result: Both the Pine script and the source-PDF rules have negative gross expectancy with costs set to
   zero; the entries themselves have no edge.
+rejection_basis: no-gross-edge
 strategy_path: strategy_library/intraday/ema9
 analysis_doc: strategy_library/intraday/ema9/STRATEGY-ANALYSIS.md
 backtest_module: backtest/strategies/ema9.py
@@ -35,3 +36,4 @@ Current conclusion: Both the Pine script and the source-PDF rules have negative 
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-09-30: recorded rejection_basis no-gross-edge (gross -1.1 bps at zero-cost measurement, 276k trades).

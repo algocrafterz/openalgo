@@ -10,6 +10,7 @@ source:
 summary: Fade a failed breakout of a prior extreme.
 result: 'Dead end, do not trade: real gross edge but too thin per trade to survive costs; adding refinements
   made results worse.'
+rejection_basis: cost-dominated
 strategy_path: strategy_library/intraday/turtle-soup
 analysis_doc: strategy_library/intraday/turtle-soup/STRATEGY-ANALYSIS.md
 backtest_module: backtest/strategies/turtle_soup.py
@@ -35,3 +36,4 @@ Current conclusion: Dead end, do not trade: real gross edge but too thin per tra
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-09-30: recorded rejection_basis cost-dominated (gross +2.2 bps is real but below the 16 bps round-trip cost).

@@ -76,6 +76,19 @@
       "horizon": "swing",
       "id": "IDEA-004",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-ema-cross-base-pullback-v2",
+          "t_stat": 1.613,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-ema-cross-base-pullback-v3",
+        "runs": 3,
+        "trend": "stagnant",
+        "trials_sum": 3
+      },
+      "rejection_basis": "concurrency-artifact",
       "result": "Disqualified 2026-09-22: the apparent edge was a concurrency artifact (needs median 54 and max 138 simultaneous positions) and is negative at a realistic 10-slot cap.",
       "revisit_when": "Only if a version is found that holds up under a realistic position cap.",
       "runs": [
@@ -534,6 +547,19 @@
       "horizon": "swing",
       "id": "IDEA-005",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-liquidity-sweep-engulfing-v2",
+          "t_stat": 0.192,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-liquidity-sweep-engulfing-v3",
+        "runs": 3,
+        "trend": "stagnant",
+        "trials_sum": 3
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "No edge gross or net. Loosening filters to rescue it reproduced the textbook in-sample versus out-of-sample overfit signature.",
       "revisit_when": "Only with genuine intraday multi-timeframe data and a fresh pre-registered test.",
       "runs": [
@@ -1027,6 +1053,18 @@
       "horizon": "intraday",
       "id": "IDEA-009",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-orb-v1",
+          "t_stat": 3.761,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-orb-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
       "result": "Backtest verdict 2026-08-28: keep running small to accumulate forward data; do not scale and do not expect monthly income.",
       "revisit_when": "Reassess after enough forward data; note the Pine edits noted in the analysis doc were not compiled on TradingView.",
       "runs": [
@@ -1348,6 +1386,18 @@
       "horizon": "intraday",
       "id": "IDEA-010",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-breakout-key-level-v1",
+          "t_stat": 13.941,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-breakout-key-level-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
       "result": "In development; key-level adapter covers PD and IB families only, value-area levels are not reproducible from 5-minute bars.",
       "revisit_when": "When the adapter coverage gap for value-area levels is closed or accepted.",
       "runs": [
@@ -1687,6 +1737,19 @@
       "horizon": "intraday",
       "id": "IDEA-011",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-ema9-intraday-v1",
+          "t_stat": 10.79,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-ema9-intraday-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Both the Pine script and the source-PDF rules have negative gross expectancy with costs set to zero; the entries themselves have no edge.",
       "revisit_when": "Not planned.",
       "runs": [
@@ -2032,6 +2095,19 @@
       "horizon": "intraday",
       "id": "IDEA-012",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-ema9-vwap-cross-v1",
+          "t_stat": 18.815,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-ema9-vwap-cross-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Built and measured 2026-09-10, verdict do not trade: on 208 NSE F&O names the cross follows through less than random, so it behaves as mean reversion, not momentum.",
       "revisit_when": "Only as a deliberately mean-reversion variant.",
       "runs": [
@@ -2328,6 +2404,19 @@
       "horizon": "intraday",
       "id": "IDEA-013",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-ib-extension-v1",
+          "t_stat": 0.81,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-ib-extension-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Backtest verdict 2026-08-28: do not trade, there is no edge for costs to eat into; retire.",
       "revisit_when": "Not planned.",
       "runs": [
@@ -2632,6 +2721,19 @@
       "horizon": "intraday",
       "id": "IDEA-014",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-nr-breakout-v1",
+          "t_stat": 12.306,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-nr-breakout-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Dead end, do not trade: measured 30.9% follow-through versus 33.3% for random entries; the regime filter helps directionally but not enough.",
       "revisit_when": "Not planned.",
       "runs": [
@@ -2913,6 +3015,19 @@
       "horizon": "intraday",
       "id": "IDEA-015",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-open-drive-value-area-v1",
+          "t_stat": 46.617,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-open-drive-value-area-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Six attempts, concluded negative: loses money and the raw idea has no edge before costs; selectivity narrowed the cost gap but hit a sample-size wall.",
       "revisit_when": "Not planned; see the value-area-fade adapter for the isolated rejection family.",
       "runs": [
@@ -3216,6 +3331,19 @@
       "horizon": "intraday",
       "id": "IDEA-016",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-turtle-soup-v1",
+          "t_stat": 23.352,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-turtle-soup-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
+      "rejection_basis": "cost-dominated",
       "result": "Dead end, do not trade: real gross edge but too thin per trade to survive costs; adding refinements made results worse.",
       "revisit_when": "Only if execution costs fall materially.",
       "runs": [
@@ -3553,6 +3681,18 @@
       "horizon": "intraday",
       "id": "IDEA-020",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-dhb-day-high-breakout-v1",
+          "t_stat": 1.283,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-dhb-day-high-breakout-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 2
+      },
       "result": "Adapter built with every vague term pinned to a number; no conclusion is recorded in a strategy analysis doc yet.",
       "revisit_when": "Write up the adapter result as a STRATEGY-ANALYSIS.md and set the verdict.",
       "runs": [
@@ -3857,6 +3997,19 @@
       "horizon": "swing",
       "id": "IDEA-021",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-dividend-growth-v2",
+          "t_stat": 0.0,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-dividend-growth-v3",
+        "runs": 3,
+        "trend": "stagnant",
+        "trials_sum": 3
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Backtest verdict 2026-08-28: do not trade.",
       "revisit_when": "Not planned.",
       "runs": [
@@ -4353,6 +4506,19 @@
       "horizon": "swing",
       "id": "IDEA-023",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 55.0252,
+          "parent_run_id": "2026-09-29-gap-rsi-swing-v3",
+          "t_stat": 1.909,
+          "trades": -3279
+        },
+        "latest_run_id": "2026-09-30-gap-rsi-swing-v4",
+        "runs": 4,
+        "trend": "improving",
+        "trials_sum": 4
+      },
+      "rejection_basis": "no-gross-edge",
       "result": "Not shipped: does not clear the cost line, and real figures are somewhat worse than reported.",
       "revisit_when": "Not planned.",
       "runs": [
@@ -4768,6 +4934,174 @@
           "validation": [
             "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
           ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": 15.8798,
+            "excess_t_stat": -0.853,
+            "gross_bps": 30.359,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 6.359,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": 22.2388,
+            "trades": 3572
+          },
+          "change_note": "swing engine now long-only (allow_shorts=False); v1-v3 included short trades that cannot be executed on CNC; adds evaluation and regime blocks; same strategy and data",
+          "code_version": "4d4d06b8d-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 46.2388,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 41.2388,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 36.2388,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 26.2388,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 22.2388,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-30",
+          "evaluation_summary": {
+            "counts": {
+              "fail": 4,
+              "not_applicable": 9,
+              "not_evaluated": 43,
+              "pass": 4,
+              "report": 7
+            },
+            "hard_failed": [
+              "G4.5",
+              "G4.4",
+              "G2.2"
+            ]
+          },
+          "in_sample": {
+            "gross_bps": 55.1299,
+            "net_bps": 31.1299,
+            "sharpe": 0.657,
+            "t_stat": 0.27,
+            "trades": 2333,
+            "win_rate": 0.1899
+          },
+          "metrics": {
+            "breakeven_cost_bps": 46.2388,
+            "days": 679,
+            "expectancy_r": 0.1275,
+            "gross_bps": 46.2388,
+            "hurdle_t": 1.972,
+            "max_dd_r": 286.7723,
+            "median_concurrent": 12.0,
+            "net_bps": 22.2388,
+            "payoff": 4.362,
+            "peak_concurrent": 104,
+            "profit_factor": 1.14,
+            "sharpe": 0.536,
+            "t_stat": -0.705,
+            "trades": 3572,
+            "win_rate": 0.2072
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials=1 as stated by the caller.",
+          "out_of_sample": {
+            "gross_bps": 29.4972,
+            "net_bps": 5.4972,
+            "sharpe": 0.193,
+            "t_stat": -2.262,
+            "trades": 1239,
+            "win_rate": 0.2397
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": false,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "ema_exit_arm": true,
+              "ema_exit_delay": 0,
+              "ema_len": 21,
+              "max_gap_pct": 20.0,
+              "min_gap_pct": 1.0,
+              "min_price": 50.0,
+              "ob_level": 90.0,
+              "os_level": 10.0,
+              "require_ema_cross": false,
+              "rsi_len": 14,
+              "rsi_mode": "on_ema",
+              "rsi_smooth_len": 14,
+              "stop_mode": "prev_close",
+              "tp_r": 0.0
+            },
+            "strategy_class": "GapRsi"
+          },
+          "parent_run_id": "2026-09-29-gap-rsi-swing-v3",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -42.7655,
+              "max_positions": 3,
+              "net_bps": -66.7655,
+              "sharpe": -2.132,
+              "t_stat": -2.081,
+              "taken_pct": 31.1,
+              "trades": 1110,
+              "win_rate": 0.1315
+            },
+            {
+              "gross_bps": -28.8532,
+              "max_positions": 5,
+              "net_bps": -52.8532,
+              "sharpe": -1.811,
+              "t_stat": -0.631,
+              "taken_pct": 43.8,
+              "trades": 1563,
+              "win_rate": 0.1446
+            },
+            {
+              "gross_bps": -5.9227,
+              "max_positions": 10,
+              "net_bps": -29.9227,
+              "sharpe": -0.988,
+              "t_stat": -1.271,
+              "taken_pct": 61.3,
+              "trades": 2189,
+              "win_rate": 0.164
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-30-gap-rsi-swing-v4",
+          "split": {
+            "oos_start": "2024-09-12",
+            "type": "oos"
+          }
         }
       ],
       "source": {
@@ -4791,6 +5125,18 @@
       "horizon": "swing",
       "id": "IDEA-024",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-ibs-mean-reversion-v2",
+          "t_stat": 0.84,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-ibs-mean-reversion-v3",
+        "runs": 3,
+        "trend": "stagnant",
+        "trials_sum": 3
+      },
       "result": "Marginal, not proven, do not trade; meaningfully improved from clearly negative.",
       "revisit_when": "If a further independent improvement is found and passes IS/OOS.",
       "runs": [
@@ -5236,6 +5582,18 @@
       "horizon": "swing",
       "id": "IDEA-026",
       "last_reviewed": "2026-09-29",
+      "lineage": {
+        "delta_vs_parent": {
+          "net_bps": 0.0,
+          "parent_run_id": "2026-09-29-phoenix-bird-rebound-v2",
+          "t_stat": 1.34,
+          "trades": 0
+        },
+        "latest_run_id": "2026-09-29-phoenix-bird-rebound-v3",
+        "runs": 3,
+        "trend": "stagnant",
+        "trials_sum": 3
+      },
       "result": "Adapter built from the published source; no conclusion is recorded in a strategy analysis doc yet.",
       "revisit_when": "Write up the adapter result and set the verdict.",
       "runs": [
@@ -5684,6 +6042,6 @@
     "ideas_with_runs": 15,
     "last_reviewed": "2026-09-29",
     "total": 25,
-    "total_runs": 36
+    "total_runs": 37
   }
 }

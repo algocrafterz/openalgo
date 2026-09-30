@@ -12,6 +12,7 @@ summary: The 9/21 EMA cross is only the trigger; the tradeable setup is cross, t
   the EMA zone, buyers defend, then breakout.
 result: 'Disqualified 2026-09-22: the apparent edge was a concurrency artifact (needs median 54 and max
   138 simultaneous positions) and is negative at a realistic 10-slot cap.'
+rejection_basis: concurrency-artifact
 strategy_path: strategy_library/swing/ema-pullback
 analysis_doc: strategy_library/swing/ema-pullback/STRATEGY-ANALYSIS.md
 backtest_module: backtest/strategies/ema_pullback.py
@@ -38,3 +39,4 @@ Current conclusion: Disqualified 2026-09-22: the apparent edge was a concurrency
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-09-30: recorded rejection_basis concurrency-artifact (needs median 54 and max 138 concurrent positions; OOS net -66 bps).

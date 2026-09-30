@@ -3,6 +3,7 @@ id: IDEA-021
 title: Dividend growth
 status: rejected
 verdict: no-edge
+rejection_basis: no-gross-edge
 category: swing-value
 horizon: swing
 source:
@@ -34,3 +35,4 @@ Current conclusion: Backtest verdict 2026-08-28: do not trade.
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-10-01: rejection_basis no-gross-edge. The stored run shows gross +404 bps, but the same-symbol random-entry baseline earns +434 bps net, so the rule adds -54 bps (t -3.07) over the symbols' own drift. There is no edge before costs once drift is removed.

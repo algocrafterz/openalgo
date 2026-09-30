@@ -10,6 +10,7 @@ source:
 summary: Breakout from narrow-range days, with a volatility-regime filter.
 result: 'Dead end, do not trade: measured 30.9% follow-through versus 33.3% for random entries; the regime
   filter helps directionally but not enough.'
+rejection_basis: no-gross-edge
 strategy_path: strategy_library/intraday/nr-breakout
 analysis_doc: strategy_library/intraday/nr-breakout/STRATEGY-ANALYSIS.md
 backtest_module: backtest/strategies/nr_breakout.py
@@ -35,3 +36,4 @@ Current conclusion: Dead end, do not trade: measured 30.9% follow-through versus
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-09-30: recorded rejection_basis no-gross-edge (gross +0.5 bps; follow-through below random entries).

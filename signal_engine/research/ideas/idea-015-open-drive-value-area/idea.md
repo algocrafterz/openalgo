@@ -10,6 +10,7 @@ source:
 summary: Market-profile open-drive, acceptance, retest and value-area rejection setups.
 result: 'Six attempts, concluded negative: loses money and the raw idea has no edge before costs; selectivity
   narrowed the cost gap but hit a sample-size wall.'
+rejection_basis: no-gross-edge
 strategy_path: strategy_library/intraday/open-drive
 analysis_doc: strategy_library/intraday/open-drive/STRATEGY-ANALYSIS.md
 backtest_module: backtest/strategies/open_drive.py
@@ -35,3 +36,4 @@ Current conclusion: Six attempts, concluded negative: loses money and the raw id
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-09-30: recorded rejection_basis no-gross-edge (gross -3.4 bps across six attempts).

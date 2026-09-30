@@ -3,6 +3,7 @@ id: IDEA-005
 title: Liquidity sweep with engulfing candle (daily adaptation)
 status: rejected
 verdict: no-edge
+rejection_basis: no-gross-edge
 category: swing-mean-reversion
 horizon: swing
 source:
@@ -39,3 +40,4 @@ Current conclusion: No edge gross or net. Loosening filters to rescue it reprodu
 ## Decision log
 
 - 2026-09-29: registered in the idea registry (status rejected).
+- 2026-10-01: rejection_basis no-gross-edge. Stored run gross is +52 bps at t 0.55, indistinguishable from zero, and excess over the random-entry baseline is -106 bps. The in-sample +106 versus out-of-sample -111 split is a consequence of there being no gross edge, not the primary reason.
