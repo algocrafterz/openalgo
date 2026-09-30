@@ -134,7 +134,9 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
         data["uid"] = api_key
         data["actid"] = api_key
 
-    payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
+    # Escape "&" in jData: a symbol such as "M&M-EQ" would otherwise be split by the form
+    # parser and rejected as invalid JSON. Full percent-encoding is NOT accepted by Flattrade.
+    payload_str = "jData=" + json.dumps(data).replace("&", "%26") + "&jKey=" + AUTH_TOKEN
 
     # Get the shared httpx client
     client = get_httpx_client()

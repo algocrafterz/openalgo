@@ -51,7 +51,7 @@ def calculate_margin_api(positions, auth):
 
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-    jdata = json.dumps(margin_data)
+    jdata = json.dumps(margin_data).replace("&", "%26")  # "&" in a symbol splits the form body
     payload = f"jData={jdata}&jKey={AUTH_TOKEN}"
 
     safe_payload = {k: v for k, v in margin_data.items() if k not in ("uid", "actid")}

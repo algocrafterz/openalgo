@@ -157,7 +157,7 @@ def place_order_api(data, auth):
     newdata = transform_data(data, token, AUTH_TOKEN)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-    payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
+    payload = "jData=" + json.dumps(newdata).replace("&", "%26") + "&jKey=" + AUTH_TOKEN
 
     logger.debug(f"{payload}")
     # Get the shared httpx client
@@ -328,7 +328,7 @@ def cancel_order(orderid, auth):
     api_key = full_api_key.split(":::")[0]
     data = {"uid": api_key, "norenordno": orderid}
 
-    payload = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
+    payload = "jData=" + json.dumps(data).replace("&", "%26") + "&jKey=" + AUTH_TOKEN
     # Set up the request headers
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -365,7 +365,7 @@ def modify_order(data, auth):
     transformed_data = transform_modify_order_data(data, token)
     # Set up the request headers
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
+    payload = "jData=" + json.dumps(transformed_data).replace("&", "%26") + "&jKey=" + AUTH_TOKEN
 
     logger.debug(f"Modify Order Payload: {payload}")
     logger.debug(f"Modify Order Data: {transformed_data}")
