@@ -2,7 +2,7 @@
 
 On 2026-09-09 the Flattrade broker session went invalid for ~6 hours (session
 expired before market open, no automatic re-login until a manual restart at
-15:05 IST — see signal_engine/pinescripts/intraday/orb/breakout.md's postmortem
+15:05 IST — see signal_engine/strategy_library/intraday/orb/breakout.md's postmortem
 for that date). A HINDALCO MARKET order placed at 10:50 IST sat in "open"
 status the whole time, then filled at 15:05 IST at whatever price happened to
 be current then — four hours removed from the signal that placed it, after the
