@@ -49,6 +49,8 @@ log/test/
 # above only matches files ENDING in .log, so a rotation suffix appended after
 # .log slips through as permanent untracked noise.
 log/*.log.*
+# Same for the control scripts' rotated logs (signal_engine/scripts/openalgoctl.log.old is 5 MB).
+*.log.old
 
 
 # Strategy encryption key
@@ -122,20 +124,23 @@ signal_engine/scripts/openalgo-service.pid
 # PineScript run artifacts: TradingView Strategy-Tester exports and chart
 # screenshots are regenerated per run, not source. They were showing up in
 # every `git status` as permanent untracked noise.
-signal_engine/pinescripts/**/result.json
-signal_engine/pinescripts/**/charts/
+signal_engine/strategy_library/**/result.json
+signal_engine/strategy_library/**/charts/
 # Third-party course/reference PDFs pulled in while researching a strategy. They are
 # inputs to the analysis, not source: large, undiffable, and usually someone else's
 # copyright. The findings drawn from them live in the strategy's own .md.
-signal_engine/pinescripts/**/*.pdf
+signal_engine/strategy_library/**/*.pdf
 # Chart screenshots dropped in for review. The one tracked image is a .jpeg
 # reference diagram, so this only catches the transient captures.
-signal_engine/pinescripts/**/*.png
+signal_engine/strategy_library/**/*.png
+# Raw idea captures (PDFs, screenshots) for the same reasons; the write-up is the idea.md.
+signal_engine/research/ideas/_inbox/*.pdf
+signal_engine/research/ideas/_inbox/*.png
 
 # EOD review reports. Regenerated from trades.db plus the tradebook snapshots by
 # signal_engine/analysis/eod.sh, so they are output rather than record. The durable record
 # is trades.db and the strategy's own changelog.
-signal_engine/analysis/reports/
+signal_engine/reports/
 signal_engine/logs/
 
 # Backtest results (timestamped run outputs)

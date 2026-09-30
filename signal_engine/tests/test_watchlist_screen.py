@@ -2,7 +2,7 @@
 
 Covers what does not need the network: the digest message can never be mistaken for a
 trade signal (the same "observation traffic must never look like a trade" convention
-used throughout signal_engine/pinescripts), the weekly gate, daily-history conviction
+used throughout signal_engine/strategy_library), the weekly gate, daily-history conviction
 tracking, and maybe_run_weekly_screen()'s orchestration of the two speeds.
 run_daily_scan()/_beta_vs_nifty()/fetch_surveillance_symbols() hit yfinance and NSE
 respectively and are exercised by hand (uv run --group analysis python -m

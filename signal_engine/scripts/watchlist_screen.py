@@ -1,7 +1,7 @@
 """Multi-factor screen for the shared ORB/BREAKOUT/EMA9VWAP watchlist.
 
 Runs the screen used to build the watchlist by hand (see
-signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md, 2026-09-12/13 entries).
+signal_engine/strategy_library/intraday/ema9-vwap/STRATEGY-LOG.md, 2026-09-12/13 entries).
 Checks FOUR factors, split into two speeds - see COMPUTE VS DECIDE below:
 
     1. Liquidity   - median daily traded value >= Rs 100cr (not market cap: a stock
@@ -106,7 +106,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WATCHLIST_FILE = (
     REPO_ROOT
-    / "signal_engine/pinescripts/intraday/intraday-stocks-watchlist-tradingview"
+    / "signal_engine/strategy_library/intraday/intraday-stocks-watchlist-tradingview"
 )
 #: Runtime state, not repo content - signal_engine/data/ is fully gitignored (same
 #: directory the Telethon session and other small state files already live in).

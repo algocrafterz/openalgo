@@ -1,0 +1,5689 @@
+{
+  "ideas": [
+    {
+      "category": "intraday-breakout",
+      "folder": "idea-001-first-5min-range-trap-breakout",
+      "horizon": "intraday",
+      "id": "IDEA-001",
+      "last_reviewed": "2026-09-29",
+      "revisit_when": "Next time an opening-range idea is evaluated; overlaps orb (IDEA-009), test the 1-hour consolidation filter against it.",
+      "runs": [],
+      "source": {
+        "author": "Akhil",
+        "ref": "research/ideas/_inbox/ideas-evaluated.txt (strategy:1)",
+        "type": "video"
+      },
+      "status": "inbox",
+      "summary": "Mark the first 5-minute candle range, wait at least 1 hour of consolidation inside it, then trade either a trap reversal back inside the range or a swing-point breakout, targeting the opposite end of the range.",
+      "tags": [
+        "opening-range",
+        "trap"
+      ],
+      "title": "First 5-minute candle range: trap and breakout entries",
+      "verdict": "none"
+    },
+    {
+      "category": "intraday-momentum",
+      "folder": "idea-002-ema9-fibonacci-pivot",
+      "horizon": "intraday",
+      "id": "IDEA-002",
+      "last_reviewed": "2026-09-29",
+      "revisit_when": "Not the same as ema9 (IDEA-011), which was built from a PDF article. Needs its own adapter before any verdict.",
+      "runs": [],
+      "source": {
+        "author": "Abhishek Singh",
+        "ref": "research/ideas/_inbox/ideas-evaluated.txt (strategy:2)",
+        "type": "video"
+      },
+      "status": "inbox",
+      "summary": "5-minute chart with a 9 EMA and Fibonacci-type standard pivot points on Nifty or Bank Nifty; entry rules are in the raw text.",
+      "tags": [
+        "ema",
+        "pivot",
+        "fibonacci"
+      ],
+      "title": "9 EMA with Fibonacci pivot points",
+      "verdict": "none"
+    },
+    {
+      "category": "intraday-breakout",
+      "folder": "idea-003-six-confirmation-bullish-breakout",
+      "horizon": "intraday",
+      "id": "IDEA-003",
+      "last_reviewed": "2026-09-29",
+      "revisit_when": "Check overlap with breakout (IDEA-010) first; the confluence filters may already be covered there.",
+      "runs": [],
+      "source": {
+        "ref": "research/ideas/_inbox/ideas-evaluated.txt (strategy:3)",
+        "type": "video"
+      },
+      "status": "inbox",
+      "summary": "Long only when six things agree: previous day high broken, first 5-minute high broken, EMA 10 > 20 > 50, ADX above 25, price above VWAP, breakout volume at least 1.5x average.",
+      "tags": [
+        "breakout",
+        "confluence",
+        "adx",
+        "vwap"
+      ],
+      "title": "Six-confirmation bullish breakout",
+      "verdict": "none"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/ema-pullback/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/ema_pullback.py",
+      "category": "swing-momentum",
+      "folder": "idea-004-ema-cross-base-pullback",
+      "horizon": "swing",
+      "id": "IDEA-004",
+      "last_reviewed": "2026-09-29",
+      "result": "Disqualified 2026-09-22: the apparent edge was a concurrency artifact (needs median 54 and max 138 simultaneous positions) and is negative at a realistic 10-slot cap.",
+      "revisit_when": "Only if a version is found that holds up under a realistic position cap.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 154.751,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 149.751,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 144.751,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 134.751,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 130.751,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 219.2348,
+            "net_bps": 195.2348,
+            "sharpe": 2.48,
+            "t_stat": 3.91,
+            "trades": 3854,
+            "win_rate": 0.1505
+          },
+          "metrics": {
+            "breakeven_cost_bps": 154.751,
+            "days": 1354,
+            "expectancy_r": 0.24,
+            "gross_bps": 154.751,
+            "hurdle_t": 1.972,
+            "max_dd_r": 635.7527,
+            "net_bps": 130.751,
+            "payoff": 8.609,
+            "profit_factor": 1.365,
+            "sharpe": 1.47,
+            "t_stat": 2.349,
+            "trades": 5115,
+            "win_rate": 0.1369
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -42.3309,
+            "net_bps": -66.3309,
+            "sharpe": -3.59,
+            "t_stat": -6.511,
+            "trades": 1261,
+            "win_rate": 0.0952
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "base_lookback_bars": 5,
+              "base_max_range_pct": 4.0,
+              "close_position_pct": 50.0,
+              "ema_fast": 20,
+              "ema_mid": 50,
+              "ema_slow": 200,
+              "ext_pct": 3.0,
+              "lookback_bars": 10,
+              "max_ext_pct": 0.0,
+              "min_price": 50.0,
+              "pullback_floor_pct": 3.0,
+              "require_base": false,
+              "require_fast_above_mid": false,
+              "sl_buffer_pct": 0.3,
+              "stop_mode": "pullback_low",
+              "touch_band_pct": 1.0,
+              "tp_r": 0.0,
+              "trail_to_breakeven_r": 1.0,
+              "trend_exit_buffer_pct": 1.0,
+              "use_regime": false
+            },
+            "strategy_class": "EmaPullback"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-ema-cross-base-pullback-v1",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "add position-cap view (3/5/10 slots) and concurrency profile; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 154.751,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 149.751,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 144.751,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 134.751,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 130.751,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 219.2348,
+            "net_bps": 195.2348,
+            "sharpe": 2.48,
+            "t_stat": 3.91,
+            "trades": 3854,
+            "win_rate": 0.1505
+          },
+          "metrics": {
+            "breakeven_cost_bps": 154.751,
+            "days": 1354,
+            "expectancy_r": 0.24,
+            "gross_bps": 154.751,
+            "hurdle_t": 1.972,
+            "max_dd_r": 635.7527,
+            "median_concurrent": 45.0,
+            "net_bps": 130.751,
+            "payoff": 8.609,
+            "peak_concurrent": 125,
+            "profit_factor": 1.365,
+            "sharpe": 1.47,
+            "t_stat": 2.349,
+            "trades": 5115,
+            "win_rate": 0.1369
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -42.3309,
+            "net_bps": -66.3309,
+            "sharpe": -3.59,
+            "t_stat": -6.511,
+            "trades": 1261,
+            "win_rate": 0.0952
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "base_lookback_bars": 5,
+              "base_max_range_pct": 4.0,
+              "close_position_pct": 50.0,
+              "ema_fast": 20,
+              "ema_mid": 50,
+              "ema_slow": 200,
+              "ext_pct": 3.0,
+              "lookback_bars": 10,
+              "max_ext_pct": 0.0,
+              "min_price": 50.0,
+              "pullback_floor_pct": 3.0,
+              "require_base": false,
+              "require_fast_above_mid": false,
+              "sl_buffer_pct": 0.3,
+              "stop_mode": "pullback_low",
+              "touch_band_pct": 1.0,
+              "tp_r": 0.0,
+              "trail_to_breakeven_r": 1.0,
+              "trend_exit_buffer_pct": 1.0,
+              "use_regime": false
+            },
+            "strategy_class": "EmaPullback"
+          },
+          "parent_run_id": "2026-09-29-ema-cross-base-pullback-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 119.8729,
+              "max_positions": 3,
+              "net_bps": 95.8729,
+              "sharpe": 0.09,
+              "t_stat": 0.911,
+              "taken_pct": 7.7,
+              "trades": 394,
+              "win_rate": 0.1091
+            },
+            {
+              "gross_bps": 157.4379,
+              "max_positions": 5,
+              "net_bps": 133.4379,
+              "sharpe": 0.38,
+              "t_stat": 1.029,
+              "taken_pct": 11.8,
+              "trades": 604,
+              "win_rate": 0.1258
+            },
+            {
+              "gross_bps": 136.0548,
+              "max_positions": 10,
+              "net_bps": 112.0548,
+              "sharpe": 0.54,
+              "t_stat": 0.409,
+              "taken_pct": 22.4,
+              "trades": 1148,
+              "win_rate": 0.1193
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ema-cross-base-pullback-v2",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -28.8065,
+            "excess_t_stat": -0.876,
+            "gross_bps": 183.5575,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 159.5575,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": 130.751,
+            "trades": 5115
+          },
+          "change_note": "score t and sharpe in bps like the headline; add position caps and a random-entry baseline (open to close, same-day exits included); same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 154.751,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 149.751,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 144.751,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 134.751,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 130.751,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 219.2348,
+            "net_bps": 195.2348,
+            "sharpe": 2.942,
+            "t_stat": 4.767,
+            "trades": 3854,
+            "win_rate": 0.1505
+          },
+          "metrics": {
+            "breakeven_cost_bps": 154.751,
+            "days": 1354,
+            "expectancy_r": 0.24,
+            "gross_bps": 154.751,
+            "hurdle_t": 1.972,
+            "max_dd_r": 635.7527,
+            "median_concurrent": 45.0,
+            "net_bps": 130.751,
+            "payoff": 8.609,
+            "peak_concurrent": 125,
+            "profit_factor": 1.365,
+            "sharpe": 2.127,
+            "t_stat": 3.962,
+            "trades": 5115,
+            "win_rate": 0.1369
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -42.3309,
+            "net_bps": -66.3309,
+            "sharpe": -1.626,
+            "t_stat": -3.0,
+            "trades": 1261,
+            "win_rate": 0.0952
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "base_lookback_bars": 5,
+              "base_max_range_pct": 4.0,
+              "close_position_pct": 50.0,
+              "ema_fast": 20,
+              "ema_mid": 50,
+              "ema_slow": 200,
+              "ext_pct": 3.0,
+              "lookback_bars": 10,
+              "max_ext_pct": 0.0,
+              "min_price": 50.0,
+              "pullback_floor_pct": 3.0,
+              "require_base": false,
+              "require_fast_above_mid": false,
+              "sl_buffer_pct": 0.3,
+              "stop_mode": "pullback_low",
+              "touch_band_pct": 1.0,
+              "tp_r": 0.0,
+              "trail_to_breakeven_r": 1.0,
+              "trend_exit_buffer_pct": 1.0,
+              "use_regime": false
+            },
+            "strategy_class": "EmaPullback"
+          },
+          "parent_run_id": "2026-09-29-ema-cross-base-pullback-v2",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 119.8729,
+              "max_positions": 3,
+              "net_bps": 95.8729,
+              "sharpe": 1.316,
+              "t_stat": 1.91,
+              "taken_pct": 7.7,
+              "trades": 394,
+              "win_rate": 0.1091
+            },
+            {
+              "gross_bps": 157.4379,
+              "max_positions": 5,
+              "net_bps": 133.4379,
+              "sharpe": 1.61,
+              "t_stat": 2.43,
+              "taken_pct": 11.8,
+              "trades": 604,
+              "win_rate": 0.1258
+            },
+            {
+              "gross_bps": 136.0548,
+              "max_positions": 10,
+              "net_bps": 112.0548,
+              "sharpe": 1.511,
+              "t_stat": 2.168,
+              "taken_pct": 22.4,
+              "trades": 1148,
+              "win_rate": 0.1193
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ema-cross-base-pullback-v3",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "ref": "research/ideas/_inbox/ideas-evaluated.txt (strategy:4)",
+        "type": "video"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/swing/ema-pullback",
+      "summary": "The 9/21 EMA cross is only the trigger; the tradeable setup is cross, tight base, pullback to the EMA zone, buyers defend, then breakout.",
+      "tags": [
+        "ema",
+        "pullback",
+        "swing"
+      ],
+      "title": "9/21 EMA cross, base, pullback, breakout",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/liquidity-sweep/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/liquidity_sweep.py",
+      "category": "swing-mean-reversion",
+      "folder": "idea-005-liquidity-sweep-engulfing",
+      "horizon": "swing",
+      "id": "IDEA-005",
+      "last_reviewed": "2026-09-29",
+      "result": "No edge gross or net. Loosening filters to rescue it reproduced the textbook in-sample versus out-of-sample overfit signature.",
+      "revisit_when": "Only with genuine intraday multi-timeframe data and a fresh pre-registered test.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 51.9996,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 46.9996,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 41.9996,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 31.9996,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 27.9996,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 129.9907,
+            "net_bps": 105.9907,
+            "sharpe": 1.73,
+            "t_stat": 0.804,
+            "trades": 73,
+            "win_rate": 0.411
+          },
+          "metrics": {
+            "breakeven_cost_bps": 51.9996,
+            "days": 106,
+            "expectancy_r": 0.0075,
+            "gross_bps": 51.9996,
+            "hurdle_t": 1.972,
+            "max_dd_r": 13.876,
+            "net_bps": 27.9996,
+            "payoff": 1.733,
+            "profit_factor": 1.011,
+            "sharpe": 0.08,
+            "t_stat": 0.355,
+            "trades": 114,
+            "win_rate": 0.3684
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -86.8628,
+            "net_bps": -110.8628,
+            "sharpe": -2.88,
+            "t_stat": -0.555,
+            "trades": 41,
+            "win_rate": 0.2927
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "min_engulf_body_pct": 60.0,
+              "min_price": 50.0,
+              "sl_buffer_pct": 0.3,
+              "stop_mode": "zone_low",
+              "structure_lookback": 10,
+              "tp_r": 2.0,
+              "zone_fraction": 0.5,
+              "zone_valid_days": 10
+            },
+            "strategy_class": "LiquiditySweep"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-liquidity-sweep-engulfing-v1",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "add position-cap view (3/5/10 slots) and concurrency profile; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 51.9996,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 46.9996,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 41.9996,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 31.9996,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 27.9996,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 129.9907,
+            "net_bps": 105.9907,
+            "sharpe": 1.73,
+            "t_stat": 0.804,
+            "trades": 73,
+            "win_rate": 0.411
+          },
+          "metrics": {
+            "breakeven_cost_bps": 51.9996,
+            "days": 106,
+            "expectancy_r": 0.0075,
+            "gross_bps": 51.9996,
+            "hurdle_t": 1.972,
+            "max_dd_r": 13.876,
+            "median_concurrent": 2.0,
+            "net_bps": 27.9996,
+            "payoff": 1.733,
+            "peak_concurrent": 5,
+            "profit_factor": 1.011,
+            "sharpe": 0.08,
+            "t_stat": 0.355,
+            "trades": 114,
+            "win_rate": 0.3684
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -86.8628,
+            "net_bps": -110.8628,
+            "sharpe": -2.88,
+            "t_stat": -0.555,
+            "trades": 41,
+            "win_rate": 0.2927
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "min_engulf_body_pct": 60.0,
+              "min_price": 50.0,
+              "sl_buffer_pct": 0.3,
+              "stop_mode": "zone_low",
+              "structure_lookback": 10,
+              "tp_r": 2.0,
+              "zone_fraction": 0.5,
+              "zone_valid_days": 10
+            },
+            "strategy_class": "LiquiditySweep"
+          },
+          "parent_run_id": "2026-09-29-liquidity-sweep-engulfing-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 38.3099,
+              "max_positions": 3,
+              "net_bps": 14.3099,
+              "sharpe": 0.14,
+              "t_stat": 0.144,
+              "taken_pct": 90.4,
+              "trades": 103,
+              "win_rate": 0.3689
+            },
+            {
+              "gross_bps": 51.9996,
+              "max_positions": 5,
+              "net_bps": 27.9996,
+              "sharpe": 0.08,
+              "t_stat": 0.355,
+              "taken_pct": 100.0,
+              "trades": 114,
+              "win_rate": 0.3684
+            },
+            {
+              "gross_bps": 51.9996,
+              "max_positions": 10,
+              "net_bps": 27.9996,
+              "sharpe": 0.08,
+              "t_stat": 0.355,
+              "taken_pct": 100.0,
+              "trades": 114,
+              "win_rate": 0.3684
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-liquidity-sweep-engulfing-v2",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -105.8588,
+            "excess_t_stat": -1.173,
+            "gross_bps": 157.8583,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 133.8583,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": 27.9996,
+            "trades": 114
+          },
+          "change_note": "score t and sharpe in bps like the headline; add position caps and a random-entry baseline (open to close, same-day exits included); same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 51.9996,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 46.9996,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 41.9996,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 31.9996,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 27.9996,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 129.9907,
+            "net_bps": 105.9907,
+            "sharpe": 2.097,
+            "t_stat": 0.98,
+            "trades": 73,
+            "win_rate": 0.411
+          },
+          "metrics": {
+            "breakeven_cost_bps": 51.9996,
+            "days": 106,
+            "expectancy_r": 0.0075,
+            "gross_bps": 51.9996,
+            "hurdle_t": 1.972,
+            "max_dd_r": 13.876,
+            "median_concurrent": 2.0,
+            "net_bps": 27.9996,
+            "payoff": 1.733,
+            "peak_concurrent": 5,
+            "profit_factor": 1.011,
+            "sharpe": 0.561,
+            "t_stat": 0.547,
+            "trades": 114,
+            "win_rate": 0.3684
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -86.8628,
+            "net_bps": -110.8628,
+            "sharpe": -2.301,
+            "t_stat": -0.444,
+            "trades": 41,
+            "win_rate": 0.2927
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "min_engulf_body_pct": 60.0,
+              "min_price": 50.0,
+              "sl_buffer_pct": 0.3,
+              "stop_mode": "zone_low",
+              "structure_lookback": 10,
+              "tp_r": 2.0,
+              "zone_fraction": 0.5,
+              "zone_valid_days": 10
+            },
+            "strategy_class": "LiquiditySweep"
+          },
+          "parent_run_id": "2026-09-29-liquidity-sweep-engulfing-v2",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 38.3099,
+              "max_positions": 3,
+              "net_bps": 14.3099,
+              "sharpe": 0.285,
+              "t_stat": 0.168,
+              "taken_pct": 90.4,
+              "trades": 103,
+              "win_rate": 0.3689
+            },
+            {
+              "gross_bps": 51.9996,
+              "max_positions": 5,
+              "net_bps": 27.9996,
+              "sharpe": 0.561,
+              "t_stat": 0.547,
+              "taken_pct": 100.0,
+              "trades": 114,
+              "win_rate": 0.3684
+            },
+            {
+              "gross_bps": 51.9996,
+              "max_positions": 10,
+              "net_bps": 27.9996,
+              "sharpe": 0.561,
+              "t_stat": 0.547,
+              "taken_pct": 100.0,
+              "trades": 114,
+              "win_rate": 0.3684
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-liquidity-sweep-engulfing-v3",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "author": "Omar Agag",
+        "ref": "research/ideas/_inbox/ideas-evaluated.txt (strategy:5)",
+        "type": "video"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/swing/liquidity-sweep",
+      "summary": "A 4-hour engulfing candle that sweeps the prior low marks a buy zone in the lower half of its body; enter on a 15-minute structure shift with a 2:1 target. Adapted to daily bars for this platform.",
+      "tags": [
+        "liquidity-sweep",
+        "engulfing",
+        "smc"
+      ],
+      "title": "Liquidity sweep with engulfing candle (daily adaptation)",
+      "verdict": "no-edge"
+    },
+    {
+      "category": "intraday-momentum",
+      "folder": "idea-006-vwap-qualified-break-pullback",
+      "horizon": "intraday",
+      "id": "IDEA-006",
+      "last_reviewed": "2026-09-29",
+      "revisit_when": "Distinct from ema9-vwap (IDEA-012), which is a cross strategy. Needs an adapter.",
+      "runs": [],
+      "source": {
+        "author": "Garvit",
+        "captured": "2026-08-29",
+        "ref": "research/ideas/_inbox/ideas-29082026.md",
+        "type": "video"
+      },
+      "status": "inbox",
+      "summary": "Long only after a qualified break above VWAP (strong close, volume spike, prior swing high taken out), entered on the first pullback to VWAP; three closes below VWAP plus a held retest signals a regime change to sellers.",
+      "tags": [
+        "vwap",
+        "pullback"
+      ],
+      "title": "VWAP qualified break then first pullback",
+      "verdict": "none"
+    },
+    {
+      "category": "intraday-mean-reversion",
+      "folder": "idea-007-double-top-bottom-key-levels",
+      "horizon": "intraday",
+      "id": "IDEA-007",
+      "last_reviewed": "2026-09-29",
+      "revisit_when": "Needs pattern-detection rules pinned to numbers before it can be tested.",
+      "runs": [],
+      "source": {
+        "captured": "2026-08-29",
+        "ref": "research/ideas/_inbox/ideas-29082026.md",
+        "type": "video"
+      },
+      "status": "inbox",
+      "summary": "Double top or bottom forming at previous day high/low, then pre-market, then intraday extremes; confirmation is a reversal off VWAP or the 200-day moving average.",
+      "tags": [
+        "double-top",
+        "key-levels",
+        "vwap"
+      ],
+      "title": "Double top / bottom at key levels with VWAP and 200 MA",
+      "verdict": "none"
+    },
+    {
+      "category": "intraday-mean-reversion",
+      "folder": "idea-008-vwap-2sd-mean-reversion",
+      "horizon": "intraday",
+      "id": "IDEA-008",
+      "last_reviewed": "2026-09-29",
+      "revisit_when": "Related to the value-area-fade result inside open-drive (IDEA-015) which was negative; test the ADX regime gate specifically.",
+      "runs": [],
+      "source": {
+        "captured": "2026-08-29",
+        "ref": "research/ideas/_inbox/ideas-29082026-self.md",
+        "type": "self"
+      },
+      "status": "inbox",
+      "summary": "In a range regime (ADX below 22), fade a close back inside the 2 SD VWAP band after at least 0.75 ATR excursion; stop at rejection extreme plus 0.2 ATR, target VWAP.",
+      "tags": [
+        "vwap",
+        "mean-reversion",
+        "adx",
+        "self"
+      ],
+      "title": "VWAP plus-minus 2 SD failed-extreme mean reversion",
+      "verdict": "none"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/orb/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/orb.py",
+      "category": "intraday-breakout",
+      "folder": "idea-009-orb",
+      "horizon": "intraday",
+      "id": "IDEA-009",
+      "last_reviewed": "2026-09-29",
+      "result": "Backtest verdict 2026-08-28: keep running small to accumulate forward data; do not scale and do not expect monthly income.",
+      "revisit_when": "Reassess after enough forward data; note the Pine edits noted in the analysis doc were not compiled on TradingView.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -0.1021,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -5.1021,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -10.1021,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -16.1021,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -20.1021,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -1.0217,
+            "net_bps": -17.0218,
+            "sharpe": -8.2,
+            "t_stat": -27.025,
+            "trades": 72723,
+            "win_rate": 0.4028
+          },
+          "metrics": {
+            "breakeven_cost_bps": -0.1021,
+            "days": 2422,
+            "expectancy_r": -0.1617,
+            "gross_bps": -0.1021,
+            "hurdle_t": 1.972,
+            "max_dd_r": 15666.5967,
+            "net_bps": -16.1022,
+            "payoff": 1.054,
+            "profit_factor": 0.715,
+            "sharpe": -7.81,
+            "t_stat": -29.968,
+            "trades": 96893,
+            "win_rate": 0.4044
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 2.6649,
+            "net_bps": -13.3351,
+            "sharpe": -6.85,
+            "t_stat": -13.582,
+            "trades": 24170,
+            "win_rate": 0.4092
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_mult": 3.0,
+              "breakout_buffer_pct": 0.5,
+              "gap_max_pct": 2.5,
+              "htf_ema_len": 20,
+              "htf_min_strength": 2.0,
+              "min_entry_min": 585,
+              "min_price": 20.0,
+              "orb_minutes": 15,
+              "orb_range_max_pct": 3.5,
+              "orb_range_min_pct": 0.4,
+              "orb_stop_frac": 20.0,
+              "pct_stop": 1.0,
+              "stop_mode": "atr",
+              "strong_vol_mult": 1.8,
+              "tp_mode": "orb",
+              "tp_mult": 1.0,
+              "tp_r": 1.5,
+              "tp_risk_floor": 1.5,
+              "use_gap_filter": true,
+              "use_htf": true,
+              "use_index": true,
+              "use_orb_range_filter": true,
+              "use_orb_stop_floor": false,
+              "use_trend": true,
+              "use_volume": true,
+              "veto_threshold": 2,
+              "vol_ma_len": 50,
+              "vol_mode": "sma3",
+              "vol_mult": 1.2
+            },
+            "strategy_class": "Orb"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-orb-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -0.1021,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -5.1021,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -10.1021,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -16.1021,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -20.1021,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -1.0217,
+            "net_bps": -17.0218,
+            "sharpe": -7.51,
+            "t_stat": -23.406,
+            "trades": 72723,
+            "win_rate": 0.4028
+          },
+          "metrics": {
+            "breakeven_cost_bps": -0.1021,
+            "days": 2422,
+            "expectancy_r": -0.1617,
+            "gross_bps": -0.1021,
+            "hurdle_t": 1.972,
+            "max_dd_r": 15666.5967,
+            "median_concurrent": 19.0,
+            "net_bps": -16.1022,
+            "payoff": 1.054,
+            "peak_concurrent": 94,
+            "profit_factor": 0.715,
+            "sharpe": -7.059,
+            "t_stat": -26.207,
+            "trades": 96893,
+            "win_rate": 0.4044
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 2.6649,
+            "net_bps": -13.3351,
+            "sharpe": -5.755,
+            "t_stat": -11.857,
+            "trades": 24170,
+            "win_rate": 0.4092
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_mult": 3.0,
+              "breakout_buffer_pct": 0.5,
+              "gap_max_pct": 2.5,
+              "htf_ema_len": 20,
+              "htf_min_strength": 2.0,
+              "min_entry_min": 585,
+              "min_price": 20.0,
+              "orb_minutes": 15,
+              "orb_range_max_pct": 3.5,
+              "orb_range_min_pct": 0.4,
+              "orb_stop_frac": 20.0,
+              "pct_stop": 1.0,
+              "stop_mode": "atr",
+              "strong_vol_mult": 1.8,
+              "tp_mode": "orb",
+              "tp_mult": 1.0,
+              "tp_r": 1.5,
+              "tp_risk_floor": 1.5,
+              "use_gap_filter": true,
+              "use_htf": true,
+              "use_index": true,
+              "use_orb_range_filter": true,
+              "use_orb_stop_floor": false,
+              "use_trend": true,
+              "use_volume": true,
+              "veto_threshold": 2,
+              "vol_ma_len": 50,
+              "vol_mode": "sma3",
+              "vol_mult": 1.2
+            },
+            "strategy_class": "Orb"
+          },
+          "parent_run_id": "2026-09-29-orb-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 0.1894,
+              "max_positions": 3,
+              "net_bps": -15.8108,
+              "sharpe": -3.762,
+              "t_stat": -10.781,
+              "taken_pct": 10.2,
+              "trades": 9893,
+              "win_rate": 0.4021
+            },
+            {
+              "gross_bps": -0.3346,
+              "max_positions": 5,
+              "net_bps": -16.3347,
+              "sharpe": -4.601,
+              "t_stat": -13.674,
+              "taken_pct": 16.8,
+              "trades": 16277,
+              "win_rate": 0.403
+            },
+            {
+              "gross_bps": -1.071,
+              "max_positions": 10,
+              "net_bps": -17.0711,
+              "sharpe": -6.09,
+              "t_stat": -18.52,
+              "taken_pct": 32.8,
+              "trades": 31813,
+              "win_rate": 0.4021
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-orb-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "live",
+      "strategy_path": "strategy_library/intraday/orb",
+      "summary": "The production ORB strategy: frozen and live, alert identity intraday-orb.",
+      "tags": [
+        "orb",
+        "live"
+      ],
+      "title": "Opening Range Breakout (production)",
+      "verdict": "marginal"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/orb/breakout.md",
+      "backtest_module": "backtest/strategies/breakout.py",
+      "category": "intraday-breakout",
+      "folder": "idea-010-breakout-key-level",
+      "horizon": "intraday",
+      "id": "IDEA-010",
+      "last_reviewed": "2026-09-29",
+      "result": "In development; key-level adapter covers PD and IB families only, value-area levels are not reproducible from 5-minute bars.",
+      "revisit_when": "When the adapter coverage gap for value-area levels is closed or accepted.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -1.1985,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -6.1985,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -11.1985,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -17.1985,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -21.1985,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -1.4178,
+            "net_bps": -17.4177,
+            "sharpe": -24.09,
+            "t_stat": -70.225,
+            "trades": 34333,
+            "win_rate": 0.4232
+          },
+          "metrics": {
+            "breakeven_cost_bps": -1.1985,
+            "days": 2418,
+            "expectancy_r": -0.4941,
+            "gross_bps": -1.1985,
+            "hurdle_t": 1.972,
+            "max_dd_r": 23317.5611,
+            "net_bps": -17.1984,
+            "payoff": 0.534,
+            "profit_factor": 0.398,
+            "sharpe": -23.79,
+            "t_stat": -80.206,
+            "trades": 47192,
+            "win_rate": 0.4271
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -0.6129,
+            "net_bps": -16.6129,
+            "sharpe": -23.55,
+            "t_stat": -38.776,
+            "trades": 12859,
+            "win_rate": 0.4375
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "adr_days": 14,
+              "atr_len": 14,
+              "break_min_rvol": 1.5,
+              "clv_long_min": 0.5,
+              "clv_short_max": 0.5,
+              "conf_atr_mult": 0.25,
+              "cooldown_bars": 3,
+              "daily_bias_len": 5,
+              "drive_buffer_mult": 0.15,
+              "htf_bars": 3,
+              "ib_minutes": 60,
+              "max_chase_atr": 1.0,
+              "max_tp_r": 2.0,
+              "min_entry_min": 585,
+              "min_headroom_r": 1.5,
+              "min_price": 20.0,
+              "min_session_vf": 0.8,
+              "min_sl_atr": 0.5,
+              "min_sl_pct_price": 0.003,
+              "orb_minutes": 15,
+              "pattern": "",
+              "require_htf_close": true,
+              "retest_bars": 6,
+              "retest_min_bars": 0,
+              "rvol_min": 1.2,
+              "rvol_strong": 1.8,
+              "score_threshold": 7,
+              "sl_buffer_mult": 0.35,
+              "sl_mode": "level",
+              "t1_pad_mult": 0.15,
+              "tp_mode": "level",
+              "tp_r": 2.0,
+              "use_bias_veto": false,
+              "use_breaks": true,
+              "use_daily_bias": false,
+              "use_ib": true,
+              "use_pd": true,
+              "use_retests": true,
+              "vol_ma_len": 50
+            },
+            "strategy_class": "Breakout"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-breakout-key-level-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -1.1985,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -6.1985,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -11.1985,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -17.1985,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -21.1985,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -1.4178,
+            "net_bps": -17.4177,
+            "sharpe": -21.574,
+            "t_stat": -57.061,
+            "trades": 34333,
+            "win_rate": 0.4232
+          },
+          "metrics": {
+            "breakeven_cost_bps": -1.1985,
+            "days": 2418,
+            "expectancy_r": -0.4941,
+            "gross_bps": -1.1985,
+            "hurdle_t": 1.972,
+            "max_dd_r": 23317.5611,
+            "median_concurrent": 4.0,
+            "net_bps": -17.1984,
+            "payoff": 0.534,
+            "peak_concurrent": 22,
+            "profit_factor": 0.398,
+            "sharpe": -21.634,
+            "t_stat": -66.265,
+            "trades": 47192,
+            "win_rate": 0.4271
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -0.6129,
+            "net_bps": -16.6129,
+            "sharpe": -21.928,
+            "t_stat": -34.058,
+            "trades": 12859,
+            "win_rate": 0.4375
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "adr_days": 14,
+              "atr_len": 14,
+              "break_min_rvol": 1.5,
+              "clv_long_min": 0.5,
+              "clv_short_max": 0.5,
+              "conf_atr_mult": 0.25,
+              "cooldown_bars": 3,
+              "daily_bias_len": 5,
+              "drive_buffer_mult": 0.15,
+              "htf_bars": 3,
+              "ib_minutes": 60,
+              "max_chase_atr": 1.0,
+              "max_tp_r": 2.0,
+              "min_entry_min": 585,
+              "min_headroom_r": 1.5,
+              "min_price": 20.0,
+              "min_session_vf": 0.8,
+              "min_sl_atr": 0.5,
+              "min_sl_pct_price": 0.003,
+              "orb_minutes": 15,
+              "pattern": "",
+              "require_htf_close": true,
+              "retest_bars": 6,
+              "retest_min_bars": 0,
+              "rvol_min": 1.2,
+              "rvol_strong": 1.8,
+              "score_threshold": 7,
+              "sl_buffer_mult": 0.35,
+              "sl_mode": "level",
+              "t1_pad_mult": 0.15,
+              "tp_mode": "level",
+              "tp_r": 2.0,
+              "use_bias_veto": false,
+              "use_breaks": true,
+              "use_daily_bias": false,
+              "use_ib": true,
+              "use_pd": true,
+              "use_retests": true,
+              "vol_ma_len": 50
+            },
+            "strategy_class": "Breakout"
+          },
+          "parent_run_id": "2026-09-29-breakout-key-level-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -1.3106,
+              "max_positions": 3,
+              "net_bps": -17.3105,
+              "sharpe": -17.599,
+              "t_stat": -54.158,
+              "taken_pct": 56.4,
+              "trades": 26620,
+              "win_rate": 0.4297
+            },
+            {
+              "gross_bps": -1.1952,
+              "max_positions": 5,
+              "net_bps": -17.1951,
+              "sharpe": -20.466,
+              "t_stat": -61.654,
+              "taken_pct": 79.3,
+              "trades": 37421,
+              "win_rate": 0.4289
+            },
+            {
+              "gross_bps": -1.2065,
+              "max_positions": 10,
+              "net_bps": -17.2064,
+              "sharpe": -21.877,
+              "t_stat": -66.146,
+              "taken_pct": 98.1,
+              "trades": 46283,
+              "win_rate": 0.4272
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-breakout-key-level-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "evaluating",
+      "strategy_path": "strategy_library/intraday/orb",
+      "summary": "Key-level engine (previous day, initial balance, opening range confluence) feeding intraday-breakout; changelog in breakout.md.",
+      "tags": [
+        "breakout",
+        "key-levels"
+      ],
+      "title": "Key-level breakout engine (breakout.pine)",
+      "verdict": "inconclusive"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/ema9/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/ema9.py",
+      "category": "intraday-momentum",
+      "folder": "idea-011-ema9-intraday",
+      "horizon": "intraday",
+      "id": "IDEA-011",
+      "last_reviewed": "2026-09-29",
+      "result": "Both the Pine script and the source-PDF rules have negative gross expectancy with costs set to zero; the entries themselves have no edge.",
+      "revisit_when": "Not planned.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -1.0954,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -6.0954,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -11.0954,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -17.0954,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -21.0954,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -1.8851,
+            "net_bps": -17.885,
+            "sharpe": -12.63,
+            "t_stat": -32.283,
+            "trades": 199920,
+            "win_rate": 0.3982
+          },
+          "metrics": {
+            "breakeven_cost_bps": -1.0954,
+            "days": 2432,
+            "expectancy_r": -0.148,
+            "gross_bps": -1.0954,
+            "hurdle_t": 1.972,
+            "max_dd_r": 40901.9305,
+            "net_bps": -17.0954,
+            "payoff": 1.043,
+            "profit_factor": 0.696,
+            "sharpe": -12.13,
+            "t_stat": -36.381,
+            "trades": 276134,
+            "win_rate": 0.4005
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 0.976,
+            "net_bps": -15.0241,
+            "sharpe": -11.29,
+            "t_stat": -17.049,
+            "trades": 76214,
+            "win_rate": 0.4065
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "adx_min": 20.0,
+              "break_buffer_atr": 0.05,
+              "confirm_bars": 1,
+              "cross_lookback": 20,
+              "exit_on_ema_cross": false,
+              "exit_on_opposite_cross": true,
+              "fast_len": 9,
+              "force_sl_past_ema": true,
+              "htf_mult": 3,
+              "max_cross_count": 0,
+              "min_atr_pct": 0.2,
+              "min_sep_atr": 0.1,
+              "min_slope_atr": 0.03,
+              "mode": "C",
+              "or_minutes": 15,
+              "pivot_len": 5,
+              "pullback_max_bars": 10,
+              "require_body_colour": false,
+              "require_close_beyond_prev": false,
+              "require_open_beyond": false,
+              "require_pullback_touch": true,
+              "rsi_mid": 50.0,
+              "rvol_days": 14,
+              "rvol_mult": 1.2,
+              "sl_atr_mult": 1.0,
+              "sl_mode": "swing",
+              "slow_len": 20,
+              "swing_lookback": 8,
+              "tp1_r": 2.0,
+              "trend_len": 200,
+              "use_adx": false,
+              "use_ema_trail": false,
+              "use_htf_bias": false,
+              "use_level_or": true,
+              "use_level_pd": true,
+              "use_level_pivot": true,
+              "use_rsi": false,
+              "use_separation": false,
+              "use_slope": false,
+              "use_trend_ema": false,
+              "use_volume": false,
+              "use_vwap": true
+            },
+            "strategy_class": "Ema9"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-ema9-intraday-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -1.0954,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -6.0954,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -11.0954,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -17.0954,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -21.0954,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -1.8851,
+            "net_bps": -17.885,
+            "sharpe": -9.343,
+            "t_stat": -22.266,
+            "trades": 199920,
+            "win_rate": 0.3982
+          },
+          "metrics": {
+            "breakeven_cost_bps": -1.0954,
+            "days": 2432,
+            "expectancy_r": -0.148,
+            "gross_bps": -1.0954,
+            "hurdle_t": 1.972,
+            "max_dd_r": 40901.9305,
+            "median_concurrent": 57.0,
+            "net_bps": -17.0954,
+            "payoff": 1.043,
+            "peak_concurrent": 165,
+            "profit_factor": 0.696,
+            "sharpe": -9.13,
+            "t_stat": -25.591,
+            "trades": 276134,
+            "win_rate": 0.4005
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 0.976,
+            "net_bps": -15.0241,
+            "sharpe": -8.527,
+            "t_stat": -12.796,
+            "trades": 76214,
+            "win_rate": 0.4065
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "adx_min": 20.0,
+              "break_buffer_atr": 0.05,
+              "confirm_bars": 1,
+              "cross_lookback": 20,
+              "exit_on_ema_cross": false,
+              "exit_on_opposite_cross": true,
+              "fast_len": 9,
+              "force_sl_past_ema": true,
+              "htf_mult": 3,
+              "max_cross_count": 0,
+              "min_atr_pct": 0.2,
+              "min_sep_atr": 0.1,
+              "min_slope_atr": 0.03,
+              "mode": "C",
+              "or_minutes": 15,
+              "pivot_len": 5,
+              "pullback_max_bars": 10,
+              "require_body_colour": false,
+              "require_close_beyond_prev": false,
+              "require_open_beyond": false,
+              "require_pullback_touch": true,
+              "rsi_mid": 50.0,
+              "rvol_days": 14,
+              "rvol_mult": 1.2,
+              "sl_atr_mult": 1.0,
+              "sl_mode": "swing",
+              "slow_len": 20,
+              "swing_lookback": 8,
+              "tp1_r": 2.0,
+              "trend_len": 200,
+              "use_adx": false,
+              "use_ema_trail": false,
+              "use_htf_bias": false,
+              "use_level_or": true,
+              "use_level_pd": true,
+              "use_level_pivot": true,
+              "use_rsi": false,
+              "use_separation": false,
+              "use_slope": false,
+              "use_trend_ema": false,
+              "use_volume": false,
+              "use_vwap": true
+            },
+            "strategy_class": "Ema9"
+          },
+          "parent_run_id": "2026-09-29-ema9-intraday-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -5.1271,
+              "max_positions": 3,
+              "net_bps": -21.1268,
+              "sharpe": -3.881,
+              "t_stat": -10.604,
+              "taken_pct": 3.0,
+              "trades": 8384,
+              "win_rate": 0.4028
+            },
+            {
+              "gross_bps": -3.6508,
+              "max_positions": 5,
+              "net_bps": -19.6505,
+              "sharpe": -4.484,
+              "t_stat": -12.588,
+              "taken_pct": 5.0,
+              "trades": 13942,
+              "win_rate": 0.4056
+            },
+            {
+              "gross_bps": -4.8303,
+              "max_positions": 10,
+              "net_bps": -20.8302,
+              "sharpe": -5.937,
+              "t_stat": -17.374,
+              "taken_pct": 10.1,
+              "trades": 27873,
+              "win_rate": 0.3976
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ema9-intraday-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "ref": "strategy_library/intraday/ema9/791187576-9-EMA-Trading-Strategy.pdf",
+        "type": "article"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/intraday/ema9",
+      "summary": "Nine-EMA retest strategy from a HowToTrade.com explainer, implemented as ema9-intraday.pine.",
+      "tags": [
+        "ema"
+      ],
+      "title": "9 EMA intraday (PDF article)",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/ema9-vwap/STRATEGY-LOG.md",
+      "backtest_module": "backtest/strategies/ema9_vwap.py",
+      "category": "intraday-momentum",
+      "folder": "idea-012-ema9-vwap-cross",
+      "horizon": "intraday",
+      "id": "IDEA-012",
+      "last_reviewed": "2026-09-29",
+      "result": "Built and measured 2026-09-10, verdict do not trade: on 208 NSE F&O names the cross follows through less than random, so it behaves as mean reversion, not momentum.",
+      "revisit_when": "Only as a deliberately mean-reversion variant.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 2.9733,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -2.0267,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -7.0267,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.0267,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -17.0267,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 2.9787,
+            "net_bps": -13.0212,
+            "sharpe": -15.21,
+            "t_stat": -42.35,
+            "trades": 290509,
+            "win_rate": 0.3872
+          },
+          "metrics": {
+            "breakeven_cost_bps": 2.9733,
+            "days": 2438,
+            "expectancy_r": -0.1871,
+            "gross_bps": 2.9733,
+            "hurdle_t": 1.972,
+            "max_dd_r": 75496.8925,
+            "net_bps": -13.0266,
+            "payoff": 1.055,
+            "profit_factor": 0.672,
+            "sharpe": -14.83,
+            "t_stat": -47.038,
+            "trades": 403529,
+            "win_rate": 0.3891
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 2.9596,
+            "net_bps": -13.0403,
+            "sharpe": -14.48,
+            "t_stat": -21.466,
+            "trades": 113020,
+            "win_rate": 0.3941
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 840,
+              "max_trades_per_day": 3,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "anticipate_atr": 0.15,
+              "atr_len": 14,
+              "exit_on_recross": false,
+              "fast_len": 9,
+              "invert": false,
+              "key_level_atr": 0.35,
+              "min_price": 20.0,
+              "mode": "cross",
+              "or_minutes": 15,
+              "require_key_level": false,
+              "require_trend": false,
+              "sl_atr_mult": 1.0,
+              "sl_buffer_atr": 0.1,
+              "sl_mode": "swing",
+              "swing_lookback": 8,
+              "tp_r": 2.0,
+              "trend_len": 200
+            },
+            "strategy_class": "Ema9Vwap"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-ema9-vwap-cross-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 2.9733,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -2.0267,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -7.0267,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.0267,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -17.0267,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 2.9787,
+            "net_bps": -13.0212,
+            "sharpe": -9.257,
+            "t_stat": -24.378,
+            "trades": 290509,
+            "win_rate": 0.3872
+          },
+          "metrics": {
+            "breakeven_cost_bps": 2.9733,
+            "days": 2438,
+            "expectancy_r": -0.1871,
+            "gross_bps": 2.9733,
+            "hurdle_t": 1.972,
+            "max_dd_r": 75496.8925,
+            "median_concurrent": 74.0,
+            "net_bps": -13.0266,
+            "payoff": 1.055,
+            "peak_concurrent": 185,
+            "profit_factor": 0.672,
+            "sharpe": -8.989,
+            "t_stat": -28.223,
+            "trades": 403529,
+            "win_rate": 0.3891
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 2.9596,
+            "net_bps": -13.0403,
+            "sharpe": -8.544,
+            "t_stat": -14.222,
+            "trades": 113020,
+            "win_rate": 0.3941
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 840,
+              "max_trades_per_day": 3,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "anticipate_atr": 0.15,
+              "atr_len": 14,
+              "exit_on_recross": false,
+              "fast_len": 9,
+              "invert": false,
+              "key_level_atr": 0.35,
+              "min_price": 20.0,
+              "mode": "cross",
+              "or_minutes": 15,
+              "require_key_level": false,
+              "require_trend": false,
+              "sl_atr_mult": 1.0,
+              "sl_buffer_atr": 0.1,
+              "sl_mode": "swing",
+              "swing_lookback": 8,
+              "tp_r": 2.0,
+              "trend_len": 200
+            },
+            "strategy_class": "Ema9Vwap"
+          },
+          "parent_run_id": "2026-09-29-ema9-vwap-cross-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 2.7837,
+              "max_positions": 3,
+              "net_bps": -13.2162,
+              "sharpe": -3.892,
+              "t_stat": -8.373,
+              "taken_pct": 3.5,
+              "trades": 14179,
+              "win_rate": 0.3861
+            },
+            {
+              "gross_bps": 2.9629,
+              "max_positions": 5,
+              "net_bps": -13.0369,
+              "sharpe": -4.997,
+              "t_stat": -12.695,
+              "taken_pct": 5.7,
+              "trades": 23192,
+              "win_rate": 0.3908
+            },
+            {
+              "gross_bps": 2.2687,
+              "max_positions": 10,
+              "net_bps": -13.7312,
+              "sharpe": -6.48,
+              "t_stat": -18.272,
+              "taken_pct": 10.9,
+              "trades": 44047,
+              "win_rate": 0.3903
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ema9-vwap-cross-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "ref": "strategy_library/intraday/ema9-vwap/vwap-ema-cross-strategy.pdf",
+        "type": "article"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/intraday/ema9-vwap",
+      "summary": "Momentum entry on the 9 EMA crossing VWAP.",
+      "tags": [
+        "ema",
+        "vwap"
+      ],
+      "title": "EMA9 x VWAP crossover",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/ib-extension/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/ib_extension.py",
+      "category": "intraday-breakout",
+      "folder": "idea-013-ib-extension",
+      "horizon": "intraday",
+      "id": "IDEA-013",
+      "last_reviewed": "2026-09-29",
+      "result": "Backtest verdict 2026-08-28: do not trade, there is no edge for costs to eat into; retire.",
+      "revisit_when": "Not planned.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -1.6444,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -6.6444,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -11.6444,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -17.6444,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -21.6444,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -3.3551,
+            "net_bps": -19.355,
+            "sharpe": -5.62,
+            "t_stat": -11.402,
+            "trades": 5534,
+            "win_rate": 0.4465
+          },
+          "metrics": {
+            "breakeven_cost_bps": -1.6444,
+            "days": 1224,
+            "expectancy_r": -0.104,
+            "gross_bps": -1.6444,
+            "hurdle_t": 1.972,
+            "max_dd_r": 803.7972,
+            "net_bps": -17.6443,
+            "payoff": 0.761,
+            "profit_factor": 0.614,
+            "sharpe": -5.43,
+            "t_stat": -12.896,
+            "trades": 7714,
+            "win_rate": 0.4466
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 2.6983,
+            "net_bps": -13.3017,
+            "sharpe": -4.92,
+            "t_stat": -6.036,
+            "trades": 2180,
+            "win_rate": 0.4468
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_sl_mult": 1.5,
+              "circuit_gap_pct": 4.0,
+              "confirm_bars": 1,
+              "d_range_max_pct": 2.5,
+              "d_range_min_pct": 0.15,
+              "entry_cutoff_min": 840,
+              "ib_minutes": 60,
+              "max_chase_atr": 0.0,
+              "min_price": 20.0,
+              "sl_atr_mult": 0.5,
+              "sl_mode": "ib",
+              "tp_ext": 1.0,
+              "use_circuit_guard": true,
+              "use_regime": true,
+              "use_volume": true,
+              "use_weekly": true,
+              "vol_mode": "sma",
+              "vol_mult": 1.5,
+              "vol_sma_bars": 375,
+              "w_range_max_pct": 4.0,
+              "w_range_min_pct": 0.3
+            },
+            "strategy_class": "IbExtension"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-ib-extension-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -1.6444,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -6.6444,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -11.6444,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -17.6444,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -21.6444,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -3.3551,
+            "net_bps": -19.355,
+            "sharpe": -5.194,
+            "t_stat": -10.985,
+            "trades": 5534,
+            "win_rate": 0.4465
+          },
+          "metrics": {
+            "breakeven_cost_bps": -1.6444,
+            "days": 1224,
+            "expectancy_r": -0.104,
+            "gross_bps": -1.6444,
+            "hurdle_t": 1.972,
+            "max_dd_r": 803.7972,
+            "median_concurrent": 4.0,
+            "net_bps": -17.6443,
+            "payoff": 0.761,
+            "peak_concurrent": 41,
+            "profit_factor": 0.614,
+            "sharpe": -4.841,
+            "t_stat": -12.086,
+            "trades": 7714,
+            "win_rate": 0.4466
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 2.6983,
+            "net_bps": -13.3017,
+            "sharpe": -3.881,
+            "t_stat": -5.144,
+            "trades": 2180,
+            "win_rate": 0.4468
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_sl_mult": 1.5,
+              "circuit_gap_pct": 4.0,
+              "confirm_bars": 1,
+              "d_range_max_pct": 2.5,
+              "d_range_min_pct": 0.15,
+              "entry_cutoff_min": 840,
+              "ib_minutes": 60,
+              "max_chase_atr": 0.0,
+              "min_price": 20.0,
+              "sl_atr_mult": 0.5,
+              "sl_mode": "ib",
+              "tp_ext": 1.0,
+              "use_circuit_guard": true,
+              "use_regime": true,
+              "use_volume": true,
+              "use_weekly": true,
+              "vol_mode": "sma",
+              "vol_mult": 1.5,
+              "vol_sma_bars": 375,
+              "w_range_max_pct": 4.0,
+              "w_range_min_pct": 0.3
+            },
+            "strategy_class": "IbExtension"
+          },
+          "parent_run_id": "2026-09-29-ib-extension-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -4.224,
+              "max_positions": 3,
+              "net_bps": -20.2239,
+              "sharpe": -4.675,
+              "t_stat": -10.694,
+              "taken_pct": 45.2,
+              "trades": 3485,
+              "win_rate": 0.4405
+            },
+            {
+              "gross_bps": -2.9029,
+              "max_positions": 5,
+              "net_bps": -18.9029,
+              "sharpe": -5.036,
+              "t_stat": -11.378,
+              "taken_pct": 65.1,
+              "trades": 5022,
+              "win_rate": 0.4425
+            },
+            {
+              "gross_bps": -2.408,
+              "max_positions": 10,
+              "net_bps": -18.4079,
+              "sharpe": -5.145,
+              "t_stat": -11.889,
+              "taken_pct": 89.3,
+              "trades": 6885,
+              "win_rate": 0.444
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ib-extension-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/intraday/ib-extension",
+      "summary": "Trade continuation after the initial balance range is exceeded.",
+      "tags": [
+        "initial-balance"
+      ],
+      "title": "Initial balance extension",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/nr-breakout/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/nr_breakout.py",
+      "category": "intraday-breakout",
+      "folder": "idea-014-nr-breakout",
+      "horizon": "intraday",
+      "id": "IDEA-014",
+      "last_reviewed": "2026-09-29",
+      "result": "Dead end, do not trade: measured 30.9% follow-through versus 33.3% for random entries; the regime filter helps directionally but not enough.",
+      "revisit_when": "Not planned.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 0.5455,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -4.4545,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -9.4545,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -15.4545,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -19.4545,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 0.4792,
+            "net_bps": -15.5207,
+            "sharpe": -12.03,
+            "t_stat": -29.421,
+            "trades": 22400,
+            "win_rate": 0.4049
+          },
+          "metrics": {
+            "breakeven_cost_bps": 0.5455,
+            "days": 2356,
+            "expectancy_r": -0.3484,
+            "gross_bps": 0.5455,
+            "hurdle_t": 1.972,
+            "max_dd_r": 10879.2234,
+            "net_bps": -15.4545,
+            "payoff": 0.81,
+            "profit_factor": 0.55,
+            "sharpe": -12.26,
+            "t_stat": -35.471,
+            "trades": 31217,
+            "win_rate": 0.4042
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 0.7137,
+            "net_bps": -15.2863,
+            "sharpe": -13.18,
+            "t_stat": -20.17,
+            "trades": 8817,
+            "win_rate": 0.4025
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "atr_len": 14,
+              "cooldown_bars": 6,
+              "min_entry_min": 570,
+              "min_price": 20.0,
+              "min_sl_atr": 0.4,
+              "min_sl_pct_price": 0.003,
+              "nr_lookback": 7,
+              "require_nr": true,
+              "sl_buffer_atr": 0.25,
+              "tp_r": 1.5
+            },
+            "strategy_class": "NrBreakout"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-nr-breakout-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 0.5455,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -4.4545,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -9.4545,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -15.4545,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -19.4545,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 0.4792,
+            "net_bps": -15.5207,
+            "sharpe": -9.608,
+            "t_stat": -18.788,
+            "trades": 22400,
+            "win_rate": 0.4049
+          },
+          "metrics": {
+            "breakeven_cost_bps": 0.5455,
+            "days": 2356,
+            "expectancy_r": -0.3484,
+            "gross_bps": 0.5455,
+            "hurdle_t": 1.972,
+            "max_dd_r": 10879.2234,
+            "median_concurrent": 5.0,
+            "net_bps": -15.4545,
+            "payoff": 0.81,
+            "peak_concurrent": 38,
+            "profit_factor": 0.55,
+            "sharpe": -9.886,
+            "t_stat": -23.165,
+            "trades": 31217,
+            "win_rate": 0.4042
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 0.7137,
+            "net_bps": -15.2863,
+            "sharpe": -10.717,
+            "t_stat": -15.053,
+            "trades": 8817,
+            "win_rate": 0.4025
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "atr_len": 14,
+              "cooldown_bars": 6,
+              "min_entry_min": 570,
+              "min_price": 20.0,
+              "min_sl_atr": 0.4,
+              "min_sl_pct_price": 0.003,
+              "nr_lookback": 7,
+              "require_nr": true,
+              "sl_buffer_atr": 0.25,
+              "tp_r": 1.5
+            },
+            "strategy_class": "NrBreakout"
+          },
+          "parent_run_id": "2026-09-29-nr-breakout-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 0.0165,
+              "max_positions": 3,
+              "net_bps": -15.9834,
+              "sharpe": -7.703,
+              "t_stat": -19.23,
+              "taken_pct": 45.9,
+              "trades": 14329,
+              "win_rate": 0.4027
+            },
+            {
+              "gross_bps": 0.1522,
+              "max_positions": 5,
+              "net_bps": -15.8477,
+              "sharpe": -8.934,
+              "t_stat": -21.384,
+              "taken_pct": 66.7,
+              "trades": 20830,
+              "win_rate": 0.403
+            },
+            {
+              "gross_bps": 0.4699,
+              "max_positions": 10,
+              "net_bps": -15.5301,
+              "sharpe": -9.787,
+              "t_stat": -22.831,
+              "taken_pct": 92.3,
+              "trades": 28821,
+              "win_rate": 0.4038
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-nr-breakout-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/intraday/nr-breakout",
+      "summary": "Breakout from narrow-range days, with a volatility-regime filter.",
+      "tags": [
+        "nr",
+        "volatility"
+      ],
+      "title": "Narrow-range breakout",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/open-drive/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/open_drive.py",
+      "category": "market-profile",
+      "folder": "idea-015-open-drive-value-area",
+      "horizon": "intraday",
+      "id": "IDEA-015",
+      "last_reviewed": "2026-09-29",
+      "result": "Six attempts, concluded negative: loses money and the raw idea has no edge before costs; selectivity narrowed the cost gap but hit a sample-size wall.",
+      "revisit_when": "Not planned; see the value-area-fade adapter for the isolated rejection family.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -3.3955,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -8.3955,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -13.3955,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -19.3955,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -23.3955,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -4.2567,
+            "net_bps": -20.2567,
+            "sharpe": -33.66,
+            "t_stat": -107.454,
+            "trades": 189398,
+            "win_rate": 0.3691
+          },
+          "metrics": {
+            "breakeven_cost_bps": -3.3955,
+            "days": 2434,
+            "expectancy_r": -0.2146,
+            "gross_bps": -3.3955,
+            "hurdle_t": 1.972,
+            "max_dd_r": 55964.6666,
+            "net_bps": -19.3955,
+            "payoff": 0.506,
+            "profit_factor": 0.287,
+            "sharpe": -33.1,
+            "t_stat": -111.941,
+            "trades": 260830,
+            "win_rate": 0.3623
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -1.1122,
+            "net_bps": -17.112,
+            "sharpe": -31.9,
+            "t_stat": -44.184,
+            "trades": 71432,
+            "win_rate": 0.3441
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 0,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "acceptance_bars": 2,
+              "atr_len": 14,
+              "clv_long_min": 0.65,
+              "clv_short_max": 0.35,
+              "min_price": 20.0,
+              "retest_band_atr": 0.5,
+              "retest_max_bars": 8,
+              "stop_atr_mult": 0.3,
+              "tp_mode": "structural",
+              "tp_r_cap": 4.0,
+              "tp_r_fallback": 1.5,
+              "use_acceptance": true,
+              "use_clv": true,
+              "use_day_type_filter": false,
+              "use_rejection": true,
+              "use_retest": true,
+              "use_volume": true,
+              "use_vwap_filter": true,
+              "value_area_pct": 70.0,
+              "vol_ma_len": 20,
+              "vol_mult": 1.5
+            },
+            "strategy_class": "OpenDrive"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-open-drive-value-area-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -3.3955,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -8.3955,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -13.3955,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -19.3955,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -23.3955,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -4.2567,
+            "net_bps": -20.2567,
+            "sharpe": -19.499,
+            "t_stat": -54.649,
+            "trades": 189398,
+            "win_rate": 0.3691
+          },
+          "metrics": {
+            "breakeven_cost_bps": -3.3955,
+            "days": 2434,
+            "expectancy_r": -0.2146,
+            "gross_bps": -3.3955,
+            "hurdle_t": 1.972,
+            "max_dd_r": 55964.6666,
+            "median_concurrent": 14.0,
+            "net_bps": -19.3955,
+            "payoff": 0.506,
+            "peak_concurrent": 60,
+            "profit_factor": 0.287,
+            "sharpe": -20.6,
+            "t_stat": -65.324,
+            "trades": 260830,
+            "win_rate": 0.3623
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -1.1122,
+            "net_bps": -17.112,
+            "sharpe": -26.27,
+            "t_stat": -40.878,
+            "trades": 71432,
+            "win_rate": 0.3441
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 0,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "acceptance_bars": 2,
+              "atr_len": 14,
+              "clv_long_min": 0.65,
+              "clv_short_max": 0.35,
+              "min_price": 20.0,
+              "retest_band_atr": 0.5,
+              "retest_max_bars": 8,
+              "stop_atr_mult": 0.3,
+              "tp_mode": "structural",
+              "tp_r_cap": 4.0,
+              "tp_r_fallback": 1.5,
+              "use_acceptance": true,
+              "use_clv": true,
+              "use_day_type_filter": false,
+              "use_rejection": true,
+              "use_retest": true,
+              "use_volume": true,
+              "use_vwap_filter": true,
+              "value_area_pct": 70.0,
+              "vol_ma_len": 20,
+              "vol_mult": 1.5
+            },
+            "strategy_class": "OpenDrive"
+          },
+          "parent_run_id": "2026-09-29-open-drive-value-area-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -2.6692,
+              "max_positions": 3,
+              "net_bps": -18.6692,
+              "sharpe": -16.156,
+              "t_stat": -37.203,
+              "taken_pct": 17.2,
+              "trades": 44969,
+              "win_rate": 0.3582
+            },
+            {
+              "gross_bps": -2.7087,
+              "max_positions": 5,
+              "net_bps": -18.7086,
+              "sharpe": -19.569,
+              "t_stat": -44.259,
+              "taken_pct": 28.4,
+              "trades": 74169,
+              "win_rate": 0.358
+            },
+            {
+              "gross_bps": -2.8253,
+              "max_positions": 10,
+              "net_bps": -18.8253,
+              "sharpe": -23.914,
+              "t_stat": -60.4,
+              "taken_pct": 54.0,
+              "trades": 140731,
+              "win_rate": 0.3586
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-open-drive-value-area-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/intraday/open-drive",
+      "summary": "Market-profile open-drive, acceptance, retest and value-area rejection setups.",
+      "tags": [
+        "market-profile",
+        "open-drive"
+      ],
+      "title": "Open-drive and value-area scalp",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/turtle-soup/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/turtle_soup.py",
+      "category": "intraday-mean-reversion",
+      "folder": "idea-016-turtle-soup",
+      "horizon": "intraday",
+      "id": "IDEA-016",
+      "last_reviewed": "2026-09-29",
+      "result": "Dead end, do not trade: real gross edge but too thin per trade to survive costs; adding refinements made results worse.",
+      "revisit_when": "Only if execution costs fall materially.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 2.2236,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -2.7764,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -7.7764,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.7764,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -17.7764,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 2.8702,
+            "net_bps": -13.1296,
+            "sharpe": -20.52,
+            "t_stat": -59.828,
+            "trades": 116696,
+            "win_rate": 0.4157
+          },
+          "metrics": {
+            "breakeven_cost_bps": 2.2236,
+            "days": 2433,
+            "expectancy_r": -0.3461,
+            "gross_bps": 2.2236,
+            "hurdle_t": 1.972,
+            "max_dd_r": 57621.3662,
+            "net_bps": -13.7763,
+            "payoff": 0.794,
+            "profit_factor": 0.556,
+            "sharpe": -21.18,
+            "t_stat": -71.263,
+            "trades": 166487,
+            "win_rate": 0.4119
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 0.708,
+            "net_bps": -15.292,
+            "sharpe": -25.87,
+            "t_stat": -40.018,
+            "trades": 49791,
+            "win_rate": 0.4031
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "adx_len": 14,
+              "atr_len": 14,
+              "cooldown_bars": 6,
+              "ib_minutes": 60,
+              "max_adx": 25.0,
+              "min_entry_min": 570,
+              "min_price": 20.0,
+              "min_sl_atr": 0.4,
+              "min_sl_pct_price": 0.003,
+              "sl_buffer_atr": 0.25,
+              "tp_r": 1.5,
+              "use_adx_filter": false,
+              "use_ib": false,
+              "use_pdh_pdl": true
+            },
+            "strategy_class": "TurtleSoup"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-turtle-soup-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 2.2236,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -2.7764,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -7.7764,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.7764,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -17.7764,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 2.8702,
+            "net_bps": -13.1296,
+            "sharpe": -12.692,
+            "t_stat": -38.186,
+            "trades": 116696,
+            "win_rate": 0.4157
+          },
+          "metrics": {
+            "breakeven_cost_bps": 2.2236,
+            "days": 2433,
+            "expectancy_r": -0.3461,
+            "gross_bps": 2.2236,
+            "hurdle_t": 1.972,
+            "max_dd_r": 57621.3662,
+            "median_concurrent": 19.0,
+            "net_bps": -13.7763,
+            "payoff": 0.794,
+            "peak_concurrent": 106,
+            "profit_factor": 0.556,
+            "sharpe": -14.11,
+            "t_stat": -47.911,
+            "trades": 166487,
+            "win_rate": 0.4119
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 0.708,
+            "net_bps": -15.292,
+            "sharpe": -19.273,
+            "t_stat": -31.384,
+            "trades": 49791,
+            "win_rate": 0.4031
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 660,
+              "max_trades_per_day": 2,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 15,
+              "time_exit_min": 885
+            },
+            "strategy": {
+              "adx_len": 14,
+              "atr_len": 14,
+              "cooldown_bars": 6,
+              "ib_minutes": 60,
+              "max_adx": 25.0,
+              "min_entry_min": 570,
+              "min_price": 20.0,
+              "min_sl_atr": 0.4,
+              "min_sl_pct_price": 0.003,
+              "sl_buffer_atr": 0.25,
+              "tp_r": 1.5,
+              "use_adx_filter": false,
+              "use_ib": false,
+              "use_pdh_pdl": true
+            },
+            "strategy_class": "TurtleSoup"
+          },
+          "parent_run_id": "2026-09-29-turtle-soup-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 2.2113,
+              "max_positions": 3,
+              "net_bps": -13.7885,
+              "sharpe": -8.565,
+              "t_stat": -24.126,
+              "taken_pct": 13.5,
+              "trades": 22407,
+              "win_rate": 0.4098
+            },
+            {
+              "gross_bps": 2.3096,
+              "max_positions": 5,
+              "net_bps": -13.6902,
+              "sharpe": -10.272,
+              "t_stat": -30.652,
+              "taken_pct": 22.2,
+              "trades": 37001,
+              "win_rate": 0.4114
+            },
+            {
+              "gross_bps": 2.563,
+              "max_positions": 10,
+              "net_bps": -13.4368,
+              "sharpe": -12.333,
+              "t_stat": -36.731,
+              "taken_pct": 42.7,
+              "trades": 71051,
+              "win_rate": 0.4133
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-turtle-soup-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/intraday/turtle-soup",
+      "summary": "Fade a failed breakout of a prior extreme.",
+      "tags": [
+        "fade",
+        "false-breakout"
+      ],
+      "title": "Turtle Soup false-breakout fade",
+      "verdict": "marginal"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/volume-profile/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/volume_profile.py",
+      "category": "market-profile",
+      "folder": "idea-017-volume-profile-decision-assist",
+      "horizon": "intraday",
+      "id": "IDEA-017",
+      "last_reviewed": "2026-09-29",
+      "result": "Tooling and model documentation, no standalone backtest verdict.",
+      "revisit_when": "If a rule set for the human read can be made testable.",
+      "runs": [],
+      "source": {
+        "type": "internal"
+      },
+      "status": "shelved",
+      "strategy_path": "strategy_library/intraday/volume-profile",
+      "summary": "Semi-automated tooling: the machine computes value area and key levels and the human makes one high-value read.",
+      "tags": [
+        "volume-profile",
+        "tooling"
+      ],
+      "title": "Volume profile decision assist",
+      "verdict": "none"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/breaking-trade/STRATEGY-LOG.md",
+      "category": "market-profile",
+      "folder": "idea-019-breaking-trade-scanner",
+      "horizon": "intraday",
+      "id": "IDEA-019",
+      "last_reviewed": "2026-09-29",
+      "result": "BTST measured 2026-09-04: no edge detected; the data does not support swing holds. Extractor kept manual-only.",
+      "revisit_when": "If the vendor data source changes or gains an API.",
+      "runs": [],
+      "source": {
+        "author": "breakingtrade.com",
+        "ref": "strategy_library/intraday/breaking-trade/README.md",
+        "type": "vendor"
+      },
+      "status": "shelved",
+      "strategy_path": "strategy_library/intraday/breaking-trade",
+      "summary": "Vendor market-profile scanner snapshots ranked by an internal extractor and scorer, used as a manual watchlist aid.",
+      "tags": [
+        "market-profile",
+        "scanner"
+      ],
+      "title": "BreakingTrade market-profile scanner",
+      "verdict": "no-edge"
+    },
+    {
+      "backtest_module": "backtest/strategies/dhb.py",
+      "category": "intraday-momentum",
+      "folder": "idea-020-dhb-day-high-breakout",
+      "horizon": "intraday",
+      "id": "IDEA-020",
+      "last_reviewed": "2026-09-29",
+      "result": "Adapter built with every vague term pinned to a number; no conclusion is recorded in a strategy analysis doc yet.",
+      "revisit_when": "Write up the adapter result as a STRATEGY-ANALYSIS.md and set the verdict.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 6.8493,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 1.8493,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -3.1507,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -9.1507,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -13.1507,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 6.6281,
+            "net_bps": -9.3715,
+            "sharpe": -2.04,
+            "t_stat": -5.992,
+            "trades": 4927,
+            "win_rate": 0.4163
+          },
+          "metrics": {
+            "breakeven_cost_bps": 6.8493,
+            "days": 2033,
+            "expectancy_r": -0.0864,
+            "gross_bps": 6.8493,
+            "hurdle_t": 1.972,
+            "max_dd_r": 623.2131,
+            "net_bps": -9.1503,
+            "payoff": 1.132,
+            "profit_factor": 0.817,
+            "sharpe": -2.08,
+            "t_stat": -7.261,
+            "trades": 6751,
+            "win_rate": 0.4192
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 7.447,
+            "net_bps": -8.5528,
+            "sharpe": -2.22,
+            "t_stat": -4.156,
+            "trades": 1824,
+            "win_rate": 0.4271
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": false,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 810,
+              "max_trades_per_day": 1,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 45,
+              "time_exit_min": 900
+            },
+            "strategy": {
+              "breakout_buffer_pct": 0.05,
+              "confirm_lookback": 6,
+              "max_bars_wait": 60,
+              "max_sl_pct": 0.025,
+              "min_gain_pct": 1.0,
+              "min_price": 50.0,
+              "min_rvol": 1.5,
+              "pullback_max_pct": 70.0,
+              "pullback_min_pct": 20.0,
+              "rejection_clv": 0.7,
+              "require_confirm": true,
+              "select_end_min": 600,
+              "sl_buffer_pct": 0.05,
+              "swing_lookback": 10,
+              "tp_r": 2.0,
+              "use_engulf": true,
+              "use_hammer": true,
+              "use_rejection": true,
+              "use_volume": true,
+              "vol_ma_len": 50,
+              "vol_mult": 1.2
+            },
+            "strategy_class": "Dhb"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-dhb-day-high-breakout-v1",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "score t and sharpe in bps like the headline; add position caps and, for swing, a random-entry baseline; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 6.8493,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 1.8493,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -3.1507,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -9.1507,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -13.1507,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 16.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "5m",
+            "source": "historify",
+            "universe": "historify-212-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 6.6281,
+            "net_bps": -9.3715,
+            "sharpe": -1.633,
+            "t_stat": -5.006,
+            "trades": 4927,
+            "win_rate": 0.4163
+          },
+          "metrics": {
+            "breakeven_cost_bps": 6.8493,
+            "days": 2033,
+            "expectancy_r": -0.0864,
+            "gross_bps": 6.8493,
+            "hurdle_t": 1.972,
+            "max_dd_r": 623.2131,
+            "median_concurrent": 2.0,
+            "net_bps": -9.1503,
+            "payoff": 1.132,
+            "peak_concurrent": 18,
+            "profit_factor": 0.817,
+            "sharpe": -1.621,
+            "t_stat": -5.978,
+            "trades": 6751,
+            "win_rate": 0.4192
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-212-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 7.447,
+            "net_bps": -8.5528,
+            "sharpe": -1.584,
+            "t_stat": -3.283,
+            "trades": 1824,
+            "win_rate": 0.4271
+          },
+          "params": {
+            "engine": "intraday",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": false,
+              "cost_bps": 16.0,
+              "entry_cutoff_min": 810,
+              "max_trades_per_day": 1,
+              "min_sl_pct": 0.002,
+              "one_trade_per_direction": true,
+              "skip_open_minutes": 45,
+              "time_exit_min": 900
+            },
+            "strategy": {
+              "breakout_buffer_pct": 0.05,
+              "confirm_lookback": 6,
+              "max_bars_wait": 60,
+              "max_sl_pct": 0.025,
+              "min_gain_pct": 1.0,
+              "min_price": 50.0,
+              "min_rvol": 1.5,
+              "pullback_max_pct": 70.0,
+              "pullback_min_pct": 20.0,
+              "rejection_clv": 0.7,
+              "require_confirm": true,
+              "select_end_min": 600,
+              "sl_buffer_pct": 0.05,
+              "swing_lookback": 10,
+              "tp_r": 2.0,
+              "use_engulf": true,
+              "use_hammer": true,
+              "use_rejection": true,
+              "use_volume": true,
+              "vol_ma_len": 50,
+              "vol_mult": 1.2
+            },
+            "strategy_class": "Dhb"
+          },
+          "parent_run_id": "2026-09-29-dhb-day-high-breakout-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2016-10-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 2.9528,
+              "max_positions": 3,
+              "net_bps": -13.0468,
+              "sharpe": -2.122,
+              "t_stat": -6.174,
+              "taken_pct": 74.9,
+              "trades": 5056,
+              "win_rate": 0.4078
+            },
+            {
+              "gross_bps": 6.2858,
+              "max_positions": 5,
+              "net_bps": -9.7139,
+              "sharpe": -1.681,
+              "t_stat": -5.765,
+              "taken_pct": 91.8,
+              "trades": 6198,
+              "win_rate": 0.4192
+            },
+            {
+              "gross_bps": 6.7786,
+              "max_positions": 10,
+              "net_bps": -9.221,
+              "sharpe": -1.636,
+              "t_stat": -5.981,
+              "taken_pct": 99.5,
+              "trades": 6717,
+              "win_rate": 0.4194
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-dhb-day-high-breakout-v2",
+          "split": {
+            "oos_start": "2024-04-09",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "author": "TradeXPavan",
+        "ref": "strategy_library/intraday/intraday-dhb.txt",
+        "type": "telegram"
+      },
+      "status": "backtested",
+      "summary": "Top gainers 09:15-10:00, wait for a healthy pullback, confirmation candle, buy on break of the first day high.",
+      "tags": [
+        "gainers",
+        "pullback"
+      ],
+      "title": "DHB day-high breakout after gainer pullback",
+      "verdict": "inconclusive"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/dividend-growth/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/value_zone.py",
+      "category": "swing-value",
+      "folder": "idea-021-dividend-growth",
+      "horizon": "swing",
+      "id": "IDEA-021",
+      "last_reviewed": "2026-09-29",
+      "result": "Backtest verdict 2026-08-28: do not trade.",
+      "revisit_when": "Not planned.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 403.6834,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 398.6834,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 393.6834,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 383.6834,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 379.6834,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 488.9163,
+            "net_bps": 464.9163,
+            "sharpe": 4.77,
+            "t_stat": 9.853,
+            "trades": 1533,
+            "win_rate": 0.8193
+          },
+          "metrics": {
+            "breakeven_cost_bps": 403.6834,
+            "days": 821,
+            "expectancy_r": 0.0384,
+            "gross_bps": 403.6834,
+            "hurdle_t": 1.972,
+            "max_dd_r": 5.2034,
+            "net_bps": 379.6834,
+            "payoff": 0.711,
+            "profit_factor": 2.332,
+            "sharpe": 4.37,
+            "t_stat": 9.702,
+            "trades": 2187,
+            "win_rate": 0.7663
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 203.8943,
+            "net_bps": 179.8943,
+            "sharpe": 3.63,
+            "t_stat": 2.622,
+            "trades": 654,
+            "win_rate": 0.6422
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "deep_value": 25.0,
+              "ema_fast": 12,
+              "ema_slow": 26,
+              "enable_dip": true,
+              "entry_score": 0.0,
+              "exit_needs_profit": false,
+              "exit_on_sell": true,
+              "extreme_sell": 90.0,
+              "gap_days": 10,
+              "lookback": 0,
+              "min_price": 20.0,
+              "mode": "dividend",
+              "profit_target_pct": 0.0,
+              "rsi_len": 14,
+              "sell_zone": 70.0,
+              "stop_atr_mult": 3.0,
+              "stop_mode": "none",
+              "stop_pct": 10.0,
+              "strong_sell_score": 0.0,
+              "trend_sma": 50,
+              "use_score": true,
+              "value_zone": 30.0,
+              "vol_period": 30,
+              "vol_surge": 1.5
+            },
+            "strategy_class": "ValueZone"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-dividend-growth-v1",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "add position-cap view (3/5/10 slots) and concurrency profile; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 403.6834,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 398.6834,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 393.6834,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 383.6834,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 379.6834,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 488.9163,
+            "net_bps": 464.9163,
+            "sharpe": 4.77,
+            "t_stat": 9.853,
+            "trades": 1533,
+            "win_rate": 0.8193
+          },
+          "metrics": {
+            "breakeven_cost_bps": 403.6834,
+            "days": 821,
+            "expectancy_r": 0.0384,
+            "gross_bps": 403.6834,
+            "hurdle_t": 1.972,
+            "max_dd_r": 5.2034,
+            "median_concurrent": 72.0,
+            "net_bps": 379.6834,
+            "payoff": 0.711,
+            "peak_concurrent": 174,
+            "profit_factor": 2.332,
+            "sharpe": 4.37,
+            "t_stat": 9.702,
+            "trades": 2187,
+            "win_rate": 0.7663
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 203.8943,
+            "net_bps": 179.8943,
+            "sharpe": 3.63,
+            "t_stat": 2.622,
+            "trades": 654,
+            "win_rate": 0.6422
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "deep_value": 25.0,
+              "ema_fast": 12,
+              "ema_slow": 26,
+              "enable_dip": true,
+              "entry_score": 0.0,
+              "exit_needs_profit": false,
+              "exit_on_sell": true,
+              "extreme_sell": 90.0,
+              "gap_days": 10,
+              "lookback": 0,
+              "min_price": 20.0,
+              "mode": "dividend",
+              "profit_target_pct": 0.0,
+              "rsi_len": 14,
+              "sell_zone": 70.0,
+              "stop_atr_mult": 3.0,
+              "stop_mode": "none",
+              "stop_pct": 10.0,
+              "strong_sell_score": 0.0,
+              "trend_sma": 50,
+              "use_score": true,
+              "value_zone": 30.0,
+              "vol_period": 30,
+              "vol_surge": 1.5
+            },
+            "strategy_class": "ValueZone"
+          },
+          "parent_run_id": "2026-09-29-dividend-growth-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 325.1245,
+              "max_positions": 3,
+              "net_bps": 301.1245,
+              "sharpe": 4.47,
+              "t_stat": 2.568,
+              "taken_pct": 5.1,
+              "trades": 112,
+              "win_rate": 0.7321
+            },
+            {
+              "gross_bps": 270.2757,
+              "max_positions": 5,
+              "net_bps": 246.2757,
+              "sharpe": 3.31,
+              "t_stat": 2.064,
+              "taken_pct": 7.8,
+              "trades": 171,
+              "win_rate": 0.7368
+            },
+            {
+              "gross_bps": 395.4562,
+              "max_positions": 10,
+              "net_bps": 371.4562,
+              "sharpe": 5.13,
+              "t_stat": 4.758,
+              "taken_pct": 15.3,
+              "trades": 334,
+              "win_rate": 0.7904
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-dividend-growth-v2",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -54.4319,
+            "excess_t_stat": -3.069,
+            "gross_bps": 458.1153,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 434.1153,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": 379.6834,
+            "trades": 2187
+          },
+          "change_note": "score t and sharpe in bps like the headline; add position caps and a random-entry baseline (open to close, same-day exits included); same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 403.6834,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 398.6834,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 393.6834,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 383.6834,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 379.6834,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 488.9163,
+            "net_bps": 464.9163,
+            "sharpe": 4.773,
+            "t_stat": 9.853,
+            "trades": 1533,
+            "win_rate": 0.8193
+          },
+          "metrics": {
+            "breakeven_cost_bps": 403.6834,
+            "days": 821,
+            "expectancy_r": 0.0384,
+            "gross_bps": 403.6834,
+            "hurdle_t": 1.972,
+            "max_dd_r": 5.2034,
+            "median_concurrent": 72.0,
+            "net_bps": 379.6834,
+            "payoff": 0.711,
+            "peak_concurrent": 174,
+            "profit_factor": 2.332,
+            "sharpe": 4.37,
+            "t_stat": 9.702,
+            "trades": 2187,
+            "win_rate": 0.7663
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 203.8943,
+            "net_bps": 179.8943,
+            "sharpe": 3.634,
+            "t_stat": 2.622,
+            "trades": 654,
+            "win_rate": 0.6422
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "deep_value": 25.0,
+              "ema_fast": 12,
+              "ema_slow": 26,
+              "enable_dip": true,
+              "entry_score": 0.0,
+              "exit_needs_profit": false,
+              "exit_on_sell": true,
+              "extreme_sell": 90.0,
+              "gap_days": 10,
+              "lookback": 0,
+              "min_price": 20.0,
+              "mode": "dividend",
+              "profit_target_pct": 0.0,
+              "rsi_len": 14,
+              "sell_zone": 70.0,
+              "stop_atr_mult": 3.0,
+              "stop_mode": "none",
+              "stop_pct": 10.0,
+              "strong_sell_score": 0.0,
+              "trend_sma": 50,
+              "use_score": true,
+              "value_zone": 30.0,
+              "vol_period": 30,
+              "vol_surge": 1.5
+            },
+            "strategy_class": "ValueZone"
+          },
+          "parent_run_id": "2026-09-29-dividend-growth-v2",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 325.1245,
+              "max_positions": 3,
+              "net_bps": 301.1245,
+              "sharpe": 4.472,
+              "t_stat": 2.568,
+              "taken_pct": 5.1,
+              "trades": 112,
+              "win_rate": 0.7321
+            },
+            {
+              "gross_bps": 270.2757,
+              "max_positions": 5,
+              "net_bps": 246.2757,
+              "sharpe": 3.313,
+              "t_stat": 2.064,
+              "taken_pct": 7.8,
+              "trades": 171,
+              "win_rate": 0.7368
+            },
+            {
+              "gross_bps": 395.4562,
+              "max_positions": 10,
+              "net_bps": 371.4562,
+              "sharpe": 5.129,
+              "t_stat": 4.758,
+              "taken_pct": 15.3,
+              "trades": 334,
+              "win_rate": 0.7904
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-dividend-growth-v3",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/swing/dividend-growth",
+      "summary": "Buy dividend-growth names in a value zone.",
+      "tags": [
+        "dividend",
+        "value"
+      ],
+      "title": "Dividend growth",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/dual-momentum/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/dual_momentum.py",
+      "category": "swing-momentum",
+      "folder": "idea-022-dual-momentum",
+      "horizon": "swing",
+      "id": "IDEA-022",
+      "last_reviewed": "2026-09-29",
+      "result": "Adds nothing over plain momentum-rank on this universe and construction; not wrong, structurally redundant.",
+      "revisit_when": "If drawdown control becomes a priority over simplicity.",
+      "runs": [],
+      "source": {
+        "author": "Gary Antonacci",
+        "type": "article"
+      },
+      "status": "shelved",
+      "strategy_path": "strategy_library/swing/dual-momentum",
+      "summary": "Relative 12-1 momentum rank plus an absolute-momentum filter that moves a slot to cash.",
+      "tags": [
+        "momentum",
+        "dual"
+      ],
+      "title": "Dual momentum (Antonacci)",
+      "verdict": "inconclusive"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/gap-rsi/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/gap_rsi.py",
+      "category": "swing-mean-reversion",
+      "folder": "idea-023-gap-rsi-swing",
+      "horizon": "swing",
+      "id": "IDEA-023",
+      "last_reviewed": "2026-09-29",
+      "result": "Not shipped: does not clear the cost line, and real figures are somewhat worse than reported.",
+      "revisit_when": "Not planned.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -8.7864,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -13.7864,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -18.7864,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -28.7864,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": -32.7864,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -8.9164,
+            "net_bps": -32.9164,
+            "sharpe": -1.01,
+            "t_stat": -1.845,
+            "trades": 5172,
+            "win_rate": 0.1775
+          },
+          "metrics": {
+            "breakeven_cost_bps": -8.7864,
+            "days": 1279,
+            "expectancy_r": -0.1748,
+            "gross_bps": -8.7864,
+            "hurdle_t": 1.972,
+            "max_dd_r": 1525.613,
+            "net_bps": -32.7864,
+            "payoff": 3.513,
+            "profit_factor": 0.81,
+            "sharpe": -1.08,
+            "t_stat": -2.442,
+            "trades": 6851,
+            "win_rate": 0.1874
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -8.3862,
+            "net_bps": -32.3862,
+            "sharpe": -1.35,
+            "t_stat": -1.732,
+            "trades": 1679,
+            "win_rate": 0.218
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "ema_exit_arm": true,
+              "ema_exit_delay": 0,
+              "ema_len": 21,
+              "max_gap_pct": 20.0,
+              "min_gap_pct": 1.0,
+              "min_price": 50.0,
+              "ob_level": 90.0,
+              "os_level": 10.0,
+              "require_ema_cross": false,
+              "rsi_len": 14,
+              "rsi_mode": "on_ema",
+              "rsi_smooth_len": 14,
+              "stop_mode": "prev_close",
+              "tp_r": 0.0
+            },
+            "strategy_class": "GapRsi"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-gap-rsi-swing-v1",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "add position-cap view (3/5/10 slots) and concurrency profile; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -8.7864,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -13.7864,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -18.7864,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -28.7864,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": -32.7864,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -8.9164,
+            "net_bps": -32.9164,
+            "sharpe": -1.01,
+            "t_stat": -1.845,
+            "trades": 5172,
+            "win_rate": 0.1775
+          },
+          "metrics": {
+            "breakeven_cost_bps": -8.7864,
+            "days": 1279,
+            "expectancy_r": -0.1748,
+            "gross_bps": -8.7864,
+            "hurdle_t": 1.972,
+            "max_dd_r": 1525.613,
+            "median_concurrent": 17.0,
+            "net_bps": -32.7864,
+            "payoff": 3.513,
+            "peak_concurrent": 101,
+            "profit_factor": 0.81,
+            "sharpe": -1.08,
+            "t_stat": -2.442,
+            "trades": 6851,
+            "win_rate": 0.1874
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -8.3862,
+            "net_bps": -32.3862,
+            "sharpe": -1.35,
+            "t_stat": -1.732,
+            "trades": 1679,
+            "win_rate": 0.218
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "ema_exit_arm": true,
+              "ema_exit_delay": 0,
+              "ema_len": 21,
+              "max_gap_pct": 20.0,
+              "min_gap_pct": 1.0,
+              "min_price": 50.0,
+              "ob_level": 90.0,
+              "os_level": 10.0,
+              "require_ema_cross": false,
+              "rsi_len": 14,
+              "rsi_mode": "on_ema",
+              "rsi_smooth_len": 14,
+              "stop_mode": "prev_close",
+              "tp_r": 0.0
+            },
+            "strategy_class": "GapRsi"
+          },
+          "parent_run_id": "2026-09-29-gap-rsi-swing-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -24.1108,
+              "max_positions": 3,
+              "net_bps": -48.1108,
+              "sharpe": -1.97,
+              "t_stat": -0.46,
+              "taken_pct": 19.2,
+              "trades": 1317,
+              "win_rate": 0.1708
+            },
+            {
+              "gross_bps": -34.2933,
+              "max_positions": 5,
+              "net_bps": -58.2933,
+              "sharpe": -2.32,
+              "t_stat": -1.188,
+              "taken_pct": 32.0,
+              "trades": 2190,
+              "win_rate": 0.1689
+            },
+            {
+              "gross_bps": -24.4566,
+              "max_positions": 10,
+              "net_bps": -48.4566,
+              "sharpe": -1.72,
+              "t_stat": -2.83,
+              "taken_pct": 54.4,
+              "trades": 3730,
+              "win_rate": 0.1668
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-gap-rsi-swing-v2",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -13.9069,
+            "excess_t_stat": -0.22,
+            "gross_bps": 5.1204,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": -18.8796,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": -32.7864,
+            "trades": 6851
+          },
+          "change_note": "score t and sharpe in bps like the headline; add position caps and a random-entry baseline (open to close, same-day exits included); same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": -8.7864,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": -13.7864,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -18.7864,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -28.7864,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": -32.7864,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": -8.9164,
+            "net_bps": -32.9164,
+            "sharpe": -0.959,
+            "t_stat": -1.807,
+            "trades": 5172,
+            "win_rate": 0.1775
+          },
+          "metrics": {
+            "breakeven_cost_bps": -8.7864,
+            "days": 1279,
+            "expectancy_r": -0.1748,
+            "gross_bps": -8.7864,
+            "hurdle_t": 1.972,
+            "max_dd_r": 1525.613,
+            "median_concurrent": 17.0,
+            "net_bps": -32.7864,
+            "payoff": 3.513,
+            "peak_concurrent": 101,
+            "profit_factor": 0.81,
+            "sharpe": -0.994,
+            "t_stat": -2.614,
+            "trades": 6851,
+            "win_rate": 0.1874
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": -8.3862,
+            "net_bps": -32.3862,
+            "sharpe": -1.126,
+            "t_stat": -2.419,
+            "trades": 1679,
+            "win_rate": 0.218
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "ema_exit_arm": true,
+              "ema_exit_delay": 0,
+              "ema_len": 21,
+              "max_gap_pct": 20.0,
+              "min_gap_pct": 1.0,
+              "min_price": 50.0,
+              "ob_level": 90.0,
+              "os_level": 10.0,
+              "require_ema_cross": false,
+              "rsi_len": 14,
+              "rsi_mode": "on_ema",
+              "rsi_smooth_len": 14,
+              "stop_mode": "prev_close",
+              "tp_r": 0.0
+            },
+            "strategy_class": "GapRsi"
+          },
+          "parent_run_id": "2026-09-29-gap-rsi-swing-v2",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": -24.1108,
+              "max_positions": 3,
+              "net_bps": -48.1108,
+              "sharpe": -1.826,
+              "t_stat": -0.749,
+              "taken_pct": 19.2,
+              "trades": 1317,
+              "win_rate": 0.1708
+            },
+            {
+              "gross_bps": -34.2933,
+              "max_positions": 5,
+              "net_bps": -58.2933,
+              "sharpe": -2.255,
+              "t_stat": -1.411,
+              "taken_pct": 32.0,
+              "trades": 2190,
+              "win_rate": 0.1689
+            },
+            {
+              "gross_bps": -24.4566,
+              "max_positions": 10,
+              "net_bps": -48.4566,
+              "sharpe": -1.839,
+              "t_stat": -2.692,
+              "taken_pct": 54.4,
+              "trades": 3730,
+              "win_rate": 0.1668
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-gap-rsi-swing-v3",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "rejected",
+      "strategy_path": "strategy_library/swing/gap-rsi",
+      "summary": "Swing entry on gap down combined with an RSI condition.",
+      "tags": [
+        "gap",
+        "rsi"
+      ],
+      "title": "Gap plus RSI swing",
+      "verdict": "no-edge"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/ibs-meanrev/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/ibs_meanrev.py",
+      "category": "swing-mean-reversion",
+      "folder": "idea-024-ibs-mean-reversion",
+      "horizon": "swing",
+      "id": "IDEA-024",
+      "last_reviewed": "2026-09-29",
+      "result": "Marginal, not proven, do not trade; meaningfully improved from clearly negative.",
+      "revisit_when": "If a further independent improvement is found and passes IS/OOS.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 6.9611,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 1.9611,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -3.0389,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.0389,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": -17.0389,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 6.1436,
+            "net_bps": -17.8564,
+            "sharpe": -1.29,
+            "t_stat": -2.62,
+            "trades": 26541,
+            "win_rate": 0.5456
+          },
+          "metrics": {
+            "breakeven_cost_bps": 6.9611,
+            "days": 1662,
+            "expectancy_r": -0.0322,
+            "gross_bps": 6.9611,
+            "hurdle_t": 1.972,
+            "max_dd_r": 1239.5256,
+            "net_bps": -17.0389,
+            "payoff": 0.721,
+            "profit_factor": 0.875,
+            "sharpe": -1.29,
+            "t_stat": -4.176,
+            "trades": 37419,
+            "win_rate": 0.5484
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 8.9558,
+            "net_bps": -15.0442,
+            "sharpe": -1.3,
+            "t_stat": -4.067,
+            "trades": 10878,
+            "win_rate": 0.5553
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "ibs_buy_max": 0.2,
+              "ibs_sell_min": 0.8,
+              "max_hold_days": 5,
+              "min_price": 50.0,
+              "require_above_sma": true,
+              "sl_atr_mult": 2.0,
+              "trend_sma_len": 100,
+              "use_trend_filter": false
+            },
+            "strategy_class": "IbsMeanRev"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-ibs-mean-reversion-v1",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "add position-cap view (3/5/10 slots) and concurrency profile; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 6.9611,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 1.9611,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -3.0389,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.0389,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": -17.0389,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 6.1436,
+            "net_bps": -17.8564,
+            "sharpe": -1.29,
+            "t_stat": -2.62,
+            "trades": 26541,
+            "win_rate": 0.5456
+          },
+          "metrics": {
+            "breakeven_cost_bps": 6.9611,
+            "days": 1662,
+            "expectancy_r": -0.0322,
+            "gross_bps": 6.9611,
+            "hurdle_t": 1.972,
+            "max_dd_r": 1239.5256,
+            "median_concurrent": 52.0,
+            "net_bps": -17.0389,
+            "payoff": 0.721,
+            "peak_concurrent": 148,
+            "profit_factor": 0.875,
+            "sharpe": -1.29,
+            "t_stat": -4.176,
+            "trades": 37419,
+            "win_rate": 0.5484
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 8.9558,
+            "net_bps": -15.0442,
+            "sharpe": -1.3,
+            "t_stat": -4.067,
+            "trades": 10878,
+            "win_rate": 0.5553
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "ibs_buy_max": 0.2,
+              "ibs_sell_min": 0.8,
+              "max_hold_days": 5,
+              "min_price": 50.0,
+              "require_above_sma": true,
+              "sl_atr_mult": 2.0,
+              "trend_sma_len": 100,
+              "use_trend_filter": false
+            },
+            "strategy_class": "IbsMeanRev"
+          },
+          "parent_run_id": "2026-09-29-ibs-mean-reversion-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 43.724,
+              "max_positions": 3,
+              "net_bps": 19.724,
+              "sharpe": 0.82,
+              "t_stat": -0.82,
+              "taken_pct": 5.5,
+              "trades": 2065,
+              "win_rate": 0.5932
+            },
+            {
+              "gross_bps": 44.0623,
+              "max_positions": 5,
+              "net_bps": 20.0623,
+              "sharpe": 0.65,
+              "t_stat": -1.62,
+              "taken_pct": 8.9,
+              "trades": 3348,
+              "win_rate": 0.5824
+            },
+            {
+              "gross_bps": 41.0092,
+              "max_positions": 10,
+              "net_bps": 17.0092,
+              "sharpe": 0.58,
+              "t_stat": -3.127,
+              "taken_pct": 17.7,
+              "trades": 6612,
+              "win_rate": 0.5853
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ibs-mean-reversion-v2",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -10.7087,
+            "excess_t_stat": -2.453,
+            "gross_bps": 17.6699,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": -6.3301,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": -17.0389,
+            "trades": 37419
+          },
+          "change_note": "score t and sharpe in bps like the headline; add position caps and a random-entry baseline (open to close, same-day exits included); same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 6.9611,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 1.9611,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -3.0389,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -13.0389,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": -17.0389,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 6.1436,
+            "net_bps": -17.8564,
+            "sharpe": -0.968,
+            "t_stat": -2.106,
+            "trades": 26541,
+            "win_rate": 0.5456
+          },
+          "metrics": {
+            "breakeven_cost_bps": 6.9611,
+            "days": 1662,
+            "expectancy_r": -0.0322,
+            "gross_bps": 6.9611,
+            "hurdle_t": 1.972,
+            "max_dd_r": 1239.5256,
+            "median_concurrent": 52.0,
+            "net_bps": -17.0389,
+            "payoff": 0.721,
+            "peak_concurrent": 148,
+            "profit_factor": 0.875,
+            "sharpe": -0.981,
+            "t_stat": -3.336,
+            "trades": 37419,
+            "win_rate": 0.5484
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 8.9558,
+            "net_bps": -15.0442,
+            "sharpe": -1.021,
+            "t_stat": -3.501,
+            "trades": 10878,
+            "win_rate": 0.5553
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "ibs_buy_max": 0.2,
+              "ibs_sell_min": 0.8,
+              "max_hold_days": 5,
+              "min_price": 50.0,
+              "require_above_sma": true,
+              "sl_atr_mult": 2.0,
+              "trend_sma_len": 100,
+              "use_trend_filter": false
+            },
+            "strategy_class": "IbsMeanRev"
+          },
+          "parent_run_id": "2026-09-29-ibs-mean-reversion-v2",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 43.724,
+              "max_positions": 3,
+              "net_bps": 19.724,
+              "sharpe": 0.826,
+              "t_stat": -0.842,
+              "taken_pct": 5.5,
+              "trades": 2065,
+              "win_rate": 0.5932
+            },
+            {
+              "gross_bps": 44.0623,
+              "max_positions": 5,
+              "net_bps": 20.0623,
+              "sharpe": 0.839,
+              "t_stat": -1.009,
+              "taken_pct": 8.9,
+              "trades": 3348,
+              "win_rate": 0.5824
+            },
+            {
+              "gross_bps": 41.0092,
+              "max_positions": 10,
+              "net_bps": 17.0092,
+              "sharpe": 0.819,
+              "t_stat": -2.191,
+              "taken_pct": 17.7,
+              "trades": 6612,
+              "win_rate": 0.5853
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-ibs-mean-reversion-v3",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "type": "internal"
+      },
+      "status": "shelved",
+      "strategy_path": "strategy_library/swing/ibs-meanrev",
+      "summary": "Buy low internal bar strength closes and exit on reversion.",
+      "tags": [
+        "ibs",
+        "mean-reversion"
+      ],
+      "title": "IBS mean reversion",
+      "verdict": "marginal"
+    },
+    {
+      "analysis_doc": "strategy_library/swing/momentum-rank/STRATEGY-ANALYSIS.md",
+      "category": "swing-momentum",
+      "folder": "idea-025-momentum-rank",
+      "horizon": "swing",
+      "id": "IDEA-025",
+      "last_reviewed": "2026-09-29",
+      "result": "Candidate, never traded, paper first. Validated as the reference edge; more concentrated variants than the shipped top-12 are worse.",
+      "revisit_when": "Promote to live only after paper results.",
+      "runs": [],
+      "source": {
+        "type": "internal"
+      },
+      "status": "paper",
+      "strategy_path": "strategy_library/swing/momentum-rank",
+      "summary": "Long-only daily rank by 12-1 momentum, hold the top 12, CNC delivery.",
+      "tags": [
+        "momentum",
+        "cnc"
+      ],
+      "title": "Cross-sectional momentum rank (12-1)",
+      "verdict": "edge"
+    },
+    {
+      "backtest_module": "backtest/strategies/phoenix.py",
+      "category": "swing-mean-reversion",
+      "folder": "idea-026-phoenix-bird-rebound",
+      "horizon": "swing",
+      "id": "IDEA-026",
+      "last_reviewed": "2026-09-29",
+      "result": "Adapter built from the published source; no conclusion is recorded in a strategy analysis doc yet.",
+      "revisit_when": "Write up the adapter result and set the verdict.",
+      "runs": [
+        {
+          "change_note": "baseline",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 375.39,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 370.39,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 365.39,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 355.39,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 351.39,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 422.9502,
+            "net_bps": 398.9502,
+            "sharpe": 1.87,
+            "t_stat": 0.329,
+            "trades": 357,
+            "win_rate": 0.8095
+          },
+          "metrics": {
+            "breakeven_cost_bps": 375.39,
+            "days": 208,
+            "expectancy_r": 0.1075,
+            "gross_bps": 375.39,
+            "hurdle_t": 1.972,
+            "max_dd_r": 24.1857,
+            "net_bps": 351.39,
+            "payoff": 0.372,
+            "profit_factor": 1.531,
+            "sharpe": 1.84,
+            "t_stat": 0.96,
+            "trades": 450,
+            "win_rate": 0.8044
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 192.8201,
+            "net_bps": 168.8201,
+            "sharpe": 2.75,
+            "t_stat": 1.293,
+            "trades": 93,
+            "win_rate": 0.7849
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_mode": "sma",
+              "confirm_lag": 3,
+              "min_price": 50.0,
+              "roc_len": 14,
+              "roc_threshold": -15.0,
+              "sl_atr": 2.5,
+              "tp_atr": 1.0
+            },
+            "strategy_class": "Phoenix"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "promoted": false,
+          "run_id": "2026-09-29-phoenix-bird-rebound-v1",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "change_note": "add position-cap view (3/5/10 slots) and concurrency profile; same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 375.39,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 370.39,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 365.39,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 355.39,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 351.39,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 422.9502,
+            "net_bps": 398.9502,
+            "sharpe": 1.87,
+            "t_stat": 0.329,
+            "trades": 357,
+            "win_rate": 0.8095
+          },
+          "metrics": {
+            "breakeven_cost_bps": 375.39,
+            "days": 208,
+            "expectancy_r": 0.1075,
+            "gross_bps": 375.39,
+            "hurdle_t": 1.972,
+            "max_dd_r": 24.1857,
+            "median_concurrent": 8.0,
+            "net_bps": 351.39,
+            "payoff": 0.372,
+            "peak_concurrent": 97,
+            "profit_factor": 1.531,
+            "sharpe": 1.84,
+            "t_stat": 0.96,
+            "trades": 450,
+            "win_rate": 0.8044
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 192.8201,
+            "net_bps": 168.8201,
+            "sharpe": 2.75,
+            "t_stat": 1.293,
+            "trades": 93,
+            "win_rate": 0.7849
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_mode": "sma",
+              "confirm_lag": 3,
+              "min_price": 50.0,
+              "roc_len": 14,
+              "roc_threshold": -15.0,
+              "sl_atr": 2.5,
+              "tp_atr": 1.0
+            },
+            "strategy_class": "Phoenix"
+          },
+          "parent_run_id": "2026-09-29-phoenix-bird-rebound-v1",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 121.2105,
+              "max_positions": 3,
+              "net_bps": 97.2105,
+              "sharpe": 0.74,
+              "t_stat": 1.284,
+              "taken_pct": 37.6,
+              "trades": 169,
+              "win_rate": 0.7456
+            },
+            {
+              "gross_bps": 128.6325,
+              "max_positions": 5,
+              "net_bps": 104.6325,
+              "sharpe": 0.6,
+              "t_stat": 0.728,
+              "taken_pct": 50.0,
+              "trades": 225,
+              "win_rate": 0.7467
+            },
+            {
+              "gross_bps": 106.4976,
+              "max_positions": 10,
+              "net_bps": 82.4976,
+              "sharpe": 0.19,
+              "t_stat": 0.655,
+              "taken_pct": 67.3,
+              "trades": 303,
+              "win_rate": 0.736
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-phoenix-bird-rebound-v2",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        },
+        {
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": 207.1568,
+            "excess_t_stat": -0.219,
+            "gross_bps": 168.2333,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 144.2333,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": 351.39,
+            "trades": 450
+          },
+          "change_note": "score t and sharpe in bps like the headline; add position caps and a random-entry baseline (open to close, same-day exits included); same strategy and data",
+          "code_version": "166341b16-dirty",
+          "cost_sensitivity": [
+            {
+              "net_bps": 375.39,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 370.39,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 365.39,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 355.39,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 351.39,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-09-29",
+            "bar_size": "1d",
+            "source": "historify",
+            "universe": "historify-197-symbols"
+          },
+          "date": "2026-09-29",
+          "in_sample": {
+            "gross_bps": 422.9502,
+            "net_bps": 398.9502,
+            "sharpe": 2.388,
+            "t_stat": 1.552,
+            "trades": 357,
+            "win_rate": 0.8095
+          },
+          "metrics": {
+            "breakeven_cost_bps": 375.39,
+            "days": 208,
+            "expectancy_r": 0.1075,
+            "gross_bps": 375.39,
+            "hurdle_t": 1.972,
+            "max_dd_r": 24.1857,
+            "median_concurrent": 8.0,
+            "net_bps": 351.39,
+            "payoff": 0.372,
+            "peak_concurrent": 97,
+            "profit_factor": 1.531,
+            "sharpe": 2.186,
+            "t_stat": 2.3,
+            "trades": 450,
+            "win_rate": 0.8044
+          },
+          "n_trials": 1,
+          "notes": "Shipped default configuration on historify-197-symbols. n_trials defaulted to 1: the number of variants searched is not recorded, so hurdle_t is a lower bound.",
+          "out_of_sample": {
+            "gross_bps": 192.8201,
+            "net_bps": 168.8201,
+            "sharpe": 4.056,
+            "t_stat": 1.977,
+            "trades": 93,
+            "win_rate": 0.7849
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 24.0,
+              "max_hold_bars": 120,
+              "min_sl_pct": 0.005
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_mode": "sma",
+              "confirm_lag": 3,
+              "min_price": 50.0,
+              "roc_len": 14,
+              "roc_threshold": -15.0,
+              "sl_atr": 2.5,
+              "tp_atr": 1.0
+            },
+            "strategy_class": "Phoenix"
+          },
+          "parent_run_id": "2026-09-29-phoenix-bird-rebound-v2",
+          "period": {
+            "end": "2026-09-29",
+            "start": "2019-12-03"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 121.2105,
+              "max_positions": 3,
+              "net_bps": 97.2105,
+              "sharpe": 1.874,
+              "t_stat": 2.247,
+              "taken_pct": 37.6,
+              "trades": 169,
+              "win_rate": 0.7456
+            },
+            {
+              "gross_bps": 128.6325,
+              "max_positions": 5,
+              "net_bps": 104.6325,
+              "sharpe": 1.99,
+              "t_stat": 1.934,
+              "taken_pct": 50.0,
+              "trades": 225,
+              "win_rate": 0.7467
+            },
+            {
+              "gross_bps": 106.4976,
+              "max_positions": 10,
+              "net_bps": 82.4976,
+              "sharpe": 1.323,
+              "t_stat": 1.832,
+              "taken_pct": 67.3,
+              "trades": 303,
+              "win_rate": 0.736
+            }
+          ],
+          "promoted": false,
+          "run_id": "2026-09-29-phoenix-bird-rebound-v3",
+          "split": {
+            "oos_start": "2025-01-15",
+            "type": "oos"
+          },
+          "validation": [
+            "validation suite A-D passed after the check B probe fix (engine vs panel diff 0.0 bps over 452,432 symbol-days)"
+          ]
+        }
+      ],
+      "source": {
+        "author": "FabTrader",
+        "captured": "2026-05-05",
+        "ref": "fabtrader.in/videos/phoenix-swing-trading-strategy-backtest-results",
+        "type": "video"
+      },
+      "status": "backtested",
+      "summary": "Buy a severe 14-day drop (ROC below -20) once the rate of change starts improving.",
+      "tags": [
+        "rebound",
+        "roc"
+      ],
+      "title": "Phoenix Bird rebound swing",
+      "verdict": "inconclusive"
+    }
+  ],
+  "summary": {
+    "by_category": {
+      "intraday-breakout": 6,
+      "intraday-mean-reversion": 3,
+      "intraday-momentum": 5,
+      "market-profile": 3,
+      "swing-mean-reversion": 4,
+      "swing-momentum": 3,
+      "swing-value": 1
+    },
+    "by_horizon": {
+      "intraday": 17,
+      "swing": 8
+    },
+    "by_status": {
+      "backtested": 2,
+      "evaluating": 1,
+      "inbox": 6,
+      "live": 1,
+      "paper": 1,
+      "rejected": 10,
+      "shelved": 4
+    },
+    "by_verdict": {
+      "edge": 1,
+      "inconclusive": 4,
+      "marginal": 3,
+      "no-edge": 10,
+      "none": 7
+    },
+    "ideas_with_runs": 15,
+    "last_reviewed": "2026-09-29",
+    "total": 25,
+    "total_runs": 36
+  }
+}

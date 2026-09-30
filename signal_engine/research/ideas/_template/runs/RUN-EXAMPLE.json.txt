@@ -1,0 +1,31 @@
+Save real runs as research/ideas/<idea>/runs/<run_id>.json (drop this .txt suffix).
+Every key below is required unless marked optional. Numbers are plain JSON numbers.
+
+{
+  "run_id": "2026-09-29-orb-v1",
+  "date": "2026-09-29",
+  "code_version": "git sha of the repo when the run was made",
+  "data": {
+    "source": "where the bars came from (e.g. historify)",
+    "as_of": "date of the data snapshot",
+    "universe": "which symbols (e.g. fno-208)",
+    "bar_size": "5m"
+  },
+  "period": {"start": "2021-01-01", "end": "2026-09-25"},
+  "costs": {"model": "named cost model", "round_trip_bps": 9.4},
+  "split": {"type": "oos", "oos_start": "2025-01-01"},
+  "metrics": {
+    "trades": 1200,
+    "gross_bps": 8.1,
+    "net_bps": -1.3,
+    "win_rate": 0.41,
+    "sharpe": 0.4,
+    "max_dd_pct": 12.5,
+    "t_stat": 1.9,
+    "breakeven_cost_bps": 6.8
+  },
+  "validation": ["known-answer suite passed", "random-entry baseline compared"],
+  "notes": "free text"
+}
+
+"split", the optional metrics, "validation" and "notes" may be omitted.

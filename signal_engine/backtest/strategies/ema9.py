@@ -1,6 +1,6 @@
 """EMA9 intraday - backtest adapter.
 
-Mirrors signal_engine/pinescripts/intraday/ema9/ema9-intraday.pine. The Pine script is
+Mirrors signal_engine/strategy_library/intraday/ema9/ema9-intraday.pine. The Pine script is
 the production artefact; where the two could drift, Pine semantics win.
 
 Defaults here match the Pine defaults, so `Ema9Params()` reproduces exactly what the
@@ -78,7 +78,7 @@ class Ema9Params:
 class Ema9(Strategy):
     name = "EMA9 intraday"
     tag = "EMA9"
-    pine = "signal_engine/pinescripts/intraday/ema9/ema9-intraday.pine"
+    pine = "signal_engine/strategy_library/intraday/ema9/ema9-intraday.pine"
 
     def __init__(self):
         self._reset()

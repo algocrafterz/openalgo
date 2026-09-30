@@ -613,7 +613,7 @@ broker:
 #   • Stock-specific overrides — broker won't offer MIS leverage on these even outside surveillance
 #
 # Maintenance: append a symbol here when "Order Rejected: <reason>" appears in the engine
-# log for that symbol consistently across days. See FLATTRADE-RESTRICTIONS.md for the
+# log for that symbol consistently across days. See docs/FLATTRADE-RESTRICTIONS.md for the
 # full procedure and current categorisation.
 broker_restrictions:
   flattrade:
@@ -747,7 +747,7 @@ mode_profiles:
   # strategies.py (runtime.py's _worst_case_live_sl_pct — currently BREAKOUT/BREAKINGTRADE/
   # BREAKINGTRADE-WATCHLIST at 0.20%, since ORB has no override and inherits the wider global
   # 0.50% floor). No manual edit is ever needed here again as capital grows through
-  # Rs25k/35k/50k/75k/1L+ — see PRD.md for the worked numbers at each of those points.
+  # Rs25k/35k/50k/75k/1L+ — see docs/PRD.md for the worked numbers at each of those points.
   # 0 keeps meaning "unlimited" (used by `analyze` below); -1 is the new "dynamic" sentinel,
   # distinct from 0 on purpose so a config typo of 0 in LIVE can never silently mean unlimited.
   live:
@@ -831,7 +831,7 @@ strategy_profiles:
     # often than a coin flip (44.5% at 0.5 ATR, t = -18.76, n = 29,492). The profile exists
     # so the script can run through the real pipeline and log its own signals; keep the
     # symbol blacklist or sandbox mode in front of it until forward data says otherwise.
-    # See signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md.
+    # See signal_engine/strategy_library/intraday/ema9-vwap/STRATEGY-LOG.md.
     #
     # min_sl_pct 0.20%, matching BREAKOUT/EMA9 rather than the 0.50% global. The stop is the
     # recent swing extreme plus a 0.10 x ATR buffer; the measured median across the backtest

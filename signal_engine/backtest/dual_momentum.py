@@ -4,7 +4,7 @@
 
 Source: Gary Antonacci's "dual momentum" - the SAME 12-1 relative-momentum ranking
 this repo already validated for momentum-rank (see
-`pinescripts/swing/momentum-rank/STRATEGY-ANALYSIS.md`), plus one addition: a pick
+`strategy_library/swing/momentum-rank/STRATEGY-ANALYSIS.md`), plus one addition: a pick
 also needs POSITIVE absolute momentum (its own trailing return > 0), not just top-N
 rank. A name that is merely the best of a falling universe is excluded and that
 slot sits in cash instead. The published claim (Antonacci's 40-year US backtest) is

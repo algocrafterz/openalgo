@@ -1,6 +1,6 @@
 """Contract tests for breakout.pine alert formats.
 
-Source: signal_engine/pinescripts/intraday/orb/breakout.pine
+Source: signal_engine/strategy_library/intraday/orb/breakout.pine
 """
 
 from signal_engine.models import Direction

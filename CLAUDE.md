@@ -26,6 +26,13 @@ auto square-off) and support Telegram alerts.
 Repository: https://github.com/marketcalls/openalgo
 Documentation: https://docs.openalgo.in
 
+## signal_engine layout
+
+`signal_engine/README.md` is the map of where each kind of file goes. Strategy ideas,
+verdicts and backtest run records are tracked in `signal_engine/research/` (start at
+`research/REGISTRY.md`); a new idea gets a folder there before any strategy code.
+After editing an idea, run `uv run python -m signal_engine.research.build_registry`.
+
 ## Documentation Map
 
 All project documentation lives under `docs/` as markdown (the single source of
@@ -254,7 +261,7 @@ messages, PR descriptions, changelogs, release notes, or any generated text
 including drafts for Discord or Telegram. Use plain text labels.
 
 **Strategy logic changes must get a layman summary in that strategy's STRATEGY-LOG.md**
-(e.g. `signal_engine/pinescripts/intraday/breaking-trade/STRATEGY-LOG.md`) — any change to
+(e.g. `signal_engine/strategy_library/intraday/breaking-trade/STRATEGY-LOG.md`) — any change to
 entry, exit, stop-loss, take-profit, or filters that decide which signals become trades.
 Dated entry (`### YYYY-MM-DD HH:MM — Title`, from `git log --format="%ad" --date=format:"%Y-%m-%d %H:%M"`
 if already committed), five fields, one to two sentences each, no financial/technical jargon
@@ -282,7 +289,7 @@ UTC instead of shifting to IST, and every BreakingTrade trade-confirmation check
 against them — so the confirmation step was structurally incapable of succeeding, for every
 symbol, every day, from when the strategy was built until the bug was found (2026-09-08). No
 exception, no error, nothing to search logs for — it just never worked, silently. See
-`signal_engine/pinescripts/intraday/breaking-trade/STRATEGY-LOG.md`'s 2026-09-08 13:52 entry.
+`signal_engine/strategy_library/intraday/breaking-trade/STRATEGY-LOG.md`'s 2026-09-08 13:52 entry.
 
 ## Frontend build
 

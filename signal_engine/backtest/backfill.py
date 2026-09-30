@@ -244,7 +244,7 @@ def backfill(symbols: list[str], start: str, end: str | None = None, *,
         # remaining symbol come back looking exactly like "no data for this
         # range" - Angel's own plugin collapses "auth failed" and "genuinely
         # nothing traded" into the same empty DataFrame before this function
-        # ever sees the difference (see PRD.md, 2026-09-14: a token died at
+        # ever sees the difference (see docs/PRD.md, 2026-09-14: a token died at
         # midnight IST mid-run and burned 30+ minutes silently "backfilling"
         # thousands of empty chunks before anyone noticed). Three consecutive
         # symbols with ZERO bars stored across their entire requested range is
@@ -270,9 +270,16 @@ def extend_existing(interval: str = "1m", *, min_stale: int = 2,
 
     Starts each symbol one day before its own last bar, so a partially-downloaded final
     session is completed rather than left with a hole in the middle of it.
+
+    A symbol is also retried when it lags the store-wide latest bar, even if it is under
+    `min_stale`. Without this, a symbol whose write failed today (e.g. a DuckDB lock
+    conflict) sits one day behind and is skipped by `min_stale` until it is 2 days stale.
+    On a market holiday nothing lags, so nothing is fetched.
     """
     cov = coverage(interval, historify_db)
-    todo = cov[cov.stale_days >= min_stale]
+    if cov.empty:
+        return []
+    todo = cov[(cov.stale_days >= min_stale) | (cov["last"] < cov["last"].max())]
     out = []
     for row in todo.itertuples():
         start = (pd.Timestamp(row.last) - pd.Timedelta(days=1)).date().isoformat()

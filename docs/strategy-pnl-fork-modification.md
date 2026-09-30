@@ -21,7 +21,7 @@ This is a **local fork modification to OpenAlgo core**, not a `signal_engine/`-o
 change. It exists because `signal_engine/` (this repo's custom trading pipeline)
 had no way to see, in the OpenAlgo GUI, which strategy placed a given order or
 whether it was paper (Analyze mode) or live — visibility that previously
-required checking EOD reports or Telegram. See `signal_engine/PRD.md` and this
+required checking EOD reports or Telegram. See `signal_engine/docs/PRD.md` and this
 repo's other `signal_engine/` docs for the pipeline itself; this file covers
 only the core-side surface it now relies on.
 
@@ -160,7 +160,7 @@ automation config, nothing to do with the free-text `strategy` tag on
   separation migration (`mode='unknown'`) are excluded entirely from
   `/strategy-pnl`, not shown as a separate "legacy" group as originally
   built. Decision made 2026-09-25: this data predates several known
-  accounting bugs already fixed in this fork (see `signal_engine/PRD.md`'s
+  accounting bugs already fixed in this fork (see `signal_engine/docs/PRD.md`'s
   P&L reliability history — the sandbox today_realized_pnl undercount and
   the EOD partial-exit fill/ledger-date bug), so it is untrusted rather than
   merely unattributed. The rows still exist in the database (nothing was
@@ -296,7 +296,7 @@ exactly matched the sum of `strategy_positions.today_realized_pnl` (also
 -2773.19) and a manual sum of the Strategy P&L page's Realized column -
 three independent methods agreeing, against one drifted counter.
 
-This is the same class of issue already tracked in `signal_engine/PRD.md`'s
+This is the same class of issue already tracked in `signal_engine/docs/PRD.md`'s
 P&L reliability history (the sandbox `today_realized_pnl` undercount noted
 2026-09-21) - evidently still present. No partial-exit (>2-leg) closes
 occurred on 2026-09-25, so this specific occurrence was not the previously-

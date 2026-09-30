@@ -139,7 +139,7 @@ def login() -> tuple[str, str | None, str]:
 
 #: Flattrade's own depth turned out to vary unpredictably by symbol - present at 120
 #: days back, ABSENT 150-240 days back, present again intermittently 270-360 days
-#: back (see PRD.md, 2026-09-13). One symbol's probe is not evidence; several are.
+#: back (see docs/PRD.md, 2026-09-13). One symbol's probe is not evidence; several are.
 DEFAULT_PROBE_SYMBOLS = ("RELIANCE", "TCS", "SBIN", "TATASTEEL", "HDFCBANK")
 
 
@@ -227,7 +227,7 @@ def main() -> None:
         print(f"  {sym:12s} {d:>5} days (~{d / 365.25:.1f} years)")
     deepest_with_data = int(by_symbol.max()) if len(by_symbol) else 0
     print("\nFlattrade's own ceiling was ~365-380 days, with a real gap 150-240 days "
-          "back on some symbols (see PRD.md 2026-09-13) - compare against that, not "
+          "back on some symbols (see docs/PRD.md 2026-09-13) - compare against that, not "
           "against zero, before deciding this is worth a full backfill.")
 
     if not args.backfill:

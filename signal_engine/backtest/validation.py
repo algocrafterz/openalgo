@@ -113,21 +113,25 @@ class _BuyTheOpen(Strategy):
     def entry(self, c, i, p, direction):
         if direction != 1:
             return None
-        # A stop far enough away that price cannot reach it, so every trade ends at
-        # the timed exit and the comparison is not contaminated by stop handling.
-        px = float(c["Close"][i])
-        return EntrySignal(direction=1, sl=px * 0.5, tp=px * 10.0, tag="probe")
+        # Levels that can NEVER bind, by construction, so every trade ends at the timed
+        # exit and the comparison is not contaminated by stop handling. Finite levels
+        # such as 0.5x and 10x are not enough: on the historify store one day (YESBANK
+        # 2020-03-06, a real crash below half the open) hit the stop and another
+        # (ANGELONE 2025-11-27, a one-bar decimal-shift print at 10x) hit the target,
+        # which together opened a 0.2 bps gap that had nothing to do with the engine's
+        # arithmetic. The engine was right on both days; the probe was not neutral.
+        return EntrySignal(direction=1, sl=float("-inf"), tp=float("inf"), tag="probe")
 
 
 def engine_differential(frames: dict[str, pd.DataFrame], exit_min: int = 15 * 60) -> dict:
     """Same trade, two code paths. Panel arithmetic vs the real simulator."""
+    # mis_squareoff_min is pushed past the session: this probe checks the engine's ARITHMETIC
+    # against a hand-computed exit at the first bar at or after exit_min. The broker square-off
+    # guard (which would cap that exit at 14:50) belongs to MIS strategy runs, not to this test.
     run = RunConfig(skip_open_minutes=0, entry_cutoff_min=exit_min - 5,
                     time_exit_min=exit_min, max_trades_per_day=1,
                     one_trade_per_direction=True, allow_shorts=False,
                     cost_bps=0.0, min_sl_pct=0.0, mis_squareoff_min=24 * 60)
-    # mis_squareoff_min is pushed past the session: this probe checks the engine's ARITHMETIC
-    # against a hand-computed exit at the first bar at or after exit_min. The broker square-off
-    # guard (which would cap that exit at 14:50) belongs to MIS strategy runs, not to this test.
     strat = _BuyTheOpen()
 
     direct, engine_r = [], []

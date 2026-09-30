@@ -2,7 +2,7 @@
 # End-of-day analysis for the signal engine. Cron-safe, idempotent, weekday-only.
 #
 # Runs after the close, while OpenAlgo is still up, and writes one dated markdown report:
-#   signal_engine/analysis/reports/eod-YYYY-MM-DD.md
+#   signal_engine/reports/eod-YYYY-MM-DD.md
 #
 # WHY A SCRIPT RATHER THAN "REMEMBER TO RUN THE CLI"
 # The paper week is only worth anything if every session is reviewed. A step that depends on
@@ -26,7 +26,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO" || { echo "FATAL: cannot cd to $REPO"; exit 1; }
 
 DAY="${1:-$(date +%F)}"
-REPORTS="$REPO/signal_engine/analysis/reports"
+REPORTS="$REPO/signal_engine/reports"
 LOGS="$REPO/signal_engine/logs"
 REPORT="$REPORTS/eod-$DAY.md"
 LOCK="$LOGS/.eod.lock"
@@ -46,7 +46,7 @@ fi
 # with nothing to show for it but "another EOD run is in progress". 2026-09-16 through
 # 2026-09-18: exactly that - three straight trading days silently lost their broker
 # verification to an unknown hung process before it cleared on its own by 2026-09-21 (see
-# PRD.md). A run this script performs takes seconds to at most a couple of minutes; nothing
+# docs/PRD.md). A run this script performs takes seconds to at most a couple of minutes; nothing
 # legitimate should ever hold this lock anywhere near STALE_LOCK_SECONDS, so a lock older than
 # that is abandoned, not active - remove it before trying to acquire a fresh one.
 STALE_LOCK_SECONDS=$((2 * 3600))

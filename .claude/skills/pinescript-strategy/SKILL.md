@@ -1,6 +1,6 @@
 ---
 name: pinescript-strategy
-description: Build, review or debug a tradeable PineScript strategy for OpenAlgo's signal_engine pipeline. Use whenever writing or modifying a .pine file under signal_engine/pinescripts/, wiring TradingView alerts to Telegram, registering a new strategy tag, backtesting a strategy before it goes live, or diagnosing why a signal never reached the broker. Also use for Pine v6 compile errors and repainting problems.
+description: Build, review or debug a tradeable PineScript strategy for OpenAlgo's signal_engine pipeline. Use whenever writing or modifying a .pine file under signal_engine/strategy_library/, wiring TradingView alerts to Telegram, registering a new strategy tag, backtesting a strategy before it goes live, or diagnosing why a signal never reached the broker. Also use for Pine v6 compile errors and repainting problems.
 ---
 
 # Tradeable PineScript strategies for OpenAlgo
@@ -19,8 +19,8 @@ ema9-intraday.pine            alert() fires on a CLOSED bar
 
 Every link is a place a signal dies silently. Most of this skill is about those links.
 
-Reference implementation: `signal_engine/pinescripts/intraday/orb/breakout.pine` is the
-most production-hardened script in the repo. `signal_engine/pinescripts/intraday/ema9/`
+Reference implementation: `signal_engine/strategy_library/intraday/orb/breakout.pine` is the
+most production-hardened script in the repo. `signal_engine/strategy_library/intraday/ema9/`
 is the smallest complete one and is easier to read end to end.
 
 ---

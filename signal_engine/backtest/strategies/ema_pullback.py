@@ -12,7 +12,7 @@ THE IDEA
     back toward its rising 20 EMA, then a green reversal bar shows buyers stepping back
     in before the medium-term trend (50 EMA) is broken. Buy the next open, sell if the
     trend actually breaks. This is a LONG-ONLY CNC/delivery swing, matching how RSI2
-    mean-reversion (signal_engine/pinescripts/swing/rsi-tp-mr/) is already traded -
+    mean-reversion (signal_engine/strategy_library/swing/rsi-tp-mr/) is already traded -
     India's T+1 settlement makes swing shorting in cash impractical.
 
 WHAT STOCKKHOJ DOES NOT SPECIFY (each is an input here, not a constant)
@@ -26,7 +26,7 @@ WHAT STOCKKHOJ DOES NOT SPECIFY (each is an input here, not a constant)
                                                                             base_max_range_pct
     - whether an already-extended move should be excluded               -> max_ext_pct
 
-FOLDED IN FROM signal_engine/pinescripts/ideas/ideas-evaluated.txt, idea #4 (9/21 EMA cross + base +
+FOLDED IN FROM signal_engine/research/ideas/_inbox/ideas-evaluated.txt, idea #4 (9/21 EMA cross + base +
 pullback + defend + breakout, reviewed 2026-09-22)
     That idea's own thesis is that an EMA cross alone is not tradeable - what separates its
     "valid setup" example from its two "skip" examples is (a) a tight base/consolidation
@@ -51,7 +51,7 @@ REGIME FILTER, ADDED 2026-09-22 AFTER THE FIRST BACKTEST
     rather than just being assumed to.
 
 WHY IT MIGHT COMPLEMENT THE EXISTING BOOK
-    RSI2 mean-reversion (signal_engine/pinescripts/swing/rsi-tp-mr/) buys weakness
+    RSI2 mean-reversion (signal_engine/strategy_library/swing/rsi-tp-mr/) buys weakness
     against a longer-term trend and holds a few days. This buys STRENGTH after a
     shallow dip and is meant to be held while the trend runs - a different regime bet
     (trend continuation vs. mean reversion), not a variant of the same edge.
@@ -60,7 +60,7 @@ STATUS: Candidate. No .pine exists - this may never need one, since RSI2 already
 proves a Python-only swing setup can run through signal_engine without a PineScript
 front end. NOT backtested yet: blocked on a 10y Historify daily pull for the F&O
 universe. See STRATEGY-ANALYSIS.md in
-signal_engine/pinescripts/swing/ema-pullback/ for the full writeup.
+signal_engine/strategy_library/swing/ema-pullback/ for the full writeup.
 """
 
 from __future__ import annotations

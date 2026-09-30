@@ -35,9 +35,9 @@ compile-on-first-try.
 
 ## Working references in this repo
 
-- `signal_engine/lipiscripts/intraday/orb.lipi` — session-based opening range
+- `signal_engine/strategy_library/lipiscripts/intraday/orb.lipi` — session-based opening range
   breakout. This is the canonical proven-syntax file. Copy its idioms.
-- `signal_engine/lipiscripts/intraday/initial_balance.lipi` — NSE 09:15-10:15
+- `signal_engine/strategy_library/lipiscripts/intraday/initial_balance.lipi` — NSE 09:15-10:15
   initial balance with midpoint, extensions and breakout alerts. Template for
   any session/time-window study.
 

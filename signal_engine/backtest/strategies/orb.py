@@ -1,6 +1,6 @@
 """Opening Range Breakout (Luxy variant) - backtest adapter.
 
-Source: `signal_engine/pinescripts/intraday/orb/orb.pine` (the live strategy).
+Source: `signal_engine/strategy_library/intraday/orb/orb.pine` (the live strategy).
 `breakout.pine` is the same file plus a key-level engine; with ORB-only triggers the
 two are identical, so this adapter covers the ORB path of both.
 
@@ -120,7 +120,7 @@ def _min_stop_distance(entry: float, atr: float) -> float:
 class Orb(Strategy):
     name = "Opening Range Breakout (orb.pine, ORB15)"
     tag = "ORB"
-    pine = "signal_engine/pinescripts/intraday/orb/orb.pine"
+    pine = "signal_engine/strategy_library/intraday/orb/orb.pine"
 
     #: Index direction, indexed by 5-minute timestamp: +1 above its session VWAP, -1
     #: below. Set by `load_index()`; None disables the index vote.

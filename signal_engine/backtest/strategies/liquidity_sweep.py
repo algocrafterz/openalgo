@@ -1,6 +1,6 @@
 """Daily liquidity-sweep engulfing continuation - backtest adapter.
 
-Source: signal_engine/pinescripts/ideas/ideas-evaluated.txt, "strategy:5" (Omar Agag's $500/day
+Source: signal_engine/research/ideas/_inbox/ideas-evaluated.txt, "strategy:5" (Omar Agag's $500/day
 prop-firm setup, Instagram reel). Original framing: 4-hour engulfing candle that sweeps
 the prior candle's low marks a buy zone (the lower half of the engulfing candle's body);
 drop to the 15-minute chart, wait for price to pull back into that zone with market
@@ -51,7 +51,7 @@ WHY THIS MIGHT COMPLEMENT THE EXISTING BOOK
 
 STATUS: Candidate, not yet backtested. Needs the same 10-year Historify daily pull the
 other swing strategies use. See STRATEGY-ANALYSIS.md in
-signal_engine/pinescripts/swing/liquidity-sweep/ for the full writeup; results get
+signal_engine/strategy_library/swing/liquidity-sweep/ for the full writeup; results get
 appended there once this runs.
 """
 

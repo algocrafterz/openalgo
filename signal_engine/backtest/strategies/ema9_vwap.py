@@ -80,7 +80,7 @@ class Ema9VwapParams:
 class Ema9Vwap(Strategy):
     name = "9 EMA / VWAP crossover, plain"
     tag = "EMA9VWAP"
-    pine = "signal_engine/pinescripts/intraday/ema9-vwap/ema9-vwap.pine"
+    pine = "signal_engine/strategy_library/intraday/ema9-vwap/ema9-vwap.pine"
 
     # A crossover is not an opening-range setup - it fires whenever the two lines
     # meet. Cutting entries at 11:00 would measure a fraction of its own signals and

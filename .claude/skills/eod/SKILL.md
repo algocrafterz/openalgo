@@ -6,14 +6,14 @@ description: Run and investigate OpenAlgo's signal_engine end-of-day review for 
 # Signal engine EOD analysis
 
 `signal_engine/analysis/eod.sh` already runs on cron at 15:25 IST every weekday and writes
-`signal_engine/analysis/reports/eod-YYYY-MM-DD.md`. This skill is the human-in-the-loop pass on
+`signal_engine/reports/eod-YYYY-MM-DD.md`. This skill is the human-in-the-loop pass on
 top of that report: don't just read the numbers back, **find out why anything failed and either
 fix it or explain precisely why it isn't a bug.**
 
 A second cron, `signal_engine/analysis/eod_claude_review.sh` at 15:40 IST, already runs this same
 investigation unattended every trading day (report-only — never edits code, see its own header
 for the three enforcement layers), writing
-`signal_engine/analysis/reports/eod-YYYY-MM-DD-claude-review.md`. When invoked interactively,
+`signal_engine/reports/eod-YYYY-MM-DD-claude-review.md`. When invoked interactively,
 check whether that day's file already exists and read it first — it did the same root-causing
 work already; don't re-derive it from scratch. Interactive `/eod` is still what actually applies
 a fix once one is confirmed (that file only ever describes what fix would be needed).
@@ -22,7 +22,7 @@ a fix once one is confirmed (that file only ever describes what fix would be nee
 
 ```bash
 DAY=$(date +%F)
-REPORT="signal_engine/analysis/reports/eod-$DAY.md"
+REPORT="signal_engine/reports/eod-$DAY.md"
 if [ ! -s "$REPORT" ]; then
   ./signal_engine/analysis/eod.sh "$DAY"   # cron should have run this at 15:45 IST; re-run if missing
 fi
@@ -167,7 +167,7 @@ abandoned), but confirm that's actually why before assuming the data gap is unex
   ```bash
   PYTHONPATH=. uv run pytest signal_engine/tests/ -q
   ```
-- Append a dated `## <Title> (YYYY-MM-DD)` section to `signal_engine/PRD.md` — root cause, what
+- Append a dated `## <Title> (YYYY-MM-DD)` section to `signal_engine/docs/PRD.md` — root cause, what
   changed, what deliberately wasn't fixed and why (see the 2026-09-21 reconciliation entry for the
   shape: root cause, fix, and an explicit "not fixed, and likely not a bug" paragraph for the
   parts that turned out to be structural rather than broken).

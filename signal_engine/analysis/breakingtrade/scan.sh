@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the BreakingTrade documented trend scans against whatever .xlsx exports are
-# currently in signal_engine/pinescripts/intraday/breaking-trade/excel/ - no arguments
+# currently in signal_engine/strategy_library/intraday/breaking-trade/excel/ - no arguments
 # needed. Drop a fresh "save page as Excel" snapshot into that folder and re-run this.
 #
 # Extra arguments are passed straight through, e.g.:

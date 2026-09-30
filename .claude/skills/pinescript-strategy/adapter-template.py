@@ -41,7 +41,7 @@ class MyParams:
 class MyStrategy(Strategy):
     name = "my strategy"
     tag = "MYSTRAT"                                   # matches strategies.py
-    pine = "signal_engine/pinescripts/.../my.pine"    # so a reader can diff the two
+    pine = "signal_engine/strategy_library/.../my.pine"    # so a reader can diff the two
 
     def __init__(self):
         self._reset()

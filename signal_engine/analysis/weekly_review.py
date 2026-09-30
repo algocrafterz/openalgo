@@ -44,11 +44,11 @@ from signal_engine.analysis.ledger import (
     load_fills,
 )
 
-_REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+_REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports")
 
 #: Known, already-explained anomaly days. Not a general-purpose incident log - just enough
 #: so a week containing a day this outage already explained does not read as unexplained
-#: noise every single week it is looked back on. See PRD.md for the underlying fixes.
+#: noise every single week it is looked back on. See docs/PRD.md for the underlying fixes.
 _KNOWN_ANOMALIES: dict[str, str] = {
     "2026-09-14": "OpenAlgo unreachable all session (engine events: 0) - cause not yet root-caused.",
     "2026-09-16": (

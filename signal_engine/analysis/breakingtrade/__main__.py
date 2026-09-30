@@ -1,7 +1,7 @@
 """CLI: breakingtrade.com's own documented trend scans, run against the latest snapshot.
 
     # zero-argument daily use: auto-discovers the freshest market_profile/volume .xlsx
-    # already sitting in signal_engine/pinescripts/intraday/breaking-trade/excel/
+    # already sitting in signal_engine/strategy_library/intraday/breaking-trade/excel/
     PYTHONPATH=. uv run python -m signal_engine.analysis.breakingtrade
 
     # or point it at specific files / a different folder

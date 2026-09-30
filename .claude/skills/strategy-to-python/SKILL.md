@@ -85,7 +85,7 @@ Two live paths exist in this codebase, with very different constraints:
 
 | Path | Good for | Constraints |
 |---|---|---|
-| **TradingView Pine** (`signal_engine/pinescripts/`) | Per-symbol strategies, small ranking universes | `request.security()` capped at 40 calls per script — a hard ceiling on any cross-sectional strategy's universe size |
+| **TradingView Pine** (`signal_engine/strategy_library/`) | Per-symbol strategies, small ranking universes | `request.security()` capped at 40 calls per script — a hard ceiling on any cross-sectional strategy's universe size |
 | **Python-native, `/python` Strategy Host** (`strategies/`) | Any universe size, anything Pine can't express | Needs its own scheduling logic (see `strategies/README.md`'s APScheduler/cron-trigger model), its own state persistence between runs (Pine's chart-local `var` state doesn't exist across process restarts), and its own market-data fetch (via the `openalgo` Python client's `history()`, matching `signal_engine/backtest/data.py:from_openalgo()`'s call shape) |
 
 If the backtest-validated config can't fit the chosen platform's constraints (this is
@@ -124,7 +124,7 @@ Check, don't assume, before connecting a new strategy's alerts to the live pipel
 
 - Dated entry in the strategy's `STRATEGY-ANALYSIS.md` (or create one) — what changed,
   what was tested, what didn't move, honest limits, status (candidate/paper vs. live).
-- Update `signal_engine/PRD.md`'s strategy table/fine-tuning-plan entry.
+- Update `signal_engine/docs/PRD.md`'s strategy table/fine-tuning-plan entry.
 - Unit tests for every pure function (score, rank/select, diff, any date/session-count
   logic) under a `tests/` directory next to the port, run via `uv run pytest`.
 - Close the technical write-up with a layman-terms summary: how does a trader actually
@@ -136,7 +136,7 @@ Check, don't assume, before connecting a new strategy's alerts to the live pipel
 The 2026-09-15 momentum-rank port (12-1 cross-sectional momentum, `.pine` -> Python)
 exercises every step above:
 
-- Source: `signal_engine/pinescripts/swing/momentum-rank/momentum-rank.pine`
+- Source: `signal_engine/strategy_library/swing/momentum-rank/momentum-rank.pine`
 - Full-universe backtest, reused engine: `signal_engine/backtest/portfolio.py`
   (`PortfolioBacktest`, `build_factor("mom_skip", ...)`)
 - Port + parity test: pure ranking functions inline in
@@ -146,5 +146,5 @@ exercises every step above:
 - Live runner, deployment-gap-aware, digest-only by design:
   `strategies/examples/momentum_rank_strategy.py`
 - Full narrative, including the platform-constraint decision fork and the Phase 2
-  auto-execution deferral: `signal_engine/pinescripts/swing/momentum-rank/
+  auto-execution deferral: `signal_engine/strategy_library/swing/momentum-rank/
   STRATEGY-ANALYSIS.md`'s 2026-09-15 entries.

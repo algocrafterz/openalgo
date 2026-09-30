@@ -4,7 +4,7 @@ WHY A BROWSER AND NOT httpx
 breakingtrade.com serves the scanners from a hash-routed SPA (Home.jsp#/intradaySignal,
 Home.jsp#/volumeScanner) behind a login, with the table built client-side - an unauthenticated
 GET of Home.jsp returns a ~900-character shell containing none of the scanner vocabulary. There
-is no public API or webhook (see ../../pinescripts/intraday/breaking-trade/README.md), so a
+is no public API or webhook (see ../../strategy_library/intraday/breaking-trade/README.md), so a
 headless browser rendering the page as the subscriber's own session is the way in.
 
 TABLE LOCATION IS BY CONTENT, NOT BY SELECTOR

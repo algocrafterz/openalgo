@@ -176,7 +176,7 @@ class Settings:
 
     # Broker pre-reject list (from yaml) — symbols the broker is known to reject for MIS.
     # Skipped before order placement to avoid wasted slot + Telegram rejection notice.
-    # See FLATTRADE-RESTRICTIONS.md for source / maintenance procedure.
+    # See docs/FLATTRADE-RESTRICTIONS.md for source / maintenance procedure.
     broker_mis_rejected: frozenset
 
     # Listener (from yaml)

@@ -2,7 +2,7 @@
 signal_engine/analysis/breakingtrade/. Covers the two run-on-string parsing traps that
 motivated keyword matching over generic string cleanup (see extractor.py's module
 docstring), and the two real sample snapshots committed under
-signal_engine/pinescripts/intraday/breaking-trade/excel/.
+signal_engine/strategy_library/intraday/breaking-trade/excel/.
 """
 
 import os
@@ -15,7 +15,7 @@ from signal_engine.analysis.breakingtrade import extractor, scorer
 
 _EXCEL_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "pinescripts",
+    "strategy_library",
     "intraday",
     "breaking-trade",
     "excel",

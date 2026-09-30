@@ -1,6 +1,6 @@
 """Dividend/Growth value-zone mean reversion - backtest adapter.
 
-Source: `signal_engine/pinescripts/swing/dividend-growth/dividend-growth.pine`
+Source: `signal_engine/strategy_library/swing/dividend-growth/dividend-growth.pine`
 
 THE IDEA
     Position price inside its own N-day range. Bottom 30% of the range is the "value
@@ -136,7 +136,7 @@ def _step(x: pd.Series, bands: list[tuple[float, float]], above: bool) -> pd.Ser
 class ValueZone(SwingStrategy):
     name = "Dividend/Growth value-zone mean reversion"
     tag = "VALZONE"
-    pine = "signal_engine/pinescripts/swing/dividend-growth/dividend-growth.pine"
+    pine = "signal_engine/strategy_library/swing/dividend-growth/dividend-growth.pine"
 
     # ---- preparation ---------------------------------------------------
 

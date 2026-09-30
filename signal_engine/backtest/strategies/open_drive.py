@@ -1,7 +1,7 @@
 """Value-area edge scalp - backtest adapter, v2.
 
 Rewritten against the repo's own documented model
-(`signal_engine/pinescripts/intraday/volume-profile/volume-profile-model.md`, the
+(`signal_engine/strategy_library/intraday/volume-profile/volume-profile-model.md`, the
 "Volume Profile Entry Zone" diagram) instead of an invented trigger. v1 required the
 OPENING candle itself to be the qualifying shape and the trigger ("break of that
 candle's own high") is not one of the model's six setups. This version implements

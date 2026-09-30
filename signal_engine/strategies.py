@@ -35,7 +35,7 @@ EMA9 = "EMA9"
 # Plain 9 EMA / VWAP crossover. Measured as NOT tradeable (gross -0.41 bps out-of-sample
 # against a ~10 bps cost line, 11,815 trades); the tag exists so the script can paper-trade
 # through the real pipeline and log its own signals for comparison against the backtest.
-# See signal_engine/pinescripts/intraday/ema9-vwap/STRATEGY-LOG.md before enabling it.
+# See signal_engine/strategy_library/intraday/ema9-vwap/STRATEGY-LOG.md before enabling it.
 EMA9_VWAP = "EMA9VWAP"
 
 # BreakingTrade scanner-selected intraday breakouts. Unlike the tags above, these alerts are

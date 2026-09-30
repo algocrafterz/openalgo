@@ -5,7 +5,7 @@ Phase 1 of migrating momentum-rank off TradingView Pine. Pine's
 request.security() call cap (40) limited the live indicator to 40 hardcoded
 names; this script ranks the FULL NSE F&O universe (~200 names) instead,
 matching the config validated by the 2026-09-15 fine-tuning grid search - see
-signal_engine/pinescripts/swing/momentum-rank/STRATEGY-ANALYSIS.md.
+signal_engine/strategy_library/swing/momentum-rank/STRATEGY-ANALYSIS.md.
 
 WHAT IT DOES
     On each scheduled run, checks whether enough trading sessions have passed

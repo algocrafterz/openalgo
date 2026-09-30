@@ -11,7 +11,7 @@ Two reasons, both load-bearing:
 
   2. IT IS THE ONLY WAY TO FIND OUT WHETHER THESE SCANS ARE WORTH TRADING. The vendor
      publishes no win rate, and this repo's own assessment of it is blunt - see
-     ../../pinescripts/intraday/breaking-trade/README.md: "our constraint has not been a
+     ../../strategy_library/intraday/breaking-trade/README.md: "our constraint has not been a
      shortage of signals - every intraday breakout variant tested so far has come out at or
      below break-even after costs. Buying a third-party scanner adds signal volume, not edge."
      A stored history of "scan X fired on symbol Y at time T" can be joined against subsequent

@@ -31,7 +31,7 @@ import pandas as pd
 
 from signal_engine.analysis.breakingtrade import store
 
-# Round-trip cost assumption for the net column: brokerage plus slippage, from PRD.md.
+# Round-trip cost assumption for the net column: brokerage plus slippage, from docs/PRD.md.
 ROUND_TRIP_COST_PCT = 0.19
 
 _SCHEMA = """

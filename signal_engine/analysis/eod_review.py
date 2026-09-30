@@ -5,7 +5,7 @@ WHY THIS EXISTS
 
 signal_engine/analysis/eod.sh already produces a markdown report every trading evening
 (ledger, declined signals, BreakingTrade review, errors) - but nobody reads a markdown file
-unless they remember to. EOD-ANALYSIS-2026-09-11.md and every "review fixes" entry in PRD.md
+unless they remember to. docs/EOD-ANALYSIS-2026-09-11.md and every "review fixes" entry in docs/PRD.md
 since exists because a HUMAN sat down and manually cross-checked trades.db against the
 broker, grepped the logs for notifier failures, and read the Telegram channels back - the
 exact three-part check this module now runs automatically, every day, without anyone
@@ -67,7 +67,7 @@ from signal_engine.analysis.breakingtrade import review
 from signal_engine.smoke_test import CheckResult, check_config, check_db
 
 _LOG_DIR = "signal_engine/logs"
-_REPORTS_DIR = "signal_engine/analysis/reports"
+_REPORTS_DIR = "signal_engine/reports"
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 #: Substrings that mean a Telegram send was attempted and failed or never happened at all -

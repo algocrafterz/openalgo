@@ -378,7 +378,7 @@ def enrich_sector(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 DEFAULT_EXCEL_DIR = os.path.join(
-    _SIGNAL_ENGINE_DIR, "pinescripts", "intraday", "breaking-trade", "excel"
+    _SIGNAL_ENGINE_DIR, "strategy_library", "intraday", "breaking-trade", "excel"
 )
 
 

@@ -1,6 +1,6 @@
 """IB (Initial Balance) extension double-breakout - backtest adapter.
 
-Source: `signal_engine/pinescripts/intraday/ib-extension/ib-extension.pine`
+Source: `signal_engine/strategy_library/intraday/ib-extension/ib-extension.pine`
 
 THE IDEA
     Two nested opening ranges, both of which must break the same way:
@@ -121,7 +121,7 @@ def _weekly_ib(day: pd.Series, dow: pd.Series, hi: pd.Series, lo: pd.Series) -> 
 class IbExtension(Strategy):
     name = "IB extension double breakout (weekly + daily)"
     tag = "IBEXT"
-    pine = "signal_engine/pinescripts/intraday/ib-extension/ib-extension.pine"
+    pine = "signal_engine/strategy_library/intraday/ib-extension/ib-extension.pine"
 
     def __init__(self, regime: pd.Series | None = None) -> None:
         # Daily Nifty-50 regime the use_regime gate reads, loaded once here. Before

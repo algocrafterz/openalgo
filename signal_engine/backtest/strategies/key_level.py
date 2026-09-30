@@ -1,6 +1,6 @@
 """breakout.pine key-level engine - backtest adapter (PD and IB families).
 
-Source: `signal_engine/pinescripts/intraday/orb/breakout.pine`, the `kl*` engine.
+Source: `signal_engine/strategy_library/intraday/orb/breakout.pine`, the `kl*` engine.
 
 WHAT IS COVERED AND WHAT IS NOT
     breakout.pine trades four level families. Three are reproducible from 5-minute bars
@@ -142,7 +142,7 @@ class KeyLevelParams:
 class KeyLevel(Strategy):
     name = "breakout.pine key levels (PDH/PDL + IBH/IBL, break and retest)"
     tag = "KEYLEVEL"
-    pine = "signal_engine/pinescripts/intraday/orb/breakout.pine"
+    pine = "signal_engine/strategy_library/intraday/orb/breakout.pine"
 
     # ---- preparation ---------------------------------------------------
 

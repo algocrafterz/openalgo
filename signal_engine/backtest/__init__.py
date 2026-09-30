@@ -1,6 +1,6 @@
 """Backtest framework for OpenAlgo's PineScript-based strategies.
 
-Every tradeable PineScript in signal_engine/pinescripts/ should have an adapter here,
+Every tradeable PineScript in signal_engine/strategy_library/ should have an adapter here,
 so a strategy can be measured before it is wired to a live broker.
 
     from signal_engine.backtest import Backtest, RunConfig, data

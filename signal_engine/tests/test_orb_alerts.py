@@ -17,7 +17,7 @@ TP/SL HIT there is no normalizer rewrite rule to synthesise the missing fields, 
 ORB time exit vanished between April and August 2026 - 47% of that channel's signals
 never received an exit of any kind. Both halves are asserted below.
 
-Source: signal_engine/pinescripts/intraday/orb/orb.pine
+Source: signal_engine/strategy_library/intraday/orb/orb.pine
 """
 
 import pytest

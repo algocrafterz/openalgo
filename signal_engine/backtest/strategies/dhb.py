@@ -1,6 +1,6 @@
 """DHB - "Day High Breakout" gainer-pullback continuation (TradeXPavan) adapter.
 
-Source: `signal_engine/pinescripts/intraday/intraday-dhb.txt`, a discretionary setup
+Source: `signal_engine/strategy_library/intraday/intraday-dhb.txt`, a discretionary setup
 posted to a Telegram channel. The text is a checklist, not a specification, so every
 vague term below had to be pinned to a number before it could be tested. Those choices
 are the whole result - a different reading of "healthy pullback" is a different
@@ -100,7 +100,7 @@ class DhbParams:
 class Dhb(Strategy):
     name = "DHB gainer-pullback breakout (TradeXPavan)"
     tag = "DHB"
-    pine = "signal_engine/pinescripts/intraday/intraday-dhb.txt"
+    pine = "signal_engine/strategy_library/intraday/intraday-dhb.txt"
     #: The setup cannot arm before 10:00 (the FDH freezes there) and is explicitly a
     #: wait-for-the-pullback rule, so the 11:00 entry cutoff that suits ORB would discard
     #: most of its signals. Long only, one trade per symbol per day.

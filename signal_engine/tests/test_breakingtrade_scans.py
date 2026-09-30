@@ -12,7 +12,7 @@ from signal_engine.analysis.breakingtrade import extractor, scans
 
 _EXCEL_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "pinescripts",
+    "strategy_library",
     "intraday",
     "breaking-trade",
     "excel",

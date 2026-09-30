@@ -5,7 +5,7 @@ mid-session OpenAlgo mode flip gets noticed.
 
 M1 — RiskEngine.update_unrealised() had no production caller at all. `unrealised_loss` was
 permanently 0.0, so check_exposure()'s `daily_realised_loss + unrealised_loss` was just the
-realised half, while PRD.md and the project notes both described the combined gate as live.
+realised half, while docs/PRD.md and the project notes both described the combined gate as live.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch

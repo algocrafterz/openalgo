@@ -139,7 +139,7 @@ sections share fourteen local variables (`m`, `d_grade`, `fri`, `multi_tp_pnl`, 
 forward between sections. Untangling that by hand risks silently corrupting the performance
 report used for strategy decisions, for no live-trading benefit. The file was restored untouched.
 
-**One latent defect found and documented, not fixed** — see "Known defects" in `signal_engine/PRD.md`.
+**One latent defect found and documented, not fixed** — see "Known defects" in `signal_engine/docs/PRD.md`.
 
 ## Open Questions
 

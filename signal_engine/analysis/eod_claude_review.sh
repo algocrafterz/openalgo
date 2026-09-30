@@ -19,7 +19,7 @@
 # --dangerously-skip-permissions is still required for a genuinely unattended run (nobody is
 # present to answer an interactive permission prompt) - layers 1-2 are what keep this safe,
 # not that flag's absence. If a real bug is found, the report describes the exact fix needed;
-# a human applies it later via /eod, same as every fix in signal_engine/PRD.md's 2026-09-21
+# a human applies it later via /eod, same as every fix in signal_engine/docs/PRD.md's 2026-09-21
 # entries was applied - with review, tests, and a considered decision on scope each time.
 #
 # Runs 15 minutes after eod.sh's own 15:25 IST cron, giving it time to finish and OpenAlgo's
@@ -38,7 +38,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO" || { echo "FATAL: cannot cd to $REPO"; exit 1; }
 
 DAY="${1:-$(date +%F)}"
-REPORTS="$REPO/signal_engine/analysis/reports"
+REPORTS="$REPO/signal_engine/reports"
 mkdir -p "$REPORTS"
 OUT="$REPORTS/eod-$DAY-claude-review.md"
 

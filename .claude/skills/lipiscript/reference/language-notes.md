@@ -1,7 +1,7 @@
 # LipiScript language notes
 
 Two tiers below. **Verified** means it appears in a script that compiled on
-GoCharting (`signal_engine/lipiscripts/intraday/orb.lipi`,
+GoCharting (`signal_engine/strategy_library/lipiscripts/intraday/orb.lipi`,
 `initial_balance.lipi`). **Docs-only** means the official documentation
 describes it but no compile has confirmed it — the docs are known to overstate
 the grammar, so treat these as unavailable until proven.

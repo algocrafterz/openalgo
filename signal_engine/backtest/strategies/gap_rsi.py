@@ -78,7 +78,7 @@ class GapRsiParams:
 class GapRsi(SwingStrategy):
     name = "Extreme-RSI breakaway gap (1:10 R:R)"
     tag = "GAPRSI"
-    pine = "signal_engine/pinescripts/swing/gap-rsi/gap-rsi-swing.pine"
+    pine = "signal_engine/strategy_library/swing/gap-rsi/gap-rsi-swing.pine"
 
     # ---- preparation ---------------------------------------------------
 

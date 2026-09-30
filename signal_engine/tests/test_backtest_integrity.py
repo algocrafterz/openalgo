@@ -378,7 +378,7 @@ class TestBySymbolEmptyTrades:
 class TestDeadTokenFailsFast:
     """A dead session token makes every remaining chunk look exactly like a real
     data gap - three consecutive all-zero symbols is the signature that catches
-    that before it burns 30+ minutes silently doing nothing (see PRD.md 2026-09-14)."""
+    that before it burns 30+ minutes silently doing nothing (see docs/PRD.md 2026-09-14)."""
 
     def test_three_consecutive_zero_symbols_raises(self, monkeypatch):
         from signal_engine.backtest import backfill

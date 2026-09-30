@@ -32,7 +32,7 @@ selected liquid stocks during market hours".
 
 WHAT THIS CANNOT TELL YOU: it measures the SELECTION, not a strategy. It assumes entry at the
 signal price with no slippage and no commission. Real costs on this book run about 0.19R per
-round trip (see PRD.md), so a scan whose edge is under ~0.2R is not tradeable even if the
+round trip (see docs/PRD.md), so a scan whose edge is under ~0.2R is not tradeable even if the
 statistics look positive.
 """
 

@@ -5,7 +5,7 @@ are edited independently and there is no compile-time link between them, so a ch
 to either alert builder or to the normalizer/parser regexes must fail here rather
 than silently drop live signals.
 
-Source: signal_engine/pinescripts/intraday/ema9-vwap/ema9-vwap.pine
+Source: signal_engine/strategy_library/intraday/ema9-vwap/ema9-vwap.pine
 """
 
 import pytest

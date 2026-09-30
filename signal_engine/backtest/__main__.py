@@ -45,13 +45,16 @@ def _register():
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.ibs_meanrev import IbsMeanRev, IbsMeanRevParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
-    from signal_engine.backtest.strategies.liquidity_sweep import LiquiditySweep, LiquiditySweepParams
+    from signal_engine.backtest.strategies.liquidity_sweep import (
+        LiquiditySweep,
+        LiquiditySweepParams,
+    )
     from signal_engine.backtest.strategies.nr_breakout import NrBreakout, NrBreakoutParams
     from signal_engine.backtest.strategies.open_drive import OpenDrive, OpenDriveParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
     from signal_engine.backtest.strategies.phoenix import Phoenix, PhoenixParams
     from signal_engine.backtest.strategies.turtle_soup import TurtleSoup, TurtleSoupParams
-    from signal_engine.backtest.strategies.value_area_fade import ValueAreaFade, FadeParams
+    from signal_engine.backtest.strategies.value_area_fade import FadeParams, ValueAreaFade
     from signal_engine.backtest.strategies.value_zone import ValueZone, ValueZoneParams
     REGISTRY["breakout"] = (Breakout, BreakoutParams, "intraday")
     REGISTRY["dhb"] = (Dhb, DhbParams, "intraday")

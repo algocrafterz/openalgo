@@ -5,7 +5,7 @@ net than the strict named scans and rank what falls out.
 
 The weights encode the same reading a discretionary Market Profile trader gives this
 vocabulary, corrected against the vendor's own cheat sheet
-(signal_engine/pinescripts/intraday/breaking-trade/BreakingTrade_Cheat_Sheet.docx):
+(signal_engine/strategy_library/intraday/breaking-trade/BreakingTrade_Cheat_Sheet.docx):
 
   - Day Type is the terminal read. "Trend" / "Double Distribution" are what the cheat sheet
     says to "hold with trailing stop - never fade"; "Normal Variation" is a moderate breakout
