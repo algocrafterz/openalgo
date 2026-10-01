@@ -279,3 +279,60 @@ daily and comparison endpoints.
 - Per-strategy allocated-capital config for %-normalized Sharpe/Sortino/Calmar/CAGR.
 - Rolling-window metrics (trailing 20/50 trades) for trend detection.
 - Trade-level drill-down UI (currently day-level only).
+
+## Charges: verification and charge-drag percentages (2026-10-01)
+
+**Verified.** The estimate (`services/strategy_trade_enrichment.py` with `portfolio.costs.india_intraday`) uses the
+standard discount-broker intraday schedule: brokerage 0.03% or Rs 20 per order (whichever is lower), STT 0.025% on the
+sell side, NSE exchange fee 0.00297% (BSE 0.00375%), SEBI Rs 10 per crore, stamp duty 0.003% on the buy side, GST 18% on
+brokerage, exchange and SEBI fees. Rebuilt independently from the sandbox's real fills with one brokerage per executed
+order, 2026-10-01 came to Rs 5,574 on 111 strategy orders. The page showed Rs 5,734, 2.9% high.
+
+**Why it ran high, fixed.** A closed-trade row is one exit leg, and the page charged every row a full entry+exit pair, so a
+position closed in several legs paid entry brokerage repeatedly. `estimate_trade_costs` now counts each entry order once
+(legs share strategy, symbol, mode, date, direction and entry price; only the earliest leg carries the entry order). The
+same day now estimates Rs 5,528, within 1% of the order-count figure. Rates are the 2024-25 published schedule: confirm
+them against a real contract note from the broker in use before relying on the last rupee. Slippage is excluded.
+
+**What was added.** `summarize_enrichment` / `summarize_costs` return `charges_pct_of_gross` (charges as a share of gross
+profit; null when there is no gross profit, above 100 when charges exceed it), `turnover`, `charges_pct_of_turnover` and
+`avg_charge_per_trade`. Shown on the Performance page summary cards ("charges Rs X = Y% of gross profit"), as three columns
+in the strategy comparison table (Charges, Charges % of profit with amber at 50% and red at 100%, After charges), and in
+the nightly `pages_vs_fills` report and EOD digest headline. The 2026-10-01 picture: charges took 80.6% of the day's gross
+profit (BREAKOUT 57%, BREAKOUT-PY 90%, BREAKINGTRADE 290%).
+
+## Charges per broker (2026-10-01)
+
+**Why.** Brokerage is the broker's own, so the Performance page prices each trade on the broker that placed it, in live
+and paper mode alike. Flattrade's published schedule (https://flattrade.in/charges/, read 2026-10-01) is NIL brokerage on
+equity intraday and delivery; STT 0.025% sell side (intraday), exchange fee NSE 0.00307% / BSE 0.00375%, SEBI Rs 10 per
+crore, stamp duty 0.003% buy side, GST 18% on exchange fee plus SEBI (and brokerage where there is any), DP Rs 20 per
+debit plus GST on a delivery sell. Statutory lines are identical at every broker; only brokerage and DP differ.
+`portfolio/costs.py`'s intraday NSE exchange fee was also out of date (0.00297%) and is now the published 0.00307%.
+
+**How.** `portfolio/broker_fees.py` holds one `BrokerFees` per broker (rate, per-order cap, delivery flat, DP charge,
+source URL, date read) plus `DEFAULT_FEES`, a typical discount broker (0.03% or Rs 20 per intraday order) flagged
+`assumed`. `india_intraday(exchange, broker=)` / `india_delivery(exchange, broker=)` swap only the brokerage rule. A broker
+with no entry, or a trade with no recorded broker, is priced on the default and labelled "assumed rates".
+**To add a broker**: read its charges page, add a `BrokerFees` entry with `source` and `verified_on`, set `assumed=False`.
+
+**Where the broker comes from.** Stamped on the order when it is placed (`strategy_order_tags.broker`, resolved from the
+event's API key via `get_auth_token_broker`), copied to the closing trade (`strategy_closed_trades.broker`; a close with no
+order of its own takes the latest order's broker). Run `upgrade/migrate_strategy_book_broker.py` (registered in
+`migrate_all.py`): it adds both columns and backfills from `db/latency.db`'s `order_latency` log (by order id, else the
+day's dominant broker, else "unknown"). On this install 666 of 667 tags matched by order id and every trade resolved to
+Flattrade. A position opened at one broker and closed at another is priced at the closing broker.
+
+**Surfaced.** `by_broker` (isolated per broker: trades, gross, charges, % of profit, after charges, assumed flag) and
+`fee_basis_assumed` in the performance API; a "Charges by broker" card and a Broker column on the Performance page; per
+broker lines in the nightly `pages_vs_fills` report. Effect on 2026-10-01: estimated charges fell from Rs 5,528 (assumed
+Rs 20-per-order brokerage) to Rs 3,372 at Flattrade, 49.1% of gross profit instead of 80.6%; after charges +3,490.
+Not modelled: slippage, DP charge when several legs sell the same scrip on one day beyond the first, and exchange-fee
+changes after the date read above (re-verify against a contract note).
+
+**If the broker changes (2026-10-01).** There is no broker API in this codebase that returns a brokerage schedule (none of the
+38 plugins implements one; Upstox's `charges/margin` is a margin calculator), so a new broker is NOT priced automatically.
+What is automatic is the warning: a trade whose broker has no entry in `portfolio/broker_fees.py` is priced on the assumed
+default, logged once by name, shown as "[assumed broker rates]" on the Performance cards and in the broker card with the
+reason, and flagged in the nightly `pages_vs_fills` report. A verified schedule also asks for a re-check after 180 days.
+`uncovered_brokers()` lists the plugin brokers still lacking a verified entry.

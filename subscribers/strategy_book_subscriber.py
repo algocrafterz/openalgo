@@ -34,6 +34,26 @@ def _request_field(event, key: str) -> str:
     return str(data.get(key) or "") if isinstance(data, dict) else ""
 
 
+def _broker(event) -> str:
+    """The broker this order went through, from the session auth tied to the event's API key.
+
+    Charges are priced per broker, in live and paper mode alike (paper orders are simulated
+    against the same configured broker). Best effort: a lookup failure yields "" (stored as
+    "unknown") and never blocks tagging the order.
+    """
+    api_key = getattr(event, "api_key", "") or _request_field(event, "apikey")
+    if not api_key:
+        return ""
+    try:
+        from database.auth_db import get_auth_token_broker
+
+        _token, broker = get_auth_token_broker(api_key)
+        return broker or ""
+    except Exception:
+        logger.exception("Strategy book: could not resolve the broker for an order")
+        return ""
+
+
 def on_order_placed(event) -> None:
     """Record which strategy an order belongs to."""
     strategy = (getattr(event, "strategy", "") or "").strip()
@@ -48,6 +68,7 @@ def on_order_placed(event) -> None:
         exchange=getattr(event, "exchange", "") or "",
         product=getattr(event, "product", "") or "",
         mode=getattr(event, "mode", "") or "",
+        broker=_broker(event),
     )
 
 
@@ -66,6 +87,7 @@ def on_batch_completed(event) -> None:
 
     user_id = _user_id(event)
     mode = getattr(event, "mode", "") or ""
+    broker = _broker(event)
     # A split or options batch is one contract, so the event carries the leg
     # identity. A basket spans several, so each result supplies its own and the
     # event has none - hence per-leg values win and the event is the fallback.
@@ -95,6 +117,7 @@ def on_batch_completed(event) -> None:
                     exchange=leg.get("exchange") or default_exchange,
                     product=leg.get("product") or default_product,
                     mode=mode,
+                    broker=broker,
                 )
             continue
 
@@ -121,6 +144,7 @@ def on_batch_completed(event) -> None:
             exchange=exchange,
             product=product,
             mode=mode,
+            broker=broker,
         )
 
 

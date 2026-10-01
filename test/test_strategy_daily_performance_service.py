@@ -50,3 +50,15 @@ def test_other_periods_omit_trade_list_but_carry_enrichment():
     assert r["net_after_costs"] == pytest.approx(50.0 - r["est_costs"], abs=0.01)
     assert r["expectancy_r"] is None and r["r_covered"] == 0 and r["r_total"] == 2
     assert [s["symbol"] for s in r["by_symbol"]] == ["AAA", "BBB"]
+
+
+def test_charge_drag_is_in_the_summary_and_the_comparison_row(monkeypatch):
+    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB"])
+    ok, r, _ = svc.get_daily_performance(None, "7d")
+    assert ok and r["charges_pct_of_gross"] == pytest.approx(100 * r["est_costs"] / 50.0, abs=0.01)  # gross is +100 - 50
+    assert r["turnover"] > 0 and r["charges_pct_of_turnover"] > 0
+    ok, c, _ = svc.get_strategy_comparison("7d")
+    row = c["strategies"][0]
+    assert row["est_costs"] == pytest.approx(r["est_costs"])
+    assert row["net_after_costs"] == pytest.approx(r["net_after_costs"])
+    assert row["charges_pct_of_gross"] == pytest.approx(r["charges_pct_of_gross"])

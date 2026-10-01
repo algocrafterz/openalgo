@@ -72,6 +72,7 @@ MIGRATIONS = [
     ("add_totp_purpose_flags.py", "Per-Purpose 2FA Flags (login/MCP/reset)"),
     ("migrate_gtt_sandbox.py", "Sandbox GTT Support & CAS F&O Close (15:40)"),
     ("migrate_strategy_book_mode.py", "Strategy Book Live/Paper Mode Separation"),
+    ("migrate_strategy_book_broker.py", "Strategy Book Per-Broker Trade Attribution"),
 ]
 
 

@@ -17,6 +17,7 @@ from database.strategy_book_db import get_closed_trades, list_strategies
 from services.strategy_metrics_service import compute_metrics, resolve_period
 from services.strategy_trade_enrichment import (
     enrich_trades,
+    summarize_costs,
     summarize_enrichment,
     symbol_breakdown,
 )
@@ -85,9 +86,13 @@ def get_strategy_comparison(period: str) -> tuple[bool, dict[str, Any], int]:
         if not trades_in_range:
             continue
         m = compute_metrics(trades_in_range, start_date, end_date)
+        costs = summarize_costs(trades_in_range)
         rows.append(
             {
                 "strategy": name,
+                "est_costs": costs["est_costs"],
+                "net_after_costs": costs["net_after_costs"],
+                "charges_pct_of_gross": costs["charges_pct_of_gross"],
                 "trades_count": m["trades_count"],
                 "win_rate": m["win_rate"],
                 "profit_factor": m["profit_factor"],

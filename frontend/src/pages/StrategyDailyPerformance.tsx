@@ -10,6 +10,7 @@ import {
 import { AlertTriangle, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  type BrokerCharges,
   type DailyPnlPoint,
   type EquityPoint,
   type PerformancePeriod,
@@ -54,6 +55,30 @@ const PERIODS: { value: PerformancePeriod; label: string }[] = [
 
 const PORTFOLIO_VALUE = '__portfolio__'
 const POLL_MS = 60_000
+
+/** "charges Rs X (Y% of gross profit)" - how much of the profit the charges take. */
+function chargesHint(
+  d: {
+    est_costs?: number | null
+    charges_pct_of_gross?: number | null
+    fee_basis_assumed?: boolean
+  },
+  format: (value: number) => string
+): string | undefined {
+  if (d.est_costs == null) return undefined
+  const amount = format(d.est_costs)
+  const note = d.fee_basis_assumed ? ' [assumed broker rates]' : ''
+  if (d.charges_pct_of_gross == null) return `charges ${amount} (no gross profit)${note}`
+  return `charges ${amount} = ${d.charges_pct_of_gross.toFixed(1)}% of gross profit${note}`
+}
+
+/** Colour for a charges-to-profit share: half the profit is a warning, all of it a loss. */
+function chargesDragClass(pct: number | null | undefined): string {
+  if (pct == null) return 'text-muted-foreground'
+  if (pct >= 100) return 'text-red-600'
+  if (pct >= 50) return 'text-amber-600'
+  return ''
+}
 
 function fmtRatio(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
@@ -107,6 +132,7 @@ function TodayTrades({
               <TableHead className="text-right">Exit</TableHead>
               <TableHead className="text-right">P&amp;L</TableHead>
               <TableHead className="text-right">R</TableHead>
+              <TableHead>Broker</TableHead>
               <TableHead className="text-right">Est. Charges</TableHead>
             </TableRow>
           </TableHeader>
@@ -126,6 +152,7 @@ function TodayTrades({
                 <TableCell className={cn('text-right font-mono', pnlClass(t.r_multiple ?? 0))}>
                   {fmtR(t.r_multiple)}
                 </TableCell>
+                <TableCell className="text-muted-foreground">{t.broker ?? '—'}</TableCell>
                 <TableCell className="text-right font-mono text-muted-foreground">
                   {t.cost === null ? '—' : formatCurrency(t.cost)}
                 </TableCell>
@@ -177,6 +204,80 @@ function SymbolTable({
         </Table>
       )}
     </div>
+  )
+}
+
+function BrokerChargesCard({
+  rows,
+  assumed,
+  formatCurrency,
+}: {
+  rows: BrokerCharges[]
+  assumed: boolean
+  formatCurrency: (value: number) => string
+}) {
+  if (rows.length === 0) return null
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Charges by broker</CardTitle>
+      </CardHeader>
+      <CardContent className="py-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Broker</TableHead>
+              <TableHead className="text-right">Trades</TableHead>
+              <TableHead className="text-right">Gross P&amp;L</TableHead>
+              <TableHead className="text-right">Est. charges</TableHead>
+              <TableHead className="text-right">Charges % of profit</TableHead>
+              <TableHead className="text-right">After charges</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.broker}>
+                <TableCell className="font-medium">
+                  {r.label}
+                  {r.assumed && (
+                    <span className="ml-2 text-xs text-amber-600" title="Assumed fee schedule">
+                      assumed rates
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right font-mono">{r.trades}</TableCell>
+                <TableCell className={cn('text-right font-mono', pnlClass(r.gross))}>
+                  {formatCurrency(r.gross)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-muted-foreground">
+                  {r.est_costs == null ? '—' : formatCurrency(r.est_costs)}
+                </TableCell>
+                <TableCell
+                  className={cn('text-right font-mono', chargesDragClass(r.charges_pct_of_gross))}
+                >
+                  {r.charges_pct_of_gross == null ? '—' : `${r.charges_pct_of_gross.toFixed(1)}%`}
+                </TableCell>
+                <TableCell className={cn('text-right font-mono', pnlClass(r.net_after_costs ?? 0))}>
+                  {r.net_after_costs == null ? '—' : formatCurrency(r.net_after_costs)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {rows
+          .filter((r) => r.attention)
+          .map((r) => (
+            <p key={`attn-${r.broker}`} className="text-xs text-amber-600 py-1">
+              {r.label}: {r.attention}
+            </p>
+          ))}
+        <p className="text-xs text-muted-foreground py-2">
+          Each broker's trades are priced on that broker's own brokerage; taxes and exchange fees
+          are the same everywhere.
+          {assumed && ' Rows marked "assumed rates" use a typical discount-broker schedule.'}
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -498,8 +599,10 @@ export default function StrategyDailyPerformance() {
           History starts from the day this page was deployed - trades closed before that are not
           reconstructed. Metrics are computed in rupees on each strategy's own realized P&L, not a
           %-of-capital return (no isolated capital is tracked per strategy). Est. charges use the
-          India intraday schedule (brokerage, STT, exchange fees, stamp duty, GST) and exclude
-          slippage. R is shown only for trades whose signal stop could be identified.
+          India intraday schedule (the placing broker's own brokerage, plus STT, exchange fees,
+          stamp duty, GST), count each entry order once however many exit legs follow, and exclude
+          slippage. "% of profit" is estimated charges divided by gross profit: 100% means charges
+          took all of it. R is shown only for trades whose signal stop could be identified.
         </span>
       </div>
 
@@ -530,9 +633,7 @@ export default function StrategyDailyPerformance() {
                 value={daily.net_after_costs == null ? '—' : formatCurrency(daily.net_after_costs)}
                 positive={(daily.net_after_costs ?? 0) > 0}
                 negative={(daily.net_after_costs ?? 0) < 0}
-                hint={
-                  daily.est_costs == null ? undefined : `charges ${formatCurrency(daily.est_costs)}`
-                }
+                hint={chargesHint(daily, formatCurrency)}
               />
               <MetricCard
                 label="Wins / Losses"
@@ -570,9 +671,7 @@ export default function StrategyDailyPerformance() {
                 value={daily.net_after_costs == null ? '—' : formatCurrency(daily.net_after_costs)}
                 positive={(daily.net_after_costs ?? 0) > 0}
                 negative={(daily.net_after_costs ?? 0) < 0}
-                hint={
-                  daily.est_costs == null ? undefined : `charges ${formatCurrency(daily.est_costs)}`
-                }
+                hint={chargesHint(daily, formatCurrency)}
               />
               <MetricCard label="Win Rate" value={`${(daily.win_rate ?? 0).toFixed(1)}%`} />
               <MetricCard label="Profit Factor" value={fmtRatio(daily.profit_factor)} />
@@ -594,6 +693,12 @@ export default function StrategyDailyPerformance() {
               />
             </div>
           )}
+
+          <BrokerChargesCard
+            rows={daily.by_broker ?? []}
+            assumed={daily.fee_basis_assumed ?? false}
+            formatCurrency={formatCurrency}
+          />
 
           {isToday ? (
             <TodayTrades trades={daily.trades ?? []} formatCurrency={formatCurrency} />
@@ -681,6 +786,9 @@ export default function StrategyDailyPerformance() {
                   <TableHead className="text-right">Win Rate</TableHead>
                   <TableHead className="text-right">Profit Factor</TableHead>
                   <TableHead className="text-right">Net P&L</TableHead>
+                  <TableHead className="text-right">Charges</TableHead>
+                  <TableHead className="text-right">Charges % of profit</TableHead>
+                  <TableHead className="text-right">After charges</TableHead>
                   <TableHead className="text-right">Expectancy</TableHead>
                   {!isToday && <TableHead className="text-right">Sharpe</TableHead>}
                   {!isToday && <TableHead className="text-right">Max Drawdown</TableHead>}
@@ -715,6 +823,31 @@ export default function StrategyDailyPerformance() {
                       )}
                     >
                       {formatCurrency(row.net_profit)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-muted-foreground">
+                      {row.est_costs == null ? '—' : formatCurrency(row.est_costs)}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-mono',
+                        chargesDragClass(row.charges_pct_of_gross)
+                      )}
+                    >
+                      {row.charges_pct_of_gross == null
+                        ? '—'
+                        : `${row.charges_pct_of_gross.toFixed(1)}%`}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-mono',
+                        (row.net_after_costs ?? 0) > 0
+                          ? 'text-green-600'
+                          : (row.net_after_costs ?? 0) < 0
+                            ? 'text-red-600'
+                            : ''
+                      )}
+                    >
+                      {row.net_after_costs == null ? '—' : formatCurrency(row.net_after_costs)}
                     </TableCell>
                     <TableCell className="text-right font-mono">
                       {formatCurrency(row.expectancy)}

@@ -100,6 +100,15 @@ export interface StrategyDailyPerformance {
   equity_curve?: EquityPoint[]
   est_costs?: number | null
   net_after_costs?: number | null
+  /** Estimated charges as a percent of gross profit; null when there is no gross profit. */
+  charges_pct_of_gross?: number | null
+  /** Gross traded value (entry plus exit) the charges were estimated on. */
+  turnover?: number
+  charges_pct_of_turnover?: number | null
+  avg_charge_per_trade?: number | null
+  by_broker?: BrokerCharges[]
+  /** True when any trade was priced on an assumed fee schedule rather than its broker's own. */
+  fee_basis_assumed?: boolean
   expectancy_r?: number | null
   total_r?: number | null
   r_covered?: number
@@ -115,8 +124,25 @@ export interface SymbolPnl {
   win_rate: number
 }
 
+/** Estimated charges for the trades one broker placed, priced on that broker's own fees. */
+export interface BrokerCharges {
+  broker: string
+  label: string
+  /** True when these rates are a stand-in, not read from the broker's own published page. */
+  assumed: boolean
+  source: string
+  /** Why these charges need a look (assumed rates, or fees read long ago); null when fine. */
+  attention?: string | null
+  trades: number
+  gross: number
+  est_costs: number | null
+  net_after_costs: number | null
+  charges_pct_of_gross: number | null
+}
+
 export interface PerformanceTrade {
   strategy: string
+  broker?: string
   symbol: string
   direction: 'LONG' | 'SHORT'
   closed_quantity: number
@@ -139,6 +165,9 @@ export interface StrategyComparisonRow {
   max_drawdown: number
   best_win_streak: number
   best_loss_streak: number
+  est_costs?: number | null
+  net_after_costs?: number | null
+  charges_pct_of_gross?: number | null
 }
 
 export interface StrategyComparisonResponse {

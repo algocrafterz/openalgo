@@ -306,3 +306,76 @@ class TestAccountView:
         fills = [F("A", "X", "BUY", 1, 10.0), F("A", "X", "SELL", 1, 12.0)]
         lines = pvf.account_view(fills, {K("A", "X"): 2.0})
         assert not any("stray" in line.lower() or "UNEXPLAINED" in line for line in lines)
+
+
+class TestChargeLines:
+    def _trade(self, strategy, pnl, entry=100.0, exit_=101.0, qty=100.0):
+        return {
+            "strategy": strategy, "symbol": "X", "exchange": "NSE", "product": "MIS", "mode": "analyze",
+            "direction": "LONG", "closed_quantity": qty, "entry_price": entry, "exit_price": exit_,
+            "realized_pnl": pnl, "trade_date": DAY, "closed_at": f"{DAY}T10:00:00",
+        }
+
+    def test_each_strategy_and_the_total_get_a_line_with_the_profit_share(self):
+        lines, headline = pvf.charge_lines([self._trade("A", 100.0), self._trade("B", -20.0)])
+        text = "\n".join(lines)
+        assert "A " in text and "B " in text and "ALL STRATEGIES" in text
+        assert "% of profit" in text
+        assert "no gross profit" in lines[1]  # B lost money
+        assert headline.startswith("est. charges")
+        assert "% of gross profit" in headline
+
+    def test_unmodelled_instrument_says_so_instead_of_inventing_a_number(self):
+        t = self._trade("A", 50.0)
+        t["exchange"] = "MCX"
+        lines, headline = pvf.charge_lines([t])
+        assert "unknown" in lines[0] and headline == ""
+
+    def test_summary_carries_the_charge_headline_when_the_check_passes(self):
+        res = compare(DAY, "analyze", {}, {}, {})
+        res.charges_headline = "est. charges 5,528 = 80.6% of gross profit 6,862"
+        res.by_strategy["A"] = (1.0, 1.0)
+        assert res.summary().endswith("est. charges 5,528 = 80.6% of gross profit 6,862")
+
+
+class TestChargesFollowTheBroker:
+    def _t(self, broker):
+        return {
+            "strategy": "A", "symbol": "X", "exchange": "NSE", "product": "MIS", "mode": "analyze",
+            "direction": "LONG", "closed_quantity": 100.0, "entry_price": 1000.0, "exit_price": 1010.0,
+            "realized_pnl": 1000.0, "trade_date": DAY, "closed_at": f"{DAY}T10:00:00", "broker": broker,
+        }
+
+    def test_flattrade_trades_cost_less_than_the_assumed_default(self):
+        flat, _ = pvf.charge_lines([self._t("flattrade")])
+        base, _ = pvf.charge_lines([self._t("unknown")])
+        pick = lambda lines: float(next(x for x in lines if x.startswith("ALL")).split("charges")[1].split()[0].replace(",", ""))  # noqa: E731
+        assert pick(flat) < pick(base)
+
+    def test_a_line_per_broker_names_assumed_rates(self):
+        lines, _ = pvf.charge_lines([self._t("flattrade"), self._t("unknown")])
+        text = "\n".join(lines)
+        assert "broker Flattrade:" in text
+        assert "assumed rates" in text and "Generic discount broker" in text
+
+    def test_loader_reads_the_broker_column_when_present_and_defaults_when_not(self, tmp_path):
+        db = tmp_path / "core.db"
+        con = sqlite3.connect(db)
+        cols = (
+            "strategy text, symbol text, exchange text, product text, mode text, direction text, "
+            "closed_quantity real, entry_price real, exit_price real, realized_pnl real, "
+            "trade_date text, closed_at text"
+        )
+        con.execute(f"create table strategy_closed_trades ({cols})")
+        con.execute(
+            "insert into strategy_closed_trades values "
+            "('A','X','NSE','MIS','analyze','LONG',1,1,2,1,?,?)",
+            (DAY, f"{DAY}T10:00:00"),
+        )
+        con.commit()
+        assert pvf.load_closed_trades(DAY, "analyze", core_db=db)[0]["broker"] == "unknown"
+        con.execute("alter table strategy_closed_trades add column broker text")
+        con.execute("update strategy_closed_trades set broker='flattrade'")
+        con.commit()
+        con.close()
+        assert pvf.load_closed_trades(DAY, "analyze", core_db=db)[0]["broker"] == "flattrade"

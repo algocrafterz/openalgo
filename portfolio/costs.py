@@ -28,6 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from math import isfinite
 
+from portfolio.broker_fees import fees_for
+
 _CHARGE_BASES = frozenset({"turnover", "buy", "sell", "order"})
 
 
@@ -154,14 +156,41 @@ class CostSchedule:
         return replace(self, charges=tuple(updated))
 
 
-def india_delivery(exchange: str = "NSE") -> CostSchedule:
+def _with_broker_brokerage(
+    schedule: CostSchedule, broker: str | None, product: str
+) -> CostSchedule:
+    """Swap the schedule's brokerage line for `broker`'s own.
+
+    Everything else (STT, exchange fee, SEBI, stamp duty, GST) is statutory and identical at
+    every broker, so only the brokerage rule changes. `broker=None` leaves the schedule as built.
+    """
+    if broker is None:
+        return schedule
+    fees = fees_for(broker)
+    charges = []
+    for charge in schedule.charges:
+        if charge.key == "brokerage":
+            if product == "intraday":
+                charge = replace(charge, rate=fees.intraday_rate, cap=fees.intraday_cap, flat=0.0)
+            else:
+                charge = replace(charge, rate=0.0, cap=0.0, flat=fees.delivery_flat)
+        charges.append(charge)
+    return replace(schedule, charges=tuple(charges), name=f"{schedule.name} - {fees.label}")
+
+
+def india_delivery(exchange: str = "NSE", broker: str | None = None) -> CostSchedule:
     """
     NSE/BSE cash delivery.
 
     Every rate is the published statutory schedule; the exchange transaction
-    fee is the only line that differs between the two venues.
+    fee is the only line that differs between the two venues. Pass `broker` to
+    use that broker's own brokerage (see `portfolio.broker_fees`).
     """
     txn = 0.0000375 if exchange.upper() == "BSE" else 0.0000307
+    return _with_broker_brokerage(_india_delivery(exchange, txn), broker, "delivery")
+
+
+def _india_delivery(exchange: str, txn: float) -> CostSchedule:
     return CostSchedule(
         name=f"India delivery ({exchange.upper()})",
         currency="INR",
@@ -272,7 +301,7 @@ class EquityCosts:
         return self.schedule.effective_rate(buy_value, sell_value, orders)
 
 
-def india_intraday(exchange: str = "NSE") -> CostSchedule:
+def india_intraday(exchange: str = "NSE", broker: str | None = None) -> CostSchedule:
     """
     NSE/BSE equity INTRADAY (MIS), which is a different schedule from delivery.
 
@@ -284,8 +313,17 @@ def india_intraday(exchange: str = "NSE") -> CostSchedule:
     On a Rs 1,00,000 round trip this comes to roughly 6 basis points of the entry
     notional -- before any slippage, which for a market-order momentum entry is
     typically larger than every statutory charge combined.
+
+    Brokerage is the broker's own: pass `broker` ("flattrade", ...) to use its
+    published rate (see `portfolio.broker_fees`); without one the generic
+    discount-broker rate above applies. The exchange transaction fee is the
+    published NSE 0.00307% (it read 0.00297% before 2026-10-01, which was out of date).
     """
-    txn = 0.0000375 if exchange.upper() == "BSE" else 0.0000297
+    txn = 0.0000375 if exchange.upper() == "BSE" else 0.0000307
+    return _with_broker_brokerage(_india_intraday(exchange, txn), broker, "intraday")
+
+
+def _india_intraday(exchange: str, txn: float) -> CostSchedule:
     return CostSchedule(
         name=f"India intraday ({exchange.upper()})",
         currency="INR",
@@ -304,7 +342,7 @@ def india_intraday(exchange: str = "NSE") -> CostSchedule:
             Charge(
                 key="exchange_txn", label="Exchange txn charge", basis="turnover",
                 rate=txn, taxed=True,
-                note="NSE 0.00297%, BSE 0.00375% of turnover",
+                note="NSE 0.00307%, BSE 0.00375% of turnover",
             ),
             Charge(
                 key="sebi", label="SEBI charges", basis="turnover",

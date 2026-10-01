@@ -79,6 +79,8 @@ class Result:
     exempt: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     account: list[str] = field(default_factory=list)
+    charges: list[str] = field(default_factory=list)
+    charges_headline: str = ""
     by_strategy: dict[str, tuple[float, float]] = field(default_factory=dict)  # fills, page
     engine_gap: dict[str, tuple[float, float]] = field(default_factory=dict)  # engine, page
 
@@ -91,10 +93,11 @@ class Result:
             return f"no fills or page rows for {self.mode} on {self.day} - nothing to compare"
         if self.passed:
             total = sum(p for _, p in self.by_strategy.values())
-            return (
+            text = (
                 f"pages match fills for {len(self.by_strategy)} strateg"
                 f"{'y' if len(self.by_strategy) == 1 else 'ies'} (page total {total:,.1f})"
             )
+            return f"{text}; {self.charges_headline}" if self.charges_headline else text
         return f"{len(self.failures)} page/fill mismatch(es): " + "; ".join(self.failures)
 
     def report(self) -> str:
@@ -123,6 +126,12 @@ class Result:
                 "Whole-account view (informational; why Positions / Dashboard can differ from the strategy pages)"
             )
             lines.extend(f"  {item}" for item in self.account)
+        if self.charges:
+            lines.append("")
+            lines.append(
+                "Estimated charges (same schedule as the Performance page; before slippage)"
+            )
+            lines.extend(f"  {item}" for item in self.charges)
         lines.append("")
         lines.append("RESULT: " + ("PASS" if self.passed else "FAIL"))
         return "\n".join(lines)
@@ -362,6 +371,75 @@ def load_fills_live(day: str, snap_dir: Path = SNAP_DIR, core_db: Path = CORE_DB
     return out
 
 
+def load_closed_trades(day: str, mode: str, core_db: Path = CORE_DB) -> list[dict]:
+    con = _ro(core_db)
+    con.row_factory = sqlite3.Row
+    try:
+        has_broker = "broker" in {r[1] for r in con.execute("pragma table_info(strategy_closed_trades)")}
+        broker_col = "broker" if has_broker else "'unknown' as broker"
+        rows = con.execute(
+            f"select strategy, symbol, exchange, product, mode, direction, closed_quantity, "
+            f"entry_price, exit_price, realized_pnl, trade_date, closed_at, {broker_col} "
+            "from strategy_closed_trades where trade_date=? and mode=?",
+            (day, mode),
+        ).fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
+
+
+def charge_lines(trades: list[dict]) -> tuple[list[str], str]:
+    """Per-strategy and total estimated charges and their share of gross profit.
+
+    Uses the Performance page's own estimator, so the two always agree. Best effort: the
+    estimator lives in OpenAlgo core and needs its dependencies, so any failure here yields
+    one explanatory line instead of breaking the reconciliation.
+    """
+    try:
+        from services.strategy_trade_enrichment import summarize_costs
+    except Exception as exc:  # noqa: BLE001 - optional insight, never a reason to fail the check
+        return [f"unavailable ({type(exc).__name__})"], ""
+
+    def line(label: str, rows: list[dict]) -> str:
+        c = summarize_costs(rows)
+        gross = sum(float(t["realized_pnl"]) for t in rows)
+        if c["est_costs"] is None:
+            return f"{label:28} gross {gross:10,.1f}   charges unknown (an instrument is not modelled)"
+        share = (
+            f"{c['charges_pct_of_gross']:6.1f}% of profit"
+            if c["charges_pct_of_gross"] is not None
+            else "  no gross profit"
+        )
+        return (
+            f"{label:28} gross {gross:10,.1f}   charges {c['est_costs']:9,.1f}  {share}"
+            f"   after charges {c['net_after_costs']:10,.1f}"
+        )
+
+    by: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        by[t["strategy"]].append(t)
+    lines = [line(s, by[s]) for s in sorted(by)]
+    lines.append(line("ALL STRATEGIES", trades))
+    total = summarize_costs(trades)
+    for b in total.get("by_broker", []):
+        tag = " (assumed rates)" if b["assumed"] else ""
+        lines.append(
+            f"  broker {b['label']}{tag}: {b['trades']} trades, charges "
+            + ("unknown" if b["est_costs"] is None else f"{b['est_costs']:,.1f}")
+        )
+        if b.get("attention"):
+            lines.append(f"  ATTENTION: {b['attention']}")
+    headline = ""
+    if total["est_costs"] is not None:
+        gross = sum(float(t["realized_pnl"]) for t in trades)
+        headline = f"est. charges {total['est_costs']:,.0f}"
+        if total["charges_pct_of_gross"] is not None:
+            headline += f" = {total['charges_pct_of_gross']:.1f}% of gross profit {gross:,.0f}"
+        if any(b.get("attention") for b in total.get("by_broker", [])):
+            headline += " (FEE SCHEDULE NEEDS ATTENTION, see report)"
+    return lines, headline
+
+
 def load_sandbox_totals(sandbox_db: Path = SANDBOX_DB):
     """(sum of per-position today_realized_pnl, funds today_realized_pnl) - the Positions page
     and the Trading Dashboard figures. None where a table is empty."""
@@ -458,6 +536,7 @@ def run(day: str, mode: str) -> Result:
         positions_total=sandbox_totals[0],
         funds_total=sandbox_totals[1],
     )
+    res.charges, res.charges_headline = charge_lines(load_closed_trades(day, mode))
     for f in unattributed:
         res.notes.append(
             f"untagged {f.action} {f.quantity:g} {f.symbol} @ {f.price} closed nothing a strategy held"

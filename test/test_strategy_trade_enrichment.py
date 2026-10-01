@@ -15,6 +15,8 @@ import pytest
 from services.strategy_trade_enrichment import (
     enrich_trades,
     estimate_trade_cost,
+    estimate_trade_costs,
+    summarize_costs,
     summarize_enrichment,
     symbol_breakdown,
 )
@@ -206,3 +208,206 @@ class TestSymbolBreakdown:
 
     def test_empty(self):
         assert symbol_breakdown([]) == []
+
+
+class TestLegAwareCosts:
+    """A position closed in several legs sent ONE entry order, not one per leg.
+
+    2026-10-01: the page charged every closed-trade row a full entry+exit pair, so partial
+    exits paid brokerage on the same entry again (Rs 5,734 estimated vs Rs 5,574 from the
+    real order count, 2.9% high).
+    """
+
+    def _legs(self):
+        # HDFCBANK-style: one entry, exits in two pieces
+        return [
+            _trade(direction="LONG", closed_quantity=50.0, entry_price=100.0, exit_price=102.0,
+                   realized_pnl=100.0, closed_at="2026-09-29T11:00:00"),
+            _trade(direction="LONG", closed_quantity=150.0, entry_price=100.0, exit_price=101.0,
+                   realized_pnl=150.0, closed_at="2026-09-29T12:00:00"),
+        ]
+
+    def test_first_leg_pays_entry_and_exit_later_legs_pay_exit_only(self):
+        legs = self._legs()
+        costs = estimate_trade_costs(legs)
+        assert costs[0] == pytest.approx(estimate_trade_cost(legs[0]))
+        entry_order_brokerage_with_gst = min(100.0 * 150 * 0.0003, 20.0) * 1.18
+        assert costs[1] == pytest.approx(
+            estimate_trade_cost(legs[1]) - entry_order_brokerage_with_gst, abs=0.01
+        )
+        assert costs[1] < estimate_trade_cost(legs[1])
+
+    def test_leg_order_follows_closing_time_not_list_order(self):
+        legs = self._legs()
+        reordered = estimate_trade_costs(list(reversed(legs)))
+        forward = estimate_trade_costs(legs)
+        assert reordered == [forward[1], forward[0]]
+
+    def test_separate_round_trips_each_pay_in_full(self):
+        a = _trade(entry_price=100.0, closed_at="2026-09-29T10:00:00")
+        b = _trade(entry_price=105.0, closed_at="2026-09-29T11:00:00")
+        costs = estimate_trade_costs([a, b])
+        assert costs == [estimate_trade_cost(a), estimate_trade_cost(b)]
+
+    def test_different_strategies_on_one_symbol_are_not_one_position(self):
+        a = _trade(strategy="A", closed_at="2026-09-29T10:00:00")
+        b = _trade(strategy="B", closed_at="2026-09-29T11:00:00")
+        assert estimate_trade_costs([a, b]) == [estimate_trade_cost(a), estimate_trade_cost(b)]
+
+    def test_unmodelled_instrument_stays_none(self):
+        assert estimate_trade_costs([_trade(exchange="MCX")]) == [None]
+
+    def test_enrich_trades_uses_the_leg_aware_cost(self, signals_db):
+        legs = self._legs()
+        enriched = enrich_trades(legs, "2026-09-29", "2026-09-29", db_path=signals_db)
+        assert [t["cost"] for t in enriched] == pytest.approx(
+            [round(c, 2) for c in estimate_trade_costs(legs)]
+        )
+
+
+class TestChargeDrag:
+    """Charges as a share of the profit they eat, so the cost of trading is visible."""
+
+    def _enriched(self, pnls, cost=10.0, **kw):
+        return [{**_trade(realized_pnl=p, **kw), "cost": cost, "risk_amount": None, "r_multiple": None}
+                for p in pnls]
+
+    def test_percent_of_gross_profit(self):
+        s = summarize_enrichment(self._enriched([100.0, 300.0]))
+        assert s["est_costs"] == pytest.approx(20.0)
+        assert s["charges_pct_of_gross"] == pytest.approx(5.0)  # 20 / 400
+
+    def test_charges_can_exceed_profit(self):
+        s = summarize_enrichment(self._enriched([10.0, 5.0], cost=10.0))
+        assert s["charges_pct_of_gross"] == pytest.approx(133.33, abs=0.01)
+        assert s["net_after_costs"] < 0
+
+    def test_no_percent_when_there_is_no_gross_profit(self):
+        assert summarize_enrichment(self._enriched([-50.0, 20.0]))["charges_pct_of_gross"] is None
+        assert summarize_enrichment(self._enriched([0.0]))["charges_pct_of_gross"] is None
+
+    def test_turnover_share_and_per_trade_average(self):
+        enriched = self._enriched([100.0, 100.0], cost=5.0, closed_quantity=10.0,
+                                  entry_price=100.0, exit_price=110.0)
+        s = summarize_enrichment(enriched)
+        assert s["turnover"] == pytest.approx(2 * (1000.0 + 1100.0))
+        assert s["charges_pct_of_turnover"] == pytest.approx(100 * 10.0 / 4200.0, abs=1e-3)
+        assert s["avg_charge_per_trade"] == pytest.approx(5.0)
+
+    def test_unknown_cost_leaves_every_charge_metric_unknown(self):
+        enriched = self._enriched([100.0]) + [{**_trade(), "cost": None, "risk_amount": None,
+                                               "r_multiple": None}]
+        s = summarize_enrichment(enriched)
+        assert s["charges_pct_of_gross"] is None and s["charges_pct_of_turnover"] is None
+        assert s["avg_charge_per_trade"] is None
+
+    def test_empty(self):
+        s = summarize_enrichment([])
+        assert s["charges_pct_of_gross"] is None and s["turnover"] == 0
+
+
+class TestSummarizeCosts:
+    """The comparison table needs charges per strategy without the signal-DB R lookup."""
+
+    def test_matches_the_enrichment_totals(self):
+        trades = [
+            _trade(realized_pnl=200.0, closed_at="2026-09-29T10:00:00"),
+            _trade(realized_pnl=-50.0, entry_price=990.0, closed_at="2026-09-29T11:00:00"),
+        ]
+        s = summarize_costs(trades)
+        full = summarize_enrichment(
+            [{**t, "cost": c, "risk_amount": None, "r_multiple": None}
+             for t, c in zip(trades, estimate_trade_costs(trades), strict=True)]
+        )
+        for key in ("est_costs", "net_after_costs", "charges_pct_of_gross", "turnover"):
+            assert s[key] == full[key]
+
+
+class TestBrokerAwareCosts:
+    """Charges follow the broker the trade was placed through (live or paper)."""
+
+    def test_flattrade_trade_pays_no_brokerage_unlike_the_default(self):
+        flat = estimate_trade_cost(_trade(broker="flattrade"))
+        base = estimate_trade_cost(_trade())  # no broker recorded -> assumed default
+        brokerage = min(986.0 * 45 * 0.0003, 20.0) + min(976.0 * 45 * 0.0003, 20.0)
+        assert base - flat == pytest.approx(brokerage * 1.18, abs=0.01)
+
+    def test_unrecognised_broker_is_priced_like_the_default(self):
+        assert estimate_trade_cost(_trade(broker="somebroker")) == estimate_trade_cost(_trade())
+
+    def test_dp_charge_applies_to_a_flattrade_delivery_sell_only(self):
+        sell = estimate_trade_cost(
+            _trade(product="CNC", direction="LONG", broker="flattrade", entry_price=100.0,
+                   exit_price=100.0, closed_quantity=10.0)
+        )
+        no_dp = estimate_trade_cost(
+            _trade(product="CNC", direction="LONG", broker="somebroker", entry_price=100.0,
+                   exit_price=100.0, closed_quantity=10.0)
+        )
+        assert sell - no_dp == pytest.approx(20.0 * 1.18, abs=0.01)
+        short = estimate_trade_cost(
+            _trade(product="CNC", direction="SHORT", broker="flattrade", entry_price=100.0,
+                   exit_price=100.0, closed_quantity=10.0)
+        )
+        assert short == pytest.approx(no_dp, abs=0.01)  # no debit on a cover
+
+    def test_dp_charge_is_taken_once_across_exit_legs(self):
+        legs = [
+            _trade(product="CNC", direction="LONG", broker="flattrade", entry_price=100.0,
+                   exit_price=102.0, closed_quantity=10.0, closed_at="2026-09-29T11:00:00"),
+            _trade(product="CNC", direction="LONG", broker="flattrade", entry_price=100.0,
+                   exit_price=103.0, closed_quantity=10.0, closed_at="2026-09-29T12:00:00"),
+        ]
+        costs = estimate_trade_costs(legs)
+        assert costs[0] - costs[1] > 20.0 * 1.18 - 0.5  # second leg carries no DP
+
+    def test_leg_discount_uses_the_brokers_own_entry_order_charge(self):
+        legs = [
+            _trade(direction="LONG", broker="flattrade", closed_quantity=50.0, entry_price=100.0,
+                   exit_price=102.0, closed_at="2026-09-29T11:00:00"),
+            _trade(direction="LONG", broker="flattrade", closed_quantity=150.0, entry_price=100.0,
+                   exit_price=101.0, closed_at="2026-09-29T12:00:00"),
+        ]
+        costs = estimate_trade_costs(legs)
+        # no brokerage at this broker, so nothing to take off the later leg
+        assert costs[1] == pytest.approx(estimate_trade_cost(legs[1]), abs=0.01)
+
+    def test_summary_isolates_each_broker(self):
+        trades = [
+            _trade(broker="flattrade", realized_pnl=400.0),
+            _trade(broker="flattrade", realized_pnl=-100.0),
+            _trade(broker="somebroker", realized_pnl=300.0),
+        ]
+        s = summarize_costs(trades)
+        by = {b["broker"]: b for b in s["by_broker"]}
+        assert set(by) == {"flattrade", "default"}
+        assert by["flattrade"]["trades"] == 2 and by["default"]["trades"] == 1
+        assert by["flattrade"]["gross"] == pytest.approx(300.0)
+        assert by["flattrade"]["assumed"] is False and by["default"]["assumed"] is True
+        assert sum(b["est_costs"] for b in s["by_broker"]) == pytest.approx(s["est_costs"], abs=0.02)
+        assert by["flattrade"]["label"] == "Flattrade"
+
+    def test_assumed_flag_is_set_when_any_trade_used_a_stand_in_schedule(self):
+        assert summarize_costs([_trade(broker="flattrade")])["fee_basis_assumed"] is False
+        assert summarize_costs([_trade()])["fee_basis_assumed"] is True
+        mixed = summarize_costs([_trade(broker="flattrade"), _trade()])
+        assert mixed["fee_basis_assumed"] is True
+
+    def test_enriched_summary_carries_the_broker_split_too(self):
+        enriched = [{**_trade(broker="flattrade"), "cost": 5.0, "risk_amount": None, "r_multiple": None}]
+        s = summarize_enrichment(enriched)
+        assert s["by_broker"][0]["broker"] == "flattrade"
+
+
+class TestFeeAttention:
+    def test_verified_broker_has_no_attention_flag(self):
+        row = summarize_costs([_trade(broker="flattrade")])["by_broker"][0]
+        assert row["attention"] is None
+
+    def test_unmodelled_broker_carries_a_named_warning(self):
+        row = summarize_costs([_trade(broker="newbroker")])["by_broker"][0]
+        assert row["assumed"] is True and "newbroker" in row["attention"]
+
+    def test_unrecorded_broker_says_so(self):
+        row = summarize_costs([_trade()])["by_broker"][0]
+        assert "not recorded" in row["attention"]

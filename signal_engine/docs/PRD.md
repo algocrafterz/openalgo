@@ -5615,3 +5615,17 @@ trade counters, tracker position, trades.db rows and P&L. Exits are owned by the
 
 - Whole-account view (added the same day): `pages_vs_fills` also rebuilds the account's realised P&L from every fill and lists, per symbol, the gap to the strategy pages, labelled with the reviewed exemption or UNEXPLAINED. It prints the Positions page (sum of sandbox per-position today_realized_pnl) and the Dashboard (sandbox_funds.today_realized_pnl) beside it, and flags the funds total when it drifts from the positions total (Rs 275.20 on 2026-10-01). Informational; it does not fail the check.
 - 2026-10-01 data correction: `reports/reconciled-2026-10-01/fix_sandbox_totals.py` set the sandbox's stored totals (Positions -17,661.28, Dashboard -17,936.48) to the strategy pages' +6,861.77, moving realized_pnl, available_balance and total_pnl by the same amount. The trade and order history was not edited, so the stray orders remain as the audit trail. Backup: `db/sandbox.db.bak-reconcile-20261001`.
+
+
+## Charges Verified and Charge Drag Surfaced (2026-10-01)
+
+- The Performance page's estimated charges use the standard discount-broker intraday schedule and were verified against an independent per-order rebuild from the sandbox fills: Rs 5,574 on 111 orders, versus Rs 5,734 shown. The 2.9% overstatement came from charging every partial-exit leg a fresh entry order; entry orders are now counted once (Rs 5,528 for the same day). Details in `docs/strategy-daily-performance.md`.
+- Charges as a percent of gross profit (and of turnover) now appear on the Performance cards, the strategy comparison table, and the nightly `pages_vs_fills` report / EOD digest. On 2026-10-01 charges took 80.6% of gross profit: gross +6,862, after charges about +1,333. BREAKOUT-PY keeps only 10% of its profit after charges, BREAKINGTRADE loses money after charges. This is the same cost wall recorded in the acceptance criteria; it is not a calculation error.
+
+
+## Charges Priced Per Broker (2026-10-01)
+
+- Brokerage now follows the broker that placed the trade (live and paper). Flattrade's own page (https://flattrade.in/charges/) states NIL brokerage on equity intraday and delivery, so 2026-10-01's estimated charges are Rs 3,372 (49.1% of gross profit), not Rs 5,528 (80.6%) as the generic Rs 20-per-order schedule had shown. Independently rebuilt per order from the fills: Rs 3,372.
+- Each order is stamped with its broker when placed and each closed trade carries it (`strategy_order_tags.broker`, `strategy_closed_trades.broker`), so charges are isolated per broker and a future broker gets its own fee schedule (`portfolio/broker_fees.py`). Trades with no recorded broker, or a broker without a published entry, are priced on an assumed default and labelled. Migration: `upgrade/migrate_strategy_book_broker.py`. Details in `docs/strategy-daily-performance.md`.
+- The intraday NSE exchange fee was corrected from 0.00297% to the published 0.00307%.
+- No broker plugin here exposes a brokerage or charges API, so a new broker is not priced automatically. What is automatic is the warning: a trade whose broker has no verified entry in `portfolio/broker_fees.py` is priced on the assumed default, logged once by name, labelled "[assumed broker rates]" on the Performance cards and broker card, and flagged in the nightly `pages_vs_fills` report; a verified schedule asks for a re-check after 180 days (`attention_for`, `uncovered_brokers`). Adding a broker is a few lines after reading its charges page.

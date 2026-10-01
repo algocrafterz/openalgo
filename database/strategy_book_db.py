@@ -97,6 +97,10 @@ class StrategyOrderTag(Base):
     # a fresh ADD COLUMN leaves existing rows NULL until backfilled; write
     # paths always store an explicit value, never NULL, going forward.
     mode = Column(String(20), nullable=True)
+    # Broker the order was placed through ("flattrade", ...), resolved at placement from the
+    # session's own auth record. Charges are priced per broker, so the closed trade it ends
+    # up in must remember it; "unknown" for orders placed before this was recorded.
+    broker = Column(String(40), nullable=True)
     # Cumulative quantity already booked for this order, so a repeated or
     # partial-fill update only contributes its unseen delta.
     applied_quantity = Column(Float, nullable=False, default=0.0)
@@ -207,6 +211,10 @@ class StrategyClosedTrade(Base):
     # calendar date, so it lines up with the rest of the strategy book.
     trade_date = Column(String(10), nullable=False, index=True)
     closed_at = Column(DateTime, nullable=False, default=datetime.now)
+    # Broker that placed the closing order. Brokerage differs per broker, so charges are
+    # computed and reported per broker (see portfolio/broker_fees.py). Nullable for rows that
+    # predate the column; read back as "unknown".
+    broker = Column(String(40), nullable=True)
 
 
 def init_strategy_book_db() -> None:
@@ -257,6 +265,21 @@ def _prune_old_tags() -> None:
         logger.exception("Could not prune old order tags")
 
 
+def _add_broker_columns(inspector) -> None:
+    """Nullable `broker` on the order tags and the closed-trade ledger. Plain ADD COLUMN, so it
+    is safe as a startup self-heal; upgrade/migrate_strategy_book_broker.py also backfills."""
+    from sqlalchemy import text
+
+    for table in ("strategy_order_tags", "strategy_closed_trades"):
+        if table not in inspector.get_table_names():
+            continue
+        if "broker" in {c["name"] for c in inspector.get_columns(table)}:
+            continue
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN broker VARCHAR(40)"))
+        logger.info(f"Strategy book DB: added {table}.broker column")
+
+
 def _migrate_add_columns():
     """Add columns introduced after the table's first release (idempotent).
 
@@ -268,6 +291,7 @@ def _migrate_add_columns():
         from sqlalchemy import inspect, text
 
         inspector = inspect(engine)
+        _add_broker_columns(inspector)
         if "strategy_order_tags" not in inspector.get_table_names():
             return
         existing = {c["name"] for c in inspector.get_columns("strategy_order_tags")}
@@ -319,6 +343,7 @@ def record_order_tag(
     exchange: str,
     product: str,
     mode: str = "",
+    broker: str = "",
 ) -> bool:
     """Remember which strategy placed an order. Ignores duplicates.
 
@@ -337,8 +362,13 @@ def record_order_tag(
         return False
     with _fill_lock:
         return _record_order_tag_locked(
-            orderid, user_id, strategy, symbol, exchange, product, mode
+            orderid, user_id, strategy, symbol, exchange, product, mode, broker
         )
+
+
+def _norm_broker(broker) -> str:
+    """Stored broker name: lower-case, never blank ("unknown" is a real, filterable bucket)."""
+    return (str(broker or "").strip().lower()) or "unknown"
 
 
 def _record_order_tag_locked(
@@ -349,6 +379,7 @@ def _record_order_tag_locked(
     exchange: str,
     product: str,
     mode: str = "",
+    broker: str = "",
 ) -> bool:
     try:
         existing = db_session.query(StrategyOrderTag).filter_by(orderid=str(orderid)).one_or_none()
@@ -359,6 +390,7 @@ def _record_order_tag_locked(
                 orderid=str(orderid),
                 user_id=user_id or "",
                 mode=(mode or "unknown"),
+                broker=_norm_broker(broker),
                 strategy=strategy,
                 symbol=symbol or "",
                 exchange=exchange or "",
@@ -373,6 +405,23 @@ def _record_order_tag_locked(
 
     _drain_pending_fills(str(orderid))
     return True
+
+
+def _latest_tag_broker(strategy: str, symbol: str, mode: str) -> str:
+    """Broker of the most recent order this leg was traded with, for closes that arrive without
+    an order of their own (reconciler / square-off)."""
+    try:
+        tag = (
+            db_session.query(StrategyOrderTag)
+            .filter_by(strategy=strategy, symbol=symbol, mode=mode)
+            .order_by(StrategyOrderTag.id.desc())
+            .first()
+        )
+        return _norm_broker(tag.broker if tag else "")
+    except Exception:
+        db_session.rollback()
+        logger.exception(f"Could not resolve broker for {strategy}/{symbol}")
+        return "unknown"
 
 
 def _drain_pending_fills(orderid: str) -> None:
@@ -611,6 +660,7 @@ def _apply_fill_locked(
                     exchange=tag.exchange,
                     product=tag.product,
                     mode=tag_mode,
+                    broker=_norm_broker(tag.broker),
                     direction="LONG" if direction > 0 else "SHORT",
                     closed_quantity=round(closing, 4),
                     entry_price=round(avg, 4),
@@ -806,6 +856,7 @@ def close_all_legs_for_position(
                         exchange=leg.exchange,
                         product=leg.product,
                         mode=leg.mode,
+                        broker=_latest_tag_broker(leg.strategy, leg.symbol, leg.mode),
                         direction="LONG" if direction > 0 else "SHORT",
                         closed_quantity=round(abs(qty), 4),
                         entry_price=round(avg, 4),
@@ -911,6 +962,7 @@ def get_closed_trades(
                 "product": r.product,
                 "mode": r.mode,
                 "direction": r.direction,
+                "broker": r.broker or "unknown",
                 "closed_quantity": float(r.closed_quantity or 0),
                 "entry_price": float(r.entry_price or 0),
                 "exit_price": float(r.exit_price or 0),
