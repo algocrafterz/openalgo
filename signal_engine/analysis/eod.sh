@@ -118,6 +118,13 @@ for line in open('$LOGS/errors_$DAY.jsonl'):
   echo '```'
 
   echo
+  echo '## Strategy P&L / Performance pages vs broker fills'
+  echo
+  echo '```'
+  run -m signal_engine.analysis.pages_vs_fills "$DAY" 2>&1 || echo "(MISMATCH: a page figure is not backed by a fill - see above)"
+  echo '```'
+
+  echo
   echo '## EOD regression check (trade / signal / system) — posted to Telegram'
   echo
   echo '```'

@@ -1,0 +1,16 @@
+[
+  {
+    "day": "2026-10-01",
+    "mode": "analyze",
+    "strategy": "BREAKOUT",
+    "symbol": "TCS",
+    "reason": "Pine TP1 alert sold 32 of BREAKOUT-PY's shares after its entry guard had closed Pine's own trade; stray order, phantom leg removed from the book (reports/reconciled-2026-10-01)"
+  },
+  {
+    "day": "2026-10-01",
+    "mode": "analyze",
+    "strategy": "BREAKOUT-PY",
+    "symbol": "ADANIPORTS",
+    "reason": "five duplicate stop orders sent after server timeouts left a stray 855 long; phantom leg removed from the book (reports/reconciled-2026-10-01)"
+  }
+]

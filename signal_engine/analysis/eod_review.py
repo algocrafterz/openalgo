@@ -188,6 +188,24 @@ async def check_reconciliation(mode: str, day: str) -> str:
     return result.summary()
 
 
+def check_pages_vs_fills(mode: str, day: str) -> str:
+    """The Strategy P&L / Performance pages must equal what the broker's own fills say.
+
+    Rebuilds each strategy's realised P&L and open legs from the raw fills and compares them
+    with OpenAlgo's strategy book (see analysis/pages_vs_fills.py). A mismatch means a page
+    number is not backed by a fill: a stray or duplicate order, a phantom open leg, or a
+    booking bug - the class of defect 2026-10-01 surfaced.
+    """
+    from signal_engine.analysis import pages_vs_fills
+
+    if mode not in ("analyze", "live"):
+        return f"SKIPPED - trading mode is {mode!r}, nothing to compare"
+    result = pages_vs_fills.run(day, mode)
+    if not result.passed:
+        raise RuntimeError(result.summary())
+    return result.summary()
+
+
 # ── SIGNAL ───────────────────────────────────────────────────────────────────
 
 def check_notifier_delivery(day: str) -> str:
@@ -420,6 +438,8 @@ async def run_eod_review(day: str) -> EODReport:
 
     report.add("TRADE", _time_check("Trade ledger integrity", lambda: check_trade_ledger(day)))
     report.add("TRADE", await _atime_check("Trade — engine vs broker P&L", check_reconciliation(mode, day)))
+
+    report.add("TRADE", _time_check("Trade — pages vs broker fills", lambda: check_pages_vs_fills(mode, day)))
 
     report.add("SIGNAL", _time_check("Signal — notifier delivery", lambda: check_notifier_delivery(day)))
     report.add("SIGNAL", _time_check(

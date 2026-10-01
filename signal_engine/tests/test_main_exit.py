@@ -361,11 +361,11 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
-            patch("signal_engine.main.fetch_open_position", new_callable=AsyncMock, return_value=50),
             patch("signal_engine.main.save"),
             patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            mock_tracker.fetch_own_position.return_value = 50
             mock_pos = MagicMock()
             mock_pos.symbol = "RELIANCE"
             mock_pos.strategy = "ORB"

@@ -246,7 +246,7 @@ async def start(
 
     state = state or RunnerStateStore()
     service = RunnerService(state=state)
-    exit_qty = broker_qty or _broker_qty
+    exit_qty = broker_qty or make_broker_qty(tracker)
     for tag in cfg.strategies:
         make = _session_factory(
             cfg,
@@ -290,10 +290,18 @@ def _without_live_paper_only(cfg: RunnerSettings, trade_mode: str) -> RunnerSett
     return replace(cfg, strategies=kept)
 
 
-async def _broker_qty(pos) -> int:
-    from signal_engine.api_client import fetch_open_position
+def make_broker_qty(tracker):
+    """Exit-driver broker check: how many shares of `pos` the broker still holds.
 
-    return await fetch_open_position(pos.symbol, pos.strategy, pos.exchange, pos.product)
+    Counts only this strategy's share of the symbol's net broker position, as a magnitude
+    (the driver reads a negative as "unknown", and a short is a real negative). -1 = unknown.
+    """
+
+    async def _broker_qty(pos) -> int:
+        own = await tracker.fetch_own_position(pos.symbol, pos.strategy, pos.exchange, pos.product)
+        return -1 if own is None else abs(own)
+
+    return _broker_qty
 
 
 def _session_factory(

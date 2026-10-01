@@ -224,7 +224,7 @@ async def place_sl_order(
             # had ALL actually succeeded on the broker — every attempt reported TIMEOUT,
             # yet the orderbook showed 5 resting SL-M orders per symbol. Check before
             # retrying (or giving up) so a genuine broker fill is adopted, not duplicated.
-            recovered = await _find_resting_sl_order(sl_order, trigger_price)
+            recovered = await _await_resting_sl_order(sl_order, trigger_price)
             if recovered is not None:
                 result = recovered
                 logger.info(
@@ -241,6 +241,25 @@ async def place_sl_order(
         )
 
     return result
+
+
+async def _await_resting_sl_order(order: Order, trigger_price: float) -> TradeResult | None:
+    """Poll for the resting SL after a TIMEOUT, giving a backed-up server time to book it.
+
+    A timeout can mean the OpenAlgo server is stalled, not that the order was dropped: on
+    2026-10-01 the server sat ~48s behind on /api/strategy-pnl, so an immediate orderbook
+    read found nothing, the SL was re-sent four times, and all five reached the sandbox
+    once it caught up (net long 684 on a 171 short). Wait `sl_timeout_settle_seconds`
+    before each of `sl_timeout_verify_attempts` reads so a late order is adopted, not duplicated.
+    """
+    attempts = int(getattr(settings, "sl_timeout_verify_attempts", 3))
+    settle = float(getattr(settings, "sl_timeout_settle_seconds", 3.0))
+    for _ in range(max(1, attempts)):
+        await asyncio.sleep(settle)
+        found = await _find_resting_sl_order(order, trigger_price)
+        if found is not None:
+            return found
+    return None
 
 
 async def _find_resting_sl_order(order: Order, trigger_price: float) -> TradeResult | None:

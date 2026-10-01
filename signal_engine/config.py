@@ -228,6 +228,8 @@ class Settings:
         int  # polls of the orderbook after an ambiguous entry-order timeout
     )
     entry_timeout_recovery_delay_seconds: float
+    sl_timeout_verify_attempts: int  # orderbook reads after an SL-M timeout, before re-sending
+    sl_timeout_settle_seconds: float  # wait before each of those reads
 
     # Bracket orders (from yaml)
     bracket_enabled: bool
@@ -830,6 +832,8 @@ def _build_settings() -> Settings:
         entry_timeout_recovery_delay_seconds=float(
             api.get("entry_timeout_recovery_delay_seconds", 2.0)
         ),
+        sl_timeout_verify_attempts=int(api.get("sl_timeout_verify_attempts", 3)),
+        sl_timeout_settle_seconds=float(api.get("sl_timeout_settle_seconds", 3.0)),
         strategy_profiles=_parse_strategy_profiles(yml),
         mode_profiles=_parse_mode_profiles(yml),
         blacklist=blacklist,

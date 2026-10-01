@@ -61,6 +61,7 @@ class TestExitsAreNeverHalted:
              patch.object(main.notifier, "notify_exit_no_position", AsyncMock()):
             tr._time_exit_active = False
             tr.find_position.return_value = None
+            tr.fetch_own_position = AsyncMock(return_value=0)
             signal = _make_signal(direction=main.Direction.EXIT, tp_level="TP1")
             await main._handle_exit(signal)
         tr.find_position.assert_called()

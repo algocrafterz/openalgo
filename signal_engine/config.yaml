@@ -738,6 +738,13 @@ api:
   entry_timeout_recovery_attempts: 3
   entry_timeout_recovery_delay_seconds: 2.0
 
+  # [tune] The same ambiguity applies to the SL-M order. 2026-10-01 11:20: OpenAlgo stalled
+  # ~48s, five SL timeouts were each re-sent, and all five reached the sandbox when it caught
+  # up (net long 684 on a 171 short). After a SL timeout, read the orderbook this many times,
+  # waiting this many seconds before each read, and adopt a late order instead of re-sending.
+  sl_timeout_verify_attempts: 3
+  sl_timeout_settle_seconds: 3.0
+
 # ── Bracket Orders ────────────────────────────────────────
 bracket:
   # CRITICAL: disabling removes all broker-side SL protection. Keep enabled=true in production.

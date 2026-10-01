@@ -16,7 +16,6 @@ from signal_engine.api_client import (
     fetch_available_capital,
     fetch_funds_available,
     fetch_margin,
-    fetch_open_position,
     fetch_order_fill_price,
     fetch_order_status,
     fetch_orderbook,
@@ -24,7 +23,7 @@ from signal_engine.api_client import (
     fetch_trading_mode,
 )
 from signal_engine.config import settings
-from signal_engine.db import fetch_last_entry_trade, save, save_declined
+from signal_engine.db import fetch_last_entry_trade, fetch_order_ids_today, save, save_declined
 from signal_engine.executor import (
     build_exit_order,
     build_order,
@@ -40,7 +39,7 @@ from signal_engine.pipeline import single_source
 from signal_engine.risk_store import RISK_DB_PATH, RiskStore
 from signal_engine.runtime import build_risk_engine
 from signal_engine.timeutils import IST
-from signal_engine.tracker import PositionTracker, TrackedPosition, _compute_r
+from signal_engine.tracker import PositionTracker, TrackedPosition, _compute_r, leg_pnl
 from signal_engine.validator import validate
 
 _OPENALGO_DB = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "db", "openalgo.db"))
@@ -383,8 +382,10 @@ async def _recover_position_from_broker(signal) -> "TrackedPosition | None":
     )
     exchange = signal.exchange or settings.exchange
     product = signal.product or settings.product
-    api_qty = await fetch_open_position(signal.symbol, signal.strategy, exchange, product)
-    if api_qty == 0 or api_qty == -1:
+    # The broker nets by symbol across strategies, so take only this strategy's share: a Pine
+    # TP alert must not sell shares that belong to BREAKOUT-PY (TCS, 2026-10-01).
+    api_qty = await tracker.fetch_own_position(signal.symbol, signal.strategy, exchange, product)
+    if api_qty is None or api_qty == 0:
         logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
         await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
         return None
@@ -476,13 +477,19 @@ async def _reconcile_sl_hit(signal, pos) -> None:
     logger.info(
         f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker"
     )
+    sl_fill = None
     if pos.sl_order_id:
+        sl_fill = await fetch_order_fill_price(pos.sl_order_id, pos.strategy, max_attempts=1)
         await cancel_order(pos.sl_order_id, pos.strategy)
     pnl_delta, current_realised = await _book_realised_pnl_delta()
+    base_price = pos.fill_price or pos.entry_price
+    if sl_fill and base_price:
+        # The stop's own fill, not the portfolio delta (which absorbs other strategies' closes).
+        pnl_delta = leg_pnl(pos.direction, base_price, sl_fill, pos.quantity)
     await tracker.book_close(
         pos,
         pnl_delta=pnl_delta,
-        exit_price=pos.sl,
+        exit_price=sl_fill or pos.sl,
         exit_types=["SL"],
         hold_minutes=_hold_minutes(pos),
         max_trades=settings.max_trades_per_day,
@@ -643,8 +650,24 @@ async def _book_exit_result(
 
     base_price = pos.fill_price or pos.entry_price
     hold_min = _hold_minutes(pos)
-    # Use the signal's TP price as approximate exit price — MARKET order fills at ~TP.
+    # The signal's TP is only the price the exit was ASKED for; a MARKET order fills at the
+    # live price. Prefer the order's own confirmed fill for both the booked price and the P&L:
+    # the portfolio-wide realised delta above also absorbs every other close that landed since
+    # the last snapshot (PY RELIANCE 2026-10-01 was booked +1,871.0 against +1,362.1 true).
     approx_exit_price = signal.tp if signal.tp and signal.tp > 0 else None
+    fill_price = await fetch_order_fill_price(trade_result.order_id, pos.strategy)
+    if fill_price and base_price:
+        approx_exit_price = fill_price
+        pnl_delta = leg_pnl(pos.direction, base_price, fill_price, exit_qty)
+        logger.info(
+            f"EXIT fill for {pos.symbol}: {fill_price:.2f} -> leg pnl {pnl_delta:,.2f} "
+            "(from the order's own fill, not the portfolio delta)"
+        )
+    else:
+        logger.warning(
+            f"EXIT fill price unavailable for {pos.symbol} order {trade_result.order_id}: "
+            f"booking the broker realised delta {pnl_delta:,.2f} instead (may include other closes)"
+        )
 
     if is_full_exit:
         # book_close advances the day counters and the realised-P&L snapshot.
@@ -913,6 +936,14 @@ async def _replace_runner_sl(
         await _place_runner_sl(pos, remaining, tp_level, new_sl_price, "ladder")
         return
 
+    if not pos.entry_price or pos.entry_price <= 0:
+        # Restart-fallback recovery with no audit trail leaves entry=0; every price derived
+        # from it is garbage (TCS 2026-10-01: a "runner SL" at 1464 on a 2091 stock).
+        logger.warning(
+            f"Runner SL for {pos.symbol} skipped: entry price unknown, no sane stop can be derived"
+        )
+        return
+
     structural_sl = structural_runner_sl(
         pos.direction, pos.entry_price, pos.tp, getattr(pos, "context", None) or {}
     )
@@ -1018,7 +1049,7 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
     order (race condition on fast reversals). If already flat, clean up silently.
     """
     logger.error(f"EXIT order failed for {pos.symbol}: {trade_result.message}")
-    broker_qty = await fetch_open_position(
+    broker_qty = await tracker.fetch_own_position(
         pos.symbol,
         pos.strategy,
         pos.exchange,
@@ -1420,13 +1451,17 @@ async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None
     trader. Poll the orderbook for a completed order matching this signal before
     conceding the entry genuinely never happened.
 
-    Matches on symbol + action + quantity + order_status=complete. Risk-based position
-    sizing makes the (symbol, action, quantity) triple change with every signal, so a
-    same-day collision with an unrelated earlier fill for the same symbol is very unlikely
-    in practice — orderbook rows don't carry a timestamp field consistent enough across
-    brokers to filter on instead.
+    Matches on symbol + action + quantity + order_status=complete, skipping order ids this
+    engine already booked today and rows tagged for another strategy. The triple alone is
+    NOT unique: a same-day re-entry at the same size (ADANIPORTS 10:50 then 11:20,
+    2026-10-01) matches the earlier, closed fill. Orderbook rows don't carry a timestamp
+    consistent enough across brokers to filter on instead.
     """
     action = order.action.value
+    # Orders already booked today for this symbol (an earlier entry that has since closed
+    # and left the tracker). ADANIPORTS 2026-10-01: the 11:20 re-entry timed out and the
+    # 10:50 entry (same symbol, side and quantity) was adopted in its place.
+    booked_ids = fetch_order_ids_today(signal.symbol)
     for attempt in range(1, settings.entry_timeout_recovery_attempts + 1):
         await asyncio.sleep(settings.entry_timeout_recovery_delay_seconds)
         orderbook = await fetch_orderbook()
@@ -1450,6 +1485,11 @@ async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None
             order_id = str(o.get("orderid") or o.get("order_id") or "")
             if not order_id:
                 continue
+            if order_id in booked_ids:
+                continue  # already booked earlier today — an old fill, not this signal's
+            row_strategy = str(o.get("strategy") or "")
+            if row_strategy and row_strategy.upper() != str(signal.strategy).upper():
+                continue  # another strategy's order on the same symbol
             if any(p.entry_order_id == order_id for p in tracker._positions.values()):
                 continue  # already tracked under some other signal — not this one's fill
             logger.warning(

@@ -536,6 +536,30 @@ def fetch_day_trades(trade_mode: str, day: str = None) -> list:
     return trades
 
 
+def fetch_order_ids_today(symbol: str) -> set[str]:
+    """Every broker order id this engine recorded today for `symbol` (entries and exits).
+
+    Lets entry-timeout recovery tell a fill it has already booked (an earlier entry that
+    closed and left the tracker) from the new one it is looking for. Empty on any error.
+    """
+    try:
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        conn = _get_connection()
+        cur = conn.execute(
+            """
+            SELECT order_id FROM trades
+            WHERE upper(symbol) = upper(?)
+              AND date(executed_at) = ?
+              AND order_id IS NOT NULL AND order_id != ''
+            """,
+            (symbol, today),
+        )
+        return {str(r[0]) for r in cur.fetchall()}
+    except Exception:
+        logger.exception(f"fetch_order_ids_today failed for {symbol}")
+        return set()
+
+
 def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
     """Look up the most recent SUCCESS entry trade for symbol+strategy on today (IST).
 

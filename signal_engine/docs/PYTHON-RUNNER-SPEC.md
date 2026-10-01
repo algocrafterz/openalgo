@@ -410,6 +410,16 @@ lives in this engine (tracker, trades.db, `openposition` called with the strateg
 BREAKOUT pair already share names this way. Watch for a same-symbol BREAKOUT and BREAKOUT-PY position in the
 sandbox: a full exit of one sells its own quantity, and the broker-side position shows the net.
 
+**Update 2026-10-01 (first paper day, what the netting actually did).** The shared sandbox position let a Pine TP1 alert
+sell 32 of BREAKOUT-PY's TCS shares through the restart-fallback exit, let the exit driver mistake the other strategy's
+shares for its own (and never run its stop-failed check for shorts, which read as "unknown"), and let entry-timeout recovery
+adopt an earlier closed fill as a new entry. Fixed in `main.py` / `tracker.py` / `pipeline/service.py`:
+`PositionTracker.fetch_own_position` subtracts other tracked strategies' quantity from the broker net everywhere the engine
+asks "how many shares do I hold". Still true: the tracker's own close detection keys on the net per symbol, so a stop fill by
+one strategy is not noticed until the symbol's net reaches zero when both hold it. The same day exposed that exit P&L was
+booked from the account-wide realised delta and the alert's target price rather than the order's own fill; see
+`docs/PRD.md` ("Exit P&L From the Order's Own Fill", "Daily Check: Strategy P&L / Performance Pages vs Broker Fills").
+
 ## 9. Definition of done
 
 - Runner disabled by default; enabling it needs explicit config.

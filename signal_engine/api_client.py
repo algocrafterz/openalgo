@@ -105,7 +105,7 @@ async def fetch_trading_mode() -> tuple[str, bool]:
         mode_str = mode_data.get("mode", "unknown")
         return (mode_str, is_analyze)
     except Exception as e:
-        logger.error(f"Failed to fetch trading mode: {e}")
+        logger.error(f"Failed to fetch trading mode: {type(e).__name__}: {e}")
         return ("unknown", False)
 
 
@@ -215,6 +215,25 @@ async def fetch_open_position(symbol: str, strategy: str, exchange: str, product
     except Exception as e:
         logger.error(f"Failed to fetch position for {symbol}: {e}")
         return -1
+
+
+async def fetch_net_position(symbol: str, strategy: str, exchange: str, product: str):
+    """Signed NET broker quantity for a symbol, or None when the API call failed.
+
+    OpenAlgo's openposition nets by symbol and product across every strategy tag, so this is
+    the combined position, not one strategy's. Use PositionTracker.fetch_own_position to get
+    the caller's share. Unlike fetch_open_position, a failure is None rather than -1, so a
+    one-share short (-1) is not mistaken for an error.
+    """
+    payload = _auth(strategy=strategy, symbol=symbol, exchange=exchange, product=product)
+    try:
+        data = await _post_json("openposition", payload)
+        if data.get("status") != "success":
+            return None
+        return int(data.get("quantity", 0))
+    except Exception as e:
+        logger.error(f"Failed to fetch position for {symbol}: {type(e).__name__}: {e}")
+        return None
 
 
 async def fetch_positionbook():

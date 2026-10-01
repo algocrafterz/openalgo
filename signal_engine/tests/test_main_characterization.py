@@ -193,12 +193,21 @@ def harness(settings=None, tracker=None, **stubs):
         "place_sl_order": AsyncMock(return_value=_ok("SL2")),
         "send_bracket_legs": AsyncMock(return_value=(_ok("SL2"), None)),
         "fetch_last_entry_trade": MagicMock(return_value=None),
+        "fetch_order_ids_today": MagicMock(return_value=set()),
         "build_exit_order": MagicMock(return_value=_order_stub()),
         "build_order": MagicMock(return_value=_order_stub()),
         "save": MagicMock(),
         "_is_be_series": MagicMock(return_value=False),
     }
     defaults.update(stubs)
+    # main no longer reads the broker's position directly: the tracker returns this strategy's
+    # share of it via api_client.fetch_net_position. `fetch_open_position` stays as the way a
+    # test states what the broker reports (-1 = API error, as before).
+    legacy_qty = defaults["fetch_open_position"]
+
+    async def _net_position(*args, **kwargs):
+        qty = await legacy_qty(*args, **kwargs)
+        return None if qty == -1 else qty
 
     stack = ExitStack()
     h = Harness(stack, settings, tracker, risk_engine)
@@ -210,7 +219,11 @@ def harness(settings=None, tracker=None, **stubs):
     # test can assert on either without caring which module owns the call.
     h.notifier = stack.enter_context(patch("signal_engine.main.notifier", new_callable=AsyncMock))
     stack.enter_context(patch("signal_engine.tracker.notifier", h.notifier))
+    stack.enter_context(patch("signal_engine.tracker.fetch_net_position", _net_position))
     for name, stub in defaults.items():
+        if name == "fetch_open_position":
+            h.fetch_open_position = stub
+            continue
         setattr(h, name, stack.enter_context(patch(f"signal_engine.main.{name}", stub)))
     return h
 
@@ -342,7 +355,13 @@ class TestSlHitReconcile:
         tracker.register(_position())
         tracker._last_realised_pnl = 0.0
 
-        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=-750.0))
+        # P&L comes from the stop order's own fill (2485 vs entry 2500 on 50 shares), not the
+        # portfolio delta, which would also absorb other strategies' closes.
+        h = harness(
+            tracker=tracker,
+            fetch_realised_pnl=AsyncMock(return_value=-1.0),
+            fetch_order_fill_price=AsyncMock(return_value=2485.0),
+        )
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="SL"))
 
@@ -360,13 +379,31 @@ class TestSlHitReconcile:
         assert tracker._completed_trades[0].exit_types == ["SL"]
 
     @pytest.mark.asyncio
-    async def test_sl_hit_exit_price_recorded_as_stop_price(self):
+    async def test_sl_hit_exit_price_is_the_stops_real_fill(self):
         tracker = _real_tracker()
         tracker.register(_position(sl=2485.0))
-        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=-750.0))
+        h = harness(
+            tracker=tracker,
+            fetch_realised_pnl=AsyncMock(return_value=-750.0),
+            fetch_order_fill_price=AsyncMock(return_value=2484.4),
+        )
+        with h.stack:
+            await _handle_exit(_exit_signal(tp_level="SL"))
+        assert tracker._completed_trades[0].exit_price == 2484.4
+
+    @pytest.mark.asyncio
+    async def test_sl_hit_without_a_fill_falls_back_to_stop_price_and_delta(self):
+        tracker = _real_tracker()
+        tracker.register(_position(sl=2485.0))
+        h = harness(
+            tracker=tracker,
+            fetch_realised_pnl=AsyncMock(return_value=-750.0),
+            fetch_order_fill_price=AsyncMock(return_value=None),
+        )
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="SL"))
         assert tracker._completed_trades[0].exit_price == 2485.0
+        assert tracker._completed_trades[0].total_pnl == -750.0
 
 
 # --------------------------------------------------------------------------
@@ -912,7 +949,11 @@ class TestPartialExitDefensiveGuard:
         the position must be closed and unregistered rather than left with qty<=0."""
         tracker = _real_tracker()
         tracker.register(_position(quantity=10))
-        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=400.0))
+        h = harness(
+            tracker=tracker,
+            fetch_realised_pnl=AsyncMock(return_value=400.0),
+            fetch_order_fill_price=AsyncMock(return_value=2540.0),
+        )
         with h.stack:
             # Force the impossible combination: partial flag with a full-size qty
             with patch("signal_engine.main._resolve_exit_qty", return_value=(10, False)):
@@ -939,7 +980,7 @@ class TestFullExitDayContext:
     async def test_winning_full_exit_counts_itself_in_day_context(self):
         tracker = _real_tracker()
         tracker.register(_position(quantity=50))
-        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=900.0))
+        h = harness(tracker=tracker, fetch_order_fill_price=AsyncMock(return_value=2518.0))
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
             # the day context is built from the counters *after* this trade is recorded
@@ -954,7 +995,7 @@ class TestFullExitDayContext:
     async def test_losing_full_exit_counts_itself_as_a_loss(self):
         tracker = _real_tracker()
         tracker.register(_position(quantity=50))
-        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=-400.0))
+        h = harness(tracker=tracker, fetch_order_fill_price=AsyncMock(return_value=2492.0))
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
         assert tracker._day_trades == 1
@@ -966,7 +1007,7 @@ class TestFullExitDayContext:
         """Only the final close counts; a partial leg banks P&L only."""
         tracker = _real_tracker()
         tracker.register(_position(quantity=100))
-        h = harness(tracker=tracker, fetch_realised_pnl=AsyncMock(return_value=300.0))
+        h = harness(tracker=tracker, fetch_order_fill_price=AsyncMock(return_value=2506.0))
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1", exit_qty_pct=0.5))
         assert tracker._day_trades == 0

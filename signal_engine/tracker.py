@@ -12,6 +12,7 @@ from signal_engine.api_client import (
     cancel_all_orders,
     cancel_order,
     close_all_positions,
+    fetch_net_position,
     fetch_open_position,
     fetch_order_fill_price,
     fetch_order_status,
@@ -51,6 +52,12 @@ def _dedupe_breakingtrade_overlap(records: list) -> list:
             and r.symbol.upper() in confirmed_symbols
         )
     ]
+
+
+def leg_pnl(direction, entry_fill: float, exit_fill: float, qty: int) -> float:
+    """Gross P&L of one exit leg from the two confirmed fill prices."""
+    move = exit_fill - entry_fill if direction == Direction.LONG else entry_fill - exit_fill
+    return move * qty
 
 
 def _compute_r(total_pnl: float, qty: int, entry: float, sl: float) -> float | None:
@@ -325,6 +332,37 @@ class PositionTracker:
         key = self._key(position.symbol, position.strategy)
         self._positions[key] = position
         logger.info(f"Tracking position: {key} qty={position.quantity}")
+
+    def other_strategies_signed_qty(
+        self, symbol: str, exchange: str, product: str, exclude_strategy: str
+    ) -> int:
+        """Signed quantity (long +, short -) other strategies hold on the same broker position.
+
+        The broker nets by (symbol, exchange, product) with no strategy dimension, so a net
+        figure includes every strategy that touched the symbol. This is the part of it that
+        is not `exclude_strategy`'s, per this tracker's books.
+        """
+        total = 0
+        for p in self._positions.values():
+            if p.strategy == exclude_strategy:
+                continue
+            if (p.symbol, p.exchange, p.product) != (symbol, exchange, product):
+                continue
+            total += p.quantity if p.direction == Direction.LONG else -p.quantity
+        return total
+
+    async def fetch_own_position(
+        self, symbol: str, strategy: str, exchange: str, product: str
+    ) -> "int | None":
+        """Signed broker quantity attributable to `strategy`, or None if the broker is unreachable.
+
+        Net broker quantity minus what other tracked strategies hold on the same symbol, so
+        BREAKOUT and BREAKOUT-PY never mistake each other's shares for their own.
+        """
+        net = await fetch_net_position(symbol, strategy, exchange, product)
+        if net is None:
+            return None
+        return net - self.other_strategies_signed_qty(symbol, exchange, product, strategy)
 
     def find_position(self, symbol: str, strategy: str) -> "TrackedPosition | None":
         """Look up a tracked position by symbol and strategy. Returns None if not found."""
@@ -1046,7 +1084,20 @@ class PositionTracker:
         # closing order's own fill price - so live mode keeps trusting the broker's own
         # realised figure below, unchanged.
         sandbox_mode = self._trade_mode_for_db() == "analyze"
-        if ltp and (pos.realized_pnl != 0.0 or sandbox_mode):
+        base_fill = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+        # Best source: the stop order's OWN confirmed fill. The position book's ltp is per
+        # symbol and the broker nets across strategies, so with two strategies on one symbol it
+        # can be the other one's execution price.
+        sl_fill = None
+        if pos.sl_order_id and base_fill > 0:
+            sl_fill = await fetch_order_fill_price(pos.sl_order_id, pos.strategy, max_attempts=1)
+        if sl_fill is not None:
+            pnl_delta = leg_pnl(pos.direction, base_fill, sl_fill, pos.quantity)
+            logger.info(
+                f"{key}: stop order {pos.sl_order_id} filled at {sl_fill:.2f} - "
+                f"pnl_delta {pnl_delta:,.2f} from the order's own fill"
+            )
+        elif ltp and (pos.realized_pnl != 0.0 or sandbox_mode):
             # This position already has partial-exit P&L booked in pos.realized_pnl (main.py
             # tracks each partial leg's delta from its own confirmed fill price). The broker's
             # per-symbol "realised" figure is NOT reliably an incremental delta for just the
@@ -1584,15 +1635,36 @@ class PositionTracker:
             self._day_pnl += time_exit_pnl
             logger.info(f"Time exit PnL captured: {time_exit_pnl:,.2f}")
 
-        # Distribute time-exit P&L equally across MIS positions (exact for single position,
-        # approximate for multiple — per-position broker fetch would require serial close flow)
-        n = len(mis_positions)
-        per_pos_pnl = time_exit_pnl / n if n > 0 else 0.0
+        # Attribute P&L per position from its own closing price (the position book's ltp for a
+        # closed position is the execution price in ANALYZE mode). Splitting the portfolio
+        # delta equally, as this used to, gave every position the average of all of them.
+        # Positions with no usable price share what is left of the delta equally.
+        priced = await self._time_exit_leg_pnls(mis_positions)
+        unpriced = [k for k in mis_positions if k not in priced]
+        leftover = time_exit_pnl - sum(
+            priced[k] for k in priced
+        )  # priced legs are only the closing leg; realised partials are added in booking
+        shared = leftover / len(unpriced) if unpriced else 0.0
 
         # Clear only MIS positions and update risk engine
         for key, pos in mis_positions.items():
             with logger.contextualize(symbol=pos.symbol):
-                await self._book_one_time_exit(key, pos, per_pos_pnl, _settings)
+                await self._book_one_time_exit(key, pos, priced.get(key, shared), _settings)
+
+    async def _time_exit_leg_pnls(self, mis_positions: dict) -> dict:
+        """Closing-leg P&L per tracked key from the position book's closing prices."""
+        book = await fetch_positionbook()
+        if not book:
+            return {}
+        book_data = _index_positionbook(book)
+        out = {}
+        for key, pos in mis_positions.items():
+            entry = book_data.get(pos.symbol)
+            base = pos.fill_price if pos.fill_price > 0 else pos.entry_price
+            if entry is None or entry.quantity != 0 or not entry.ltp or base <= 0:
+                continue
+            out[key] = leg_pnl(pos.direction, base, entry.ltp, pos.quantity)
+        return out
 
     async def _book_one_time_exit(self, key: str, pos, per_pos_pnl: float, _settings) -> None:
         """Record one force-closed MIS position and drop it from the tracker."""
