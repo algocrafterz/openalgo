@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { EvaluationBlock, GateRow, GateStatus } from '@/api/backtestResults'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -82,6 +83,7 @@ function DimensionTable({ name, rows }: { name: string; rows: GateRow[] }) {
             return (
               <TableRow
                 key={row.gate}
+                id={`gate-${row.gate}`}
                 data-testid={`gate-${row.gate}`}
                 className={cn(hardFail && 'bg-red-500/10')}
               >
@@ -114,6 +116,13 @@ function DimensionTable({ name, rows }: { name: string; rows: GateRow[] }) {
   )
 }
 
+/** Whether the current URL hash points at one of these gate rows. */
+function hashTargets(gates: string[]): boolean {
+  const hash = typeof window === 'undefined' ? '' : window.location.hash
+  if (!hash.startsWith('#gate-')) return false
+  return gates.includes(decodeURIComponent(hash.slice('#gate-'.length)))
+}
+
 /**
  * Acceptance-criteria gates by dimension. No composite score is shown on purpose: a
  * single number would hide which dimension failed and why.
@@ -124,6 +133,22 @@ export function EvaluationTable({ evaluation }: { evaluation: EvaluationBlock })
     .map((d) => ({ name: d.name, rows: d.rows.filter((r) => !isDead(r)) }))
     .filter((d) => d.rows.length > 0)
   const dead = evaluation.dimensions.flatMap((d) => d.rows.filter(isDead))
+  const deadKey = dead.map((r) => r.gate).join('|')
+  const [deadOpen, setDeadOpen] = useState(() => hashTargets(dead.map((r) => r.gate)))
+
+  // A gate link may point at a row inside the closed list: open it and bring the row into view.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deadKey stands for the dead gates
+  useEffect(() => {
+    const reveal = () => {
+      if (!hashTargets(dead.map((r) => r.gate))) return
+      setDeadOpen(true)
+      const target = document.getElementById(window.location.hash.slice(1))
+      target?.scrollIntoView?.()
+    }
+    reveal()
+    window.addEventListener('hashchange', reveal)
+    return () => window.removeEventListener('hashchange', reveal)
+  }, [deadKey])
   return (
     <Card data-testid="evaluation">
       <CardHeader>
@@ -147,13 +172,17 @@ export function EvaluationTable({ evaluation }: { evaluation: EvaluationBlock })
           <DimensionTable key={d.name} name={d.name} rows={d.rows} />
         ))}
         {dead.length > 0 && (
-          <details data-testid="gates-dead">
+          <details
+            data-testid="gates-dead"
+            open={deadOpen}
+            onToggle={(e) => setDeadOpen(e.currentTarget.open)}
+          >
             <summary className="cursor-pointer text-sm underline underline-offset-4">
               {dead.length} gate{dead.length === 1 ? '' : 's'} not evaluated or not applicable
             </summary>
             <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
               {dead.map((r) => (
-                <li key={r.gate} data-testid={`gate-${r.gate}`}>
+                <li key={r.gate} id={`gate-${r.gate}`} data-testid={`gate-${r.gate}`}>
                   <span className="font-mono text-xs mr-2">{r.gate}</span>
                   {r.title}: {STATUS_TEXT[r.status]}. {r.evidence}
                 </li>

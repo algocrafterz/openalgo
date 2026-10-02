@@ -11,6 +11,9 @@ here writes: run records are produced by `signal_engine.backtest.record_run`.
 
 import csv
 import io
+import itertools
+import json
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -18,8 +21,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from signal_engine.research.build_registry import RegistryError, load_ideas
-from signal_engine.research.spec import SpecError, load_spec
+from signal_engine.research.intake.spec import SpecError, load_spec
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -32,6 +37,8 @@ SPARKLINE_POINTS = 60
 
 _IDEA_ID = re.compile(r"^IDEA-\d{3}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+#: Run ids of the per-run detail endpoint: the dated, versioned folder name.
+_DETAIL_RUN_ID = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+-v\d+\Z")
 
 #: Differences that make two runs a different experiment, not a tuning step. Comparing
 #: them is allowed but must be flagged: the deltas then mix a code change with a data or
@@ -155,6 +162,11 @@ _IDEA_FIELDS = (
     "tags",
     "source",
     "rejection_basis",
+    "stage",
+    "research_state",
+    "strategy_category",
+    "strategy_tags",
+    "classification",
 )
 
 
@@ -408,6 +420,310 @@ def export_run(
         return _error("No per-trade export is stored for this run", 404)
     path, mimetype = sidecar
     return True, ExportFile(path.name, mimetype, path=path), 200
+
+
+#: Largest run-folder file read into memory; anything bigger is treated as unreadable.
+_MAX_FILE_BYTES = 2 * 1024 * 1024
+#: Most directory entries inspected when looking for the newest reproduction attempt.
+_MAX_SCAN_ENTRIES = 1000
+_READ_ERRORS = (OSError, ValueError, RecursionError, MemoryError, yaml.YAMLError)
+
+
+def _read_text(path: Path, base: Path) -> str:
+    """A file's text, refusing symlinks, paths outside `base` and files over the size cap."""
+    if path.is_symlink():
+        raise OSError(f"refusing symlink {path}")
+    path.resolve().relative_to(base.resolve())
+    with path.open("rb") as handle:
+        raw = handle.read(_MAX_FILE_BYTES + 1)
+    if len(raw) > _MAX_FILE_BYTES:
+        raise ValueError(f"file exceeds {_MAX_FILE_BYTES} bytes: {path}")
+    return raw.decode("utf-8")
+
+
+def _read_json(path: Path, base: Path) -> Any:
+    """A JSON file's content, or None when it is missing or unreadable (logged)."""
+    try:
+        return json.loads(_read_text(path, base))
+    except _READ_ERRORS:
+        logger.exception("Could not read %s", path)
+        return None
+
+
+def _jsonable(value: Any) -> Any:
+    """`value` with string keys and ISO date strings, so it always serialises to JSON."""
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _read_yaml(path: Path, base: Path) -> dict[str, Any] | None:
+    try:
+        data = yaml.safe_load(_read_text(path, base))
+        return _jsonable(data) if isinstance(data, dict) else None
+    except _READ_ERRORS:
+        logger.exception("Could not read %s", path)
+        return None
+
+
+def _str_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _str_list(value: Any) -> list[str]:
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return list(value)
+    return []
+
+
+def _checklist(value: Any) -> dict[str, bool]:
+    return {k: v for k, v in _dict(value).items() if isinstance(k, str) and isinstance(v, bool)}
+
+
+def _period(value: Any) -> dict[str, str] | None:
+    data = _dict(value)
+    start, end = data.get("start"), data.get("end")
+    if isinstance(start, str) and isinstance(end, str):
+        return {"start": start, "end": end}
+    return None
+
+
+def _profile(value: Any) -> dict[str, str] | None:
+    data = _dict(value)
+    name, sha = data.get("name"), data.get("sha256")
+    if isinstance(name, str) and isinstance(sha, str):
+        return {"name": name, "sha256": sha}
+    return None
+
+
+def _strategy_window(value: Any) -> str | dict[str, Any] | None:
+    if isinstance(value, str):
+        return value
+    return _jsonable(value) if isinstance(value, dict) else None
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _resolve_run_folder(
+    record: dict[str, Any], runs_dir: Path, run_id: str, ideas_root: Path
+) -> Path | None:
+    """The run folder named by artifact_dir, or None when it is not exactly this run's own.
+
+    The runs directory must be a real (non-symlink) directory under `ideas_root`, and the
+    folder must be a direct, non-symlink child of it named `run_id`.
+    """
+    rel = record["artifact_dir"]
+    if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+        return None
+    try:
+        if runs_dir.is_symlink():
+            return None
+        base = runs_dir.resolve()
+        base.relative_to(ideas_root.resolve())
+        candidate = runs_dir / rel
+        if candidate.is_symlink():
+            return None
+        folder = candidate.resolve()
+    except (OSError, ValueError):
+        return None
+    if folder.name != run_id or folder.parent != base or not folder.is_dir():
+        return None
+    return folder
+
+
+def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "schema": schema,
+        "captured": captured,
+        "strategy_version": None,
+        "parent_version": None,
+        "branch_label": None,
+        "change_classes": [],
+        "verdict": None,
+        "promotion": None,
+        "next_action": None,
+        "spec": None,
+        "fingerprints": None,
+        "scope": None,
+        "reproducibility": None,
+        "assumptions": None,
+        "missing_capabilities": [],
+        "manifest_sha256": None,
+        "created_ist": None,
+    }
+
+
+def _resolved_value(execution: dict[str, Any], field: str) -> Any:
+    return _dict(_dict(execution.get("resolved")).get(field)).get("value")
+
+
+def _build_scope(
+    manifest: dict[str, Any] | None,
+    execution: dict[str, Any] | None,
+    strategy: dict[str, Any] | None,
+    spec: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if manifest is None:
+        return None
+    m, ex, st, sp = manifest, _dict(execution), _dict(strategy), _dict(spec)
+    session, dataset = _dict(m.get("session")), _dict(m.get("dataset"))
+    profile, sizing, portfolio = (
+        _dict(m.get("deployment_profile")),
+        _dict(sp.get("sizing")),
+        _dict(sp.get("portfolio")),
+    )
+    return {
+        "market": _dict(ex.get("profile")).get("market"),
+        "universe": _dict(m.get("universe")).get("definition"),
+        "symbol_count": dataset.get("symbol_count"),
+        "style": st.get("style"),
+        "direction": st.get("direction"),
+        "timeframe": st.get("timeframe"),
+        "product": st.get("product"),
+        "period": _period(m.get("period")),
+        "strategy_window": _strategy_window(session.get("strategy_window")),
+        "exchange_session": session.get("exchange"),
+        "broker_cutoff": session.get("broker_cutoff"),
+        "force_flat": session.get("force_flat"),
+        "capital_per_trade": sizing.get("capital_per_trade"),
+        "risk_per_trade_pct": sizing.get("risk_per_trade_pct"),
+        "portfolio_mode": portfolio.get("mode"),
+        "portfolio_scope": portfolio.get("scope"),
+        "slippage_bps_per_side": _resolved_value(ex, "slippage_bps_per_side"),
+        "cost_bps_round_trip": _resolved_value(ex, "cost_bps_round_trip"),
+        "profile": _profile(profile),
+        "dataset": {
+            "id": _str_or_none(dataset.get("id")),
+            "source": _str_or_none(dataset.get("source")),
+            "interval": _str_or_none(dataset.get("interval")),
+            "data_as_of": _str_or_none(dataset.get("data_as_of")),
+            "fingerprint": _str_or_none(dataset.get("fingerprint")),
+        },
+    }
+
+
+def _last_attempt(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """The reproduction attempt with the greatest file name among the first 1000 entries.
+
+    Scans at most `_MAX_SCAN_ENTRIES` directory entries, then reads that one file.
+    """
+    folder = runs_dir / f"{run_id}.reproductions"
+    try:
+        if folder.is_symlink():
+            return None
+        with os.scandir(folder) as entries:
+            names = [
+                e.name
+                for e in itertools.islice(entries, _MAX_SCAN_ENTRIES)
+                if e.name.endswith(".json")
+            ]
+    except FileNotFoundError:
+        return None
+    except OSError:
+        logger.exception("Could not list %s", folder)
+        return None
+    if not names:
+        return None
+    data = _read_json(folder / max(names), folder)
+    if not isinstance(data, dict):
+        return None
+    return {k: _jsonable(data.get(k)) for k in ("attempted_ist", "reproducible", "reasons")}
+
+
+def _build_reproducibility(
+    manifest: dict[str, Any] | None, runs_dir: Path, run_id: str
+) -> dict[str, Any] | None:
+    if manifest is None:
+        return None
+    engine = _dict(manifest.get("engine"))
+    return {
+        "reproducible": manifest.get("reproducible"),
+        "code_dirty": engine.get("code_dirty"),
+        "dirty_paths": _str_list(engine.get("dirty_paths")),
+        "code_commit": engine.get("code_commit"),
+        "engine_version": engine.get("engine_version"),
+        "checklist": _checklist(manifest.get("reproducibility")),
+        "last_attempt": _last_attempt(runs_dir, run_id),
+    }
+
+
+def _read_run_folder(
+    folder: Path, runs_dir: Path, run_id: str, detail: dict[str, Any]
+) -> dict[str, Any]:
+    """Fill `detail` from the run folder; an unreadable file nulls only its own blocks."""
+    manifest = _read_json(folder / "manifest.json", folder)
+    manifest = manifest if isinstance(manifest, dict) else None
+    report = _read_json(folder / "report" / "report.json", folder)
+    report = report if isinstance(report, dict) else {}
+    execution = _read_json(folder / "execution" / "config.json", folder)
+    strategy = _read_json(folder / "strategy" / "strategy.json", folder)
+    assumptions = _read_json(folder / "assumptions.json", folder)
+    spec = _read_yaml(folder / "strategy" / "spec.yaml", folder)
+    detail["verdict"] = _jsonable(report.get("verdict"))
+    detail["promotion"] = _jsonable(report.get("promotion"))
+    detail["next_action"] = _jsonable(report.get("next_action"))
+    detail["spec"] = spec
+    if isinstance(assumptions, dict):
+        detail["assumptions"] = {
+            "sealed_ist": assumptions.get("sealed_ist"),
+            "entries": _jsonable(assumptions.get("entries") or []),
+        }
+    detail["scope"] = _build_scope(
+        manifest,
+        execution if isinstance(execution, dict) else None,
+        strategy if isinstance(strategy, dict) else None,
+        spec,
+    )
+    detail["reproducibility"] = _build_reproducibility(manifest, runs_dir, run_id)
+    if manifest is not None:
+        meta = _dict(manifest.get("strategy"))
+        detail["strategy_version"] = meta.get("version")
+        detail["parent_version"] = meta.get("parent_version")
+        detail["branch_label"] = meta.get("branch_label")
+        detail["change_classes"] = _str_list(manifest.get("change_classes"))
+        detail["missing_capabilities"] = _str_list(manifest.get("missing_capabilities"))
+        detail["fingerprints"] = _jsonable(manifest.get("fingerprints"))
+        detail["created_ist"] = manifest.get("created_ist")
+    return detail
+
+
+def get_run_detail(
+    idea_id: str, run_id: str, root: Path | None = None
+) -> tuple[bool, dict[str, Any], int]:
+    """Everything a schema 3 run folder says about one run, reshaped for the page.
+
+    Read-model only: nothing is derived or verified here (the registry check verifies
+    hashes; verdicts and promotion are read from report.json as the engine wrote them).
+    """
+    if not isinstance(run_id, str) or not _DETAIL_RUN_ID.match(run_id):
+        return _error("invalid run id", 400)
+    root = root or DEFAULT_ROOT
+    idea, failure = _find_idea(idea_id, root)
+    if failure:
+        return failure
+    record = next((r for r in idea.get("runs") or [] if r.get("run_id") == run_id), None)
+    if record is None:
+        return _error(f"Run not found: {run_id}", 404)
+    if record.get("schema") != 3 or not record.get("artifact_dir"):
+        detail = _empty_run_detail(run_id, record.get("schema", 2), False)
+        return True, {"status": "success", "run": detail}, 200
+    runs_dir = _idea_folder(idea, root) / "runs"
+    folder = _resolve_run_folder(record, runs_dir, run_id, root / "research" / "ideas")
+    if folder is None:
+        return _error("invalid run folder", 400)
+    detail = _empty_run_detail(run_id, 3, True)
+    detail["manifest_sha256"] = record.get("manifest_sha256")
+    _read_run_folder(folder, runs_dir, run_id, detail)
+    return True, {"status": "success", "run": detail}, 200
 
 
 def _get(run: dict[str, Any], path: tuple[str, ...]) -> Any:

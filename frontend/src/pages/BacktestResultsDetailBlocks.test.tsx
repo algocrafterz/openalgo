@@ -6,11 +6,11 @@ import type { BacktestIdeaResponse, EvaluationBlock, RegimesBlock } from '@/api/
 import { makeRun } from '@/test/backtestResultsFixtures'
 import BacktestResultsDetail from './BacktestResultsDetail'
 
-const mocks = vi.hoisted(() => ({ idea: vi.fn(), compare: vi.fn() }))
+const mocks = vi.hoisted(() => ({ idea: vi.fn(), compare: vi.fn(), run: vi.fn() }))
 
 vi.mock('@/api/backtestResults', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/backtestResults')>()),
-  backtestResultsApi: { idea: mocks.idea, compare: mocks.compare },
+  backtestResultsApi: { idea: mocks.idea, compare: mocks.compare, run: mocks.run },
 }))
 
 vi.mock('lightweight-charts', () => ({
@@ -73,6 +73,7 @@ const REGIMES: RegimesBlock = {
 
 function renderPage(response: BacktestIdeaResponse) {
   mocks.idea.mockReturnValue(Promise.resolve(response))
+  mocks.run.mockRejectedValue(new Error('run detail not mocked'))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
@@ -97,26 +98,18 @@ describe('BacktestResultsDetail additions', () => {
     )
   })
 
-  it('renders evaluation, regimes, lineage, spec, notes and rejection basis when present', async () => {
+  it('renders evaluation, regimes, spec, notes and rejection basis when present', async () => {
     renderPage({
       status: 'success',
       idea: { ...IDEA, rejection_basis: 'no-gross-edge' },
       runs: [makeRun({ evaluation: EVALUATION, regimes: REGIMES })],
-      lineage: {
-        runs: 1,
-        latest_run_id: 'v1',
-        trials_sum: 1,
-        trend: 'insufficient',
-        delta_vs_parent: null,
-      },
       spec: { name: 'Gap RSI', entry: ['Gap down 2 percent at the open'] },
       research_notes: 'Decision log entry',
     })
     expect(await screen.findByTestId('evaluation')).toBeInTheDocument()
     expect(screen.getByTestId('regimes')).toBeInTheDocument()
-    expect(screen.getByTestId('lineage')).toBeInTheDocument()
     expect(screen.getByTestId('rejection-basis')).toHaveTextContent('no-gross-edge')
-    expect(screen.getByTestId('strategy-definition')).toHaveTextContent('Gap down 2 percent')
+    expect(await screen.findByTestId('strategy-definition')).toHaveTextContent('Gap down 2 percent')
     expect(screen.getByTestId('research-notes')).toHaveTextContent('Decision log entry')
   })
 
@@ -125,7 +118,7 @@ describe('BacktestResultsDetail additions', () => {
     await waitFor(() => expect(screen.getByTestId('run-tearsheet')).toBeInTheDocument())
     expect(screen.queryByTestId('evaluation')).not.toBeInTheDocument()
     expect(screen.queryByTestId('regimes')).not.toBeInTheDocument()
-    expect(screen.getByTestId('verdict-banner')).toBeInTheDocument()
+    expect(await screen.findByText('Run detail unavailable')).toBeInTheDocument()
     expect(screen.queryByTestId('rejection-basis')).not.toBeInTheDocument()
     expect(screen.queryByTestId('research-notes')).not.toBeInTheDocument()
     expect(screen.getByTestId('no-spec')).toBeInTheDocument()

@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router'
-import type { IdeaCard } from '@/api/backtestResults'
+import type { Classification, IdeaCard } from '@/api/backtestResults'
 import {
   Table,
   TableBody,
@@ -15,6 +15,7 @@ import {
   fmtNum,
   fmtSigned,
   fmtSpan,
+  ideaVerdict,
   isKnown,
   metricText,
   NA,
@@ -36,7 +37,7 @@ interface Column {
 const LEAD_COLUMNS: Column[] = [
   { key: 'id', label: 'Idea' },
   { key: 'status', label: 'Status' },
-  { key: 'verdict', label: 'Verdict' },
+  { key: 'verdict', label: 'Verdict (latest run)' },
 ]
 
 const RESULT_COLUMNS: Column[] = [
@@ -88,6 +89,22 @@ function SortHeader({
 }
 
 /** The figures that matter less than the verdict, kept to one muted line under the title. */
+function ClassificationLine({ classification }: { classification?: Classification }) {
+  if (!classification) return null
+  const parts = [
+    classification.strategy_category,
+    classification.trading_style,
+    classification.market,
+    classification.timeframe,
+  ].filter((p): p is string => Boolean(p))
+  if (parts.length === 0) return null
+  return (
+    <div className="text-xs text-muted-foreground" data-testid="classification-line">
+      {parts.join(' · ')}
+    </div>
+  )
+}
+
 function SecondaryLine({ idea }: { idea: IdeaCard }) {
   const run = idea.latest_run
   if (!run) return null
@@ -206,13 +223,14 @@ export function LeaderboardTable({ ideas, sortKey, sortDir, onSort }: Leaderboar
                 {idea.id}
               </Link>
               <div className="text-sm text-muted-foreground max-w-xs truncate">{idea.title}</div>
+              <ClassificationLine classification={idea.classification} />
               <SecondaryLine idea={idea} />
             </TableCell>
             <TableCell>
               <StatusBadge status={idea.status} />
             </TableCell>
             <TableCell>
-              <VerdictBadge verdict={idea.verdict} />
+              <VerdictBadge verdict={ideaVerdict(idea)} />
             </TableCell>
             <TableCell className="text-sm whitespace-normal max-w-[10rem]">
               {idea.rejection_basis ?? <span className="text-muted-foreground">n/a</span>}

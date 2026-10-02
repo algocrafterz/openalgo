@@ -15,6 +15,7 @@ from services.backtest_results_service import (
     compare_runs,
     export_run,
     get_idea_results,
+    get_run_detail,
     list_results,
 )
 from utils.logging import get_logger
@@ -53,6 +54,15 @@ def backtest_results_compare(idea_id):
     if not run_a or not run_b:
         return jsonify({"status": "error", "message": "Both run ids (a and b) are required"}), 400
     _success, response, status_code = compare_runs(idea_id, run_a, run_b)
+    return jsonify(response), status_code
+
+
+@backtest_results_bp.route("/api/backtest-results/<idea_id>/runs/<run_id>", methods=["GET"])
+@check_session_validity
+@limiter.limit(BACKTEST_RESULTS_READ_LIMIT)
+def backtest_results_run_detail(idea_id, run_id):
+    """One run's folder contents: verdict, scope, reproducibility, assumptions."""
+    _success, response, status_code = get_run_detail(idea_id, run_id)
     return jsonify(response), status_code
 
 

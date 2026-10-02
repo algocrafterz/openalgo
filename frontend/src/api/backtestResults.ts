@@ -84,6 +84,8 @@ export interface LatestRun {
   years?: number | null
   data_age_days?: number | null
   sparkline: number[]
+  /** Calculated verdict of this latest run, when the server sends it. */
+  run_verdict?: RunVerdictValue | null
 }
 
 export interface IdeaCard {
@@ -101,6 +103,14 @@ export interface IdeaCard {
   source?: { type?: string; author?: string; ref?: string }
   /** Why a rejected idea was rejected; absent on older ideas. */
   rejection_basis?: string
+  /** Workflow stage, set by the researcher and gated by evidence (not the legacy `status`). */
+  stage?: Stage
+  /** The researcher's own disposition. Separate from any run's calculated verdict. */
+  research_state?: ResearchState
+  /** What kind of strategy this is. Idea-level, mutable, never part of a run or a version. */
+  strategy_category?: string
+  strategy_tags?: string[]
+  classification?: Classification
   run_count: number
   latest_run: LatestRun | null
 }
@@ -214,6 +224,179 @@ export interface StrategySpec {
   rationale?: string | string[]
 }
 
+// ---- Run decision, scope and reproducibility (build order 5) -------------------------------
+// Calculated by signal_engine and read from the run folder. The UI only presents them.
+
+export type Stage = 'inbox' | 'backtest' | 'paper' | 'live' | 'retired'
+export type ResearchState =
+  | 'active'
+  | 'promising'
+  | 'needs_more_evidence'
+  | 'weak_evidence'
+  | 'evidence_against_edge'
+  | 'shelved'
+  | 'rejected'
+
+/** Calculated per run, never typed, never changes once the run is written. */
+export type RunVerdictValue = 'EDGE' | 'MARGINAL' | 'NO_EDGE' | 'INCONCLUSIVE'
+export type PromotionDecision = 'READY_FOR_NEXT_STAGE' | 'NOT_READY' | 'BLOCKED'
+export type PromotionGateStatus = 'PASS' | 'FAIL' | 'NOT_RUN' | 'NOT_APPLICABLE' | 'REPORT'
+
+export interface VerdictReason {
+  text: string
+  gate: string | null
+  status: string | null
+  /** For example `evaluation:G2.1`: the gate row that backs this reason. */
+  evidence_ref: string | null
+}
+
+export interface DerivedVerdict {
+  run_verdict: RunVerdictValue
+  primary_failed_gate: string | null
+  reasons: VerdictReason[]
+  /** For example `engine readiness: ...` when EDGE was held at MARGINAL. */
+  caps_applied: string[]
+}
+
+export interface PromotionStageResult {
+  decision: PromotionDecision
+  gates: { gate: string; status: PromotionGateStatus }[]
+  reasons: string[]
+}
+
+export interface Promotion {
+  stages: {
+    backtest: PromotionStageResult
+    paper: PromotionStageResult
+    live: PromotionStageResult
+  }
+  next_stage: string | null
+}
+
+export interface NextAction {
+  action: string
+  reason: string
+  gate: string | null
+}
+
+export interface Classification {
+  strategy_category: string
+  strategy_tags: string[]
+  trading_style: string | null
+  direction: string | null
+  timeframe: string | null
+  market: string | null
+}
+
+export type AssumptionSource =
+  | 'user'
+  | 'derived'
+  | 'platform_default'
+  | 'market_data'
+  | 'broker_config'
+  | 'inferred'
+
+export interface AssumptionEntry {
+  id: string
+  field: string
+  section: 'intent' | 'execution' | 'profile'
+  value: unknown
+  source: AssumptionSource
+  confidence: 'high' | 'medium' | 'low'
+  materiality: 'high' | 'medium' | 'low'
+  reason: string
+  user_confirmed: boolean
+}
+
+/** One reproduction attempt, stored outside the run folder. */
+export interface ReproductionAttempt {
+  attempted_ist: string
+  reproducible: boolean
+  reasons: string[]
+}
+
+export interface RunScope {
+  market: string | null
+  universe: string | null
+  symbol_count: number | null
+  style: string | null
+  direction: string | null
+  timeframe: string | null
+  product: string | null
+  period: { start: string; end: string } | null
+  /** Strategy session, exchange session and broker cutoff are separate things. */
+  strategy_window: string | { entry?: string; no_trade?: string[] } | null
+  exchange_session: string | null
+  broker_cutoff: string | null
+  force_flat: string | null
+  capital_per_trade: number | null
+  risk_per_trade_pct: number | null
+  portfolio_mode: string | null
+  portfolio_scope: string | null
+  slippage_bps_per_side: number | null
+  cost_bps_round_trip: number | null
+  profile: { name: string; sha256: string } | null
+  dataset: {
+    id: string
+    source: string
+    interval: string
+    data_as_of: string
+    fingerprint: string
+  } | null
+}
+
+export interface RunReproducibility {
+  reproducible: boolean
+  code_dirty: boolean
+  dirty_paths: string[]
+  code_commit: string | null
+  engine_version: string | null
+  /** Each reproducibility item and whether it was captured. */
+  checklist: Record<string, boolean>
+  last_attempt: ReproductionAttempt | null
+}
+
+export interface RunFingerprints {
+  rules: string
+  params: string
+  strategy: string
+  execution: string
+  cost: string
+  universe: string
+  profile: string
+  dataset: string
+}
+
+/**
+ * Everything a run folder says about one run. `captured` is false for a schema 2 record that has
+ * no run folder: every other field is then null or empty and the UI shows "not captured".
+ */
+export interface RunDetail {
+  run_id: string
+  schema: number
+  captured: boolean
+  strategy_version: string | null
+  parent_version: string | null
+  branch_label: string | null
+  change_classes: string[]
+  verdict: DerivedVerdict | null
+  promotion: Promotion | null
+  next_action: NextAction | null
+  /** The frozen intent this run was made from, never the idea's current spec.yaml. */
+  spec: Record<string, unknown> | null
+  fingerprints: RunFingerprints | null
+  scope: RunScope | null
+  reproducibility: RunReproducibility | null
+  assumptions: { sealed_ist: string; entries: AssumptionEntry[] } | null
+  missing_capabilities: string[]
+  manifest_sha256: string | null
+  created_ist: string | null
+}
+
+export interface BacktestRunDetailResponse extends Envelope {
+  run: RunDetail
+}
+
 export interface RunRecord {
   run_id: string
   date: string
@@ -246,6 +429,18 @@ export interface RunRecord {
   regimes?: RegimesBlock
   /** True when a per-trade file is stored beside the record. */
   trades_export?: boolean
+  /** Schema 3 flat-record fields. Absent on a schema 2 run. */
+  schema?: number
+  strategy_version?: string
+  strategy_fingerprint?: string
+  change_classes?: string[]
+  reproducible?: boolean
+  code_dirty?: boolean
+  promotion_eligible?: boolean
+  missing_capabilities?: string[]
+  run_verdict?: RunVerdictValue | null
+  promotion_decision?: PromotionDecision | null
+  next_action?: NextAction | null
 }
 
 export interface MetricDelta {
@@ -337,6 +532,14 @@ export const backtestResultsApi = {
     unwrap(
       webClient.get<BacktestIdeaResponse>(`/api/backtest-results/${encodeURIComponent(ideaId)}`),
       'Failed to load backtest history'
+    ),
+
+  run: (ideaId: string, runId: string): Promise<BacktestRunDetailResponse> =>
+    unwrap(
+      webClient.get<BacktestRunDetailResponse>(
+        `/api/backtest-results/${encodeURIComponent(ideaId)}/runs/${encodeURIComponent(runId)}`
+      ),
+      'Failed to load run detail'
     ),
 
   compare: (ideaId: string, runA: string, runB: string): Promise<BacktestCompareResponse> => {

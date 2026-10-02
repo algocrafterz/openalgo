@@ -155,3 +155,59 @@ def test_export_defaults_to_json_and_propagates_errors(monkeypatch):
     response = client.get("/api/backtest-results/IDEA-001/runs/r1/export")
     assert seen["fmt"] == "json"
     assert response.status_code == 404
+
+
+def test_run_detail_requires_a_session():
+    with _app().test_client() as client:
+        path = "/api/backtest-results/IDEA-001/runs/2026-09-29-orb-v1"
+        assert client.get(path).status_code in (302, 401)
+
+
+@pytest.mark.parametrize("status", [200, 400, 404])
+def test_run_detail_route_passes_ids_and_propagates_status(monkeypatch, status):
+    seen = {}
+
+    def fake(idea_id, run_id):
+        seen.update(idea=idea_id, run=run_id)
+        return status == 200, {"status": "success" if status == 200 else "error"}, status
+
+    monkeypatch.setattr(route_module, "get_run_detail", fake)
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get("/api/backtest-results/IDEA-001/runs/2026-09-29-orb-v1")
+    assert response.status_code == status
+    assert seen == {"idea": "IDEA-001", "run": "2026-09-29-orb-v1"}
+
+
+def test_run_detail_does_not_shadow_export(monkeypatch):
+    monkeypatch.setattr(
+        route_module, "get_run_detail", lambda *_a: (True, {"status": "success"}, 200)
+    )
+    monkeypatch.setattr(route_module, "export_run", lambda *_a: (False, {"status": "error"}, 404))
+    client = _client_logged_in(_app(), monkeypatch)
+    assert client.get("/api/backtest-results/IDEA-001/runs/r1/export").status_code == 404
+
+
+def test_run_detail_serialises_yaml_spec_with_mixed_keys(monkeypatch, tmp_path):
+    import json
+
+    from services import backtest_results_service as svc
+
+    rid = "2026-09-29-orb-v1"
+    runs = tmp_path / "research" / "ideas" / "idea-001-sample" / "runs"
+    (runs / rid / "strategy").mkdir(parents=True)
+    (runs / rid / "strategy" / "spec.yaml").write_text(
+        "name: orb\nsince: 2026-01-02\nlevels:\n  1: a\n  x: b\n", encoding="utf-8"
+    )
+    (runs / rid / "manifest.json").write_text(json.dumps({"schema": 3}), encoding="utf-8")
+    record = {"run_id": rid, "schema": 3, "artifact_dir": f"{rid}/", "manifest_sha256": "a" * 64}
+    monkeypatch.setattr(
+        svc,
+        "_load",
+        lambda _r: [{"id": "IDEA-001", "folder": "idea-001-sample", "runs": [record]}],
+    )
+    monkeypatch.setattr(svc, "DEFAULT_ROOT", tmp_path)
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get(f"/api/backtest-results/IDEA-001/runs/{rid}")
+    assert response.status_code == 200
+    spec = response.get_json()["run"]["spec"]
+    assert spec["since"] == "2026-01-02" and spec["levels"] == {"1": "a", "x": "b"}

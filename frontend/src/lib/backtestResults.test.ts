@@ -16,6 +16,7 @@ import {
   fmtPercent,
   fmtSigned,
   fmtSpan,
+  ideaVerdict,
   isExtrapolated,
   isKnown,
   judgeDelta,
@@ -392,5 +393,42 @@ describe('buildVerdict', () => {
       null
     )
     expect(open.tone).toBe('warn')
+  })
+})
+
+describe('ideaVerdict', () => {
+  it('prefers the latest run calculated verdict, mapped to the legacy words', () => {
+    const pairs = [
+      ['EDGE', 'edge'],
+      ['MARGINAL', 'marginal'],
+      ['NO_EDGE', 'no-edge'],
+      ['INCONCLUSIVE', 'inconclusive'],
+    ] as const
+    for (const [calc, legacy] of pairs) {
+      const idea = makeCard({ verdict: 'none', latest_run: makeLatest({ run_verdict: calc }) })
+      expect(ideaVerdict(idea)).toBe(legacy)
+    }
+  })
+
+  it('falls back to the idea derived verdict when the run carries none', () => {
+    expect(ideaVerdict(makeCard({ verdict: 'marginal' }))).toBe('marginal')
+    expect(
+      ideaVerdict(makeCard({ verdict: 'edge', latest_run: makeLatest({ run_verdict: null }) }))
+    ).toBe('edge')
+    expect(ideaVerdict(makeCard({ verdict: 'none', latest_run: null }))).toBe('none')
+  })
+
+  it('filters, sorts and lists distinct values on the same underlying value', () => {
+    const a = makeCard({
+      id: 'A',
+      verdict: 'no-edge',
+      latest_run: makeLatest({ run_verdict: 'EDGE' }),
+    })
+    const b = makeCard({ id: 'B', verdict: 'marginal', latest_run: makeLatest() })
+    expect(filterIdeas([a, b], { ...EMPTY_FILTERS, verdict: 'edge' }).map((i) => i.id)).toEqual([
+      'A',
+    ])
+    expect(sortIdeas([b, a], 'verdict', 'asc').map((i) => i.id)).toEqual(['A', 'B'])
+    expect(distinct([a, b], 'verdict')).toEqual(['edge', 'marginal'])
   })
 })

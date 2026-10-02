@@ -1,17 +1,23 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { backtestResultsApi } from '@/api/backtestResults'
+import { backtestResultsApi, type RunDetail, type RunRecord } from '@/api/backtestResults'
+import { BacktestScope } from '@/components/backtest-results/BacktestScope'
 import { CompareView } from '@/components/backtest-results/CompareView'
 import { DataCoverage } from '@/components/backtest-results/DataCoverage'
+import { DecisionPanel } from '@/components/backtest-results/DecisionPanel'
+import { GlossaryDrawer } from '@/components/backtest-results/GlossaryDrawer'
+import { PromotionGate } from '@/components/backtest-results/PromotionGate'
+import { Reproducibility } from '@/components/backtest-results/Reproducibility'
 import { ResearchNotes } from '@/components/backtest-results/ResearchNotes'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
+import { RunIdentity } from '@/components/backtest-results/RunIdentity'
 import { RunTearsheet } from '@/components/backtest-results/RunTearsheet'
 import { StrategyDefinition } from '@/components/backtest-results/StrategyDefinition'
 import { StatusBadge, VerdictBadge } from '@/components/backtest-results/VerdictBadge'
-import { VerdictBanner } from '@/components/backtest-results/VerdictBanner'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useRunDetail } from '@/hooks/useRunDetail'
 
 function Failure({ message }: { message: string }) {
   return (
@@ -26,6 +32,57 @@ function Failure({ message }: { message: string }) {
   )
 }
 
+function RunDetailLoading() {
+  return (
+    <div className="space-y-3" data-testid="run-detail-loading">
+      <Skeleton className="h-24 w-full max-w-3xl" />
+      <Skeleton className="h-32 w-full max-w-3xl" />
+    </div>
+  )
+}
+
+type IdeaCardLike = NonNullable<Awaited<ReturnType<typeof backtestResultsApi.idea>>['idea']>
+
+function RunDetailBlocks({
+  idea,
+  run,
+  detail,
+  isLatestRun,
+}: {
+  idea: IdeaCardLike
+  run: RunRecord
+  detail: RunDetail
+  isLatestRun: boolean
+}) {
+  return (
+    <>
+      <RunIdentity
+        ideaTitle={idea.title}
+        strategyVersion={detail.strategy_version}
+        runId={run.run_id}
+        changeClasses={detail.change_classes}
+        classification={idea.classification ?? null}
+        scope={detail.captured ? detail.scope : undefined}
+        strategyCategory={idea.strategy_category}
+        tags={idea.strategy_tags}
+      />
+      <DecisionPanel
+        verdict={detail.verdict}
+        promotion={detail.promotion}
+        nextAction={detail.next_action}
+        researchState={idea.research_state}
+        stage={idea.stage}
+        legacyVerdict={idea.verdict}
+        runVerdict={run.run_verdict ?? null}
+        isLatestRun={isLatestRun}
+        captured={detail.captured}
+        evaluation={run.evaluation ?? null}
+      />
+      <PromotionGate promotion={detail.promotion} evaluation={run.evaluation ?? null} />
+    </>
+  )
+}
+
 export default function BacktestResultsDetail() {
   const { ideaId = '' } = useParams<{ ideaId: string }>()
   const [selected, setSelected] = useState<string | null>(null)
@@ -35,6 +92,11 @@ export default function BacktestResultsDetail() {
     queryFn: () => backtestResultsApi.idea(ideaId),
     enabled: ideaId !== '',
   })
+
+  const loadedRuns = data?.runs ?? []
+  const runId = (loadedRuns.find((r) => r.run_id === selected) ?? loadedRuns[loadedRuns.length - 1])
+    ?.run_id
+  const detailQuery = useRunDetail(ideaId, runId)
 
   if (isLoading) {
     return (
@@ -52,6 +114,9 @@ export default function BacktestResultsDetail() {
   const runs = data.runs ?? []
   const latest = runs[runs.length - 1]
   const current = runs.find((r) => r.run_id === selected) ?? latest
+  const isLatestRun = !!current && current === latest
+  const detail = detailQuery.data?.run
+  const detailFailed = detailQuery.isError || detailQuery.data?.status === 'error'
 
   return (
     <div className="space-y-6">
@@ -59,9 +124,12 @@ export default function BacktestResultsDetail() {
         <Link to="/backtest-results" className="text-sm underline underline-offset-4">
           All backtests
         </Link>
-        <h1 className="text-2xl font-bold">
-          {idea.id}: {idea.title}
-        </h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-2xl font-bold">
+            {idea.id}: {idea.title}
+          </h1>
+          <GlossaryDrawer />
+        </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge status={idea.status} />
           {/* One chip says it once: a rejected idea with a stated basis shows the basis. */}
@@ -70,7 +138,13 @@ export default function BacktestResultsDetail() {
               rejected: {idea.rejection_basis}
             </Badge>
           ) : (
-            <VerdictBadge verdict={idea.verdict} />
+            !detail &&
+            isLatestRun && (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                Latest run verdict
+                <VerdictBadge verdict={idea.verdict} />
+              </span>
+            )
           )}
         </div>
         <p className="text-sm max-w-3xl">{idea.summary}</p>
@@ -82,9 +156,43 @@ export default function BacktestResultsDetail() {
         )}
       </div>
 
-      <VerdictBanner idea={idea} run={current} lineage={data.lineage} />
+      {current && detailQuery.isLoading && <RunDetailLoading />}
+      {current && detailFailed && (
+        <p className="text-sm text-muted-foreground" data-testid="run-detail-unavailable">
+          Run detail unavailable
+        </p>
+      )}
+      {current && detail && (
+        <RunDetailBlocks idea={idea} run={current} detail={detail} isLatestRun={isLatestRun} />
+      )}
 
-      <StrategyDefinition spec={data.spec} />
+      <StrategyDefinition
+        spec={data.spec}
+        loading={!!current && detailQuery.isLoading}
+        frozen={
+          detail?.captured
+            ? {
+                spec: detail.spec,
+                version: detail.strategy_version,
+                parentVersion: detail.parent_version,
+                branchLabel: detail.branch_label,
+                fingerprints: detail.fingerprints,
+              }
+            : undefined
+        }
+      />
+
+      {detail?.captured && (
+        <>
+          <BacktestScope scope={detail.scope} />
+          <Reproducibility
+            reproducibility={detail.reproducibility}
+            fingerprints={detail.fingerprints}
+            manifestSha256={detail.manifest_sha256}
+            changeClasses={detail.change_classes}
+          />
+        </>
+      )}
 
       {runs.length === 0 || !current ? (
         <div className="text-sm text-muted-foreground" data-testid="no-runs">
@@ -97,7 +205,11 @@ export default function BacktestResultsDetail() {
           <div className="text-sm text-muted-foreground">
             Showing run {current.run_id} ({current.date}). Select another date above to view it.
           </div>
-          <RunTearsheet run={current} ideaId={ideaId} />
+          <RunTearsheet
+            run={current}
+            ideaId={ideaId}
+            assumptions={detail?.captured ? detail.assumptions : undefined}
+          />
           <CompareView ideaId={ideaId} runs={runs} />
         </>
       )}

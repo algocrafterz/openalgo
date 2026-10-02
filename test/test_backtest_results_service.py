@@ -11,18 +11,21 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import backtest_results_service as svc  # noqa: E402
+from signal_engine.tests.intake_fixtures import GOOD_SPEC  # noqa: E402
 
 IDEA_MD = """---
 id: IDEA-{num}
 title: Sample idea {num}
-status: rejected
-verdict: no-edge
+stage: inbox
+research_state: rejected
 category: intraday-momentum
 horizon: intraday
+strategy_path: strategy_library/intraday/sample
 source:
   type: video
   ref: "https://example.invalid/v"
@@ -71,6 +74,7 @@ def _run(run_id="2026-09-30-s-v1", date="2026-09-30", net=-1.3, **extra):
 
 
 def _add_idea(root: Path, num: str, runs=()):
+    (root / "strategy_library" / "intraday" / "sample").mkdir(parents=True, exist_ok=True)
     folder = root / "research" / "ideas" / f"idea-{num}-sample"
     folder.mkdir(parents=True)
     (folder / "idea.md").write_text(IDEA_MD.format(num=num), encoding="utf-8")
@@ -275,33 +279,7 @@ class TestCapAndBaselineOnTheCard:
         assert latest["net_bps_cap10"] is None and latest["baseline_excess_bps"] is None
 
 
-SPEC_YAML = """name: Sample
-market: NSE cash equity
-timeframe: 5m
-trading_style: intraday
-direction: both
-entry:
-  - 5-min close above VWAP by 0.2 percent
-  - Fill on the next candle open
-exit:
-  - Close below VWAP by 0.1 percent
-stop_loss:
-  - 1.5 ATR(14) below entry
-take_profit:
-  - 2R target
-position_sizing: risk 1 percent of capital per trade
-max_holding_period: 12 bars
-filters: none
-session_filters: none
-indicators:
-  - VWAP
-  - ATR(14)
-parameters:
-  atr_mult: 1.5
-cost_assumptions: 16 bps round trip
-constraints: none
-rationale: Trend persistence after a VWAP break.
-"""
+SPEC_YAML = yaml.safe_dump(GOOD_SPEC)
 
 
 class TestIdeaDetailExtras:
@@ -310,7 +288,7 @@ class TestIdeaDetailExtras:
         (folder / "spec.yaml").write_text(SPEC_YAML, encoding="utf-8")
         ok, body, _ = svc.get_idea_results("IDEA-001", root)
         assert ok
-        assert body["spec"]["entry"][0] == "5-min close above VWAP by 0.2 percent"
+        assert body["spec"]["entry"] == GOOD_SPEC["entry"]
         assert body["research_notes"] == "Body."
         assert "id: IDEA-001" not in body["research_notes"]
 
@@ -330,7 +308,7 @@ class TestIdeaDetailExtras:
         folder = root / "research" / "ideas" / "idea-001-sample"
         (folder / "spec.yaml").write_text(SPEC_YAML, encoding="utf-8")
         _ok, after, _ = svc.get_idea_results("IDEA-001", root)
-        assert after["spec"]["name"] == "Sample"
+        assert after["spec"]["name"] == GOOD_SPEC["name"]
 
     def test_evaluation_regimes_and_lineage_pass_through(self, tmp_path):
         evaluation = {"version": 1, "dimensions": [], "summary": {"counts": {}, "hard_failed": []}}
@@ -429,3 +407,526 @@ class TestExportRun:
         )
         assert svc.metrics_rows(record) == export.metrics_rows(record)
         assert svc.series_rows(record) == export.series_rows(record)
+
+
+# ---------------------------------------------------------------------------
+# Per-run detail (schema 3 run folders) and idea-level classification fields
+# ---------------------------------------------------------------------------
+
+
+HEX = "a" * 64
+RID = "2026-09-29-orb-v1"
+
+
+def _manifest_doc(run_id=RID, **over):
+    doc = {
+        "schema": 3,
+        "run_id": run_id,
+        "created_ist": "2026-09-29T10:00:00+05:30",
+        "strategy": {"version": "v2", "parent_version": "v1", "branch_label": "tight"},
+        "fingerprints": dict.fromkeys(
+            ("rules", "params", "strategy", "execution", "cost", "universe")
+            + ("profile", "dataset"),
+            HEX,
+        ),
+        "period": {"start": "2021-01-01", "end": "2026-09-25"},
+        "dataset": {
+            "id": "ds1",
+            "source": "historify",
+            "interval": "5m",
+            "data_as_of": "2026-09-28",
+            "symbol_count": 208,
+            "fingerprint": HEX,
+        },
+        "universe": {"definition": "fno-208", "symbols_sha256": HEX, "version": "1"},
+        "deployment_profile": {"name": "zerodha-mis", "product": "MIS", "sha256": HEX},
+        "session": {
+            "exchange": "09:15-15:30",
+            "strategy_window": "09:20-14:30",
+            "broker_cutoff": "15:15",
+            "force_flat": "15:10",
+        },
+        "engine": {
+            "engine_version": "1.2",
+            "code_commit": "abc123",
+            "code_dirty": True,
+            "dirty_paths": ["a.py"],
+        },
+        "change_classes": ["PARAM_CHANGE"],
+        "missing_capabilities": ["data_quality"],
+        "reproducible": False,
+        "reproducibility": {"strategy_version": True, "code_commit": False},
+    }
+    doc.update(over)
+    return doc
+
+
+SPEC = {
+    "name": "orb",
+    "sizing": {"capital_per_trade": 50000, "risk_per_trade_pct": 1.0},
+    "portfolio": {"mode": "capped", "scope": "per-day"},
+}
+REPORT = {
+    "verdict": {
+        "run_verdict": "NO_EDGE",
+        "primary_failed_gate": "G2",
+        "reasons": [],
+        "caps_applied": [],
+    },
+    "promotion": {"stages": {}, "next_stage": None},
+    "next_action": {"action": "revise", "reason": "r", "gate": None},
+}
+STRATEGY = {"style": "breakout", "direction": "long", "timeframe": "5m", "product": "MIS"}
+EXEC = {
+    "resolved": {
+        "slippage_bps_per_side": {"value": 2.5, "ledger_id": "a1"},
+        "cost_bps_round_trip": {"value": 9.4, "ledger_id": "a2"},
+    },
+    "profile": {"market": "NSE"},
+}
+ASSUMPTIONS = {"sealed_ist": "2026-09-29T10:00:00+05:30", "entries": [{"id": "a1"}]}
+
+
+def _write(path: Path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, str):
+        path.write_text(content, encoding="utf-8")
+    else:
+        path.write_text(json.dumps(content), encoding="utf-8")
+
+
+def _make_run_folder(runs: Path, run_id=RID, manifest=None, skip=()):
+    folder = runs / run_id
+    files = {
+        "manifest.json": manifest or _manifest_doc(run_id),
+        "assumptions.json": ASSUMPTIONS,
+        "strategy/spec.yaml": yaml.safe_dump(SPEC),
+        "strategy/strategy.json": STRATEGY,
+        "execution/config.json": EXEC,
+        "report/report.json": REPORT,
+    }
+    for rel, content in files.items():
+        if rel not in skip:
+            _write(folder / rel, content)
+    return folder
+
+
+def _flat(run_id=RID, **extra):
+    rec = _run(run_id)
+    rec.update(schema=3, artifact_dir=f"{run_id}/", manifest_sha256=HEX)
+    rec.update(extra)
+    return rec
+
+
+@pytest.fixture
+def detail_root(tmp_path, monkeypatch):
+    """A root whose registry load is stubbed: detail reads files, not the validated registry."""
+    folder = tmp_path / "research" / "ideas" / "idea-001-sample"
+    (folder / "runs").mkdir(parents=True)
+    state = {"runs": []}
+
+    def fake_load(_root):
+        return [{"id": "IDEA-001", "folder": "idea-001-sample", "runs": state["runs"]}]
+
+    monkeypatch.setattr(svc, "_load", fake_load)
+    state["tmp"] = tmp_path
+    state["runs_dir"] = folder / "runs"
+    return state
+
+
+def _detail(state, run_id=RID):
+    return svc.get_run_detail("IDEA-001", run_id, root=state["tmp"])
+
+
+class TestRunDetailFull:
+    def test_every_field_of_a_schema3_run(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"])
+        reproductions = detail_root["runs_dir"] / f"{RID}.reproductions"
+        _write(
+            reproductions / "20260930T100000.json",
+            {"attempted_ist": "t1", "reproducible": False, "reasons": ["old"], "checks": {}},
+        )
+        _write(
+            reproductions / "20261001T100000.json",
+            {
+                "run_id": RID,
+                "reproducible": True,
+                "reasons": [],
+                "attempted_ist": "t2",
+                "checks": {"x": 1},
+                "compared_trades": 5,
+            },
+        )
+        detail_root["runs"] = [_flat()]
+        ok, body, status = _detail(detail_root)
+        assert ok and status == 200 and body["status"] == "success"
+        run = body["run"]
+        assert run["run_id"] == RID and run["schema"] == 3 and run["captured"] is True
+        assert run["strategy_version"] == "v2"
+        assert run["parent_version"] == "v1"
+        assert run["branch_label"] == "tight"
+        assert run["change_classes"] == ["PARAM_CHANGE"]
+        assert run["missing_capabilities"] == ["data_quality"]
+        assert run["created_ist"] == "2026-09-29T10:00:00+05:30"
+        assert run["fingerprints"]["rules"] == HEX and len(run["fingerprints"]) == 8
+        assert run["manifest_sha256"] == HEX
+        assert run["verdict"]["run_verdict"] == "NO_EDGE"
+        assert run["promotion"] == REPORT["promotion"]
+        assert run["next_action"]["action"] == "revise"
+        assert run["spec"] == SPEC
+        assert run["assumptions"] == ASSUMPTIONS
+        assert run["scope"] == {
+            "market": "NSE",
+            "universe": "fno-208",
+            "symbol_count": 208,
+            "style": "breakout",
+            "direction": "long",
+            "timeframe": "5m",
+            "product": "MIS",
+            "period": {"start": "2021-01-01", "end": "2026-09-25"},
+            "strategy_window": "09:20-14:30",
+            "exchange_session": "09:15-15:30",
+            "broker_cutoff": "15:15",
+            "force_flat": "15:10",
+            "capital_per_trade": 50000,
+            "risk_per_trade_pct": 1.0,
+            "portfolio_mode": "capped",
+            "portfolio_scope": "per-day",
+            "slippage_bps_per_side": 2.5,
+            "cost_bps_round_trip": 9.4,
+            "profile": {"name": "zerodha-mis", "sha256": HEX},
+            "dataset": {
+                "id": "ds1",
+                "source": "historify",
+                "interval": "5m",
+                "data_as_of": "2026-09-28",
+                "fingerprint": HEX,
+            },
+        }
+        assert run["reproducibility"] == {
+            "reproducible": False,
+            "code_dirty": True,
+            "dirty_paths": ["a.py"],
+            "code_commit": "abc123",
+            "engine_version": "1.2",
+            "checklist": {"strategy_version": True, "code_commit": False},
+            "last_attempt": {"attempted_ist": "t2", "reproducible": True, "reasons": []},
+        }
+
+    def test_cnc_run_and_no_strategy_window(self, detail_root):
+        manifest = _manifest_doc()
+        manifest["session"] = {
+            "exchange": None,
+            "strategy_window": "none",
+            "broker_cutoff": None,
+            "force_flat": None,
+        }
+        _make_run_folder(detail_root["runs_dir"], manifest=manifest)
+        detail_root["runs"] = [_flat()]
+        scope = _detail(detail_root)[1]["run"]["scope"]
+        assert scope["strategy_window"] == "none"
+        assert scope["broker_cutoff"] is None and scope["force_flat"] is None
+        assert scope["exchange_session"] is None
+
+    def test_portfolio_scope_may_be_absent(self, detail_root, monkeypatch):
+        folder = _make_run_folder(detail_root["runs_dir"])
+        spec = {**SPEC, "portfolio": {"mode": "unlimited"}}
+        _write(folder / "strategy" / "spec.yaml", yaml.safe_dump(spec))
+        detail_root["runs"] = [_flat()]
+        scope = _detail(detail_root)[1]["run"]["scope"]
+        assert scope["portfolio_mode"] == "unlimited" and scope["portfolio_scope"] is None
+
+    def test_no_reproductions_gives_null_last_attempt(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"])
+        detail_root["runs"] = [_flat()]
+        assert _detail(detail_root)[1]["run"]["reproducibility"]["last_attempt"] is None
+
+    def test_corrupt_newest_reproduction_gives_null(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"])
+        repro = detail_root["runs_dir"] / f"{RID}.reproductions"
+        _write(repro / "20260930T100000.json", {"attempted_ist": "t1", "reproducible": True})
+        _write(repro / "20261001T100000.json", "{not json")
+        detail_root["runs"] = [_flat()]
+        run = _detail(detail_root)[1]["run"]
+        assert run["reproducibility"]["last_attempt"] is None
+        assert run["verdict"] is not None
+
+
+class TestRunDetailDegraded:
+    def test_legacy_schema2_is_not_captured(self, detail_root):
+        detail_root["runs"] = [_run(RID)]
+        ok, body, status = _detail(detail_root)
+        assert ok and status == 200
+        run = body["run"]
+        assert run["captured"] is False and run["schema"] == 2 and run["run_id"] == RID
+        for key in (
+            "strategy_version",
+            "parent_version",
+            "branch_label",
+            "verdict",
+            "promotion",
+            "next_action",
+            "spec",
+            "fingerprints",
+            "scope",
+            "reproducibility",
+            "assumptions",
+            "manifest_sha256",
+            "created_ist",
+        ):
+            assert run[key] is None
+        assert run["change_classes"] == [] and run["missing_capabilities"] == []
+
+    def test_schema3_without_artifact_dir_is_not_captured(self, detail_root):
+        rec = _flat()
+        del rec["artifact_dir"]
+        detail_root["runs"] = [rec]
+        run = _detail(detail_root)[1]["run"]
+        assert run["captured"] is False and run["schema"] == 3
+
+    def test_missing_report_nulls_only_report_blocks(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"], skip=("report/report.json",))
+        detail_root["runs"] = [_flat()]
+        run = _detail(detail_root)[1]["run"]
+        assert run["verdict"] is None and run["promotion"] is None and run["next_action"] is None
+        assert run["scope"] is not None and run["spec"] == SPEC
+        assert run["strategy_version"] == "v2" and run["captured"] is True
+
+    def test_unreadable_manifest_nulls_manifest_blocks(self, detail_root):
+        folder = _make_run_folder(detail_root["runs_dir"])
+        (folder / "manifest.json").write_text("{broken", encoding="utf-8")
+        detail_root["runs"] = [_flat()]
+        run = _detail(detail_root)[1]["run"]
+        assert run["strategy_version"] is None and run["fingerprints"] is None
+        assert run["reproducibility"] is None and run["created_ist"] is None
+        assert run["change_classes"] == [] and run["missing_capabilities"] == []
+        assert run["manifest_sha256"] == HEX
+        assert run["verdict"]["run_verdict"] == "NO_EDGE"
+        assert run["spec"] == SPEC and run["assumptions"] == ASSUMPTIONS
+        assert run["captured"] is True
+
+    def test_missing_spec_and_assumptions_null_their_blocks(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"], skip=("strategy/spec.yaml", "assumptions.json"))
+        detail_root["runs"] = [_flat()]
+        run = _detail(detail_root)[1]["run"]
+        assert run["spec"] is None and run["assumptions"] is None
+        assert run["verdict"] is not None
+
+
+class TestRunDetailErrors:
+    def test_unknown_idea_is_404(self, detail_root):
+        ok, body, status = svc.get_run_detail("IDEA-099", RID, root=detail_root["tmp"])
+        assert not ok and status == 404 and body["status"] == "error"
+
+    def test_unknown_run_is_404(self, detail_root):
+        detail_root["runs"] = [_flat()]
+        ok, _body, status = _detail(detail_root, "2026-09-29-orb-v9")
+        assert not ok and status == 404
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["../x", "a/b", "2026-09-29-ORB-v1", "2026-09-29-orb-v1\n", "", "x", "2026-09-29-orb-v"],
+    )
+    def test_invalid_run_id_is_400_before_any_lookup(self, detail_root, bad, monkeypatch):
+        def boom(*_a, **_k):
+            raise AssertionError("must not touch the registry")
+
+        monkeypatch.setattr(svc, "_find_idea", boom)
+        ok, body, status = svc.get_run_detail("IDEA-001", bad, root=detail_root["tmp"])
+        assert not ok and status == 400 and body["message"] == "invalid run id"
+
+    def test_absolute_artifact_dir_is_400(self, detail_root, tmp_path):
+        outside = tmp_path / "outside"
+        _make_run_folder(outside, RID)
+        detail_root["runs"] = [_flat(artifact_dir=f"{outside / RID}/")]
+        ok, _b, status = _detail(detail_root)
+        assert not ok and status == 400
+
+    def test_dotdot_artifact_dir_is_400(self, detail_root, tmp_path):
+        _make_run_folder(tmp_path / "research" / "ideas", RID)
+        detail_root["runs"] = [_flat(artifact_dir=f"../{RID}/")]
+        ok, _b, status = _detail(detail_root)
+        assert not ok and status == 400
+
+    def test_symlink_out_of_runs_dir_is_400(self, detail_root, tmp_path):
+        outside = tmp_path / "elsewhere"
+        _make_run_folder(outside, RID)
+        (detail_root["runs_dir"] / RID).symlink_to(outside / RID, target_is_directory=True)
+        detail_root["runs"] = [_flat()]
+        ok, _b, status = _detail(detail_root)
+        assert not ok and status == 400
+
+
+class TestIdeaCardClassification:
+    def test_card_carries_new_fields_unchanged(self):
+        idea = {
+            "id": "IDEA-001",
+            "stage": "backtest",
+            "research_state": "active",
+            "strategy_category": "breakout",
+            "strategy_tags": ["orb"],
+            "classification": {"strategy_category": "breakout", "strategy_tags": ["orb"]},
+            "runs": [],
+        }
+        card = svc._idea_card(idea, date(2026, 10, 1))
+        assert card["stage"] == "backtest" and card["research_state"] == "active"
+        assert card["strategy_category"] == "breakout" and card["strategy_tags"] == ["orb"]
+        assert card["classification"]["strategy_category"] == "breakout"
+        assert card["id"] == "IDEA-001" and card["run_count"] == 0
+
+    def test_old_idea_gets_none(self, root):
+        _ok, body, _ = svc.list_results(root)
+        card = body["ideas"][0]
+        for key in (
+            "stage",
+            "research_state",
+            "strategy_category",
+            "strategy_tags",
+            "classification",
+        ):
+            assert key in card
+        assert card["classification"] is None or isinstance(card["classification"], dict)
+
+    def test_idea_results_card_has_fields(self, root):
+        _ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        for key in (
+            "stage",
+            "research_state",
+            "strategy_category",
+            "strategy_tags",
+            "classification",
+        ):
+            assert key in body["idea"]
+
+
+class TestRunDetailHardening:
+    def _setup(self, state):
+        folder = _make_run_folder(state["runs_dir"])
+        state["runs"] = [_flat()]
+        return folder
+
+    def test_symlinked_runs_dir_is_rejected(self, detail_root, tmp_path):
+        outside = tmp_path / "outside_runs"
+        _make_run_folder(outside)
+        detail_root["runs_dir"].rmdir()
+        detail_root["runs_dir"].symlink_to(outside, target_is_directory=True)
+        detail_root["runs"] = [_flat()]
+        ok, body, status = _detail(detail_root)
+        assert status == 400 and not ok
+
+    def test_symlinked_manifest_is_unreadable(self, detail_root, tmp_path):
+        folder = self._setup(detail_root)
+        secret = tmp_path / "secret.json"
+        secret.write_text(json.dumps(_manifest_doc()), encoding="utf-8")
+        (folder / "manifest.json").unlink()
+        (folder / "manifest.json").symlink_to(secret)
+        _ok, body, status = _detail(detail_root)
+        run = body["run"]
+        assert status == 200
+        assert run["scope"] is None and run["reproducibility"] is None
+        assert run["strategy_version"] is None and run["fingerprints"] is None
+
+    def test_symlinked_report_is_unreadable(self, detail_root, tmp_path):
+        folder = self._setup(detail_root)
+        secret = tmp_path / "r.json"
+        secret.write_text(json.dumps(REPORT), encoding="utf-8")
+        (folder / "report" / "report.json").unlink()
+        (folder / "report" / "report.json").symlink_to(secret)
+        _ok, body, _ = _detail(detail_root)
+        assert body["run"]["verdict"] is None
+
+    def test_artifact_dir_of_another_run_is_rejected(self, detail_root):
+        self._setup(detail_root)
+        _make_run_folder(detail_root["runs_dir"], run_id="2026-09-30-other-v1")
+        detail_root["runs"] = [_flat(artifact_dir="2026-09-30-other-v1/")]
+        _ok, _body, status = _detail(detail_root)
+        assert status == 400
+
+    def test_artifact_dir_subdirectory_is_rejected(self, detail_root):
+        folder = self._setup(detail_root)
+        (folder / "sub").mkdir()
+        detail_root["runs"] = [_flat(artifact_dir=f"{RID}/sub")]
+        _ok, _body, status = _detail(detail_root)
+        assert status == 400
+
+    def test_oversized_file_nulls_only_its_blocks(self, detail_root):
+        folder = self._setup(detail_root)
+        (folder / "manifest.json").write_text(
+            json.dumps({"pad": "x" * (3 * 1024 * 1024)}), encoding="utf-8"
+        )
+        _ok, body, status = _detail(detail_root)
+        assert status == 200
+        assert body["run"]["scope"] is None
+        assert body["run"]["verdict"] == REPORT["verdict"]
+
+    def test_deeply_nested_json_does_not_raise(self, detail_root):
+        folder = self._setup(detail_root)
+        (folder / "report" / "report.json").write_text("[" * 100000, encoding="utf-8")
+        _ok, body, status = _detail(detail_root)
+        assert status == 200 and body["run"]["verdict"] is None
+        assert body["run"]["scope"] is not None
+
+    def test_spec_with_int_key_and_date_is_jsonable(self, detail_root):
+        folder = self._setup(detail_root)
+        (folder / "strategy" / "spec.yaml").write_text(
+            "name: orb\nsince: 2026-01-02\nlevels:\n  1: a\n  2026-01-03: b\n",
+            encoding="utf-8",
+        )
+        _ok, body, _ = _detail(detail_root)
+        spec = body["run"]["spec"]
+        json.dumps(spec)
+        assert spec["since"] == "2026-01-02"
+        assert spec["levels"]["1"] == "a" and spec["levels"]["2026-01-03"] == "b"
+
+    def test_many_reproduction_files_are_bounded(self, detail_root):
+        self._setup(detail_root)
+        repro = detail_root["runs_dir"] / f"{RID}.reproductions"
+        repro.mkdir()
+        for i in range(5000):
+            (repro / f"junk{i:05d}.txt").write_text("x")
+        (repro / "20260930T100000.json").write_text(
+            json.dumps({"attempted_ist": "t", "reproducible": True, "reasons": []})
+        )
+        seen = []
+        real = svc.itertools.islice
+
+        def spy(it, n):
+            seen.append(n)
+            return real(it, n)
+
+        svc.itertools.islice = spy
+        try:
+            _ok, body, status = _detail(detail_root)
+        finally:
+            svc.itertools.islice = real
+        assert status == 200 and seen and max(seen) <= 1000
+
+    def test_malformed_manifest_shapes_become_null(self, detail_root):
+        manifest = _manifest_doc(
+            reproducibility={"a": True, "b": "yes", "c": 1},
+            period={"start": 1, "end": "2026-01-01"},
+            deployment_profile={"name": 5, "sha256": HEX},
+            session={"strategy_window": 7, "exchange": 3},
+            dataset={"id": 9, "source": "h", "interval": ["5m"], "symbol_count": 3},
+            engine={"dirty_paths": "a.py", "code_commit": "c", "engine_version": "1"},
+        )
+        _make_run_folder(detail_root["runs_dir"], manifest=manifest)
+        detail_root["runs"] = [_flat()]
+        _ok, body, _ = _detail(detail_root)
+        run = body["run"]
+        assert run["reproducibility"]["checklist"] == {"a": True}
+        assert run["reproducibility"]["dirty_paths"] == []
+        assert run["scope"]["period"] is None
+        assert run["scope"]["profile"] is None
+        assert run["scope"]["strategy_window"] is None
+        assert run["scope"]["dataset"]["id"] is None
+        assert run["scope"]["dataset"]["interval"] is None
+        assert run["scope"]["dataset"]["source"] == "h"
+
+    def test_valid_shapes_are_kept(self, detail_root):
+        self._setup(detail_root)
+        _ok, body, _ = _detail(detail_root)
+        scope = body["run"]["scope"]
+        assert scope["period"] == {"start": "2021-01-01", "end": "2026-09-25"}
+        assert scope["profile"] == {"name": "zerodha-mis", "sha256": HEX}
+        assert body["run"]["reproducibility"]["dirty_paths"] == ["a.py"]

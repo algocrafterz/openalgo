@@ -286,3 +286,77 @@ describe('response from a server that predates the coverage fields', () => {
     expect(within(row).getByText('1200')).toBeInTheDocument()
   })
 })
+
+describe('classification line', () => {
+  const CLS = {
+    strategy_category: 'Mean Reversion',
+    strategy_tags: ['vwap'],
+    trading_style: 'Intraday',
+    direction: 'Long',
+    timeframe: '5m',
+    market: 'NSE Equities',
+  }
+
+  it('shows category, style, market and timeframe under the strategy name', async () => {
+    renderPage(ok([makeCard({ id: 'IDEA-020', title: 'VWAP fade', classification: CLS })]))
+    expect(await screen.findByTestId('classification-line')).toHaveTextContent(
+      'Mean Reversion · Intraday · NSE Equities · 5m'
+    )
+  })
+
+  it('omits missing parts', async () => {
+    renderPage(
+      ok([
+        makeCard({
+          classification: { ...CLS, trading_style: null, market: null },
+        }),
+      ])
+    )
+    expect(await screen.findByTestId('classification-line')).toHaveTextContent(
+      /^Mean Reversion · 5m$/
+    )
+  })
+
+  it('shows nothing when the idea has no classification', async () => {
+    renderPage(ok([makeCard({ id: 'IDEA-021' })]))
+    await screen.findByText('IDEA-021')
+    expect(screen.queryByTestId('classification-line')).toBeNull()
+  })
+})
+
+describe('BacktestResults verdict column', () => {
+  beforeEach(() => {
+    mocks.list.mockReset()
+  })
+
+  const calc = [
+    makeCard({
+      id: 'IDEA-020',
+      verdict: 'no-edge',
+      latest_run: makeLatest({ run_verdict: 'EDGE' }),
+    }),
+    makeCard({ id: 'IDEA-021', verdict: 'marginal', latest_run: makeLatest() }),
+  ]
+
+  it('labels the column as the latest run verdict', async () => {
+    renderPage(ok(calc))
+    await screen.findByText('IDEA-020')
+    expect(screen.getByRole('button', { name: /Verdict \(latest run\)/ })).toBeInTheDocument()
+  })
+
+  it('shows the calculated run verdict, falling back to the derived idea verdict', async () => {
+    renderPage(ok(calc))
+    const withCalc = (await screen.findByText('IDEA-020')).closest('tr') as HTMLElement
+    expect(within(withCalc).getByText('edge')).toBeInTheDocument()
+    expect(within(withCalc).queryByText('no edge')).toBeNull()
+    const legacy = (await screen.findByText('IDEA-021')).closest('tr') as HTMLElement
+    expect(within(legacy).getByText('marginal')).toBeInTheDocument()
+  })
+
+  it('filters on the shown value', async () => {
+    renderPage(ok(calc))
+    await screen.findByText('IDEA-020')
+    await userEvent.selectOptions(screen.getByLabelText('Verdict'), 'edge')
+    expect(ids()).toEqual(['IDEA-020'])
+  })
+})

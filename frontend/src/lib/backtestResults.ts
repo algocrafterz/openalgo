@@ -1,9 +1,12 @@
 import type {
+  EvaluationBlock,
+  GateRow,
   IdeaCard,
   LatestRun,
   Lineage,
   RunMetrics,
   RunRecord,
+  RunVerdictValue,
   SeriesPoint,
   Verdict,
 } from '@/api/backtestResults'
@@ -12,6 +15,22 @@ export const NA = 'n/a'
 
 /** Evidence order: a verdict that survived testing outranks one that did not. */
 export const VERDICT_ORDER: Verdict[] = ['edge', 'marginal', 'inconclusive', 'no-edge', 'none']
+
+const CALCULATED_TO_VERDICT: Record<RunVerdictValue, Verdict> = {
+  EDGE: 'edge',
+  MARGINAL: 'marginal',
+  NO_EDGE: 'no-edge',
+  INCONCLUSIVE: 'inconclusive',
+}
+
+/**
+ * The verdict shown for an idea: the latest run's calculated verdict when the server sends one,
+ * otherwise the idea's derived legacy verdict. Both describe the latest run only.
+ */
+export function ideaVerdict(idea: Pick<IdeaCard, 'verdict' | 'latest_run'>): Verdict {
+  const calculated = idea.latest_run?.run_verdict
+  return (calculated && CALCULATED_TO_VERDICT[calculated]) || idea.verdict
+}
 
 /** A metric is unknowable when the run has no trades or the value is absent. */
 export function isKnown(
@@ -192,7 +211,7 @@ function sortValue(idea: IdeaCard, key: SortKey): number | string | null {
     case 'status':
       return idea.status
     case 'verdict':
-      return VERDICT_ORDER.indexOf(idea.verdict)
+      return VERDICT_ORDER.indexOf(ideaVerdict(idea))
     case 'date':
       return run ? run.date : null
     case 'runs':
@@ -216,7 +235,7 @@ function compareEvidence(a: IdeaCard, b: IdeaCard): number {
   const hasRunA = a.latest_run ? 0 : 1
   const hasRunB = b.latest_run ? 0 : 1
   if (hasRunA !== hasRunB) return hasRunA - hasRunB
-  const verdictDiff = VERDICT_ORDER.indexOf(a.verdict) - VERDICT_ORDER.indexOf(b.verdict)
+  const verdictDiff = VERDICT_ORDER.indexOf(ideaVerdict(a)) - VERDICT_ORDER.indexOf(ideaVerdict(b))
   if (verdictDiff !== 0) return verdictDiff
   const dateA = a.latest_run?.date ?? ''
   const dateB = b.latest_run?.date ?? ''
@@ -261,7 +280,7 @@ export function filterIdeas(ideas: IdeaCard[], f: IdeaFilters): IdeaCard[] {
   const q = f.search.trim().toLowerCase()
   return ideas.filter((i) => {
     if (f.status !== ALL && i.status !== f.status) return false
-    if (f.verdict !== ALL && i.verdict !== f.verdict) return false
+    if (f.verdict !== ALL && ideaVerdict(i) !== f.verdict) return false
     if (f.category !== ALL && i.category !== f.category) return false
     if (f.horizon !== ALL && i.horizon !== f.horizon) return false
     if (!q) return true
@@ -271,7 +290,7 @@ export function filterIdeas(ideas: IdeaCard[], f: IdeaFilters): IdeaCard[] {
 }
 
 export function distinct(ideas: IdeaCard[], field: 'status' | 'verdict' | 'category' | 'horizon') {
-  return [...new Set(ideas.map((i) => i[field]))].sort()
+  return [...new Set(ideas.map((i) => (field === 'verdict' ? ideaVerdict(i) : i[field])))].sort()
 }
 
 /** Chart data must be strictly ascending in time: sort and keep the last point per day. */
@@ -415,4 +434,14 @@ export function buildVerdict(
     return { tone: 'ok', headline: 'Clears the evidence bar. Validate out of sample next.', points }
   }
   return { tone: 'warn', headline: 'Below the evidence bar. Not yet proven.', points }
+}
+
+/** The gate row for an id, accepting a group id such as G2 for its first row G2.1. */
+export function findGateRow(
+  evaluation: EvaluationBlock | null | undefined,
+  gate: string
+): GateRow | undefined {
+  if (!evaluation) return undefined
+  const rows = (evaluation.dimensions ?? []).flatMap((d) => d.rows ?? [])
+  return rows.find((r) => r.gate === gate) ?? rows.find((r) => r.gate.startsWith(`${gate}.`))
 }

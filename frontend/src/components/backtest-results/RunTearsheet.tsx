@@ -1,4 +1,4 @@
-import type { RunRecord } from '@/api/backtestResults'
+import type { RunDetail, RunRecord } from '@/api/backtestResults'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   fmtNum,
@@ -76,7 +76,15 @@ function HeadlineStats({ run }: { run: RunRecord }) {
   )
 }
 
-export function RunTearsheet({ run, ideaId }: { run: RunRecord; ideaId?: string }) {
+export function RunTearsheet({
+  run,
+  ideaId,
+  assumptions,
+}: {
+  run: RunRecord
+  ideaId?: string
+  assumptions?: RunDetail['assumptions']
+}) {
   const series = run.series ?? {}
   return (
     <div className="space-y-6" data-testid="run-tearsheet">
@@ -115,7 +123,7 @@ export function RunTearsheet({ run, ideaId }: { run: RunRecord; ideaId?: string 
       {run.evaluation && <EvaluationTable evaluation={run.evaluation} />}
       {run.regimes && <RegimeTable regimes={run.regimes} />}
       <RunRobustness run={run} />
-      <RunAssumptions run={run} />
+      <RunAssumptions run={run} assumptions={assumptions} />
       <p className="text-xs text-muted-foreground" data-testid="caveat">
         Backtests overstate live performance: fills, slippage, data quality and regime change all
         cut results after a strategy goes live. No metric on this page is a threshold that proves a

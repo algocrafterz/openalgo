@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   BacktestCompareResponse,
   BacktestIdeaResponse,
+  RunDetail,
   RunRecord,
 } from '@/api/backtestResults'
 import { makeRun } from '@/test/backtestResultsFixtures'
@@ -13,6 +14,7 @@ import BacktestResultsDetail from './BacktestResultsDetail'
 
 const mocks = vi.hoisted(() => ({
   idea: vi.fn(),
+  run: vi.fn(),
   compare: vi.fn(),
   createChart: vi.fn(),
   setData: vi.fn(),
@@ -20,7 +22,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/api/backtestResults', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/backtestResults')>()),
-  backtestResultsApi: { idea: mocks.idea, compare: mocks.compare },
+  backtestResultsApi: { idea: mocks.idea, compare: mocks.compare, run: mocks.run },
 }))
 
 vi.mock('lightweight-charts', () => ({
@@ -59,12 +61,63 @@ const RUN_V2 = makeRun({
   metrics: { ...RUN_V1.metrics, net_bps: 2.5 },
 })
 
+function makeDetail(over: Partial<RunDetail> = {}): RunDetail {
+  return {
+    run_id: RUN_V1.run_id,
+    schema: 3,
+    captured: true,
+    strategy_version: 'v3',
+    parent_version: 'v2',
+    branch_label: null,
+    change_classes: ['parameter_change'],
+    verdict: {
+      run_verdict: 'EDGE',
+      primary_failed_gate: null,
+      reasons: [
+        {
+          text: 'Net edge clears the hurdle',
+          gate: 'G2.1',
+          status: 'PASS',
+          evidence_ref: 'evaluation:G2.1',
+        },
+      ],
+      caps_applied: [],
+    },
+    promotion: {
+      stages: {
+        backtest: { decision: 'READY_FOR_NEXT_STAGE', gates: [], reasons: [] },
+        paper: { decision: 'NOT_READY', gates: [], reasons: ['not run yet'] },
+        live: { decision: 'BLOCKED', gates: [], reasons: [] },
+      },
+      next_stage: 'paper',
+    },
+    next_action: { action: 'Start paper incubation', reason: 'Backtest gates cleared', gate: null },
+    spec: { name: 'Frozen spec name', entry: ['frozen entry rule'] },
+    fingerprints: null,
+    scope: null,
+    reproducibility: null,
+    assumptions: null,
+    missing_capabilities: [],
+    manifest_sha256: null,
+    created_ist: null,
+    ...over,
+  }
+}
+
 function ideaResponse(runs: RunRecord[]): BacktestIdeaResponse {
   return { status: 'success', idea: IDEA, runs }
 }
 
-function renderPage(response: BacktestIdeaResponse) {
+function renderPage(
+  response: BacktestIdeaResponse,
+  detail: RunDetail | Error = makeDetail({ captured: false, verdict: null })
+) {
   mocks.idea.mockReturnValue(Promise.resolve(response))
+  if (detail instanceof Error) {
+    mocks.run.mockRejectedValue(detail)
+  } else {
+    mocks.run.mockResolvedValue({ status: 'success', run: detail })
+  }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
@@ -116,6 +169,7 @@ const deltaRow = (label: string) => {
 describe('BacktestResultsDetail tearsheet', () => {
   beforeEach(() => {
     mocks.idea.mockReset()
+    mocks.run.mockReset()
     mocks.compare.mockReset()
     mocks.setData.mockReset()
     mocks.createChart.mockReset()
@@ -249,6 +303,7 @@ describe('BacktestResultsDetail tearsheet', () => {
 describe('BacktestResultsDetail run history', () => {
   beforeEach(() => {
     mocks.idea.mockReset()
+    mocks.run.mockReset()
     mocks.compare.mockReset()
     mocks.compare.mockResolvedValue(compareOk())
   })
@@ -301,6 +356,7 @@ describe('BacktestResultsDetail run history', () => {
 
   it('shows loading skeletons first', () => {
     mocks.idea.mockReturnValue(new Promise(() => {}))
+    mocks.run.mockReturnValue(new Promise(() => {}))
     const client = new QueryClient()
     render(
       <QueryClientProvider client={client}>
@@ -318,6 +374,7 @@ describe('BacktestResultsDetail run history', () => {
 describe('BacktestResultsDetail compare', () => {
   beforeEach(() => {
     mocks.idea.mockReset()
+    mocks.run.mockReset()
     mocks.compare.mockReset()
     mocks.compare.mockResolvedValue(compareOk())
   })
@@ -417,6 +474,7 @@ describe('BacktestResultsDetail compare', () => {
 describe('BacktestResultsDetail data coverage and reality checks', () => {
   beforeEach(() => {
     mocks.idea.mockReset()
+    mocks.run.mockReset()
   })
 
   it('puts the data coverage above the run history so the window is read before the numbers', async () => {
@@ -443,5 +501,198 @@ describe('BacktestResultsDetail data coverage and reality checks', () => {
     await userEvent.click(screen.getByRole('button', { name: /2026-09-01/ }))
     expect(screen.getByTestId('data-coverage')).toHaveTextContent('4.2 years')
     expect(screen.getByTestId('data-coverage')).toHaveTextContent('40 days old')
+  })
+})
+
+describe('BacktestResultsDetail decision-first layout', () => {
+  beforeEach(() => {
+    mocks.idea.mockReset()
+    mocks.run.mockReset()
+    mocks.compare.mockReset()
+  })
+
+  const withIdea = (over: Record<string, unknown>): BacktestIdeaResponse => ({
+    status: 'success',
+    idea: { ...IDEA, ...over } as BacktestIdeaResponse['idea'],
+    runs: [RUN_V1],
+  })
+
+  it('shows the calculated verdict from the run detail, not the legacy idea verdict', async () => {
+    renderPage(withIdea({ verdict: 'no-edge' }), makeDetail())
+    const panel = await screen.findByTestId('decision-panel')
+    expect(await within(panel).findByTestId('verdict-badge')).toHaveTextContent('Edge')
+    expect(within(panel).queryByTestId('legacy-note')).toBeNull()
+    expect(mocks.run).toHaveBeenCalledWith('IDEA-012', RUN_V1.run_id)
+    expect(within(panel).getByTestId('next-action')).toHaveTextContent('Start paper incubation')
+  })
+
+  it('labels the research state separately from the run verdict', async () => {
+    renderPage(withIdea({ research_state: 'promising', stage: 'backtest' }), makeDetail())
+    const state = await screen.findByTestId('research-state')
+    expect(state).toHaveTextContent('Research state')
+    expect(state).toHaveTextContent('Promising')
+    expect(screen.getByTestId('run-verdict')).not.toContainElement(state)
+  })
+
+  it('shows strategy details from the frozen spec when run detail is present', async () => {
+    renderPage(
+      { ...withIdea({}), spec: { name: 'Current spec name', entry: ['current rule'] } },
+      makeDetail()
+    )
+    expect(await screen.findByText(/frozen entry rule/)).toBeInTheDocument()
+    expect(screen.queryByText(/current rule/)).toBeNull()
+  })
+
+  it('shows run identity with version and classification chips', async () => {
+    renderPage(
+      withIdea({
+        strategy_category: 'Mean Reversion',
+        classification: {
+          strategy_category: 'Mean Reversion',
+          strategy_tags: ['vwap'],
+          trading_style: 'Intraday',
+          direction: null,
+          timeframe: '5m',
+          market: 'NSE Equities',
+        },
+      }),
+      makeDetail()
+    )
+    const identity = await screen.findByTestId('run-identity')
+    expect(identity).toHaveTextContent('v3')
+    expect(identity).toHaveTextContent(RUN_V1.run_id)
+    expect(within(identity).getByTestId('classification')).toHaveTextContent('Mean Reversion')
+  })
+
+  it('still renders the existing blocks and a note when the run detail request fails', async () => {
+    renderPage(withIdea({}), new Error('boom'))
+    expect(await screen.findByTestId('run-tearsheet')).toBeInTheDocument()
+    expect(await screen.findByText('Run detail unavailable')).toBeInTheDocument()
+    expect(screen.getByTestId('data-coverage')).toBeInTheDocument()
+    expect(screen.queryByTestId('decision-panel')).toBeNull()
+  })
+
+  it('shows placeholders while run detail loads without blanking the page', async () => {
+    mocks.idea.mockResolvedValue({ status: 'success', idea: IDEA, runs: [RUN_V1] })
+    mocks.run.mockReturnValue(new Promise(() => {}))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/backtest-results/IDEA-012']}>
+          <Routes>
+            <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    expect(await screen.findByTestId('run-detail-loading')).toBeInTheDocument()
+    expect(screen.getByTestId('run-tearsheet')).toBeInTheDocument()
+  })
+
+  it('shows the legacy note for a run that was not captured', async () => {
+    renderPage(
+      withIdea({ verdict: 'marginal' }),
+      makeDetail({ captured: false, verdict: null, spec: null })
+    )
+    expect(await screen.findByTestId('legacy-note')).toBeInTheDocument()
+    expect(screen.getByTestId('legacy-verdict')).toHaveTextContent(/marginal/i)
+  })
+
+  it('has a glossary button and the drawer is closed by default', async () => {
+    renderPage(withIdea({}), makeDetail())
+    await screen.findByTestId('decision-panel')
+    expect(screen.getByRole('button', { name: /glossary/i })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('renders the promotion gate and the gate anchors the reasons link to', async () => {
+    renderPage(withIdea({}), makeDetail())
+    expect(await screen.findByTestId('promotion-gate')).toBeInTheDocument()
+  })
+})
+
+describe('BacktestResultsDetail verdict provenance', () => {
+  beforeEach(() => {
+    mocks.idea.mockReset()
+    mocks.run.mockReset()
+    mocks.compare.mockReset()
+  })
+
+  const twoRuns = (): BacktestIdeaResponse => ({
+    status: 'success',
+    idea: { ...IDEA, verdict: 'edge' } as BacktestIdeaResponse['idea'],
+    runs: [RUN_V1, RUN_V2],
+  })
+
+  it('labels the idea verdict as the latest run verdict while detail is loading', async () => {
+    mocks.idea.mockResolvedValue(twoRuns())
+    mocks.run.mockImplementation(() => new Promise(() => {}))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/backtest-results/IDEA-012']}>
+          <Routes>
+            <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    expect(await screen.findByText('Latest run verdict')).toBeInTheDocument()
+    expect(screen.getByText('edge')).toBeInTheDocument()
+  })
+
+  it('shows no idea verdict in the header for an older run whose detail failed', async () => {
+    renderPage(twoRuns(), new Error('boom'))
+    await userEvent.click(await screen.findByRole('button', { name: '2026-09-30' }))
+    await screen.findByTestId('run-detail-unavailable')
+    expect(screen.queryByText('Latest run verdict')).toBeNull()
+    expect(screen.queryByText('edge')).toBeNull()
+  })
+
+  it('does not show the latest verdict as the recorded verdict of an older legacy run', async () => {
+    renderPage(twoRuns(), makeDetail({ captured: false, verdict: null, spec: null }))
+    await userEvent.click(await screen.findByRole('button', { name: '2026-09-30' }))
+    await screen.findByTestId('legacy-note')
+    expect(screen.queryByTestId('legacy-verdict')).toBeNull()
+    expect(screen.getByTestId('decision-panel')).toHaveTextContent(
+      'No calculated verdict was recorded for this run'
+    )
+  })
+
+  it('takes the identity chips from the frozen scope of a captured run', async () => {
+    renderPage(
+      {
+        status: 'success',
+        idea: {
+          ...IDEA,
+          classification: {
+            strategy_category: 'c',
+            strategy_tags: [],
+            trading_style: 'IDEA-STYLE',
+            direction: 'IDEA-DIR',
+            timeframe: 'IDEA-TF',
+            market: 'IDEA-MKT',
+          },
+        } as BacktestIdeaResponse['idea'],
+        runs: [RUN_V1],
+      },
+      makeDetail({
+        scope: { style: 'FROZEN-STYLE', market: 'FROZEN-MKT' } as unknown as RunDetail['scope'],
+      })
+    )
+    const chips = await screen.findByTestId('classification')
+    expect(chips).toHaveTextContent('FROZEN-STYLE')
+    expect(chips).toHaveTextContent('FROZEN-MKT')
+    expect(chips).not.toHaveTextContent('IDEA-STYLE')
+    expect(chips).not.toHaveTextContent('IDEA-TF')
+  })
+
+  it('shows a not captured note when the captured run has no frozen spec', async () => {
+    renderPage(
+      { ...ideaResponse([RUN_V1]), spec: { name: 'Idea spec', entry: 'CURRENT RULE' } } as never,
+      makeDetail({ spec: null })
+    )
+    expect(await screen.findByTestId('frozen-spec-missing')).toBeInTheDocument()
+    expect(screen.queryByText(/CURRENT RULE/)).toBeNull()
   })
 })

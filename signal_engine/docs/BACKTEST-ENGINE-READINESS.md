@@ -29,8 +29,8 @@ with tests green, ruff clean and a commit.
 | 1 | Engine P1 step 1: spec v2, profiles, execution resolution | done 2026-10-02 | `27626054d` |
 | 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | `32eb6f00a`, plus `b5f40c0fd` (entry window against the profile; classification planned) |
 | 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5), ledger id fix | done 2026-10-02 | `c7b348a51` |
-| 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | done 2026-10-02 | see `git log` (feat(research): derived verdict and promotion, stage and research state, strategy classification) |
-| 5 | UI U1 and glossary | not started | |
+| 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | done 2026-10-02 | `9d1f3fd43`, plus `668f7b20c` (G2.7 diagnostic) |
+| 5 | UI U1, glossary and the classification line (backend read-model, decision panel, promotion block, scope, reproducibility, assumptions, frozen strategy, glossary) | done 2026-10-03 | see `git log` (feat(backtests-ui): decision panel, run detail read-model and glossary) |
 | 6 | UI U3 (comparison) | not started | |
 | 7 | UI U4 (version tree) | not started | |
 | 8 | UI U2 remainder, as engine steps 4 and 5 land | not started | |
@@ -40,11 +40,15 @@ Findings carried forward from implementation (raised, not designed around):
 - The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4 (confirmed by the owner).
 - Resolved 2026-10-02 (step 3): each run seals its ledger snapshot (`assumptions.json`) and the working ledger's `next_id` is floored by `ledger.sealed_next_id`, so deleting `assumptions.yaml` cannot restart ids below a sealed one.
 - Resolved 2026-10-02 (build order 4): the verdict is calculated per run (`backtest/verdict.py`), with EDGE capped at MARGINAL while P1 readiness rows are unverified. Because the cap would otherwise let a capped run be promoted, promotion is also NOT_READY while readiness rows are missing (a conservative reading of lifecycle 1.6, flagged for the owner).
-- `MIN_SAMPLE_GATES` is `G2.1` (trade count, 200 net trades) only. Lifecycle 1.5 says 'the G2 minimum-sample gates' without naming them; widen the tuple if other G2 rows should count.
-- Frontmatter `status` and `verdict` are removed as hand-written keys. The registry emits them as DERIVED fields (status from stage, research state and runs; verdict from the latest run's calculated verdict) so the existing Backtests page, REGISTRY.md and site keep working unchanged. Updating the page to read `stage`, `research_state` and `run_verdict` directly, and exposing classification in `services/backtest_results_service.py`, touches files outside `signal_engine/` and needs the owner's decision on the core-change rule.
+- Resolved 2026-10-03 (owner decision): minimum-sample gates are counted explicitly. `G2.1` (trade count, with the 30-trade subgroup floor) is mandatory and decides the verdict; `G2.7` (track length) is labelled REPORT in the acceptance criteria, so it is a diagnostic: shown as a reason, never required for the verdict, promotion or the next action (`promotion.DIAGNOSTIC_GATES`). An INCONCLUSIVE verdict from the sample rule now names its gate.
+- Owner decision 2026-10-03: promotion requires engine readiness (kept as built).
+- Owner decision 2026-10-03: the Backtests page is an approved, narrow exception to the no-core-changes rule: `services/backtest_results_service.py`, `blueprints/backtest_results.py`, `frontend/src` and their tests, limited to read-model, API and presentation. Strategy execution and evaluation logic stays in `signal_engine/`. Build orders 6 to 8 may use it.
+- Frontmatter `status` and `verdict` are removed as hand-written keys. The registry emits them as DERIVED fields (status from stage, research state and runs; verdict from the latest run's calculated verdict) so the existing Backtests page, REGISTRY.md and site keep working unchanged. Build order 5 now reads `stage`, `research_state`, `run_verdict` and classification directly (see the exception above). The list page filters, search and related strategies are build order 7.
 - The dirty-tree check counts only result-affecting paths (Python outside tests, config.yaml, uv.lock, pyproject.toml, research profiles). Docs, generated registry files, run outputs and frontend files do not block a run.
 - Strategy classification (`STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md`) is planned in `BACKTESTS-UI-PLAN.md` and built in build order 4 (data) and 5 and 7 (UI). The legacy frontmatter `category` is left unchanged; retiring it is an open decision.
 - Profile-sourced values (`profile.*`) are Medium materiality, not High, because the author selects the profile by name. A High default would force a confirmation on every idea.
+- The service module `services/backtest_results_service.py` imported the deleted `signal_engine.research.spec` from build order 1 until build order 5: the repo-wide search then covered only `signal_engine/`, and the test runs covered only `signal_engine/tests`. Fixed 2026-10-03; the core `test/test_backtest_results_*` files are part of the checks from now on.
+- The legacy frontmatter `tags` field (read by the Backtests service) and the new `strategy_tags` overlap in purpose. Both are kept; retire the legacy `tags` and the legacy `category` together once the new filters exist (build order 7).
 
 ## P1
 
