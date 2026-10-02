@@ -1,21 +1,24 @@
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
-import { backtestResultsApi, type IdeaCard, type ResultsSummary } from '@/api/backtestResults'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
+import { backtestResultsApi, type ResultsSummary } from '@/api/backtestResults'
 import { LeaderboardTable } from '@/components/backtest-results/LeaderboardTable'
+import { StrategyFilters } from '@/components/backtest-results/StrategyFilters'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
-  ALL,
-  distinct,
-  EMPTY_FILTERS,
   filterIdeas,
+  filtersFromParams,
+  filtersToParams,
+  groupByStrategyCategory,
   type IdeaFilters,
   type SortDir,
   type SortKey,
   sortIdeas,
   VERDICT_ORDER,
 } from '@/lib/backtestResults'
+
+const SEARCH_WRITE_MS = 300
 
 const VERDICT_LABELS: Record<string, string> = {
   edge: 'Edge',
@@ -52,104 +55,69 @@ function SummaryTiles({ summary }: { summary: ResultsSummary }) {
   )
 }
 
-function FilterSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string
-  value: string
-  options: string[]
-  onChange: (v: string) => void
-}) {
-  return (
-    <label className="text-sm flex flex-col gap-1">
-      {label}
-      <select
-        className="border-input bg-background rounded-md border px-2 py-1.5 text-sm"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value={ALL}>All</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-    </label>
-  )
-}
-
-function Filters({
-  ideas,
-  filters,
-  onChange,
-}: {
-  ideas: IdeaCard[]
-  filters: IdeaFilters
-  onChange: (next: IdeaFilters) => void
-}) {
-  const set = (patch: Partial<IdeaFilters>) => onChange({ ...filters, ...patch })
-  return (
-    <div className="flex flex-wrap items-end gap-3">
-      <label className="text-sm flex flex-col gap-1">
-        Search
-        <Input
-          value={filters.search}
-          placeholder="Id, title or tag"
-          onChange={(e) => set({ search: e.target.value })}
-          className="w-56"
-        />
-      </label>
-      <FilterSelect
-        label="Status"
-        value={filters.status}
-        options={distinct(ideas, 'status')}
-        onChange={(status) => set({ status })}
-      />
-      <FilterSelect
-        label="Verdict"
-        value={filters.verdict}
-        options={distinct(ideas, 'verdict')}
-        onChange={(verdict) => set({ verdict })}
-      />
-      <FilterSelect
-        label="Category"
-        value={filters.category}
-        options={distinct(ideas, 'category')}
-        onChange={(category) => set({ category })}
-      />
-      <FilterSelect
-        label="Horizon"
-        value={filters.horizon}
-        options={distinct(ideas, 'horizon')}
-        onChange={(horizon) => set({ horizon })}
-      />
-    </div>
-  )
-}
-
 function Message({ children }: { children: React.ReactNode }) {
   return <div className="py-10 text-center text-sm text-muted-foreground">{children}</div>
 }
 
 export default function BacktestResults() {
-  const [filters, setFilters] = useState<IdeaFilters>(EMPTY_FILTERS)
-  const [sortKey, setSortKey] = useState<SortKey>('evidence')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
-
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data, isLoading } = useQuery({
     queryKey: ['backtest-results'],
     queryFn: backtestResultsApi.list,
   })
+  const ideas = useMemo(() => data?.ideas ?? [], [data])
 
-  const ideas = data?.ideas ?? []
+  // Values the loaded ideas do not carry are dropped, so a stale link cannot hide every row.
+  const { filters: urlFilters, groupByCategory } = useMemo(
+    () => filtersFromParams(searchParams, ideas),
+    [searchParams, ideas]
+  )
+
+  // The search box filters at once; the URL write waits for a pause in typing.
+  const [searchText, setSearchText] = useState(urlFilters.search)
+  const lastWritten = useRef(urlFilters.search)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (urlFilters.search !== lastWritten.current) {
+      lastWritten.current = urlFilters.search
+      setSearchText(urlFilters.search)
+    }
+  }, [urlFilters.search])
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    []
+  )
+  const filters: IdeaFilters = useMemo(
+    () => ({ ...urlFilters, search: searchText }),
+    [urlFilters, searchText]
+  )
+
+  const writeUrl = (next: IdeaFilters, group: boolean) => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    lastWritten.current = next.search
+    setSearchParams(filtersToParams(next, group), { replace: true })
+  }
+  const updateFilters = (next: IdeaFilters) => {
+    setSearchText(next.search)
+    if (next.search !== filters.search) {
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => writeUrl(next, groupByCategory), SEARCH_WRITE_MS)
+    } else {
+      writeUrl(next, groupByCategory)
+    }
+  }
+  const [sortKey, setSortKey] = useState<SortKey>('evidence')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
   const visible = useMemo(
     () => sortIdeas(filterIdeas(ideas, filters), sortKey, sortDir),
     [ideas, filters, sortKey, sortDir]
   )
+
+  const groups = useMemo(() => groupByStrategyCategory(visible), [visible])
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -201,7 +169,22 @@ export default function BacktestResults() {
           ) : (
             <>
               <div className="flex flex-wrap items-end justify-between gap-3">
-                <Filters ideas={ideas} filters={filters} onChange={setFilters} />
+                <div className="space-y-2">
+                  <StrategyFilters
+                    ideas={ideas}
+                    filters={filters}
+                    shown={visible.length}
+                    onChange={updateFilters}
+                  />
+                  <label className="text-sm flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={groupByCategory}
+                      onChange={(e) => writeUrl(filters, e.target.checked)}
+                    />
+                    Group by category
+                  </label>
+                </div>
                 <button
                   type="button"
                   className="text-sm underline underline-offset-4 disabled:no-underline disabled:text-muted-foreground"
@@ -214,16 +197,25 @@ export default function BacktestResults() {
               {visible.length === 0 ? (
                 <Message>No ideas match these filters.</Message>
               ) : (
-                <Card>
-                  <CardContent className="overflow-x-auto">
-                    <LeaderboardTable
-                      ideas={visible}
-                      sortKey={sortKey}
-                      sortDir={sortDir}
-                      onSort={handleSort}
-                    />
-                  </CardContent>
-                </Card>
+                <div className="space-y-4">
+                  {(groupByCategory ? groups : [{ category: '', ideas: visible }]).map((g) => (
+                    <Card key={g.category || 'all'}>
+                      <CardContent className="overflow-x-auto">
+                        {groupByCategory && (
+                          <h2 className="text-sm font-semibold pb-2" data-testid="category-heading">
+                            {`${g.category} (${g.ideas.length})`}
+                          </h2>
+                        )}
+                        <LeaderboardTable
+                          ideas={g.ideas}
+                          sortKey={sortKey}
+                          sortDir={sortDir}
+                          onSort={handleSort}
+                        />
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
               )}
               <p className="text-xs text-muted-foreground">
                 Default order puts ideas with recorded runs first, then by verdict, then by most

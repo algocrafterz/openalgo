@@ -1083,3 +1083,195 @@ def test_importing_the_service_does_not_load_the_comparison_engine():
         ["uv", "run", "python", "-c", code], cwd=repo, capture_output=True, text=True
     )
     assert out.returncode == 0, out.stdout + out.stderr
+
+
+FP = ["a", "b", "c"]
+VERSION_KEYS = {"version", "strategy_fingerprint", "parent", "created_ist", "note"}
+
+
+def _versions_yaml(rows):
+    out = []
+    for r in rows:
+        out.append(f"- version: {r[0]}")
+        out.append(f"  strategy_fingerprint: {r[1] * 64}")
+        out.append(f"  parent: {r[2] if r[2] else 'null'}")
+        out.append(f"  created_ist: '2026-10-0{len(out) % 9 + 1}T10:00:00+05:30'")
+        out.append(f"  note: note {r[0]}")
+    return "\n".join(out) + "\n"
+
+
+THREE = [("v1", "a", None), ("v2", "b", "v1"), ("v2b", "c", "v1")]
+
+
+def _idea_folder(root):
+    return root / "research" / "ideas" / "idea-001-sample"
+
+
+def _freeze_registry(monkeypatch, root, **pointer_overrides):
+    """Serve the already-built registry, as when versions.yaml changes after it was cached."""
+    ideas = svc.load_ideas(root)
+    for idea in ideas:
+        idea.update(pointer_overrides)
+    monkeypatch.setattr(svc, "_load", lambda _r: ideas)
+
+
+class TestStrategyVersions:
+    def test_versions_in_file_order_with_exactly_five_keys(self, root):
+        (_idea_folder(root) / "versions.yaml").write_text(_versions_yaml(THREE), encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok
+        assert [v["version"] for v in body["versions"]] == ["v1", "v2", "v2b"]
+        assert all(set(v) == VERSION_KEYS for v in body["versions"])
+        assert body["versions"][0]["parent"] is None
+        assert body["versions"][2]["parent"] == "v1"
+        assert all(type(v) is dict for v in body["versions"])
+        json.dumps(body["versions"])
+
+    def test_no_versions_file_is_null(self, root):
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["versions"] is None
+
+    def test_malformed_yaml_is_null_not_an_error(self, root, monkeypatch):
+        _freeze_registry(monkeypatch, root)
+        (_idea_folder(root) / "versions.yaml").write_text("- version: [unclosed", encoding="utf-8")
+        ok, body, status = svc.get_idea_results("IDEA-001", root)
+        assert ok and status == 200 and body["versions"] is None
+
+    def test_invalid_content_is_null(self, root, monkeypatch):
+        _freeze_registry(monkeypatch, root)
+        (_idea_folder(root) / "versions.yaml").write_text("- version: nope\n", encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["versions"] is None
+
+    def test_symlinked_versions_file_is_null(self, root, tmp_path_factory):
+        target = tmp_path_factory.mktemp("elsewhere") / "v.yaml"
+        target.write_text(_versions_yaml(THREE), encoding="utf-8")
+        (_idea_folder(root) / "versions.yaml").symlink_to(target)
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["versions"] is None
+
+    def test_oversized_versions_file_is_null(self, root):
+        text = _versions_yaml(THREE) + "# " + "x" * (3 * 1024 * 1024) + "\n"
+        (_idea_folder(root) / "versions.yaml").write_text(text, encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["versions"] is None
+
+    def test_pointers_absent_are_none(self, root):
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert body["version_pointers"] == {
+            "current_version": None,
+            "promoted_version": None,
+            "promoted_run_id": None,
+        }
+
+    def test_pointers_present_pass_through(self, root):
+        (_idea_folder(root) / "versions.yaml").write_text(_versions_yaml(THREE), encoding="utf-8")
+        md = _idea_folder(root) / "idea.md"
+        text = md.read_text(encoding="utf-8").replace(
+            "tags: [vwap]\n",
+            "tags: [vwap]\ncurrent_version: v2\npromoted_version: v1\n"
+            "promoted_run_id: 2026-09-30-s-v1\n",
+        )
+        md.write_text(text, encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert body["version_pointers"] == {
+            "current_version": "v2",
+            "promoted_version": "v1",
+            "promoted_run_id": "2026-09-30-s-v1",
+        }
+
+    def test_non_string_pointer_is_none(self, root, monkeypatch):
+        _freeze_registry(monkeypatch, root, current_version=3, promoted_version=["v1"])
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["version_pointers"]["current_version"] is None
+        assert body["version_pointers"]["promoted_version"] is None
+
+    def test_run_strategy_version_passes_through(self, tmp_path):
+        _add_idea(tmp_path, "001", runs=[_run(strategy_version="v2")])
+        ok, body, _ = svc.get_idea_results("IDEA-001", tmp_path)
+        assert body["runs"][0]["strategy_version"] == "v2"
+
+    def test_legacy_idea_keeps_the_rest_of_the_response(self, root):
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["versions"] is None
+        assert len(body["runs"]) == 2 and body["spec"] is None
+        assert body["research_notes"] == "Body."
+        assert "strategy_version" not in body["runs"][0]
+
+
+class TestVersionsError:
+    def _error(self, root):
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok
+        return body
+
+    def test_absent_and_healthy_have_null_error(self, root):
+        assert self._error(root)["versions_error"] is None
+        (_idea_folder(root) / "versions.yaml").write_text(_versions_yaml(THREE), encoding="utf-8")
+        body = self._error(root)
+        assert body["versions_error"] is None and body["versions"] is not None
+
+    def test_invalid_yaml_and_content(self, root, monkeypatch):
+        _freeze_registry(monkeypatch, root)
+        path = _idea_folder(root) / "versions.yaml"
+        for text in ("- version: [unclosed", "- version: nope\n"):
+            path.write_text(text, encoding="utf-8")
+            body = self._error(root)
+            assert body["versions"] is None
+            assert body["versions_error"] == "versions.yaml is invalid"
+
+    def test_symlink_is_not_readable(self, root, tmp_path_factory):
+        target = tmp_path_factory.mktemp("elsewhere") / "v.yaml"
+        target.write_text(_versions_yaml(THREE), encoding="utf-8")
+        (_idea_folder(root) / "versions.yaml").symlink_to(target)
+        body = self._error(root)
+        assert body["versions"] is None
+        assert body["versions_error"] == "versions.yaml is not readable"
+
+    def test_oversized(self, root):
+        text = _versions_yaml(THREE) + "# " + "x" * (3 * 1024 * 1024) + "\n"
+        (_idea_folder(root) / "versions.yaml").write_text(text, encoding="utf-8")
+        body = self._error(root)
+        assert body["versions"] is None
+        assert body["versions_error"] == "versions.yaml is larger than the allowed size"
+
+    def test_unreadable_oserror(self, root, monkeypatch):
+        (_idea_folder(root) / "versions.yaml").write_text(_versions_yaml(THREE), encoding="utf-8")
+
+        def boom(path, base):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(svc, "_read_text", boom)
+        assert self._error(root)["versions_error"] == "versions.yaml is not readable"
+
+    def test_message_never_contains_a_path(self, root, tmp_path_factory, monkeypatch):
+        _freeze_registry(monkeypatch, root)
+        target = tmp_path_factory.mktemp("elsewhere") / "v.yaml"
+        target.write_text("x", encoding="utf-8")
+        path = _idea_folder(root) / "versions.yaml"
+        path.symlink_to(target)
+        msg = self._error(root)["versions_error"]
+        assert "/" not in msg and str(root) not in msg and "elsewhere" not in msg
+
+    def test_versions_file_is_opened_once(self, root, monkeypatch):
+        _freeze_registry(monkeypatch, root)
+        path = _idea_folder(root) / "versions.yaml"
+        path.write_text(_versions_yaml(THREE), encoding="utf-8")
+        opened = []
+        real_open, real_read_text = Path.open, Path.read_text
+
+        def counting_open(self, *a, **k):
+            if self.name == "versions.yaml":
+                opened.append("open")
+            return real_open(self, *a, **k)
+
+        def counting_read_text(self, *a, **k):
+            if self.name == "versions.yaml":
+                opened.append("read_text")
+            return real_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "open", counting_open)
+        monkeypatch.setattr(Path, "read_text", counting_read_text)
+        body = self._error(root)
+        assert [v["version"] for v in body["versions"]] == ["v1", "v2", "v2b"]
+        assert opened == ["open"]

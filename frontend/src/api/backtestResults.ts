@@ -473,6 +473,26 @@ export interface BacktestListResponse extends Envelope {
   summary?: ResultsSummary
 }
 
+// ---- Strategy versions (build order 7) -----------------------------------------------------
+// Read from the idea's versions.yaml (append-only) and its frontmatter pointers.
+
+export interface StrategyVersion {
+  /** v1, v2, ... or a branch label such as v3b. */
+  version: string
+  strategy_fingerprint: string
+  /** The version this one descends from. Null for the first version. */
+  parent: string | null
+  created_ist: string
+  note: string
+}
+
+/** Current, latest and promoted are three different things and are marked separately. */
+export interface VersionPointers {
+  current_version: string | null
+  promoted_version: string | null
+  promoted_run_id: string | null
+}
+
 export interface BacktestIdeaResponse extends Envelope {
   idea?: Omit<IdeaCard, 'run_count' | 'latest_run'>
   runs?: RunRecord[]
@@ -481,6 +501,11 @@ export interface BacktestIdeaResponse extends Envelope {
   spec?: StrategySpec | null
   /** The idea.md body: research notes and the decision log, apart from the definition. */
   research_notes?: string
+  /** Every strategy version in creation order. Null when versions.yaml is absent or unreadable. */
+  versions?: StrategyVersion[] | null
+  /** A plain sentence when versions.yaml exists but could not be read; null when it is fine or absent. */
+  versions_error?: string | null
+  version_pointers?: VersionPointers
 }
 
 // ---- Run comparison (build order 6) ---------------------------------------------------------

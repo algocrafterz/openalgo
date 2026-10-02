@@ -247,3 +247,49 @@ def test_compare_route_returns_comparison_keys_end_to_end(monkeypatch, tmp_path)
     assert body["comparison_note"] is None
     assert body["comparison"]["schema"] == 1
     assert "metric_deltas" in body
+
+
+def test_idea_route_returns_versions_and_pointers_end_to_end(monkeypatch, tmp_path):
+    import services.backtest_results_service as svc
+
+    folder = tmp_path / "research" / "ideas" / "idea-001-sample"
+    folder.mkdir(parents=True)
+    (folder / "versions.yaml").write_text(
+        "- version: v1\n  strategy_fingerprint: " + "a" * 64 + "\n  parent: null\n"
+        "  created_ist: '2026-10-01T10:00:00+05:30'\n  note: first\n",
+        encoding="utf-8",
+    )
+    idea = {
+        "id": "IDEA-001",
+        "folder": "idea-001-sample",
+        "runs": [],
+        "current_version": "v1",
+    }
+    monkeypatch.setattr(svc, "DEFAULT_ROOT", tmp_path)
+    monkeypatch.setattr(svc, "_load", lambda _r: [idea])
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get("/api/backtest-results/IDEA-001")
+    body = response.get_json()
+    assert response.status_code == 200
+    assert [v["version"] for v in body["versions"]] == ["v1"]
+    assert body["version_pointers"] == {
+        "current_version": "v1",
+        "promoted_version": None,
+        "promoted_run_id": None,
+    }
+
+
+def test_idea_route_reports_versions_error_without_a_path(monkeypatch, tmp_path):
+    import services.backtest_results_service as svc
+
+    folder = tmp_path / "research" / "ideas" / "idea-001-sample"
+    folder.mkdir(parents=True)
+    (folder / "versions.yaml").write_text("- version: nope\n", encoding="utf-8")
+    idea = {"id": "IDEA-001", "folder": "idea-001-sample", "runs": []}
+    monkeypatch.setattr(svc, "DEFAULT_ROOT", tmp_path)
+    monkeypatch.setattr(svc, "_load", lambda _r: [idea])
+    client = _client_logged_in(_app(), monkeypatch)
+    body = client.get("/api/backtest-results/IDEA-001").get_json()
+    assert body["versions"] is None
+    assert body["versions_error"] == "versions.yaml is invalid"
+    assert str(tmp_path) not in body["versions_error"]

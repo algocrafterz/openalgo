@@ -262,11 +262,22 @@ export interface IdeaFilters {
   search: string
   status: string
   verdict: string
+  /** Legacy library group (the registry's `category`), shown as "Library group". */
   category: string
   horizon: string
+  /** Strategy classification facets. An idea with no strategy category counts as Other. */
+  strategyCategory: string
+  tradingStyle: string
+  direction: string
+  market: string
+  timeframe: string
+  researchState: string
+  /** Selected tags; an idea must carry every one of them. */
+  tags: string[]
 }
 
 export const ALL = 'all'
+export const OTHER_CATEGORY = 'Other'
 
 export const EMPTY_FILTERS: IdeaFilters = {
   search: '',
@@ -274,19 +285,271 @@ export const EMPTY_FILTERS: IdeaFilters = {
   verdict: ALL,
   category: ALL,
   horizon: ALL,
+  strategyCategory: ALL,
+  tradingStyle: ALL,
+  direction: ALL,
+  market: ALL,
+  timeframe: ALL,
+  researchState: ALL,
+  tags: [],
 }
+
+/** The idea's strategy category, or Other when none is recorded. */
+export function ideaStrategyCategory(idea: IdeaCard): string {
+  return (
+    idea.strategy_category?.trim() ||
+    idea.classification?.strategy_category?.trim() ||
+    OTHER_CATEGORY
+  )
+}
+
+/** Union of strategy_tags and legacy tags, de-duplicated case-insensitively (first spelling wins). */
+export function ideaTags(idea: IdeaCard): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const source = [
+    ...(idea.strategy_tags ?? []),
+    ...(idea.classification?.strategy_tags ?? []),
+    ...(idea.tags ?? []),
+  ]
+  for (const raw of source) {
+    const tag = typeof raw === 'string' ? raw.trim() : ''
+    const key = tag.toLowerCase()
+    if (!tag || seen.has(key)) continue
+    seen.add(key)
+    out.push(tag)
+  }
+  return out
+}
+
+export type FacetKey =
+  | 'strategyCategory'
+  | 'tradingStyle'
+  | 'direction'
+  | 'market'
+  | 'timeframe'
+  | 'researchState'
+  | 'verdict'
+
+/** The value an idea has for a facet, or null when it has none. */
+export function facetValue(idea: IdeaCard, facet: FacetKey): string | null {
+  switch (facet) {
+    case 'strategyCategory':
+      return ideaStrategyCategory(idea)
+    case 'tradingStyle':
+      return idea.classification?.trading_style || null
+    case 'direction':
+      return idea.classification?.direction || null
+    case 'market':
+      return idea.classification?.market || null
+    case 'timeframe':
+      return idea.classification?.timeframe || null
+    case 'researchState':
+      return idea.research_state || null
+    case 'verdict':
+      return ideaVerdict(idea)
+  }
+}
+
+export interface FacetOption {
+  value: string
+  count: number
+}
+
+function sortedOptions(counts: Map<string, number>): FacetOption[] {
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => a.value.localeCompare(b.value))
+}
+
+/** Options present in the loaded ideas, each with how many ideas carry it. */
+export function facetOptions(ideas: IdeaCard[], facet: FacetKey): FacetOption[] {
+  const counts = new Map<string, number>()
+  for (const i of ideas) {
+    const v = facetValue(i, facet)
+    if (v) counts.set(v, (counts.get(v) ?? 0) + 1)
+  }
+  return sortedOptions(counts)
+}
+
+export function tagOptions(ideas: IdeaCard[]): FacetOption[] {
+  const counts = new Map<string, { label: string; count: number }>()
+  for (const i of ideas) {
+    for (const t of ideaTags(i)) {
+      const key = t.toLowerCase()
+      const cur = counts.get(key)
+      counts.set(key, { label: cur?.label ?? t, count: (cur?.count ?? 0) + 1 })
+    }
+  }
+  return [...counts.values()]
+    .map(({ label, count }) => ({ value: label, count }))
+    .sort((a, b) => a.value.localeCompare(b.value))
+}
+
+const FACET_FILTER_KEYS: FacetKey[] = [
+  'strategyCategory',
+  'tradingStyle',
+  'direction',
+  'market',
+  'timeframe',
+  'researchState',
+  'verdict',
+]
 
 export function filterIdeas(ideas: IdeaCard[], f: IdeaFilters): IdeaCard[] {
   const q = f.search.trim().toLowerCase()
+  const wanted = f.tags.map((t) => t.toLowerCase())
   return ideas.filter((i) => {
     if (f.status !== ALL && i.status !== f.status) return false
-    if (f.verdict !== ALL && ideaVerdict(i) !== f.verdict) return false
     if (f.category !== ALL && i.category !== f.category) return false
     if (f.horizon !== ALL && i.horizon !== f.horizon) return false
+    for (const facet of FACET_FILTER_KEYS) {
+      const want = f[facet]
+      if (want !== ALL && facetValue(i, facet) !== want) return false
+    }
+    if (wanted.length > 0) {
+      const have = new Set(ideaTags(i).map((t) => t.toLowerCase()))
+      if (!wanted.every((t) => have.has(t))) return false
+    }
     if (!q) return true
-    const haystack = [i.id, i.title, i.summary, ...(i.tags ?? [])].join(' ').toLowerCase()
+    const haystack = [
+      i.id,
+      i.title,
+      i.summary,
+      i.strategy_category ?? '',
+      i.classification?.strategy_category ?? '',
+      ...ideaTags(i),
+    ]
+      .join(' ')
+      .toLowerCase()
     return haystack.includes(q)
   })
+}
+
+const PARAM_FOR: Record<string, keyof IdeaFilters> = {
+  q: 'search',
+  status: 'status',
+  verdict: 'verdict',
+  library: 'category',
+  horizon: 'horizon',
+  cat: 'strategyCategory',
+  style: 'tradingStyle',
+  dir: 'direction',
+  market: 'market',
+  tf: 'timeframe',
+  state: 'researchState',
+}
+
+/** Only non-default filters are written, so the default URL stays clean. */
+export function filtersToParams(f: IdeaFilters, groupByCategory: boolean): URLSearchParams {
+  const params = new URLSearchParams()
+  for (const [param, key] of Object.entries(PARAM_FOR)) {
+    const v = f[key] as string
+    if (v && v !== ALL) params.set(param, v)
+  }
+  for (const tag of f.tags) params.append('tag', tag)
+  if (groupByCategory) params.set('group', 'category')
+  return params
+}
+
+type LegacyField = 'status' | 'category' | 'horizon'
+const LEGACY_FIELDS: LegacyField[] = ['status', 'category', 'horizon']
+
+/** Drops facet, legacy and tag values that no loaded idea carries, so a stale link cannot hide every row. */
+function dropUnknownValues(filters: IdeaFilters, ideas: IdeaCard[]): IdeaFilters {
+  const next: IdeaFilters = { ...filters, tags: [...filters.tags] }
+  const target = next as unknown as Record<string, string>
+  for (const facet of FACET_FILTER_KEYS) {
+    const want = filters[facet]
+    if (want !== ALL && !facetOptions(ideas, facet).some((o) => o.value === want)) {
+      target[facet] = ALL
+    }
+  }
+  for (const field of LEGACY_FIELDS) {
+    const want = filters[field]
+    if (want !== ALL && !ideas.some((i) => i[field] === want)) target[field] = ALL
+  }
+  const known = new Set(tagOptions(ideas).map((t) => t.value.toLowerCase()))
+  next.tags = next.tags.filter((t) => known.has(t.toLowerCase()))
+  return next
+}
+
+/** With loaded ideas, values they do not carry are dropped; without any, everything is kept. */
+export function filtersFromParams(
+  params: URLSearchParams,
+  ideas: IdeaCard[] = []
+): {
+  filters: IdeaFilters
+  groupByCategory: boolean
+} {
+  let filters: IdeaFilters = { ...EMPTY_FILTERS, tags: [] }
+  const target = filters as unknown as Record<string, string>
+  for (const [param, key] of Object.entries(PARAM_FOR)) {
+    const v = params.get(param)
+    if (v) target[key] = v
+  }
+  const legacy = (params.get('tags') ?? '').split(',')
+  filters.tags = [...params.getAll('tag'), ...legacy].filter(Boolean)
+  if (ideas.length > 0) filters = dropUnknownValues(filters, ideas)
+  return { filters, groupByCategory: params.get('group') === 'category' }
+}
+
+function mergeCounts(universe: FacetOption[], counted: FacetOption[]): FacetOption[] {
+  const counts = new Map(counted.map((o) => [o.value, o.count]))
+  return universe.map((o) => ({ value: o.value, count: counts.get(o.value) ?? 0 }))
+}
+
+/** Options from every idea; each count is the number of rows choosing it would show. */
+export function facetOptionsFor(
+  ideas: IdeaCard[],
+  filters: IdeaFilters,
+  facet: FacetKey
+): FacetOption[] {
+  const rows = filterIdeas(ideas, { ...filters, [facet]: ALL })
+  return mergeCounts(facetOptions(ideas, facet), facetOptions(rows, facet))
+}
+
+export function legacyOptionsFor(
+  ideas: IdeaCard[],
+  filters: IdeaFilters,
+  field: LegacyField
+): FacetOption[] {
+  const tally = (list: IdeaCard[]) => {
+    const counts = new Map<string, number>()
+    for (const i of list) counts.set(i[field], (counts.get(i[field]) ?? 0) + 1)
+    return sortedOptions(counts)
+  }
+  return mergeCounts(tally(ideas), tally(filterIdeas(ideas, { ...filters, [field]: ALL })))
+}
+
+/** Each count is the number of rows after adding that tag to the current selection. */
+export function tagOptionsFor(ideas: IdeaCard[], filters: IdeaFilters): FacetOption[] {
+  const selected = new Set(filters.tags.map((t) => t.toLowerCase()))
+  return tagOptions(ideas).map((o) => {
+    const tags = selected.has(o.value.toLowerCase()) ? filters.tags : [...filters.tags, o.value]
+    return { value: o.value, count: filterIdeas(ideas, { ...filters, tags }).length }
+  })
+}
+
+export interface CategoryGroup {
+  category: string
+  ideas: IdeaCard[]
+}
+
+/** Groups keep the incoming order within each group. Alphabetical groups, Other last. */
+export function groupByStrategyCategory(ideas: IdeaCard[]): CategoryGroup[] {
+  const map = new Map<string, IdeaCard[]>()
+  for (const i of ideas) {
+    const c = ideaStrategyCategory(i)
+    map.set(c, [...(map.get(c) ?? []), i])
+  }
+  return [...map.entries()]
+    .map(([category, list]) => ({ category, ideas: list }))
+    .sort((a, b) => {
+      if (a.category === OTHER_CATEGORY) return 1
+      if (b.category === OTHER_CATEGORY) return -1
+      return a.category.localeCompare(b.category)
+    })
 }
 
 export function distinct(ideas: IdeaCard[], field: 'status' | 'verdict' | 'category' | 'horizon') {

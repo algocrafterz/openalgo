@@ -59,7 +59,7 @@ class VersionResult:
     parent: str | None
 
 
-def _check_row(path: Path, row: Any) -> Version:
+def _check_row(path: Path | str, row: Any) -> Version:
     if not isinstance(row, dict):
         raise VersionError(f"{path}: every entry must be a mapping")
     for key in _KEYS:
@@ -82,32 +82,45 @@ def _check_row(path: Path, row: Any) -> Version:
     return entry
 
 
+def parse_versions(text: str, source: str = VERSIONS_FILE) -> list[Version]:
+    """Parse and validate versions.yaml text. `source` names the file in error messages.
+
+    Raises VersionError for invalid text. Callers that already hold the text (and have
+    size-checked it) use this instead of `load_versions`, which would re-read the file.
+    """
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise VersionError(f"{source}: versions.yaml is unreadable ({exc})") from exc
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise VersionError(f"{source}: versions.yaml must be a list")
+    found: list[Version] = []
+    for row in raw:
+        entry = _check_row(source, row)
+        if any(entry.version == v.version for v in found):
+            raise VersionError(f"{source}: duplicate version {entry.version}")
+        if any(entry.strategy_fingerprint == v.strategy_fingerprint for v in found):
+            raise VersionError(f"{source}: duplicate fingerprint on {entry.version}")
+        if entry.parent is not None and not any(entry.parent == v.version for v in found):
+            raise VersionError(
+                f"{source}: parent {entry.parent} of {entry.version} must be an earlier version"
+            )
+        found.append(entry)
+    return found
+
+
 def load_versions(folder: Path) -> list[Version]:
     """The idea's versions in file order. Raises VersionError for an invalid file."""
     path = folder / VERSIONS_FILE
     if not path.exists():
         return []
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
         raise VersionError(f"{path}: versions.yaml is unreadable ({exc})") from exc
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise VersionError(f"{path}: versions.yaml must be a list")
-    found: list[Version] = []
-    for row in raw:
-        entry = _check_row(path, row)
-        if any(entry.version == v.version for v in found):
-            raise VersionError(f"{path}: duplicate version {entry.version}")
-        if any(entry.strategy_fingerprint == v.strategy_fingerprint for v in found):
-            raise VersionError(f"{path}: duplicate fingerprint on {entry.version}")
-        if entry.parent is not None and not any(entry.parent == v.version for v in found):
-            raise VersionError(
-                f"{path}: parent {entry.parent} of {entry.version} must be an earlier version"
-            )
-        found.append(entry)
-    return found
+    return parse_versions(text, str(path))
 
 
 def _next_label(existing: list[Version]) -> str:

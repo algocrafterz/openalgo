@@ -288,3 +288,25 @@ class TestNaiveNow:
         with pytest.raises(ValueError, match="now must be timezone-aware"):
             freeze.register(tmp_path, frozen, now=self.NAIVE)
         assert not (tmp_path / "versions.yaml").exists()
+
+
+class TestParseVersions:
+    TEXT = (
+        "- version: v1\n  strategy_fingerprint: " + "a" * 64 + "\n  parent: null\n"
+        "  created_ist: '2026-10-01T10:00:00+05:30'\n  note: first\n"
+    )
+
+    def test_equals_load_versions_on_the_same_text(self, tmp_path):
+        (tmp_path / "versions.yaml").write_text(self.TEXT, encoding="utf-8")
+        assert versions.parse_versions(self.TEXT) == versions.load_versions(tmp_path)
+
+    def test_empty_text_is_empty_list(self):
+        assert versions.parse_versions("") == []
+
+    def test_invalid_text_raises_with_source_name(self):
+        with pytest.raises(versions.VersionError, match="my-source"):
+            versions.parse_versions("- version: nope\n", source="my-source")
+
+    def test_unparseable_yaml_raises_version_error(self):
+        with pytest.raises(versions.VersionError, match="unreadable"):
+            versions.parse_versions("- version: [unclosed")

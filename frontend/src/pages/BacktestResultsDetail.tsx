@@ -1,13 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { backtestResultsApi, type RunDetail, type RunRecord } from '@/api/backtestResults'
+import {
+  backtestResultsApi,
+  type IdeaCard,
+  type RunDetail,
+  type RunRecord,
+} from '@/api/backtestResults'
 import { BacktestScope } from '@/components/backtest-results/BacktestScope'
 import { CompareView } from '@/components/backtest-results/CompareView'
 import { DataCoverage } from '@/components/backtest-results/DataCoverage'
 import { DecisionPanel } from '@/components/backtest-results/DecisionPanel'
 import { GlossaryDrawer } from '@/components/backtest-results/GlossaryDrawer'
 import { PromotionGate } from '@/components/backtest-results/PromotionGate'
+import { RelatedStrategies } from '@/components/backtest-results/RelatedStrategies'
 import { Reproducibility } from '@/components/backtest-results/Reproducibility'
 import { ResearchNotes } from '@/components/backtest-results/ResearchNotes'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
@@ -15,6 +21,7 @@ import { RunIdentity } from '@/components/backtest-results/RunIdentity'
 import { RunTearsheet } from '@/components/backtest-results/RunTearsheet'
 import { StrategyDefinition } from '@/components/backtest-results/StrategyDefinition'
 import { StatusBadge, VerdictBadge } from '@/components/backtest-results/VerdictBadge'
+import { VersionTree } from '@/components/backtest-results/VersionTree'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useRunDetail } from '@/hooks/useRunDetail'
@@ -83,14 +90,28 @@ function RunDetailBlocks({
   )
 }
 
+/**
+ * The route element is reused when moving between related ideas. Keying the body on the idea id
+ * gives each idea fresh selection state from its very first render.
+ */
 export default function BacktestResultsDetail() {
   const { ideaId = '' } = useParams<{ ideaId: string }>()
+  return <BacktestResultsDetailBody key={ideaId} ideaId={ideaId} />
+}
+
+function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
   const [selected, setSelected] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['backtest-results', ideaId],
     queryFn: () => backtestResultsApi.idea(ideaId),
     enabled: ideaId !== '',
+  })
+
+  // Same key and fetcher as the list page, so a cached list costs no extra request.
+  const listQuery = useQuery({
+    queryKey: ['backtest-results'],
+    queryFn: backtestResultsApi.list,
   })
 
   const loadedRuns = data?.runs ?? []
@@ -115,6 +136,12 @@ export default function BacktestResultsDetail() {
   const latest = runs[runs.length - 1]
   const current = runs.find((r) => r.run_id === selected) ?? latest
   const isLatestRun = !!current && current === latest
+  const allIdeas = listQuery.data?.ideas ?? []
+  const currentCard: IdeaCard = allIdeas.find((i) => i.id === idea.id) ?? {
+    ...idea,
+    run_count: runs.length,
+    latest_run: null,
+  }
   const detail = detailQuery.data?.run
   const detailFailed = detailQuery.isError || detailQuery.data?.status === 'error'
 
@@ -201,7 +228,21 @@ export default function BacktestResultsDetail() {
       ) : (
         <>
           <DataCoverage run={current} />
-          <RunHistory runs={runs} selectedId={current.run_id} onSelect={setSelected} />
+          <VersionTree
+            versions={data.versions ?? null}
+            versionsError={data.versions_error ?? null}
+            pointers={data.version_pointers}
+            runs={runs}
+            selectedRunId={current.run_id}
+            onSelectRun={setSelected}
+          />
+          <RunHistory
+            runs={runs}
+            selectedId={current.run_id}
+            onSelect={setSelected}
+            versions={data.versions ?? null}
+            pointers={data.version_pointers}
+          />
           <div className="text-sm text-muted-foreground">
             Showing run {current.run_id} ({current.date}). Select another date above to view it.
           </div>
@@ -215,6 +256,8 @@ export default function BacktestResultsDetail() {
       )}
 
       <ResearchNotes notes={data.research_notes} />
+
+      <RelatedStrategies current={currentCard} ideas={allIdeas} />
     </div>
   )
 }

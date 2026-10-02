@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BacktestListResponse, LatestRun } from '@/api/backtestResults'
 import { makeCard, makeLatest } from '@/test/backtestResultsFixtures'
@@ -152,9 +152,9 @@ describe('BacktestResults leaderboard', () => {
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'inbox')
     expect(ids()).toEqual(['IDEA-002'])
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'all')
-    await userEvent.selectOptions(screen.getByLabelText('Category'), 'options')
+    await userEvent.selectOptions(screen.getByLabelText('Library group'), 'options')
     expect(ids()).toEqual(['IDEA-002'])
-    await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
+    await userEvent.selectOptions(screen.getByLabelText('Library group'), 'all')
     await userEvent.selectOptions(screen.getByLabelText('Horizon'), 'swing')
     expect(ids()).toEqual(['IDEA-002'])
   })
@@ -358,5 +358,230 @@ describe('BacktestResults verdict column', () => {
     await screen.findByText('IDEA-020')
     await userEvent.selectOptions(screen.getByLabelText('Verdict'), 'edge')
     expect(ids()).toEqual(['IDEA-020'])
+  })
+})
+
+const cls = (over: Record<string, string | null> = {}) => ({
+  strategy_category: 'Mean Reversion',
+  strategy_tags: [],
+  trading_style: 'Intraday',
+  direction: 'Long',
+  timeframe: '5m',
+  market: 'NSE Equities',
+  ...over,
+})
+
+const CLASSIFIED = [
+  makeCard({
+    id: 'C-1',
+    title: 'VWAP fade',
+    strategy_category: 'Mean Reversion',
+    strategy_tags: ['VWAP'],
+    research_state: 'active',
+    classification: cls(),
+    latest_run: makeLatest({
+      date: '2026-10-01',
+      metrics: { trades: 100, gross_bps: 1, net_bps: 9, t_stat: 3, hurdle_t: 2 },
+    }),
+  }),
+  makeCard({
+    id: 'C-2',
+    title: 'Range break',
+    strategy_category: 'Breakout',
+    strategy_tags: ['Pullback'],
+    research_state: 'promising',
+    classification: cls({
+      strategy_category: 'Breakout',
+      trading_style: 'Swing',
+      market: 'NSE F&O',
+    }),
+    latest_run: makeLatest({
+      date: '2026-09-01',
+      metrics: { trades: 100, gross_bps: 1, net_bps: 2, t_stat: 1, hurdle_t: 2 },
+    }),
+  }),
+  makeCard({
+    id: 'C-3',
+    title: 'RSI fade',
+    strategy_category: 'Mean Reversion',
+    tags: ['vwap'],
+    classification: cls(),
+    latest_run: makeLatest({
+      date: '2026-08-01',
+      metrics: { trades: 100, gross_bps: 1, net_bps: 5, t_stat: 2, hurdle_t: 2 },
+    }),
+  }),
+  makeCard({ id: 'C-4', title: 'Plain idea', latest_run: null, run_count: 0 }),
+]
+
+describe('BacktestResults classification filters', () => {
+  beforeEach(() => mocks.list.mockReset())
+
+  it('shows facet options with counts and filters by category', async () => {
+    renderPage(ok(CLASSIFIED))
+    await screen.findByText('C-1')
+    const select = screen.getByLabelText('Category')
+    expect(within(select).getByRole('option', { name: 'Mean Reversion (2)' })).toBeInTheDocument()
+    expect(within(select).getByRole('option', { name: 'Other (1)' })).toBeInTheDocument()
+    await userEvent.selectOptions(select, 'Other')
+    expect(ids()).toEqual(['C-4'])
+  })
+
+  it('filters by style and market, and keeps the Library group filter', async () => {
+    renderPage(ok(CLASSIFIED))
+    await screen.findByText('C-1')
+    await userEvent.selectOptions(screen.getByLabelText('Trading style'), 'Swing')
+    expect(ids()).toEqual(['C-2'])
+    await userEvent.selectOptions(screen.getByLabelText('Trading style'), 'all')
+    await userEvent.selectOptions(screen.getByLabelText('Market'), 'NSE Equities')
+    expect(ids()).toEqual(['C-1', 'C-3'])
+    await userEvent.selectOptions(screen.getByLabelText('Library group'), 'intraday-momentum')
+    expect(ids()).toEqual(['C-1', 'C-3'])
+  })
+
+  it('tags need all selected, including legacy tags', async () => {
+    renderPage(ok(CLASSIFIED))
+    await screen.findByText('C-1')
+    await userEvent.click(screen.getByRole('button', { name: 'VWAP (2)' }))
+    expect(ids()).toEqual(['C-1', 'C-3'])
+    await userEvent.click(screen.getByRole('button', { name: 'Pullback (0)' }))
+    expect(screen.getByText('No ideas match these filters.')).toBeInTheDocument()
+    expect(screen.getByText('Has all selected tags')).toBeInTheDocument()
+  })
+
+  it('search matches category and combines with filters, shows count and clears', async () => {
+    renderPage(ok(CLASSIFIED))
+    await screen.findByText('C-1')
+    await userEvent.type(screen.getByLabelText('Search'), 'mean rev')
+    expect(ids()).toEqual(['C-1', 'C-3'])
+    expect(screen.getByTestId('results-count')).toHaveTextContent('2 of 4 strategies')
+    await userEvent.selectOptions(screen.getByLabelText('Research state'), 'active')
+    expect(ids()).toEqual(['C-1'])
+    await userEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(screen.getByLabelText('Search')).toHaveValue('')
+    expect(ids()).toEqual(['C-1'])
+  })
+
+  it('restores filters from the URL', async () => {
+    mocks.list.mockReturnValue(Promise.resolve(ok(CLASSIFIED)))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/backtest-results?cat=Breakout&tag=Pullback']}>
+          <Routes>
+            <Route path="/backtest-results" element={<BacktestResults />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    await screen.findByText('C-2')
+    expect(ids()).toEqual(['C-2'])
+    expect(screen.getByLabelText('Category')).toHaveValue('Breakout')
+  })
+
+  it('shows classification chips on the row', async () => {
+    renderPage(ok(CLASSIFIED))
+    const row = (await screen.findByText('C-2')).closest('tr') as HTMLElement
+    const chips = within(row).getByTestId('classification-chips')
+    expect(chips).toHaveTextContent('Breakout')
+    expect(chips).toHaveTextContent('Swing')
+    expect(chips).toHaveTextContent('NSE F&O')
+    expect(chips).toHaveTextContent('5m')
+  })
+
+  it('groups by category with headings and keeps sort within groups', async () => {
+    renderPage(ok(CLASSIFIED))
+    await screen.findByText('C-1')
+    await userEvent.click(screen.getByLabelText('Group by category'))
+    const headings = screen.getAllByTestId('category-heading').map((h) => h.textContent)
+    expect(headings).toEqual(['Breakout (1)', 'Mean Reversion (2)', 'Other (1)'])
+    expect(ids()).toEqual(['C-2', 'C-1', 'C-3', 'C-4'])
+  })
+})
+
+function renderAt(url: string, ideas = CLASSIFIED) {
+  mocks.list.mockReturnValue(Promise.resolve(ok(ideas)))
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const Where = () => <div data-testid="search">{useLocation().search}</div>
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[url]}>
+        <Routes>
+          <Route
+            path="/backtest-results"
+            element={
+              <>
+                <BacktestResults />
+                <Where />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
+}
+
+describe('BacktestResults stale url filters and counts', () => {
+  beforeEach(() => mocks.list.mockReset())
+
+  it('ignores an unknown category in the URL and shows every idea with All', async () => {
+    renderAt('/backtest-results?cat=Bogus&tag=NoSuchTag')
+    await screen.findByText('C-1')
+    expect(ids()).toHaveLength(4)
+    expect(screen.getByLabelText('Category')).toHaveValue('all')
+    expect(screen.queryByTestId('active-filters')).toBeNull()
+  })
+
+  it('a valid URL value filters, and an active filters summary clears everything', async () => {
+    renderAt('/backtest-results?cat=Breakout')
+    await screen.findByText('C-2')
+    expect(ids()).toEqual(['C-2'])
+    const summary = screen.getByTestId('active-filters')
+    expect(summary).toHaveTextContent('Breakout')
+    await userEvent.click(within(summary).getByRole('button', { name: 'Clear all filters' }))
+    expect(ids()).toHaveLength(4)
+    expect(screen.getByLabelText('Category')).toHaveValue('all')
+    expect(screen.queryByTestId('active-filters')).toBeNull()
+  })
+
+  it('facet and tag counts follow the other filters and equal the resulting rows', async () => {
+    renderAt('/backtest-results')
+    await screen.findByText('C-1')
+    await userEvent.selectOptions(screen.getByLabelText('Trading style'), 'Swing')
+    const market = screen.getByLabelText('Market')
+    const option = within(market).getByRole('option', { name: /^NSE F&O/ })
+    const shown = Number(/\((\d+)\)/.exec(option.textContent ?? '')?.[1])
+    await userEvent.selectOptions(market, 'NSE F&O')
+    expect(ids()).toHaveLength(shown)
+    expect(screen.getByTestId('results-count')).toHaveTextContent(`${shown} of 4`)
+    expect(within(market).getByRole('option', { name: 'NSE Equities (0)' })).toBeInTheDocument()
+  })
+
+  it('a tag containing a comma round trips through the URL', async () => {
+    const tagged = [makeCard({ id: 'T-1', title: 'Comma tag', strategy_tags: ['a,b'] })]
+    renderAt('/backtest-results?tag=a%2Cb', tagged)
+    await screen.findByText('T-1')
+    expect(screen.getByRole('button', { name: 'a,b (1)' })).toHaveAttribute('aria-pressed', 'true')
+    expect(ids()).toEqual(['T-1'])
+  })
+
+  it('filters the list at once but writes the search to the URL after a pause', async () => {
+    renderAt('/backtest-results')
+    await screen.findByText('C-1')
+    await userEvent.type(screen.getByLabelText('Search'), 'mean')
+    expect(screen.getByLabelText('Search')).toHaveValue('mean')
+    expect(ids()).toEqual(['C-1', 'C-3'])
+    expect(screen.getByTestId('search')).toHaveTextContent('')
+    expect(screen.getByTestId('search').textContent).not.toContain('q=')
+    await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent('q=mean'))
+  })
+
+  it('names the clear search button by its visible text', async () => {
+    renderAt('/backtest-results')
+    await screen.findByText('C-1')
+    const btn = screen.getByRole('button', { name: 'Clear search' })
+    expect(btn).toHaveTextContent('Clear search')
+    expect(btn).not.toHaveAttribute('aria-label')
   })
 })

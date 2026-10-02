@@ -25,6 +25,7 @@ import yaml
 
 from signal_engine.research.build_registry import RegistryError, load_ideas
 from signal_engine.research.intake.spec import SpecError, load_spec
+from signal_engine.research.intake.versions import VERSIONS_FILE, VersionError, parse_versions
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -284,6 +285,43 @@ def _load_spec(folder: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+_VERSION_KEYS = ("version", "strategy_fingerprint", "parent", "created_ist", "note")
+_POINTER_KEYS = ("current_version", "promoted_version", "promoted_run_id")
+
+
+def _load_versions(folder: Path, base: Path) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """The idea's strategy versions and a path-free error sentence.
+
+    Returns `(versions, None)` when healthy, `(None, None)` when versions.yaml is absent (the
+    idea was never frozen) and `(None, message)` when it exists but cannot be used. The file
+    is opened once, with the same hardening as other run files (inside `base`, no symlink,
+    size cap), and the text that was size-checked is the text that is parsed.
+    """
+    path = folder / VERSIONS_FILE
+    try:
+        if not path.exists() and not path.is_symlink():
+            return None, None
+        text = _read_text(path, base)
+        return [{k: getattr(v, k) for k in _VERSION_KEYS} for v in parse_versions(text)], None
+    except VersionError:
+        logger.exception("Invalid versions file %s", path)
+        return None, "versions.yaml is invalid"
+    except ValueError as exc:
+        logger.exception("Could not read %s", path)
+        if "exceeds" in str(exc):
+            return None, "versions.yaml is larger than the allowed size"
+        if isinstance(exc, UnicodeDecodeError):
+            return None, "versions.yaml is invalid"
+        return None, "versions.yaml is not readable"
+    except _READ_ERRORS:
+        logger.exception("Could not read %s", path)
+        return None, "versions.yaml is not readable"
+
+
+def _version_pointers(idea: dict[str, Any]) -> dict[str, str | None]:
+    return {k: idea[k] if isinstance(idea.get(k), str) else None for k in _POINTER_KEYS}
+
+
 def get_idea_results(
     idea_id: str, root: Path | None = None, today: date | None = None
 ) -> tuple[bool, dict[str, Any], int]:
@@ -308,6 +346,7 @@ def get_idea_results(
         }
         for run in idea.get("runs") or []
     ]
+    versions, versions_error = _load_versions(folder, root / "research" / "ideas")
     return (
         True,
         {
@@ -317,6 +356,9 @@ def get_idea_results(
             "lineage": idea.get("lineage"),
             "spec": _load_spec(folder),
             "research_notes": _research_notes(folder),
+            "versions": versions,
+            "versions_error": versions_error,
+            "version_pointers": _version_pointers(idea),
         },
         200,
     )

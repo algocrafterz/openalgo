@@ -105,6 +105,27 @@ function ClassificationLine({ classification }: { classification?: Classificatio
   )
 }
 
+/** Secondary chips; the verdict and evidence columns stay the primary read. */
+function ClassificationChips({ idea }: { idea: IdeaCard }) {
+  const c = idea.classification
+  const chips = [
+    idea.strategy_category || c?.strategy_category,
+    c?.trading_style,
+    c?.market,
+    c?.timeframe,
+  ].filter((p): p is string => Boolean(p))
+  if (chips.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1 pt-0.5" data-testid="classification-chips">
+      {chips.map((chip) => (
+        <span key={chip} className="rounded border px-1.5 py-0 text-[10px] text-muted-foreground">
+          {chip}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function SecondaryLine({ idea }: { idea: IdeaCard }) {
   const run = idea.latest_run
   if (!run) return null
@@ -224,6 +245,7 @@ export function LeaderboardTable({ ideas, sortKey, sortDir, onSort }: Leaderboar
               </Link>
               <div className="text-sm text-muted-foreground max-w-xs truncate">{idea.title}</div>
               <ClassificationLine classification={idea.classification} />
+              <ClassificationChips idea={idea} />
               <SecondaryLine idea={idea} />
             </TableCell>
             <TableCell>
