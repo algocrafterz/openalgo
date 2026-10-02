@@ -50,8 +50,8 @@ from signal_engine.backtest.baseline import (
 from signal_engine.backtest.costs import CostModel
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
-from signal_engine.research import spec
 from signal_engine.research.build_registry import _parse_frontmatter
+from signal_engine.research.intake import spec
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 

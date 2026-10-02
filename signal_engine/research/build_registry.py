@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from signal_engine.research import spec
+from signal_engine.research.intake import spec
 
 STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
 VERDICTS = ("none", "edge", "marginal", "no-edge", "inconclusive")

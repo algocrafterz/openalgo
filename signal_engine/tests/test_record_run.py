@@ -11,10 +11,12 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from signal_engine.backtest import record_run as rr
 from signal_engine.backtest.types import Trade
 from signal_engine.research import build_registry as br
+from signal_engine.tests.intake_fixtures import GOOD_SPEC
 
 SUPPORTED = {"orb", "ema9_vwap"}
 
@@ -89,6 +91,7 @@ def _make_idea(root: Path, number: str, slug: str, module: str) -> Path:
     (folder / "idea.md").write_text(
         IDEA_MD.format(id=f"IDEA-{number}", slug=slug, module=module), encoding="utf-8"
     )
+    (folder / "spec.yaml").write_text(yaml.safe_dump(GOOD_SPEC), encoding="utf-8")
     return folder
 
 

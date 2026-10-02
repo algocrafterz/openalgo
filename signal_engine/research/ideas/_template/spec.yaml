@@ -1,38 +1,82 @@
-# Strategy specification. Copy next to idea.md and complete EVERY field.
+# Strategy specification, schema v2. Copy next to idea.md and complete EVERY required field.
+# This file holds strategy INTENT only. Broker and product rules live in a deployment profile
+# (research/profiles/), and execution settings (slippage, costs, warm-up, bar size) are
+# resolved by the platform. Override those only in execution.yaml, with a reason.
+#
 # A spec that is incomplete or vague is rejected before any backtest runs
-# (research/spec.py). Write rules a program could code without guessing:
+# (research/intake/spec.py). Write rules a program could code without guessing:
 #   not "buy when momentum is strong"
 #   but "5-min close > VWAP; EMA9 > EMA20; enter at the next candle open"
-# Keep it to the strategy as it is today. Experiments, rejected variants and
-# observations belong in idea.md and the run records, not here.
+# Keep it to the strategy as it is today. Experiments, rejected variants and observations
+# belong in idea.md and the run records, not here.
+#
+# Fields marked (optional) may be left out. Anything you leave out that the platform can infer
+# is recorded as an assumption for you to confirm. Replace every placeholder below.
 
+schema_version: 2
 name: Short strategy name
-market: e.g. NSE cash equity, F&O-eligible names
-timeframe: e.g. 5m          # bar size: 5m, 15min, 1h, 1d
-trading_style: intraday     # intraday | swing | positional
-direction: both             # long_only | short_only | both ; swing and positional must be long_only
+
+source:                       # saved unchanged in ideas/_inbox/
+  kind: own_words             # video | article | pdf | screenshot | own_words
+  ref: _inbox/your-file.txt
+
+profile: flattrade-nse-cash   # deployment profile name (research/profiles/<name>.yaml)
+
+style: intraday | swing | positional   # pick one
+direction: long_only | short_only | both   # pick one; swing and positional must be long_only
+timeframe: 5m                 # one of: 1m, 5m, 15m, 1h, 1d
+product: MIS                  # (optional) MIS for intraday, CNC for swing or positional
 
 entry:
   - Condition with a number or threshold
   - Which bar the order fills on, e.g. next candle open
 exit:
   - Condition with a number or threshold
-stop_loss:
+stop:                         # a rule with a number, or the single word: none
   - e.g. 1 ATR(14) below entry
-take_profit:                # or the single word: none
+take_profit:                  # a rule, or the single word: none
   - e.g. 2R target
-position_sizing: e.g. risk 1% of capital per trade
-max_holding_period: e.g. 12 bars   # or: same session
+holding_period: 12 bars       # or: same_session
 
-filters: none               # symbol or market filters, or the single word: none
-session_filters: none       # time-of-day or calendar filters, or: none
-
-indicators:
-  - e.g. VWAP
-  - e.g. EMA(9)
-parameters:                 # every tunable value, with the value used
+indicators:                   # or the single word: none
+  - {name: VWAP, anchor: session}       # VWAP needs an anchor
+  - {name: EMA, period: 9, source: close}   # source defaults to close for price indicators
+parameters:                   # every tunable value with the value used, or: none
   ema_fast: 9
 
-cost_assumptions: e.g. 16 bps round trip
-constraints: none           # anything else the strategy must respect, or: none
-rationale: One or two sentences on why this should have an edge.
+# (optional) Signal, order and fill timing. Leave it out and the platform infers it from the
+# entry text, records the inference and asks you to confirm it if it matters.
+# timing:
+#   signal_evaluation: bar_close    # bar_close | bar_open | intrabar | tick
+#   order_submission: signal_close  # signal_close | next_bar_open
+#   fill_model: next_bar_open       # next_bar_open | signal_close | limit_at_level
+
+# (optional) What price stops, targets and sizing are measured from, only where ambiguous.
+# reference_prices: {stop: entry_fill}
+
+filters: none                 # symbol or market filters, or the single word: none
+session_window: {entry: "09:20-14:30"}   # IST range, or the single word: none
+
+re_entry:
+  allowed: false              # if true, also: max_per_symbol_day: 1 and (optional) trigger
+
+sizing:
+  risk_per_trade_pct: 1.0     # percent of capital risked per trade
+  capital_per_trade: 100000   # rupees deployed per trade (a different number from risk)
+
+portfolio:
+  mode: single_position       # single_position | multi_position
+  scope: per_symbol           # single_position only: global (one position in total) | per_symbol
+  # multi_position needs: max_concurrent, max_trades_per_day, capital_per_position,
+  #   max_exposure, selection, conflict. It takes no scope.
+
+# (optional) Order types, only if the source says. Default is market entry, stop-market stop.
+# order_types: {entry: market, stop: stop_market, target: limit}
+
+disclosure:                   # (optional) never blocks a run, but under-reporting inflates results
+  prior_variants: 0           # variants already tried before this one
+  chart_peeking: false        # true if something you saw on the chart shaped the rules
+  destination: python         # python | pine_tradingview
+
+# rationale: One or two sentences on why this should have an edge.   (optional)
+# kill_criterion: The result that would make you drop it.            (optional)

@@ -1,0 +1,18 @@
+# Deployment profile: Flattrade, NSE/BSE cash equity.
+# Broker and product constraints live here and nowhere else; the strategy spec never repeats
+# them. A different broker is a different profile, not an edit to a strategy.
+# All times are IST, "HH:MM".
+name: flattrade-nse-cash
+broker: flattrade
+market: NSE/BSE cash equity
+products:
+  MIS:
+    # Broker squares off MIS at 15:00 (confirmed 2026-09-30). The backtest closes positions
+    # itself before that and never relies on broker auto-square-off as the exit.
+    force_flat: "15:00"
+    standing_time_exit: "14:45"
+    latest_exit_bar_close: "14:55"
+    exit_convention: engine_exit_before_force_flat
+  CNC:
+    # Delivery: overnight holding allowed, no intraday force-flat and no MIS cutoff.
+    carry_forward: true

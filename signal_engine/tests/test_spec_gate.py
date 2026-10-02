@@ -1,10 +1,9 @@
-"""Spec gate: new ideas need a complete spec.yaml before they can be backtested.
+"""Spec gate: every idea needs a complete v2 spec.yaml before it can be backtested.
 
-Ideas numbered below `spec.SPEC_REQUIRED_FROM_ID` predate the gate and are exempt; a
-spec.yaml they do carry is still validated.
+There is no older-idea exemption: a missing spec refuses the run for any idea number, and an
+idea past the inbox without one fails the registry check.
 """
 
-import copy
 from datetime import date
 from pathlib import Path
 
@@ -15,28 +14,8 @@ import yaml
 from signal_engine.backtest import record_run as rr
 from signal_engine.backtest.types import Trade
 from signal_engine.research import build_registry as br
-from signal_engine.research import spec
-
-GOOD = {
-    "name": "VWAP EMA momentum",
-    "market": "NSE cash equity",
-    "timeframe": "5m",
-    "trading_style": "intraday",
-    "direction": "both",
-    "entry": ["5-min close > VWAP", "EMA9 > EMA20", "Enter at next candle open"],
-    "exit": ["Close below VWAP", "Maximum hold 12 bars"],
-    "stop_loss": ["1 ATR(14) below entry"],
-    "take_profit": "none",
-    "position_sizing": "Risk 1% per trade",
-    "max_holding_period": "12 bars",
-    "filters": "none",
-    "session_filters": "none",
-    "indicators": ["VWAP", "EMA(9)"],
-    "parameters": {"ema_fast": 9},
-    "cost_assumptions": "16 bps round trip",
-    "constraints": "none",
-    "rationale": "Trend continuation.",
-}
+from signal_engine.research.intake import spec
+from signal_engine.tests.intake_fixtures import GOOD_SPEC, make_spec
 
 IDEA_MD = """---
 id: IDEA-{number}
@@ -101,6 +80,10 @@ def _idea(root: Path, number: str) -> Path:
     return folder
 
 
+def _write_spec(folder: Path, data: dict) -> None:
+    (folder / "spec.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
 def _record(root: Path, number: str):
     return rr.record_idea(
         root, f"IDEA-{number}", execute=_execute, run_date="2026-09-30", supported={"orb"}
@@ -108,13 +91,14 @@ def _record(root: Path, number: str):
 
 
 class TestRecordGate:
-    def test_new_idea_without_spec_is_refused_and_nothing_runs(self, tmp_path):
-        folder = _idea(tmp_path, "027")
+    @pytest.mark.parametrize("number", ["012", "027"])
+    def test_idea_without_spec_is_refused_and_nothing_runs(self, tmp_path, number):
+        folder = _idea(tmp_path, number)
         called = []
         with pytest.raises(spec.SpecError, match="spec.yaml is required"):
             rr.record_idea(
                 tmp_path,
-                "IDEA-027",
+                f"IDEA-{number}",
                 execute=lambda k: called.append(k),
                 run_date="2026-09-30",
                 supported={"orb"},
@@ -122,49 +106,44 @@ class TestRecordGate:
         assert called == []
         assert not (folder / "runs").exists()
 
-    def test_new_idea_with_incomplete_spec_is_refused(self, tmp_path):
-        folder = _idea(tmp_path, "027")
-        bad = copy.deepcopy(GOOD)
-        bad["entry"] = ["Buy when momentum is strong"]
-        (folder / "spec.yaml").write_text(yaml.safe_dump(bad), encoding="utf-8")
+    def test_idea_with_incomplete_spec_is_refused(self, tmp_path):
+        folder = _idea(tmp_path, "012")
+        _write_spec(folder, make_spec(entry=["Buy when momentum is strong"]))
         with pytest.raises(spec.SpecError, match="entry"):
-            _record(tmp_path, "027")
+            _record(tmp_path, "012")
 
-    def test_new_idea_with_complete_spec_records(self, tmp_path):
-        folder = _idea(tmp_path, "027")
-        (folder / "spec.yaml").write_text(yaml.safe_dump(GOOD), encoding="utf-8")
-        assert _record(tmp_path, "027").exists()
+    def test_idea_with_malformed_spec_is_refused(self, tmp_path):
+        folder = _idea(tmp_path, "012")
+        _write_spec(folder, make_spec(style="swing", direction="both", product="CNC"))
+        with pytest.raises(spec.SpecError, match="long_only"):
+            _record(tmp_path, "012")
 
-    def test_existing_idea_without_spec_still_records(self, tmp_path):
-        _idea(tmp_path, "012")
+    def test_idea_with_complete_spec_records(self, tmp_path):
+        folder = _idea(tmp_path, "012")
+        _write_spec(folder, GOOD_SPEC)
         assert _record(tmp_path, "012").exists()
 
 
 class TestRegistryCheck:
     def test_invalid_spec_on_any_idea_fails_the_registry(self, tmp_path):
         folder = _idea(tmp_path, "012")
-        bad = copy.deepcopy(GOOD)
-        bad["stop_loss"] = ["below the low"]
-        (folder / "spec.yaml").write_text(yaml.safe_dump(bad), encoding="utf-8")
-        with pytest.raises(br.RegistryError, match="stop_loss"):
+        _write_spec(folder, make_spec(stop=["below the low"]))
+        with pytest.raises(br.RegistryError, match="stop"):
             br.load_ideas(tmp_path)
 
     def test_valid_spec_loads(self, tmp_path):
         folder = _idea(tmp_path, "012")
-        (folder / "spec.yaml").write_text(yaml.safe_dump(GOOD), encoding="utf-8")
+        _write_spec(folder, GOOD_SPEC)
         assert len(br.load_ideas(tmp_path)) == 1
 
-    def test_new_active_idea_without_spec_fails_the_registry(self, tmp_path):
-        _idea(tmp_path, "027")
+    @pytest.mark.parametrize("number", ["012", "027"])
+    def test_active_idea_without_spec_fails_the_registry(self, tmp_path, number):
+        _idea(tmp_path, number)
         with pytest.raises(br.RegistryError, match="spec.yaml is required"):
             br.load_ideas(tmp_path)
 
-    def test_new_inbox_idea_without_spec_is_allowed(self, tmp_path):
+    def test_inbox_idea_without_spec_is_allowed(self, tmp_path):
         folder = _idea(tmp_path, "027")
         text = (folder / "idea.md").read_text(encoding="utf-8").replace("evaluating", "inbox")
         (folder / "idea.md").write_text(text, encoding="utf-8")
-        assert len(br.load_ideas(tmp_path)) == 1
-
-    def test_existing_idea_without_spec_loads(self, tmp_path):
-        _idea(tmp_path, "012")
         assert len(br.load_ideas(tmp_path)) == 1
