@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from signal_engine.research.intake import spec
+from signal_engine.research.intake import spec, versions
 
 STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
 VERDICTS = ("none", "edge", "marginal", "no-edge", "inconclusive")
@@ -343,6 +343,19 @@ def _parse_frontmatter(path: Path) -> dict[str, Any]:
     return _normalise(data)
 
 
+def _validate_version_pointers(idea: dict[str, Any], folder: Path) -> list[str]:
+    """versions.yaml must be valid and the idea's version pointers must name registered versions."""
+    try:
+        known = {v.version for v in versions.load_versions(folder)}
+    except versions.VersionError as exc:
+        return [f"versions.yaml: {exc}"]
+    return [
+        f"{key} '{idea[key]}' is not a version in versions.yaml"
+        for key in versions.POINTER_KEYS
+        if idea.get(key) is not None and idea[key] not in known
+    ]
+
+
 def _validate(idea: dict[str, Any], folder: Path, root: Path) -> list[str]:
     problems = [f"missing field '{f}'" for f in REQUIRED if f not in idea]
     for field, allowed in (
@@ -364,6 +377,7 @@ def _validate(idea: dict[str, Any], folder: Path, root: Path) -> list[str]:
         if target and not (root / target).exists():
             problems.append(f"{field} '{target}' does not exist")
     problems.extend(_validate_rejection_basis(idea))
+    problems.extend(_validate_version_pointers(idea, folder))
     return problems
 
 

@@ -54,3 +54,22 @@ def make_spec(**changes: Any) -> dict[str, Any]:
         else:
             out[key] = copy.deepcopy(value)
     return out
+
+
+def write_spec(folder, data=None):
+    """Write a spec.yaml (GOOD_SPEC by default) into an idea folder and return the folder."""
+    import yaml
+
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "spec.yaml").write_text(
+        yaml.safe_dump(data if data is not None else GOOD_SPEC), encoding="utf-8"
+    )
+    return folder
+
+
+# A spec whose timing is not implied by the entry text, so the ledger must infer it as a
+# High-materiality assumption the author has to confirm.
+AMBIGUOUS_TIMING = {
+    "entry": ["EMA9 above EMA20 by 0.5 percent", "Stochastic below 20"],
+    "exit": ["EMA9 below EMA20", "Maximum hold 12 bars"],
+}

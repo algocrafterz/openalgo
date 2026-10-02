@@ -51,7 +51,8 @@ from signal_engine.backtest.costs import CostModel
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
 from signal_engine.research.build_registry import _parse_frontmatter
-from signal_engine.research.intake import spec
+from signal_engine.research.intake import freeze as intake_freeze
+from signal_engine.research.intake import spec, versions
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -385,6 +386,8 @@ def record_idea(
     position_caps: Sequence[int] = DEFAULT_POSITION_CAPS,
     validation: Sequence[str] = (),
     regimes: Callable[[], regime_data.RegimeInputs] | None = None,
+    parent_version: str | None = None,
+    version_label: str | None = None,
 ) -> Path:
     """Run one idea and write its record. Returns the path written.
 
@@ -408,10 +411,15 @@ def record_idea(
             f"{idea_id}: backtest module {idea.get('backtest_module')!r} has no trade-list "
             "engine, so it cannot produce a run record"
         )
-    spec.check_idea(idea_id, folder)
     runs_dir = folder / "runs"
     if parent is not None and parent not in _existing_run_ids(runs_dir):
         raise ValueError(f"parent run '{parent}' is not a run of {idea_id}")
+    # Freeze is the last gate before anything executes: it refuses an idea that is not Backtest
+    # Ready. The version is only checked here (a bad parent or label fails before the backtest
+    # runs) and is registered once the record is built, so a failed run leaves no orphan version.
+    frozen = intake_freeze.freeze(folder, idea_id=idea_id, register_version=False)
+    version_args = {"parent": parent_version, "label": version_label, "note": note}
+    intake_freeze.register(folder, frozen, dry_run=True, **version_args)
 
     execution = execute(key)
     n_trials = trials if trials is not None else 1
@@ -448,6 +456,7 @@ def record_idea(
             f"{regime_note}"
         ),
     )
+    intake_freeze.register(folder, frozen, **version_args)
     return write_run(runs_dir, record)
 
 
@@ -485,6 +494,8 @@ def main(
     target.add_argument("--all", action="store_true", help="every idea with a backtest module")
     parser.add_argument("--parent", help="run id this run descends from (with --idea)")
     parser.add_argument("--note", default="", help="what changed since the parent")
+    parser.add_argument("--parent-version", help="strategy version a new version descends from")
+    parser.add_argument("--version", help="branch label for a new strategy version, e.g. v3b")
     parser.add_argument("--trials", type=int, help="configurations searched in total")
     parser.add_argument("--oos-start", help="YYYY-MM-DD; default splits the last 30 percent")
     parser.add_argument(
@@ -524,6 +535,8 @@ def main(
                 run_date=args.run_date,
                 supported=keys,
                 parent=args.parent,
+                parent_version=args.parent_version,
+                version_label=args.version,
                 note=args.note,
                 trials=args.trials,
                 oos_start=args.oos_start,
@@ -531,7 +544,12 @@ def main(
                 validation=args.validation,
                 regimes=load_regimes,
             )
-        except (Unsupported, spec.SpecError) as exc:
+        except (
+            Unsupported,
+            spec.SpecError,
+            intake_freeze.FreezeError,
+            versions.VersionError,
+        ) as exc:
             if args.all:
                 sys.stdout.write(f"skipped {exc}\n")
                 continue

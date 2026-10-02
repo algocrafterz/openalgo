@@ -19,13 +19,35 @@ Build plan for the first three P1 steps (spec schema, assumption ledger, run man
 `BACKTESTS-UI-TECHNICAL-REQUIREMENTS.md`, `BACKTESTS-UI-PLAN.md`. Canonical lifecycle and
 minimum run schema (wins on conflict): `BACKTEST-LIFECYCLE-AND-RUN-SCHEMA.md`.
 
+## Build order progress
+
+The order is in `BACKTESTS-UI-PLAN.md`, "Build order". One step per conversation, each ending
+with tests green, ruff clean and a commit.
+
+| Order | Work | Status | Commit |
+| --- | --- | --- | --- |
+| 1 | Engine P1 step 1: spec v2, profiles, execution resolution | done 2026-10-02 | `27626054d` |
+| 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | see `git log` (feat(research): assumption ledger, intake states, freeze, versions) |
+| 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5) | not started | |
+| 4 | E4: derived verdict, promotion, next action | not started | |
+| 5 | UI U1 and glossary | not started | |
+| 6 | UI U3 (comparison) | not started | |
+| 7 | UI U4 (version tree) | not started | |
+| 8 | UI U2 remainder, as engine steps 4 and 5 land | not started | |
+
+Findings carried forward from implementation (raised, not designed around):
+- The entry window is not checked against the profile's latest exit-bar close (14:55), so a window such as 09:20-15:10 passes validation.
+- The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4.
+- Profile-sourced values (`profile.*`) are Medium materiality, not High, because the author selects the profile by name. A High default would force a confirmation on every idea.
+
 ## P1
 
 | Capability | Status | Code | Tests | Verified |
 | --- | --- | --- | --- | --- |
 | Spec schema split: strategy intent vs resolved execution configuration vs deployment profile; field class and per-field provenance | built 2026-10-02 (field class, spec v2, profile and execution resolution with a source per value; per-field provenance in the ledger is step 2) | `research/intake/{fields,spec,profiles,execution}.py`, `research/profiles/`, `research/ideas/_template/spec.yaml` | `tests/test_intake_spec.py`, `test_intake_profiles.py`, `test_intake_execution.py`, `test_spec_gate.py` | |
 | Spec validation: entry, exit, direction, timeframe, holding period, stop, signal evaluation, order submission, fill model, indicator source, reference prices, portfolio scope | built 2026-10-02 (validity vs intake tagging; absent timing is inferred and recorded in step 2) | `research/intake/spec.py` (`validate_spec`) | `tests/test_intake_spec.py` | |
-| Assumption ledger with materiality and confirmation; intake states | not started | | | |
+| Assumption ledger with materiality and confirmation; intake states | built 2026-10-02 (ledger with merge that keeps ids and resets confirmation on a changed value; computed intake state; freeze with the structural ledger-id invariant; intake CLI; `record_run` gated on freeze) | `research/intake/{ledger,state,freeze,cli}.py`, `research/intake/__main__.py`, `backtest/record_run.py` (freeze call) | `tests/test_intake_ledger.py`, `test_intake_state.py`, `test_intake_freeze.py`, `test_intake_cli.py`, `test_spec_gate.py::TestFreezeGate` | |
+| Strategy versions: append-only `versions.yaml`, automatic and branch labels, current and promoted pointers, rules, parameters and strategy fingerprints | built 2026-10-02 (UI plan E2; component fingerprints other than rules, parameters and strategy are step 3) | `research/intake/{versions,fingerprints}.py`, `research/build_registry.py` (`_validate_version_pointers`) | `tests/test_intake_versions.py`, `test_intake_fingerprints.py`, `test_intake_freeze.py::TestVersionRegistration`, `test_spec_gate.py::TestRegistryVersionPointers` | |
 | Point-in-time universe membership and per-date eligibility | not started | | | |
 | Direction validation (no shorts in swing or positional) | built 2026-10-02 (spec-level; swing engine enforcement is existing behaviour) | `research/intake/spec.py` (`_check_classification`) | `tests/test_intake_spec.py::TestDirectionAndProduct` | |
 | Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat) | not started | | | |

@@ -18,7 +18,6 @@ from typing import Any
 
 import yaml
 
-from signal_engine.backtest import record_run
 from signal_engine.research.intake import fields
 from signal_engine.research.intake.profiles import Profile
 
@@ -95,7 +94,7 @@ def load_overrides(folder: Path) -> dict[str, Any] | None:
     return dict(loaded)
 
 
-def _validate_overrides(overrides: Mapping[str, Any]) -> dict[str, tuple[Any, str]]:
+def validate_overrides(overrides: Mapping[str, Any]) -> dict[str, tuple[Any, str]]:
     intent = fields.top_level(fields.INTENT)
     accepted: dict[str, tuple[Any, str]] = {}
     for key, block in overrides.items():
@@ -130,11 +129,11 @@ def _warmup(spec: Mapping[str, Any]) -> tuple[int, str]:
 
 
 def _product(spec: Mapping[str, Any]) -> tuple[str, str, str]:
-    if spec.get("product") in fields.PRODUCTS:
-        return spec["product"], "user", "stated in the spec"
     style = spec.get("style")
     if style not in fields.STYLES:
-        raise ExecutionError("cannot resolve product without a valid style")
+        raise ExecutionError("cannot resolve execution settings without a valid style")
+    if spec.get("product") in fields.PRODUCTS:
+        return spec["product"], "user", "stated in the spec"
     product = "MIS" if style == "intraday" else "CNC"
     return product, "derived", f"{style} strategies trade {product}"
 
@@ -151,6 +150,10 @@ def _profile_rows(profile: Profile, product: str) -> list[_Row]:
 
 
 def _platform_rows(spec: Mapping[str, Any], product: tuple[str, str, str]) -> list[_Row]:
+    # Imported here, not at module level: record_run imports the intake package, so a top-level
+    # import would make `import ...intake.ledger` fail when it is the first thing imported.
+    from signal_engine.backtest import record_run
+
     intraday = spec.get("style") == "intraday"
     warmup, warmup_reason = _warmup(spec)
     cost = record_run.INTRADAY_COST_BPS if intraday else record_run.SWING_COST_BPS
@@ -194,7 +197,7 @@ def resolve_execution(
     The spec must already pass `validate_spec`; this does not re-validate it. Raises
     ExecutionError for a bad override or when the profile cannot serve the product.
     """
-    accepted = _validate_overrides(overrides or {})
+    accepted = validate_overrides(overrides or {})
     product = _product(spec)
     if not profile.supports(product[0]):
         raise ExecutionError(f"profile '{profile.name}' does not support product {product[0]}")

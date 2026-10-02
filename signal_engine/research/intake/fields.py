@@ -129,10 +129,10 @@ FIELDS: tuple[FieldDef, ...] = (
     _f("execution.cost_bps_round_trip", EXECUTION, DEFAULTABLE, MEDIUM),
     _f("execution.oos_fraction", EXECUTION, DEFAULTABLE, LOW),
     _f("execution.embargo_sessions", EXECUTION, DEFAULTABLE, LOW),
-    _f("profile.mis_squareoff_min", PROFILE, DEFAULTABLE, HIGH),
-    _f("profile.squareoff_margin_min", PROFILE, DEFAULTABLE, HIGH),
-    _f("profile.time_exit_min", PROFILE, DEFAULTABLE, HIGH),
-    _f("profile.carry_forward", PROFILE, DEFAULTABLE, HIGH),
+    _f("profile.mis_squareoff_min", PROFILE, DEFAULTABLE, MEDIUM),
+    _f("profile.squareoff_margin_min", PROFILE, DEFAULTABLE, MEDIUM),
+    _f("profile.time_exit_min", PROFILE, DEFAULTABLE, MEDIUM),
+    _f("profile.carry_forward", PROFILE, DEFAULTABLE, MEDIUM),
 )
 
 _INDEX = {f.name: f for f in FIELDS}
