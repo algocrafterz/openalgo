@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import functools
+import inspect
 import json
 import math
 import os
@@ -31,8 +32,8 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,8 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from signal_engine.backtest import regime, regime_data
+from signal_engine.backtest import manifest as manifest_mod
+from signal_engine.backtest import regime, regime_data, run_artifact
 from signal_engine.backtest.baseline import (
     INTRADAY_MAX_TRADES,
     random_entry_baseline,
@@ -50,6 +52,7 @@ from signal_engine.backtest.baseline import (
 from signal_engine.backtest.costs import CostModel
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
+from signal_engine.research import readiness
 from signal_engine.research.build_registry import _parse_frontmatter
 from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.research.intake import spec, versions
@@ -71,6 +74,10 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 _FOLDER = re.compile(r"^idea-(\d{3})-(.+)$")
 
 
+#: The shape of every run id this module generates; anything else is not a run.
+RUN_ID_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+-v\d+")
+
+
 class Unsupported(Exception):
     """The idea's backtest module cannot produce a trade list."""
 
@@ -87,9 +94,12 @@ class Execution:
     days: list[str]
     baseline: dict[str, Any] | None = None
     cost_model: CostModel | None = None
+    symbols: list[str] = field(default_factory=list)
 
 
-def deployed_cost_model(kind: str, config_path: Path | None = None) -> CostModel:
+def deployed_cost_model(
+    kind: str, config_path: Path | None = None, slippage_bps_per_side: float | None = None
+) -> CostModel:
     """The per-trade cost model for the deployment in `config.yaml`.
 
     Capital and risk per trade come from `sizing`, exchange and MIS margin from `broker`.
@@ -117,7 +127,9 @@ def deployed_cost_model(kind: str, config_path: Path | None = None) -> CostModel
         leverage=leverage,
         product=product,
         exchange=str(need("broker", "exchange")),
-        slippage_bps_per_side=SLIPPAGE_BPS_PER_SIDE,
+        slippage_bps_per_side=(
+            SLIPPAGE_BPS_PER_SIDE if slippage_bps_per_side is None else float(slippage_bps_per_side)
+        ),
     )
 
 
@@ -211,28 +223,39 @@ def next_run_id(runs_dir: Path, run_date: str, slug: str) -> str:
     """`<date>-<slug>-vN` where N follows the highest version this idea already has."""
     pattern = re.compile(rf"^\d{{4}}-\d{{2}}-\d{{2}}-{re.escape(slug)}-v(\d+)$")
     highest = 0
-    if runs_dir.is_dir():
-        for path in runs_dir.glob("*.json"):
-            match = pattern.match(path.stem)
-            if match:
-                highest = max(highest, int(match.group(1)))
+    for run_id in _existing_run_ids(runs_dir):
+        match = pattern.match(run_id)
+        if match:
+            highest = max(highest, int(match.group(1)))
     return f"{run_date}-{slug}-v{highest + 1}"
 
 
 def _existing_run_ids(runs_dir: Path) -> set[str]:
-    return {p.stem for p in runs_dir.glob("*.json")} if runs_dir.is_dir() else set()
+    """Ids of flat records plus run folders (a committed folder consumes its id)."""
+    if not runs_dir.is_dir():
+        return set()
+    ids = {p.stem for p in runs_dir.glob("*.json") if not p.name.startswith(".")}
+    ids |= {
+        p.name
+        for p in runs_dir.iterdir()
+        if p.is_dir() and not p.name.startswith(".") and not p.name.endswith(".reproductions")
+    }
+    return ids
 
 
-def write_run(runs_dir: Path, record: dict[str, Any]) -> Path:
-    """Write `record` as `<run_id>.json`, atomically, refusing to replace an existing run.
+def serialise_run(record: Mapping[str, Any]) -> str:
+    """The flat record as JSON text. Raises ValueError for NaN or infinity, before any write."""
+    return json.dumps(record, indent=2, allow_nan=False) + "\n"
 
-    The text is fully built before anything touches disk, so a NaN fails cleanly. It is
-    written to a temp file then hard-linked into place: link() fails if the target exists,
-    which makes "create only if absent" a single atomic step.
+
+def write_run_text(runs_dir: Path, run_id: str, text: str) -> Path:
+    """Place `text` as `<run_id>.json`, atomically, refusing to replace an existing run.
+
+    It is written to a temp file then hard-linked into place: link() fails if the target
+    exists, which makes "create only if absent" a single atomic step.
     """
-    text = json.dumps(record, indent=2, allow_nan=False) + "\n"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    target = runs_dir / f"{record['run_id']}.json"
+    target = runs_dir / f"{run_id}.json"
     fd, tmp_name = tempfile.mkstemp(dir=runs_dir, prefix=".run-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -241,6 +264,14 @@ def write_run(runs_dir: Path, record: dict[str, Any]) -> Path:
     finally:
         os.unlink(tmp_name)
     return target
+
+
+def write_run(runs_dir: Path, record: dict[str, Any]) -> Path:
+    """Write `record` as `<run_id>.json`, atomically, refusing to replace an existing run.
+
+    The text is fully built before anything touches disk, so a NaN fails cleanly.
+    """
+    return write_run_text(runs_dir, record["run_id"], serialise_run(record))
 
 
 def _iso(day: Any) -> str:
@@ -266,17 +297,50 @@ def default_oos_start(
     return trade_days[int(len(trade_days) * (1 - fraction))]
 
 
-def _cost_model_or_none(kind: str) -> CostModel | None:
+def _cost_model_or_none(kind: str, slippage_bps_per_side: float | None = None) -> CostModel | None:
     """The deployed cost model, or None (logged) when config.yaml cannot supply it."""
     try:
-        return deployed_cost_model(kind)
+        return deployed_cost_model(kind, slippage_bps_per_side=slippage_bps_per_side)
     except (KeyError, OSError, ValueError, yaml.YAMLError):
         logger.exception("Per-trade cost model unavailable; record has no cost_model block")
         return None
 
 
-def execute_backtest(key: str) -> Execution:
-    """Run strategy `key` with shipped defaults on the full Historify universe."""
+def _apply_profile_settings(run: Any, cfg: Mapping[str, Any]) -> Any:
+    """Overlay the deployment profile's square-off settings on an intraday RunConfig."""
+    changes: dict[str, Any] = {}
+    for name in ("mis_squareoff_min", "squareoff_margin_min"):
+        if name in cfg:
+            changes[name] = int(cfg[name])
+    if "time_exit_min" in cfg:
+        changes["time_exit_min"] = min(int(run.time_exit_min), int(cfg["time_exit_min"]))
+    return run.with_(**changes) if changes else run
+
+
+def _end_of_session(end: str | None) -> str | None:
+    """`end` (an ISO date) as the last second of that session, or None.
+
+    The loaders compare `timestamp <= end`, and a bare date is midnight IST, which would drop
+    that session's own bars; the closing second keeps the whole session.
+    """
+    return None if end is None else f"{date.fromisoformat(end).isoformat()} 23:59:59"
+
+
+def execute_backtest(
+    key: str, settings: Mapping[str, Any] | None = None, end: str | None = None
+) -> Execution:
+    """Run strategy `key` with shipped defaults on the full Historify universe.
+
+    `settings` is the frozen execution configuration (keys cost_bps, mis_squareoff_min,
+    squareoff_margin_min, time_exit_min, slippage_bps_per_side). Without it the engine
+    defaults apply. The profile's square-off values win over the strategy's overrides, and the
+    time exit is only ever tightened.
+
+    `end` (ISO date) limits every data load, the baseline reloads included, to sessions up to
+    and including that day; None loads everything available.
+    """
+    cfg = dict(settings or {})
+    until = _end_of_session(end)
     from signal_engine.backtest import __main__ as cli
     from signal_engine.backtest import data
     from signal_engine.backtest.harness import Backtest
@@ -287,13 +351,16 @@ def execute_backtest(key: str) -> Execution:
     cls, params_cls, kind = cli.REGISTRY[key]
     strategy, params = cls(), params_cls()
     if kind == "swing":
-        frames = data.from_historify_daily(min_sessions=500)
-        run = SwingRunConfig(cost_bps=SWING_COST_BPS)
+        frames = data.from_historify_daily(min_sessions=500, end=until)
+        run = SwingRunConfig(cost_bps=cfg.get("cost_bps", SWING_COST_BPS))
         universe, bar_size = len(frames), "1d"
         bt = Backtest(strategy, frames, run, engine=simulate_swing, release_raw=True)
     else:
-        frames = data.from_historify(interval="5m")
-        run = RunConfig(cost_bps=INTRADAY_COST_BPS).with_(**getattr(strategy, "run_overrides", {}))
+        frames = data.from_historify(interval="5m", end=until)
+        run = RunConfig(cost_bps=cfg.get("cost_bps", INTRADAY_COST_BPS)).with_(
+            **getattr(strategy, "run_overrides", {})
+        )
+        run = _apply_profile_settings(run, cfg)
         universe, bar_size = len(frames), "5m"
         bt = Backtest(strategy, frames, run, release_raw=True)
     days = [_iso(d) for d in bt.days]
@@ -306,14 +373,18 @@ def execute_backtest(key: str) -> Execution:
         if sample:
             baseline = random_entry_baseline_intraday(
                 sample,
-                data.from_historify(symbols=sorted({t.symbol for t in sample}), interval="5m"),
+                data.from_historify(
+                    symbols=sorted({t.symbol for t in sample}), interval="5m", end=until
+                ),
                 float(run.cost_bps),
                 population_trades=len(trades),
             )
     if kind == "swing":
         # The engine released its raw frames, so reload the (small, daily) panel.
         baseline = random_entry_baseline(
-            trades, data.from_historify_daily(min_sessions=500), float(run.cost_bps)
+            trades,
+            data.from_historify_daily(min_sessions=500, end=until),
+            float(run.cost_bps),
         )
     return Execution(
         trades=trades,
@@ -333,7 +404,8 @@ def execute_backtest(key: str) -> Execution:
         costs={"model": "flat-round-trip-bps", "round_trip_bps": float(run.cost_bps)},
         days=days,
         baseline=baseline,
-        cost_model=_cost_model_or_none(kind),
+        cost_model=_cost_model_or_none(kind, cfg.get("slippage_bps_per_side")),
+        symbols=sorted(frames),
     )
 
 
@@ -372,6 +444,46 @@ def _regime_inputs(
     return days, jsonable(source), ""
 
 
+#: Frozen resolved field -> `settings` key handed to the execute callable.
+_SETTINGS_FIELDS = {
+    "cost_bps": "execution.cost_bps_round_trip",
+    "mis_squareoff_min": "profile.mis_squareoff_min",
+    "squareoff_margin_min": "profile.squareoff_margin_min",
+    "time_exit_min": "profile.time_exit_min",
+    "slippage_bps_per_side": "execution.slippage_bps_per_side",
+}
+
+
+def _execute_frozen(
+    execute: Callable[..., Execution], key: str, frozen: Any, end: str | None = None
+) -> Execution:
+    """Run `execute`, passing the frozen settings and `end` when it accepts them, then verify
+    the cost."""
+    settings = {
+        name: frozen.resolved[field_name]["value"]
+        for name, field_name in _SETTINGS_FIELDS.items()
+        if field_name in frozen.resolved
+    }
+    try:
+        accepted = inspect.signature(execute).parameters
+    except (TypeError, ValueError):
+        accepted = {}
+    kwargs: dict[str, Any] = {}
+    if "settings" in accepted:
+        kwargs["settings"] = settings
+    if "end" in accepted:
+        kwargs["end"] = end
+    execution = execute(key, **kwargs)
+    expected = frozen.resolved["execution.cost_bps_round_trip"]["value"]
+    actual = execution.costs.get("round_trip_bps")
+    if actual is None or float(actual) != float(expected):
+        raise ValueError(
+            "execution did not use the frozen configuration: round_trip_bps "
+            f"{actual!r} != frozen {expected!r}"
+        )
+    return execution
+
+
 def record_idea(
     root: Path,
     idea_id: str,
@@ -388,8 +500,31 @@ def record_idea(
     regimes: Callable[[], regime_data.RegimeInputs] | None = None,
     parent_version: str | None = None,
     version_label: str | None = None,
+    allow_dirty: bool = False,
+    git_state_fn: Callable[[Path], dict[str, Any]] | None = None,
+    dataset_fingerprint_fn: Callable[[Sequence[str], str, str], str] | None = None,
+    readiness_missing_fn: Callable[[], list[str]] | None = None,
+    now: datetime | None = None,
+    frozen: intake_freeze.FrozenSpec | None = None,
+    end: str | None = None,
 ) -> Path:
-    """Run one idea and write its record. Returns the path written.
+    """Run one idea, write its immutable run folder and then the flat record. Returns the
+    flat record's path.
+
+    The order is: key check, parent check, dirty check, freeze, version dry run, execute,
+    run id, record build, second git read, then everything that can raise is built and validated
+    in memory (fingerprint, readiness, environment, report, manifest, flat record text), then
+    version registration, folder commit and the flat record. Anything raised before the version
+    registration leaves no folder, no flat record, no version and no consumed run id. A tree
+    that changed during the run raises DirtyTreeError unless `allow_dirty`. `allow_dirty` records a run made from
+    uncommitted result-affecting code as non-reproducible. The `*_fn` hooks default to the real
+    `manifest.git_state`, `manifest.dataset_fingerprint` and `readiness.missing_p1`, looked up
+    at call time.
+
+    `frozen` is a FrozenSpec to run instead of freezing the idea's current spec (a rerun of a
+    recorded run): the freeze step, the version dry run and the version registration are
+    skipped because its version is already registered; every other check still applies. `end`
+    (ISO date) is passed to an `execute` that accepts it, limiting the data to that session.
 
     `regimes` loads the NIFTY and VIX inputs for the per-regime block. Left empty the record
     has no `regimes` block; a loader that raises is logged, the record is still written, and
@@ -414,14 +549,22 @@ def record_idea(
     runs_dir = folder / "runs"
     if parent is not None and parent not in _existing_run_ids(runs_dir):
         raise ValueError(f"parent run '{parent}' is not a run of {idea_id}")
+    run_artifact.require_aware(now)
+    git_fn = git_state_fn or manifest_mod.git_state
+    git = git_fn(root)
+    run_artifact.check_clean(git, allow_dirty)
     # Freeze is the last gate before anything executes: it refuses an idea that is not Backtest
     # Ready. The version is only checked here (a bad parent or label fails before the backtest
     # runs) and is registered once the record is built, so a failed run leaves no orphan version.
-    frozen = intake_freeze.freeze(folder, idea_id=idea_id, register_version=False)
     version_args = {"parent": parent_version, "label": version_label, "note": note}
-    intake_freeze.register(folder, frozen, dry_run=True, **version_args)
+    if frozen is None:
+        frozen = intake_freeze.freeze(folder, idea_id=idea_id, register_version=False)
+        intake_freeze.register(folder, frozen, dry_run=True, **version_args)
+        register_version = True
+    else:
+        register_version = False
 
-    execution = execute(key)
+    execution = _execute_frozen(execute, key, frozen, end=end)
     n_trials = trials if trials is not None else 1
     trials_note = (
         f"n_trials={n_trials} as stated by the caller."
@@ -430,9 +573,12 @@ def record_idea(
         "so hurdle_t is a lower bound."
     )
     regime_days, regime_source, regime_note = _regime_inputs(regimes)
+    # The id is chosen only now, after the long backtest, to keep the window in which another
+    # process could take it as short as possible.
+    run_id = next_run_id(runs_dir, run_date, run_slug(folder))
     record = build_run_record(
         execution.trades,
-        run_id=next_run_id(runs_dir, run_date, run_slug(folder)),
+        run_id=run_id,
         run_date=run_date,
         code_version=git_version(root),
         data=execution.data,
@@ -456,8 +602,124 @@ def record_idea(
             f"{regime_note}"
         ),
     )
-    intake_freeze.register(folder, frozen, **version_args)
-    return write_run(runs_dir, record)
+    # The tree may have changed while the backtest ran: read it again, then build and validate
+    # everything that can raise before anything is written.
+    engine = run_artifact.settle_git(git, git_fn(root), allow_dirty)
+    readiness_missing = (readiness_missing_fn or readiness.missing_p1)()
+    # The manifest records the dry-run version; the real registration must agree with it.
+    dry = (
+        intake_freeze.register(folder, frozen, dry_run=True, **version_args)
+        if register_version
+        else frozen
+    )
+    prepared = run_artifact.prepare_run_artifact(
+        runs_dir=runs_dir,
+        idea_folder=folder,
+        idea_id=idea_id,
+        record=record,
+        frozen=dry,
+        execution=execution,
+        cost_model_json=jsonable(execution.cost_model),
+        engine=engine,
+        dataset_fingerprint_fn=dataset_fingerprint_fn or manifest_mod.dataset_fingerprint,
+        readiness_missing=readiness_missing,
+        parent_run_id=parent,
+        now=now or datetime.now(IST),
+    )
+    flat_text = serialise_run(prepared.flat)
+    if register_version:
+        registered = intake_freeze.register(folder, frozen, **version_args)
+        if (registered.version, registered.parent_version) != (dry.version, dry.parent_version):
+            raise RuntimeError(
+                f"version registered as {registered.version} but the manifest recorded {dry.version}"
+            )
+    prepared.commit(runs_dir)
+    return write_run_text(runs_dir, run_id, flat_text)
+
+
+class RerunError(Exception):
+    """The run to rerun or reproduce does not exist or has no manifest to rebuild from."""
+
+
+class InvalidRunId(RerunError, ValueError):
+    """A run id from the command line that is not shaped like a generated run id."""
+
+
+def validate_run_id(run_id: str) -> str:
+    """Return `run_id` if it is `<date>-<slug>-v<n>`, else raise InvalidRunId.
+
+    Checked before any path is built from it, so '../x', an absolute path or a name with a
+    slash or newline never reaches the filesystem.
+    """
+    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
+        raise InvalidRunId(f"'{run_id}' is not a valid run id (expected <date>-<slug>-v<n>)")
+    return run_id
+
+
+def find_run_folder(root: Path, run_id: str) -> tuple[str, Path]:
+    """The (idea id, run folder) of `run_id`. Raises RerunError if no idea has that run folder
+    or the folder has no manifest (a legacy run, which cannot be rebuilt)."""
+    validate_run_id(run_id)
+    for idea_id, folder in idea_folders(root).items():
+        run_folder = folder / "runs" / run_id
+        if run_folder.is_dir():
+            if not (run_folder / "manifest.json").is_file():
+                raise RerunError(f"run {run_id} has no manifest.json, so it cannot be rebuilt")
+            return idea_id, run_folder
+    raise RerunError(f"run '{run_id}' is not a run folder of any idea under {root}")
+
+
+def record_rerun(
+    root: Path, run_id: str, *, end: str | None = None, note: str = "", **kwargs: Any
+) -> Path:
+    """Record a new run of the frozen strategy `run_id` was made from, against current data.
+
+    The strategy version is the run's own, the parent is `run_id`, and the result is classified
+    by the usual change classes. `end` limits the data to that session; None uses everything
+    available. The other keyword arguments are those of `record_idea`. Raises RerunError for an
+    unknown run or one without a manifest, and FreezeError if its folder does not verify.
+    """
+    idea_id, run_folder = find_run_folder(root, run_id)
+    frozen = intake_freeze.from_run_folder(run_folder)
+    return record_idea(
+        root,
+        idea_id,
+        frozen=frozen,
+        parent=run_id,
+        end=end,
+        note=note or f"rerun of {run_id}",
+        **kwargs,
+    )
+
+
+def _reproduce_main(
+    args: argparse.Namespace,
+    run: Callable[..., Execution],
+    keys: Iterable[str],
+    hooks: Mapping[str, Any],
+) -> int:
+    from signal_engine.backtest import reproduce as reproduce_mod
+
+    try:
+        _, run_folder = find_run_folder(args.root, args.reproduce)
+    except RerunError:
+        logger.exception("Cannot reproduce %s", args.reproduce)
+        return 1
+    report = reproduce_mod.reproduce(
+        run_folder,
+        root=args.root,
+        execute=run,
+        supported=keys,
+        git_state_fn=hooks["git_state_fn"],
+        dataset_fingerprint_fn=hooks["dataset_fingerprint_fn"],
+    )
+    if report.reproducible:
+        sys.stdout.write(
+            f"reproducible: {report.run_id} ({report.compared_trades} trades identical)\n"
+        )
+        return 0
+    sys.stdout.write(f"not reproducible: {report.run_id}: {'; '.join(report.reasons)}\n")
+    return 1
 
 
 def _summary_line(path: Path) -> str:
@@ -486,12 +748,22 @@ def main(
     execute: Callable[[str], Execution] | None = None,
     supported: Iterable[str] | None = None,
     regimes: Callable[[], regime_data.RegimeInputs] | None = None,
+    git_state_fn: Callable[[Path], dict[str, Any]] | None = None,
+    dataset_fingerprint_fn: Callable[[Sequence[str], str, str], str] | None = None,
+    readiness_missing_fn: Callable[[], list[str]] | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog="signal_engine.backtest.record_run")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--idea", help="idea id, e.g. IDEA-012")
     target.add_argument("--all", action="store_true", help="every idea with a backtest module")
+    target.add_argument(
+        "--rerun", metavar="RUN_ID", help="rerun this run's frozen strategy on current data"
+    )
+    target.add_argument(
+        "--reproduce", metavar="RUN_ID", help="rerun this run on its own data and compare trades"
+    )
+    parser.add_argument("--end", help="YYYY-MM-DD last session to load (with --rerun)")
     parser.add_argument("--parent", help="run id this run descends from (with --idea)")
     parser.add_argument("--note", default="", help="what changed since the parent")
     parser.add_argument("--parent-version", help="strategy version a new version descends from")
@@ -507,8 +779,22 @@ def main(
     parser.add_argument(
         "--no-regimes", action="store_true", help="skip the per-regime block (no network needed)"
     )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="record a run from uncommitted code (marked non-reproducible, not promotable)",
+    )
     parser.add_argument("--run-date", default=datetime.now(IST).date().isoformat())
     args = parser.parse_args(argv)
+    if args.end and not args.rerun:
+        parser.error("--end applies to --rerun only")
+    if args.end:
+        try:
+            date.fromisoformat(args.end)
+        except ValueError:
+            parser.error(f"--end must be YYYY-MM-DD, got {args.end!r}")
+    if (args.rerun or args.reproduce) and (args.parent or args.parent_version or args.version):
+        parser.error("--parent, --parent-version and --version do not apply to --rerun/--reproduce")
     if args.all and (args.parent or args.oos_start):
         parser.error("--parent and --oos-start apply to a single idea, not --all")
     try:
@@ -518,34 +804,49 @@ def main(
 
     keys = set(supported) if supported is not None else supported_keys()
     run = execute or execute_backtest
+    if args.reproduce:
+        hooks = {"git_state_fn": git_state_fn, "dataset_fingerprint_fn": dataset_fingerprint_fn}
+        return _reproduce_main(args, run, keys, hooks)
     load_regimes = None
     if not args.no_regimes:
         # An injected `execute` is a test double: do not reach for the real data stores.
         load_regimes = regimes or (regime_data.load_regime_inputs if execute is None else None)
         if load_regimes is not None:
             load_regimes = functools.cache(load_regimes)  # one load serves every idea in --all
-    ids = _ideas_with_module(args.root) if args.all else [args.idea]
+    ids = _ideas_with_module(args.root) if args.all else [args.idea or args.rerun]
     failures = 0
     for idea_id in ids:
         try:
-            path = record_idea(
-                args.root,
-                idea_id,
-                execute=run,
-                run_date=args.run_date,
-                supported=keys,
-                parent=args.parent,
-                parent_version=args.parent_version,
-                version_label=args.version,
-                note=args.note,
-                trials=args.trials,
-                oos_start=args.oos_start,
-                position_caps=position_caps,
-                validation=args.validation,
-                regimes=load_regimes,
-            )
+            common = {
+                "execute": run,
+                "run_date": args.run_date,
+                "supported": keys,
+                "note": args.note,
+                "trials": args.trials,
+                "oos_start": args.oos_start,
+                "position_caps": position_caps,
+                "validation": args.validation,
+                "regimes": load_regimes,
+                "allow_dirty": args.allow_dirty,
+                "git_state_fn": git_state_fn,
+                "dataset_fingerprint_fn": dataset_fingerprint_fn,
+                "readiness_missing_fn": readiness_missing_fn,
+            }
+            if args.rerun:
+                path = record_rerun(args.root, args.rerun, end=args.end, **common)
+            else:
+                path = record_idea(
+                    args.root,
+                    idea_id,
+                    parent=args.parent,
+                    parent_version=args.parent_version,
+                    version_label=args.version,
+                    **common,
+                )
         except (
+            RerunError,
             Unsupported,
+            run_artifact.DirtyTreeError,
             spec.SpecError,
             intake_freeze.FreezeError,
             versions.VersionError,

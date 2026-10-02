@@ -13,6 +13,7 @@ state itself is computed (see `state.py`), never stored.
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 from collections.abc import Iterable, Mapping
@@ -323,17 +324,39 @@ def _make_entry(entry_id: str, name: str, row: _Row, confirmed: bool) -> Assumpt
     )
 
 
+def sealed_next_id(folder: Path) -> int:
+    """The lowest id that no sealed run snapshot has used.
+
+    Each run seals its own ledger in `runs/<run_id>/assumptions.json`. A reference to a ledger id
+    is always read against that snapshot, so an old run can never be reinterpreted. This floor
+    also keeps numbering above every sealed id, so deleting the working `assumptions.yaml` cannot
+    restart ids below one a run has cited. Raises LedgerError for an unreadable snapshot.
+    """
+    floor = 1
+    for path in sorted((folder / "runs").glob("*/assumptions.json")):
+        if path.parent.name.startswith("."):
+            continue  # a half-written temp directory of a run that never committed
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            ids = [int(_ID.match(e["id"]).group(1)) for e in raw["entries"]]
+            floor = max(floor, int(raw["next_id"]), max(ids, default=0) + 1)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise LedgerError(f"{path}: sealed ledger snapshot is unreadable ({exc})") from exc
+    return floor
+
+
 def resolve(
     spec: Any,
     overrides: Mapping[str, Any] | None = None,
     existing: Ledger | None = None,
     profiles_dir: Path | None = None,
+    floor_next_id: int = 0,
 ) -> Ledger:
     """Build the ledger for a spec, merged with an existing one.
 
     Merging keeps an entry's id. Its confirmation is kept only while its value and source are
     unchanged, so a confirmation never carries over to a value the author did not see. Ids are
-    never reused. Works on an incomplete spec: it records what it can and skips the rest.
+    never reused, and `floor_next_id` (see `sealed_next_id`) keeps new ids above sealed ones. Works on an incomplete spec: it records what it can and skips the rest.
     Raises ExecutionError for a bad override.
     """
     data = spec if isinstance(spec, Mapping) else {}
@@ -344,7 +367,7 @@ def resolve(
             rows[name] = replace(rows[name], value=value, source="user", reason=reason)
     previous = {e.field: e for e in existing.entries} if existing else {}
     highest = max((int(_ID.match(e.id).group(1)) for e in previous.values()), default=0)
-    next_id = max(existing.next_id if existing else 0, highest + 1, 1)
+    next_id = max(existing.next_id if existing else 0, highest + 1, floor_next_id, 1)
     entries: list[Assumption] = []
     for f in fields.FIELDS:
         row = rows.get(f.name)

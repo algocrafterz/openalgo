@@ -379,3 +379,71 @@ class TestImports:
             check=False,
         )
         assert done.returncode == 0, done.stderr
+
+
+class TestSealedHighWater:
+    def _seal(self, folder, run_id, ids, next_id):
+        import json
+
+        run = folder / "runs" / run_id
+        run.mkdir(parents=True)
+        entries = [{"id": i, "field": f"f{n}"} for n, i in enumerate(ids)]
+        (run / "assumptions.json").write_text(
+            json.dumps(
+                {"sealed_ist": "2026-10-02T14:00:00+05:30", "next_id": next_id, "entries": entries}
+            ),
+            encoding="utf-8",
+        )
+
+    def test_no_runs_gives_one(self, tmp_path):
+        assert ledger.sealed_next_id(tmp_path) == 1
+
+    def test_is_above_every_id_and_next_id_in_every_snapshot(self, tmp_path):
+        self._seal(tmp_path, "2026-10-02-x-v1", ["A-001", "A-050"], 51)
+        self._seal(tmp_path, "2026-10-02-x-v2", ["A-002", "A-007"], 60)
+        assert ledger.sealed_next_id(tmp_path) == 60
+
+    def test_ids_above_next_id_still_count(self, tmp_path):
+        self._seal(tmp_path, "r1", ["A-090"], 5)
+        assert ledger.sealed_next_id(tmp_path) == 91
+
+    def test_unreadable_snapshot_raises(self, tmp_path):
+        run = tmp_path / "runs" / "r1"
+        run.mkdir(parents=True)
+        (run / "assumptions.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(ledger.LedgerError, match="snapshot"):
+            ledger.sealed_next_id(tmp_path)
+
+    def test_stale_temp_run_directories_are_skipped(self, tmp_path):
+        self._seal(tmp_path, "2026-10-02-x-v1", ["A-003"], 4)
+        stale = tmp_path / "runs" / ".2026-10-02-x-v2.tmp-abc123"
+        stale.mkdir()
+        (stale / "assumptions.json").write_text("{half written", encoding="utf-8")
+        assert ledger.sealed_next_id(tmp_path) == 4
+
+    def test_resolve_floor_keeps_new_ids_above_sealed_ids(self, tmp_path):
+        led = ledger.resolve(make_spec(), floor_next_id=60)
+        ids = [int(e.id[2:]) for e in led.entries]
+        assert min(ids) == 60 and led.next_id == max(ids) + 1
+
+    def test_deleted_working_ledger_cannot_restart_below_a_sealed_id(self, tmp_path):
+        from signal_engine.research.intake import freeze
+        from signal_engine.tests.intake_fixtures import write_spec
+
+        write_spec(tmp_path)
+        first = freeze.freeze(tmp_path, register_version=False)
+        top = max(int(e.id[2:]) for e in first.ledger)
+        self._seal(tmp_path, "2026-10-02-x-v1", [e.id for e in first.ledger], top + 1)
+        again = freeze.freeze(tmp_path, register_version=False)
+        assert min(int(e.id[2:]) for e in again.ledger) > top
+
+    def test_cli_resolve_respects_the_floor(self, tmp_path):
+        from signal_engine.research.intake import cli
+        from signal_engine.tests.intake_fixtures import write_spec
+
+        folder = tmp_path / "research" / "ideas" / "idea-012-sample"
+        write_spec(folder)
+        self._seal(folder, "r1", ["A-040"], 41)
+        assert cli.main(["resolve", "IDEA-012"], root=tmp_path) == 0
+        saved = ledger.load(folder)
+        assert min(int(e.id[2:]) for e in saved.entries) >= 41

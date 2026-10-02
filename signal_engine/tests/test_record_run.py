@@ -95,6 +95,19 @@ def _make_idea(root: Path, number: str, slug: str, module: str) -> Path:
     return folder
 
 
+@pytest.fixture(autouse=True)
+def _stub_provenance(monkeypatch):
+    """Roots here are not git checkouts and have no Historify store: stub both lookups."""
+    from signal_engine.backtest import manifest
+
+    monkeypatch.setattr(
+        manifest,
+        "git_state",
+        lambda root: {"code_commit": "a" * 40, "code_dirty": False, "dirty_paths": []},
+    )
+    monkeypatch.setattr(manifest, "dataset_fingerprint", lambda symbols, interval, as_of: "d" * 64)
+
+
 @pytest.fixture
 def root(tmp_path: Path) -> Path:
     _make_idea(tmp_path, "009", "orb", "backtest/strategies/orb.py")

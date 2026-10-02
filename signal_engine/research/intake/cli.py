@@ -27,7 +27,12 @@ def _out(text: str = "") -> None:
 
 
 def _working_ledger(folder: Path, data):
-    return ledger.resolve(data, execution.load_overrides(folder), existing=ledger.load(folder))
+    return ledger.resolve(
+        data,
+        execution.load_overrides(folder),
+        existing=ledger.load(folder),
+        floor_next_id=ledger.sealed_next_id(folder),
+    )
 
 
 def _report(idea: str, data, led: ledger.Ledger) -> state.StateResult:

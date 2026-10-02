@@ -34,6 +34,19 @@ Body.
 """
 
 
+@pytest.fixture(autouse=True)
+def _stub_provenance(monkeypatch):
+    """tmp_path roots are not git checkouts and have no Historify store: stub both lookups."""
+    from signal_engine.backtest import manifest
+
+    monkeypatch.setattr(
+        manifest,
+        "git_state",
+        lambda root: {"code_commit": "a" * 40, "code_dirty": False, "dirty_paths": []},
+    )
+    monkeypatch.setattr(manifest, "dataset_fingerprint", lambda symbols, interval, as_of: "d" * 64)
+
+
 def _trade(day):
     return Trade(
         symbol="A.NS",

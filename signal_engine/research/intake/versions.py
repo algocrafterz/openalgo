@@ -30,6 +30,12 @@ _KEYS = ("version", "strategy_fingerprint", "parent", "created_ist", "note")
 _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---(?=\r?\n|\Z)", re.DOTALL)
 
 
+def require_aware(now: datetime | None) -> None:
+    """Raise ValueError for a naive datetime: it would silently be read as local time."""
+    if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+        raise ValueError("now must be timezone-aware")
+
+
 class VersionError(Exception):
     """versions.yaml is invalid, or a version, parent, label or pointer is not acceptable."""
 
@@ -154,6 +160,7 @@ def resolve_version(
     writing anything when the parent or label is not acceptable. With `dry_run` it performs
     every check and returns what would happen, but writes nothing.
     """
+    require_aware(now)
     existing = load_versions(folder)
     for entry in existing:
         if entry.strategy_fingerprint == strategy_fingerprint:

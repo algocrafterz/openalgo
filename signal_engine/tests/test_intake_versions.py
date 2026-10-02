@@ -263,3 +263,28 @@ class TestHardening:
         versions.set_pointer(tmp_path, "current_version", "v1")
         out = (tmp_path / "idea.md").read_text(encoding="utf-8")
         assert "current_version_note: keep me" in out and "current_version: v1" in out
+
+
+class TestNaiveNow:
+    NAIVE = datetime(2026, 10, 2, 14, 0)
+
+    def test_resolve_version_rejects_naive(self, tmp_path):
+        with pytest.raises(ValueError, match="now must be timezone-aware"):
+            versions.resolve_version(tmp_path, FP_A, now=self.NAIVE)
+        assert not (tmp_path / "versions.yaml").exists()
+
+    def test_resolve_version_dry_run_rejects_naive_too(self, tmp_path):
+        with pytest.raises(ValueError, match="now must be timezone-aware"):
+            versions.resolve_version(tmp_path, FP_A, now=self.NAIVE, dry_run=True)
+
+    def test_freeze_and_register_reject_naive(self, tmp_path):
+        from signal_engine.research.intake import freeze
+        from signal_engine.tests.intake_fixtures import write_spec
+
+        write_spec(tmp_path)
+        with pytest.raises(ValueError, match="now must be timezone-aware"):
+            freeze.freeze(tmp_path, now=self.NAIVE)
+        frozen = freeze.freeze(tmp_path, register_version=False)
+        with pytest.raises(ValueError, match="now must be timezone-aware"):
+            freeze.register(tmp_path, frozen, now=self.NAIVE)
+        assert not (tmp_path / "versions.yaml").exists()

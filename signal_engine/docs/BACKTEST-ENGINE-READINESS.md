@@ -27,8 +27,8 @@ with tests green, ruff clean and a commit.
 | Order | Work | Status | Commit |
 | --- | --- | --- | --- |
 | 1 | Engine P1 step 1: spec v2, profiles, execution resolution | done 2026-10-02 | `27626054d` |
-| 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | see `git log` (feat(research): assumption ledger, intake states, freeze, versions) |
-| 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5) | not started | |
+| 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | `32eb6f00a`, plus `b5f40c0fd` (entry window against the profile; classification planned) |
+| 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5), ledger id fix | done 2026-10-02 | see `git log` (feat(backtest): immutable run folder, manifest, change classes, rerun and reproduce) |
 | 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | not started | |
 | 5 | UI U1 and glossary | not started | |
 | 6 | UI U3 (comparison) | not started | |
@@ -38,7 +38,9 @@ with tests green, ruff clean and a commit.
 Findings carried forward from implementation (raised, not designed around):
 - Resolved 2026-10-02: the entry window is now validated against the profile's standing time exit (`Profile.entry_window_problem`).
 - The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4 (confirmed by the owner).
-- Ledger ids can restart if `assumptions.yaml` is deleted. Step 3 fixes this by sealing a ledger snapshot with each run and seeding `next_id` from it.
+- Resolved 2026-10-02 (step 3): each run seals its ledger snapshot (`assumptions.json`) and the working ledger's `next_id` is floored by `ledger.sealed_next_id`, so deleting `assumptions.yaml` cannot restart ids below a sealed one.
+- The EDGE-capped-at-MARGINAL rule (plan decision 1) is not implemented in step 3: the verdict is calculated in build order 4, so runs record `missing_capabilities` and a null verdict until then.
+- The dirty-tree check counts only result-affecting paths (Python outside tests, config.yaml, uv.lock, pyproject.toml, research profiles). Docs, generated registry files, run outputs and frontend files do not block a run.
 - Strategy classification (`STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md`) is planned in `BACKTESTS-UI-PLAN.md` and built in build order 4 (data) and 5 and 7 (UI). The legacy frontmatter `category` is left unchanged; retiring it is an open decision.
 - Profile-sourced values (`profile.*`) are Medium materiality, not High, because the author selects the profile by name. A High default would force a confirmation on every idea.
 
@@ -56,7 +58,7 @@ Findings carried forward from implementation (raised, not designed around):
 | Deployment profile: MIS force-flat 15:00, CNC carry-forward | built 2026-10-02 (declared and mapped to `RunConfig`; engine enforcement of CNC carry-forward is confirmed in step 5) | `research/intake/profiles.py`, `research/profiles/flattrade-nse-cash.yaml`, `research/intake/execution.py` | `tests/test_intake_profiles.py`, `tests/test_intake_execution.py` | |
 | Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version | not started | | | |
 | Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade) | not started | | | |
-| Run manifest and run folder layout; immutable artifacts retained and addressable | not started | | | |
+| Run manifest and run folder layout; immutable artifacts retained and addressable | built 2026-10-02 (7-file run folder committed atomically and read-only, manifest with the 8 component fingerprints and reproducibility flags, schema 3 flat record, dirty-tree refusal and `--allow-dirty`, change classes, `--rerun`, `--reproduce`, registry check of folder and manifest hash; derived verdict, promotion and next action are written as null until build order 4) | `backtest/{artifacts,manifest,trades_io,fingerprints,change_class,run_artifact,reproduce}.py`, `backtest/record_run.py`, `research/readiness.py`, `research/intake/freeze.py` (`from_run_folder`), `research/build_registry.py` (schema 3 checks) | `tests/test_run_artifacts.py`, `test_manifest.py`, `test_trades_io.py`, `test_backtest_fingerprints.py`, `test_change_class.py`, `test_run_artifact_write.py`, `test_reproduce.py`, `test_rerun.py`, `test_readiness.py`, `test_registry_v3.py` | |
 | Per-component cost decomposition per trade | not started | | | |
 | Validity vs performance failure handling in the gate runner | not started | | | |
 | Trial counting under the acceptance-criteria definition | not started | | | |

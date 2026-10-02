@@ -30,6 +30,7 @@ from typing import Any
 
 import yaml
 
+from signal_engine.backtest import manifest as run_manifest
 from signal_engine.research.intake import spec, versions
 
 STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
@@ -401,7 +402,121 @@ def _validate_rejection_basis(idea: dict[str, Any]) -> list[str]:
     return []
 
 
-def _validate_run(run: Any) -> list[str]:
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+V3_REQUIRED_FILES = (
+    "manifest.json",
+    "assumptions.json",
+    "strategy/spec.yaml",
+    "strategy/strategy.json",
+    "execution/config.json",
+    "evidence/trades.parquet",
+    "report/report.json",
+)
+
+
+def _is_str_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(x, str) for x in value)
+
+
+def _v3_field_problems(run: dict[str, Any]) -> list[str]:
+    """Presence and type checks for the schema 3 index fields."""
+    checks = {
+        "artifact_dir": lambda v: isinstance(v, str) and v.endswith("/"),
+        "manifest_sha256": lambda v: isinstance(v, str) and bool(_HEX64.match(v)),
+        "strategy_version": lambda v: isinstance(v, str),
+        "strategy_fingerprint": lambda v: isinstance(v, str) and bool(_HEX64.match(v)),
+        "change_classes": _is_str_list,
+        "reproducible": lambda v: isinstance(v, bool),
+        "code_dirty": lambda v: isinstance(v, bool),
+        "promotion_eligible": lambda v: isinstance(v, bool),
+        "missing_capabilities": _is_str_list,
+    }
+    problems: list[str] = []
+    for field, ok in checks.items():
+        if field not in run:
+            problems.append(f"missing field '{field}'")
+        elif not ok(run[field]):
+            problems.append(f"'{field}' has the wrong type or format: {run[field]!r}")
+    return problems
+
+
+def _resolve_artifact_dir(run: dict[str, Any], runs_dir: Path) -> tuple[Path | None, str | None]:
+    """Resolve artifact_dir inside runs_dir. Returns (path, None) or (None, problem)."""
+    rel = run["artifact_dir"]
+    if rel.startswith(("/", "\\")) or ".." in rel.replace("\\", "/").split("/"):
+        return None, f"artifact_dir '{rel}' must be relative and stay inside the runs directory"
+    root = runs_dir.resolve()
+    target = (runs_dir / rel).resolve()
+    if target == root or root not in target.parents:
+        return None, f"artifact_dir '{rel}' must stay inside the runs directory"
+    if not target.is_dir():
+        return None, f"artifact_dir '{rel}' does not exist"
+    return target, None
+
+
+def _v3_manifest_agreement(run: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
+    """Problems where the flat record contradicts its manifest."""
+    engine = manifest.get("engine")
+    dirty = engine.get("code_dirty") if isinstance(engine, dict) else None
+    repro = manifest.get("reproducible")
+    pairs = (
+        ("reproducible", repro),
+        ("code_dirty", dirty),
+        ("change_classes", manifest.get("change_classes")),
+        ("missing_capabilities", manifest.get("missing_capabilities")),
+    )
+    problems = [
+        f"{field} differs from the manifest ({run.get(field)!r} vs {expected!r})"
+        for field, expected in pairs
+        if run.get(field) != expected
+    ]
+    if isinstance(repro, bool) and isinstance(dirty, bool):
+        eligible = repro and not dirty
+        if run.get("promotion_eligible") != eligible:
+            problems.append(
+                f"promotion_eligible must be {eligible} (reproducible and not code_dirty), "
+                f"got {run.get('promotion_eligible')!r}"
+            )
+    return problems
+
+
+def _v3_folder_problems(run: dict[str, Any], runs_dir: Path) -> list[str]:
+    """Check a schema 3 record against its artifact folder."""
+    folder, problem = _resolve_artifact_dir(run, runs_dir)
+    if folder is None:
+        return [problem or "artifact_dir unusable"]
+    problems = [
+        f"required artifact missing: {rel}"
+        for rel in V3_REQUIRED_FILES
+        if not (folder / rel).is_file()
+    ]
+    if "manifest.json" in {r.split(": ", 1)[-1] for r in problems}:
+        return problems
+    try:
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [*problems, f"manifest.json unreadable ({exc})"]
+    if run_manifest.manifest_sha256(folder) != run["manifest_sha256"]:
+        problems.append("manifest_sha256 does not match manifest.json")
+    problems.extend(f"artifact check: {p}" for p in run_manifest.verify_artifacts(folder))
+    problems.extend(f"manifest invalid: {p}" for p in run_manifest.validate_manifest(manifest))
+    if not isinstance(manifest, dict):
+        return problems
+    if manifest.get("run_id") != run["run_id"]:
+        problems.append(
+            f"manifest run_id '{manifest.get('run_id')}' differs from record run_id '{run['run_id']}'"
+        )
+    fps = manifest.get("fingerprints")
+    strat = manifest.get("strategy")
+    if isinstance(fps, dict) and fps.get("strategy") != run["strategy_fingerprint"]:
+        problems.append("strategy_fingerprint differs from manifest fingerprints.strategy")
+    if isinstance(strat, dict) and strat.get("version") != run["strategy_version"]:
+        problems.append("strategy_version differs from manifest strategy.version")
+    problems.extend(_v3_manifest_agreement(run, manifest))
+    return problems
+
+
+def _validate_run(run: Any, runs_dir: Path | None = None) -> list[str]:
     if not isinstance(run, dict):
         return ["run is not a JSON object"]
     problems = [f"missing field '{f}'" for f in RUN_REQUIRED if f not in run]
@@ -422,6 +537,14 @@ def _validate_run(run: Any) -> list[str]:
             if key in block and (isinstance(value, bool) or not isinstance(value, (int, float))):
                 problems.append(f"'{section}.{key}' must be a number, got {value!r}")
     problems.extend(_validate_run_v2(run))
+    if "schema" in run:
+        if isinstance(run["schema"], bool) or run["schema"] != 3:
+            problems.append(f"unsupported schema {run['schema']!r}")
+        else:
+            field_problems = _v3_field_problems(run)
+            problems.extend(field_problems)
+            if not field_problems and runs_dir is not None and isinstance(run.get("run_id"), str):
+                problems.extend(_v3_folder_problems(run, runs_dir))
     return problems
 
 
@@ -435,7 +558,7 @@ def _load_runs(folder: Path) -> tuple[list[dict[str, Any]], list[str]]:
         except (OSError, ValueError) as exc:
             problems.append(f"{folder.name}/runs/{path.name}: unreadable ({exc})")
             continue
-        found = _validate_run(run)
+        found = _validate_run(run, folder / "runs")
         problems.extend(f"{folder.name}/runs/{path.name}: {p}" for p in found)
         if found:
             continue
@@ -444,6 +567,18 @@ def _load_runs(folder: Path) -> tuple[list[dict[str, Any]], list[str]]:
             continue
         seen.add(run["run_id"])
         runs.append(run)
+    runs_dir = folder / "runs"
+    if runs_dir.is_dir():
+        for sub in sorted(runs_dir.iterdir()):
+            if (
+                sub.is_dir()
+                and not sub.name.startswith(".")
+                and not sub.name.endswith(".reproductions")
+                and not (runs_dir / f"{sub.name}.json").exists()
+            ):
+                problems.append(
+                    f"{folder.name}/runs/{sub.name}: orphan run folder with no {sub.name}.json record"
+                )
     ids = {r["run_id"] for r in runs}
     for run in runs:
         parent = run.get("parent_run_id")

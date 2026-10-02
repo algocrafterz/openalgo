@@ -10,11 +10,14 @@ one appends the next. Nothing is written when freeze refuses.
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from signal_engine.research.intake import (
     execution,
@@ -122,6 +125,7 @@ def register(
     version only once its run has succeeded; `dry_run=True` checks the parent and label early
     without writing. Raises VersionError for an unacceptable parent or label.
     """
+    versions.require_aware(now)
     found = versions.resolve_version(
         folder,
         frozen.strategy_fingerprint,
@@ -150,6 +154,7 @@ def freeze(
 ) -> FrozenSpec:
     """Freeze an idea. Raises SpecError for a missing or incomplete spec and FreezeError for a
     blocked idea or unconfirmed High-materiality assumptions."""
+    versions.require_aware(now)
     idea = idea_id or folder.name
     data = load_spec(folder)
     if data is None:
@@ -159,7 +164,11 @@ def freeze(
         )
     overrides = execution.load_overrides(folder)
     led = ledger_mod.resolve(
-        data, overrides, existing=ledger_mod.load(folder), profiles_dir=profiles_dir
+        data,
+        overrides,
+        existing=ledger_mod.load(folder),
+        profiles_dir=profiles_dir,
+        floor_next_id=ledger_mod.sealed_next_id(folder),
     )
     result = state.intake_state(data, led, profiles_dir)
     if result.state != state.BACKTEST_READY:
@@ -192,3 +201,70 @@ def freeze(
     if not register_version:
         return frozen
     return register(folder, frozen, parent=parent_version, label=version_label, note=note, now=now)
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise FreezeError(f"{path.name} unreadable in the run folder: {exc}") from exc
+
+
+def from_run_folder(run_folder: Path) -> FrozenSpec:
+    """Rebuild the FrozenSpec a run was made from, using only that run's folder.
+
+    The idea's current spec.yaml is never read and nothing is written. The rules, params and
+    strategy fingerprints are recomputed from the stored intent and must equal the manifest's,
+    so a tampered or non-canonical spec is refused. Raises FreezeError when the artifacts do not
+    verify, a file is unreadable or the fingerprints differ.
+    """
+    from signal_engine.backtest import manifest as manifest_mod
+
+    folder = Path(run_folder)
+    problems = manifest_mod.verify_artifacts(folder)
+    if problems:
+        raise FreezeError(f"run folder {folder.name} does not verify: {'; '.join(problems)}")
+    manifest = _read_json(folder / "manifest.json")
+    config = _read_json(folder / "execution" / "config.json")
+    assumptions = _read_json(folder / "assumptions.json")
+    strategy = _read_json(folder / "strategy" / "strategy.json")
+    try:
+        intent = yaml.safe_load((folder / "strategy" / "spec.yaml").read_text(encoding="utf-8"))
+        entries = tuple(ledger_mod.Assumption(**raw) for raw in assumptions["entries"])
+        stored = manifest["fingerprints"]
+        profile_meta = manifest["deployment_profile"]
+        resolved, profile = config["resolved"], config["profile"]
+        version, parent_version = strategy["version"], strategy["parent_version"]
+        profile_name, profile_sha = profile_meta["name"], profile_meta["sha256"]
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+        raise FreezeError(f"run folder {folder.name} is malformed: {exc}") from exc
+    if not isinstance(intent, dict):
+        raise FreezeError(f"run folder {folder.name}: strategy/spec.yaml is not a mapping")
+    rules = fingerprints.rules_fingerprint(intent)
+    params = fingerprints.params_fingerprint(intent.get("parameters"))
+    strategy_fp = fingerprints.strategy_fingerprint(rules, params)
+    for name, got in (("rules", rules), ("params", params), ("strategy", strategy_fp)):
+        if stored.get(name) != got:
+            raise FreezeError(
+                f"run folder {folder.name}: {name} fingerprint of strategy/spec.yaml does not "
+                "match the manifest (tampered or non-canonical spec)"
+            )
+    return FrozenSpec(
+        intent=intent,
+        resolved=resolved,
+        profile=profile,
+        profile_name=profile_name,
+        profile_sha256=profile_sha,
+        ledger=entries,
+        unconfirmed_medium=tuple(
+            e
+            for e in entries
+            if e.materiality == "medium" and e.source != "user" and not e.user_confirmed
+        ),
+        rules_fingerprint=rules,
+        params_fingerprint=params,
+        strategy_fingerprint=strategy_fp,
+        version=version,
+        parent_version=parent_version,
+        version_created=False,
+    )

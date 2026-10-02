@@ -11,6 +11,7 @@ from signal_engine.tests import test_record_run as base
 from signal_engine.tests.test_record_run import SUPPORTED, _execution
 
 root = base.root  # the idea-folder fixture, shared with test_record_run
+_stub_provenance = base._stub_provenance  # autouse: no git checkout under tmp_path
 
 CONFIG = {
     "sizing": {"risk_per_trade": 0.01, "sandbox_capital": 100000},

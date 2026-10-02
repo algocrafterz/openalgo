@@ -265,3 +265,112 @@ class TestDeferredRegistration:
         with pytest.raises(versions.VersionError, match="label"):
             freeze.register(tmp_path, frozen, label="nope", dry_run=True)
         assert not (tmp_path / "versions.yaml").exists()
+
+
+# ---- from_run_folder -----------------------------------------------------------------------
+# A frozen spec rebuilt from a run folder alone (rerun and reproduce start here).
+
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+
+from signal_engine.backtest import manifest as _mf  # noqa: E402
+from signal_engine.tests import test_run_artifact_write as _raw  # noqa: E402
+
+_stub_provenance = _raw._stub_provenance
+root = _raw.root
+
+
+def _run_folder(root_):
+    path = _raw._record(root_, execute=lambda key: _raw._execution())
+    return _raw._folder(path)
+
+
+def _rewrite(path, text):
+    _os.chmod(path, 0o644)
+    path.write_text(text, encoding="utf-8")
+
+
+def _fix_hash(folder, rel):
+    """Make the manifest agree with an edited artifact so only the fingerprint check can object."""
+    import hashlib
+
+    manifest_path = folder / "manifest.json"
+    manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"][rel] = hashlib.sha256((folder / rel).read_bytes()).hexdigest()
+    _rewrite(manifest_path, _json.dumps(manifest))
+
+
+class TestFromRunFolder:
+    def test_round_trip_equals_the_original_frozen_spec(self, root):
+        idea = root / "research" / "ideas" / "idea-009-orb"
+        original = freeze.freeze(idea, idea_id="IDEA-009", register_version=False)
+        folder = _run_folder(root)
+        rebuilt = freeze.from_run_folder(folder)
+        assert rebuilt.intent == original.intent
+        assert rebuilt.resolved == original.resolved
+        assert rebuilt.profile == original.profile
+        assert rebuilt.profile_name == original.profile_name
+        assert rebuilt.profile_sha256 == original.profile_sha256
+        assert rebuilt.ledger == original.ledger
+        assert rebuilt.unconfirmed_medium == original.unconfirmed_medium
+        assert rebuilt.rules_fingerprint == original.rules_fingerprint
+        assert rebuilt.params_fingerprint == original.params_fingerprint
+        assert rebuilt.strategy_fingerprint == original.strategy_fingerprint
+        assert rebuilt.version == "v1"
+        assert rebuilt.parent_version is None
+        assert rebuilt.version_created is False
+
+    def test_ignores_the_ideas_current_spec(self, root):
+        folder = _run_folder(root)
+        before = freeze.from_run_folder(folder)
+        idea = root / "research" / "ideas" / "idea-009-orb"
+        edited = make_spec(parameters={"ema_fast": 5, "ema_slow": 9, "atr_len": 3})
+        (idea / "spec.yaml").write_text(yaml.safe_dump(edited), encoding="utf-8")
+        after = freeze.from_run_folder(folder)
+        assert after == before
+        assert after.intent["parameters"] != edited["parameters"]
+
+    def test_writes_nothing(self, root):
+        folder = _run_folder(root)
+        listing = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+        freeze.from_run_folder(folder)
+        assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) == listing
+
+    def test_tampered_spec_is_refused(self, root):
+        folder = _run_folder(root)
+        _rewrite(folder / "strategy" / "spec.yaml", "style: swing\n")
+        with pytest.raises(freeze.FreezeError, match="spec.yaml"):
+            freeze.from_run_folder(folder)
+
+    def test_tampered_config_is_refused(self, root):
+        folder = _run_folder(root)
+        _rewrite(folder / "execution" / "config.json", "{}")
+        with pytest.raises(freeze.FreezeError, match="config.json"):
+            freeze.from_run_folder(folder)
+
+    def test_tampered_manifest_fingerprint_is_refused(self, root):
+        folder = _run_folder(root)
+        manifest_path = folder / "manifest.json"
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["fingerprints"]["rules"] = "0" * 64
+        _rewrite(manifest_path, _json.dumps(manifest))
+        with pytest.raises(freeze.FreezeError, match="rules fingerprint"):
+            freeze.from_run_folder(folder)
+
+    def test_non_canonical_spec_with_matching_hash_is_refused_by_fingerprint(self, root):
+        folder = _run_folder(root)
+        intent = yaml.safe_load((folder / "strategy" / "spec.yaml").read_text(encoding="utf-8"))
+        intent["parameters"] = {"ema_fast": 99}
+        _rewrite(folder / "strategy" / "spec.yaml", yaml.safe_dump(intent, sort_keys=True))
+        _fix_hash(folder, "strategy/spec.yaml")
+        assert _mf.verify_artifacts(folder) == []
+        with pytest.raises(freeze.FreezeError, match="params fingerprint"):
+            freeze.from_run_folder(folder)
+
+    def test_missing_manifest_is_refused(self, root):
+        folder = _run_folder(root)
+        _os.chmod(folder, 0o755)
+        _os.chmod(folder / "manifest.json", 0o644)
+        (folder / "manifest.json").unlink()
+        with pytest.raises(freeze.FreezeError):
+            freeze.from_run_folder(folder)
