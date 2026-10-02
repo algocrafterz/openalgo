@@ -483,6 +483,139 @@ export interface BacktestIdeaResponse extends Envelope {
   research_notes?: string
 }
 
+// ---- Run comparison (build order 6) ---------------------------------------------------------
+// Computed by signal_engine (backtest/compare.py) from two run folders. The UI only presents it.
+// Deltas are never labelled better or worse: that is the researcher's call.
+
+/** One compared field. `changed` is true when a and b differ. */
+export interface FieldDiff {
+  field: string
+  label: string
+  a: unknown
+  b: unknown
+  changed: boolean
+}
+
+export interface SpecDiff {
+  changed: Record<string, { a: unknown; b: unknown }>
+  added: Record<string, unknown>
+  removed: Record<string, unknown>
+}
+
+export interface FingerprintPair {
+  a: string | null
+  b: string | null
+  changed: boolean
+}
+
+export interface StrategyComparison {
+  version: { a: string | null; b: string | null }
+  same_version: boolean
+  /** Entry, exit, stop, filters, sessions, timing, portfolio and sizing intent. */
+  rules: SpecDiff
+  /** The tunable parameter values only. */
+  parameters: SpecDiff
+  fingerprints: { rules: FingerprintPair; params: FingerprintPair; strategy: FingerprintPair }
+}
+
+export interface DatasetComparison {
+  fields: FieldDiff[]
+  /** True when the dataset fingerprints differ: history was corrected or backfilled. */
+  fingerprint_changed: boolean
+}
+
+export interface PeriodRange {
+  start: string
+  end: string
+}
+
+export interface Overlap {
+  periods: { a: PeriodRange | null; b: PeriodRange | null }
+  /** The sessions both runs cover. Null when the periods do not intersect. */
+  common: PeriodRange | null
+  /**
+   * The parts of each run's period outside the common window, per run: disjoint inclusive
+   * ranges in date order (up to two: before and after). Empty when none.
+   */
+  extra: { a: PeriodRange[]; b: PeriodRange[] }
+  /** Plain-language warning naming each extra span, or null when the periods are identical. */
+  warning: string | null
+}
+
+export interface PeriodViews {
+  /** Each run's own full-period metrics, recomputed from its retained trades. */
+  full: { a: RunMetrics; b: RunMetrics }
+  /** Both runs restricted to the common sessions. Null when there is no common period. */
+  common: { a: RunMetrics; b: RunMetrics } | null
+  /**
+   * The later-ending run's trades whose entry date lies in any of its own `ranges` (its extra
+   * spans outside the common sessions). Null when there are none.
+   */
+  incremental: { run: 'a' | 'b'; ranges: PeriodRange[]; metrics: RunMetrics } | null
+}
+
+/** One x position (an ISO date or month) with each run's value. */
+export interface CurvePoint {
+  x: string
+  a: number | null
+  b: number | null
+}
+
+export interface DistributionBin {
+  bin_start: number
+  bin_end: number
+  a: number
+  b: number
+}
+
+export interface ComparisonCurves {
+  equity_r: CurvePoint[]
+  /** Equity minus running peak, zero or negative (zero at a new high). */
+  drawdown_r: CurvePoint[]
+  /** Net R per calendar month; x is YYYY-MM. */
+  monthly: CurvePoint[]
+  /** Rolling mean net R per trade over `rolling_window` trades. */
+  rolling: CurvePoint[]
+  rolling_window: number
+  /** Net R per trade, on bins shared by both runs. */
+  distribution: DistributionBin[]
+  /** Marked on the charts: the shared sessions, or null when the periods do not intersect. */
+  common: PeriodRange | null
+  /** The later-ending run's extra spans (disjoint ranges); empty when there is no incremental view. */
+  incremental: PeriodRange[]
+}
+
+export interface RunComparison {
+  schema: 1
+  /** Every component that differs, in a fixed order; ['RESEARCH_RERUN'] when nothing differs. */
+  change_classes: string[]
+  strategy: StrategyComparison
+  scope: FieldDiff[]
+  dataset: DatasetComparison
+  execution: FieldDiff[]
+  cost: FieldDiff[]
+  /** Full-period metric deltas from the recomputed views. */
+  performance: Record<string, MetricDelta>
+  /** The same deltas for the common sessions only. Null when there is no common period. */
+  performance_common: Record<string, MetricDelta> | null
+  overlap: Overlap
+  views: PeriodViews
+  /** Full-period curves. */
+  curves: ComparisonCurves
+  /**
+   * The same curves on only the trades entered inside the common window, each run's equity
+   * starting from 0 at the window start and drawdown measured inside the window. Null when
+   * there is no common window.
+   */
+  curves_common: ComparisonCurves | null
+  /**
+   * The same curves on only the incremental run's trades outside the common window; the other
+   * run's values are null throughout and equity starts from 0 at the first incremental span.
+   * Null when there is no incremental view.
+   */
+  curves_incremental: ComparisonCurves | null
+}
+
 export interface BacktestCompareResponse extends Envelope {
   idea_id?: string
   run_a?: RunRef
@@ -494,6 +627,9 @@ export interface BacktestCompareResponse extends Envelope {
   warnings?: string[]
   info?: string[]
   equity_r?: { a: SeriesPoint[]; b: SeriesPoint[] }
+  /** Null when either run has no run folder (a legacy record): see `comparison_note`. */
+  comparison?: RunComparison | null
+  comparison_note?: string | null
 }
 
 async function unwrap<T extends Envelope>(

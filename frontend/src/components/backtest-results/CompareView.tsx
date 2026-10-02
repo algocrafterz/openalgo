@@ -15,16 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  type DeltaVerdict,
-  fmtNum,
-  fmtPercent,
-  fmtSigned,
-  judgeDelta,
-  METRIC_LABELS,
-  NA,
-} from '@/lib/backtestResults'
-import { cn } from '@/lib/utils'
+import { fmtNum, fmtPercent, fmtSigned, METRIC_LABELS, NA } from '@/lib/backtestResults'
+import { CompareDetail } from './CompareDetail'
 import { ExportMenu } from './ExportMenu'
 import { LineChart } from './LineChart'
 
@@ -44,22 +36,6 @@ function formatDelta(key: string, delta: number | null): string {
   return COUNT_KEYS.has(key) ? fmtSigned(delta, 0) : fmtSigned(delta)
 }
 
-const VERDICT_TEXT: Record<DeltaVerdict, string> = {
-  improved: 'improved',
-  worse: 'worse',
-  unchanged: 'unchanged',
-  neutral: '',
-  'n/a': 'n/a',
-}
-
-const VERDICT_CLASS: Record<DeltaVerdict, string> = {
-  improved: 'text-green-600',
-  worse: 'text-red-600',
-  unchanged: 'text-muted-foreground',
-  neutral: 'text-muted-foreground',
-  'n/a': 'text-muted-foreground',
-}
-
 function orderedKeys(deltas: Record<string, MetricDelta>): string[] {
   const known = Object.keys(METRIC_LABELS).filter((k) => k in deltas)
   const rest = Object.keys(deltas)
@@ -77,21 +53,18 @@ function DeltaTable({ deltas }: { deltas: Record<string, MetricDelta> }) {
           <TableHead className="text-right">Run A</TableHead>
           <TableHead className="text-right">Run B</TableHead>
           <TableHead className="text-right">Change</TableHead>
-          <TableHead>Assessment</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {orderedKeys(deltas).map((key) => {
           const d = deltas[key]
-          const verdict = judgeDelta(key, d.delta)
           return (
             <TableRow key={key}>
               <TableCell>{METRIC_LABELS[key] ?? key}</TableCell>
               <TableCell className="text-right font-mono">{formatValue(key, d.a)}</TableCell>
               <TableCell className="text-right font-mono">{formatValue(key, d.b)}</TableCell>
-              <TableCell className="text-right font-mono">{formatDelta(key, d.delta)}</TableCell>
-              <TableCell className={cn('text-sm', VERDICT_CLASS[verdict])}>
-                {VERDICT_TEXT[verdict]}
+              <TableCell className="text-right font-mono text-muted-foreground">
+                {formatDelta(key, d.delta)}
               </TableCell>
             </TableRow>
           )
@@ -131,7 +104,6 @@ function ParamDiffView({ diff }: { diff: NonNullable<BacktestCompareResponse['pa
 }
 
 function CompareBody({ data, ideaId }: { data: BacktestCompareResponse; ideaId: string }) {
-  const trials = data.n_trials
   return (
     <div className="space-y-6" data-testid="compare-body">
       <div className="space-y-1">
@@ -142,6 +114,28 @@ function CompareBody({ data, ideaId }: { data: BacktestCompareResponse; ideaId: 
           <ExportMenu ideaId={ideaId} runId={data.run_b.run_id} label="Export run B" />
         )}
       </div>
+      {data.comparison && !(data.run_a && data.run_b) ? (
+        <div role="alert" className="text-sm text-red-600">
+          The detailed comparison could not be shown: the response is missing one of the two runs.
+        </div>
+      ) : data.comparison && data.run_a && data.run_b ? (
+        <CompareDetail comparison={data.comparison} runA={data.run_a} runB={data.run_b} />
+      ) : (
+        <LegacyBody data={data} />
+      )}
+    </div>
+  )
+}
+
+function LegacyBody({ data }: { data: BacktestCompareResponse }) {
+  const trials = data.n_trials
+  return (
+    <div className="space-y-6">
+      {data.comparison_note && (
+        <p className="text-sm text-muted-foreground" data-testid="comparison-note">
+          {data.comparison_note}
+        </p>
+      )}
       {data.comparable === false && (
         <div role="alert" className="rounded-md border border-yellow-500/60 p-3 text-sm space-y-1">
           <div className="font-medium">
@@ -192,7 +186,13 @@ function CompareBody({ data, ideaId }: { data: BacktestCompareResponse; ideaId: 
   )
 }
 
-export function CompareView({ ideaId, runs }: { ideaId: string; runs: RunRecord[] }) {
+export function CompareView(props: { ideaId: string; runs: RunRecord[] }) {
+  // Keyed so the selected runs never point at runs that no longer exist.
+  const key = `${props.ideaId}|${props.runs.map((r) => r.run_id).join(',')}`
+  return <CompareViewInner key={key} {...props} />
+}
+
+function CompareViewInner({ ideaId, runs }: { ideaId: string; runs: RunRecord[] }) {
   const [runA, setRunA] = useState(runs.length >= 2 ? runs[runs.length - 2].run_id : '')
   const [runB, setRunB] = useState(runs.length >= 2 ? runs[runs.length - 1].run_id : '')
   const enabled = runs.length >= 2 && runA !== '' && runB !== '' && runA !== runB

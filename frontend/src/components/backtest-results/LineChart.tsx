@@ -14,10 +14,12 @@ interface LineChartProps {
   title: string
   series: ChartSeries[]
   height?: number
+  /** Zero-or-negative series such as drawdown: explicit sign on the axis and a zero line. */
+  signed?: boolean
 }
 
 /** Line chart of one or more R-multiple series, one point per trading day. */
-export function LineChart({ title, series, height = 260 }: LineChartProps) {
+export function LineChart({ title, series, height = 260, signed = false }: LineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const isDark = useThemeStore((s) => s.mode) === 'dark'
   const hasData = series.some((s) => s.points.length > 0)
@@ -46,8 +48,14 @@ export function LineChart({ title, series, height = 260 }: LineChartProps) {
       const line = chart.addSeries(LineSeries, {
         color: s.color,
         lineWidth: 2,
-        priceFormat: { type: 'custom', formatter: (p: number) => `${p.toFixed(1)}R` },
+        priceFormat: {
+          type: 'custom',
+          formatter: (p: number) => `${signed && p > 0 ? '+' : ''}${p.toFixed(1)}R`,
+        },
       })
+      if (signed) {
+        line.createPriceLine({ price: 0, color: border, lineWidth: 1, title: '0' })
+      }
       line.setData(
         toLineData(s.points).map((p) => ({ time: p.time as UTCTimestamp, value: p.value }))
       )
@@ -60,7 +68,7 @@ export function LineChart({ title, series, height = 260 }: LineChartProps) {
       window.removeEventListener('resize', handleResize)
       chart.remove()
     }
-  }, [series, isDark, height, hasData])
+  }, [series, isDark, height, hasData, signed])
 
   return (
     <figure className="space-y-2" aria-label={title}>

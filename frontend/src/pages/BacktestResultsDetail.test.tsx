@@ -385,18 +385,13 @@ describe('BacktestResultsDetail compare', () => {
     expect(mocks.compare).toHaveBeenCalledWith('IDEA-012', RUN_V1.run_id, RUN_V2.run_id)
   })
 
-  it('labels direction: higher net is improved, lower drawdown is improved, lower Sharpe is worse', async () => {
+  it('shows neutral deltas with no verdict wording or green/red colour', async () => {
     renderPage(ideaResponse([RUN_V1, RUN_V2]))
     await screen.findByTestId('compare-body')
-    expect(within(deltaRow('Net bps per trade')).getByText('improved')).toHaveClass(
-      'text-green-600'
-    )
-    expect(within(deltaRow('Max drawdown (R)')).getByText('improved')).toBeInTheDocument()
-    expect(within(deltaRow('Sharpe')).getByText('worse')).toHaveClass('text-red-600')
-    expect(within(deltaRow('Profit factor')).getByText('unchanged')).toBeInTheDocument()
-    expect(
-      within(deltaRow('t-statistic')).getByText('n/a', { selector: 'td.text-sm' })
-    ).toBeInTheDocument()
+    const body = screen.getByTestId('compare-body')
+    expect(body.textContent ?? '').not.toMatch(/improved|worse|assessment/i)
+    expect(body.innerHTML).not.toMatch(/text-green-|text-red-/)
+    expect(deltaRow('Net bps per trade')).toHaveTextContent(/[+-]\d/)
   })
 
   it('does not judge trade counts and formats win rate in points', async () => {

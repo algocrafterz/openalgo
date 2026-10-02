@@ -479,8 +479,9 @@ REPORT = {
 STRATEGY = {"style": "breakout", "direction": "long", "timeframe": "5m", "product": "MIS"}
 EXEC = {
     "resolved": {
-        "slippage_bps_per_side": {"value": 2.5, "ledger_id": "a1"},
-        "cost_bps_round_trip": {"value": 9.4, "ledger_id": "a2"},
+        "execution.slippage_bps_per_side": {"value": 2.5, "ledger_id": "a1"},
+        "execution.cost_bps_round_trip": {"value": 9.4, "ledger_id": "a2"},
+        "profile.mis_squareoff_min": {"value": 15, "ledger_id": "a3"},
     },
     "profile": {"market": "NSE"},
 }
@@ -930,3 +931,155 @@ class TestRunDetailHardening:
         assert scope["period"] == {"start": "2021-01-01", "end": "2026-09-25"}
         assert scope["profile"] == {"name": "zerodha-mis", "sha256": HEX}
         assert body["run"]["reproducibility"]["dirty_paths"] == ["a.py"]
+
+
+# ---- comparison engine wiring (build order 6, P2) ---------------------------------------------
+
+import re  # noqa: E402
+import subprocess  # noqa: E402
+
+from signal_engine.tests import test_backtest_compare as tc  # noqa: E402
+from signal_engine.tests import test_record_run as rrbase  # noqa: E402
+
+TS_FILE = Path(__file__).resolve().parents[1] / "frontend" / "src" / "api" / "backtestResults.ts"
+_stub_provenance = rrbase._stub_provenance  # autouse: roots here are not git checkouts
+
+LEGACY_KEYS = (
+    "status idea_id run_a run_b metric_deltas params n_trials comparable warnings info equity_r"
+).split()
+
+
+def _ts_keys(interface: str) -> list[str]:
+    text = TS_FILE.read_text(encoding="utf-8")
+    body = re.search(rf"export interface {interface} \{{(.*?)\n\}}", text, re.S).group(1)
+    return re.findall(r"^  (\w+)\??:", body, re.M)
+
+
+@pytest.fixture
+def real_pair(tmp_path, monkeypatch):
+    """Two real run folders written by record_idea, served through a stubbed registry load."""
+    rrbase._make_idea(tmp_path, "009", "orb", "backtest/strategies/orb.py")
+    ex = tc._execution_of(tc.A_ROWS, "2026-03-01", "2026-03-10")
+    ex_b = tc._execution_of(tc.B_ROWS, "2026-03-04", "2026-03-20")
+    flat_a = tc._record(tmp_path, ex)
+    flat_b = tc._record(tmp_path, ex_b)
+    records = [json.loads(f.read_text(encoding="utf-8")) for f in (flat_a, flat_b)]
+    state = {
+        "root": tmp_path,
+        "records": records,
+        "ids": [r["run_id"] for r in records],
+        "runs_dir": flat_a.parent,
+    }
+    monkeypatch.setattr(
+        svc,
+        "_load",
+        lambda _root: [{"id": "IDEA-009", "folder": "idea-009-orb", "runs": state["records"]}],
+    )
+    return state
+
+
+def _compare(state, a=0, b=1):
+    return svc.compare_runs("IDEA-009", state["ids"][a], state["ids"][b], root=state["root"])
+
+
+class TestResolvedPrefix:
+    def test_fixture_shape_is_the_real_prefixed_one(self, real_pair):
+        folder = real_pair["runs_dir"] / real_pair["ids"][0]
+        resolved = json.loads((folder / "execution" / "config.json").read_text())["resolved"]
+        assert "execution.slippage_bps_per_side" in resolved
+
+    def test_scope_slippage_and_cost_are_not_null(self, real_pair):
+        _ok, body, _ = svc.get_run_detail("IDEA-009", real_pair["ids"][0], root=real_pair["root"])
+        scope = body["run"]["scope"]
+        assert scope["slippage_bps_per_side"] is not None
+        assert scope["cost_bps_round_trip"] is not None
+
+    def test_service_scope_equals_compare_build_scope_for_every_field(self, real_pair):
+        from signal_engine.backtest import compare
+
+        for rid in real_pair["ids"]:
+            _ok, body, status = svc.get_run_detail("IDEA-009", rid, root=real_pair["root"])
+            assert status == 200
+            expected = compare.build_scope(real_pair["runs_dir"] / rid)
+            assert body["run"]["scope"] == expected
+
+
+class TestCompareDetailed:
+    def test_comparison_has_exactly_the_contract_keys(self, real_pair):
+        ok, body, status = _compare(real_pair)
+        assert ok and status == 200
+        assert body["comparison_note"] is None
+        assert set(body["comparison"]) == set(_ts_keys("RunComparison"))
+        json.dumps(body)
+
+    def test_legacy_keys_are_unchanged(self, real_pair):
+        _ok, body, _ = _compare(real_pair)
+        for key in LEGACY_KEYS:
+            assert key in body
+
+    def test_legacy_pair_has_null_comparison_and_a_note(self, root):
+        _ok, body, status = svc.compare_runs("IDEA-001", "2026-09-30-s-v1", "2026-10-05-s-v2", root)
+        assert status == 200 and body["comparison"] is None
+        assert (
+            body["comparison_note"] == "Detailed comparison needs both runs to have a run folder."
+        )
+
+    def test_mixed_pair_has_null_comparison_and_a_note(self, real_pair):
+        legacy = _run("2026-09-01-legacy-v1", "2026-09-01")
+        real_pair["records"].append(legacy)
+        real_pair["ids"].append(legacy["run_id"])
+        _ok, body, status = _compare(real_pair, 0, 2)
+        assert status == 200 and body["comparison"] is None
+        assert (
+            body["comparison_note"] == "Detailed comparison needs both runs to have a run folder."
+        )
+
+    def test_compare_error_gives_null_and_a_pathless_note(self, real_pair):
+        folder = real_pair["runs_dir"] / real_pair["ids"][1]
+        (folder / "evidence" / "trades.parquet").unlink()
+        _ok, body, status = _compare(real_pair)
+        assert status == 200 and body["comparison"] is None
+        note = body["comparison_note"]
+        assert isinstance(note, str) and note
+        assert str(real_pair["root"]) not in note and "/" not in note
+
+    def test_symlinked_run_folder_is_rejected_with_400(self, real_pair, tmp_path):
+        folder = real_pair["runs_dir"] / real_pair["ids"][1]
+        moved = tmp_path / "elsewhere" / folder.name
+        moved.parent.mkdir()
+        folder.rename(moved)
+        folder.symlink_to(moved, target_is_directory=True)
+        ok, _body, status = _compare(real_pair)
+        assert status == 400 and not ok
+
+    def test_mismatched_artifact_dir_is_rejected_with_400(self, real_pair):
+        real_pair["records"][1] = {**real_pair["records"][1], "artifact_dir": "other/"}
+        ok, _body, status = _compare(real_pair)
+        assert status == 400 and not ok
+
+    def test_unexpected_exception_is_not_a_500(self, real_pair, monkeypatch):
+        from signal_engine.backtest import compare
+
+        def boom(a, b):
+            raise RuntimeError("secret /path/detail")
+
+        monkeypatch.setattr(compare, "compare_run_folders", boom)
+        ok, body, status = _compare(real_pair)
+        assert ok and status == 200 and body["comparison"] is None
+        assert body["comparison_note"] == "Detailed comparison is unavailable for these runs."
+
+
+def test_importing_the_service_does_not_load_the_comparison_engine():
+    code = (
+        "import sys; sys.path.insert(0, '.');"
+        "import services.backtest_results_service;"
+        "bad=[m for m in sys.modules if m in ('scipy',"
+        "'signal_engine.backtest.compare','signal_engine.backtest.harness')"
+        " or m.startswith('scipy.')];"
+        "print(','.join(bad)); sys.exit(1 if bad else 0)"
+    )
+    repo = Path(__file__).resolve().parents[1]
+    out = subprocess.run(
+        ["uv", "run", "python", "-c", code], cwd=repo, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stdout + out.stderr

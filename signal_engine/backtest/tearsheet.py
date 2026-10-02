@@ -39,7 +39,6 @@ import pandas as pd
 
 from signal_engine.backtest.concurrency import apply_position_cap, concurrency_profile
 from signal_engine.backtest.costs import CostModel, cost_profile
-from signal_engine.backtest.evaluation import evaluate
 from signal_engine.backtest.metrics import clustered_t, hurdle_t
 from signal_engine.backtest.regime import regime_block
 from signal_engine.backtest.splits import purge_and_embargo
@@ -98,7 +97,9 @@ def _daily_sharpe(net_bps: np.ndarray, days: np.ndarray) -> float:
     return float(daily.mean() / daily.std(ddof=1) * math.sqrt(TRADING_DAYS))
 
 
-def _core(trades: Sequence) -> dict[str, Any]:
+def _core_arrays(
+    days: np.ndarray, r_gross: np.ndarray, r_net: np.ndarray, risk_pct: np.ndarray
+) -> dict[str, Any]:
     """The metrics shared by the full run and each half of an IS/OOS split.
 
     `t_stat` and `sharpe` are scored on net bps, the same unit as the headline `net_bps`.
@@ -108,13 +109,9 @@ def _core(trades: Sequence) -> dict[str, Any]:
     one day share that day's market move). When the sign differs, the result is carried
     by a few heavy signal days, which is a finding, not a bug.
     """
-    out: dict[str, Any] = {"trades": len(trades), "gross_bps": 0.0, "net_bps": 0.0}
-    if not trades:
+    out: dict[str, Any] = {"trades": len(r_net), "gross_bps": 0.0, "net_bps": 0.0}
+    if not len(r_net):
         return out
-    r_net = np.array([t.r_net for t in trades])
-    r_gross = np.array([t.r_gross for t in trades])
-    risk_pct = np.array([t.risk_pct for t in trades])
-    days = np.array([_iso_day(t.day) for t in trades])
     net_bps = r_net * risk_pct * 100
     out["gross_bps"] = _num((r_gross * risk_pct).mean() * 100) or 0.0
     out["net_bps"] = _num(net_bps.mean()) or 0.0
@@ -124,22 +121,67 @@ def _core(trades: Sequence) -> dict[str, Any]:
     return out
 
 
-def _daily_curves(trades: Sequence) -> tuple[list[list], list[list], float]:
-    """Cumulative net R and drawdown, one point per trading day, in calendar order."""
-    if not trades:
-        return [], [], 0.0
-    daily = (
-        pd.Series([t.r_net for t in trades])
-        .groupby([_iso_day(t.day) for t in trades])
-        .sum()
-        .sort_index()
+def _arrays(trades: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        np.array([_iso_day(t.day) for t in trades]),
+        np.array([t.r_gross for t in trades], dtype=float),
+        np.array([t.r_net for t in trades], dtype=float),
+        np.array([t.risk_pct for t in trades], dtype=float),
     )
+
+
+def _core(trades: Sequence) -> dict[str, Any]:
+    return _core_arrays(*_arrays(trades))
+
+
+def _curves_arrays(days: np.ndarray, r_net: np.ndarray) -> tuple[list[list], list[list], float]:
+    """Cumulative net R and drawdown, one point per trading day, in calendar order."""
+    if not len(r_net):
+        return [], [], 0.0
+    daily = pd.Series(r_net).groupby(days).sum().sort_index()
     equity = daily.cumsum()
     peak = np.maximum.accumulate(np.maximum(equity.to_numpy(), 0.0))
     drawdown = equity.to_numpy() - peak
     eq_pts = [[d, round(float(v), 4)] for d, v in equity.items()]
     dd_pts = [[d, round(float(v), 4)] for d, v in zip(equity.index, drawdown, strict=True)]
     return eq_pts, dd_pts, float(-drawdown.min())
+
+
+def _daily_curves(trades: Sequence) -> tuple[list[list], list[list], float]:
+    """Cumulative net R and drawdown, one point per trading day, in calendar order."""
+    days, _, r_net, _ = _arrays(trades)
+    return _curves_arrays(days, r_net)
+
+
+def headline_metrics(
+    days: Sequence[str],
+    r_gross: Sequence[float],
+    r_net: Sequence[float],
+    risk_pct: Sequence[float],
+    *,
+    n_trials: int = 1,
+) -> dict[str, Any]:
+    """The headline metrics of a run from plain per-trade arrays.
+
+    The single implementation behind `build_run_record`'s `metrics` block and the run
+    comparison's recomputed views. `days` are ISO session dates, `risk_pct` is the stop
+    distance in percent of price. Unknown statistics are omitted, never zero.
+    """
+    d = np.array([str(x) for x in days])
+    g, n, p = (np.array(v, dtype=float) for v in (r_gross, r_net, risk_pct))
+    out = _core_arrays(d, g, n, p)
+    out["days"] = len(set(d.tolist()))
+    out["breakeven_cost_bps"] = out["gross_bps"]
+    _put(out, "hurdle_t", hurdle_t(n_trials), 3)
+    if not len(n):
+        return out
+    wins, losses = n[n > 0], n[n <= 0]
+    _put(out, "expectancy_r", n.mean())
+    if len(wins) and len(losses) and losses.sum() != 0:
+        _put(out, "profit_factor", wins.sum() / abs(losses.sum()), 3)
+        _put(out, "payoff", wins.mean() / abs(losses.mean()), 3)
+    out["max_dd_r"] = round(_curves_arrays(d, n)[2], 4)
+    return out
 
 
 def _monthly(trades: Sequence) -> list[dict[str, Any]]:
@@ -158,23 +200,6 @@ def _monthly(trades: Sequence) -> list[dict[str, Any]]:
         }
         for m, row in grouped.iterrows()
     ]
-
-
-def _extended(trades: Sequence, n_trials: int) -> dict[str, Any]:
-    """Headline metrics: the core set plus payoff shape and the trial-aware hurdle."""
-    out = _core(trades)
-    out["days"] = len({_iso_day(t.day) for t in trades})
-    out["breakeven_cost_bps"] = out["gross_bps"]
-    _put(out, "hurdle_t", hurdle_t(n_trials), 3)
-    if not trades:
-        return out
-    r = np.array([t.r_net for t in trades])
-    wins, losses = r[r > 0], r[r <= 0]
-    _put(out, "expectancy_r", r.mean())
-    if len(wins) and len(losses) and losses.sum() != 0:
-        _put(out, "profit_factor", wins.sum() / abs(losses.sum()), 3)
-        _put(out, "payoff", wins.mean() / abs(losses.mean()), 3)
-    return out
 
 
 def _cost_sensitivity(gross_bps: float, model_bps: float) -> list[dict[str, float]]:
@@ -264,10 +289,8 @@ def build_run_record(
         raise ValueError(f"max_positions must be an integer >= 1, got {list(position_caps)!r}")
     trades = list(trades)
 
-    metrics = _extended(trades, n_trials)
-    equity, drawdown, max_dd = _daily_curves(trades)
-    if trades:
-        metrics["max_dd_r"] = round(max_dd, 4)
+    metrics = headline_metrics(*_arrays(trades), n_trials=n_trials)
+    equity, drawdown, _ = _daily_curves(trades)
 
     record: dict[str, Any] = {
         "run_id": run_id,
@@ -307,6 +330,10 @@ def build_run_record(
         profile = cost_profile(trades, cost_model, costs["round_trip_bps"])
         if profile is not None:
             record["cost_model"] = profile
+    # Imported here: evaluation pulls in the registry and the data loaders, which a read-only
+    # consumer of `headline_metrics` (the run comparison) must not pay for at import time.
+    from signal_engine.backtest.evaluation import evaluate
+
     record["evaluation"] = evaluate(
         trades,
         metrics=metrics,

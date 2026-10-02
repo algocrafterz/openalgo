@@ -30,8 +30,8 @@ with tests green, ruff clean and a commit.
 | 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | `32eb6f00a`, plus `b5f40c0fd` (entry window against the profile; classification planned) |
 | 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5), ledger id fix | done 2026-10-02 | `c7b348a51` |
 | 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | done 2026-10-02 | `9d1f3fd43`, plus `668f7b20c` (G2.7 diagnostic) |
-| 5 | UI U1, glossary and the classification line (backend read-model, decision panel, promotion block, scope, reproducibility, assumptions, frozen strategy, glossary) | done 2026-10-03 | see `git log` (feat(backtests-ui): decision panel, run detail read-model and glossary) |
-| 6 | UI U3 (comparison) | not started | |
+| 5 | UI U1, glossary and the classification line (backend read-model, decision panel, promotion block, scope, reproducibility, assumptions, frozen strategy, glossary) | done 2026-10-03 | `15afdb590` |
+| 6 | UI U3 (comparison): engine (`backtest/compare.py`), service wiring, compare view | done 2026-10-03 | see `git log` (feat(backtests-ui): overlap-aware run comparison) |
 | 7 | UI U4 (version tree) | not started | |
 | 8 | UI U2 remainder, as engine steps 4 and 5 land | not started | |
 
@@ -49,6 +49,9 @@ Findings carried forward from implementation (raised, not designed around):
 - Profile-sourced values (`profile.*`) are Medium materiality, not High, because the author selects the profile by name. A High default would force a confirmation on every idea.
 - The service module `services/backtest_results_service.py` imported the deleted `signal_engine.research.spec` from build order 1 until build order 5: the repo-wide search then covered only `signal_engine/`, and the test runs covered only `signal_engine/tests`. Fixed 2026-10-03; the core `test/test_backtest_results_*` files are part of the checks from now on.
 - The legacy frontmatter `tags` field (read by the Backtests service) and the new `strategy_tags` overlap in purpose. Both are kept; retire the legacy `tags` and the legacy `category` together once the new filters exist (build order 7).
+- Build order 6 design: the comparison is computed in `signal_engine/backtest/compare.py` (diffs, change classes, common and incremental recomputation with the tearsheet's own `headline_metrics`, per-view curves) and the service only calls it. `signal_engine/backtest/__init__.py` is now lazy so importing a lean backtest module no longer loads the harness. The first compare call in the web process still loads scipy and adds roughly 85 MB once; owner decision pending (keep, or move the computation out of process).
+- Type-check note: in `frontend/`, `npx tsc --noEmit -p tsconfig.json` only follows project references and checks nothing. Use `npx tsc --noEmit -p tsconfig.app.json`. Pre-existing, unrelated frontend test failures: `src/config/navigation.test.ts` expects 10 nav items (config has 12); StrategyBuilder tests time out under full-suite load but pass alone.
+- Comparison curves for the common and incremental views are computed by the backend (`curves_common`, `curves_incremental`), re-based to zero at the window start, so the UI does no date filtering of its own. The common and incremental spans are lists of disjoint ranges, because one run can extend the other on both sides.
 
 ## P1
 

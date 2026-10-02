@@ -563,7 +563,8 @@ def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any
 
 
 def _resolved_value(execution: dict[str, Any], field: str) -> Any:
-    return _dict(_dict(execution.get("resolved")).get(field)).get("value")
+    """A resolved execution value; config.json keys them with an `execution.` prefix."""
+    return _dict(_dict(execution.get("resolved")).get(f"execution.{field}")).get("value")
 
 
 def _build_scope(
@@ -772,6 +773,40 @@ def _comparability(a: dict[str, Any], b: dict[str, Any]) -> tuple[list[str], lis
     return warnings, info
 
 
+_NO_FOLDER_NOTE = "Detailed comparison needs both runs to have a run folder."
+_UNAVAILABLE_NOTE = "Detailed comparison is unavailable for these runs."
+_COMPARE_ERROR_NOTE = "Detailed comparison is unavailable: a run folder is missing required files."
+
+
+def _detailed_comparison(
+    idea: dict[str, Any], a: dict[str, Any], b: dict[str, Any], root: Path
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    """The (comparison, note, folder_rejected) triple for two runs of one idea.
+
+    `folder_rejected` is True when a schema 3 run's artifact_dir fails the same
+    containment checks get_run_detail applies; the caller answers 400 then.
+    """
+    if any(r.get("schema") != 3 or not r.get("artifact_dir") for r in (a, b)):
+        return None, _NO_FOLDER_NOTE, False
+    runs_dir = _idea_folder(idea, root) / "runs"
+    ideas_root = root / "research" / "ideas"
+    folders = [_resolve_run_folder(r, runs_dir, r["run_id"], ideas_root) for r in (a, b)]
+    if any(f is None for f in folders):
+        return None, None, True
+    # Lazy on purpose: the engine loads numpy/pandas/pyarrow/scipy on first use only,
+    # and never imports the backtest harness. Keep it out of module import time.
+    from signal_engine.backtest.compare import CompareError, compare_run_folders
+
+    try:
+        return _jsonable(compare_run_folders(folders[0], folders[1])), None, False
+    except CompareError:
+        logger.exception("Run comparison failed for %s and %s", a["run_id"], b["run_id"])
+        return None, _COMPARE_ERROR_NOTE, False
+    except Exception:
+        logger.exception("Unexpected error comparing %s and %s", a["run_id"], b["run_id"])
+        return None, _UNAVAILABLE_NOTE, False
+
+
 def compare_runs(
     idea_id: str, run_a: str, run_b: str, root: Path | None = None
 ) -> tuple[bool, dict[str, Any], int]:
@@ -790,6 +825,9 @@ def compare_runs(
         return _error(f"Run not found: {', '.join(missing)}", 404)
     a, b = by_id[run_a], by_id[run_b]
     warnings, info = _comparability(a, b)
+    comparison, note, rejected = _detailed_comparison(idea, a, b, root or DEFAULT_ROOT)
+    if rejected:
+        return _error("invalid run folder", 400)
     return (
         True,
         {
@@ -807,6 +845,8 @@ def compare_runs(
                 "a": (a.get("series") or {}).get("equity_r", []),
                 "b": (b.get("series") or {}).get("equity_r", []),
             },
+            "comparison": comparison,
+            "comparison_note": note,
         },
         200,
     )

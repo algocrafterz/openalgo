@@ -211,3 +211,39 @@ def test_run_detail_serialises_yaml_spec_with_mixed_keys(monkeypatch, tmp_path):
     assert response.status_code == 200
     spec = response.get_json()["run"]["spec"]
     assert spec["since"] == "2026-01-02" and spec["levels"] == {"1": "a", "x": "b"}
+
+
+def test_compare_route_returns_comparison_keys_end_to_end(monkeypatch, tmp_path):
+    import json
+
+    import services.backtest_results_service as svc
+    from signal_engine.backtest import manifest
+    from signal_engine.tests import test_backtest_compare as tc
+    from signal_engine.tests import test_record_run as rrbase
+
+    monkeypatch.setattr(
+        manifest,
+        "git_state",
+        lambda r: {"code_commit": "a" * 40, "code_dirty": False, "dirty_paths": []},
+    )
+    monkeypatch.setattr(manifest, "dataset_fingerprint", lambda s, i, a: "d" * 64)
+    rrbase._make_idea(tmp_path, "009", "orb", "backtest/strategies/orb.py")
+    flats = [
+        tc._record(tmp_path, tc._execution_of(tc.A_ROWS, "2026-03-01", "2026-03-10")),
+        tc._record(tmp_path, tc._execution_of(tc.B_ROWS, "2026-03-04", "2026-03-20")),
+    ]
+    records = [json.loads(f.read_text(encoding="utf-8")) for f in flats]
+    monkeypatch.setattr(svc, "DEFAULT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        svc,
+        "_load",
+        lambda _r: [{"id": "IDEA-009", "folder": "idea-009-orb", "runs": records}],
+    )
+    client = _client_logged_in(_app(), monkeypatch)
+    a, b = (r["run_id"] for r in records)
+    response = client.get(f"/api/backtest-results/IDEA-009/compare?a={a}&b={b}")
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["comparison_note"] is None
+    assert body["comparison"]["schema"] == 1
+    assert "metric_deltas" in body
