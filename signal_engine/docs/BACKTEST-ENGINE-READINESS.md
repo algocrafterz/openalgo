@@ -29,15 +29,17 @@ with tests green, ruff clean and a commit.
 | 1 | Engine P1 step 1: spec v2, profiles, execution resolution | done 2026-10-02 | `27626054d` |
 | 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | see `git log` (feat(research): assumption ledger, intake states, freeze, versions) |
 | 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5) | not started | |
-| 4 | E4: derived verdict, promotion, next action | not started | |
+| 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | not started | |
 | 5 | UI U1 and glossary | not started | |
 | 6 | UI U3 (comparison) | not started | |
 | 7 | UI U4 (version tree) | not started | |
 | 8 | UI U2 remainder, as engine steps 4 and 5 land | not started | |
 
 Findings carried forward from implementation (raised, not designed around):
-- The entry window is not checked against the profile's latest exit-bar close (14:55), so a window such as 09:20-15:10 passes validation.
-- The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4.
+- Resolved 2026-10-02: the entry window is now validated against the profile's standing time exit (`Profile.entry_window_problem`).
+- The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4 (confirmed by the owner).
+- Ledger ids can restart if `assumptions.yaml` is deleted. Step 3 fixes this by sealing a ledger snapshot with each run and seeding `next_id` from it.
+- Strategy classification (`STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md`) is planned in `BACKTESTS-UI-PLAN.md` and built in build order 4 (data) and 5 and 7 (UI). The legacy frontmatter `category` is left unchanged; retiring it is an open decision.
 - Profile-sourced values (`profile.*`) are Medium materiality, not High, because the author selects the profile by name. A High default would force a confirmation on every idea.
 
 ## P1

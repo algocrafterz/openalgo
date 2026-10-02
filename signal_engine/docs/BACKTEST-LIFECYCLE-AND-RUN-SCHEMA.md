@@ -120,6 +120,13 @@ The stage-to-gate mapping is: Backtest is G0 to G6, Paper is G7 to G8, Live is G
 The next action comes from the first NOT_RUN or `fail` gate of the earliest stage that is not
 ready, looked up in the rule table in `backtest/next_action.py`.
 
+### 1.7 Strategy classification is not a state
+
+`strategy_category` and `strategy_tags` (see `STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md` and the
+classification section of `BACKTESTS-UI-PLAN.md`) are idea-level discovery metadata. They are not
+a sixth lifecycle dimension: nothing is computed from them, they gate nothing, and they are never
+copied into a run, a manifest or a fingerprint. Changing them creates no version and no run.
+
 ## 2. Minimum run artifact
 
 The folder is the source of truth. The flat record is an index, and its content is copied

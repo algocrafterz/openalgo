@@ -137,6 +137,7 @@ problem is tagged *validity* (malformed) or *intake* (missing or ambiguous).
 - The profile must exist and must support the spec's product.
 - `re_entry.allowed: false` with trigger fields present is a validity error.
 - An indicator without a source is DERIVABLE when a sensible default exists (close). It is a BLOCKER only when it is ambiguous, for example VWAP anchoring.
+- An MIS entry window may not end after the profile's standing time exit (14:45 for `flattrade-nse-cash`). This is a profile-level rule (`Profile.entry_window_problem`), not a strategy rule, and a violation is a validity error on `session_window.entry` (added 2026-10-02).
 
 ### Tests (written first)
 
@@ -263,6 +264,13 @@ synthetic frames and a temporary DuckDB, never the live Historify store:
 - The flat v3 record is still read by `build_registry`, `evolution` and `backtest_results_service`, with existing reader tests run against a v3 fixture.
 - While P1 capabilities are missing, an EDGE-qualifying synthetic result is capped and names the missing rows.
 
+## Ledger id uniqueness (added 2026-10-02, built in step 3)
+
+Ledger ids must never collide with ids that an older run already cites.
+- Every run seals its own ledger snapshot (`assumptions.json`, including `next_id`), so a reference is always read as `(run_id, ledger_id)` against that snapshot, and an id can never be reinterpreted by a later ledger.
+- The working ledger's `next_id` is seeded from the highest id across the sealed snapshots of the idea's existing runs when `assumptions.yaml` is missing or older. Deleting the working file therefore cannot restart numbering below an id a run has used.
+- Tests: delete `assumptions.yaml` after a run and re-resolve, and assert new ids are above every id in the run's snapshot. A run's snapshot is unchanged by later edits to the working ledger.
+
 ## Build order and checkpoints
 
 Each step finishes with its tests green, `uv run ruff check`, the full `signal_engine/tests`
@@ -310,3 +318,6 @@ step to change what a run writes. None of the three changes `engine.py` or
 4. **`research/spec.py` deleted in step 1.** One canonical specification format
    (`research/intake/`); no v1 path is kept. `test_research_spec.py` and `test_spec_gate.py`
    are rewritten against the v2 schema rather than kept for v1.
+5. **Entry window against the profile (2026-10-02).** Built as a profile-level validity rule, not a strategy rule (see Step 1 validation rules).
+6. **Ledger ids (2026-10-02).** Handled in step 3 by sealing a snapshot with each run and seeding `next_id` from it (section above).
+7. **"Fully settled" means material assumptions are resolved.** Freeze needs every High-materiality inferred value confirmed. Medium and Low entries are recorded and surfaced, never required to be confirmed one by one.

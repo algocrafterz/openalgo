@@ -221,3 +221,23 @@ class TestReviewHardening:
         fields = profiles.load_profile("flattrade-nse-cash").run_config_fields("MIS")
         last_start = fields["mis_squareoff_min"] - fields["squareoff_margin_min"] - bar_min
         assert last_start + bar_min == 14 * 60 + 55
+
+
+class TestEntryWindow:
+    def _mis(self):
+        return profiles.load_profile("flattrade-nse-cash")
+
+    @pytest.mark.parametrize("window", ["09:20-14:30", "09:15-14:45", "10:00-11:00"])
+    def test_mis_window_ending_by_the_standing_exit_is_accepted(self, window):
+        assert self._mis().entry_window_problem("MIS", window) is None
+
+    @pytest.mark.parametrize("window", ["09:20-14:46", "09:20-14:55", "09:20-15:10", "09:20-15:30"])
+    def test_mis_window_ending_after_the_standing_exit_is_a_problem(self, window):
+        problem = self._mis().entry_window_problem("MIS", window)
+        assert problem and "flattrade-nse-cash" in problem and "14:45" in problem
+
+    def test_cnc_has_no_entry_window_limit(self):
+        assert self._mis().entry_window_problem("CNC", "09:20-15:29") is None
+
+    def test_unsupported_product_is_not_this_checks_concern(self):
+        assert self._mis().entry_window_problem("NRML", "09:20-15:29") is None

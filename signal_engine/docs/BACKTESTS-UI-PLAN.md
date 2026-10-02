@@ -192,6 +192,32 @@ The engine prerequisite is E2.
 - Definitions follow the acceptance criteria's wording wherever both define a term.
 - A help-button drawer (`GlossaryDrawer.tsx`) and an `InfoTip` used by metric labels. Nothing renders permanently on the page.
 
+## Strategy classification (additive requirement, 2026-10-02)
+
+Requirement: `STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md`. It adds a lightweight discovery layer
+(category, tags, filters, search, related strategies). It was not in the earlier plans: the
+word "classification" in E3 means run change classes, which is unrelated.
+
+**Where each field lives.** A logical Strategy is the idea. Nothing is duplicated.
+
+| Field | Lives in | Why |
+| --- | --- | --- |
+| `strategy_category` | `idea.md` frontmatter. Allowed values are in `research/taxonomy.yaml` (Trend Following, Mean Reversion, Breakout, Momentum, Market Structure, Statistical / Quantitative, Grid, Arbitrage, Options, Other), so the list is extended by editing one file | Strategy level, mutable, never part of a run |
+| `strategy_tags` | `idea.md` frontmatter, a list of free text. Duplicates are ignored regardless of case | Discovery only |
+| `trading_style`, `direction`, `timeframe` | The frozen spec (`style`, `direction`, `timeframe`). Shown from the selected run's `strategy/` artifact | These change trading logic, so a change is a new version. They are already structured fields |
+| `market` | The deployment profile's `market` (in the run's `execution/config.json`) | Already recorded. A new field would duplicate it |
+| `research_state` | `idea.md` frontmatter (build order 4) | Researcher disposition, separate from classification |
+
+**Rules.**
+- Category and tags are never read by `freeze()`, never enter a fingerprint, the manifest or any run artifact. A test freezes an idea, edits its category and tags, freezes again and asserts the same fingerprints, the same version and no new `versions.yaml` entry (requirement sections 8 and 9).
+- A run page shows category and tags from the idea's current metadata, labelled as strategy-level, and style, direction, timeframe and market from that run's frozen artifacts. Editing a tag therefore never changes what an old run displays about how it was run.
+- No category-dependent execution, verdict or calculation. No `strategy_family` entity. Related strategies are found by shared category and tags.
+- The legacy frontmatter `category` (for example `intraday-breakout`) is the library category the registry and the current page filter use. It mixes style and type. It is left unchanged, and `strategy_category` is added beside it. Whether to retire the legacy field is an open finding for the owner.
+
+**Build.**
+- Engine side (build order 4, with the other `idea.md` metadata): `research/taxonomy.yaml`, validation in `build_registry` (category must be in the taxonomy, tags must be a list of text), the fields carried into `registry.json`, exposure in `backtest_results_service`, and `intake classify IDEA-n --category X --tag a --tag b`.
+- UI: the classification line and chips in the run header (build order 5, U1). The strategy list filters (category, style, direction, market, timeframe, tags, research state, verdict), search by name, category and tag, and the related-strategies grouping (build order 7, with the version tree).
+
 ## Build order
 
 Engine steps run first, because the UI reads what they write.
@@ -201,10 +227,10 @@ Engine steps run first, because the UI reads what they write.
 | 1 | Engine P1 step 1 (spec v2, profiles) | |
 | 2 | Engine P1 step 2 (ledger, intake states, freeze) + E2 (versions) | Strategy versions |
 | 3 | Engine P1 step 3 (run folder, manifest) with E1 fingerprints, + E3 (classification) + E5 (rerun) | Immutable artifact, dataset identity, reproducibility |
-| 4 | E4 (derived verdict, promotion, next action) | Decision support |
-| 5 | UI U1 + glossary | Definition of Done items 1 to 7 and 11 to 18 |
+| 4 | E4 (derived verdict, promotion, next action) + `idea.md` metadata: `stage` / `research_state` split, strategy classification (category, tags, taxonomy) | Decision support, classification data |
+| 5 | UI U1 + glossary + classification line in the run header | Definition of Done items 1 to 7 and 11 to 18 |
 | 6 | UI U3 | Definition of Done items 8 to 10 |
-| 7 | UI U4 | Lineage and branches |
+| 7 | UI U4 + strategy list filters, search and related strategies | Lineage, branches, discovery |
 | 8 | UI U2 remainder, as engine steps 4 and 5 land | Cost decomposition, data quality, trade-level drill-down |
 
 Each order closes with tests green before the next starts:
@@ -241,6 +267,12 @@ The tests are written first.
   - Strategy details show the frozen spec, not the current one.
   - The glossary drawer opens and closes and is absent from the default render.
   - The compare view shows the overlap warning when the periods differ.
+- **Classification.**
+  - A category outside the taxonomy fails the registry check, and adding it to `taxonomy.yaml` makes it pass.
+  - Tags are normalised and de-duplicated, and a non-list fails.
+  - Editing category or tags leaves the strategy fingerprint, the version and `versions.yaml` unchanged, and an identical re-run is still RESEARCH_RERUN.
+  - Filters combine (category and tag and research state), search matches name, category and tag, and a strategy with no category shows as Other.
+  - A run page shows frozen style, direction, timeframe and market from the run, and category and tags from the idea.
 - **Definition of Done check.** A test walks the 20 items in section 4 of the requirements against a fixture run and fails, naming the item, if any field it needs is missing from the API response.
 
 ## Decisions (confirmed by the user 2026-10-02)
@@ -252,6 +284,9 @@ The tests are written first.
   - A gate the engine cannot evaluate yet is NOT_RUN, never PASS, and is listed as a reason.
   - A promotion requirement that is NOT_RUN keeps the verdict at or below MARGINAL.
   - EDGE is therefore unreachable until the required gates exist, which is the honest result, and is consistent with the readiness cap.
+
+- **U5. Strategy classification (2026-10-02).** Added by `STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md` and mapped above. Category and tags live on the idea, outside every fingerprint. The legacy `category` field stays.
+- **U6. Stage and research state (2026-10-02).** The `stage` / `research_state` frontmatter split is built in build order 4, with the promotion decision it depends on. `research_state` stays separate from the calculated run verdict.
 
 Planning stops here. The canonical lifecycle and the minimum run schema are in
 `BACKTEST-LIFECYCLE-AND-RUN-SCHEMA.md`. Remaining capabilities (portfolio analytics,

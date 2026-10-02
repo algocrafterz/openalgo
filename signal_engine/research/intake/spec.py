@@ -552,6 +552,15 @@ def _derived_product(data: Mapping[str, Any]) -> str | None:
     return "MIS" if style == "intraday" else "CNC"
 
 
+def _entry_window(data: Mapping[str, Any]) -> str | None:
+    """The entry window when it is a well-formed range that starts before it ends."""
+    block = data.get("session_window")
+    value = block.get("entry") if isinstance(block, Mapping) else None
+    if isinstance(value, str) and _RANGE.match(value) and value[:5] < value[6:]:
+        return value
+    return None
+
+
 def _check_profile(out: _Collector, data: Mapping[str, Any], profiles_dir: Path | None) -> None:
     name = data.get("profile")
     if not isinstance(name, str) or not name.strip():
@@ -564,6 +573,12 @@ def _check_profile(out: _Collector, data: Mapping[str, Any], profiles_dir: Path 
     product = _derived_product(data)
     if product is not None and not profile.supports(product):
         out.validity("profile", f"profile '{name}' does not support product {product}")
+        return
+    window = _entry_window(data)
+    if product is not None and window is not None:
+        problem = profile.entry_window_problem(product, window)
+        if problem:
+            out.validity("session_window.entry", problem)
 
 
 def validate_spec(data: Any, profiles_dir: Path | None = None) -> list[Problem]:

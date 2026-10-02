@@ -66,6 +66,26 @@ class Profile:
         """The profile content as loaded, for the run's execution config."""
         return deepcopy(self._content)
 
+    def entry_window_problem(self, product: str, window: str) -> str | None:
+        """Why an entry window `HH:MM-HH:MM` cannot work under this profile, or None if it can.
+
+        An MIS entry window may not end after the standing time exit, because a position
+        entered after it would have no standing exit before the broker's force-flat. CNC has
+        no intraday cutoff. This is a deployment rule, so it lives in the profile and not in
+        the strategy.
+        """
+        rules = self.products.get(product)
+        if rules is None or rules.standing_time_exit_min is None:
+            return None
+        end = int(window[6:8]) * 60 + int(window[9:11])
+        if end <= rules.standing_time_exit_min:
+            return None
+        cutoff = rules.standing_time_exit_min
+        return (
+            f"entry window ends {window[6:]}, after profile '{self.name}' {product} standing "
+            f"time exit {cutoff // 60:02d}:{cutoff % 60:02d}"
+        )
+
     def run_config_fields(self, product: str) -> dict[str, int]:
         """RunConfig fields this profile fixes for a product. CNC fixes none."""
         if product not in self.products:

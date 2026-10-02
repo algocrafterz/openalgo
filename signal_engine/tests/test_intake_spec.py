@@ -484,3 +484,29 @@ class TestReviewHardening:
             reference_prices={"stop": "entry_fill", "sizing": "signal_close"},
         )
         assert _problems(s) == []
+
+
+class TestEntryWindowAgainstProfile:
+    def test_window_inside_the_profile_cutoff_is_clean(self):
+        assert _problems(make_spec(session_window={"entry": "09:20-14:45"})) == []
+
+    @pytest.mark.parametrize("window", ["09:20-14:50", "09:20-15:10"])
+    def test_mis_window_past_the_standing_exit_is_a_validity_error(self, window):
+        found = _problems(make_spec(session_window={"entry": window}))
+        assert [(p.kind, p.field) for p in found] == [("validity", "session_window.entry")]
+        assert "flattrade-nse-cash" in found[0].message
+
+    def test_swing_cnc_is_not_limited(self):
+        s = make_spec(
+            style="swing",
+            direction="long_only",
+            product="CNC",
+            timeframe="1d",
+            session_window={"entry": "09:20-15:25"},
+        )
+        assert _problems(s) == []
+
+    def test_a_malformed_window_reports_only_its_own_problem(self):
+        found = _problems(make_spec(session_window={"entry": "14:30-09:20"}))
+        assert [p.field for p in found] == ["session_window.entry"]
+        assert "start before" in found[0].message
