@@ -24,6 +24,9 @@ _STATUS = {
     "report": "REPORT",
 }
 _NOT_REQUIRED = frozenset({"NOT_APPLICABLE", "REPORT"})
+#: Rows the acceptance criteria label REPORT: shown, never required for promotion or the verdict.
+#: G2.7 (track length against the Minimum Track Record Length) is the only one today.
+DIAGNOSTIC_GATES: tuple[str, ...] = ("G2.7",)
 _GATE_RE = re.compile(r"^G(\d+)\.(\d+)$")
 
 
@@ -93,7 +96,11 @@ def evaluate_promotion(
                 "reasons": [f"the {blocker} stage is not ready"],
             }
             continue
-        required = [g for g in gates if g["status"] not in _NOT_REQUIRED]
+        required = [
+            g
+            for g in gates
+            if g["status"] not in _NOT_REQUIRED and g["gate"] not in DIAGNOSTIC_GATES
+        ]
         reasons: list[str] = []
         if not required:
             reasons.append("no gates evaluated for this stage")

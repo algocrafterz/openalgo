@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from signal_engine.backtest.promotion import (
+    DIAGNOSTIC_GATES,
     STAGE_GATES,
     evaluation_rows,
     gate_number,
@@ -17,7 +18,12 @@ MARGINAL = "MARGINAL"
 NO_EDGE = "NO_EDGE"
 INCONCLUSIVE = "INCONCLUSIVE"
 
+#: Minimum-sample gates that decide the verdict (rule 2). The acceptance criteria name two rows
+#: about sample size: G2.1 (trade count, with a 30-trade floor per reported subgroup) is a
+#: requirement; G2.7 (track length against the Minimum Track Record Length) is labelled REPORT,
+#: so it is shown as a diagnostic and never decides anything.
 MIN_SAMPLE_GATES = ("G2.1",)
+MIN_SAMPLE_DIAGNOSTIC_GATES = DIAGNOSTIC_GATES
 _NOT_REQUIRED = frozenset({"report", "not_applicable"})
 
 
@@ -52,7 +58,7 @@ def _result(
     }
 
 
-def derive(
+def _derive(
     evaluation: Mapping[str, Any] | None,
     *,
     validity: Mapping[str, Any],
@@ -96,6 +102,7 @@ def derive(
         return _result(
             INCONCLUSIVE,
             [_gate_reason(r, "Too few trades to judge") for r in short],
+            str(short[0]["gate"]),
         )
 
     hard = [r for r in rows if r.get("hard") and r.get("status") == "fail"]
@@ -111,6 +118,7 @@ def derive(
         for r in rows
         if (gate_number(str(r["gate"])) in STAGE_GATES["backtest"])
         and r.get("status") not in _NOT_REQUIRED
+        and str(r["gate"]) not in DIAGNOSTIC_GATES
         and r.get("status") in ("fail", "not_evaluated")
     ]
     if open_gates:
@@ -134,3 +142,56 @@ def derive(
             [f"engine readiness: {names}"],
         )
     return _result(EDGE, [])
+
+
+def _diagnostics(evaluation: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    rows = {
+        str(r["gate"]): r
+        for dim in (evaluation or {}).get("dimensions", [])
+        for r in dim.get("rows", [])
+    }
+    found = []
+    for gate in MIN_SAMPLE_DIAGNOSTIC_GATES:
+        row = rows.get(gate)
+        if row is not None and row.get("status") in ("fail", "not_evaluated"):
+            label = status_label(str(row["status"]))
+            verb = "failed" if label == "FAIL" else "was not run"
+            title = row.get("title") or gate
+            found.append(
+                _reason(
+                    f"Diagnostic, does not decide the verdict: {title} ({gate}) {verb}.",
+                    gate,
+                    label,
+                )
+            )
+    return found
+
+
+def derive(
+    evaluation: Mapping[str, Any] | None,
+    *,
+    validity: Mapping[str, Any],
+    data_quality: Mapping[str, Any],
+    readiness_missing: Sequence[str],
+    code_dirty: bool = False,
+    reproducible: bool = True,
+) -> dict[str, Any]:
+    """Apply the verdict rules in order; the first match decides (see `_derive`).
+
+    Diagnostic sample-size rows (`MIN_SAMPLE_DIAGNOSTIC_GATES`) are appended to the reasons for
+    a run whose performance gates were evaluated. They never change the verdict.
+    """
+    result = _derive(
+        evaluation,
+        validity=validity,
+        data_quality=data_quality,
+        readiness_missing=readiness_missing,
+        code_dirty=code_dirty,
+        reproducible=reproducible,
+    )
+    performance_evaluated = validity.get("ok", True) and not (
+        data_quality.get("status") == "WARNING" and data_quality.get("affects_validity")
+    )
+    if performance_evaluated:
+        result = {**result, "reasons": [*result["reasons"], *_diagnostics(evaluation)]}
+    return result

@@ -143,3 +143,21 @@ def test_all_pass_with_readiness_missing_is_marginal_and_not_ready():
     v = vd.derive(e, validity=OK, data_quality=DQ_OK, readiness_missing=["x"])
     assert v["run_verdict"] == "MARGINAL"
     assert decisions(run(e, readiness_missing=["x"]))["backtest"] == pr.NOT_READY
+
+
+class TestDiagnosticGatesAreNotRequired:
+    def _stage(self, **kw):
+        from signal_engine.tests.test_verdict import make_eval
+
+        return pr.evaluate_promotion(make_eval(**kw), code_dirty=False, reproducible=True)[
+            "stages"
+        ]["backtest"]
+
+    def test_track_length_not_run_does_not_block_the_backtest_stage(self):
+        assert self._stage(G2_7="not_evaluated")["decision"] == "READY_FOR_NEXT_STAGE"
+
+    def test_track_length_failure_does_not_block_either(self):
+        assert self._stage(G2_7="fail")["decision"] == "READY_FOR_NEXT_STAGE"
+
+    def test_a_mandatory_sample_gate_still_blocks(self):
+        assert self._stage(G2_1="not_evaluated")["decision"] == "NOT_READY"

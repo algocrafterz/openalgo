@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from signal_engine.backtest.promotion import READY, STAGES, evaluation_rows
+from signal_engine.backtest.promotion import DIAGNOSTIC_GATES, READY, STAGES, evaluation_rows
 
 DIRTY_ACTION = "Commit the working tree and re-run from a clean state"
 ADVANCE_ACTION = "Advance to the next stage"
@@ -204,7 +204,9 @@ def next_action(
     open_gates: set[str] = set()
     if stage is not None:
         open_gates = {
-            g["gate"] for g in stages[stage]["gates"] if g["status"] in ("FAIL", "NOT_RUN")
+            g["gate"]
+            for g in stages[stage]["gates"]
+            if g["status"] in ("FAIL", "NOT_RUN") and g["gate"] not in DIAGNOSTIC_GATES
         }
     rows = evaluation_rows(evaluation)
     dims = {

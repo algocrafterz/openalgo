@@ -37,7 +37,12 @@ def test_every_dimension_has_a_default():
 
 
 @pytest.mark.parametrize(
-    "gate", [g[0] for g in ev._GATES if g[0][0] == "G" and int(g[0][1:].split(".")[0]) <= 6]
+    "gate",
+    [
+        g[0]
+        for g in ev._GATES
+        if g[0][0] == "G" and int(g[0][1:].split(".")[0]) <= 6 and g[0] not in na.DIAGNOSTIC_GATES
+    ],
 )
 def test_each_backtest_rule_fires_for_its_gate(gate):
     out = act(make_eval(**{gate.replace(".", "_"): "not_evaluated"}))
@@ -137,3 +142,8 @@ def test_first_hard_failed_gate_beats_gate_order():
     hard = {r["gate"] for d in e["dimensions"] for r in d["rows"] if r["hard"]}
     assert "G1.2" in hard
     assert act(e)["gate"] == "G1.2"
+
+
+def test_a_diagnostic_gate_is_never_the_next_action():
+    out = act(make_eval(G2_7="not_evaluated"))
+    assert out["gate"] != "G2.7"

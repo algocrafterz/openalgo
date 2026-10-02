@@ -175,3 +175,42 @@ def test_inputs_not_mutated():
     e0, b0 = copy.deepcopy(e), copy.deepcopy(bad)
     derive(e, validity=bad, readiness_missing=["x"])
     assert e == e0 and bad == b0
+
+
+class TestMinimumSampleGates:
+    def test_mandatory_gate_is_g2_1_and_track_length_is_diagnostic(self):
+        assert vd.MIN_SAMPLE_GATES == ("G2.1",)
+        assert vd.MIN_SAMPLE_DIAGNOSTIC_GATES == ("G2.7",)
+
+    def test_track_length_not_run_never_makes_a_run_inconclusive(self):
+        r = vd.derive(
+            make_eval(G2_7="not_evaluated"), validity=OK, data_quality=DQ_OK, readiness_missing=[]
+        )
+        assert r["run_verdict"] != "INCONCLUSIVE"
+
+    def test_track_length_open_is_listed_as_diagnostic_and_does_not_decide(self):
+        base = vd.derive(make_eval(), validity=OK, data_quality=DQ_OK, readiness_missing=[])
+        r = vd.derive(make_eval(G2_7="fail"), validity=OK, data_quality=DQ_OK, readiness_missing=[])
+        diag = [x for x in r["reasons"] if x["gate"] == "G2.7"]
+        assert diag and diag[0]["text"].startswith("Diagnostic")
+        assert "does not decide" in diag[0]["text"]
+        assert r["run_verdict"] == base["run_verdict"]
+        assert r["primary_failed_gate"] != "G2.7"
+
+    def test_diagnostic_is_not_listed_when_the_gate_passes(self):
+        r = vd.derive(make_eval(), validity=OK, data_quality=DQ_OK, readiness_missing=[])
+        assert not [x for x in r["reasons"] if x["gate"] == "G2.7"]
+
+    def test_diagnostic_is_not_listed_for_an_invalid_run(self):
+        bad = {"ok": False, "failures": [{"check": "lookahead", "detail": "x"}]}
+        r = vd.derive(
+            make_eval(G2_7="fail"), validity=bad, data_quality=DQ_OK, readiness_missing=[]
+        )
+        assert r["run_verdict"] == "INCONCLUSIVE"
+        assert not [x for x in r["reasons"] if x["gate"] == "G2.7"]
+
+    def test_mandatory_sample_gate_still_decides(self):
+        r = vd.derive(
+            make_eval(G2_1="not_evaluated"), validity=OK, data_quality=DQ_OK, readiness_missing=[]
+        )
+        assert r["run_verdict"] == "INCONCLUSIVE" and r["primary_failed_gate"] == "G2.1"
