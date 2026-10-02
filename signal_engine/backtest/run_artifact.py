@@ -20,6 +20,9 @@ from typing import Any
 import yaml
 
 from signal_engine.backtest import manifest as manifest_mod
+from signal_engine.backtest import next_action as next_action_mod
+from signal_engine.backtest import promotion as promotion_mod
+from signal_engine.backtest import verdict as verdict_mod
 from signal_engine.backtest.artifacts import RunFolder, _encode
 from signal_engine.backtest.change_class import classify, first_run_classes
 from signal_engine.backtest.fingerprints import canonical_json, component_fingerprints, sha256_hex
@@ -224,24 +227,77 @@ def _branch_label(version: str | None) -> str | None:
     return None if version is None or _PLAIN_VERSION.match(version) else version
 
 
-def _report(record: Mapping[str, Any]) -> dict[str, Any]:
+def _derived(
+    record: Mapping[str, Any],
+    readiness_missing: Sequence[str],
+    code_dirty: bool,
+    reproducible: bool,
+) -> dict[str, Any]:
+    """Verdict, promotion and next action for a run, derived from its evaluation block."""
+    evaluation = record.get("evaluation") or {}
+    validity = {"ok": True, "failures": []}
+    data_quality = {"status": "NOT_RUN", "affects_validity": False, "items": []}
+    run_verdict = verdict_mod.derive(
+        evaluation,
+        validity=validity,
+        data_quality=data_quality,
+        readiness_missing=list(readiness_missing),
+        code_dirty=code_dirty,
+        reproducible=reproducible,
+    )
+    promo = promotion_mod.evaluate_promotion(
+        evaluation,
+        code_dirty=code_dirty,
+        reproducible=reproducible,
+        readiness_missing=list(readiness_missing),
+    )
+    action = next_action_mod.next_action(
+        promo,
+        evaluation,
+        code_dirty=code_dirty,
+        reproducible=reproducible,
+        primary_gate=run_verdict.get("primary_failed_gate"),
+    )
+    return {
+        "validity": validity,
+        "data_quality": data_quality,
+        "verdict": run_verdict,
+        "promotion": promo,
+        "next_action": action,
+    }
+
+
+def _report(record: Mapping[str, Any], derived: Mapping[str, Any]) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema": SCHEMA,
         "metrics": record["metrics"],
         "series": record.get("series"),
         "evaluation": record.get("evaluation"),
-        "validity": {"ok": True, "failures": []},
-        "data_quality": {"status": "NOT_RUN", "affects_validity": False, "items": []},
-        # The run verdict, promotion decision and next action are computed in a later build
-        # step (verdict derivation); until then they stay null in both the folder and the index.
-        "verdict": None,
-        "promotion": None,
-        "next_action": None,
+        "validity": derived["validity"],
+        "data_quality": derived["data_quality"],
+        "verdict": derived["verdict"],
+        "promotion": derived["promotion"],
+        "next_action": derived["next_action"],
         "n_trials": record.get("n_trials"),
         "notes": record.get("notes", ""),
     }
     report.update({k: record[k] for k in _REPORT_BLOCKS if k in record})
     return report
+
+
+def _reproducibility(
+    frozen: Any, symbols: Sequence[str], engine: Mapping[str, Any]
+) -> dict[str, bool]:
+    return {
+        "strategy_version": frozen.version is not None,
+        "strategy_fingerprint": True,
+        "dataset_fingerprint": bool(symbols),
+        "execution_config": True,
+        "deployment_profile": True,
+        "engine_version": True,
+        "code_commit": engine["code_commit"] != "unknown",
+        "resolved_assumptions": True,
+    }
 
 
 def build_manifest(
@@ -278,16 +334,7 @@ def build_manifest(
         minutes = int(squareoff["value"])
         force_flat = f"{minutes // 60:02d}:{minutes % 60:02d}"
     code_dirty = bool(engine["code_dirty"])
-    reproducibility = {
-        "strategy_version": frozen.version is not None,
-        "strategy_fingerprint": True,
-        "dataset_fingerprint": bool(symbols),
-        "execution_config": True,
-        "deployment_profile": True,
-        "engine_version": True,
-        "code_commit": engine["code_commit"] != "unknown",
-        "resolved_assumptions": True,
-    }
+    reproducibility = _reproducibility(frozen, symbols, engine)
     manifest: dict[str, Any] = {
         "schema": SCHEMA,
         "run_id": run_id,
@@ -396,13 +443,18 @@ def prepare_run_artifact(
     """
     run_id = record["run_id"]
     created = _created(now)
+    code_dirty = bool(engine["code_dirty"])
+    reproducible = (not code_dirty) and all(
+        _reproducibility(frozen, sorted(execution.symbols), engine).values()
+    )
+    derived = _derived(record, readiness_missing, code_dirty, reproducible)
     files: dict[str, bytes] = {
         "assumptions.json": _encode(_assumptions(frozen, idea_folder, created)),
         "strategy/spec.yaml": _encode(yaml.safe_dump(frozen.intent, sort_keys=True)),
         "strategy/strategy.json": _encode(_strategy_json(idea_id, frozen)),
         "execution/config.json": _encode({"resolved": frozen.resolved, "profile": frozen.profile}),
         "evidence/trades.parquet": _encode(trades_parquet_bytes(execution.trades)),
-        "report/report.json": _encode(_report(record)),
+        "report/report.json": _encode(_report(record, derived)),
     }
     artifacts = {rel: hashlib.sha256(files[rel]).hexdigest() for rel in sorted(files)}
     dataset_fp = _symbols_fingerprint(
@@ -450,8 +502,8 @@ def prepare_run_artifact(
         "code_dirty": manifest["engine"]["code_dirty"],
         "promotion_eligible": manifest["reproducible"] and not manifest["engine"]["code_dirty"],
         "missing_capabilities": manifest["missing_capabilities"],
-        "run_verdict": None,
-        "promotion_decision": None,
-        "next_action": None,
+        "run_verdict": derived["verdict"]["run_verdict"],
+        "promotion_decision": derived["promotion"]["stages"]["backtest"]["decision"],
+        "next_action": derived["next_action"],
     }
     return PreparedRun(run_id, flat, manifest_sha, files, manifest)

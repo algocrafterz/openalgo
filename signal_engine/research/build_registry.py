@@ -31,8 +31,10 @@ from typing import Any
 import yaml
 
 from signal_engine.backtest import manifest as run_manifest
-from signal_engine.research.intake import spec, versions
+from signal_engine.research.intake import lifecycle, spec, taxonomy, versions
 
+#: The legacy `status` and `verdict` values. Both are derived for every entry (see
+#: `lifecycle.derive_status` / `derive_verdict`), never hand-written in frontmatter.
 STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
 VERDICTS = ("none", "edge", "marginal", "no-edge", "inconclusive")
 HORIZONS = ("intraday", "swing", "positional")
@@ -50,8 +52,7 @@ CATEGORIES = (
 REQUIRED = (
     "id",
     "title",
-    "status",
-    "verdict",
+    "stage",
     "category",
     "horizon",
     "source",
@@ -357,11 +358,14 @@ def _validate_version_pointers(idea: dict[str, Any], folder: Path) -> list[str]:
     ]
 
 
-def _validate(idea: dict[str, Any], folder: Path, root: Path) -> list[str]:
+def _validate(
+    idea: dict[str, Any], folder: Path, root: Path, categories: tuple[str, ...] | None = None
+) -> list[str]:
     problems = [f"missing field '{f}'" for f in REQUIRED if f not in idea]
+    problems.extend(lifecycle.vocabulary_problems(idea))
+    if categories is not None:
+        problems.extend(taxonomy.classification_problems(idea, categories))
     for field, allowed in (
-        ("status", STATUSES),
-        ("verdict", VERDICTS),
         ("horizon", HORIZONS),
         ("category", CATEGORIES),
     ):
@@ -383,11 +387,10 @@ def _validate(idea: dict[str, Any], folder: Path, root: Path) -> list[str]:
 
 
 def _validate_rejection_basis(idea: dict[str, Any]) -> list[str]:
-    basis, status = idea.get("rejection_basis"), idea.get("status")
+    basis = idea.get("rejection_basis")
+    rejected = idea.get("research_state") == "rejected"
     if basis is None:
-        needed = status == "rejected" and str(idea.get("last_reviewed", "")) >= (
-            REJECTION_BASIS_REQUIRED_FROM
-        )
+        needed = rejected and str(idea.get("last_reviewed", "")) >= (REJECTION_BASIS_REQUIRED_FROM)
         return (
             [
                 f"rejection_basis is required for a rejected idea: one of {', '.join(REJECTION_BASES)}"
@@ -397,8 +400,8 @@ def _validate_rejection_basis(idea: dict[str, Any]) -> list[str]:
         )
     if basis not in REJECTION_BASES:
         return [f"rejection_basis '{basis}' not one of {', '.join(REJECTION_BASES)}"]
-    if status != "rejected":
-        return ["rejection_basis is only valid when status is rejected"]
+    if not rejected:
+        return ["rejection_basis is only valid when research_state is rejected"]
     return []
 
 
@@ -480,6 +483,29 @@ def _v3_manifest_agreement(run: dict[str, Any], manifest: dict[str, Any]) -> lis
     return problems
 
 
+def _v3_report_agreement(run: dict[str, Any], report: Any) -> list[str]:
+    """Problems where the flat verdict fields contradict the hashed report/report.json."""
+    if not isinstance(report, dict):
+        return ["report/report.json is not a JSON object"]
+    verdict = report.get("verdict")
+    promotion = report.get("promotion")
+    stages = promotion.get("stages") if isinstance(promotion, dict) else None
+    backtest = stages.get("backtest") if isinstance(stages, dict) else None
+    pairs = (
+        ("run_verdict", verdict.get("run_verdict") if isinstance(verdict, dict) else None),
+        (
+            "promotion_decision",
+            backtest.get("decision") if isinstance(backtest, dict) else None,
+        ),
+        ("next_action", report.get("next_action")),
+    )
+    return [
+        f"{field} differs from report/report.json ({run.get(field)!r} vs {expected!r})"
+        for field, expected in pairs
+        if run.get(field) != expected
+    ]
+
+
 def _v3_folder_problems(run: dict[str, Any], runs_dir: Path) -> list[str]:
     """Check a schema 3 record against its artifact folder."""
     folder, problem = _resolve_artifact_dir(run, runs_dir)
@@ -513,6 +539,14 @@ def _v3_folder_problems(run: dict[str, Any], runs_dir: Path) -> list[str]:
     if isinstance(strat, dict) and strat.get("version") != run["strategy_version"]:
         problems.append("strategy_version differs from manifest strategy.version")
     problems.extend(_v3_manifest_agreement(run, manifest))
+    report_path = folder / "report" / "report.json"
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            problems.append(f"report/report.json unreadable ({exc})")
+        else:
+            problems.extend(_v3_report_agreement(run, report))
     return problems
 
 
@@ -590,6 +624,11 @@ def _load_runs(folder: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return sorted(runs, key=lambda r: (r["date"], r["run_id"])), problems
 
 
+def load_runs(folder: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """The valid run records of an idea folder (oldest first) and the problems found."""
+    return _load_runs(folder)
+
+
 def latest_run(idea: dict[str, Any]) -> dict[str, Any] | None:
     """The most recent run record of an idea, or None if it has never been backtested."""
     runs = idea.get("runs") or []
@@ -661,12 +700,48 @@ def lineage(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+def _entry(
+    idea: dict[str, Any], folder: Path, runs: list[dict[str, Any]], categories: tuple[str, ...]
+) -> dict[str, Any]:
+    """A validated idea as published: frontmatter plus runs, lineage, the derived legacy
+    `status` / `verdict` and the classification."""
+    state = idea.get("research_state", lifecycle.DEFAULT_RESEARCH_STATE)
+    entry: dict[str, Any] = {
+        **idea,
+        "folder": folder.name,
+        "runs": runs,
+        "research_state": state,
+        "status": lifecycle.derive_status(idea["stage"], state, bool(runs)),
+        "verdict": lifecycle.derive_verdict(runs[-1] if runs else None),
+        "strategy_category": taxonomy.category_of(idea),
+        "strategy_tags": taxonomy.tags_of(idea),
+    }
+    entry["classification"] = taxonomy.classification_block(idea, categories, _valid_spec(folder))
+    if runs:
+        entry["lineage"] = lineage(runs)
+    return entry
+
+
+def _valid_spec(folder: Path) -> dict[str, Any] | None:
+    """The idea's current spec if it exists and is valid, else None."""
+    try:
+        data = spec.load_spec(folder)
+    except spec.SpecError:
+        return None
+    return data if isinstance(data, dict) and not spec.validate_spec(data) else None
+
+
 def load_ideas(root: Path) -> list[dict[str, Any]]:
     """Load and validate every idea under `root`/research/ideas. Raises RegistryError."""
     ideas_dir = root / "research" / "ideas"
     ideas: list[dict[str, Any]] = []
     problems: list[str] = []
     seen: dict[str, str] = {}
+    try:
+        categories: tuple[str, ...] | None = taxonomy.load_categories(taxonomy.taxonomy_path(root))
+    except taxonomy.TaxonomyError as exc:
+        categories = None
+        problems.append(f"taxonomy: {exc}")
     for folder in sorted(
         p for p in ideas_dir.iterdir() if p.is_dir() and not p.name.startswith("_")
     ):
@@ -678,21 +753,20 @@ def load_ideas(root: Path) -> list[dict[str, Any]]:
                 f"{folder.name}: {exc}" if idea_file.exists() else f"{folder.name}: idea.md missing"
             )
             continue
-        found = _validate(idea, folder, root)
+        found = _validate(idea, folder, root, categories)
         if not found:
-            found = spec.registry_problems(str(idea["id"]), str(idea["status"]), folder)
+            found = spec.registry_problems(str(idea["id"]), str(idea["stage"]), folder)
+        runs, run_problems = _load_runs(folder)
+        if not found and not run_problems:
+            found = lifecycle.evidence_problems(idea, runs)
         problems.extend(f"{folder.name}: {p}" for p in found)
         ident = str(idea.get("id"))
         if ident in seen:
             problems.append(f"{folder.name}: duplicate id {ident} (also {seen[ident]})")
         seen[ident] = folder.name
-        runs, run_problems = _load_runs(folder)
         problems.extend(run_problems)
-        if not found and not run_problems:
-            entry = {**idea, "folder": folder.name, "runs": runs}
-            if runs:
-                entry["lineage"] = lineage(runs)
-            ideas.append(entry)
+        if not found and not run_problems and categories is not None:
+            ideas.append(_entry(idea, folder, runs, categories))
     if problems:
         raise RegistryError("\n".join(problems))
     return sorted(ideas, key=lambda i: i["id"])

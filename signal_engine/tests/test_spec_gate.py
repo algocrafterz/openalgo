@@ -20,8 +20,7 @@ from signal_engine.tests.intake_fixtures import GOOD_SPEC, make_spec
 IDEA_MD = """---
 id: IDEA-{number}
 title: Sample
-status: evaluating
-verdict: none
+stage: backtest
 category: intraday-breakout
 horizon: intraday
 source: {{type: self}}
@@ -157,7 +156,11 @@ class TestRegistryCheck:
 
     def test_inbox_idea_without_spec_is_allowed(self, tmp_path):
         folder = _idea(tmp_path, "027")
-        text = (folder / "idea.md").read_text(encoding="utf-8").replace("evaluating", "inbox")
+        text = (
+            (folder / "idea.md")
+            .read_text(encoding="utf-8")
+            .replace("stage: backtest", "stage: inbox")
+        )
         (folder / "idea.md").write_text(text, encoding="utf-8")
         assert len(br.load_ideas(tmp_path)) == 1
 

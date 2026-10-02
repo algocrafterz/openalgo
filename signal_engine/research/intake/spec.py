@@ -27,9 +27,9 @@ from signal_engine.research.intake.profiles import ProfileError, load_profile
 
 SCHEMA_VERSION = 2
 
-#: Statuses at which the registry demands a spec. An inbox idea is a raw capture and a rejected
-#: or shelved one is finished; the record gate is stricter. Replaced by `stage` in build order 2.
-SPEC_ACTIVE_STATUSES = ("evaluating", "backtested", "paper", "live")
+#: Stages at which the registry demands a spec. An inbox idea is a raw capture and a retired
+#: one is finished; the record gate is stricter.
+SPEC_ACTIVE_STAGES = ("backtest", "paper", "live")
 
 VALIDITY = "validity"
 INTAKE = "intake"
@@ -633,7 +633,7 @@ def check_idea(idea_id: str, folder: Path) -> None:
         raise SpecError(f"{idea_id}: spec.yaml is incomplete:\n{detail}")
 
 
-def registry_problems(idea_id: str, status: str, folder: Path) -> list[str]:
+def registry_problems(idea_id: str, stage: str, folder: Path) -> list[str]:
     """Spec problems for the registry check: a present spec must be valid, and an idea that is
     being worked on must have one."""
     try:
@@ -641,5 +641,5 @@ def registry_problems(idea_id: str, status: str, folder: Path) -> list[str]:
     except SpecError as exc:
         return [str(exc)]
     if data is None:
-        return [_required_message(idea_id)] if status in SPEC_ACTIVE_STATUSES else []
+        return [_required_message(idea_id)] if stage in SPEC_ACTIVE_STAGES else []
     return [f"spec.yaml: {p}" for p in validate_spec(data)]

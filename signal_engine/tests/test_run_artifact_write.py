@@ -87,9 +87,9 @@ class TestLayout:
         assert flat["artifact_dir"] == f"{flat['run_id']}/"
         assert flat["manifest_sha256"] == mf.manifest_sha256(_folder(path))
         assert flat["strategy_version"] == _manifest(path)["strategy"]["version"]
-        assert flat["run_verdict"] is None
-        assert flat["promotion_decision"] is None
-        assert flat["next_action"] is None
+        assert flat["run_verdict"] in {"INCONCLUSIVE", "MARGINAL", "NO_EDGE"}
+        assert flat["promotion_decision"] in {"NOT_READY", "BLOCKED"}
+        assert set(flat["next_action"]) == {"action", "reason", "gate"}
         assert flat["metrics"]["trades"] == 40  # v2 keys are kept
         assert flat["code_version"]
 
@@ -126,9 +126,19 @@ class TestLayout:
             "affects_validity": False,
             "items": [],
         }
-        assert report["verdict"] is None
-        assert report["promotion"] is None
-        assert report["next_action"] is None
+        assert set(report["verdict"]) == {
+            "run_verdict",
+            "primary_failed_gate",
+            "reasons",
+            "caps_applied",
+        }
+        assert report["verdict"]["run_verdict"] != "EDGE"
+        assert set(report["promotion"]["stages"]) == {"backtest", "paper", "live"}
+        assert set(report["next_action"]) == {"action", "reason", "gate"}
+        assert flat["run_verdict"] == report["verdict"]["run_verdict"]
+        assert flat["promotion_decision"] == report["promotion"]["stages"]["backtest"]["decision"]
+        assert flat["promotion_decision"] in {"READY_FOR_NEXT_STAGE", "NOT_READY", "BLOCKED"}
+        assert flat["next_action"] == report["next_action"]
         assert report["n_trials"] == flat["n_trials"]
         for key in ("position_caps", "split", "baseline", "cost_model"):
             if key in flat:

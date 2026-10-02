@@ -14,8 +14,8 @@ from signal_engine.research import build_registry as br
 IDEA = """---
 id: IDEA-001
 title: Sample
-status: {status}
-verdict: no-edge
+stage: inbox
+research_state: {state}
 category: intraday-momentum
 horizon: intraday
 source: {{type: self}}
@@ -27,12 +27,12 @@ Body.
 """
 
 
-def _idea(root: Path, status="rejected", reviewed="2026-09-29", basis=None) -> Path:
+def _idea(root: Path, state="rejected", reviewed="2026-09-29", basis=None) -> Path:
     folder = root / "research" / "ideas" / "idea-001-sample"
     folder.mkdir(parents=True, exist_ok=True)
     extra = f"rejection_basis: {basis}\n" if basis else ""
     (folder / "idea.md").write_text(
-        IDEA.format(status=status, reviewed=reviewed, extra=extra), encoding="utf-8"
+        IDEA.format(state=state, reviewed=reviewed, extra=extra), encoding="utf-8"
     )
     return folder
 
@@ -79,9 +79,9 @@ class TestRejectionBasis:
         with pytest.raises(br.RegistryError, match="rejection_basis"):
             br.load_ideas(tmp_path)
 
-    def test_basis_on_a_live_idea_is_refused(self, tmp_path):
-        _idea(tmp_path, status="paper", basis="overfit")
-        with pytest.raises(br.RegistryError, match="only valid when status is rejected"):
+    def test_basis_on_a_non_rejected_idea_is_refused(self, tmp_path):
+        _idea(tmp_path, state="active", basis="overfit")
+        with pytest.raises(br.RegistryError, match="only valid when research_state is rejected"):
             br.load_ideas(tmp_path)
 
     def test_documented_bases(self):

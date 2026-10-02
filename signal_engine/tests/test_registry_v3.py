@@ -69,9 +69,22 @@ def _manifest(run_id: str, artifacts: dict[str, str]) -> dict:
     }
 
 
-def _make_folder(runs: Path, run_id: str = RUN_ID, skip: str | None = None) -> Path:
+def report_for(flat: dict) -> dict:
+    """A report.json whose derived fields agree with the flat record values given."""
+    return {
+        "schema": 3,
+        "verdict": {"run_verdict": flat.get("run_verdict")},
+        "promotion": {"stages": {"backtest": {"decision": flat.get("promotion_decision")}}},
+        "next_action": flat.get("next_action"),
+    }
+
+
+def _make_folder(
+    runs: Path, run_id: str = RUN_ID, skip: str | None = None, report: dict | None = None
+) -> Path:
     rf = RunFolder(runs, run_id)
-    for rel, content in FILES.items():
+    files = {**FILES, "report/report.json": report} if report is not None else FILES
+    for rel, content in files.items():
         if rel != skip:
             rf.add(rel, content)
     return rf.commit(lambda arts: _manifest(run_id, arts))
@@ -106,7 +119,7 @@ def idea(tmp_path: Path) -> Path:
 
 def _setup(idea: Path, run_id: str = RUN_ID, **patch) -> tuple[Path, dict]:
     runs = idea / "runs"
-    folder = _make_folder(runs, run_id)
+    folder = _make_folder(runs, run_id, report=report_for(patch))
     rec = {**_record(run_id, folder), **patch}
     (runs / f"{run_id}.json").write_text(json.dumps(rec), encoding="utf-8")
     return folder, rec
@@ -342,3 +355,38 @@ def test_hand_edited_promotion_eligible_fails(idea: Path):
     rec["promotion_eligible"] = False
     (runs / f"{RUN_ID}.json").write_text(json.dumps(rec), encoding="utf-8")
     assert _problems(idea) == []
+
+
+# ---- the flat verdict fields must agree with the hashed report -----------------------------
+
+REPORT_FIELDS = [
+    ("run_verdict", "EDGE", "NO_EDGE"),
+    ("promotion_decision", "NOT_READY", "READY_FOR_NEXT_STAGE"),
+    ("next_action", {"action": "a", "reason": "r", "gate": None}, {"action": "b"}),
+]
+
+
+def _edit_flat(idea: Path, run_id: str, **changes) -> None:
+    path = idea / "runs" / f"{run_id}.json"
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    rec.update(changes)
+    path.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@pytest.mark.parametrize("field,real,fake", REPORT_FIELDS)
+def test_consistent_flat_and_report_load(idea: Path, field: str, real, fake):
+    _setup(idea, **{field: real})
+    assert _problems(idea) == []
+
+
+@pytest.mark.parametrize("field,real,fake", REPORT_FIELDS)
+def test_hand_edited_flat_verdict_field_is_reported(idea: Path, field: str, real, fake):
+    _setup(idea, **{field: real})
+    _edit_flat(idea, RUN_ID, **{field: fake})
+    assert any(field in p and "report" in p for p in _problems(idea))
+
+
+def test_flat_claims_ready_but_report_has_no_such_field(idea: Path):
+    _setup(idea)
+    _edit_flat(idea, RUN_ID, promotion_decision="READY_FOR_NEXT_STAGE")
+    assert any("promotion_decision" in p for p in _problems(idea))

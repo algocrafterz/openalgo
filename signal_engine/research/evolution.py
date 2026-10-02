@@ -95,23 +95,17 @@ def assess_evolution(runs: Sequence[dict[str, Any]], verdict: str | None = None)
     return {**base, "state": state, "action": action, "best_run": best_id, "reason": reason}
 
 
-def _verdict(idea_dir: Any) -> str | None:
-    """The `verdict:` line of an idea.md front matter, or None."""
-    for line in (idea_dir / "idea.md").read_text(encoding="utf-8").splitlines()[:40]:
-        if line.startswith("verdict:"):
-            return line.split(":", 1)[1].strip()
-    return None
-
-
 def main() -> None:
     """Print the verdict for every idea that has runs."""
     import json
     from pathlib import Path
 
+    from signal_engine.research.intake.lifecycle import derive_verdict
+
     for idea in sorted((Path(__file__).parent / "ideas").glob("idea-*")):
         runs = [json.loads(p.read_text()) for p in sorted((idea / "runs").glob("*.json"))]
         if runs:
-            out = assess_evolution(runs, verdict=_verdict(idea))
+            out = assess_evolution(runs, verdict=derive_verdict(runs[-1]))
             print(f"{idea.name}: {out['state']} -> {out['action']} ({out['reason']})")
 
 

@@ -16,8 +16,8 @@ from signal_engine.research import build_registry as br
 VALID = """---
 id: IDEA-001
 title: Sample idea
-status: rejected
-verdict: no-edge
+stage: inbox
+research_state: rejected
 category: intraday-momentum
 horizon: intraday
 source:
@@ -76,8 +76,8 @@ def test_missing_required_field_is_reported(base: Path):
 
 
 def test_invalid_status_is_reported(base: Path):
-    _write_idea(base, "idea-001-sample", VALID.replace("status: rejected", "status: maybe"))
-    with pytest.raises(br.RegistryError, match="status"):
+    _write_idea(base, "idea-001-sample", VALID.replace("stage: inbox", "stage: maybe"))
+    with pytest.raises(br.RegistryError, match="stage"):
         br.load_ideas(base)
 
 
@@ -115,9 +115,9 @@ def test_summarize_counts(base: Path):
     _write_idea(
         base,
         "idea-002-b",
-        VALID.replace("IDEA-001", "IDEA-002")
-        .replace("status: rejected", "status: inbox")
-        .replace("verdict: no-edge", "verdict: none"),
+        VALID.replace("IDEA-001", "IDEA-002").replace(
+            "research_state: rejected", "research_state: active"
+        ),
     )
     s = br.summarize(br.load_ideas(base))
     assert s["total"] == 2
@@ -126,7 +126,8 @@ def test_summarize_counts(base: Path):
 
 
 def test_render_markdown_lists_every_idea(base: Path):
-    _write_idea(base, "idea-001-a", VALID)
+    d = _write_idea(base, "idea-001-a", VALID)
+    _write_run(d, {**RUN, "run_verdict": "NO_EDGE"})
     md = br.render_markdown(br.load_ideas(base))
     assert "IDEA-001" in md and "Sample idea" in md and "no-edge" in md
 

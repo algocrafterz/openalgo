@@ -23,8 +23,8 @@ SUPPORTED = {"orb", "ema9_vwap"}
 IDEA_MD = """---
 id: {id}
 title: Sample {slug}
-status: rejected
-verdict: no-edge
+stage: inbox
+research_state: rejected
 category: intraday-breakout
 horizon: intraday
 source: {{type: video, ref: "https://example.invalid/v"}}

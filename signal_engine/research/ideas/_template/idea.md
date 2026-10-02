@@ -1,8 +1,9 @@
 ---
 id: IDEA-000                # next free number; folder must be idea-000-<slug>
 title: Short human title
-status: inbox               # inbox | evaluating | backtested | paper | live | rejected | shelved
-verdict: none               # none | edge | marginal | no-edge | inconclusive
+stage: inbox                # inbox | backtest | paper | live | retired (move with `intake stage`)
+# research_state: active    # active | promising | needs_more_evidence | weak_evidence | evidence_against_edge | shelved | rejected (default active; `intake state`)
+# strategy_category: Other  # see research/taxonomy.yaml (`intake classify`); strategy_tags: [a, b]
 category: intraday-momentum # see CATEGORIES in build_registry.py
 horizon: intraday           # intraday | swing | positional
 source:

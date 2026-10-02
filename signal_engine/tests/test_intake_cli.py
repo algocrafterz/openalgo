@@ -7,7 +7,7 @@ import pytest
 from signal_engine.research.intake import cli, ledger, versions
 from signal_engine.tests.intake_fixtures import make_spec, write_spec
 
-IDEA_MD = "---\nid: IDEA-012\ntitle: T\nstatus: evaluating\n---\n\nBody.\n"
+IDEA_MD = "---\nid: IDEA-012\ntitle: T\nstage: backtest\n---\n\nBody.\n"
 
 
 def _idea(tmp_path, **changes):

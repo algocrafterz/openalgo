@@ -13,7 +13,7 @@ from signal_engine.tests.intake_fixtures import AMBIGUOUS_TIMING, make_spec, wri
 from signal_engine.timeutils import IST
 
 NOW = datetime(2026, 10, 2, 14, 0, tzinfo=IST)
-IDEA_MD = "---\nid: IDEA-001\ntitle: T\nstatus: evaluating\n---\n\nBody.\n"
+IDEA_MD = "---\nid: IDEA-001\ntitle: T\nstage: backtest\n---\n\nBody.\n"
 
 
 def _freeze(folder, **kw):

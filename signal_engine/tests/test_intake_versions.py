@@ -12,7 +12,7 @@ from signal_engine.timeutils import IST
 
 NOW = datetime(2026, 10, 2, 14, 0, tzinfo=IST)
 FP_A, FP_B, FP_C, FP_D = ("a" * 64, "b" * 64, "c" * 64, "d" * 64)
-IDEA_MD = "---\nid: IDEA-001\ntitle: T\nstatus: evaluating\n---\n\nBody text.\n"
+IDEA_MD = "---\nid: IDEA-001\ntitle: T\nstage: backtest\n---\n\nBody text.\n"
 
 
 def _resolve(folder, fp, **kw):

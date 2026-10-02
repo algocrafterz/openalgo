@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from signal_engine.research.intake import frontmatter
 from signal_engine.timeutils import IST
 
 VERSIONS_FILE = "versions.yaml"
@@ -211,18 +212,7 @@ def set_pointer(folder: Path, key: str, version: str) -> None:
         raise VersionError(f"unknown pointer key '{key}', expected {', '.join(POINTER_KEYS)}")
     if version not in {v.version for v in load_versions(folder)}:
         raise VersionError(f"{version} is not a registered version of this idea")
-    path = folder / "idea.md"
-    raw = path.read_bytes().decode("utf-8")
-    nl = "\r\n" if "\r\n" in raw else "\n"
-    span = _frontmatter_span(raw)
-    if span is None:
-        raise VersionError(f"{path}: no frontmatter block to update")
-    block = raw[span[0] : span[1]]
-    line = re.compile(rf"^{re.escape(key)}:[^\r\n]*", re.MULTILINE)
-    new_line = f"{key}: {version}"
-    block = (
-        line.sub(lambda _m: new_line, block, count=1)
-        if line.search(block)
-        else block + nl + new_line
-    )
-    path.write_bytes((raw[: span[0]] + block + raw[span[1] :]).encode("utf-8"))
+    try:
+        frontmatter.set_keys(folder, {key: version})
+    except frontmatter.FrontmatterError as exc:
+        raise VersionError(str(exc)) from exc

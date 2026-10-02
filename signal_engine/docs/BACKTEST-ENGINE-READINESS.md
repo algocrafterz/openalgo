@@ -28,8 +28,8 @@ with tests green, ruff clean and a commit.
 | --- | --- | --- | --- |
 | 1 | Engine P1 step 1: spec v2, profiles, execution resolution | done 2026-10-02 | `27626054d` |
 | 2 | Engine P1 step 2: ledger, intake states, freeze, versions (E2) | done 2026-10-02 | `32eb6f00a`, plus `b5f40c0fd` (entry window against the profile; classification planned) |
-| 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5), ledger id fix | done 2026-10-02 | see `git log` (feat(backtest): immutable run folder, manifest, change classes, rerun and reproduce) |
-| 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | not started | |
+| 3 | Engine P1 step 3: run folder, manifest, component fingerprints (E1), change classes (E3), rerun (E5), ledger id fix | done 2026-10-02 | `c7b348a51` |
+| 4 | E4: derived verdict, promotion, next action, plus `stage` / `research_state` split and strategy classification metadata | done 2026-10-02 | see `git log` (feat(research): derived verdict and promotion, stage and research state, strategy classification) |
 | 5 | UI U1 and glossary | not started | |
 | 6 | UI U3 (comparison) | not started | |
 | 7 | UI U4 (version tree) | not started | |
@@ -39,7 +39,9 @@ Findings carried forward from implementation (raised, not designed around):
 - Resolved 2026-10-02: the entry window is now validated against the profile's standing time exit (`Profile.entry_window_problem`).
 - The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4 (confirmed by the owner).
 - Resolved 2026-10-02 (step 3): each run seals its ledger snapshot (`assumptions.json`) and the working ledger's `next_id` is floored by `ledger.sealed_next_id`, so deleting `assumptions.yaml` cannot restart ids below a sealed one.
-- The EDGE-capped-at-MARGINAL rule (plan decision 1) is not implemented in step 3: the verdict is calculated in build order 4, so runs record `missing_capabilities` and a null verdict until then.
+- Resolved 2026-10-02 (build order 4): the verdict is calculated per run (`backtest/verdict.py`), with EDGE capped at MARGINAL while P1 readiness rows are unverified. Because the cap would otherwise let a capped run be promoted, promotion is also NOT_READY while readiness rows are missing (a conservative reading of lifecycle 1.6, flagged for the owner).
+- `MIN_SAMPLE_GATES` is `G2.1` (trade count, 200 net trades) only. Lifecycle 1.5 says 'the G2 minimum-sample gates' without naming them; widen the tuple if other G2 rows should count.
+- Frontmatter `status` and `verdict` are removed as hand-written keys. The registry emits them as DERIVED fields (status from stage, research state and runs; verdict from the latest run's calculated verdict) so the existing Backtests page, REGISTRY.md and site keep working unchanged. Updating the page to read `stage`, `research_state` and `run_verdict` directly, and exposing classification in `services/backtest_results_service.py`, touches files outside `signal_engine/` and needs the owner's decision on the core-change rule.
 - The dirty-tree check counts only result-affecting paths (Python outside tests, config.yaml, uv.lock, pyproject.toml, research profiles). Docs, generated registry files, run outputs and frontend files do not block a run.
 - Strategy classification (`STRATEGY-CATEGORIZATION-UI-REQUIREMENT.md`) is planned in `BACKTESTS-UI-PLAN.md` and built in build order 4 (data) and 5 and 7 (UI). The legacy frontmatter `category` is left unchanged; retiring it is an open decision.
 - Profile-sourced values (`profile.*`) are Medium materiality, not High, because the author selects the profile by name. A High default would force a confirmation on every idea.

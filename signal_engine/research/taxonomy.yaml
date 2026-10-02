@@ -1,0 +1,14 @@
+# Strategy categories for discovery. Extend this list by editing this file only.
+# `strategy_category` in an idea's frontmatter must be one of these; absent means Other.
+# The list must be non-empty, unique (case-insensitively) and contain Other.
+categories:
+  - Trend Following
+  - Mean Reversion
+  - Breakout
+  - Momentum
+  - Market Structure
+  - Statistical / Quantitative
+  - Grid
+  - Arbitrage
+  - Options
+  - Other

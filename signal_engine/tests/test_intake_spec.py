@@ -397,7 +397,7 @@ class TestLoadAndGate:
         spec.check_idea("IDEA-012", tmp_path)
 
     def test_registry_problems_for_an_active_idea_without_spec(self, tmp_path):
-        found = spec.registry_problems("IDEA-003", "evaluating", tmp_path)
+        found = spec.registry_problems("IDEA-003", "backtest", tmp_path)
         assert found and "spec.yaml is required" in found[0]
 
     def test_registry_allows_inbox_idea_without_spec(self, tmp_path):
