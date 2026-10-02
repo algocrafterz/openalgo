@@ -30,6 +30,19 @@ square-off times against NSE and broker pages, and this repo's own cost schedule
   drawdowns can pass. Example that passes: gross +0.55R with a 0.35R cost (stops near 0.5%) gives
   net +0.20R, still positive with slippage doubled, and clears every economics and statistics gate.
 
+## Definitions
+
+Verdicts are deterministic outcomes of the gate results, not judgements.
+
+- **EDGE**: no validity failure, every HARD gate G0 to G6 passes, and net expectancy is positive after costs with the G2 statistics met.
+- **MARGINAL**: positive net evidence exists (for example positive out-of-sample net expectancy) but one or more promotion requirements fail. Record which: fails cost stress, insufficient sample, unstable parameter neighbourhood, poor symbol dispersion, or similar.
+- **NO_EDGE**: valid evidence, and net expectancy is not positive after realistic costs, or positive evidence does not survive validation.
+- **INCONCLUSIVE**: a validity failure (look-ahead, invalid data, invalid configuration, malformed strategy, impossible execution assumption) or too little valid evidence to decide. Never a synonym for failed.
+
+**Trial.** An evaluated change to any material research dimension: strategy logic, parameter set, universe, selection or ranking rule, execution assumption, portfolio rule, or regime filter. Not a trial: logging, UI or artifact-format changes, documentation-only changes, and a bug fix that restores the originally intended behavior (the fix is recorded in the strategy log with the run it affects). The trial count used for the G2 hurdles is the count of trials under this definition.
+
+**Ruin (G5.1).** A Monte Carlo path is ruined if its equity falls to or below 75% of starting capital, i.e. a drawdown of 25%, the same limit G5.1 uses for the 95th percentile drawdown. Proposed 2026-10-02 [H]; change it here, deliberately, and every Monte Carlo result must record the definition it used.
+
 ## Market facts verified on 2026-09-30
 
 - **Tick size (NSE/CMTR/67133, 13 Mar 2025; NSE/CMTR/62174, 24 May 2024):** cash-segment equities
