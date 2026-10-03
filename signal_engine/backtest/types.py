@@ -17,8 +17,8 @@ class RunConfig:
     """
 
     skip_open_minutes: int = 15
-    entry_cutoff_min: int = 11 * 60        # 11:00 IST, no NEW entries after
-    time_exit_min: int = 14 * 60 + 45      # 14:45 IST, must match config.yaml time_exit
+    entry_cutoff_min: int = 11 * 60  # 11:00 IST, no NEW entries after
+    time_exit_min: int = 14 * 60 + 45  # 14:45 IST, must match config.yaml time_exit
     max_trades_per_day: int = 2
     one_trade_per_direction: bool = True
     allow_longs: bool = True
@@ -60,26 +60,26 @@ class RunConfig:
 class EntrySignal:
     """What a strategy returns when it wants a position on the next bar's open."""
 
-    direction: int          # +1 long, -1 short
+    direction: int  # +1 long, -1 short
     sl: float
     tp: float
-    tag: str = ""           # setup name, carried into the trade log
+    tag: str = ""  # setup name, carried into the trade log
     meta: dict = field(default_factory=dict)
 
 
 @dataclass
 class Position:
     direction: int
-    entry: float            # actual fill (next bar open)
-    signal_price: float     # close of the signal bar - what the alert advertises
+    entry: float  # actual fill (next bar open)
+    signal_price: float  # close of the signal bar - what the alert advertises
     sl: float
-    sl_eff: float           # effective stop, which a trail may ratchet
+    sl_eff: float  # effective stop, which a trail may ratchet
     tp: float
     risk: float
     tag: str
     entry_bar: int
-    targets: tuple = ()     # absolute target prices from the signal, for the shared Ladder
-    ladder: Any = None      # strategy_core.exits.Ladder when an ExitPlan manages this position
+    targets: tuple = ()  # absolute target prices from the signal, for the shared Ladder
+    ladder: Any = None  # strategy_core.exits.Ladder when an ExitPlan manages this position
 
 
 @dataclass
@@ -99,7 +99,13 @@ class Trade:
     reason: str = ""
     r_gross: float = 0.0
     r_net: float = 0.0
-    legs: int = 1           # number of exit fills (1 unless a ladder scaled out)
+    legs: int = 1  # number of exit fills (1 unless a ladder scaled out)
+    # Lineage ids, set by the engines only when a LedgerRecorder is attached.
+    signal_id: str | None = None
+    order_id: str | None = None
+    entry_fill_id: str | None = None
+    exit_fill_id: str | None = None
+    position_id: str | None = None
 
     @property
     def risk_pct(self) -> float:
@@ -150,8 +156,9 @@ class Ctx:
 HOLDOUT_OOS_FRACTION = 0.30
 
 
-def india_intraday_bps(notional: float = 1_00_000.0, slippage_bps_per_side: float = 4.0,
-                       exchange: str = "NSE") -> float:
+def india_intraday_bps(
+    notional: float = 1_00_000.0, slippage_bps_per_side: float = 4.0, exchange: str = "NSE"
+) -> float:
     """Round-trip intraday cost in basis points of the ENTRY notional.
 
     Computed from `portfolio.costs.india_intraday` rather than restated here, so the

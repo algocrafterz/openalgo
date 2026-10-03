@@ -35,6 +35,14 @@ with tests green, ruff clean and a commit.
 | 7 | UI U4: version tree, run history grouped by version, strategy list filters, search, related strategies | done 2026-10-03 | see `git log` (feat(backtests-ui): version tree, grouped history, strategy filters and search) |
 | 8 | UI U2 remainder, as engine steps 4 and 5 land | not started | |
 
+Engine steps 4 to 6 (plan: `BACKTEST-ENGINE-P1-STEPS-4-6-PLAN.md`), agreed order before the UI build order 8:
+
+| Step | Work | Status | Commit |
+| --- | --- | --- | --- |
+| 4 | Lineage ledgers, exclusions, cost decomposition, evaluators G0.5, G6.1, G6.5, G1.6 | done 2026-10-03 (recorder overhead measured 1.08 to 1.28 times on a noisy host, hard test bound 1.5; recorder memory is bounded per symbol) | see `git log` (feat(backtest): lineage ledgers, exclusions and cost decomposition) |
+| 5 | Derived calendar and session model, per-run data quality, corporate-action policy, eligibility and universe file, warm-up | not started | |
+| 6 | Validity checks incl. truncation, trial ledger, evaluators G0.2, G0.3, G2.5 | not started | |
+
 Findings carried forward from implementation (raised, not designed around):
 - Resolved 2026-10-02: the entry window is now validated against the profile's standing time exit (`Profile.entry_window_problem`).
 - The frontmatter `status` still drives the registry's spec requirement. The split into `stage` and `research_state`, and the stage transitions, need the promotion decision, so they are scheduled with build order 4 (confirmed by the owner).
@@ -66,9 +74,9 @@ Findings carried forward from implementation (raised, not designed around):
 | Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat) | not started | | | |
 | Deployment profile: MIS force-flat 15:00, CNC carry-forward | built 2026-10-02 (declared and mapped to `RunConfig`; engine enforcement of CNC carry-forward is confirmed in step 5) | `research/intake/profiles.py`, `research/profiles/flattrade-nse-cash.yaml`, `research/intake/execution.py` | `tests/test_intake_profiles.py`, `tests/test_intake_execution.py` | |
 | Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version | not started | | | |
-| Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade) | not started | | | |
+| Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade) | built 2026-10-03 (recorder attached to the headline run only; deterministic ids; every engine skip is a counted exclusion with a code; `evidence/{signals,orders,fills,exclusions}.parquet`; reconciliation; evaluators G0.5, G6.1, G6.5, G1.6; fills record the next-bar open and never an invented price: slippage is a cost component) | `backtest/ledgers.py`, `engine.py`, `swing_engine.py`, `harness.py`, `trades_io.py`, `run_artifact.py`, `record_run.py`, `evaluation.py` | `tests/test_backtest_ledgers.py`, `test_evidence_ledgers.py` | |
 | Run manifest and run folder layout; immutable artifacts retained and addressable | built 2026-10-02 (7-file run folder committed atomically and read-only, manifest with the 8 component fingerprints and reproducibility flags, schema 3 flat record, dirty-tree refusal and `--allow-dirty`, change classes, `--rerun`, `--reproduce`, registry check of folder and manifest hash; derived verdict, promotion and next action are written as null until build order 4) | `backtest/{artifacts,manifest,trades_io,fingerprints,change_class,run_artifact,reproduce}.py`, `backtest/record_run.py`, `research/readiness.py`, `research/intake/freeze.py` (`from_run_folder`), `research/build_registry.py` (schema 3 checks) | `tests/test_run_artifacts.py`, `test_manifest.py`, `test_trades_io.py`, `test_backtest_fingerprints.py`, `test_change_class.py`, `test_run_artifact_write.py`, `test_reproduce.py`, `test_rerun.py`, `test_readiness.py`, `test_registry_v3.py` | |
-| Per-component cost decomposition per trade | not started | | | |
+| Per-component cost decomposition per trade | built 2026-10-03 (brokerage, STT, exchange, GST, SEBI, stamp and slippage in bps of entry notional per trade, summing to `modeled_cost_bps`; the headline `cost_bps` stays the engine's flat figure) | `backtest/costs.py` (`decompose_trades`), `backtest/trades_io.py` | `tests/test_cost_components.py`, `test_trades_io.py` | |
 | Validity vs performance failure handling in the gate runner | not started | | | |
 | Trial counting under the acceptance-criteria definition | not started | | | |
 

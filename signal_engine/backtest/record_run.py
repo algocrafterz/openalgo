@@ -49,7 +49,8 @@ from signal_engine.backtest.baseline import (
     random_entry_baseline_intraday,
     sample_trades,
 )
-from signal_engine.backtest.costs import CostModel
+from signal_engine.backtest.costs import CostModel, decompose_trades
+from signal_engine.backtest.ledgers import LedgerRecorder
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
 from signal_engine.research import readiness
@@ -95,6 +96,12 @@ class Execution:
     baseline: dict[str, Any] | None = None
     cost_model: CostModel | None = None
     symbols: list[str] = field(default_factory=list)
+    #: Lineage ledgers of the headline run (signals, orders, fills, exclusions), or None.
+    ledgers: dict[str, pd.DataFrame] | None = None
+    #: Modelled per-trade cost components, one row per trade, or None without a cost model.
+    cost_components: pd.DataFrame | None = None
+    #: Problems `LedgerRecorder.reconcile` found against the recorder's own buffers (empty = clean).
+    ledger_problems: list[str] = field(default_factory=list)
 
 
 def deployed_cost_model(
@@ -364,7 +371,13 @@ def execute_backtest(
         universe, bar_size = len(frames), "5m"
         bt = Backtest(strategy, frames, run, release_raw=True)
     days = [_iso(d) for d in bt.days]
-    trades = bt.trades(params, "all")
+    # The recorder serves this one headline run; no other call below receives one.
+    recorder = LedgerRecorder()
+    trades = bt.trades(params, "all", recorder=recorder)
+    ledgers = recorder.to_frames()
+    ledger_problems = recorder.reconcile(ledgers, trades)
+    cost_model = _cost_model_or_none(kind, cfg.get("slippage_bps_per_side"))
+    cost_components = decompose_trades(trades, cost_model) if cost_model is not None else None
     baseline = None
     if kind != "swing":
         # Intraday: score a seeded sample of trades, loading only the symbols that sample
@@ -404,8 +417,11 @@ def execute_backtest(
         costs={"model": "flat-round-trip-bps", "round_trip_bps": float(run.cost_bps)},
         days=days,
         baseline=baseline,
-        cost_model=_cost_model_or_none(kind, cfg.get("slippage_bps_per_side")),
+        cost_model=cost_model,
         symbols=sorted(frames),
+        ledgers=ledgers,
+        cost_components=cost_components,
+        ledger_problems=ledger_problems,
     )
 
 
@@ -452,6 +468,33 @@ _SETTINGS_FIELDS = {
     "time_exit_min": "profile.time_exit_min",
     "slippage_bps_per_side": "execution.slippage_bps_per_side",
 }
+
+
+def session_inputs(frozen: Any, execution: Execution) -> dict[str, Any] | None:
+    """The session facts the ledger gates need, read from the frozen configuration.
+
+    None when the run has no ledgers or the data is not intraday bars. `mis_squareoff_min` and
+    `squareoff_margin_min` come from the resolved profile (None when the profile lacks them),
+    `bar_minutes` from the data bar size, `entry_window` from the spec's session window.
+    """
+    if execution.ledgers is None:
+        return None
+    size = str(execution.data.get("bar_size", ""))
+    if not (size.endswith("m") and size[:-1].isdigit()):
+        return None
+
+    def resolved(name: str) -> int | None:
+        item = frozen.resolved.get(name)
+        return None if item is None else int(item["value"])
+
+    window = frozen.intent.get("session_window")
+    entry = window.get("entry") if isinstance(window, Mapping) else None
+    return {
+        "mis_squareoff_min": resolved("profile.mis_squareoff_min"),
+        "squareoff_margin_min": resolved("profile.squareoff_margin_min"),
+        "bar_minutes": int(size[:-1]),
+        "entry_window": entry if isinstance(entry, str) else None,
+    }
 
 
 def _execute_frozen(
@@ -597,6 +640,9 @@ def record_idea(
         regime_source=regime_source,
         cost_model=execution.cost_model,
         embargo_sessions=EMBARGO_SESSIONS,
+        ledgers=execution.ledgers,
+        ledger_problems=execution.ledger_problems,
+        session=session_inputs(frozen, execution),
         notes=(
             f"Shipped default configuration on {execution.data['universe']}. {trials_note}"
             f"{regime_note}"

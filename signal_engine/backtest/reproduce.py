@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,8 @@ class ReproductionReport:
     checks: dict[str, bool]
     compared_trades: int
     attempted_ist: str
+    #: Informational only: columns the rerun has that the recorded file does not.
+    notes: list[str] = field(default_factory=list)
 
 
 class _Attempt:
@@ -62,6 +64,7 @@ class _Attempt:
     def __init__(self) -> None:
         self.checks: dict[str, bool] = {}
         self.reasons: list[str] = []
+        self.notes: list[str] = []
 
     def record(self, name: str, ok: bool, *reasons: str) -> bool:
         self.checks[name] = ok
@@ -165,7 +168,16 @@ def _compare_trades(attempt: _Attempt, folder: Path, execution: Any) -> int:
             "trades_match", False, "recorded run has zero trades: there is nothing to compare"
         )
         return 0
-    new = trades_to_frame(execution.trades)
+    new = trades_to_frame(execution.trades, components=getattr(execution, "cost_components", None))
+    # Always compare on the columns the recorded file has. Extra columns on the rerun are noted,
+    # never compared; a column the rerun lacks stays a mismatch (reported by `_differences`).
+    extra = [c for c in new.columns if c not in old.columns]
+    if extra:
+        attempt.notes.append(
+            "rerun has columns the recorded file lacks (not compared): " + ", ".join(extra)
+        )
+    if set(old.columns) <= set(new.columns):
+        new = new[list(old.columns)]
     reasons = _differences(old, new)
     attempt.record("trades_match", not reasons, *reasons)
     return min(len(old), len(new))
@@ -286,6 +298,7 @@ def reproduce(
         checks=attempt.checks,
         compared_trades=compared,
         attempted_ist=stamp.astimezone(IST).isoformat(),
+        notes=attempt.notes,
     )
     if write_report:
         _write_report(folder.parent, report, stamp)

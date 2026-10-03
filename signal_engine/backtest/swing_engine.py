@@ -32,7 +32,14 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from signal_engine.backtest.ledgers import CODE_INDEX
 from signal_engine.backtest.types import Ctx, Position, Trade
+
+_K_DIR_OFF = CODE_INDEX["DIRECTION_DISABLED"]
+_K_RISK = CODE_INDEX["RISK_INVALID"]
+_K_WRONG_SIDE = CODE_INDEX["STOP_WRONG_SIDE"]
+_K_TIGHT = CODE_INDEX["STOP_TOO_TIGHT"]
+_K_POS_OPEN = CODE_INDEX["POSITION_OPEN"]
 
 
 @dataclass(frozen=True)
@@ -71,13 +78,21 @@ class SwingRunConfig:
         return replace(self, **kw)
 
 
-def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig) -> list[Trade]:
+def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[Trade]:
+    """Run one symbol. With a `ledgers.LedgerRecorder` as `rec`, signal, order and entry fill
+    are three ledger rows stamped at the same bar (the open that triggers the setup)."""
     o, h, low, close = c["Open"], c["High"], c["Low"], c["Close"]
     days, times, n = c["day"], c.index, c.n
 
     trades: list[Trade] = []
     pos: Position | None = None
     entry_day = None
+    b = rec.begin(c) if rec is not None else None
+    skip = b.skip if rec is not None else None
+    b_sig = b.signals.append if rec is not None else None
+    b_ord = b.orders.append if rec is not None else None
+    b_fill = b.fills.append if rec is not None else None
+    b_stamp = b._pending.append if rec is not None else None
     cost_frac = run.cost_bps / 100.0 / 100.0
 
     strategy.reset_symbol(p)
@@ -86,12 +101,27 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig) -> list[Trade]:
         nonlocal pos, entry_day
         move = (price - pos.entry) if pos.direction == 1 else (pos.entry - price)
         r_gross = move / pos.risk
-        trades.append(Trade(
-            symbol=c.symbol, day=entry_day, direction=pos.direction, tag=pos.tag,
-            entry_time=times[pos.entry_bar], entry=pos.entry,
-            signal_price=pos.signal_price, sl=pos.sl, tp=pos.tp, risk=pos.risk,
-            exit_time=times[i], exit=float(price), reason=reason,
-            r_gross=r_gross, r_net=r_gross - cost_frac * pos.entry / pos.risk))
+        trade = Trade(
+            symbol=c.symbol,
+            day=entry_day,
+            direction=pos.direction,
+            tag=pos.tag,
+            entry_time=times[pos.entry_bar],
+            entry=pos.entry,
+            signal_price=pos.signal_price,
+            sl=pos.sl,
+            tp=pos.tp,
+            risk=pos.risk,
+            exit_time=times[i],
+            exit=float(price),
+            reason=reason,
+            r_gross=r_gross,
+            r_net=r_gross - cost_frac * pos.entry / pos.risk,
+        )
+        if rec is not None:
+            b_fill((pos.entry_bar, pos.direction, 1, i, price, reason, 1))
+            b_stamp((trade, pos.entry_bar, pos.direction, 1))
+        trades.append(trade)
         pos, entry_day = None, None
 
     for i in range(n):
@@ -99,8 +129,12 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig) -> list[Trade]:
         if pos is None:
             for d in (1, -1):
                 if d == 1 and not run.allow_longs:
+                    if rec is not None:
+                        skip(i, _K_DIR_OFF)
                     continue
                 if d == -1 and not run.allow_shorts:
+                    if rec is not None:
+                        skip(i, _K_DIR_OFF)
                     continue
                 sig = strategy.entry_at_open(c, i, p, d)
                 if sig is None:
@@ -108,18 +142,41 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig) -> list[Trade]:
                 fill = float(o[i])
                 risk = abs(fill - float(sig.sl))
                 if risk <= 0 or np.isnan(risk):
+                    if rec is not None:
+                        b_sig((i, d, sig.tag, fill, sig.sl, sig.tp, risk, _K_RISK))
                     continue
                 # stop on the correct side, and wide enough to be a real order
                 if (sig.sl >= fill) if d == 1 else (sig.sl <= fill):
+                    if rec is not None:
+                        b_sig((i, d, sig.tag, fill, sig.sl, sig.tp, risk, _K_WRONG_SIDE))
                     continue
                 if risk / fill < run.min_sl_pct:
+                    if rec is not None:
+                        b_sig((i, d, sig.tag, fill, sig.sl, sig.tp, risk, _K_TIGHT))
                     continue
-                pos = Position(direction=d, entry=fill, signal_price=fill,
-                               sl=float(sig.sl), sl_eff=float(sig.sl), tp=float(sig.tp),
-                               risk=risk, tag=sig.tag, entry_bar=i)
+                if rec is not None:
+                    # signal, order and fill share this bar's open; fill is recorded as-is
+                    # (slippage is a cost component, plan decision 1)
+                    b_sig((i, d, sig.tag, fill, sig.sl, sig.tp, risk, -1))
+                    b_ord((i, d, i, -1))
+                    b_fill((i, d, 0, i, fill, "", 1))
+                pos = Position(
+                    direction=d,
+                    entry=fill,
+                    signal_price=fill,
+                    sl=float(sig.sl),
+                    sl_eff=float(sig.sl),
+                    tp=float(sig.tp),
+                    risk=risk,
+                    tag=sig.tag,
+                    entry_bar=i,
+                )
                 entry_day = days[i]
                 strategy.on_entry(c, i, p, sig)
                 break
+
+        elif rec is not None:
+            skip(i, _K_POS_OPEN)
 
         # 2. manage the position against THIS bar - including its own entry bar.
         if pos is not None:
@@ -152,4 +209,6 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig) -> list[Trade]:
 
         strategy.on_bar(c, i, p)
 
+    if rec is not None:
+        b.finish()
     return trades

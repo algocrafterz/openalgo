@@ -245,7 +245,7 @@ class TestExecuteBacktestEnd:
                 self.days = [pd.Timestamp("2026-01-05")]
 
             def trades(self, *a, **k):
-                return [SimpleNamespace(symbol="AAA")]
+                return [SimpleNamespace(symbol="AAA", entry=100.0, risk=1.0, position_id=None)]
 
         monkeypatch.setattr(harness, "Backtest", FakeBT)
         monkeypatch.setattr(rr, "sample_trades", lambda trades, n: list(trades))

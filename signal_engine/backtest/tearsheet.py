@@ -260,6 +260,9 @@ def build_run_record(
     regime_source: dict[str, Any] | None = None,
     cost_model: CostModel | None = None,
     embargo_sessions: int = 0,
+    ledgers: dict[str, pd.DataFrame] | None = None,
+    session: dict[str, Any] | None = None,
+    ledger_problems: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build a schema-v2 run record from `Trade` objects. Inputs are not modified.
 
@@ -281,6 +284,10 @@ def build_run_record(
     `embargo_sessions` (with `oos_start`) purges in-sample trades that exit on or after the
     cut and skips the first sessions of the out-of-sample window (G3.5); what was removed is
     written into `split`. Zero keeps the plain split by entry day.
+
+    `ledgers` (the four lineage frames) and `session` (mis_squareoff_min, squareoff_margin_min,
+    bar_minutes, entry_window) feed the evaluators that need them (G0.5, G6.1, G6.5, G1.6);
+    without them those gates stay not_evaluated.
     """
     if n_trials < 1:
         raise ValueError(f"n_trials must be >= 1, got {n_trials}")
@@ -347,6 +354,9 @@ def build_run_record(
         regimes=record.get("regimes"),
         cost_profile=record.get("cost_model"),
         split=record.get("split"),
+        ledgers=ledgers,
+        session=session,
+        ledger_problems=ledger_problems,
     )
     if baseline is not None:
         record["baseline"] = dict(baseline)

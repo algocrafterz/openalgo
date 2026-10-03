@@ -28,9 +28,15 @@ from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION, Ctx, RunConfig
 class Backtest:
     """Binds one strategy to one set of symbol frames."""
 
-    def __init__(self, strategy, frames: dict[str, pd.DataFrame],
-                 run: RunConfig | None = None, is_fraction: float = 1.0 - HOLDOUT_OOS_FRACTION,
-                 engine=simulate, release_raw: bool = False):
+    def __init__(
+        self,
+        strategy,
+        frames: dict[str, pd.DataFrame],
+        run: RunConfig | None = None,
+        is_fraction: float = 1.0 - HOLDOUT_OOS_FRACTION,
+        engine=simulate,
+        release_raw: bool = False,
+    ):
         # `engine` swaps the simulator without touching the reporting. The intraday
         # `engine.simulate` forces an EOD exit, so a multi-day strategy passes
         # `swing_engine.simulate_swing` here and reuses every report below unchanged.
@@ -46,7 +52,7 @@ class Backtest:
         self.frames = frames
         self.engine = engine
         self.run = run or RunConfig()
-        self.days = sessions(frames)          # computed before any release, below
+        self.days = sessions(frames)  # computed before any release, below
         self.cut = self.days[int(len(self.days) * is_fraction)]
         self.release_raw = release_raw
         self._prep: dict = {}
@@ -62,16 +68,22 @@ class Backtest:
 
     def describe(self) -> str:
         n_is = sum(1 for d in self.days if d < self.cut)
-        return (f"{len(self.frames)} symbols | {self.days[0]} .. {self.days[-1]} | "
-                f"IS {n_is} sessions, OOS {len(self.days) - n_is} (cut {self.cut}) | "
-                f"cost {self.run.cost_bps:.0f} bps")
+        return (
+            f"{len(self.frames)} symbols | {self.days[0]} .. {self.days[-1]} | "
+            f"IS {n_is} sessions, OOS {len(self.days) - n_is} (cut {self.cut}) | "
+            f"cost {self.run.cost_bps:.0f} bps"
+        )
 
     # ---- execution ------------------------------------------------------
 
-    def trades(self, p, window: str = "all", run: RunConfig | None = None):
+    def trades(self, p, window: str = "all", run: RunConfig | None = None, recorder=None):
+        """Simulate every symbol. `recorder` (a `ledgers.LedgerRecorder`) is handed to the engine
+        only when given, so engines that take no `rec` keep working. Only the single recorded run
+        passes one; sweep, ablation and cost-sensitivity never do."""
         run = run or self.run
         keep = self._filter(window)
         out = []
+        extra = {} if recorder is None else {"rec": recorder}
         for sym, df in self.frames.items():
             key = (sym, self.strategy.prepare_key(p))
             if key not in self._prep:
@@ -81,19 +93,28 @@ class Backtest:
                     raise RuntimeError(
                         f"{sym}: raw frame was released (release_raw=True) and no "
                         f"cached prepare() exists for this parameter set; construct "
-                        f"Backtest with release_raw=False to vary strategy params")
+                        f"Backtest with release_raw=False to vary strategy params"
+                    )
                 self._prep[key] = Ctx(self.strategy.prepare_for(sym, df, p), symbol=sym)
                 if self.release_raw:
                     self.frames[sym] = None
-            out += [t for t in self.engine(self._prep[key], self.strategy, p, run) if keep(t.day)]
+            out += [
+                t
+                for t in self.engine(self._prep[key], self.strategy, p, run, **extra)
+                if keep(t.day)
+            ]
         return out
 
     # ---- reports --------------------------------------------------------
 
     def confirm(self, p, label: str = "config") -> pd.DataFrame:
         """The honest test: in-sample, out-of-sample, and the whole period."""
-        return pd.DataFrame([metrics.summary(self.trades(p, w), f"{label} [{w.upper()}]")
-                             for w in ("is", "oos", "all")])
+        return pd.DataFrame(
+            [
+                metrics.summary(self.trades(p, w), f"{label} [{w.upper()}]")
+                for w in ("is", "oos", "all")
+            ]
+        )
 
     def ablation(self, base_p, variants: dict[str, dict]) -> pd.DataFrame:
         """Marginal effect of each variant against the base, IN BOTH WINDOWS.
@@ -104,25 +125,48 @@ class Backtest:
         rows = []
         b_is = metrics.summary(self.trades(base_p, "is"))
         b_oos = metrics.summary(self.trades(base_p, "oos"))
-        rows.append({"variant": "base", "n_IS": b_is["n"], "bps_IS": b_is["gross_bps"],
-                         "n_OOS": b_oos["n"], "bps_OOS": b_oos["gross_bps"], "helps": "-"})
+        rows.append(
+            {
+                "variant": "base",
+                "n_IS": b_is["n"],
+                "bps_IS": b_is["gross_bps"],
+                "n_OOS": b_oos["n"],
+                "bps_OOS": b_oos["gross_bps"],
+                "helps": "-",
+            }
+        )
         for label, kw in variants.items():
             p = replace(base_p, **kw)
             i = metrics.summary(self.trades(p, "is"))
             o = metrics.summary(self.trades(p, "oos"))
             up_i = i["gross_bps"] > b_is["gross_bps"]
             up_o = o["gross_bps"] > b_oos["gross_bps"]
-            rows.append({"variant": label, "n_IS": i["n"], "bps_IS": i["gross_bps"],
-                             "n_OOS": o["n"], "bps_OOS": o["gross_bps"],
-                             "helps": "BOTH" if up_i and up_o else
-                                   "IS only" if up_i else "OOS only" if up_o else "neither"})
+            rows.append(
+                {
+                    "variant": label,
+                    "n_IS": i["n"],
+                    "bps_IS": i["gross_bps"],
+                    "n_OOS": o["n"],
+                    "bps_OOS": o["gross_bps"],
+                    "helps": "BOTH"
+                    if up_i and up_o
+                    else "IS only"
+                    if up_i
+                    else "OOS only"
+                    if up_o
+                    else "neither",
+                }
+            )
         return pd.DataFrame(rows)
 
     def sweep(self, base_p, field: str, values, window: str = "is") -> pd.DataFrame:
         """One parameter at a time. Keep the grid coarse - fine grids fit noise."""
-        return pd.DataFrame([
-            metrics.summary(self.trades(replace(base_p, **{field: v}), window), f"{field}={v}")
-            for v in values])
+        return pd.DataFrame(
+            [
+                metrics.summary(self.trades(replace(base_p, **{field: v}), window), f"{field}={v}")
+                for v in values
+            ]
+        )
 
     def cost_sensitivity(self, p, bps=(6, 8, 10, 12), window: str = "all") -> pd.DataFrame:
         """Where the sign flips. For a marginal strategy this IS the result.
@@ -132,8 +176,9 @@ class Backtest:
         grows with the number of levels.
         """
         trades = self.trades(p, window)
-        return pd.DataFrame([
-            metrics.summary(metrics.with_flat_cost(trades, b), f"{b:.0f} bps") for b in bps])
+        return pd.DataFrame(
+            [metrics.summary(metrics.with_flat_cost(trades, b), f"{b:.0f} bps") for b in bps]
+        )
 
     def by_symbol(self, p, window: str = "all") -> pd.DataFrame:
         return metrics.by_symbol(self.trades(p, window))

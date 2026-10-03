@@ -26,7 +26,11 @@ from signal_engine.backtest import verdict as verdict_mod
 from signal_engine.backtest.artifacts import RunFolder, _encode
 from signal_engine.backtest.change_class import classify, first_run_classes
 from signal_engine.backtest.fingerprints import canonical_json, component_fingerprints, sha256_hex
-from signal_engine.backtest.trades_io import trades_parquet_bytes
+from signal_engine.backtest.trades_io import (
+    LEDGER_SCHEMAS,
+    frame_parquet_bytes,
+    trades_parquet_bytes,
+)
 from signal_engine.research.intake import ledger as ledger_mod
 from signal_engine.research.intake.versions import require_aware
 from signal_engine.timeutils import IST
@@ -267,7 +271,56 @@ def _derived(
     }
 
 
-def _report(record: Mapping[str, Any], derived: Mapping[str, Any]) -> dict[str, Any]:
+def _trades_bytes(execution: Any) -> bytes:
+    """The trades table: extended with the cost components when the run carries them."""
+    components = getattr(execution, "cost_components", None)
+    if components is None:
+        return trades_parquet_bytes(execution.trades)
+    return trades_parquet_bytes(execution.trades, components=components)
+
+
+def ledger_summary(
+    ledgers: Mapping[str, Any] | None, trades: Sequence, extra_problems: Sequence[str] = ()
+) -> dict[str, Any] | None:
+    """Counts of the lineage ledgers for report.json, or None when the run has none.
+
+    `excluded_by_reason` sums the exclusion rows' `count` per reason code over every scope.
+    `reconcile_problems` is the number of reconciliation problems found in the frames, and
+    `problems` names them; both are empty for a run whose ledgers reconcile exactly.
+    """
+    if ledgers is None:
+        return None
+    from signal_engine.backtest.evaluation import reconcile_frames
+
+    sig, orders, fills, exc = (
+        ledgers["signals"],
+        ledgers["orders"],
+        ledgers["fills"],
+        ledgers["exclusions"],
+    )
+    by_reason = {str(k): int(v) for k, v in exc.groupby("reason_code")["count"].sum().items()}
+    problems = [*reconcile_frames(ledgers, trades), *extra_problems]
+    return {
+        "signals": int(len(sig)),
+        "accepted": int(sig["accepted"].sum()),
+        "excluded_by_reason": dict(sorted(by_reason.items())),
+        "orders": int(len(orders)),
+        "filled": int((orders["status"] == "FILLED").sum()),
+        "dropped": int((orders["status"] == "DROPPED").sum()),
+        "fills": int(len(fills)),
+        "trades": int(len(trades)),
+        "reconcile_problems": len(problems),
+        "problems": problems,
+    }
+
+
+def _report(
+    record: Mapping[str, Any],
+    derived: Mapping[str, Any],
+    ledgers: Mapping[str, Any] | None = None,
+    trades: Sequence = (),
+    ledger_problems: Sequence[str] = (),
+) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema": SCHEMA,
         "metrics": record["metrics"],
@@ -280,6 +333,7 @@ def _report(record: Mapping[str, Any], derived: Mapping[str, Any]) -> dict[str, 
         "next_action": derived["next_action"],
         "n_trials": record.get("n_trials"),
         "notes": record.get("notes", ""),
+        "ledgers": ledger_summary(ledgers, trades, ledger_problems),
     }
     report.update({k: record[k] for k in _REPORT_BLOCKS if k in record})
     return report
@@ -448,14 +502,28 @@ def prepare_run_artifact(
         _reproducibility(frozen, sorted(execution.symbols), engine).values()
     )
     derived = _derived(record, readiness_missing, code_dirty, reproducible)
+    ledgers = getattr(execution, "ledgers", None)
     files: dict[str, bytes] = {
         "assumptions.json": _encode(_assumptions(frozen, idea_folder, created)),
         "strategy/spec.yaml": _encode(yaml.safe_dump(frozen.intent, sort_keys=True)),
         "strategy/strategy.json": _encode(_strategy_json(idea_id, frozen)),
         "execution/config.json": _encode({"resolved": frozen.resolved, "profile": frozen.profile}),
-        "evidence/trades.parquet": _encode(trades_parquet_bytes(execution.trades)),
-        "report/report.json": _encode(_report(record, derived)),
+        "evidence/trades.parquet": _encode(_trades_bytes(execution)),
+        "report/report.json": _encode(
+            _report(
+                record,
+                derived,
+                ledgers,
+                execution.trades,
+                getattr(execution, "ledger_problems", ()),
+            )
+        ),
     }
+    # The four ledgers are optional: a run without them stays valid.
+    for name in sorted(ledgers or {}):
+        files[f"evidence/{name}.parquet"] = _encode(
+            frame_parquet_bytes(ledgers[name], LEDGER_SCHEMAS[name])
+        )
     artifacts = {rel: hashlib.sha256(files[rel]).hexdigest() for rel in sorted(files)}
     dataset_fp = _symbols_fingerprint(
         execution.symbols,

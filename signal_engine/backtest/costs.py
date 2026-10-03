@@ -26,6 +26,7 @@ from functools import lru_cache
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from portfolio.costs import india_delivery, india_intraday
 from signal_engine.backtest.types import Trade
@@ -44,6 +45,39 @@ def _statutory_bps(product: str, exchange: str, bucket: float) -> float:
     notional = bucket * _NOTIONAL_BUCKET
     charge = schedule.charge(buy_value=notional, sell_value=notional, orders=2)
     return float(charge) / notional * 1e4
+
+
+#: Statutory components, in column order, with the `portfolio.costs` breakdown key each reads.
+_STATUTORY_KEYS = (
+    ("brokerage", "brokerage"),
+    ("stt", "stt"),
+    ("exchange", "exchange_txn"),
+    ("gst", "tax"),
+    ("sebi", "sebi"),
+    ("stamp", "stamp_duty"),
+)
+COMPONENT_COLUMNS = tuple(f"cost_{name}_bps" for name, _ in _STATUTORY_KEYS) + (
+    "cost_slippage_bps",
+)
+DECOMPOSITION_COLUMNS = (*COMPONENT_COLUMNS, "modeled_cost_bps")
+
+
+@lru_cache(maxsize=8192)
+def _component_bps(product: str, exchange: str, bucket: float) -> tuple[float, ...]:
+    """Statutory components in bps of entry notional, in `_STATUTORY_KEYS` order, then a residual.
+
+    Same schedule, orders and notional as `_statutory_bps`, but read from `breakdown()` so the
+    lines stay separate. The last value is the residual: the schedule's own `slippage` line plus
+    any charge key not named in `_STATUTORY_KEYS`. It is folded into the slippage column by
+    the callers, so the components always sum to `_statutory_bps` even when a schedule gains a
+    line.
+    """
+    schedule = india_intraday(exchange) if product == "MIS" else india_delivery(exchange)
+    notional = bucket * _NOTIONAL_BUCKET
+    parts = schedule.breakdown(buy_value=notional, sell_value=notional, orders=2)
+    named = tuple(float(parts[key]) for _, key in _STATUTORY_KEYS)
+    residual = float(parts["total"]) - sum(named)
+    return tuple(v / notional * 1e4 for v in (*named, residual))
 
 
 @dataclass(frozen=True)
@@ -79,6 +113,44 @@ class CostModel:
     def trade_cost_bps(self, trade: Trade, slippage_mult: float = 1.0) -> float:
         """Round-trip cost in bps of the entry notional: statutory plus two slippage legs."""
         return self.statutory_bps(trade) + 2.0 * self.slippage_bps_per_side * slippage_mult
+
+    def components(self, trade: Trade, slippage_mult: float = 1.0) -> dict[str, float]:
+        """Modelled round-trip cost split into lines, in bps of the entry notional.
+
+        Keys are `cost_<line>_bps` for brokerage, stt, exchange, gst, sebi, stamp and slippage,
+        plus `modeled_cost_bps` (their sum, equal to `trade_cost_bps` for the same arguments).
+        """
+        bucket = max(1.0, round(self.notional(trade) / _NOTIONAL_BUCKET))
+        *statutory, residual = _component_bps(self.product, self.exchange, bucket)
+        slippage = residual + 2.0 * self.slippage_bps_per_side * slippage_mult
+        values = (*statutory, slippage)
+        out = dict(zip(COMPONENT_COLUMNS, values, strict=True))
+        out["modeled_cost_bps"] = float(sum(values))
+        return out
+
+
+def decompose_trades(trades, model: CostModel, slippage_mult: float = 1.0) -> pd.DataFrame:
+    """One row per trade, in input order, with `DECOMPOSITION_COLUMNS` (float64)."""
+    rows = list(trades)
+    if not rows:
+        return pd.DataFrame({c: np.empty(0, dtype=np.float64) for c in DECOMPOSITION_COLUMNS})
+    entry = np.array([t.entry for t in rows], dtype=np.float64)
+    risk = np.array([t.risk for t in rows], dtype=np.float64)
+    sized = model.capital * model.risk_per_trade / (risk / entry)
+    notional = np.minimum(sized, model.capital * model.leverage)
+    buckets = np.maximum(1.0, np.round(notional / _NOTIONAL_BUCKET))
+    uniq, inverse = np.unique(buckets, return_inverse=True)
+    table = np.array(
+        [_component_bps(model.product, model.exchange, float(b)) for b in uniq], dtype=np.float64
+    )
+    picked = table[inverse.reshape(-1)]
+    statutory, residual = picked[:, :-1], picked[:, -1]
+    slippage = residual + 2.0 * model.slippage_bps_per_side * slippage_mult
+    data = {c: statutory[:, i] for i, c in enumerate(COMPONENT_COLUMNS[:-1])}
+    data["cost_slippage_bps"] = slippage
+    frame = pd.DataFrame(data, columns=list(COMPONENT_COLUMNS))
+    frame["modeled_cost_bps"] = frame.sum(axis=1)
+    return frame
 
 
 def recost(trades, model: CostModel, slippage_mult: float = 1.0) -> list[Trade]:

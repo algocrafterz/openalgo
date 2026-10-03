@@ -199,6 +199,9 @@ class _Inputs:
     regimes: dict[str, Any] | None = None
     cost_profile: dict[str, Any] | None = None
     split: dict[str, Any] | None = None
+    ledgers: dict[str, Any] | None = None
+    session: dict[str, Any] | None = None
+    ledger_problems: Sequence[str] = ()
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -739,12 +742,285 @@ def _regime_activation(x: _Inputs) -> _Result:
     )
 
 
+# ---- ledger-backed gates (G0.5, G6.1, G6.5, G1.6) ------------------------------------------
+
+#: Stop-width buckets, percent of signal price. Left-closed, six buckets (G1.6).
+STOP_WIDTH_EDGES = (0.20, 0.30, 0.50, 0.75, 1.00)
+#: Share of accepted signals at one stop width above which a fixed floor "sets most stops".
+FLOOR_DOMINANCE = 0.5
+#: NSE continuous session, minutes after midnight IST: the outer bound for any fill.
+MARKET_OPEN_MIN = 9 * 60 + 15
+MARKET_CLOSE_MIN = 15 * 60 + 30
+GAP_REASONS = ("SL_GAP", "SL_GAP_ENTRY")
+_NOT_EVALUATED_NO_LEDGERS = "no lineage ledgers recorded for this run"
+
+
+def reconcile_frames(frames: dict[str, Any], trades: Sequence = ()) -> list[str]:
+    """Problems found reconciling the four ledger frames; empty means they reconcile exactly.
+
+    The same checks as `LedgerRecorder.reconcile`, but from the frames alone, so a recorded run
+    can be audited without the recorder: ids are unique, every reason code is known, every
+    signal is accepted or excluded, every accepted signal has an order, every order is filled or
+    dropped with a code, every filled order has an entry fill and every entry has a trade (by
+    position id) and an exit.
+    """
+    from signal_engine.backtest import ledgers as lg
+
+    sig, ordr, fills, exc = (
+        frames["signals"],
+        frames["orders"],
+        frames["fills"],
+        frames["exclusions"],
+    )
+    out: list[str] = []
+    for name, df, col in (
+        ("signals", sig, "signal_id"),
+        ("orders", ordr, "order_id"),
+        ("fills", fills, "fill_id"),
+        ("exclusions", exc, "exclusion_id"),
+    ):
+        dup = int(df[col].duplicated().sum())
+        if dup:
+            out.append(f"{name}: {dup} duplicate {col}")
+    for code in sorted(set(exc["reason_code"].dropna())):
+        if not lg.is_known(code):
+            out.append(f"exclusions: unknown reason code {code}")
+    exc_ids = set(exc["exclusion_id"])
+    accepted = sig["accepted"].astype(bool)
+    sig_exc = sig["exclusion_id"]
+    bad = sig[~accepted & (sig_exc.isna() | ~sig_exc.isin(exc_ids))]
+    if len(bad):
+        out.append(f"signals: {len(bad)} rejected without an exclusion row")
+    bad = sig[accepted & sig_exc.notna()]
+    if len(bad):
+        out.append(f"signals: {len(bad)} accepted but carry an exclusion")
+    accepted_ids = set(sig.loc[accepted, "signal_id"])
+    orphan = set(ordr["signal_id"]) - accepted_ids
+    if orphan:
+        out.append(f"orders: {len(orphan)} without an accepted signal")
+    lost = accepted_ids - set(ordr["signal_id"])
+    if lost:
+        out.append(f"signals: {len(lost)} accepted without an order")
+    bad_status = ordr[~ordr["status"].isin(["FILLED", "DROPPED"])]
+    if len(bad_status):
+        out.append(f"orders: {len(bad_status)} neither FILLED nor DROPPED")
+    dropped = ordr[ordr["status"] == "DROPPED"]
+    miss = dropped[dropped["exclusion_id"].isna() | ~dropped["exclusion_id"].isin(exc_ids)]
+    if len(miss):
+        out.append(f"orders: {len(miss)} dropped without an exclusion row")
+    filled = ordr[ordr["status"] == "FILLED"]
+    entries = fills[fills["kind"] == "entry"]
+    no_entry = set(filled["order_id"]) - set(entries["order_id"])
+    if no_entry:
+        out.append(f"orders: {len(no_entry)} filled without an entry fill")
+    extra_entry = set(entries["order_id"]) - set(filled["order_id"])
+    if extra_entry:
+        out.append(f"fills: {len(extra_entry)} entry fills without a filled order")
+    pids = [t.position_id for t in trades if getattr(t, "position_id", None) is not None]
+    entry_pids = set(entries["position_id"])
+    if set(pids) != entry_pids or len(pids) != len(set(pids)):
+        out.append(f"trades: {len(pids)} trades versus {len(entry_pids)} entry positions")
+    no_exit = entry_pids - set(fills.loc[fills["kind"] == "exit", "position_id"])
+    if no_exit:
+        out.append(f"fills: {len(no_exit)} positions without an exit fill")
+    return out
+
+
+def _g05(x: _Inputs) -> _Result:
+    threshold = "ledgers reconcile exactly; every exclusion carries a known reason code"
+    if x.ledgers is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_LEDGERS
+    problems = [*reconcile_frames(x.ledgers, x.trades), *x.ledger_problems]
+    exc = x.ledgers["exclusions"]
+    counts = {str(k): int(v) for k, v in exc.groupby("reason_code")["count"].sum().items()}
+    table = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none"
+    text = f"exclusions by reason code: {table}"
+    if problems:
+        shown = "; ".join(problems[:5]) + (
+            f"; +{len(problems) - 5} more" if len(problems) > 5 else ""
+        )
+        return "fail", len(problems), threshold, f"{len(problems)} problems: {shown}. {text}"
+    return "pass", 0, threshold, f"ledgers reconcile; {text}"
+
+
+def _hhmm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _entry_window(text: Any) -> tuple[int, int] | None:
+    if not isinstance(text, str) or len(text) != 11 or text[5] != "-":
+        return None
+    try:
+        start = int(text[:2]) * 60 + int(text[3:5])
+        end = int(text[6:8]) * 60 + int(text[9:11])
+    except ValueError:
+        return None
+    return (start, end) if start < end else None
+
+
+def _g61(x: _Inputs) -> _Result:
+    # Entry: signal bar start inside [window start, window end), the engine's cutoff semantics.
+    # Exit: the exit bar's own span is `bar_minutes_by_symbol[symbol]` when the session gives one
+    # (mixed bar sizes), else the declared `bar_minutes`; its close must be <= square-off - margin.
+    threshold = "entries from signal bars inside the strategy window; every exit bar closes by square-off - margin"
+    if x.ledgers is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_LEDGERS
+    s = x.session or {}
+    squareoff, margin, bar = (
+        s.get(k) for k in ("mis_squareoff_min", "squareoff_margin_min", "bar_minutes")
+    )
+    if squareoff is None or margin is None or bar is None:
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            "the session (square-off, margin, bar size) is not recorded",
+        )
+    fills = x.ledgers["fills"]
+    if len(fills) == 0:
+        return "not_evaluated", None, threshold, "no fills"
+    limit = int(squareoff) - int(margin)
+    window = _entry_window(s.get("entry_window"))
+    spans = {str(k): int(v) for k, v in (s.get("bar_minutes_by_symbol") or {}).items()}
+    mins = _minutes(fills["fill_time"])
+    kind = fills["kind"].to_numpy()
+    ids = fills["fill_id"].to_numpy()
+    symbols = fills["symbol"].to_numpy()
+    signal_min = _signal_minutes(x.ledgers, fills)
+    bad: list[str] = []
+    exit_close: list[int] = []
+    for i in range(len(fills)):
+        m, entry = int(mins[i]), kind[i] == "entry"
+        if m < MARKET_OPEN_MIN or m > MARKET_CLOSE_MIN:
+            bad.append(f"{ids[i]} at {_hhmm(m)} is outside the market session")
+        elif entry:
+            sig = signal_min.get(ids[i])
+            if window is not None and sig is not None and not window[0] <= sig < window[1]:
+                bad.append(
+                    f"{ids[i]} entry from a signal bar at {_hhmm(sig)} is outside the entry window"
+                )
+        else:
+            close = m + spans.get(str(symbols[i]), int(bar))
+            exit_close.append(close)
+            if close > limit:
+                bad.append(f"{ids[i]} exit bar closes {_hhmm(close)}, after {_hhmm(limit)}")
+    window_text = s.get("entry_window") or "no entry window"
+    if bad:
+        more = f" ({len(bad)} offending fills)" if len(bad) > 1 else ""
+        return "fail", len(bad), threshold, f"first offender: {bad[0]}{more}"
+    latest = _hhmm(max(exit_close)) if exit_close else "n/a"
+    return (
+        "pass",
+        latest,
+        threshold,
+        f"{int((kind == 'entry').sum())} entries from signal bars inside {window_text}; latest "
+        f"exit bar closes {latest}, limit {_hhmm(limit)}",
+    )
+
+
+def _minutes(times: pd.Series) -> np.ndarray:
+    stamps = pd.to_datetime(times, utc=True).dt.tz_convert("Asia/Kolkata")
+    return (stamps.dt.hour * 60 + stamps.dt.minute).to_numpy()
+
+
+def _signal_minutes(ledgers: dict[str, Any], fills: pd.DataFrame) -> dict[str, int]:
+    """Entry fill id -> start minute of the signal bar that caused it, from the orders ledger.
+
+    The engine blocks a signal whose bar start is at or after the entry cutoff, so the entry
+    window is judged on the signal bar (start <= bar < end), not on the next-bar-open fill
+    stamp. An entry whose order is not in the ledger is left unchecked here; G0.5 reports it.
+    """
+    orders = ledgers["orders"]
+    if len(orders) == 0:
+        return {}
+    by_order = dict(zip(orders["order_id"], _minutes(orders["submit_time"]), strict=True))
+    entries = fills[fills["kind"] == "entry"]
+    return {
+        fid: int(by_order[oid])
+        for fid, oid in zip(entries["fill_id"], entries["order_id"], strict=True)
+        if oid in by_order
+    }
+
+
+def _g65(x: _Inputs) -> _Result:
+    threshold = "report: share of trades stopped by a gap, and the mean loss beyond the stop"
+    if x.ledgers is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_LEDGERS
+    if not x.trades:
+        return "not_evaluated", None, threshold, "no trades"
+    gaps = [t for t in x.trades if t.reason in GAP_REASONS and t.risk > 0]
+    share = len(gaps) / len(x.trades)
+    head = (
+        f"{len(gaps)} of {len(x.trades)} trades ({share:.1%}) exited by {' or '.join(GAP_REASONS)}"
+    )
+    if not gaps:
+        return "report", 0.0, threshold, head + "; no gap exits"
+    beyond = np.array([t.direction * (t.sl - t.exit) / t.risk for t in gaps], dtype=float)
+    return (
+        "report",
+        _num(share),
+        threshold,
+        f"{head}; mean loss beyond the stop {float(beyond.mean()):.3f}R. The live stop type "
+        "(SL-M versus SL) is not tested here",
+    )
+
+
+def stop_width_table(signals: pd.DataFrame) -> list[dict[str, Any]]:
+    """Accepted signals bucketed by stop width, risk as a percent of signal price (G1.6)."""
+    edges = (0.0, *STOP_WIDTH_EDGES, math.inf)
+    labels = [f"<{edges[1]:.2f}%"]
+    labels += [f"{lo:.2f}-{hi:.2f}%" for lo, hi in zip(edges[1:-2], edges[2:-1], strict=True)]
+    labels.append(f">={edges[-2]:.2f}%")
+    pct = _stop_pct(signals)
+    counts = [
+        int(((pct >= lo) & (pct < hi)).sum()) for lo, hi in zip(edges[:-1], edges[1:], strict=True)
+    ]
+    total = sum(counts)
+    return [
+        {"bucket": label, "count": n, "share": (n / total if total else 0.0)}
+        for label, n in zip(labels, counts, strict=True)
+    ]
+
+
+def _stop_pct(signals: pd.DataFrame) -> pd.Series:
+    price = signals["signal_price"].astype(float)
+    risk = signals["risk"].astype(float)
+    keep = signals["accepted"].astype(bool) & (risk > 0) & (price > 0)
+    return (risk[keep] / price[keep] * 100.0).round(6)
+
+
+def _g16(x: _Inputs) -> _Result:
+    threshold = (
+        f"report: if a fixed floor sets most stops (more than {FLOOR_DOMINANCE:.0%} at one width), "
+        "show results at other floors"
+    )
+    if x.ledgers is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_LEDGERS
+    pct = _stop_pct(x.ledgers["signals"])
+    if len(pct) == 0:
+        return "not_evaluated", None, threshold, "no accepted signals with a stop"
+    table = stop_width_table(x.ledgers["signals"])
+    text = "; ".join(f"{r['bucket']}: {r['count']} ({r['share']:.0%})" for r in table)
+    modal = pct.round(2).value_counts()
+    width, n = float(modal.index[0]), int(modal.iloc[0])
+    share = n / len(pct)
+    evidence = f"stop width, {len(pct)} accepted signals: {text}"
+    if share > FLOOR_DOMINANCE:
+        evidence += (
+            f". A fixed floor appears to set most stops: {share:.0%} at {width:.2f}% of price. "
+            "Results at other floors are not computed here; rerun with another min_sl_pct"
+        )
+    return "report", _num(share), threshold, evidence
+
+
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
+    "G0.5": _g05,
     "G1.1": _g11,
     "G1.2": _g12,
     "G1.3": _g13,
     "G1.4": _g14,
     "G1.5": _g15,
+    "G1.6": _g16,
     "G2.1": _g21,
     "G2.2": _g22,
     "G2.3": _g23,
@@ -760,6 +1036,8 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G4.5": _g45,
     "G4.6": _g46,
     "G5.2": _g52,
+    "G6.1": _g61,
+    "G6.5": _g65,
     "G6.9": _g69,
     "X.1": _params_count,
     "X.2": _regime_dispersion,
@@ -793,6 +1071,9 @@ def evaluate(
     regimes: dict[str, Any] | None = None,
     cost_profile: dict[str, Any] | None = None,
     split: dict[str, Any] | None = None,
+    ledgers: dict[str, Any] | None = None,
+    session: dict[str, Any] | None = None,
+    ledger_problems: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -800,7 +1081,10 @@ def evaluate(
     `horizon` is intraday, swing or positional; `position_caps` are the record's
     position-cap rows; `regimes` is the run's optional regimes block; `cost_profile` is the optional per-trade
     `cost_model` block (G1.1, G1.3); `split` is the record's split block with its purge and
-    embargo counts (G3.5). Returns `{version, criteria, horizon, dimensions, summary}`.
+    embargo counts (G3.5); `ledgers` (the four lineage frames) and `session`
+    (mis_squareoff_min, squareoff_margin_min, bar_minutes, entry_window) feed G0.5, G6.1, G6.5
+    and G1.6, which stay not_evaluated without them; `ledger_problems` are the recorder's own
+    reconciliation problems and make G0.5 fail. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -817,6 +1101,9 @@ def evaluate(
         regimes=regimes,
         cost_profile=cost_profile,
         split=split,
+        ledgers=ledgers,
+        session=session,
+        ledger_problems=tuple(ledger_problems),
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:
