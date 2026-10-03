@@ -42,6 +42,7 @@ _K_POS_OPEN = CODE_INDEX["POSITION_OPEN"]
 _K_NO_NEXT = CODE_INDEX["NO_NEXT_BAR"]
 _K_DROP_SESSION = CODE_INDEX["ORDER_DROPPED_SESSION_END"]
 _K_DROP_POS = CODE_INDEX["ORDER_DROPPED_POSITION_OPEN"]
+_K_WARMUP = CODE_INDEX["WARMUP"]
 
 
 def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Trade]:
@@ -71,6 +72,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
 
     strategy.reset_symbol(p)
     cost_frac = run.cost_bps / 100.0 / 100.0  # bps -> fraction of notional
+    warmup = run.warmup_bars
 
     # Broker MIS square-off guard: the exit bar must CLOSE margin minutes before the broker's
     # auto square-off, so the latest allowed exit-bar stamp is square-off - margin - bar length.
@@ -249,6 +251,11 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
         strategy.on_bar(c, i, p)
 
         # 4. evaluate a signal on this closed bar
+        if i < warmup:
+            # warm-up bars never produce a signal; counted per day like the other bar skips
+            if rec is not None:
+                skip(i, _K_WARMUP)
+            continue
         if pos is not None or pending is not None:
             if rec is not None:
                 # inlined skip(): the two hottest sites, same counter layout as ledgers

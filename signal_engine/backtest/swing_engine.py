@@ -40,6 +40,7 @@ _K_RISK = CODE_INDEX["RISK_INVALID"]
 _K_WRONG_SIDE = CODE_INDEX["STOP_WRONG_SIDE"]
 _K_TIGHT = CODE_INDEX["STOP_TOO_TIGHT"]
 _K_POS_OPEN = CODE_INDEX["POSITION_OPEN"]
+_K_WARMUP = CODE_INDEX["WARMUP"]
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,10 @@ class SwingRunConfig:
     #: Hard cap on holding period. Without it a trend exit can hold for years and one
     #: trade dominates the sample.
     max_hold_bars: int = 120
+
+    #: Bars at the start of each symbol's history that cannot produce a signal (counted as
+    #: WARMUP exclusions). Zero changes nothing.
+    warmup_bars: int = 0
 
     def __post_init__(self) -> None:
         if self.allow_shorts or not self.allow_longs:
@@ -94,6 +99,7 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
     b_fill = b.fills.append if rec is not None else None
     b_stamp = b._pending.append if rec is not None else None
     cost_frac = run.cost_bps / 100.0 / 100.0
+    warmup = run.warmup_bars
 
     strategy.reset_symbol(p)
 
@@ -126,7 +132,11 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
 
     for i in range(n):
         # 1. flat: today's OPEN may trigger a setup armed by yesterday's CLOSE.
-        if pos is None:
+        if pos is None and i < warmup:
+            # warm-up: the strategy sees the bar (on_bar below) but cannot open a position
+            if rec is not None:
+                skip(i, _K_WARMUP)
+        elif pos is None:
             for d in (1, -1):
                 if d == 1 and not run.allow_longs:
                     if rec is not None:

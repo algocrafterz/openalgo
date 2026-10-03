@@ -233,7 +233,7 @@ def _downcast(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _clean_session(df: pd.DataFrame) -> pd.DataFrame:
+def _clean_session(df: pd.DataFrame, collector=None, symbol: str | None = None) -> pd.DataFrame:
     """Drop everything that is not a tradeable NSE bar.
 
     Three defects are present in the store and each one silently corrupts a result:
@@ -241,12 +241,28 @@ def _clean_session(df: pd.DataFrame) -> pd.DataFrame:
     duplicate timestamps from a re-run download job (one session counted twice), and
     bars whose high/low do not bracket the open/close (an impossible bar that will
     trigger a stop that never existed).
+
+    With a `collector` and a `symbol`, the counts of each kind of dropped row are
+    recorded (a duplicate is counted before the hours filter, an out-of-hours bar
+    before the sanity filter). The returned frame is the same either way.
     """
+    n_raw = len(df)
     df = df[~df.index.duplicated(keep="last")].sort_index()
+    n_dedup = len(df)
     df = df.between_time(SESSION_OPEN, SESSION_CLOSE)
+    n_hours = len(df)
     o, h, lo_, c = df["Open"], df["High"], df["Low"], df["Close"]
     sane = (h >= lo_) & (h >= o) & (h >= c) & (lo_ <= o) & (lo_ <= c) & (lo_ > 0)
-    return df[sane]
+    out = df[sane]
+    if collector is not None and symbol is not None:
+        collector.record_seen(symbol, n_raw)
+        collector.record_clean(
+            symbol,
+            duplicate_ts=n_raw - n_dedup,
+            outside_hours=n_dedup - n_hours,
+            impossible=n_hours - len(out),
+        )
+    return out
 
 
 def split_days(df: pd.DataFrame) -> set:
@@ -266,7 +282,7 @@ def split_days(df: pd.DataFrame) -> set:
 
 def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
                    min_sessions: int = 250, db_path=None,
-                   drop_split_days: bool = True) -> dict[str, pd.DataFrame]:
+                   drop_split_days: bool = True, collector=None) -> dict[str, pd.DataFrame]:
     """Bars from OpenAlgo's Historify store, resampled from stored 1-minute data.
 
     This is the loader to prefer over `load()` for anything reported. yfinance caps
@@ -279,9 +295,14 @@ def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
     Prices are RAW - the store keeps what the broker sent. `drop_split_days` removes
     the session after each corporate action so a cross-day feature cannot read a split
     as a gap; within-day logic is unaffected either way.
+
+    A `DataCollector` passed as `collector` receives the dropped-row, split-day and
+    min-sessions counts; the returned frames are unchanged by it.
     """
     import duckdb
 
+    if collector is not None:
+        collector.interval = interval
     con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
     try:
         symbols = symbols or historify_symbols("1m", db_path)
@@ -302,7 +323,7 @@ def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
             raw.index = (pd.to_datetime(raw.pop("timestamp"), unit="s", utc=True)
                          .dt.tz_convert("Asia/Kolkata"))
             raw.columns = ["Open", "High", "Low", "Close", "Volume"]
-            df = _clean_session(raw)
+            df = _clean_session(raw, collector, s)
             if df.empty:
                 continue
 
@@ -332,9 +353,16 @@ def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
             if drop_split_days:
                 bad = split_days(df)
                 if bad:
+                    if collector is not None:
+                        collector.record_split_days(s, bad)
                     df = df[~pd.Series(df.index.date, index=df.index).isin(bad).to_numpy()]
-            if pd.Series(df.index.date).nunique() >= min_sessions:
+            n_sessions = pd.Series(df.index.date).nunique()
+            if n_sessions >= min_sessions:
                 out[s] = _downcast(df)
+            elif collector is not None:
+                collector.record_min_sessions(s, n_sessions)
+        if collector is not None:
+            collector.symbols_loaded = len(out)
         if not out:
             raise RuntimeError(
                 f"no symbol in {db_path or HISTORIFY_DB} has {min_sessions}+ sessions "
@@ -385,7 +413,7 @@ def _split_adjust_daily(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int = 500,
-                         db_path=None) -> dict[str, pd.DataFrame]:
+                         db_path=None, collector=None) -> dict[str, pd.DataFrame]:
     """Split-adjusted daily bars from Historify, for the swing engine.
 
     The alternative to `data.load(..., interval="1d", auto_adjust=True)`: same shape,
@@ -394,9 +422,14 @@ def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int =
     dependency in the loop. Historify's daily coverage reaches further back than its
     1-minute coverage (the broker retains small daily candles far longer than the full
     tick-level minute series), so this is usually the DEEPEST panel available here.
+
+    A `DataCollector` passed as `collector` receives duplicate/impossible-bar and
+    min-sessions counts; the returned frames are unchanged by it.
     """
     import duckdb
 
+    if collector is not None:
+        collector.interval = "1d"
     con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
     try:
         symbols = symbols or historify_symbols("D", db_path)
@@ -412,19 +445,29 @@ def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int =
                 q += " AND timestamp <= ?"
                 args.append(int(pd.Timestamp(end, tz="Asia/Kolkata").timestamp()))
             raw = con.execute(q + " ORDER BY timestamp", args).df()
-            if raw.empty or len(raw) < min_sessions:
+            if raw.empty:
                 continue
             raw.index = (pd.to_datetime(raw.pop("timestamp"), unit="s", utc=True)
                          .dt.tz_convert("Asia/Kolkata").dt.normalize())
             raw.columns = ["Open", "High", "Low", "Close", "Volume"]
+            n_raw = len(raw)
             raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+            n_dedup = len(raw)
             sane = ((raw["High"] >= raw["Low"]) & (raw["High"] >= raw["Open"]) &
                     (raw["High"] >= raw["Close"]) & (raw["Low"] <= raw["Open"]) &
                     (raw["Low"] <= raw["Close"]) & (raw["Low"] > 0))
             raw = raw[sane]
+            if collector is not None:
+                collector.record_seen(s, n_raw)
+                collector.record_clean(s, duplicate_ts=n_raw - n_dedup,
+                                       impossible=n_dedup - len(raw))
             if len(raw) < min_sessions:
+                if collector is not None:
+                    collector.record_min_sessions(s, len(raw))
                 continue
             out[s] = _downcast(_split_adjust_daily(raw))
+        if collector is not None:
+            collector.symbols_loaded = len(out)
         if not out:
             raise RuntimeError(
                 f"no symbol in {db_path or HISTORIFY_DB} has {min_sessions}+ daily "

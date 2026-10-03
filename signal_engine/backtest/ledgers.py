@@ -78,7 +78,7 @@ REASON_CODES: tuple[str, ...] = LIVE_CODES + RESERVED_CODES
 #: code -> small int, used by the engines in the hot loop. Order is part of the contract.
 CODE_INDEX: dict[str, int] = {c: k for k, c in enumerate(REASON_CODES)}
 
-SCOPES = ("bar", "signal", "order", "symbol", "run")
+SCOPES = ("bar", "signal", "order", "symbol", "symbol_session", "run")
 
 _IST_OFFSET_NS = 19_800 * 1_000_000_000
 _SHIFT = 6  # packed skip = (bar index << 6) | code int; 64 codes max

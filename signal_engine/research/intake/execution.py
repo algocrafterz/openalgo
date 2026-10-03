@@ -37,6 +37,12 @@ _RUN_CONFIG_FIELDS = {
     "profile.time_exit_min": "time_exit_min",
 }
 
+#: Per-date eligibility defaults (backtest/eligibility.py): listing age in sessions, session
+#: volume strictly above, session close at or above, in rupees.
+ELIGIBILITY_MIN_PRIOR_SESSIONS = 60
+ELIGIBILITY_MIN_VOLUME = 1
+ELIGIBILITY_MIN_PRICE = 10.0
+
 _Row = tuple[str, Any, str, str]
 
 
@@ -185,6 +191,24 @@ def _platform_rows(spec: Mapping[str, Any], product: tuple[str, str, str]) -> li
             record_run.EMBARGO_SESSIONS,
             "platform_default",
             "G3.5 embargo after the cut",
+        ),
+        (
+            "execution.eligibility_min_prior_sessions",
+            ELIGIBILITY_MIN_PRIOR_SESSIONS,
+            "platform_default",
+            "listing age: earlier traded sessions required before a symbol is eligible",
+        ),
+        (
+            "execution.eligibility_min_volume",
+            ELIGIBILITY_MIN_VOLUME,
+            "platform_default",
+            "session volume must be above this to count as traded",
+        ),
+        (
+            "execution.eligibility_min_price",
+            ELIGIBILITY_MIN_PRICE,
+            "platform_default",
+            "session close floor in rupees, excludes penny-priced sessions",
         ),
     ]
 

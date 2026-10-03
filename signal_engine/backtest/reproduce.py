@@ -37,6 +37,7 @@ CHECKS = (
     "code_unchanged",
     "rerun_completed",
     "dataset_unchanged",
+    "calendar_unchanged",
     "trades_match",
 )
 #: Float tolerance for comparing trades, absolute.
@@ -225,6 +226,28 @@ def _check_dataset(
     )
 
 
+def _check_calendar(attempt: _Attempt, manifest: dict[str, Any], execution: Any) -> None:
+    """The rerun derives the same trading calendar the run recorded.
+
+    Skipped as passed, with a note, when the manifest has no calendar (a run made before the
+    session layer existed). A rerun that derives none when the manifest has one fails.
+    """
+    recorded = manifest.get("calendar_version")
+    if recorded is None:
+        attempt.notes.append("calendar not compared: the manifest records no calendar_version")
+        attempt.record("calendar_unchanged", True)
+        return
+    calendar = getattr(execution, "calendar", None)
+    now_version = None if calendar is None else calendar.version
+    attempt.record(
+        "calendar_unchanged",
+        now_version == recorded,
+        "trading calendar changed: the set of trading days in the data is not the one the run "
+        f"used (recorded {recorded}, rerun {now_version}); sessions were added, removed or "
+        "backfilled",
+    )
+
+
 def _write_report(runs_dir: Path, report: ReproductionReport, now: datetime) -> Path:
     target_dir = runs_dir / f"{report.run_id}.reproductions"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -289,6 +312,7 @@ def reproduce(
                 execution = _rerun(attempt, folder, manifest, execute, key)
                 if execution is not None:
                     _check_dataset(attempt, manifest, execution, dataset_fingerprint_fn)
+                    _check_calendar(attempt, manifest, execution)
                     compared = _compare_trades(attempt, folder, execution)
     ok = all(attempt.checks.get(name) is True for name in CHECKS)
     report = ReproductionReport(

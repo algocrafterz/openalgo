@@ -202,6 +202,9 @@ class _Inputs:
     ledgers: dict[str, Any] | None = None
     session: dict[str, Any] | None = None
     ledger_problems: Sequence[str] = ()
+    data_quality: dict[str, Any] | None = None
+    calendar: Any = None
+    membership: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1013,8 +1016,212 @@ def _g16(x: _Inputs) -> _Result:
     return "report", _num(share), threshold, evidence
 
 
+_NOT_EVALUATED_NO_DQ = "no data-quality report recorded for this run"
+_NOT_EVALUATED_NO_MEMBERSHIP = "no universe membership record for this run"
+_IST_NAMES = ("Asia/Kolkata", "Asia/Calcutta")
+_LEDGER_TIME_COLUMNS = (
+    ("signals", "bar_time"),
+    ("orders", "submit_time"),
+    ("orders", "fill_bar_time"),
+    ("fills", "fill_time"),
+    ("exclusions", "bar_time"),
+)
+CRITERION_MIN_BARS = 370  # G0.4, one-minute bars in a 375-bar session
+_DAILY_INTERVALS = ("1d", "d")
+
+
+def _policy_text(dq: dict[str, Any], key: str) -> str:
+    return str((dq.get("policy") or {}).get(key, "not stated"))
+
+
+def _g03(x: _Inputs) -> _Result:
+    threshold = "all external times converted to IST at the boundary; bar timestamps are open-time"
+    dq = x.data_quality
+    if dq is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_DQ
+    stated = _policy_text(dq, "timestamps")
+    caveat = (
+        "open-time stamping is a property of each loader and is covered by its unit test, "
+        "not re-proved per run"
+    )
+    if x.ledgers is None:
+        return "report", None, threshold, f"{stated}; no ledgers to check. {caveat}"
+    bad, checked = [], 0
+    for name, column in _LEDGER_TIME_COLUMNS:
+        frame = x.ledgers.get(name)
+        if frame is None or column not in frame.columns:
+            continue
+        checked += 1
+        tz = getattr(frame[column].dtype, "tz", None)
+        if tz is None or str(tz) not in _IST_NAMES:
+            bad.append(f"{name}.{column}")
+    if checked == 0:
+        return "report", None, threshold, f"{stated}; no ledger time columns to check. {caveat}"
+    if bad:
+        return (
+            "fail",
+            len(bad),
+            threshold,
+            f"{len(bad)} ledger time columns are not in IST: {', '.join(bad)}. {stated}",
+        )
+    return (
+        "pass",
+        0,
+        threshold,
+        f"{stated}; all {checked} ledger time columns are IST. {caveat}",
+    )
+
+
+def _g04(x: _Inputs) -> _Result:
+    threshold = (
+        f"every symbol-session used has at least {CRITERION_MIN_BARS} one-minute bars "
+        "(98.7% of a 375-bar session); gaps listed by name"
+    )
+    dq = x.data_quality
+    if dq is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_DQ
+    interval = str((dq.get("dropped") or {}).get("interval", "")).lower()
+    if interval in _DAILY_INTERVALS:
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            "daily bars: one bar per session, so there is no intraday coverage to check",
+        )
+    if dq.get("status") == "NOT_RUN":
+        return "not_evaluated", None, threshold, "no symbols were audited"
+    summary = dq.get("summary") or {}
+    audited = list(summary.get("audited_symbols") or [])
+    total = int(summary.get("symbols") or len(audited))
+    floor = (dq.get("thresholds") or {}).get("min_session_completeness")
+    note = (
+        f"audit floor is {floor:.0%} of expected bars against 98.7% in the criterion; the "
+        "auction-era exemption from 2026-08-03 is not modelled"
+        if isinstance(floor, (int, float))
+        else "the auction-era exemption from 2026-08-03 is not modelled"
+    )
+    short = [str(d) for d in (getattr(x.calendar, "short_sessions", ()) or ())]
+    short_text = (
+        f" Short or irregular sessions in the calendar: {', '.join(short)}." if short else ""
+    )
+    audit_text = f"{len(audited)} of {total} symbols audited"
+    item = next((i for i in dq.get("items") or [] if i.get("check") == "incomplete_sessions"), None)
+    if item is not None:
+        names = ", ".join(item.get("symbols") or [])
+        # within the data-quality tolerance (info severity) the gaps are reported, not failed
+        status = "fail" if item.get("severity") == "warning" else "report"
+        return (
+            status,
+            int(item.get("count", 0)),
+            threshold,
+            f"{item.get('detail')}; symbols (up to 10): {names}; {audit_text}; "
+            f"full list in data_quality.json. {note}.{short_text}",
+        )
+    if len(audited) < total:
+        return (
+            "report",
+            None,
+            threshold,
+            f"{audit_text} (an evenly spaced sample); no gap in the sample, the remaining "
+            f"symbols are not checked, so the criterion cannot be passed. {note}.{short_text}",
+        )
+    return (
+        "pass",
+        0,
+        threshold,
+        f"{audit_text}; no symbol-session below the audit floor. {note}.{short_text}",
+    )
+
+
+def _g06(x: _Inputs) -> _Result:
+    threshold = (
+        "report: intraday level profiles use continuous-market bars only, stamped before 15:15"
+    )
+    dq = x.data_quality
+    if dq is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_DQ
+    return (
+        "report",
+        None,
+        threshold,
+        f"data layer: {_policy_text(dq, 'closing_auction')}. Whether a feature or strategy "
+        "reads bars from 15:15 onward is a property of its code (features/session.py), not "
+        "checked per run",
+    )
+
+
+def _g08(x: _Inputs) -> _Result:
+    threshold = "report: split and bonus sessions excluded or adjusted; ex-date handling verified"
+    dq = x.data_quality
+    if dq is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_DQ
+    split = (dq.get("dropped") or {}).get("split_days_dropped") or {}
+    n_days = sum(len(v) for v in split.values())
+    return (
+        "report",
+        n_days,
+        threshold,
+        f"policy: {_policy_text(dq, 'corporate_actions')}. This run excluded {n_days} "
+        f"symbol-sessions across {len(split)} symbols as probable splits. Limits: the 0.75 to "
+        "1.33 test cannot see dividends, bonuses or rights, and ex-date handling is not "
+        "verified, so this gate does not pass",
+    )
+
+
+def _g47(x: _Inputs) -> _Result:
+    threshold = (
+        "report: the universe uses today's list, which is survivor-biased; test on symbols as "
+        "they existed and list names that later left"
+    )
+    m = x.membership
+    if m is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_MEMBERSHIP
+    bias = bool(m.get("survivorship_bias"))
+    return (
+        "report",
+        bias,
+        threshold,
+        f"membership source {m.get('membership_source')}; survivorship bias {bias}. The "
+        "universe is today's symbol master applied to the past, not point-in-time membership: "
+        "names that later left F&O or were delisted are absent and cannot be listed here "
+        "because no historical membership source exists. Results are biased toward survivors",
+    )
+
+
+def _g62(x: _Inputs) -> _Result:
+    threshold = (
+        "report: skip names under ASM, GSM or T2T, names the broker blocks for MIS, and names "
+        "without a valid tick; log each by name"
+    )
+    if x.membership is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_MEMBERSHIP
+    if x.ledgers is None:
+        return "not_evaluated", None, threshold, _NOT_EVALUATED_NO_LEDGERS
+    exc = x.ledgers["exclusions"]
+    rows = exc[exc["reason_code"] == "NOT_ELIGIBLE"]
+    total = int(rows["count"].sum())
+    by_reason = {str(k): int(v) for k, v in rows.groupby("detail")["count"].sum().items()}
+    table = ", ".join(f"{k}={v}" for k, v in sorted(by_reason.items())) or "none"
+    policy = x.membership.get("eligibility_policy")
+    policy_text = (
+        ", ".join(f"{k}={v}" for k, v in sorted(policy.items())) if policy else "not recorded"
+    )
+    return (
+        "report",
+        total,
+        threshold,
+        f"data-driven eligibility policy ({policy_text}); {total} symbol-sessions NOT_ELIGIBLE "
+        f"({table}), each logged by symbol and date in exclusions.parquet. ASM, GSM, T2T and "
+        "broker MIS block lists are not modelled",
+    )
+
+
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
+    "G0.3": _g03,
+    "G0.4": _g04,
     "G0.5": _g05,
+    "G0.6": _g06,
+    "G0.8": _g08,
     "G1.1": _g11,
     "G1.2": _g12,
     "G1.3": _g13,
@@ -1035,8 +1242,10 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G4.4": _g44,
     "G4.5": _g45,
     "G4.6": _g46,
+    "G4.7": _g47,
     "G5.2": _g52,
     "G6.1": _g61,
+    "G6.2": _g62,
     "G6.5": _g65,
     "G6.9": _g69,
     "X.1": _params_count,
@@ -1074,6 +1283,9 @@ def evaluate(
     ledgers: dict[str, Any] | None = None,
     session: dict[str, Any] | None = None,
     ledger_problems: Sequence[str] = (),
+    data_quality: dict[str, Any] | None = None,
+    calendar: Any = None,
+    membership: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1084,7 +1296,10 @@ def evaluate(
     embargo counts (G3.5); `ledgers` (the four lineage frames) and `session`
     (mis_squareoff_min, squareoff_margin_min, bar_minutes, entry_window) feed G0.5, G6.1, G6.5
     and G1.6, which stay not_evaluated without them; `ledger_problems` are the recorder's own
-    reconciliation problems and make G0.5 fail. Returns `{version, criteria, horizon, dimensions, summary}`.
+    reconciliation problems and make G0.5 fail. `data_quality` (the per-run report),
+    `calendar` (the derived session calendar) and `membership` (source, survivorship flag,
+    eligibility policy) feed G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2, each not_evaluated without
+    its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1104,6 +1319,9 @@ def evaluate(
         ledgers=ledgers,
         session=session,
         ledger_problems=tuple(ledger_problems),
+        data_quality=data_quality,
+        calendar=calendar,
+        membership=membership,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

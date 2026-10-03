@@ -447,3 +447,18 @@ class TestSealedHighWater:
         assert cli.main(["resolve", "IDEA-012"], root=tmp_path) == 0
         saved = ledger.load(folder)
         assert min(int(e.id[2:]) for e in saved.entries) >= 41
+
+
+class TestEligibilityEntries:
+    def test_eligibility_defaults_are_ledger_entries(self):
+        led = _resolve()
+        for name, value in (
+            ("execution.eligibility_min_prior_sessions", 60),
+            ("execution.eligibility_min_volume", 1),
+            ("execution.eligibility_min_price", 10.0),
+        ):
+            entry = led.get(name)
+            assert entry.value == value
+            assert entry.source == "platform_default" and entry.section == "execution"
+            assert entry.materiality == "medium" and entry.user_confirmed is False
+            assert entry.reason.strip()

@@ -52,6 +52,11 @@ class RunConfig:
     mis_squareoff_min: int = 15 * 60
     squareoff_margin_min: int = 5
 
+    #: Bars at the start of each symbol's history that cannot produce a signal, so indicators
+    #: have their longest lookback before the first decision (resolved `execution.warmup_bars`).
+    #: The skipped bars are counted as WARMUP exclusions. Zero changes nothing.
+    warmup_bars: int = 0
+
     def with_(self, **kw) -> RunConfig:
         return replace(self, **kw)
 

@@ -183,3 +183,39 @@ class TestReviewHardening:
     def test_bool_period_does_not_count_toward_warmup(self):
         spec = make_spec(indicators=[{"name": "EMA", "period": True}])
         assert _resolve(spec).get("execution.warmup_bars").value == 0
+
+
+class TestEligibilityDefaults:
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("execution.eligibility_min_prior_sessions", 60),
+            ("execution.eligibility_min_volume", 1),
+            ("execution.eligibility_min_price", 10.0),
+        ],
+    )
+    def test_resolves_as_platform_default_with_reason(self, name, value):
+        v = _resolve().get(name)
+        assert v.value == value
+        assert v.source == "platform_default"
+        assert v.section == "execution"
+        assert v.reason.strip()
+
+    def test_swing_spec_gets_the_same_defaults(self):
+        r = _resolve(make_spec(product="CNC", **SWING))
+        assert r.get("execution.eligibility_min_prior_sessions").value == 60
+
+    def test_catalog_classes_them_defaultable_medium(self):
+        from signal_engine.research.intake import fields
+
+        for name in (
+            "execution.eligibility_min_prior_sessions",
+            "execution.eligibility_min_volume",
+            "execution.eligibility_min_price",
+        ):
+            f = fields.get(name)
+            assert f.cls == fields.DEFAULTABLE and f.materiality == fields.MEDIUM
+
+    def test_they_are_not_overridable_by_the_author(self):
+        with pytest.raises(execution.ExecutionError, match="unknown override"):
+            _resolve(overrides={"eligibility_min_price": {"value": 5, "reason": "x"}})

@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -25,13 +26,16 @@ from signal_engine.backtest import promotion as promotion_mod
 from signal_engine.backtest import verdict as verdict_mod
 from signal_engine.backtest.artifacts import RunFolder, _encode
 from signal_engine.backtest.change_class import classify, first_run_classes
+from signal_engine.backtest.dq_run import POLICY as DATA_POLICY
 from signal_engine.backtest.fingerprints import canonical_json, component_fingerprints, sha256_hex
+from signal_engine.backtest.session import session_model
 from signal_engine.backtest.trades_io import (
     LEDGER_SCHEMAS,
     frame_parquet_bytes,
     trades_parquet_bytes,
 )
 from signal_engine.research.intake import ledger as ledger_mod
+from signal_engine.research.intake import profiles as profiles_mod
 from signal_engine.research.intake.versions import require_aware
 from signal_engine.timeutils import IST
 
@@ -192,14 +196,68 @@ def _symbols_fingerprint(
 
 
 def _null_notes(manifest: Mapping[str, Any]) -> list[str]:
+    """One note per manifest path that is still null, with its reason.
+
+    A run that carries the data and session layer (it has a `calendar_version`) fills every
+    step-5 path, so only `random.monte_carlo` and, for CNC, the MIS-only session fields remain.
+    A run without the layer keeps the original "not captured until engine step 5" notes.
+    """
+    supplied = manifest.get("calendar_version") is not None
+    product = (manifest.get("deployment_profile") or {}).get("product")
     notes = []
     for dotted in _STEP5_PATHS:
         present, value = manifest_mod._get(manifest, dotted)
-        if present and value is None:
+        if not (present and value is None):
+            continue
+        if dotted == "session.broker_cutoff" and supplied and product != "MIS":
+            notes.append(f"{dotted} is null: {product} delivery has no intraday broker cutoff")
+        elif supplied and dotted != "random.monte_carlo":
+            notes.append(f"{dotted} not captured: the run supplied no value")
+        else:
             notes.append(f"{dotted} not captured until engine step 5")
     if manifest["session"]["force_flat"] is None:
-        notes.append("session.force_flat is null: the profile has no MIS square-off for this run")
+        if supplied and product == "CNC":
+            notes.append(
+                "session.force_flat is null: CNC delivery has no force-flat, positions carry forward"
+            )
+        else:
+            notes.append(
+                "session.force_flat is null: the profile has no MIS square-off for this run"
+            )
     return notes
+
+
+def _json_safe(value: Any) -> Any:
+    """`value` as plain JSON types (numpy scalars and dates converted), NaN refused later."""
+
+    def default(obj: Any) -> Any:
+        if hasattr(obj, "item") and callable(obj.item):
+            return obj.item()
+        if hasattr(obj, "isoformat"):
+            return obj.isoformat()
+        return str(obj)
+
+    return json.loads(json.dumps(value, default=default))
+
+
+def _profile_rules(frozen: Any, product: str) -> Any:
+    """The frozen profile's `ProductRules` for MIS, or None (CNC has no intraday cutoffs)."""
+    block = ((getattr(frozen, "profile", None) or {}).get("products") or {}).get(product)
+    if product != "MIS" or not isinstance(block, Mapping):
+        return None
+    problems: list[str] = []
+    rules = profiles_mod._parse_mis(block, problems)
+    return None if problems else rules
+
+
+def universe_version(membership: Mapping[str, Any] | None, universe_frame: Any) -> str | None:
+    """`eligibility-<sha8>` of the eligibility policy and the universe records, or None."""
+    if universe_frame is None:
+        return None
+    policy = (membership or {}).get("eligibility_policy")
+    records = json.loads(universe_frame.to_json(orient="records"))
+    digest = sha256_hex(canonical_json({"policy": policy, "universe": records}))
+    return "eligibility-" + digest[:8]
 
 
 def _assumptions(frozen: Any, folder: Path, created: str) -> dict[str, Any]:
@@ -236,11 +294,20 @@ def _derived(
     readiness_missing: Sequence[str],
     code_dirty: bool,
     reproducible: bool,
+    data_quality: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Verdict, promotion and next action for a run, derived from its evaluation block."""
+    """Verdict, promotion and next action for a run, derived from its evaluation block.
+
+    `data_quality` is the run's real report (status, affects_validity, items); without one the
+    constant NOT_RUN stands in.
+    """
     evaluation = record.get("evaluation") or {}
     validity = {"ok": True, "failures": []}
-    data_quality = {"status": "NOT_RUN", "affects_validity": False, "items": []}
+    data_quality = (
+        dict(data_quality)
+        if data_quality is not None
+        else {"status": "NOT_RUN", "affects_validity": False, "items": []}
+    )
     run_verdict = verdict_mod.derive(
         evaluation,
         validity=validity,
@@ -387,6 +454,40 @@ def build_manifest(
     if squareoff is not None:
         minutes = int(squareoff["value"])
         force_flat = f"{minutes // 60:02d}:{minutes % 60:02d}"
+    calendar = getattr(execution, "calendar", None)
+    membership = getattr(execution, "membership", None)
+    session = {
+        "exchange": None,
+        "strategy_window": window,
+        "broker_cutoff": None,
+        "force_flat": force_flat,
+    }
+    if calendar is not None:
+        product = frozen.resolved["execution.product"]["value"]
+        rules = _profile_rules(frozen, product)
+        if rules is None and squareoff is not None:
+            # fall back to the resolved profile fields rather than nulling a known cutoff
+            flat = int(squareoff["value"])
+            margin = frozen.resolved.get("profile.squareoff_margin_min")
+            rules = SimpleNamespace(
+                force_flat_min=flat,
+                latest_exit_bar_close_min=flat - int(margin["value"]) if margin else flat,
+            )
+        session = session_model(
+            calendar,
+            profile_rules=rules,
+            product=product,
+            strategy_window=window,
+        )
+    universe: dict[str, Any] = {
+        "definition": execution.data["universe"],
+        "symbols_sha256": sha256_hex(canonical_json(symbols)),
+        "version": universe_version(membership, getattr(execution, "universe_frame", None)),
+    }
+    if membership is not None:
+        universe["membership_source"] = membership.get("membership_source")
+        universe["survivorship_bias"] = membership.get("survivorship_bias")
+    has_data_report = getattr(execution, "data_report", None) is not None
     code_dirty = bool(engine["code_dirty"])
     reproducibility = _reproducibility(frozen, symbols, engine)
     manifest: dict[str, Any] = {
@@ -408,25 +509,18 @@ def build_manifest(
             "data_as_of": execution.data["as_of"],
             "symbol_count": len(symbols),
             "fingerprint": dataset_fp,
-            "corporate_action_policy": None,
+            "corporate_action_policy": (
+                DATA_POLICY["corporate_actions"] if has_data_report else None
+            ),
         },
-        "universe": {
-            "definition": execution.data["universe"],
-            "symbols_sha256": sha256_hex(canonical_json(symbols)),
-            "version": None,
-        },
-        "calendar_version": None,
+        "universe": universe,
+        "calendar_version": None if calendar is None else calendar.version,
         "deployment_profile": {
             "name": frozen.profile_name,
             "product": frozen.resolved["execution.product"]["value"],
             "sha256": frozen.profile_sha256,
         },
-        "session": {
-            "exchange": None,
-            "strategy_window": window,
-            "broker_cutoff": None,
-            "force_flat": force_flat,
-        },
+        "session": session,
         "engine": {
             "engine_version": ENGINE_VERSION,
             "code_commit": engine["code_commit"],
@@ -501,7 +595,13 @@ def prepare_run_artifact(
     reproducible = (not code_dirty) and all(
         _reproducibility(frozen, sorted(execution.symbols), engine).values()
     )
-    derived = _derived(record, readiness_missing, code_dirty, reproducible)
+    derived = _derived(
+        record,
+        readiness_missing,
+        code_dirty,
+        reproducible,
+        getattr(execution, "data_quality", None),
+    )
     ledgers = getattr(execution, "ledgers", None)
     files: dict[str, bytes] = {
         "assumptions.json": _encode(_assumptions(frozen, idea_folder, created)),
@@ -524,6 +624,12 @@ def prepare_run_artifact(
         files[f"evidence/{name}.parquet"] = _encode(
             frame_parquet_bytes(ledgers[name], LEDGER_SCHEMAS[name])
         )
+    data_report = getattr(execution, "data_report", None)
+    if data_report is not None:
+        files["data_quality.json"] = _encode(_json_safe(data_report))
+    universe_frame = getattr(execution, "universe_frame", None)
+    if universe_frame is not None:
+        files["execution/universe.parquet"] = _encode(frame_parquet_bytes(universe_frame))
     artifacts = {rel: hashlib.sha256(files[rel]).hexdigest() for rel in sorted(files)}
     dataset_fp = _symbols_fingerprint(
         execution.symbols,

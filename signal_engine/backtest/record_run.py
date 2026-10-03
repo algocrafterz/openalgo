@@ -41,6 +41,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import regime, regime_data, run_artifact
 from signal_engine.backtest.baseline import (
@@ -50,7 +51,18 @@ from signal_engine.backtest.baseline import (
     sample_trades,
 )
 from signal_engine.backtest.costs import CostModel, decompose_trades
+from signal_engine.backtest.data_collect import CLEAN_KEYS, DataCollector
+from signal_engine.backtest.dq_run import build_data_quality
+from signal_engine.backtest.eligibility import (
+    MEMBERSHIP_SOURCE,
+    SURVIVORSHIP_BIAS,
+    EligibilityPolicy,
+    EligibilityResult,
+    apply_eligibility,
+    compute_eligibility,
+)
 from signal_engine.backtest.ledgers import LedgerRecorder
+from signal_engine.backtest.session import Calendar, derive_calendar
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
 from signal_engine.research import readiness
@@ -102,6 +114,16 @@ class Execution:
     cost_components: pd.DataFrame | None = None
     #: Problems `LedgerRecorder.reconcile` found against the recorder's own buffers (empty = clean).
     ledger_problems: list[str] = field(default_factory=list)
+    #: Trading calendar derived from the loaded frames, or None when the run did not derive one.
+    calendar: Calendar | None = None
+    #: Verdict-relevant part of the data-quality report: status, affects_validity, items.
+    data_quality: dict[str, Any] | None = None
+    #: One row per loaded symbol with its eligibility counts (`execution/universe.parquet`).
+    universe_frame: pd.DataFrame | None = None
+    #: The full data-quality report (`data_quality.json`).
+    data_report: dict[str, Any] | None = None
+    #: membership_source, survivorship_bias and the eligibility policy applied.
+    membership: dict[str, Any] | None = None
 
 
 def deployed_cost_model(
@@ -333,15 +355,157 @@ def _end_of_session(end: str | None) -> str | None:
     return None if end is None else f"{date.fromisoformat(end).isoformat()} 23:59:59"
 
 
+#: Symbols whose bars the per-run data-quality audit reads (an even sample of the universe).
+DQ_MAX_SYMBOLS = 60
+
+
+def _last_session(frames: Mapping[str, pd.DataFrame]) -> date | None:
+    last = [df.index[-1].date() for df in frames.values() if df is not None and len(df)]
+    return max(last) if last else None
+
+
+def _eligibility_policy(cfg: Mapping[str, Any]) -> EligibilityPolicy | None:
+    """The policy from the frozen `execution.eligibility_*` settings, None when none are given.
+
+    A missing key falls back to the platform default, so a partial mapping still applies a
+    full policy; no keys at all means the run applies no eligibility drop.
+    """
+    names = ("eligibility_min_prior_sessions", "eligibility_min_volume", "eligibility_min_price")
+    if not any(n in cfg for n in names):
+        return None
+    from signal_engine.research.intake import execution as intake_execution
+
+    return EligibilityPolicy(
+        min_prior_sessions=int(
+            cfg.get(
+                "eligibility_min_prior_sessions", intake_execution.ELIGIBILITY_MIN_PRIOR_SESSIONS
+            )
+        ),
+        min_volume=float(
+            cfg.get("eligibility_min_volume", intake_execution.ELIGIBILITY_MIN_VOLUME)
+        ),
+        min_price=float(cfg.get("eligibility_min_price", intake_execution.ELIGIBILITY_MIN_PRICE)),
+    )
+
+
+@dataclass(frozen=True)
+class _DataLayer:
+    """What the data and session layer learned about the loaded frames."""
+
+    calendar: Calendar
+    data_report: dict[str, Any] | None
+    universe_frame: pd.DataFrame | None
+    membership: dict[str, Any] | None
+    #: NOT_ELIGIBLE sessions that were dropped: symbol -> {date: reason}.
+    dropped: dict[str, dict[date, str]]
+    #: What the engine sees: the loaded frames minus the ineligible symbol-sessions.
+    frames: dict[str, pd.DataFrame]
+    #: The eligibility result, kept so the baselines drop the same sessions; None without a policy.
+    eligibility: EligibilityResult | None = None
+
+
+def _build_data_layer(
+    frames: dict[str, pd.DataFrame],
+    collector: DataCollector,
+    cfg: Mapping[str, Any],
+    as_of: date | None = None,
+    adjusted_prices: bool = False,
+) -> _DataLayer:
+    """Calendar, data quality, eligibility and the frames the engine will run on.
+
+    Everything that reads the loaded frames happens here, before the backtest, because the
+    harness releases its raw frames as it goes. Data quality is audited on the frames as
+    loaded (before any eligibility drop). The calendar ignores sessions after `as_of` (the
+    run's `end`; the last loaded session when None). `adjusted_prices` marks the split-adjusted
+    daily panel, for which the price floor is not applied.
+    """
+    calendar = derive_calendar(frames, as_of=as_of if as_of is not None else _last_session(frames))
+    report = None
+    if collector.interval:
+        report = build_data_quality(
+            frames,
+            collector,
+            calendar=calendar.trading_days,
+            short_sessions=calendar.short_sessions,
+            max_symbols=DQ_MAX_SYMBOLS,
+        )
+        report = {
+            **report,
+            "calendar": {
+                "source": calendar.source,
+                "version": calendar.version,
+                "sessions": len(calendar.trading_days),
+                "short_sessions": [d.isoformat() for d in calendar.short_sessions],
+            },
+        }
+    policy = _eligibility_policy(cfg)
+    if policy is None:
+        return _DataLayer(calendar, report, None, None, {}, frames)
+    result = compute_eligibility(frames, policy, calendar, adjusted_prices=adjusted_prices)
+    kept, dropped = apply_eligibility(frames, result)
+    membership = {
+        "membership_source": MEMBERSHIP_SOURCE,
+        "survivorship_bias": SURVIVORSHIP_BIAS,
+        "eligibility_policy": {
+            "min_prior_sessions": policy.min_prior_sessions,
+            "min_volume": policy.min_volume,
+            "min_price": policy.min_price,
+        },
+    }
+    return _DataLayer(calendar, report, result.universe_frame, membership, dropped, kept, result)
+
+
+def _record_data_exclusions(
+    recorder: LedgerRecorder, collector: DataCollector, dropped: Mapping[str, Mapping[date, str]]
+) -> None:
+    """Write what the data layer removed before the engine ran into the recorder."""
+    for symbol, days in sorted(collector.split_days_dropped.items()):
+        for day in sorted(days):
+            recorder.add_exclusion(
+                symbol,
+                "symbol_session",
+                ledgers_mod.SPLIT_DAY,
+                date=day,
+                detail="open versus previous close outside 0.75 to 1.33",
+            )
+    for symbol, sessions in sorted(collector.symbols_dropped_min_sessions.items()):
+        recorder.add_exclusion(
+            symbol,
+            "symbol",
+            ledgers_mod.SYMBOL_MIN_SESSIONS,
+            detail=f"sessions={int(sessions)}",
+        )
+    for symbol, counts in sorted(collector.clean_dropped.items()):
+        total = sum(int(counts.get(k, 0)) for k in CLEAN_KEYS)
+        if total:
+            recorder.add_exclusion(
+                symbol,
+                "symbol",
+                ledgers_mod.BAD_BAR,
+                detail=" ".join(f"{k}={int(counts.get(k, 0))}" for k in CLEAN_KEYS),
+                count=total,
+            )
+    for symbol, days in sorted(dropped.items()):
+        for day, reason in sorted(days.items()):
+            recorder.add_exclusion(
+                symbol, "symbol_session", ledgers_mod.NOT_ELIGIBLE, date=day, detail=reason
+            )
+
+
 def execute_backtest(
     key: str, settings: Mapping[str, Any] | None = None, end: str | None = None
 ) -> Execution:
     """Run strategy `key` with shipped defaults on the full Historify universe.
 
     `settings` is the frozen execution configuration (keys cost_bps, mis_squareoff_min,
-    squareoff_margin_min, time_exit_min, slippage_bps_per_side). Without it the engine
-    defaults apply. The profile's square-off values win over the strategy's overrides, and the
-    time exit is only ever tightened.
+    squareoff_margin_min, time_exit_min, slippage_bps_per_side, warmup_bars and the three
+    eligibility_* thresholds). Without it the engine defaults apply, no warm-up is set and no
+    symbol-session is dropped as ineligible. The profile's square-off values win over the
+    strategy's overrides, and the time exit is only ever tightened.
+
+    The loaders report what they dropped through a `DataCollector`. The calendar, the data
+    quality report and the eligibility drop are computed from the loaded frames before the
+    backtest; the data-layer exclusions are added to the recorder before its frames are built.
 
     `end` (ISO date) limits every data load, the baseline reloads included, to sessions up to
     and including that day; None loads everything available.
@@ -357,23 +521,38 @@ def execute_backtest(
     cli._register()
     cls, params_cls, kind = cli.REGISTRY[key]
     strategy, params = cls(), params_cls()
+    collector = DataCollector()
     if kind == "swing":
-        frames = data.from_historify_daily(min_sessions=500, end=until)
+        frames = data.from_historify_daily(min_sessions=500, end=until, collector=collector)
         run = SwingRunConfig(cost_bps=cfg.get("cost_bps", SWING_COST_BPS))
-        universe, bar_size = len(frames), "1d"
-        bt = Backtest(strategy, frames, run, engine=simulate_swing, release_raw=True)
+        bar_size = "1d"
     else:
-        frames = data.from_historify(interval="5m", end=until)
+        frames = data.from_historify(interval="5m", end=until, collector=collector)
         run = RunConfig(cost_bps=cfg.get("cost_bps", INTRADAY_COST_BPS)).with_(
             **getattr(strategy, "run_overrides", {})
         )
         run = _apply_profile_settings(run, cfg)
-        universe, bar_size = len(frames), "5m"
-        bt = Backtest(strategy, frames, run, release_raw=True)
+        bar_size = "5m"
+    if "warmup_bars" in cfg:
+        run = run.with_(warmup_bars=int(cfg["warmup_bars"]))
+    loaded_symbols, universe = sorted(frames), len(frames)
+    layer = _build_data_layer(
+        frames,
+        collector,
+        cfg,
+        as_of=date.fromisoformat(end) if end else None,
+        adjusted_prices=kind == "swing",
+    )
+    del frames  # the harness releases its raw frames as it goes; do not keep a second copy
+    if kind == "swing":
+        bt = Backtest(strategy, layer.frames, run, engine=simulate_swing, release_raw=True)
+    else:
+        bt = Backtest(strategy, layer.frames, run, release_raw=True)
     days = [_iso(d) for d in bt.days]
     # The recorder serves this one headline run; no other call below receives one.
     recorder = LedgerRecorder()
     trades = bt.trades(params, "all", recorder=recorder)
+    _record_data_exclusions(recorder, collector, layer.dropped)
     ledgers = recorder.to_frames()
     ledger_problems = recorder.reconcile(ledgers, trades)
     cost_model = _cost_model_or_none(kind, cfg.get("slippage_bps_per_side"))
@@ -386,8 +565,12 @@ def execute_backtest(
         if sample:
             baseline = random_entry_baseline_intraday(
                 sample,
-                data.from_historify(
-                    symbols=sorted({t.symbol for t in sample}), interval="5m", end=until
+                _baseline_frames(
+                    data.from_historify(
+                        symbols=sorted({t.symbol for t in sample}), interval="5m", end=until
+                    ),
+                    layer,
+                    int(run.warmup_bars),
                 ),
                 float(run.cost_bps),
                 population_trades=len(trades),
@@ -396,7 +579,9 @@ def execute_backtest(
         # The engine released its raw frames, so reload the (small, daily) panel.
         baseline = random_entry_baseline(
             trades,
-            data.from_historify_daily(min_sessions=500, end=until),
+            _baseline_frames(
+                data.from_historify_daily(min_sessions=500, end=until), layer, int(run.warmup_bars)
+            ),
             float(run.cost_bps),
         )
     return Execution(
@@ -418,11 +603,41 @@ def execute_backtest(
         days=days,
         baseline=baseline,
         cost_model=cost_model,
-        symbols=sorted(frames),
+        symbols=loaded_symbols,
         ledgers=ledgers,
         cost_components=cost_components,
         ledger_problems=ledger_problems,
+        calendar=layer.calendar,
+        data_quality=_verdict_data_quality(layer.data_report),
+        universe_frame=layer.universe_frame,
+        data_report=layer.data_report,
+        membership=layer.membership,
     )
+
+
+def _baseline_frames(
+    frames: dict[str, pd.DataFrame], layer: _DataLayer, warmup: int
+) -> dict[str, pd.DataFrame]:
+    """Reloaded baseline frames on the same footing as the strategy's: ineligible symbol-sessions
+    dropped with the run's eligibility result, and the first `warmup` bars of each symbol
+    skipped, so a random entry can never land where the strategy could not trade."""
+    if layer.eligibility is not None:
+        frames, _ = apply_eligibility(frames, layer.eligibility)
+    if warmup > 0:
+        frames = {s: df.iloc[warmup:] for s, df in frames.items()}
+        frames = {s: df for s, df in frames.items() if len(df)}
+    return frames
+
+
+def _verdict_data_quality(report: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The three keys the verdict reads from a full data-quality report."""
+    if report is None:
+        return None
+    return {
+        "status": report["status"],
+        "affects_validity": report["affects_validity"],
+        "items": report["items"],
+    }
 
 
 #: Slot counts every run is also scored at, so a per-trade edge that only exists for an
@@ -467,6 +682,10 @@ _SETTINGS_FIELDS = {
     "squareoff_margin_min": "profile.squareoff_margin_min",
     "time_exit_min": "profile.time_exit_min",
     "slippage_bps_per_side": "execution.slippage_bps_per_side",
+    "warmup_bars": "execution.warmup_bars",
+    "eligibility_min_prior_sessions": "execution.eligibility_min_prior_sessions",
+    "eligibility_min_volume": "execution.eligibility_min_volume",
+    "eligibility_min_price": "execution.eligibility_min_price",
 }
 
 
@@ -643,6 +862,9 @@ def record_idea(
         ledgers=execution.ledgers,
         ledger_problems=execution.ledger_problems,
         session=session_inputs(frozen, execution),
+        data_quality=getattr(execution, "data_report", None),
+        calendar=getattr(execution, "calendar", None),
+        membership=getattr(execution, "membership", None),
         notes=(
             f"Shipped default configuration on {execution.data['universe']}. {trials_note}"
             f"{regime_note}"

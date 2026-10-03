@@ -484,6 +484,10 @@ class TestSettings:
             "squareoff_margin_min": 5,
             "time_exit_min": 885,
             "slippage_bps_per_side": 4.0,
+            "warmup_bars": 20,
+            "eligibility_min_prior_sessions": 60,
+            "eligibility_min_volume": 1,
+            "eligibility_min_price": 10.0,
         }
 
     def test_execute_without_settings_is_called_with_the_key_only(self, root):

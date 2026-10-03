@@ -263,6 +263,9 @@ def build_run_record(
     ledgers: dict[str, pd.DataFrame] | None = None,
     session: dict[str, Any] | None = None,
     ledger_problems: Sequence[str] = (),
+    data_quality: dict[str, Any] | None = None,
+    calendar: Any = None,
+    membership: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a schema-v2 run record from `Trade` objects. Inputs are not modified.
 
@@ -288,6 +291,11 @@ def build_run_record(
     `ledgers` (the four lineage frames) and `session` (mis_squareoff_min, squareoff_margin_min,
     bar_minutes, entry_window) feed the evaluators that need them (G0.5, G6.1, G6.5, G1.6);
     without them those gates stay not_evaluated.
+
+    `data_quality` (the full per-run report), `calendar` (the derived `session.Calendar`) and
+    `membership` (membership source, survivorship flag and eligibility policy) feed the data
+    and session gates G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2; each stays not_evaluated without
+    its input.
     """
     if n_trials < 1:
         raise ValueError(f"n_trials must be >= 1, got {n_trials}")
@@ -357,6 +365,9 @@ def build_run_record(
         ledgers=ledgers,
         session=session,
         ledger_problems=ledger_problems,
+        data_quality=data_quality,
+        calendar=calendar,
+        membership=membership,
     )
     if baseline is not None:
         record["baseline"] = dict(baseline)
