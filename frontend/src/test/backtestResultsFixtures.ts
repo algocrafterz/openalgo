@@ -33,7 +33,6 @@ export function makeCard(overrides: Partial<IdeaCard> = {}): IdeaCard {
     title: 'Sample idea',
     status: 'rejected',
     verdict: 'no-edge',
-    category: 'intraday-momentum',
     horizon: 'intraday',
     summary: 'One line summary.',
     run_count: 1,

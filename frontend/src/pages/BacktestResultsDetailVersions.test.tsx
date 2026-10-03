@@ -50,7 +50,6 @@ const IDEA = {
   title: 'EMA9 x VWAP crossover',
   status: 'rejected',
   verdict: 'no-edge' as const,
-  category: 'intraday-momentum',
   horizon: 'intraday',
   summary: 'Momentum entry.',
 }

@@ -93,13 +93,11 @@ export interface IdeaCard {
   title: string
   status: string
   verdict: Verdict
-  category: string
   horizon: string
   summary: string
   result?: string
   revisit_when?: string
   last_reviewed?: string
-  tags?: string[]
   source?: { type?: string; author?: string; ref?: string }
   /** Why a rejected idea was rejected; absent on older ideas. */
   rejection_basis?: string

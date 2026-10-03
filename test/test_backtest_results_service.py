@@ -23,7 +23,7 @@ id: IDEA-{num}
 title: Sample idea {num}
 stage: inbox
 research_state: rejected
-category: intraday-momentum
+strategy_category: Momentum
 horizon: intraday
 strategy_path: strategy_library/intraday/sample
 source:
@@ -33,7 +33,7 @@ summary: One line of what the idea is.
 result: Lost money before costs.
 revisit_when: Never.
 last_reviewed: 2026-09-29
-tags: [vwap]
+strategy_tags: [vwap]
 ---
 
 Body.
@@ -1168,8 +1168,8 @@ class TestStrategyVersions:
         (_idea_folder(root) / "versions.yaml").write_text(_versions_yaml(THREE), encoding="utf-8")
         md = _idea_folder(root) / "idea.md"
         text = md.read_text(encoding="utf-8").replace(
-            "tags: [vwap]\n",
-            "tags: [vwap]\ncurrent_version: v2\npromoted_version: v1\n"
+            "strategy_tags: [vwap]\n",
+            "strategy_tags: [vwap]\ncurrent_version: v2\npromoted_version: v1\n"
             "promoted_run_id: 2026-09-30-s-v1\n",
         )
         md.write_text(text, encoding="utf-8")

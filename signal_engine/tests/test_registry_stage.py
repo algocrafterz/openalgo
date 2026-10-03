@@ -16,8 +16,7 @@ from signal_engine.tests.test_registry_v3 import FILES, RUN_ID, _manifest, _reco
 IDEA = """---
 id: IDEA-001
 title: Sample
-{lifecycle}category: intraday-momentum
-horizon: intraday
+{lifecycle}horizon: intraday
 source: {{type: self}}
 summary: One line.
 last_reviewed: 2026-09-29

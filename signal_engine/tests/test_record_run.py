@@ -25,7 +25,7 @@ id: {id}
 title: Sample {slug}
 stage: inbox
 research_state: rejected
-category: intraday-breakout
+strategy_category: Breakout
 horizon: intraday
 source: {{type: video, ref: "https://example.invalid/v"}}
 summary: One line.

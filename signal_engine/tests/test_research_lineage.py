@@ -16,7 +16,7 @@ id: IDEA-001
 title: Sample
 stage: inbox
 research_state: {state}
-category: intraday-momentum
+strategy_category: Momentum
 horizon: intraday
 source: {{type: self}}
 summary: One line.

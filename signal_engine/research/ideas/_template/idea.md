@@ -3,8 +3,8 @@ id: IDEA-000                # next free number; folder must be idea-000-<slug>
 title: Short human title
 stage: inbox                # inbox | backtest | paper | live | retired (move with `intake stage`)
 # research_state: active    # active | promising | needs_more_evidence | weak_evidence | evidence_against_edge | shelved | rejected (default active; `intake state`)
-# strategy_category: Other  # see research/taxonomy.yaml (`intake classify`); strategy_tags: [a, b]
-category: intraday-momentum # see CATEGORIES in build_registry.py
+strategy_category: Other    # one of research/taxonomy.yaml (`intake classify`); absent means Other
+strategy_tags: []           # free-form discovery tags, e.g. [vwap, pullback]
 horizon: intraday           # intraday | swing | positional
 source:
   type: video               # video | article | self | internal | vendor | telegram
@@ -19,7 +19,6 @@ result: One sentence conclusion once tested (delete while untested).
 # backtest_module: backtest/strategies/<name>.py
 revisit_when: The specific condition that should make us look at this again.
 last_reviewed: 2026-01-01
-tags: []
 ---
 
 # IDEA-000 - Title

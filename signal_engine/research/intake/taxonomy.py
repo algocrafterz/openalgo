@@ -17,6 +17,19 @@ from signal_engine.research.intake.profiles import ProfileError, load_profile
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "taxonomy.yaml"
 DEFAULT_CATEGORY = "Other"
 
+#: Retired frontmatter `category` values -> `strategy_category`, used by migrate-classification.
+LEGACY_CATEGORY_MAP = {
+    "intraday-momentum": "Momentum",
+    "intraday-mean-reversion": "Mean Reversion",
+    "intraday-breakout": "Breakout",
+    "market-profile": "Market Structure",
+    "swing-momentum": "Momentum",
+    "swing-mean-reversion": "Mean Reversion",
+    "swing-value": "Statistical / Quantitative",
+    "options": "Options",
+    "tooling": "Other",
+}
+
 _CACHE: dict[Path, tuple[int, int, tuple[str, ...]]] = {}
 
 

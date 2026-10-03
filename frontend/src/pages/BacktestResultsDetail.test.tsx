@@ -44,7 +44,6 @@ const IDEA = {
   title: 'EMA9 x VWAP crossover',
   status: 'rejected',
   verdict: 'no-edge' as const,
-  category: 'intraday-momentum',
   horizon: 'intraday',
   summary: 'Momentum entry on the 9 EMA crossing VWAP.',
   result: 'Cross follows through less than random.',

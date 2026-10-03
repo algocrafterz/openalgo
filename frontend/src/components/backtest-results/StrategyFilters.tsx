@@ -43,9 +43,8 @@ function FilterSelect({
   )
 }
 
-const LEGACY: { label: string; key: 'status' | 'category' | 'horizon' }[] = [
+const LEGACY: { label: string; key: 'status' | 'horizon' }[] = [
   { label: 'Status', key: 'status' },
-  { label: 'Library group', key: 'category' },
   { label: 'Horizon', key: 'horizon' },
 ]
 

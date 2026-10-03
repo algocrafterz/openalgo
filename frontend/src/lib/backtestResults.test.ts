@@ -162,8 +162,18 @@ describe('sortIdeas', () => {
 
 describe('filterIdeas', () => {
   const ideas = [
-    makeCard({ id: 'IDEA-001', title: 'ORB breakout', tags: ['opening-range'], status: 'live' }),
-    makeCard({ id: 'IDEA-002', title: 'VWAP fade', category: 'market-profile', horizon: 'swing' }),
+    makeCard({
+      id: 'IDEA-001',
+      title: 'ORB breakout',
+      strategy_tags: ['opening-range'],
+      status: 'live',
+    }),
+    makeCard({
+      id: 'IDEA-002',
+      title: 'VWAP fade',
+      strategy_category: 'Market Profile',
+      horizon: 'swing',
+    }),
   ]
 
   it('returns everything for empty filters', () => {
@@ -177,10 +187,12 @@ describe('filterIdeas', () => {
     expect(filterIdeas(ideas, { ...EMPTY_FILTERS, search: 'zzz' })).toHaveLength(0)
   })
 
-  it('filters by status, verdict, category and horizon', () => {
+  it('filters by status, verdict, strategy category and horizon', () => {
     expect(filterIdeas(ideas, { ...EMPTY_FILTERS, status: 'live' })).toHaveLength(1)
     expect(filterIdeas(ideas, { ...EMPTY_FILTERS, verdict: 'edge' })).toHaveLength(0)
-    expect(filterIdeas(ideas, { ...EMPTY_FILTERS, category: 'market-profile' })).toHaveLength(1)
+    expect(
+      filterIdeas(ideas, { ...EMPTY_FILTERS, strategyCategory: 'Market Profile' })
+    ).toHaveLength(1)
     expect(filterIdeas(ideas, { ...EMPTY_FILTERS, horizon: 'swing' })).toHaveLength(1)
     expect(EMPTY_FILTERS.status).toBe(ALL)
   })

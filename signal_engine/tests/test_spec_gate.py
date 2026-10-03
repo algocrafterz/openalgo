@@ -21,7 +21,7 @@ IDEA_MD = """---
 id: IDEA-{number}
 title: Sample
 stage: backtest
-category: intraday-breakout
+strategy_category: Breakout
 horizon: intraday
 source: {{type: self}}
 summary: One line.

@@ -67,17 +67,23 @@ class TestCategoryAndTags:
         with pytest.raises(br.RegistryError, match="strategy_tags"):
             br.load_ideas(tmp_path)
 
-    def test_legacy_category_and_horizon_are_untouched(self, tmp_path):
+    def test_entry_carries_no_legacy_keys_and_horizon_is_untouched(self, tmp_path):
         _idea(tmp_path, "strategy_category: Momentum\n")
         entry = _entry(tmp_path)
-        assert entry["category"] == "intraday-momentum" and entry["horizon"] == "intraday"
+        assert "category" not in entry and "tags" not in entry
+        assert entry["strategy_category"] == "Momentum" and entry["horizon"] == "intraday"
 
-    def test_legacy_category_is_still_validated(self, tmp_path):
-        folder = _idea(tmp_path)
-        text = (folder / "idea.md").read_text().replace("intraday-momentum", "Breakout")
-        (folder / "idea.md").write_text(text)
-        with pytest.raises(br.RegistryError, match="category 'Breakout' not one of"):
+    @pytest.mark.parametrize("legacy", ["category: intraday-momentum\n", "tags: [vwap]\n"])
+    def test_legacy_keys_are_rejected_with_the_migration_hint(self, tmp_path, legacy):
+        _idea(tmp_path, legacy)
+        with pytest.raises(br.RegistryError, match="migrate-classification") as exc:
             br.load_ideas(tmp_path)
+        assert "category was replaced by strategy_category" in str(exc.value)
+        assert "tags by strategy_tags" in str(exc.value)
+
+    def test_category_is_no_longer_required(self, tmp_path):
+        _idea(tmp_path)
+        assert _entry(tmp_path)["strategy_category"] == "Other"
 
     def test_root_taxonomy_file_extends_the_valid_categories(self, tmp_path):
         _idea(tmp_path, "strategy_category: Seasonality\n")

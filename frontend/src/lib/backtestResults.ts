@@ -262,8 +262,6 @@ export interface IdeaFilters {
   search: string
   status: string
   verdict: string
-  /** Legacy library group (the registry's `category`), shown as "Library group". */
-  category: string
   horizon: string
   /** Strategy classification facets. An idea with no strategy category counts as Other. */
   strategyCategory: string
@@ -283,7 +281,6 @@ export const EMPTY_FILTERS: IdeaFilters = {
   search: '',
   status: ALL,
   verdict: ALL,
-  category: ALL,
   horizon: ALL,
   strategyCategory: ALL,
   tradingStyle: ALL,
@@ -303,15 +300,11 @@ export function ideaStrategyCategory(idea: IdeaCard): string {
   )
 }
 
-/** Union of strategy_tags and legacy tags, de-duplicated case-insensitively (first spelling wins). */
+/** Union of strategy_tags and classification strategy_tags, de-duplicated case-insensitively (first spelling wins). */
 export function ideaTags(idea: IdeaCard): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  const source = [
-    ...(idea.strategy_tags ?? []),
-    ...(idea.classification?.strategy_tags ?? []),
-    ...(idea.tags ?? []),
-  ]
+  const source = [...(idea.strategy_tags ?? []), ...(idea.classification?.strategy_tags ?? [])]
   for (const raw of source) {
     const tag = typeof raw === 'string' ? raw.trim() : ''
     const key = tag.toLowerCase()
@@ -401,7 +394,6 @@ export function filterIdeas(ideas: IdeaCard[], f: IdeaFilters): IdeaCard[] {
   const wanted = f.tags.map((t) => t.toLowerCase())
   return ideas.filter((i) => {
     if (f.status !== ALL && i.status !== f.status) return false
-    if (f.category !== ALL && i.category !== f.category) return false
     if (f.horizon !== ALL && i.horizon !== f.horizon) return false
     for (const facet of FACET_FILTER_KEYS) {
       const want = f[facet]
@@ -430,7 +422,6 @@ const PARAM_FOR: Record<string, keyof IdeaFilters> = {
   q: 'search',
   status: 'status',
   verdict: 'verdict',
-  library: 'category',
   horizon: 'horizon',
   cat: 'strategyCategory',
   style: 'tradingStyle',
@@ -452,8 +443,8 @@ export function filtersToParams(f: IdeaFilters, groupByCategory: boolean): URLSe
   return params
 }
 
-type LegacyField = 'status' | 'category' | 'horizon'
-const LEGACY_FIELDS: LegacyField[] = ['status', 'category', 'horizon']
+type LegacyField = 'status' | 'horizon'
+const LEGACY_FIELDS: LegacyField[] = ['status', 'horizon']
 
 /** Drops facet, legacy and tag values that no loaded idea carries, so a stale link cannot hide every row. */
 function dropUnknownValues(filters: IdeaFilters, ideas: IdeaCard[]): IdeaFilters {
@@ -488,8 +479,7 @@ export function filtersFromParams(
     const v = params.get(param)
     if (v) target[key] = v
   }
-  const legacy = (params.get('tags') ?? '').split(',')
-  filters.tags = [...params.getAll('tag'), ...legacy].filter(Boolean)
+  filters.tags = params.getAll('tag').filter(Boolean)
   if (ideas.length > 0) filters = dropUnknownValues(filters, ideas)
   return { filters, groupByCategory: params.get('group') === 'category' }
 }
@@ -552,7 +542,7 @@ export function groupByStrategyCategory(ideas: IdeaCard[]): CategoryGroup[] {
     })
 }
 
-export function distinct(ideas: IdeaCard[], field: 'status' | 'verdict' | 'category' | 'horizon') {
+export function distinct(ideas: IdeaCard[], field: 'status' | 'verdict' | 'horizon') {
   return [...new Set(ideas.map((i) => (field === 'verdict' ? ideaVerdict(i) : i[field])))].sort()
 }
 

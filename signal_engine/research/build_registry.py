@@ -3,7 +3,7 @@
 Every idea is a folder holding an `idea.md` with YAML frontmatter. This script is the
 only thing that reads them; it validates each one and generates three outputs:
 
-    research/REGISTRY.md      human index, counts by status / category
+    research/REGISTRY.md      human index, counts by status / strategy category
     research/registry.json    machine-readable, for tooling
     research/site/index.html  self-contained static page, publishable as-is
 
@@ -38,22 +38,16 @@ from signal_engine.research.intake import lifecycle, spec, taxonomy, versions
 STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
 VERDICTS = ("none", "edge", "marginal", "no-edge", "inconclusive")
 HORIZONS = ("intraday", "swing", "positional")
-CATEGORIES = (
-    "intraday-momentum",
-    "intraday-mean-reversion",
-    "intraday-breakout",
-    "market-profile",
-    "swing-momentum",
-    "swing-mean-reversion",
-    "swing-value",
-    "options",
-    "tooling",
+#: Frontmatter keys retired in favour of `strategy_category` / `strategy_tags`.
+LEGACY_CLASSIFICATION_KEYS = ("category", "tags")
+LEGACY_CLASSIFICATION_HINT = (
+    "category was replaced by strategy_category and tags by strategy_tags; "
+    "run `uv run python -m signal_engine.research.intake migrate-classification`"
 )
 REQUIRED = (
     "id",
     "title",
     "stage",
-    "category",
     "horizon",
     "source",
     "summary",
@@ -365,12 +359,10 @@ def _validate(
     problems.extend(lifecycle.vocabulary_problems(idea))
     if categories is not None:
         problems.extend(taxonomy.classification_problems(idea, categories))
-    for field, allowed in (
-        ("horizon", HORIZONS),
-        ("category", CATEGORIES),
-    ):
-        if field in idea and idea[field] not in allowed:
-            problems.append(f"{field} '{idea[field]}' not one of {', '.join(allowed)}")
+    if any(key in idea for key in LEGACY_CLASSIFICATION_KEYS):
+        problems.append(LEGACY_CLASSIFICATION_HINT)
+    if "horizon" in idea and idea["horizon"] not in HORIZONS:
+        problems.append(f"horizon '{idea['horizon']}' not one of {', '.join(HORIZONS)}")
     if "id" in idea:
         m = _ID.match(str(idea["id"]))
         if not m:
@@ -780,7 +772,7 @@ def summarize(ideas: list[dict[str, Any]]) -> dict[str, Any]:
         "total": len(ideas),
         "by_status": count("status"),
         "by_verdict": count("verdict"),
-        "by_category": count("category"),
+        "by_category": count("strategy_category"),
         "by_horizon": count("horizon"),
         "total_runs": sum(len(i.get("runs", [])) for i in ideas),
         "ideas_with_runs": sum(1 for i in ideas if i.get("runs")),
@@ -834,7 +826,7 @@ def render_markdown(ideas: list[dict[str, Any]]) -> str:
             or f"research/ideas/{i['folder']}/idea.md"
         )
         lines.append(
-            f"| {i['id']} | {_cell(i['title'])} | {i['status']} | {i['verdict']} | {i['category']} "
+            f"| {i['id']} | {_cell(i['title'])} | {i['status']} | {i['verdict']} | {i['strategy_category']} "
             f"| {_run_line(latest_run(i))} | {_cell(i.get('result'))} | {_cell(i.get('revisit_when'))} | `{detail}` |"
         )
     return "\n".join(lines) + "\n"
@@ -918,7 +910,7 @@ def render_html(ideas: list[dict[str, Any]]) -> str:
             f"<h2>{e(i['id'])} - {e(i['title'])}</h2>"
             f'<div class="meta"><span class="tag">{e(i["status"])}</span>'
             f'<span class="tag">verdict: {e(i["verdict"])}</span>'
-            f'<span class="tag">{e(i["category"])}</span>'
+            f'<span class="tag">{e(i["strategy_category"])}</span>'
             f'<span class="tag">{e(i["horizon"])}</span> source: {e(src_txt)}'
             f" - reviewed {e(i['last_reviewed'])}</div>{''.join(rows)}</article>"
         )

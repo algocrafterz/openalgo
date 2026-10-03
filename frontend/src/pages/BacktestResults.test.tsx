@@ -29,7 +29,6 @@ const IDEAS = [
     title: 'Beta idea',
     verdict: 'none',
     status: 'inbox',
-    category: 'options',
     horizon: 'swing',
     run_count: 0,
     latest_run: null,
@@ -146,15 +145,12 @@ describe('BacktestResults leaderboard', () => {
     expect(ids()).toEqual(['IDEA-003'])
   })
 
-  it('filters by status, category and horizon', async () => {
+  it('filters by status and horizon', async () => {
     renderPage(ok())
     await screen.findByText('IDEA-001')
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'inbox')
     expect(ids()).toEqual(['IDEA-002'])
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'all')
-    await userEvent.selectOptions(screen.getByLabelText('Library group'), 'options')
-    expect(ids()).toEqual(['IDEA-002'])
-    await userEvent.selectOptions(screen.getByLabelText('Library group'), 'all')
     await userEvent.selectOptions(screen.getByLabelText('Horizon'), 'swing')
     expect(ids()).toEqual(['IDEA-002'])
   })
@@ -404,7 +400,7 @@ const CLASSIFIED = [
     id: 'C-3',
     title: 'RSI fade',
     strategy_category: 'Mean Reversion',
-    tags: ['vwap'],
+    strategy_tags: ['vwap'],
     classification: cls(),
     latest_run: makeLatest({
       date: '2026-08-01',
@@ -427,7 +423,7 @@ describe('BacktestResults classification filters', () => {
     expect(ids()).toEqual(['C-4'])
   })
 
-  it('filters by style and market, and keeps the Library group filter', async () => {
+  it('filters by style and market', async () => {
     renderPage(ok(CLASSIFIED))
     await screen.findByText('C-1')
     await userEvent.selectOptions(screen.getByLabelText('Trading style'), 'Swing')
@@ -435,11 +431,9 @@ describe('BacktestResults classification filters', () => {
     await userEvent.selectOptions(screen.getByLabelText('Trading style'), 'all')
     await userEvent.selectOptions(screen.getByLabelText('Market'), 'NSE Equities')
     expect(ids()).toEqual(['C-1', 'C-3'])
-    await userEvent.selectOptions(screen.getByLabelText('Library group'), 'intraday-momentum')
-    expect(ids()).toEqual(['C-1', 'C-3'])
   })
 
-  it('tags need all selected, including legacy tags', async () => {
+  it('tags need all selected', async () => {
     renderPage(ok(CLASSIFIED))
     await screen.findByText('C-1')
     await userEvent.click(screen.getByRole('button', { name: 'VWAP (2)' }))

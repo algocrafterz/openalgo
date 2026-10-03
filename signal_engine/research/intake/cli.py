@@ -1,11 +1,13 @@
 """Intake command line: check, resolve, confirm, ask, clear-questions, block, unblock,
-set-current, and the idea lifecycle commands stage, state and classify.
+set-current, and the idea lifecycle commands stage, state and classify, plus the one-off
+migrate-classification.
 
     uv run python -m signal_engine.research.intake check IDEA-012
     uv run python -m signal_engine.research.intake confirm IDEA-012 A-004 A-005
     uv run python -m signal_engine.research.intake stage IDEA-012 paper --version v2
     uv run python -m signal_engine.research.intake state IDEA-012 shelved --revisit-when "..."
     uv run python -m signal_engine.research.intake classify IDEA-012 --category Breakout --tags a,b
+    uv run python -m signal_engine.research.intake migrate-classification [--dry-run]
 
 `check` never writes. Exit codes: 0 success (for `check`, Backtest Ready), 1 refused (not
 ready, spec problem, or a lifecycle rule), 2 bad input (unknown idea, id, version, stage,
@@ -295,6 +297,65 @@ def _cmd_classify(idea: str, folder: Path, args, root: Path) -> int:
     return 0
 
 
+def _migrate_one(folder: Path, categories: tuple[str, ...]) -> tuple[dict, list[str]]:
+    """The frontmatter updates migrating one idea needs, and the notes to report."""
+    fm = frontmatter.read(folder)
+    updates: dict = {}
+    notes: list[str] = []
+    if "category" in fm:
+        legacy = fm["category"]
+        target = taxonomy.LEGACY_CATEGORY_MAP.get(legacy)
+        if target is None:
+            notes.append(f"unknown legacy category '{legacy}', using Other")
+            target = taxonomy.DEFAULT_CATEGORY
+        if target not in categories:
+            notes.append(f"'{target}' is not in the taxonomy, using Other")
+            target = taxonomy.DEFAULT_CATEGORY
+        existing = fm.get("strategy_category")
+        if existing is not None and existing != target:
+            notes.append(f"kept existing strategy_category '{existing}'")
+        elif existing is None:
+            updates["strategy_category"] = target
+    if "tags" in fm:
+        legacy_tags = fm["tags"] if isinstance(fm["tags"], list) else [fm["tags"]]
+        current = fm.get("strategy_tags") or []
+        merged = taxonomy.normalise_tags(
+            [*current, *(str(t) for t in legacy_tags if t is not None)]
+        )
+        if merged != current:
+            updates["strategy_tags"] = merged
+    return updates, notes
+
+
+def _cmd_migrate_classification(root: Path, dry_run: bool) -> int:
+    categories = taxonomy.load_categories(taxonomy.taxonomy_path(root))
+    changed = failed = 0
+    for idea, folder in idea_folders(root).items():
+        try:
+            fm = frontmatter.read(folder)
+            legacy = [k for k in ("category", "tags") if k in fm]
+            if not legacy:
+                _out(f"{idea}: nothing to migrate")
+                continue
+            updates, notes = _migrate_one(folder, categories)
+            if not dry_run:
+                if updates:
+                    frontmatter.set_keys(folder, updates)
+                frontmatter.remove_keys(folder, legacy)
+        except (frontmatter.FrontmatterError, taxonomy.TaxonomyError, OSError) as exc:
+            failed += 1
+            _out(f"{idea}: error: {exc}")
+            continue
+        changed += 1
+        detail = ", ".join(f"{k}={v}" for k, v in updates.items()) or "legacy keys dropped"
+        suffix = f" ({'; '.join(notes)})" if notes else ""
+        verb = "would migrate" if dry_run else "migrated"
+        _out(f"{idea}: {verb}: {detail}{suffix}")
+    label = "would change" if dry_run else "changed"
+    _out(f"summary: {changed} {label}, {failed} unreadable")
+    return 1 if failed else 0
+
+
 def _lifecycle_command(args, folder: Path, root: Path) -> int:
     try:
         if args.command == "stage":
@@ -350,6 +411,11 @@ def _parser() -> argparse.ArgumentParser:
     classify.add_argument("idea")
     classify.add_argument("--category")
     classify.add_argument("--tags", help="comma-separated; replaces the idea's tags")
+    migrate = sub.add_parser(
+        "migrate-classification",
+        help="move legacy category/tags to strategy_category/strategy_tags",
+    )
+    migrate.add_argument("--dry-run", action="store_true", help="print the changes, write nothing")
     return parser
 
 
@@ -369,6 +435,14 @@ _COMMANDS = {
 def main(argv: list[str], root: Path | None = None) -> int:
     """Run one intake command. Returns the exit code."""
     args = _parser().parse_args(argv)
+    if args.command == "migrate-classification":
+        try:
+            return _cmd_migrate_classification(
+                root if root is not None else DEFAULT_ROOT, args.dry_run
+            )
+        except taxonomy.TaxonomyError as exc:
+            _out(f"error: {exc}")
+            return 2
     folders = idea_folders(root if root is not None else DEFAULT_ROOT)
     if args.idea not in folders:
         _out(f"unknown idea {args.idea}")

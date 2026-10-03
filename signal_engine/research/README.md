@@ -31,6 +31,14 @@ backtest result is reproducible and comparable with every other.
 `verdict` is the evidence, separate from status: `none`, `edge`, `marginal`, `no-edge`,
 `inconclusive`. An idea can be `shelved` with verdict `marginal`.
 
+## Frontmatter classification
+
+`strategy_category` (one of `taxonomy.yaml`; absent means Other) and `strategy_tags` (a list of
+text) classify an idea. The older `category` and `tags` keys are retired: the builder rejects
+them. Convert existing files with
+`uv run python -m signal_engine.research.intake migrate-classification [--dry-run]`.
+`horizon` is unchanged.
+
 ## Adding an idea
 
 1. Save the raw source in `ideas/_inbox/` unchanged.

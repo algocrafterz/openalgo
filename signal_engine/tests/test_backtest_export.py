@@ -141,7 +141,7 @@ class TestCli:
         folder.mkdir(parents=True)
         (folder / "idea.md").write_text(
             "---\nid: IDEA-012\ntitle: t\nstage: inbox\nresearch_state: rejected\n"
-            "category: intraday-breakout\nhorizon: intraday\nsource: {type: self}\n"
+            "strategy_category: Breakout\nhorizon: intraday\nsource: {type: self}\n"
             "summary: s\nbacktest_module: backtest/strategies/orb.py\nlast_reviewed: 2026-01-01\n---\n",
             encoding="utf-8",
         )

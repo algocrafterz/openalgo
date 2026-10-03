@@ -33,7 +33,6 @@ const A = makeCard({
   title: 'VWAP Mean Reversion',
   strategy_category: 'Mean Reversion',
   strategy_tags: ['VWAP', 'Pullback'],
-  tags: ['vwap', 'legacy-one'],
   research_state: 'active',
   classification: cls(),
 })
@@ -51,7 +50,7 @@ const B = makeCard({
     market: 'NSE F&O',
   }),
 })
-const C = makeCard({ id: 'C', title: 'Uncategorised', tags: ['Misc'] })
+const C = makeCard({ id: 'C', title: 'Uncategorised', strategy_tags: ['Misc'] })
 const ALLI = [A, B, C]
 const f = (p: Partial<typeof EMPTY_FILTERS>) => ({ ...EMPTY_FILTERS, ...p })
 const idsOf = (l: IdeaCard[]) => l.map((i) => i.id)
@@ -102,13 +101,12 @@ describe('facet filters', () => {
 })
 
 describe('tags', () => {
-  it('unions strategy and legacy tags de-duplicated case-insensitively', () => {
-    expect(ideaTags(A)).toEqual(['VWAP', 'Pullback', 'legacy-one'])
+  it('unions strategy_tags and classification tags de-duplicated case-insensitively', () => {
+    expect(ideaTags(A)).toEqual(['VWAP', 'Pullback'])
   })
 
-  it('offers tag options with counts including legacy tags', () => {
+  it('offers tag options with counts from strategy_tags', () => {
     expect(tagOptions(ALLI)).toEqual([
-      { value: 'legacy-one', count: 1 },
       { value: 'Misc', count: 1 },
       { value: 'Pullback', count: 2 },
       { value: 'VWAP', count: 1 },
@@ -126,7 +124,7 @@ describe('search', () => {
   it('matches name, category and tags case-insensitively by substring', () => {
     expect(idsOf(filterIdeas(ALLI, f({ search: 'opening' })))).toEqual(['B'])
     expect(idsOf(filterIdeas(ALLI, f({ search: 'MEAN rev' })))).toEqual(['A'])
-    expect(idsOf(filterIdeas(ALLI, f({ search: 'legacy' })))).toEqual(['A'])
+    expect(idsOf(filterIdeas(ALLI, f({ search: 'misc' })))).toEqual(['C'])
     expect(idsOf(filterIdeas(ALLI, f({ search: 'pullb' })))).toEqual(['A', 'B'])
   })
 
@@ -147,7 +145,6 @@ describe('url params', () => {
       researchState: 'active',
       verdict: 'edge',
       status: 'live',
-      category: 'options',
       horizon: 'swing',
       tags: ['VWAP', 'Pullback'],
     })
@@ -175,7 +172,7 @@ describe('groupByStrategyCategory', () => {
 })
 
 describe('unknown url values', () => {
-  it('drops facet, legacy and tag values that no loaded idea carries', () => {
+  it('drops facet, status, horizon and tag values that no loaded idea carries', () => {
     const params = new URLSearchParams(
       'cat=Bogus&style=Nope&verdict=zzz&status=ghost&tag=Nothing&tag=VWAP&dir=Long'
     )
@@ -202,8 +199,9 @@ describe('tags in the url', () => {
     expect(back.filters.tags).toEqual(['a,b', 'c'])
   })
 
-  it('still reads the older comma separated tags param', () => {
-    expect(filtersFromParams(new URLSearchParams('tags=x,y')).filters.tags).toEqual(['x', 'y'])
+  it('ignores the removed tags, category and library params', () => {
+    const { filters } = filtersFromParams(new URLSearchParams('tags=x,y&category=a&library=b'))
+    expect(filters).toEqual(EMPTY_FILTERS)
   })
 })
 
@@ -241,9 +239,9 @@ describe('counts reflect the other filters', () => {
     }
   })
 
-  it('legacy counts equal the rows after choosing the option', () => {
+  it('status and horizon counts equal the rows after choosing the option', () => {
     const base = f({ search: 'pullb' })
-    for (const field of ['status', 'category', 'horizon'] as const) {
+    for (const field of ['status', 'horizon'] as const) {
       for (const o of legacyOptionsFor(ALLI, base, field)) {
         expect(o.count).toBe(filterIdeas(ALLI, { ...base, [field]: o.value }).length)
       }

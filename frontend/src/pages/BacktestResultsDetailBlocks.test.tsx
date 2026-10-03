@@ -29,7 +29,6 @@ const IDEA = {
   title: 'Gap RSI swing',
   status: 'rejected',
   verdict: 'no-edge' as const,
-  category: 'swing',
   horizon: 'swing',
   summary: 'Gap entry with RSI filter.',
 }

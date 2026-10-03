@@ -21,12 +21,12 @@ describe('relatedStrategies', () => {
     expect(r.sharedTags).toEqual([])
   })
 
-  it('orders shared tags by count then title, case-insensitively, with legacy tags', () => {
+  it('orders shared tags by count then title, case-insensitively', () => {
     const r = relatedStrategies(cur, [
       cur,
       makeCard({ id: 'one', title: 'B one', strategy_tags: ['vwap'] }),
       makeCard({ id: 'two', title: 'Z two', strategy_tags: ['VWAP', 'Pullback'] }),
-      makeCard({ id: 'leg', title: 'A legacy', tags: ['pullback'] }),
+      makeCard({ id: 'leg', title: 'A lower', strategy_tags: ['pullback'] }),
       makeCard({ id: 'none', title: 'None', strategy_tags: ['x'] }),
     ])
     expect(r.sharedTags.map((s) => s.idea.id)).toEqual(['two', 'leg', 'one'])

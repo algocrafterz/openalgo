@@ -18,7 +18,7 @@ id: IDEA-001
 title: Sample idea
 stage: inbox
 research_state: rejected
-category: intraday-momentum
+strategy_category: Momentum
 horizon: intraday
 source:
   type: video
@@ -30,7 +30,7 @@ result: Lost money before costs.
 strategy_path: strategy_library/intraday/sample
 revisit_when: Never.
 last_reviewed: 2026-09-29
-tags: [vwap, ema]
+strategy_tags: [vwap, ema]
 ---
 
 Body text, not parsed.
@@ -58,7 +58,7 @@ def test_load_valid_idea(base: Path):
     assert idea["id"] == "IDEA-001"
     assert idea["source"]["captured"] == "2026-09-22"  # dates normalised to str
     assert idea["last_reviewed"] == "2026-09-29"
-    assert idea["tags"] == ["vwap", "ema"]
+    assert idea["strategy_tags"] == ["vwap", "ema"]
 
 
 def test_underscore_folders_are_skipped(base: Path):
@@ -122,7 +122,7 @@ def test_summarize_counts(base: Path):
     s = br.summarize(br.load_ideas(base))
     assert s["total"] == 2
     assert s["by_status"] == {"inbox": 1, "rejected": 1}
-    assert s["by_category"] == {"intraday-momentum": 2}
+    assert s["by_category"] == {"Momentum": 2}
 
 
 def test_render_markdown_lists_every_idea(base: Path):
@@ -408,3 +408,12 @@ def test_malformed_baseline_is_rejected(base: Path, patch: dict):
     _setup_run(base, {**RUN, **patch})
     with pytest.raises(br.RegistryError, match="baseline"):
         br.load_ideas(base)
+
+
+def test_markdown_and_site_group_by_strategy_category(base: Path):
+    _write_idea(base, "idea-001-a", VALID)
+    ideas = br.load_ideas(base)
+    md = br.render_markdown(ideas)
+    assert "## By category" in md and "| Momentum | 1 |" in md
+    assert "intraday-momentum" not in md
+    assert '<span class="tag">Momentum</span>' in br.render_html(ideas)
