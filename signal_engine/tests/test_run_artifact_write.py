@@ -120,7 +120,7 @@ class TestLayout:
         assert report["metrics"] == flat["metrics"]
         assert report["series"] == flat["series"]
         assert report["evaluation"] == flat.get("evaluation")
-        assert report["validity"] == {"ok": True, "failures": []}
+        assert report["validity"] == {"ok": True, "failures": [], "checks_run": ["config"]}
         assert report["data_quality"] == {
             "status": "NOT_RUN",
             "affects_validity": False,

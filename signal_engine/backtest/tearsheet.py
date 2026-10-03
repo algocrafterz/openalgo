@@ -262,6 +262,8 @@ def build_run_record(
     embargo_sessions: int = 0,
     ledgers: dict[str, pd.DataFrame] | None = None,
     session: dict[str, Any] | None = None,
+    trials: dict[str, Any] | None = None,
+    truncation: dict[str, Any] | None = None,
     ledger_problems: Sequence[str] = (),
     data_quality: dict[str, Any] | None = None,
     calendar: Any = None,
@@ -295,7 +297,9 @@ def build_run_record(
     `data_quality` (the full per-run report), `calendar` (the derived `session.Calendar`) and
     `membership` (membership source, survivorship flag and eligibility policy) feed the data
     and session gates G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2; each stays not_evaluated without
-    its input.
+    its input. `trials` (material, external, total, source) is the ledger-derived trial count
+    behind `n_trials` and feeds G2.5; `truncation` (a `TruncationResult` as a dict) feeds G0.2.
+    `trials` is kept on the record when given.
     """
     if n_trials < 1:
         raise ValueError(f"n_trials must be >= 1, got {n_trials}")
@@ -368,7 +372,11 @@ def build_run_record(
         data_quality=data_quality,
         calendar=calendar,
         membership=membership,
+        trials=trials,
+        truncation=truncation,
     )
+    if trials is not None:
+        record["trials"] = dict(trials)
     if baseline is not None:
         record["baseline"] = dict(baseline)
     if validation:

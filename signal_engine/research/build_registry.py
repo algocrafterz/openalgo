@@ -31,7 +31,7 @@ from typing import Any
 import yaml
 
 from signal_engine.backtest import manifest as run_manifest
-from signal_engine.research.intake import lifecycle, spec, taxonomy, versions
+from signal_engine.research.intake import lifecycle, spec, taxonomy, trials, versions
 
 #: The legacy `status` and `verdict` values. Both are derived for every entry (see
 #: `lifecycle.derive_status` / `derive_verdict`), never hand-written in frontmatter.
@@ -723,6 +723,29 @@ def _valid_spec(folder: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and not spec.validate_spec(data) else None
 
 
+def _trials_problems(folder: Path, runs: list[dict[str, Any]]) -> list[str]:
+    """Problems with the idea's trials.yaml: unreadable or invalid, or shrunk.
+
+    The ledger is append-only, so its current total can never be lower than the highest total
+    any run recorded in its `trials` block at the time it ran.
+    """
+    try:
+        total = trials.count(folder).total
+    except trials.TrialError as exc:
+        return [f"trials.yaml: {exc}"]
+    recorded = [
+        r["trials"]["total"]
+        for r in runs
+        if isinstance(r.get("trials"), dict) and isinstance(r["trials"].get("total"), int)
+    ]
+    if recorded and total < max(recorded):
+        return [
+            f"trials.yaml shrank: rows were removed or counts lowered (now {total} trials, a run "
+            f"recorded {max(recorded)})"
+        ]
+    return []
+
+
 def load_ideas(root: Path) -> list[dict[str, Any]]:
     """Load and validate every idea under `root`/research/ideas. Raises RegistryError."""
     ideas_dir = root / "research" / "ideas"
@@ -751,6 +774,7 @@ def load_ideas(root: Path) -> list[dict[str, Any]]:
         runs, run_problems = _load_runs(folder)
         if not found and not run_problems:
             found = lifecycle.evidence_problems(idea, runs)
+        found = [*found, *_trials_problems(folder, runs)]
         problems.extend(f"{folder.name}: {p}" for p in found)
         ident = str(idea.get("id"))
         if ident in seen:

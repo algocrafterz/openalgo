@@ -34,6 +34,7 @@ from signal_engine.backtest.trades_io import (
     frame_parquet_bytes,
     trades_parquet_bytes,
 )
+from signal_engine.backtest.validity import run_validity_checks
 from signal_engine.research.intake import ledger as ledger_mod
 from signal_engine.research.intake import profiles as profiles_mod
 from signal_engine.research.intake.versions import require_aware
@@ -65,6 +66,7 @@ _REPORT_BLOCKS = (
     "split",
     "baseline",
     "cost_sensitivity",
+    "trials",
 )
 
 
@@ -295,14 +297,18 @@ def _derived(
     code_dirty: bool,
     reproducible: bool,
     data_quality: Mapping[str, Any] | None = None,
+    validity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verdict, promotion and next action for a run, derived from its evaluation block.
 
     `data_quality` is the run's real report (status, affects_validity, items); without one the
-    constant NOT_RUN stands in.
+    constant NOT_RUN stands in. `validity` is the `run_validity_checks` result; without one the
+    run is treated as having run no check (ok, nothing in checks_run).
     """
     evaluation = record.get("evaluation") or {}
-    validity = {"ok": True, "failures": []}
+    validity = (
+        dict(validity) if validity is not None else {"ok": True, "failures": [], "checks_run": []}
+    )
     data_quality = (
         dict(data_quality)
         if data_quality is not None
@@ -419,6 +425,23 @@ def _reproducibility(
         "code_commit": engine["code_commit"] != "unknown",
         "resolved_assumptions": True,
     }
+
+
+def material_fingerprints(frozen: Any, execution: Any, cost_model_json: Any) -> dict[str, str]:
+    """The four fingerprints a trial is keyed on: rules, params, execution, cost.
+
+    The universe fingerprint is not part of it (a data refresh that adds a symbol is not a trial).
+    """
+    full = component_fingerprints(
+        intent=frozen.intent,
+        resolved=frozen.resolved,
+        cost_model=cost_model_json or None,
+        symbols=sorted(execution.symbols),
+        universe_definition=execution.data["universe"],
+        profile_content=frozen.profile,
+        dataset_fingerprint="",
+    )
+    return {k: full[k] for k in ("rules", "params", "execution", "cost")}
 
 
 def build_manifest(
@@ -595,14 +618,23 @@ def prepare_run_artifact(
     reproducible = (not code_dirty) and all(
         _reproducibility(frozen, sorted(execution.symbols), engine).values()
     )
+    ledgers = getattr(execution, "ledgers", None)
+    validity = run_validity_checks(
+        data_quality=getattr(execution, "data_quality", None),
+        intent=frozen.intent,
+        profiles_dir=None,
+        ledgers=ledgers,
+        trades=execution.trades,
+        truncation=getattr(execution, "truncation", None),
+    )
     derived = _derived(
         record,
         readiness_missing,
         code_dirty,
         reproducible,
         getattr(execution, "data_quality", None),
+        validity,
     )
-    ledgers = getattr(execution, "ledgers", None)
     files: dict[str, bytes] = {
         "assumptions.json": _encode(_assumptions(frozen, idea_folder, created)),
         "strategy/spec.yaml": _encode(yaml.safe_dump(frozen.intent, sort_keys=True)),

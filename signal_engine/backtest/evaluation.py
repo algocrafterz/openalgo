@@ -93,7 +93,7 @@ REGIME_HEURISTIC = (
 #: no evaluator exists for the gate.
 _GATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("G0.1", "integrity", "Same logic in every mode", False, "code review and adapter tests"),
-    ("G0.2", "integrity", "Causality of every input", False, "truncation tests in tests/"),
+    ("G0.2", "integrity", "Causality of every input", False, "no truncation check was run"),
     ("G0.3", "integrity", "Timestamps in IST", False, "unit test per data entry point"),
     ("G0.4", "integrity", "Data coverage", False, "coverage report outside the run"),
     ("G0.5", "integrity", "No silent exclusion", False, "log review, not stored in a record"),
@@ -205,6 +205,8 @@ class _Inputs:
     data_quality: dict[str, Any] | None = None
     calendar: Any = None
     membership: dict[str, Any] | None = None
+    trials: dict[str, Any] | None = None
+    truncation: Any = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -338,11 +340,81 @@ def _g22(x: _Inputs) -> _Result:
 
 
 def _g25(x: _Inputs) -> _Result:
+    threshold = "every variant tried is counted in trials.yaml; DSR and the t-hurdle use that count"
+    t = x.trials
+    if t is None:
+        if not x.n_trials or x.n_trials < 1:
+            return "not_evaluated", None, threshold, "no trial count and no ledger for this run"
+        return (
+            "fail",
+            x.n_trials,
+            threshold,
+            f"n_trials {x.n_trials} was not derived from trials.yaml (no ledger block recorded)",
+        )
+    if not hasattr(t, "get") or t.get("source") != "trials.yaml":
+        source = t.get("source") if hasattr(t, "get") else t
+        return (
+            "fail",
+            x.n_trials,
+            threshold,
+            f"n_trials {x.n_trials} did not come from trials.yaml (source {source!r})",
+        )
+    total = t.get("total")
+    if total != x.n_trials:
+        return (
+            "fail",
+            x.n_trials,
+            threshold,
+            f"n_trials {x.n_trials} disagrees with the ledger total {total!r}",
+        )
     return (
-        "report",
+        "pass",
         x.n_trials,
-        "every variant tried is counted",
-        f"n_trials {x.n_trials}; the hurdle is a lower bound when the count is not known",
+        threshold,
+        f"n_trials {x.n_trials} from trials.yaml: {t.get('material')} material and "
+        f"{t.get('external')} external",
+    )
+
+
+_G02_THRESHOLD = "a run on data cut at earlier sessions reproduces every earlier signal and trade"
+
+
+def _g02(x: _Inputs) -> _Result:
+    if x.truncation is None:
+        return "not_evaluated", None, _G02_THRESHOLD, "no truncation check was run for this run"
+    try:
+        data = x.truncation.to_dict() if hasattr(x.truncation, "to_dict") else x.truncation
+        ok = data.get("ok")
+        checked = list(data.get("checked") or [])
+        mismatches = list(data.get("mismatches") or [])
+        first = mismatches[0] if mismatches else None
+        named = (
+            f"{first.get('symbol')} cut {first.get('cut')}: {first.get('kind')}: "
+            f"{first.get('detail')}"
+            if first is not None
+            else None
+        )
+    except (AttributeError, TypeError, IndexError):
+        return "fail", None, _G02_THRESHOLD, "the truncation result is malformed"
+    if mismatches:
+        return (
+            "fail",
+            len(mismatches),
+            _G02_THRESHOLD,
+            f"{len(mismatches)} mismatch(es); first: {named}",
+        )
+    if ok is not True:
+        return "fail", None, _G02_THRESHOLD, "the look-ahead check reported failure"
+    if data.get("compared_total") == 0:
+        return "not_evaluated", 0, _G02_THRESHOLD, "nothing was compared"
+    symbols = sorted({str(c.get("symbol")) for c in checked})
+    if not symbols:
+        return "not_evaluated", 0, _G02_THRESHOLD, "no symbol had enough history to be checked"
+    return (
+        "pass",
+        len(symbols),
+        _G02_THRESHOLD,
+        f"{len(symbols)} symbol(s) re-run at {len(checked)} cut(s): no earlier signal or trade changed",
     )
 
 
@@ -1217,6 +1289,7 @@ def _g62(x: _Inputs) -> _Result:
 
 
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
+    "G0.2": _g02,
     "G0.3": _g03,
     "G0.4": _g04,
     "G0.5": _g05,
@@ -1286,6 +1359,8 @@ def evaluate(
     data_quality: dict[str, Any] | None = None,
     calendar: Any = None,
     membership: dict[str, Any] | None = None,
+    trials: dict[str, Any] | None = None,
+    truncation: Any = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1299,7 +1374,8 @@ def evaluate(
     reconciliation problems and make G0.5 fail. `data_quality` (the per-run report),
     `calendar` (the derived session calendar) and `membership` (source, survivorship flag,
     eligibility policy) feed G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2, each not_evaluated without
-    its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
+    `TruncationResult` or its dict) feeds G0.2, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1322,6 +1398,8 @@ def evaluate(
         data_quality=data_quality,
         calendar=calendar,
         membership=membership,
+        trials=trials,
+        truncation=truncation,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

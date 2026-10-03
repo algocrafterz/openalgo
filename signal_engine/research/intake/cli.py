@@ -1,5 +1,5 @@
 """Intake command line: check, resolve, confirm, ask, clear-questions, block, unblock,
-set-current, and the idea lifecycle commands stage, state and classify, plus the one-off
+set-current, trials, and the idea lifecycle commands stage, state and classify, plus the one-off
 migrate-classification.
 
     uv run python -m signal_engine.research.intake check IDEA-012
@@ -33,6 +33,7 @@ from signal_engine.research.intake import (
     lifecycle,
     state,
     taxonomy,
+    trials,
     versions,
 )
 from signal_engine.research.intake.profiles import ProfileError
@@ -374,6 +375,38 @@ def _lifecycle_command(args, folder: Path, root: Path) -> int:
         return 2
 
 
+def _trial_line(t: trials.Trial) -> str:
+    if t.kind == trials.MATERIAL:
+        return f"  {t.trial}  material  run {t.run_id}  {t.created_ist}"
+    return f"  {t.trial}  external  x{t.count}  {t.reason}  {t.created_ist}"
+
+
+def _summary(idea: str, c: trials.TrialCount) -> str:
+    return f"{idea}: trials: material {c.material}, external {c.external}, total {c.total}"
+
+
+def _cmd_trials(idea: str, folder: Path, args) -> int:
+    try:
+        if args.action == "show":
+            entries = trials.load_trials(folder)
+            _out(_summary(idea, trials.count(folder)))
+            for entry in entries:
+                _out(_trial_line(entry))
+            return 0
+        if not (args.reason and args.reason.strip()):
+            _out("error: trials add needs --reason")
+            return 2
+        if not (args.n and args.n.isascii() and args.n.isdigit() and int(args.n) >= 1):
+            _out(f"error: N must be a positive integer, got {args.n!r}")
+            return 2
+        result = trials.add_external(folder, int(args.n), args.reason)
+        _out(_summary(idea, result.count))
+        return 0
+    except trials.TrialError as exc:
+        _out(f"refused: {exc}")
+        return 1
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m signal_engine.research.intake")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -411,6 +444,11 @@ def _parser() -> argparse.ArgumentParser:
     classify.add_argument("idea")
     classify.add_argument("--category")
     classify.add_argument("--tags", help="comma-separated; replaces the idea's tags")
+    trial_cmd = sub.add_parser("trials", help="show or extend the idea's trial ledger")
+    trial_cmd.add_argument("action", choices=("show", "add"))
+    trial_cmd.add_argument("idea")
+    trial_cmd.add_argument("n", nargs="?", help="external trial count (add)")
+    trial_cmd.add_argument("--reason", help="why the variants were searched outside (add)")
     migrate = sub.add_parser(
         "migrate-classification",
         help="move legacy category/tags to strategy_category/strategy_tags",
@@ -448,6 +486,8 @@ def main(argv: list[str], root: Path | None = None) -> int:
         _out(f"unknown idea {args.idea}")
         return 2
     folder = folders[args.idea]
+    if args.command == "trials":
+        return _cmd_trials(args.idea, folder, args)
     if args.command in _LIFECYCLE:
         return _lifecycle_command(args, folder, root if root is not None else DEFAULT_ROOT)
     try:

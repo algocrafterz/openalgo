@@ -274,14 +274,21 @@ class TestRecordIdea:
         assert rec["split"]["type"] == "oos"
         assert rec["parent_run_id"] is None
 
-    def test_default_trial_count_is_flagged_as_a_lower_bound(self, root):
+    def test_trial_count_comes_from_the_ledger_and_the_note_says_so(self, root):
         rec = json.loads(self._record(root).read_text())
         assert rec["n_trials"] == 1
-        assert "lower bound" in rec["notes"]
+        assert "trials.yaml" in rec["notes"]
+        assert "lower bound" not in rec["notes"] and "defaulted" not in rec["notes"]
 
-    def test_explicit_trials_are_recorded_and_not_called_a_lower_bound(self, root):
-        rec = json.loads(self._record(root, trials=12).read_text())
+    def test_external_trials_are_added_to_the_ledger_count(self, root):
+        rec = json.loads(self._record(root, external_trials=11, external_reason="grid").read_text())
         assert rec["n_trials"] == 12
+        assert rec["trials"] == {
+            "material": 1,
+            "external": 11,
+            "total": 12,
+            "source": "trials.yaml",
+        }
         assert "lower bound" not in rec["notes"]
 
     def test_a_second_run_gets_v2_and_keeps_the_first(self, root):

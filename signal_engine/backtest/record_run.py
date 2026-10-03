@@ -2,7 +2,8 @@
 
     uv run --group analysis python -m signal_engine.backtest.record_run --idea IDEA-012
     uv run --group analysis python -m signal_engine.backtest.record_run --idea IDEA-012 \\
-        --parent 2026-09-30-ema9-vwap-cross-v1 --note "wider stop" --trials 4
+        --parent 2026-09-30-ema9-vwap-cross-v1 --note "wider stop" \\
+        --external-trials 4 --reason "grid search run in a notebook"
     uv run --group analysis python -m signal_engine.backtest.record_run --all
 
 Each run is written to `research/ideas/<idea-folder>/runs/<run_id>.json` using the schema
@@ -14,9 +15,15 @@ The run uses the strategy's shipped default parameters and the engine defaults t
 `python -m signal_engine.backtest` CLI uses (5-minute bars and 16 bps for intraday, daily
 bars and 24 bps for swing), on every symbol the Historify store holds - never a subset.
 
-`--trials` is how many configurations were searched to arrive at the strategy being
-recorded. Nothing in the repository records that number, so when it is omitted the record
-carries 1 and says so: the hurdle it shows is a lower bound, not the true bar.
+`n_trials` comes from the idea's `trials.yaml` ledger (research/intake/trials.py): one entry per
+distinct material configuration (rules, params, execution, cost fingerprints), plus
+the variants searched outside the system, added with `--external-trials N --reason TEXT`. The
+ledger is written right after the backtest executes and before any artifact is built: a run that
+crashed counts as no trial, a run that executed but failed to write its artifacts does count (it
+was evaluated), and a re-run of the same configuration adds nothing.
+
+Every run also gets the validity checks (data quality, config, lineage) and, unless
+`--no-truncation` is given, a look-ahead check that re-runs three symbols on truncated data.
 """
 
 from __future__ import annotations
@@ -61,14 +68,17 @@ from signal_engine.backtest.eligibility import (
     apply_eligibility,
     compute_eligibility,
 )
+from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.ledgers import LedgerRecorder
 from signal_engine.backtest.session import Calendar, derive_calendar
 from signal_engine.backtest.tearsheet import build_run_record
+from signal_engine.backtest.truncation import truncation_check
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
 from signal_engine.research import readiness
 from signal_engine.research.build_registry import _parse_frontmatter
 from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.research.intake import spec, versions
+from signal_engine.research.intake import trials as trials_mod
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -124,6 +134,21 @@ class Execution:
     data_report: dict[str, Any] | None = None
     #: membership_source, survivorship_bias and the eligibility policy applied.
     membership: dict[str, Any] | None = None
+    #: Look-ahead check result (`TruncationResult.to_dict()`), or None when it was not run.
+    truncation: dict[str, Any] | None = None
+
+
+#: Symbols the look-ahead check re-runs on truncated data.
+TRUNCATION_SYMBOLS = 3
+
+
+def _evenly_spaced(keys: Sequence[str], n: int) -> list[str]:
+    """Up to `n` of the sorted `keys`, evenly spaced (all of them when there are fewer)."""
+    keys = sorted(keys)
+    if len(keys) <= n:
+        return keys
+    step = (len(keys) - 1) / (n - 1)
+    return [keys[round(i * step)] for i in range(n)]
 
 
 def deployed_cost_model(
@@ -493,7 +518,10 @@ def _record_data_exclusions(
 
 
 def execute_backtest(
-    key: str, settings: Mapping[str, Any] | None = None, end: str | None = None
+    key: str,
+    settings: Mapping[str, Any] | None = None,
+    end: str | None = None,
+    run_truncation: bool = True,
 ) -> Execution:
     """Run strategy `key` with shipped defaults on the full Historify universe.
 
@@ -509,6 +537,11 @@ def execute_backtest(
 
     `end` (ISO date) limits every data load, the baseline reloads included, to sessions up to
     and including that day; None loads everything available.
+
+    `run_truncation` keeps small copies of up to three evenly spaced symbols' frames (the
+    harness releases the raw ones) and, after the headline run, re-runs them on truncated data
+    (`truncation.truncation_check`); the result is `Execution.truncation`. False skips it and
+    leaves `Execution.truncation` None, which the validity block records as a check not run.
     """
     cfg = dict(settings or {})
     until = _end_of_session(end)
@@ -544,10 +577,13 @@ def execute_backtest(
         adjusted_prices=kind == "swing",
     )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
-    if kind == "swing":
-        bt = Backtest(strategy, layer.frames, run, engine=simulate_swing, release_raw=True)
-    else:
-        bt = Backtest(strategy, layer.frames, run, release_raw=True)
+    kept = (
+        {s: layer.frames[s].copy() for s in _evenly_spaced(list(layer.frames), TRUNCATION_SYMBOLS)}
+        if run_truncation
+        else {}
+    )
+    engine_used = simulate_swing if kind == "swing" else simulate
+    bt = Backtest(strategy, layer.frames, run, engine=engine_used, release_raw=True)
     days = [_iso(d) for d in bt.days]
     # The recorder serves this one headline run; no other call below receives one.
     recorder = LedgerRecorder()
@@ -555,6 +591,10 @@ def execute_backtest(
     _record_data_exclusions(recorder, collector, layer.dropped)
     ledgers = recorder.to_frames()
     ledger_problems = recorder.reconcile(ledgers, trades)
+    truncation = None
+    if run_truncation:
+        truncation = truncation_check(strategy, params, kept, run, engine=engine_used).to_dict()
+        del kept
     cost_model = _cost_model_or_none(kind, cfg.get("slippage_bps_per_side"))
     cost_components = decompose_trades(trades, cost_model) if cost_model is not None else None
     baseline = None
@@ -612,6 +652,7 @@ def execute_backtest(
         universe_frame=layer.universe_frame,
         data_report=layer.data_report,
         membership=layer.membership,
+        truncation=truncation,
     )
 
 
@@ -717,10 +758,14 @@ def session_inputs(frozen: Any, execution: Execution) -> dict[str, Any] | None:
 
 
 def _execute_frozen(
-    execute: Callable[..., Execution], key: str, frozen: Any, end: str | None = None
+    execute: Callable[..., Execution],
+    key: str,
+    frozen: Any,
+    end: str | None = None,
+    run_truncation: bool = True,
 ) -> Execution:
-    """Run `execute`, passing the frozen settings and `end` when it accepts them, then verify
-    the cost."""
+    """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
+    them, then verify the cost."""
     settings = {
         name: frozen.resolved[field_name]["value"]
         for name, field_name in _SETTINGS_FIELDS.items()
@@ -735,6 +780,8 @@ def _execute_frozen(
         kwargs["settings"] = settings
     if "end" in accepted:
         kwargs["end"] = end
+    if "run_truncation" in accepted:
+        kwargs["run_truncation"] = run_truncation
     execution = execute(key, **kwargs)
     expected = frozen.resolved["execution.cost_bps_round_trip"]["value"]
     actual = execution.costs.get("round_trip_bps")
@@ -746,6 +793,16 @@ def _execute_frozen(
     return execution
 
 
+def _check_external(count: int, reason: str | None) -> None:
+    """Raise ValueError for a bad external trial count or a count given without a reason."""
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError(f"external_trials must be an integer >= 0, got {count!r}")
+    if count > 0 and not (isinstance(reason, str) and reason.strip()):
+        raise ValueError("external_trials needs an external_reason saying where they came from")
+    if count == 0 and reason is not None:
+        raise ValueError("external_reason was given without external_trials")
+
+
 def record_idea(
     root: Path,
     idea_id: str,
@@ -755,7 +812,8 @@ def record_idea(
     supported: Iterable[str] | None = None,
     parent: str | None = None,
     note: str = "",
-    trials: int | None = None,
+    external_trials: int = 0,
+    external_reason: str | None = None,
     oos_start: str | None = None,
     position_caps: Sequence[int] = DEFAULT_POSITION_CAPS,
     validation: Sequence[str] = (),
@@ -769,6 +827,7 @@ def record_idea(
     now: datetime | None = None,
     frozen: intake_freeze.FrozenSpec | None = None,
     end: str | None = None,
+    run_truncation: bool = True,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
@@ -788,6 +847,12 @@ def record_idea(
     skipped because its version is already registered; every other check still applies. `end`
     (ISO date) is passed to an `execute` that accepts it, limiting the data to that session.
 
+    `external_trials` (with a non-empty `external_reason`) are variants searched outside the
+    system; they are added to the idea's `trials.yaml` ledger together with this run's
+    configuration, right after the execution succeeds and before artifacts are built (see the
+    module docstring). `n_trials` is the ledger's material entries plus its external count. `run_truncation=False` skips the look-ahead check; the validity block then
+    lists no 'truncation' in `checks_run`.
+
     `regimes` loads the NIFTY and VIX inputs for the per-regime block. Left empty the record
     has no `regimes` block; a loader that raises is logged, the record is still written, and
     its notes say the regime analysis is missing and why.
@@ -795,8 +860,10 @@ def record_idea(
     Raises KeyError for an unknown idea, Unsupported when its module has no trade-list
     engine, spec.SpecError when a new idea has no complete spec.yaml, ValueError for a
     parent that is not a run of this idea, and FileExistsError if the run id was taken
-    in the meantime. Nothing is executed or written in the first four cases.
+    in the meantime, and ValueError for external trials without a reason. Nothing is executed or
+    written in the first four cases.
     """
+    _check_external(external_trials, external_reason)
     folders = idea_folders(root)
     if idea_id not in folders:
         raise KeyError(idea_id)
@@ -826,18 +893,38 @@ def record_idea(
     else:
         register_version = False
 
-    execution = _execute_frozen(execute, key, frozen, end=end)
-    n_trials = trials if trials is not None else 1
-    trials_note = (
-        f"n_trials={n_trials} as stated by the caller."
-        if trials is not None
-        else "n_trials defaulted to 1: the number of variants searched is not recorded, "
-        "so hurdle_t is a lower bound."
-    )
+    execution = _execute_frozen(execute, key, frozen, end=end, run_truncation=run_truncation)
     regime_days, regime_source, regime_note = _regime_inputs(regimes)
     # The id is chosen only now, after the long backtest, to keep the window in which another
     # process could take it as short as possible.
     run_id = next_run_id(runs_dir, run_date, run_slug(folder))
+    stamp = now or datetime.now(IST)
+    cost_model_json = jsonable(execution.cost_model)
+    material = run_artifact.material_fingerprints(frozen, execution, cost_model_json)
+    # The trial is written now, right after the execution succeeded and before any artifact is
+    # built: a trial is an EVALUATED change. A run whose execution crashed counts nothing; a run
+    # that executed but whose artifact write then failed DOES count (it was evaluated). The write
+    # is idempotent, so a retry never double counts.
+    try:
+        registered = trials_mod.register_material(folder, material, run_id, now=stamp)
+        if external_trials:
+            registered = trials_mod.add_external(
+                folder, external_trials, str(external_reason), now=stamp
+            )
+    except Exception:
+        logger.exception("Could not write the trial ledger of %s for run %s", idea_id, run_id)
+        raise
+    trials_block = {
+        "material": registered.count.material,
+        "external": registered.count.external,
+        "total": registered.count.total,
+        "source": "trials.yaml",
+    }
+    n_trials = trials_block["total"]
+    trials_note = (
+        f"n_trials={n_trials} from trials.yaml: {trials_block['material']} material "
+        f"configuration(s) and {trials_block['external']} external."
+    )
     record = build_run_record(
         execution.trades,
         run_id=run_id,
@@ -850,6 +937,8 @@ def record_idea(
         parent_run_id=parent,
         change_note=note or ("baseline" if parent is None else ""),
         n_trials=n_trials,
+        trials=trials_block,
+        truncation=execution.truncation,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
@@ -887,12 +976,12 @@ def record_idea(
         record=record,
         frozen=dry,
         execution=execution,
-        cost_model_json=jsonable(execution.cost_model),
+        cost_model_json=cost_model_json,
         engine=engine,
         dataset_fingerprint_fn=dataset_fingerprint_fn or manifest_mod.dataset_fingerprint,
         readiness_missing=readiness_missing,
         parent_run_id=parent,
-        now=now or datetime.now(IST),
+        now=stamp,
     )
     flat_text = serialise_run(prepared.flat)
     if register_version:
@@ -947,6 +1036,12 @@ def record_rerun(
     available. The other keyword arguments are those of `record_idea`. Raises RerunError for an
     unknown run or one without a manifest, and FreezeError if its folder does not verify.
     """
+    if kwargs.get("external_trials") or kwargs.get("external_reason") is not None:
+        raise ValueError(
+            "a rerun cannot add external trials; use `trials add IDEA-n N --reason TEXT`"
+        )
+    kwargs.pop("external_trials", None)
+    kwargs.pop("external_reason", None)
     idea_id, run_folder = find_run_folder(root, run_id)
     frozen = intake_freeze.from_run_folder(run_folder)
     return record_idea(
@@ -1036,7 +1131,20 @@ def main(
     parser.add_argument("--note", default="", help="what changed since the parent")
     parser.add_argument("--parent-version", help="strategy version a new version descends from")
     parser.add_argument("--version", help="branch label for a new strategy version, e.g. v3b")
-    parser.add_argument("--trials", type=int, help="configurations searched in total")
+    parser.add_argument("--trials", help=argparse.SUPPRESS)  # removed: rejected with a pointer
+    parser.add_argument(
+        "--external-trials",
+        type=int,
+        default=0,
+        metavar="N",
+        help="variants searched outside the system, added to trials.yaml (needs --reason)",
+    )
+    parser.add_argument("--reason", help="where the --external-trials came from")
+    parser.add_argument(
+        "--no-truncation",
+        action="store_true",
+        help="skip the look-ahead (truncation) check; validity then lists it as not run",
+    )
     parser.add_argument("--oos-start", help="YYYY-MM-DD; default splits the last 30 percent")
     parser.add_argument(
         "--caps",
@@ -1054,6 +1162,20 @@ def main(
     )
     parser.add_argument("--run-date", default=datetime.now(IST).date().isoformat())
     args = parser.parse_args(argv)
+    if args.trials is not None:
+        parser.error(
+            "--trials was removed: n_trials now comes from the idea's trials.yaml ledger. "
+            "Use --external-trials N --reason TEXT for variants searched outside the system."
+        )
+    if args.external_trials < 0 or (args.external_trials == 0 and args.reason is not None):
+        parser.error("--external-trials must be a positive integer, and --reason needs it")
+    if args.external_trials and not (args.reason and args.reason.strip()):
+        parser.error("--external-trials needs --reason saying where those variants came from")
+    if (args.all or args.rerun) and args.external_trials:
+        parser.error(
+            "--external-trials applies to a new run of a single idea, not --all or --rerun; "
+            "add external trials with: trials add IDEA-n N --reason TEXT"
+        )
     if args.end and not args.rerun:
         parser.error("--end applies to --rerun only")
     if args.end:
@@ -1090,7 +1212,9 @@ def main(
                 "run_date": args.run_date,
                 "supported": keys,
                 "note": args.note,
-                "trials": args.trials,
+                "external_trials": args.external_trials,
+                "external_reason": args.reason,
+                "run_truncation": not args.no_truncation,
                 "oos_start": args.oos_start,
                 "position_caps": position_caps,
                 "validation": args.validation,
@@ -1101,6 +1225,8 @@ def main(
                 "readiness_missing_fn": readiness_missing_fn,
             }
             if args.rerun:
+                common.pop("external_trials")
+                common.pop("external_reason")
                 path = record_rerun(args.root, args.rerun, end=args.end, **common)
             else:
                 path = record_idea(

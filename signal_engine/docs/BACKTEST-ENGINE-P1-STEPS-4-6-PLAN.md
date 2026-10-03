@@ -78,8 +78,11 @@ promotion NOT_READY while rows are unverified) can be lifted by review, not by e
     3 symbols and require the earlier signals and trades to be unchanged). Any failure makes the verdict
     INCONCLUSIVE and performance gates are not evaluated (rule already in `verdict.derive`).
 12. **Trials follow the acceptance-criteria definition.** An append-only `trials.yaml` per idea records one entry
-    for each distinct material configuration evaluated: the tuple (rules, params, execution, cost, universe)
-    fingerprints. Changes that are NOT trials (dataset, data range, engine, deployment profile changes alone,
+    for each distinct material configuration evaluated: the tuple of four fingerprints (rules, params,
+    execution, cost); the universe fingerprint is excluded because it includes the sorted symbol list, so a routine
+    data refresh adding a symbol would otherwise count as a trial on a re-run of an identical frozen spec (a
+    universe selection change arrives through a code change or an explicit external trial). Changes that are NOT
+    trials (dataset, data range, universe membership refresh, engine, deployment profile changes alone,
     re-runs) add nothing. `external_trials` (variants searched outside the system, with a reason) are added by
     `intake trials add IDEA-n N --reason`. `n_trials = distinct entries + external_trials`; the default of 1 is
     gone, and a run records which parts the number came from. G2.5 passes only when the ledger exists.
