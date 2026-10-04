@@ -488,6 +488,10 @@ class TestSettings:
             "eligibility_min_prior_sessions": 60,
             "eligibility_min_volume": 1,
             "eligibility_min_price": 10.0,
+            # the frozen spec's intent, so the run is bound to the spec and not to class defaults
+            "parameters": {"ema_fast": 9, "ema_slow": 20, "atr_len": 14},
+            "stop": ["1 ATR(14) below entry"],
+            "holding_period": "12 bars",
         }
 
     def test_execute_without_settings_is_called_with_the_key_only(self, root):
