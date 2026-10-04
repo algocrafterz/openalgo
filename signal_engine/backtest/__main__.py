@@ -42,6 +42,7 @@ def _register():
     from signal_engine.backtest.strategies.ema9_vwap import Ema9Vwap, Ema9VwapParams
     from signal_engine.backtest.strategies.ema_pullback import EmaPullback, EmaPullbackParams
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
+    from signal_engine.backtest.strategies.high_proximity import HighProximity, HighProximityParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
     from signal_engine.backtest.strategies.ibs_meanrev import IbsMeanRev, IbsMeanRevParams
     from signal_engine.backtest.strategies.key_level import KeyLevel, KeyLevelParams
@@ -63,6 +64,7 @@ def _register():
     REGISTRY["ema9_vwap"] = (Ema9Vwap, Ema9VwapParams, "intraday")
     REGISTRY["ema_pullback"] = (EmaPullback, EmaPullbackParams, "swing")
     REGISTRY["gap_rsi"] = (GapRsi, GapRsiParams, "swing")
+    REGISTRY["high_proximity"] = (HighProximity, HighProximityParams, "swing")
     REGISTRY["ib_extension"] = (IbExtension, IbExtParams, "intraday")
     REGISTRY["ibs_meanrev"] = (IbsMeanRev, IbsMeanRevParams, "swing")
     REGISTRY["key_level"] = (KeyLevel, KeyLevelParams, "intraday")

@@ -62,6 +62,7 @@ from signal_engine.backtest.data_collect import CLEAN_KEYS, DataCollector
 from signal_engine.backtest.dq_run import build_data_quality
 from signal_engine.backtest.eligibility import (
     MEMBERSHIP_SOURCE,
+    PRICE_FLOOR_NOT_APPLIED,
     SURVIVORSHIP_BIAS,
     EligibilityPolicy,
     EligibilityResult,
@@ -519,6 +520,9 @@ def _build_data_layer(
     membership = {
         "membership_source": MEMBERSHIP_SOURCE,
         "survivorship_bias": SURVIVORSHIP_BIAS,
+        # The floor is part of the policy but is skipped for the split-adjusted daily panel.
+        "price_floor_applied": not adjusted_prices,
+        "price_floor_note": PRICE_FLOOR_NOT_APPLIED if adjusted_prices else None,
         "eligibility_policy": {
             "min_prior_sessions": policy.min_prior_sessions,
             "min_volume": policy.min_volume,

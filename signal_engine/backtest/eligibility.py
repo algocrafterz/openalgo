@@ -38,6 +38,10 @@ LISTING_AGE = "LISTING_AGE"
 NO_TRADE = "NO_TRADE"
 ZERO_VOLUME = "ZERO_VOLUME"
 PRICE_FLOOR = "PRICE_FLOOR"
+PRICE_FLOOR_NOT_APPLIED = (
+    "not applied to the split-adjusted daily panel: its prices are back-adjusted, not the "
+    "traded price"
+)
 REASONS = (LISTING_AGE, NO_TRADE, ZERO_VOLUME, PRICE_FLOOR)
 
 UNIVERSE_COLUMNS = (

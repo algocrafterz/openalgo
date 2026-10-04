@@ -155,6 +155,17 @@ def _profile_rows(profile: Profile, product: str) -> list[_Row]:
     return rows
 
 
+_MIN_PRICE_REASON_RAW = "session close floor in rupees, excludes penny-priced sessions"
+
+#: Why a daily swing run records the price floor but does not apply it (see eligibility.py).
+MIN_PRICE_NOT_APPLIED = (
+    "platform default, NOT APPLIED to this run: the daily panel is split-adjusted, so its prices "
+    "are back-adjusted and not the traded price, and a nominal rupee floor would not be reliable. "
+    "The eligibility filters that do apply are listing age, a bar on the session and non-zero "
+    "volume"
+)
+
+
 def _platform_rows(spec: Mapping[str, Any], product: tuple[str, str, str]) -> list[_Row]:
     # Imported here, not at module level: record_run imports the intake package, so a top-level
     # import would make `import ...intake.ledger` fail when it is the first thing imported.
@@ -208,7 +219,7 @@ def _platform_rows(spec: Mapping[str, Any], product: tuple[str, str, str]) -> li
             "execution.eligibility_min_price",
             ELIGIBILITY_MIN_PRICE,
             "platform_default",
-            "session close floor in rupees, excludes penny-priced sessions",
+            _MIN_PRICE_REASON_RAW if intraday else MIN_PRICE_NOT_APPLIED,
         ),
     ]
 

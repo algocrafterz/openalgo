@@ -1333,8 +1333,16 @@ def _g62(x: _Inputs) -> _Result:
     by_reason = {str(k): int(v) for k, v in rows.groupby("detail")["count"].sum().items()}
     table = ", ".join(f"{k}={v}" for k, v in sorted(by_reason.items())) or "none"
     policy = x.membership.get("eligibility_policy")
+    if policy and x.membership.get("price_floor_applied") is False:
+        # Report what was applied: the floor is in the policy but this run skipped it.
+        policy = {k: v for k, v in policy.items() if k != "min_price"}
+        floor = "min_price not applied (split-adjusted daily prices)"
+    else:
+        floor = ""
     policy_text = (
-        ", ".join(f"{k}={v}" for k, v in sorted(policy.items())) if policy else "not recorded"
+        ", ".join([*(f"{k}={v}" for k, v in sorted(policy.items())), *([floor] if floor else [])])
+        if policy
+        else "not recorded"
     )
     return (
         "report",
