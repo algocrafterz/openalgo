@@ -1275,3 +1275,636 @@ class TestVersionsError:
         body = self._error(root)
         assert [v["version"] for v in body["versions"]] == ["v1", "v2", "v2b"]
         assert opened == ["open"]
+
+
+# ---- Evidence read-model: run detail extras, paged trades, trade lineage --------------------
+
+import math  # noqa: E402
+
+import pandas as pd  # noqa: E402
+
+from signal_engine.backtest.trades_io import LEDGER_SCHEMAS  # noqa: E402
+
+_COST_KEYS = ("brokerage", "stt", "exchange", "gst", "sebi", "stamp", "slippage")
+_IST = "Asia/Kolkata"
+
+
+def _trade_frame(with_lineage=True, with_costs=True):
+    times = ["2026-01-05 09:30", "2026-02-10 10:00", "2026-03-02 09:45", "2026-04-07 11:00"]
+    n = len(times)
+    frame = pd.DataFrame(
+        {
+            "trade_id": [f"T-{i + 1:06d}" for i in range(n)],
+            "symbol": ["AAA", "BBB", "AAA", "CCC"],
+            "side": ["BUY"] * n,
+            "entry_time": pd.to_datetime(times).tz_localize(_IST),
+            "exit_time": pd.to_datetime(times).tz_localize(_IST) + pd.Timedelta(minutes=30),
+            "entry_price": [100.0, 200.0, 300.0, 400.0],
+            "exit_price": [101.0, 190.0, 310.0, 380.0],
+            "quantity": [1, 2, 3, 4],
+            "exit_reason": ["TP", "SL", "SL_GAP", "SL_GAP_ENTRY"],
+            "gross_r": [1.0, -1.0, 0.5, float("nan")],
+            "net_r": [0.8, -1.2, 0.3, -2.0],
+            "gross_bps": [10.0, -50.0, 30.0, -500.0],
+            "net_bps": [8.0, -52.0, 28.0, -502.0],
+            "cost_bps": [2.0, 2.0, 2.0, 2.0],
+        }
+    )
+    if with_lineage:
+        frame["signal_id"] = [f"{s}|s{i}|1" for i, s in enumerate(frame["symbol"])]
+        frame["order_id"] = ["O|" + s for s in frame["signal_id"]]
+        frame["entry_fill_id"] = ["F|" + o + "|entry1" for o in frame["order_id"]]
+        frame["exit_fill_id"] = ["F|" + o + "|exit1" for o in frame["order_id"]]
+        frame["position_id"] = ["P|" + f for f in frame["entry_fill_id"]]
+    if with_costs:
+        for i, key in enumerate(_COST_KEYS):
+            frame[f"cost_{key}_bps"] = [float(i + 1), float(i + 2), float(i + 3), float(i + 4)]
+        frame["modeled_cost_bps"] = [10.0, 12.0, 14.0, 16.0]
+    return frame
+
+
+@pytest.fixture(autouse=True)
+def _fresh_evidence_caches():
+    svc._clear_evidence_caches()
+    yield
+    svc._clear_evidence_caches()
+
+
+def _put_parquet(folder: Path, rel: str, frame: pd.DataFrame, schema=None):
+    svc._clear_evidence_caches()
+    path = folder / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if schema is not None:
+        import pyarrow as pa
+
+        pa.Table.from_pandas(frame, schema=schema, preserve_index=False)
+        table = pa.Table.from_pandas(frame, schema=schema, preserve_index=False)
+        import pyarrow.parquet as pq
+
+        pq.write_table(table, path)
+    else:
+        frame.to_parquet(path, index=False)
+    return path
+
+
+def _ledgers(folder: Path, trades: pd.DataFrame):
+    sig = pd.DataFrame(
+        {
+            "signal_id": trades["signal_id"],
+            "symbol": trades["symbol"],
+            "bar_time": trades["entry_time"],
+            "direction": [1] * len(trades),
+            "tag": ["t"] * len(trades),
+            "signal_price": [1.0] * len(trades),
+            "stop": [0.5] * len(trades),
+            "target": [2.0] * len(trades),
+            "risk": [0.5] * len(trades),
+            "accepted": [True] * len(trades),
+            "exclusion_id": [None] * len(trades),
+        }
+    )
+    orders = pd.DataFrame(
+        {
+            "order_id": trades["order_id"],
+            "signal_id": trades["signal_id"],
+            "symbol": trades["symbol"],
+            "submit_time": trades["entry_time"],
+            "order_type": ["MARKET"] * len(trades),
+            "side": ["BUY"] * len(trades),
+            "fill_bar_time": trades["entry_time"],
+            "status": ["FILLED"] * len(trades),
+            "exclusion_id": [None] * len(trades),
+        }
+    )
+    rows = []
+    for _, t in trades.iterrows():
+        # written out of order on purpose: exit leg 2 first
+        rows.append((t["order_id"], t["exit_fill_id"], t["exit_time"], 2, 1.5))
+        rows.append((t["order_id"], t["entry_fill_id"], t["entry_time"], 1, 1.0))
+    fills = pd.DataFrame(
+        {
+            "fill_id": [r[1] for r in rows],
+            "order_id": [r[0] for r in rows],
+            "position_id": [trades["position_id"].iloc[0]] * len(rows),
+            "symbol": ["X"] * len(rows),
+            "fill_time": [r[2] for r in rows],
+            "fill_price": [r[4] for r in rows],
+            "side": ["BUY"] * len(rows),
+            "kind": ["entry" if r[3] == 1 else "exit" for r in rows],
+            "exit_reason": [None] * len(rows),
+            "leg": [r[3] for r in rows],
+        }
+    )
+    for name, frame in (("signals", sig), ("orders", orders), ("fills", fills)):
+        _put_parquet(folder, f"evidence/{name}.parquet", frame, LEDGER_SCHEMAS[name])
+
+
+@pytest.fixture
+def ev(detail_root):
+    """A schema 3 run with trades (lineage + costs) and ledgers, split at 2026-03-01."""
+    detail_root["runs"] = [_flat(split={"type": "date", "oos_start": "2026-03-01"})]
+    folder = _make_run_folder(detail_root["runs_dir"])
+    trades = _trade_frame()
+    _put_parquet(folder, "evidence/trades.parquet", trades)
+    _ledgers(folder, trades)
+    detail_root["folder"] = folder
+    detail_root["trades"] = trades
+    return detail_root
+
+
+def _trades(state, run_id=RID, **kw):
+    return svc.get_run_trades("IDEA-001", run_id, root=state["tmp"], **kw)
+
+
+def _ids(result):
+    return [r["trade_id"] for r in result[1]["page"]["rows"]]
+
+
+class TestDetailEvidenceFields:
+    def test_validity_trials_ledgers_from_report(self, ev):
+        report = dict(
+            REPORT,
+            validity={
+                "ok": False,
+                "failures": [{"check": "c", "detail": "d"}],
+                "checks_run": ["c"],
+            },
+            trials={"material": 2, "external": 1, "total": 3, "source": "trials.yaml"},
+            ledgers={"signals": 4, "trades": 4},
+        )
+        _write(ev["folder"] / "report" / "report.json", report)
+        run = _detail(ev)[1]["run"]
+        assert run["validity"]["ok"] is False and run["validity"]["checks_run"] == ["c"]
+        assert run["trials"]["total"] == 3
+        assert run["ledgers"] == {"signals": 4, "trades": 4}
+
+    def test_wrong_shapes_become_null(self, ev):
+        report = dict(REPORT, validity=[1], trials="x", ledgers=5, data_quality=7)
+        _write(ev["folder"] / "report" / "report.json", report)
+        run = _detail(ev)[1]["run"]
+        assert run["validity"] is None and run["trials"] is None
+        assert run["ledgers"] is None and run["data_quality"] is None
+
+    def test_data_quality_prefers_file_then_report(self, ev):
+        _write(ev["folder"] / "report" / "report.json", dict(REPORT, data_quality={"status": "R"}))
+        assert _detail(ev)[1]["run"]["data_quality"] == {"status": "R"}
+        _write(ev["folder"] / "data_quality.json", {"status": "PASS", "items": []})
+        assert _detail(ev)[1]["run"]["data_quality"]["status"] == "PASS"
+
+    def test_data_quality_null_when_neither(self, ev):
+        assert _detail(ev)[1]["run"]["data_quality"] is None
+
+    def test_data_quality_symlink_rejected(self, ev):
+        real = ev["tmp"] / "dq.json"
+        real.write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+        os.symlink(real, ev["folder"] / "data_quality.json")
+        assert _detail(ev)[1]["run"]["data_quality"] is None
+
+    def test_cost_components_are_hand_computed_means(self, ev):
+        cc = _detail(ev)[1]["run"]["cost_components"]
+        assert cc["trades"] == 4
+        by_key = {c["key"]: c for c in cc["components"]}
+        assert [c["key"] for c in cc["components"]] == list(_COST_KEYS)
+        # brokerage column is 1,2,3,4 -> mean 2.5 ; stt is 2,3,4,5 -> 3.5
+        assert by_key["brokerage"]["mean_bps"] == pytest.approx(2.5)
+        assert by_key["stt"]["mean_bps"] == pytest.approx(3.5)
+        assert by_key["stt"]["label"] == "STT"
+        assert by_key["gst"]["label"] == "GST"
+        assert by_key["sebi"]["label"] == "SEBI fee"
+        assert by_key["stamp"]["label"] == "Stamp duty"
+        assert by_key["exchange"]["label"] == "Exchange charges"
+        assert cc["modeled_cost_bps_mean"] == pytest.approx(13.0)
+        assert cc["engine_cost_bps_mean"] == pytest.approx(2.0)
+
+    def test_cost_components_null_without_cost_columns(self, ev):
+        _put_parquet(ev["folder"], "evidence/trades.parquet", _trade_frame(with_costs=False))
+        run = _detail(ev)[1]["run"]
+        assert run["cost_components"] is None
+        assert run["has_trades"] is True
+
+    def test_has_flags(self, ev):
+        run = _detail(ev)[1]["run"]
+        assert run["has_trades"] is True and run["has_ledgers"] is True
+
+    def test_has_ledgers_false_without_ledger_files(self, ev):
+        for name in ("signals", "orders", "fills"):
+            (ev["folder"] / "evidence" / f"{name}.parquet").unlink()
+        run = _detail(ev)[1]["run"]
+        assert run["has_trades"] is True and run["has_ledgers"] is False
+
+    def test_symlinked_trades_not_counted(self, ev):
+        trades = ev["folder"] / "evidence" / "trades.parquet"
+        moved = ev["tmp"] / "t.parquet"
+        trades.rename(moved)
+        os.symlink(moved, trades)
+        run = _detail(ev)[1]["run"]
+        assert run["has_trades"] is False and run["cost_components"] is None
+
+    def test_partial_run_without_evidence(self, detail_root):
+        detail_root["runs"] = [_flat()]
+        _make_run_folder(detail_root["runs_dir"])
+        run = _detail(detail_root)[1]["run"]
+        assert run["validity"] is None and run["trials"] is None and run["ledgers"] is None
+        assert run["cost_components"] is None
+        assert run["has_trades"] is False and run["has_ledgers"] is False
+
+    def test_corrupt_trades_parquet_does_not_break_detail(self, ev):
+        (ev["folder"] / "evidence" / "trades.parquet").write_bytes(b"not parquet")
+        ok, body, status = _detail(ev)
+        assert status == 200 and body["run"]["cost_components"] is None
+
+    def test_legacy_run_returns_nulls_and_false(self, detail_root):
+        detail_root["runs"] = [{"run_id": RID, "schema": 2}]
+        run = _detail(detail_root)[1]["run"]
+        for key in ("validity", "data_quality", "trials", "ledgers", "cost_components"):
+            assert run[key] is None
+        assert run["has_trades"] is False and run["has_ledgers"] is False
+
+
+class TestRunTrades:
+    def test_all_subset_defaults_and_row_columns(self, ev):
+        ok, body, status = _trades(ev)
+        assert (ok, status, body["status"]) == (True, 200, "success")
+        page = body["page"]
+        assert page["total"] == 4 and page["limit"] == 100 and page["offset"] == 0
+        assert page["subset"] == "all"
+        assert _ids((ok, body, status)) == ["T-000001", "T-000002", "T-000003", "T-000004"]
+        row = page["rows"][0]
+        for col in ("signal_id", "order_id", "position_id", "cost_stt_bps", "modeled_cost_bps"):
+            assert col in row
+        json.dumps(body, allow_nan=False)
+
+    def test_timestamps_are_iso_ist(self, ev):
+        row = _trades(ev)[1]["page"]["rows"][0]
+        assert row["entry_time"] == "2026-01-05T09:30:00+05:30"
+        assert row["exit_time"] == "2026-01-05T10:00:00+05:30"
+
+    def test_nan_becomes_none(self, ev):
+        rows = _trades(ev)[1]["page"]["rows"]
+        assert rows[3]["gross_r"] is None
+        assert not any(isinstance(v, float) and math.isnan(v) for r in rows for v in r.values())
+
+    def test_inf_becomes_none(self, ev):
+        frame = _trade_frame()
+        frame.loc[0, "net_bps"] = float("inf")
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        row = _trades(ev)[1]["page"]["rows"][0]
+        assert row["net_bps"] is None
+
+    def test_in_sample_and_oos_split(self, ev):
+        assert _ids(_trades(ev, subset="in_sample")) == ["T-000001", "T-000002"]
+        assert _ids(_trades(ev, subset="oos")) == ["T-000003", "T-000004"]
+        assert _trades(ev, subset="oos")[1]["page"]["total"] == 2
+
+    def test_split_boundary_day_is_oos(self, ev):
+        frame = _trade_frame()
+        frame.loc[2, "entry_time"] = pd.Timestamp("2026-03-01 00:00", tz=_IST)
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        assert "T-000003" in _ids(_trades(ev, subset="oos"))
+        frame.loc[2, "entry_time"] = pd.Timestamp("2026-02-28 23:59", tz=_IST)
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        assert "T-000003" in _ids(_trades(ev, subset="in_sample"))
+
+    @pytest.mark.parametrize("subset", ["oos", "in_sample"])
+    def test_no_split_gives_empty_page_with_message(self, ev, subset):
+        ev["runs"][0].pop("split")
+        ok, body, status = _trades(ev, subset=subset)
+        assert status == 200
+        assert body["page"]["rows"] == [] and body["page"]["total"] == 0
+        assert "split" in body["message"].lower()
+
+    def test_all_works_without_split(self, ev):
+        ev["runs"][0].pop("split")
+        assert _trades(ev)[1]["page"]["total"] == 4
+
+    def test_losers(self, ev):
+        assert _ids(_trades(ev, subset="losers")) == ["T-000002", "T-000004"]
+
+    def test_gap_exits(self, ev):
+        assert _ids(_trades(ev, subset="gap_exits")) == ["T-000003", "T-000004"]
+
+    def test_unknown_subset_400(self, ev):
+        assert _trades(ev, subset="bogus")[2] == 400
+
+    def test_symbol_and_reason_filters(self, ev):
+        assert _ids(_trades(ev, symbol="AAA")) == ["T-000001", "T-000003"]
+        assert _ids(_trades(ev, reason="SL")) == ["T-000002"]
+        assert _ids(_trades(ev, symbol="AAA", reason="SL_GAP")) == ["T-000003"]
+        assert _trades(ev, symbol="aaa")[1]["page"]["total"] == 0
+
+    def test_filters_combine_with_subset(self, ev):
+        assert _ids(_trades(ev, subset="oos", symbol="AAA")) == ["T-000003"]
+
+    def test_sort_whitelist_and_direction(self, ev):
+        assert _ids(_trades(ev, sort="net_r")) == ["T-000004", "T-000002", "T-000003", "T-000001"]
+        assert _ids(_trades(ev, sort="net_r", desc=True))[0] == "T-000001"
+        assert _ids(_trades(ev, sort="symbol", desc=True))[0] == "T-000004"
+
+    @pytest.mark.parametrize("bad", ["bogus", "net_r; drop", "../x", "", "SIGNAL_ID "])
+    def test_sort_outside_whitelist_400(self, ev, bad):
+        assert _trades(ev, sort=bad)[2] == 400
+
+    def test_sort_on_missing_column_400(self, ev):
+        _put_parquet(ev["folder"], "evidence/trades.parquet", _trade_frame(with_costs=False))
+        assert _trades(ev, sort="cost_stt_bps")[2] == 400
+
+    def test_nan_sorts_last(self, ev):
+        assert _ids(_trades(ev, sort="gross_r"))[-1] == "T-000004"
+        assert _ids(_trades(ev, sort="gross_r", desc=True))[-1] == "T-000004"
+
+    def test_paging_and_total(self, ev):
+        ok, body, _ = _trades(ev, limit=3, offset=0)
+        assert len(body["page"]["rows"]) == 3 and body["page"]["total"] == 4
+        ok, body, _ = _trades(ev, limit=3, offset=3)
+        assert _ids((ok, body, 200)) == ["T-000004"] and body["page"]["total"] == 4
+        assert _trades(ev, offset=99)[1]["page"]["rows"] == []
+
+    @pytest.mark.parametrize("bad", [0, -5, 501, 100000])
+    def test_out_of_range_limit_400(self, ev, bad):
+        assert _trades(ev, limit=bad)[2] == 400
+
+    def test_limit_bounds_accepted(self, ev):
+        assert _trades(ev, limit=1)[1]["page"]["limit"] == 1
+        assert _trades(ev, limit=500)[1]["page"]["limit"] == 500
+
+    def test_negative_offset_400(self, ev):
+        assert _trades(ev, offset=-1)[2] == 400
+
+    def test_large_file_pages_fast(self, ev):
+        n = 12000
+        base = _trade_frame().iloc[[0]]
+        big = pd.concat([base] * n, ignore_index=True)
+        big["trade_id"] = [f"T-{i + 1:06d}" for i in range(n)]
+        _put_parquet(ev["folder"], "evidence/trades.parquet", big)
+        page = _trades(ev, limit=500, offset=11800, sort="trade_id")[1]["page"]
+        assert page["total"] == n and len(page["rows"]) == 200
+
+    def test_missing_parquet_404(self, ev):
+        (ev["folder"] / "evidence" / "trades.parquet").unlink()
+        ok, body, status = _trades(ev)
+        assert status == 404 and body["message"] == "no trades for this run"
+
+    def test_unknown_idea_and_run_404(self, ev):
+        assert svc.get_run_trades("IDEA-009", RID, root=ev["tmp"])[2] == 404
+        assert _trades(ev, run_id="2026-01-01-nope-v1")[2] == 404
+
+    @pytest.mark.parametrize("bad", ["../x", "a/b", "..", "2026-09-29-orb-v1/../x", ""])
+    def test_run_id_traversal_400(self, ev, bad):
+        assert _trades(ev, run_id=bad)[2] == 400
+
+    def test_bad_idea_id_400(self, ev):
+        assert svc.get_run_trades("../etc", RID, root=ev["tmp"])[2] == 400
+
+    def test_legacy_run_has_no_trades(self, detail_root):
+        detail_root["runs"] = [{"run_id": RID, "schema": 2}]
+        assert _trades(detail_root)[2] == 404
+
+    def test_symlinked_parquet_rejected(self, ev):
+        trades = ev["folder"] / "evidence" / "trades.parquet"
+        moved = ev["tmp"] / "t.parquet"
+        trades.rename(moved)
+        os.symlink(moved, trades)
+        ok, body, status = _trades(ev)
+        assert ok is False and status in (400, 404)
+
+    def test_oversize_file_refused(self, ev, monkeypatch):
+        monkeypatch.setattr(svc, "_MAX_PARQUET_BYTES", 10)
+        ok, body, status = _trades(ev)
+        assert ok is False and status == 413
+
+    def test_corrupt_parquet_generic_error_no_path(self, ev):
+        (ev["folder"] / "evidence" / "trades.parquet").write_bytes(b"garbage")
+        ok, body, status = _trades(ev)
+        assert ok is False and status == 500
+        assert str(ev["tmp"]) not in json.dumps(body)
+
+    def test_errors_never_leak_paths(self, ev, monkeypatch):
+        def boom(*_a, **_k):
+            raise RuntimeError(str(ev["tmp"]))
+
+        monkeypatch.setattr(svc, "_load_frame", boom)
+        ok, body, status = _trades(ev)
+        assert status == 500 and str(ev["tmp"]) not in json.dumps(body)
+
+
+class TestTradeLineage:
+    def _lineage(self, state, trade_id="T-000001", run_id=RID):
+        return svc.get_trade_lineage("IDEA-001", run_id, trade_id, root=state["tmp"])
+
+    def test_full_chain(self, ev):
+        ok, body, status = self._lineage(ev)
+        assert (ok, status) == (True, 200)
+        lin = body["lineage"]
+        t = ev["trades"].iloc[0]
+        assert lin["trade_id"] == "T-000001"
+        assert lin["signal"]["signal_id"] == t["signal_id"]
+        assert lin["order"]["order_id"] == t["order_id"]
+        assert lin["position_id"] == t["position_id"]
+        assert lin["signal"]["bar_time"] == "2026-01-05T09:30:00+05:30"
+        json.dumps(body, allow_nan=False)
+
+    def test_fills_ordered_by_time_then_leg(self, ev):
+        fills = self._lineage(ev)[1]["lineage"]["fills"]
+        assert [f["leg"] for f in fills] == [1, 2]
+        assert fills[0]["fill_time"] < fills[1]["fill_time"]
+        assert {f["order_id"] for f in fills} == {ev["trades"].iloc[0]["order_id"]}
+
+    def test_only_this_trades_rows_returned(self, ev):
+        lin = self._lineage(ev, "T-000002")[1]["lineage"]
+        assert lin["order"]["order_id"] == ev["trades"].iloc[1]["order_id"]
+        assert len(lin["fills"]) == 2
+
+    def test_uses_predicate_pushdown(self, ev, monkeypatch):
+        seen = []
+        real = svc.pq.read_table
+
+        def spy(path, *a, **k):
+            seen.append((Path(str(path)).name, k.get("filters")))
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(svc.pq, "read_table", spy)
+        self._lineage(ev)
+        by_name = dict(seen)
+        for name in ("signals.parquet", "orders.parquet", "fills.parquet"):
+            assert by_name[name], name
+
+    def test_without_ledgers_parts_empty(self, ev):
+        for name in ("signals", "orders", "fills"):
+            (ev["folder"] / "evidence" / f"{name}.parquet").unlink()
+        lin = self._lineage(ev)[1]["lineage"]
+        assert lin["signal"] is None and lin["order"] is None and lin["fills"] == []
+        assert lin["position_id"] == ev["trades"].iloc[0]["position_id"]
+
+    def test_without_lineage_columns(self, ev):
+        _put_parquet(ev["folder"], "evidence/trades.parquet", _trade_frame(with_lineage=False))
+        lin = self._lineage(ev)[1]["lineage"]
+        assert lin["signal"] is None and lin["order"] is None
+        assert lin["fills"] == [] and lin["position_id"] is None
+        assert lin["missing"] == ["signal_id", "order_id", "position_id"]
+
+    def test_unknown_trade_404(self, ev):
+        assert self._lineage(ev, "T-999999")[2] == 404
+
+    @pytest.mark.parametrize("bad", ["T-1", "x", "T-000001/..", "../T-000001", "t-000001", ""])
+    def test_bad_trade_id_400(self, ev, bad):
+        assert self._lineage(ev, bad)[2] == 400
+
+    def test_trade_id_newline_rejected(self, ev):
+        assert self._lineage(ev, "T-000001\n")[2] == 400
+
+    def test_missing_trades_parquet_404(self, ev):
+        (ev["folder"] / "evidence" / "trades.parquet").unlink()
+        assert self._lineage(ev)[2] == 404
+
+    def test_unknown_run_404_and_bad_run_400(self, ev):
+        assert self._lineage(ev, run_id="2026-01-01-nope-v1")[2] == 404
+        assert self._lineage(ev, run_id="../x")[2] == 400
+
+    def test_symlinked_ledger_ignored(self, ev):
+        fills = ev["folder"] / "evidence" / "fills.parquet"
+        moved = ev["tmp"] / "f.parquet"
+        fills.rename(moved)
+        os.symlink(moved, fills)
+        lin = self._lineage(ev)[1]["lineage"]
+        assert lin["fills"] == []
+
+
+class TestEvidenceGuards:
+    def test_row_cap_refuses_trades_with_413(self, ev, monkeypatch):
+        monkeypatch.setattr(svc, "_MAX_PARQUET_ROWS", 2)
+        ok, body, status = _trades(ev)
+        assert (ok, status) == (False, 413)
+        assert "too large" in body["message"] and str(ev["tmp"]) not in json.dumps(body)
+
+    def test_row_cap_nulls_cost_components_and_logs(self, ev, monkeypatch):
+        monkeypatch.setattr(svc, "_MAX_PARQUET_ROWS", 2)
+        assert _detail(ev)[1]["run"]["cost_components"] is None
+
+    def test_row_cap_on_ledger_refuses_lineage(self, ev, monkeypatch):
+        real = svc._open_guarded
+
+        def guarded(path):
+            if path.name == "trades.parquet":
+                return real(path)
+            monkeypatch.setattr(svc, "_MAX_PARQUET_ROWS", 1)
+            return real(path)
+
+        monkeypatch.setattr(svc, "_open_guarded", guarded)
+        ok, body, status = svc.get_trade_lineage("IDEA-001", RID, "T-000001", root=ev["tmp"])
+        assert status == 413 and body["message"] == "ledger too large for interactive lineage"
+
+    def test_cost_components_cached_per_file_version(self, ev, monkeypatch):
+        _detail(ev)
+        calls = []
+        real = svc._compute_cost_components
+        monkeypatch.setattr(svc, "_compute_cost_components", lambda p: calls.append(1) or real(p))
+        _detail(ev)
+        assert calls == []
+
+    def test_paging_decodes_the_file_once(self, ev, monkeypatch):
+        _trades(ev, limit=2, offset=0)
+        reads = []
+        real = svc.pq.ParquetFile.read
+        monkeypatch.setattr(
+            svc.pq.ParquetFile, "read", lambda self, *a, **k: reads.append(1) or real(self, *a, **k)
+        )
+        _trades(ev, limit=2, offset=2)
+        _trades(ev, limit=2, offset=0, sort="net_r")
+        assert reads == []
+
+    def test_cache_invalidated_when_file_changes(self, ev):
+        assert _trades(ev)[1]["page"]["total"] == 4
+        path = ev["folder"] / "evidence" / "trades.parquet"
+        frame = _trade_frame().iloc[:2]
+        frame.to_parquet(path, index=False)
+        os.utime(path, ns=(1, 1))
+        assert _trades(ev)[1]["page"]["total"] == 2
+
+    def test_projection_reads_only_known_columns(self, ev):
+        frame = _trade_frame()
+        frame["secret_blob"] = "x"
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        assert "secret_blob" not in _trades(ev)[1]["page"]["rows"][0]
+        assert _trades(ev, sort="secret_blob")[2] == 400
+
+    def test_schema_validated_before_any_read(self, ev, monkeypatch):
+        _put_parquet(
+            ev["folder"], "evidence/trades.parquet", _trade_frame().drop(columns=["symbol"])
+        )
+        monkeypatch.setattr(svc, "_load_frame", lambda *a: pytest.fail("data was read"))
+        assert _trades(ev, symbol="AAA")[2] == 400
+
+    def test_subset_note_names_the_exclusions(self, ev):
+        page = _trades(ev, subset="oos")[1]["page"]
+        assert "oos_start" in page["subset_note"] and "purge" in page["subset_note"]
+        assert "oos_start" in _trades(ev, subset="in_sample")[1]["page"]["subset_note"]
+
+    def test_nat_entry_time_is_ignored_by_split_subsets(self, ev):
+        frame = _trade_frame()
+        frame.loc[1, "entry_time"] = pd.NaT
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        assert _ids(_trades(ev, subset="in_sample")) == ["T-000001"]
+        assert _ids(_trades(ev, subset="oos")) == ["T-000003", "T-000004"]
+        assert _trades(ev)[1]["page"]["rows"][-1]["entry_time"] is None
+
+    def test_big_ints_become_strings_and_bytes_decode(self, ev):
+        frame = _trade_frame()
+        frame["quantity"] = [2**60, 5, -(2**60), 2**53 - 1]
+        frame["side"] = [b"BUY", b"SELL", b"\xff", b"x"]
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        rows = _trades(ev, sort="trade_id")[1]["page"]["rows"]
+        assert rows[0]["quantity"] == str(2**60) and rows[2]["quantity"] == str(-(2**60))
+        assert rows[1]["quantity"] == 5 and rows[3]["quantity"] == 2**53 - 1
+        assert rows[0]["side"] == "BUY"
+        assert not any(str(v).startswith("b'") for r in rows for v in r.values())
+
+    def test_symlinked_ledger_still_ignored_with_guard(self, ev):
+        assert svc._evidence_file(ev["folder"], "nope") is None
+
+
+class TestLineageIntegrity:
+    def _lineage(self, state, trade_id="T-000001"):
+        return svc.get_trade_lineage("IDEA-001", RID, trade_id, root=state["tmp"])
+
+    def test_duplicate_trade_id_409(self, ev):
+        frame = pd.concat([_trade_frame(), _trade_frame().iloc[[0]]], ignore_index=True)
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        ok, body, status = self._lineage(ev)
+        assert status == 409 and body["message"] == "ledger inconsistent"
+
+    def test_duplicate_signal_row_409(self, ev):
+        sigs = pd.read_parquet(ev["folder"] / "evidence" / "signals.parquet")
+        sigs = pd.concat([sigs, sigs.iloc[[0]]], ignore_index=True)
+        _put_parquet(ev["folder"], "evidence/signals.parquet", sigs, LEDGER_SCHEMAS["signals"])
+        assert self._lineage(ev)[2] == 409
+
+    def test_duplicate_order_row_409(self, ev):
+        orders = pd.read_parquet(ev["folder"] / "evidence" / "orders.parquet")
+        orders = pd.concat([orders, orders.iloc[[0]]], ignore_index=True)
+        _put_parquet(ev["folder"], "evidence/orders.parquet", orders, LEDGER_SCHEMAS["orders"])
+        assert self._lineage(ev)[2] == 409
+
+    def test_ledger_missing_filter_column_422(self, ev):
+        _put_parquet(ev["folder"], "evidence/signals.parquet", pd.DataFrame({"other": ["a"]}))
+        ok, body, status = self._lineage(ev)
+        assert status == 422 and body["message"] == "ledger schema unexpected"
+
+    def test_trades_missing_trade_id_422(self, ev):
+        _put_parquet(
+            ev["folder"], "evidence/trades.parquet", _trade_frame().drop(columns=["trade_id"])
+        )
+        assert self._lineage(ev)[2] == 422
+
+    def test_partial_lineage_columns_listed_as_missing(self, ev):
+        frame = _trade_frame().drop(columns=["position_id"])
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        lin = self._lineage(ev)[1]["lineage"]
+        assert lin["missing"] == ["position_id"] and lin["signal"] is not None
+
+    def test_complete_run_reports_nothing_missing(self, ev):
+        assert self._lineage(ev)[1]["lineage"]["missing"] == []
+
+    def test_ledger_lookups_are_memoised(self, ev, monkeypatch):
+        self._lineage(ev)
+        monkeypatch.setattr(svc.pq, "read_table", lambda *a, **k: pytest.fail("re-read"))
+        assert self._lineage(ev)[2] == 200

@@ -61,6 +61,15 @@ const REQUIRED_IDS = [
   'source_inferred',
   'materiality',
   'ledger',
+  'data_quality',
+  'validity_checks',
+  'lookahead_check',
+  'lineage',
+  'exclusion',
+  'reconciliation',
+  'trial_ledger',
+  'cost_components',
+  'trade_subsets',
 ]
 
 const EMOJI = /[\u{1F000}-\u{1FFFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]/u

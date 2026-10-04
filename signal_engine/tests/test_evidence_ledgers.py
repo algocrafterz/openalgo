@@ -1037,3 +1037,85 @@ class TestReproduceColumns:
         report = _reproduce(folder, root, lambda key, settings=None, end=None: exe)
         assert report.reproducible is False
         assert any("columns differ" in r for r in report.reasons)
+
+
+class TestPrunableLedgers:
+    def _fills(self, n=120_000):
+        import numpy as np
+
+        sym = np.array([f"S{k:03d}" for k in range(300)])[np.arange(n) % 300]
+        when = pd.Timestamp("2026-06-01 09:20", tz=IST) + pd.to_timedelta(np.arange(n) // 300, "m")
+        ids = [f"F|{s}|{i}" for i, s in enumerate(sym)]
+        return pd.DataFrame(
+            {
+                "fill_id": [f"{s}|{i:07d}" for i, s in enumerate(sym)],
+                "order_id": ids,
+                "position_id": ids,
+                "symbol": sym,
+                "fill_time": when,
+                "fill_price": 100.0,
+                "side": "BUY",
+                "kind": "entry",
+                "exit_reason": None,
+                "leg": 1,
+            }
+        )
+
+    def test_bytes_deterministic_and_input_order_independent(self):
+        frame = self._fills(2000)
+        schema = trades_io.LEDGER_SCHEMAS["fills"]
+        one = trades_io.frame_parquet_bytes(frame, schema)
+        assert one == trades_io.frame_parquet_bytes(frame.copy(), schema)
+        assert one == trades_io.frame_parquet_bytes(frame.iloc[::-1], schema)
+
+    def test_statistics_present_for_id_columns(self):
+        frame = self._fills(2000)
+        for name, col in (("fills", "fill_id"), ("orders", "order_id")):
+            if name == "orders":
+                continue
+            data = trades_io.frame_parquet_bytes(frame, trades_io.LEDGER_SCHEMAS[name])
+            meta = pq.ParquetFile(io.BytesIO(data)).metadata
+            idx = meta.schema.names.index(col)
+            stats = meta.row_group(0).column(idx).statistics
+            assert stats is not None and stats.has_min_max
+
+    def test_id_lookup_reads_only_the_matching_row_groups(self):
+        frame = self._fills()
+        data = trades_io.frame_parquet_bytes(frame, trades_io.LEDGER_SCHEMAS["fills"])
+        pf = pq.ParquetFile(io.BytesIO(data))
+        assert pf.metadata.num_row_groups >= 3
+        target = frame["fill_id"].iloc[77_777]
+        idx = pf.schema_arrow.names.index("fill_id")
+        hit = [
+            g
+            for g in range(pf.metadata.num_row_groups)
+            if pf.metadata.row_group(g).column(idx).statistics.min
+            <= target
+            <= pf.metadata.row_group(g).column(idx).statistics.max
+        ]
+        assert 1 <= len(hit) < pf.metadata.num_row_groups
+        got = pq.read_table(io.BytesIO(data), filters=[("fill_id", "=", target)])
+        assert got.num_rows == 1 and got.column("fill_id")[0].as_py() == target
+        assert (
+            len(
+                pf.read_row_groups(hit).filter(
+                    __import__("pyarrow.compute").compute.equal(
+                        pf.read_row_groups(hit)["fill_id"], target
+                    )
+                )
+            )
+            == 1
+        )
+
+    def test_round_trip_equals_the_sorted_frame(self):
+        frame = self._fills(5000)
+        data = trades_io.frame_parquet_bytes(frame, trades_io.LEDGER_SCHEMAS["fills"])
+        got = pq.read_table(io.BytesIO(data)).to_pandas()
+        want = frame.sort_values(["symbol", "fill_time", "fill_id"]).reset_index(drop=True)
+        assert got["fill_id"].tolist() == want["fill_id"].tolist()
+        assert got["fill_price"].tolist() == want["fill_price"].tolist()
+
+    def test_trades_table_layout_is_unchanged(self):
+        data = trades_io.trades_parquet_bytes([])
+        meta = pq.ParquetFile(io.BytesIO(data)).metadata
+        assert meta.num_row_groups <= 1

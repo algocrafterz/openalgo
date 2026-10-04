@@ -341,6 +341,60 @@ const DEFS = {
     'The recorded list of assumptions, with their sources, behind a strategy or run.',
     'The assumption ledger keeps each assumption with where it came from and how much it matters, so nothing hidden affects a result. The trials ledger similarly counts every evaluated change.',
   ],
+  data_quality: [
+    'Data Quality',
+    'Evidence',
+    'The audit of the market data a run was tested on: gaps, bad rows, split days and dropped symbols.',
+    'Before a run is trusted, the data is audited for missing sessions, impossible or duplicate rows and split days. A warning that affects validity makes the run INCONCLUSIVE, because the result may be an artifact of bad data rather than of the strategy.',
+  ],
+  validity_checks: [
+    'Validity Checks',
+    'Evidence',
+    'Integrity checks run on the run itself: data quality, configuration, lineage and the look-ahead check.',
+    'Each check is shown as passed, failed or did not run. A check that did not run is not a pass: it simply provides no assurance either way.',
+  ],
+  lookahead_check: [
+    'Look-ahead (Truncation) Check',
+    'Evidence',
+    'Re-runs the signals on truncated data to prove they do not use the future.',
+    'The check cuts the data off earlier and confirms the same signals appear. It covers single-symbol inputs derived from the price frame only. Regime or cross-sectional inputs are not covered by it.',
+  ],
+  lineage: [
+    'Lineage',
+    'Evidence',
+    'The chain from a signal to its order, fills and position, so any trade can be traced back.',
+    'Lineage follows a trade through signal, order, entry fill, exit fill or fills and position, with the ids and times the engine recorded. It lets you see exactly why a trade exists.',
+  ],
+  exclusion: [
+    'Exclusion',
+    'Evidence',
+    'A signal that did not become a trade, with the reason code that stopped it.',
+    'Every signal is either accepted or excluded with a code, such as the daily trade limit or the entry cutoff. Exclusions are counted so no signal disappears without a reason.',
+  ],
+  reconciliation: [
+    'Reconciliation',
+    'Evidence',
+    'The check that every signal, order and fill is accounted for in the ledgers.',
+    'Reconciliation confirms that signals equal accepted plus excluded, orders equal filled plus dropped, and fills match trades. Any problem is listed so the counts can be trusted or questioned.',
+  ],
+  trial_ledger: [
+    'Trial Ledger',
+    'Evidence',
+    'The count of variants tried, kept in trials.yaml, used to judge how lucky a result could be.',
+    'Material trials are variants of this idea that changed results; external trials come from outside ideas. The more variants tried, the higher the bar a result must clear, so the ledger is read from the record, never estimated.',
+  ],
+  cost_components: [
+    'Modelled Cost Components',
+    'Metrics',
+    'A breakdown of a realistic per-trade cost into brokerage, taxes, fees and slippage.',
+    'The headline net result uses the engine flat cost. The modelled components show where a realistic cost comes from, in basis points of entry notional, averaged over trades. Neither figure is called right or wrong.',
+  ],
+  trade_subsets: [
+    'Trade Subsets',
+    'Evidence',
+    'Slices of the trade list that back a gate: all, in-sample, out-of-sample, losing trades or gap exits.',
+    'A gate result is built from a particular group of trades. Showing the subset lets you inspect the exact trades behind a number instead of trusting the summary.',
+  ],
 } as const satisfies Record<string, Def>
 
 export type GlossaryTermId = keyof typeof DEFS

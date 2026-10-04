@@ -5,11 +5,13 @@ import type {
   Promotion,
   PromotionDecision,
   PromotionGateStatus,
+  TradeSubset,
 } from '@/api/backtestResults'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { findGateRow, fmtNum } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
 import { InfoTip } from './InfoTip'
+import { ShowTradesButton } from './ShowTradesButton'
 
 export const DECISION_TEXT: Record<PromotionDecision, string> = {
   READY_FOR_NEXT_STAGE: 'Ready for the next stage',
@@ -69,10 +71,12 @@ function GateItem({
   gate,
   status,
   row,
+  onShowTrades,
 }: {
   gate: string
   status: PromotionGateStatus
   row: GateRow | undefined
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   const [open, setOpen] = useState(false)
   const expandable = EXPANDABLE.includes(status)
@@ -93,6 +97,7 @@ function GateItem({
         <span className="font-mono text-xs w-14">{gate}</span>
         {badge}
         {row && <span className="text-muted-foreground">{row.title}</span>}
+        <ShowTradesButton gate={gate} onShowTrades={onShowTrades} />
         {expandable && (
           <button
             type="button"
@@ -142,9 +147,11 @@ function count(gates: { status: string }[], s: string): number {
 export function PromotionGate({
   promotion,
   evaluation,
+  onShowTrades,
 }: {
   promotion: Promotion | null
   evaluation: EvaluationBlock | null
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   if (!promotion) return null
   return (
@@ -178,6 +185,7 @@ export function PromotionGate({
                     gate={g.gate}
                     status={g.status}
                     row={findGateRow(evaluation, g.gate)}
+                    onShowTrades={onShowTrades}
                   />
                 ))}
               </ul>

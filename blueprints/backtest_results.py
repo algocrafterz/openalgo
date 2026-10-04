@@ -7,6 +7,7 @@ session-authed (no /api/v1 exposure - UI only), following the same pattern as
 """
 
 import os
+import re
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
@@ -16,6 +17,8 @@ from services.backtest_results_service import (
     export_run,
     get_idea_results,
     get_run_detail,
+    get_run_trades,
+    get_trade_lineage,
     list_results,
 )
 from utils.logging import get_logger
@@ -85,3 +88,59 @@ def backtest_results_export(idea_id, run_id):
     response = Response(result.body, mimetype=result.mimetype)
     response.headers["Content-Disposition"] = f'attachment; filename="{result.filename}"'
     return response
+
+
+_BOOLEANS = {"1": True, "true": True, "0": False, "false": False}
+
+
+def _int_arg(name: str, default: int) -> int:
+    raw = request.args.get(name)
+    if raw is None:
+        return default
+    if not re.fullmatch(r"-?\d{1,9}", raw.strip()):
+        raise ValueError(name)
+    return int(raw)
+
+
+@backtest_results_bp.route("/api/backtest-results/<idea_id>/runs/<run_id>/trades", methods=["GET"])
+@check_session_validity
+@limiter.limit(BACKTEST_RESULTS_READ_LIMIT)
+def backtest_results_trades(idea_id, run_id):
+    """One page of a run's trades: `?subset&symbol&reason&sort&desc&limit&offset`."""
+    try:
+        limit = _int_arg("limit", 100)
+        offset = _int_arg("offset", 0)
+        desc = _BOOLEANS[request.args.get("desc", "false").strip().lower()]
+    except (ValueError, KeyError):
+        return jsonify({"status": "error", "message": "Invalid query parameter"}), 400
+    try:
+        _success, response, status_code = get_run_trades(
+            idea_id,
+            run_id,
+            subset=request.args.get("subset", "all"),
+            symbol=request.args.get("symbol") or None,
+            reason=request.args.get("reason") or None,
+            sort=request.args.get("sort", "entry_time"),
+            desc=desc,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception:
+        logger.exception("Backtest trades request failed")
+        return jsonify({"status": "error", "message": "Could not read the trades"}), 500
+    return jsonify(response), status_code
+
+
+@backtest_results_bp.route(
+    "/api/backtest-results/<idea_id>/runs/<run_id>/trades/<trade_id>/lineage", methods=["GET"]
+)
+@check_session_validity
+@limiter.limit(BACKTEST_RESULTS_READ_LIMIT)
+def backtest_results_trade_lineage(idea_id, run_id, trade_id):
+    """The signal, order and fills behind one trade."""
+    try:
+        _success, response, status_code = get_trade_lineage(idea_id, run_id, trade_id)
+    except Exception:
+        logger.exception("Backtest lineage request failed")
+        return jsonify({"status": "error", "message": "Could not read the lineage"}), 500
+    return jsonify(response), status_code

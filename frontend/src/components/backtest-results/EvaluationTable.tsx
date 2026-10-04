@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { EvaluationBlock, GateRow, GateStatus } from '@/api/backtestResults'
+import type { EvaluationBlock, GateRow, GateStatus, TradeSubset } from '@/api/backtestResults'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table'
 import { fmtNum } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
+import { ShowTradesButton } from './ShowTradesButton'
 
 const STATUS_TEXT: Record<GateStatus, string> = {
   pass: 'pass',
@@ -62,7 +63,15 @@ function isDead(row: GateRow): boolean {
   return DEAD.includes(row.status)
 }
 
-function DimensionTable({ name, rows }: { name: string; rows: GateRow[] }) {
+function DimensionTable({
+  name,
+  rows,
+  onShowTrades,
+}: {
+  name: string
+  rows: GateRow[]
+  onShowTrades?: (subset: TradeSubset) => void
+}) {
   return (
     <div className="space-y-1" data-testid={`dimension-${name}`}>
       <div className="text-sm font-medium capitalize">{dimensionLabel(name)}</div>
@@ -87,7 +96,14 @@ function DimensionTable({ name, rows }: { name: string; rows: GateRow[] }) {
                 data-testid={`gate-${row.gate}`}
                 className={cn(hardFail && 'bg-red-500/10')}
               >
-                <TableCell className="font-mono text-xs">{row.gate}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  {row.gate}
+                  <ShowTradesButton
+                    gate={row.gate}
+                    onShowTrades={onShowTrades}
+                    className="ml-2 font-sans underline"
+                  />
+                </TableCell>
                 <TableCell>
                   {row.title}
                   {row.hard && <span className="ml-1 text-xs text-muted-foreground">(hard)</span>}
@@ -127,7 +143,13 @@ function hashTargets(gates: string[]): boolean {
  * Acceptance-criteria gates by dimension. No composite score is shown on purpose: a
  * single number would hide which dimension failed and why.
  */
-export function EvaluationTable({ evaluation }: { evaluation: EvaluationBlock }) {
+export function EvaluationTable({
+  evaluation,
+  onShowTrades,
+}: {
+  evaluation: EvaluationBlock
+  onShowTrades?: (subset: TradeSubset) => void
+}) {
   const failed = evaluation.summary.hard_failed
   const live = evaluation.dimensions
     .map((d) => ({ name: d.name, rows: d.rows.filter((r) => !isDead(r)) }))
@@ -169,7 +191,7 @@ export function EvaluationTable({ evaluation }: { evaluation: EvaluationBlock })
           is not a pass.
         </p>
         {live.map((d) => (
-          <DimensionTable key={d.name} name={d.name} rows={d.rows} />
+          <DimensionTable key={d.name} name={d.name} rows={d.rows} onShowTrades={onShowTrades} />
         ))}
         {dead.length > 0 && (
           <details

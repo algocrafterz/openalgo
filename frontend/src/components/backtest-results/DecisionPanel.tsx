@@ -7,6 +7,7 @@ import type {
   ResearchState,
   RunVerdictValue,
   Stage,
+  TradeSubset,
   Verdict,
   VerdictReason,
 } from '@/api/backtestResults'
@@ -14,6 +15,7 @@ import { findGateRow } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
 import { InfoTip } from './InfoTip'
 import { decisionClass, decisionText } from './PromotionGate'
+import { ShowTradesButton } from './ShowTradesButton'
 import { VerdictBadge } from './VerdictBadge'
 
 const VERDICT_LABEL: Record<RunVerdictValue, string> = {
@@ -63,9 +65,11 @@ function gateId(reason: VerdictReason): string | null {
 function ReasonItem({
   reason,
   evaluation,
+  onShowTrades,
 }: {
   reason: VerdictReason
   evaluation?: EvaluationBlock | null
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   const [open, setOpen] = useState(false)
   const gate = gateId(reason)
@@ -86,6 +90,7 @@ function ReasonItem({
           Gate {gate}
         </a>
       )}
+      <ShowTradesButton gate={target ?? gate} onShowTrades={onShowTrades} />
       {open && (
         <div className="ml-4 text-xs text-muted-foreground">
           {reason.status ? `Gate status: ${reason.status}. ` : ''}
@@ -99,9 +104,11 @@ function ReasonItem({
 function RunVerdictRegion({
   verdict,
   evaluation,
+  onShowTrades,
 }: {
   verdict: DerivedVerdict | null
   evaluation?: EvaluationBlock | null
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   return (
     <section
@@ -135,6 +142,7 @@ function RunVerdictRegion({
                   key={`${r.text}-${r.evidence_ref ?? ''}-${i}`}
                   reason={r}
                   evaluation={evaluation}
+                  onShowTrades={onShowTrades}
                 />
               ))}
             </ul>
@@ -257,6 +265,7 @@ export function DecisionPanel({
   isLatestRun,
   captured,
   evaluation,
+  onShowTrades,
 }: {
   verdict: DerivedVerdict | null
   promotion: Promotion | null
@@ -271,6 +280,8 @@ export function DecisionPanel({
   isLatestRun?: boolean
   captured: boolean
   evaluation?: EvaluationBlock | null
+  /** Opens the trade drill-down on the subset behind a gate. */
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   if (!captured) {
     return (
@@ -294,7 +305,7 @@ export function DecisionPanel({
   return (
     <section className="space-y-3 max-w-3xl" data-testid="decision-panel" aria-label="Decision">
       <div className="flex flex-wrap gap-3">
-        <RunVerdictRegion verdict={verdict} evaluation={evaluation} />
+        <RunVerdictRegion verdict={verdict} evaluation={evaluation} onShowTrades={onShowTrades} />
         <StateRegion researchState={researchState} stage={stage} />
       </div>
       {promotion && <PromotionSummary promotion={promotion} />}

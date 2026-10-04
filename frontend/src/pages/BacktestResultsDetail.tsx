@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import {
   backtestResultsApi,
   type IdeaCard,
   type RunDetail,
   type RunRecord,
+  type TradeSubset,
 } from '@/api/backtestResults'
 import { BacktestScope } from '@/components/backtest-results/BacktestScope'
 import { CompareView } from '@/components/backtest-results/CompareView'
@@ -16,6 +17,7 @@ import { PromotionGate } from '@/components/backtest-results/PromotionGate'
 import { RelatedStrategies } from '@/components/backtest-results/RelatedStrategies'
 import { Reproducibility } from '@/components/backtest-results/Reproducibility'
 import { ResearchNotes } from '@/components/backtest-results/ResearchNotes'
+import { RunEvidence, type TradesDrillState } from '@/components/backtest-results/RunEvidence'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
 import { RunIdentity } from '@/components/backtest-results/RunIdentity'
 import { RunTearsheet } from '@/components/backtest-results/RunTearsheet'
@@ -55,11 +57,13 @@ function RunDetailBlocks({
   run,
   detail,
   isLatestRun,
+  onShowTrades,
 }: {
   idea: IdeaCardLike
   run: RunRecord
   detail: RunDetail
   isLatestRun: boolean
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   return (
     <>
@@ -84,8 +88,13 @@ function RunDetailBlocks({
         isLatestRun={isLatestRun}
         captured={detail.captured}
         evaluation={run.evaluation ?? null}
+        onShowTrades={onShowTrades}
       />
-      <PromotionGate promotion={detail.promotion} evaluation={run.evaluation ?? null} />
+      <PromotionGate
+        promotion={detail.promotion}
+        evaluation={run.evaluation ?? null}
+        onShowTrades={onShowTrades}
+      />
     </>
   )
 }
@@ -101,6 +110,16 @@ export default function BacktestResultsDetail() {
 
 function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
   const [selected, setSelected] = useState<string | null>(null)
+  const [drill, setDrill] = useState<TradesDrillState | null>(null)
+  const nonce = useRef(0)
+  const selectRun = (id: string) => {
+    setSelected(id)
+    setDrill(null)
+  }
+  const openTrades = (subset: TradeSubset) => {
+    nonce.current += 1
+    setDrill({ subset, nonce: nonce.current })
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ['backtest-results', ideaId],
@@ -118,6 +137,11 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
   const runId = (loadedRuns.find((r) => r.run_id === selected) ?? loadedRuns[loadedRuns.length - 1])
     ?.run_id
   const detailQuery = useRunDetail(ideaId, runId)
+
+  // Opening the drill-down brings its section into view.
+  useEffect(() => {
+    if (drill) document.getElementById('trades')?.scrollIntoView?.({ block: 'start' })
+  }, [drill])
 
   if (isLoading) {
     return (
@@ -190,7 +214,13 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
         </p>
       )}
       {current && detail && (
-        <RunDetailBlocks idea={idea} run={current} detail={detail} isLatestRun={isLatestRun} />
+        <RunDetailBlocks
+          idea={idea}
+          run={current}
+          detail={detail}
+          isLatestRun={isLatestRun}
+          onShowTrades={detail.captured && detail.has_trades ? openTrades : undefined}
+        />
       )}
 
       <StrategyDefinition
@@ -221,6 +251,17 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
         </>
       )}
 
+      {current && detail && (
+        <RunEvidence
+          ideaId={ideaId}
+          run={current}
+          detail={detail}
+          drill={drill}
+          onOpenTrades={openTrades}
+          onCloseTrades={() => setDrill(null)}
+        />
+      )}
+
       {runs.length === 0 || !current ? (
         <div className="text-sm text-muted-foreground" data-testid="no-runs">
           No backtest run has been recorded for this idea yet.
@@ -234,12 +275,12 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
             pointers={data.version_pointers}
             runs={runs}
             selectedRunId={current.run_id}
-            onSelectRun={setSelected}
+            onSelectRun={selectRun}
           />
           <RunHistory
             runs={runs}
             selectedId={current.run_id}
-            onSelect={setSelected}
+            onSelect={selectRun}
             versions={data.versions ?? null}
             pointers={data.version_pointers}
           />
@@ -250,6 +291,7 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
             run={current}
             ideaId={ideaId}
             assumptions={detail?.captured ? detail.assumptions : undefined}
+            onShowTrades={detail?.captured && detail.has_trades ? openTrades : undefined}
           />
           <CompareView ideaId={ideaId} runs={runs} />
         </>

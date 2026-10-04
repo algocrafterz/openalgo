@@ -293,3 +293,171 @@ def test_idea_route_reports_versions_error_without_a_path(monkeypatch, tmp_path)
     assert body["versions"] is None
     assert body["versions_error"] == "versions.yaml is invalid"
     assert str(tmp_path) not in body["versions_error"]
+
+
+# ---- trades and lineage routes ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/backtest-results/IDEA-001/runs/2026-09-29-orb-v1/trades",
+        "/api/backtest-results/IDEA-001/runs/2026-09-29-orb-v1/trades/T-000001/lineage",
+    ],
+)
+def test_trade_routes_require_a_session(path):
+    with _app().test_client() as client:
+        assert client.get(path).status_code in (302, 401)
+
+
+def test_trades_route_parses_query_and_passes_it(monkeypatch):
+    seen = {}
+
+    def fake(idea_id, run_id, **kw):
+        seen.update(idea=idea_id, run=run_id, **kw)
+        return True, {"status": "success", "page": {}}, 200
+
+    monkeypatch.setattr(route_module, "get_run_trades", fake)
+    client = _client_logged_in(_app(), monkeypatch)
+    url = (
+        "/api/backtest-results/IDEA-001/runs/r1/trades"
+        "?subset=oos&symbol=AAA&reason=SL&sort=net_r&desc=true&limit=50&offset=10"
+    )
+    assert client.get(url).status_code == 200
+    assert seen == {
+        "idea": "IDEA-001",
+        "run": "r1",
+        "subset": "oos",
+        "symbol": "AAA",
+        "reason": "SL",
+        "sort": "net_r",
+        "desc": True,
+        "limit": 50,
+        "offset": 10,
+    }
+
+
+def test_trades_route_defaults(monkeypatch):
+    seen = {}
+
+    def fake(idea_id, run_id, **kw):
+        seen.update(kw)
+        return True, {"status": "success"}, 200
+
+    monkeypatch.setattr(route_module, "get_run_trades", fake)
+    client = _client_logged_in(_app(), monkeypatch)
+    client.get("/api/backtest-results/IDEA-001/runs/r1/trades")
+    assert seen == {
+        "subset": "all",
+        "symbol": None,
+        "reason": None,
+        "sort": "entry_time",
+        "desc": False,
+        "limit": 100,
+        "offset": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "limit=abc",
+        "offset=x",
+        "limit=1.5",
+        "desc=maybe",
+        "offset=",
+        "limit=99999999999999999999",
+        "limit=%2B5",
+        "limit=1234567890",
+        "offset=-x",
+    ],
+)
+def test_trades_route_bad_params_400(monkeypatch, query):
+    called = []
+    monkeypatch.setattr(
+        route_module, "get_run_trades", lambda *a, **k: called.append(1) or (True, {}, 200)
+    )
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get(f"/api/backtest-results/IDEA-001/runs/r1/trades?{query}")
+    assert response.status_code == 400 and not called
+    assert response.get_json()["status"] == "error"
+
+
+@pytest.mark.parametrize(
+    "raw,expected", [("1", True), ("0", False), ("false", False), ("TRUE", True)]
+)
+def test_trades_route_boolean_forms(monkeypatch, raw, expected):
+    seen = {}
+    monkeypatch.setattr(
+        route_module,
+        "get_run_trades",
+        lambda i, r, **kw: seen.update(kw) or (True, {"status": "success"}, 200),
+    )
+    client = _client_logged_in(_app(), monkeypatch)
+    client.get(f"/api/backtest-results/IDEA-001/runs/r1/trades?desc={raw}")
+    assert seen["desc"] is expected
+
+
+def test_lineage_route_passes_ids_and_status(monkeypatch):
+    seen = {}
+
+    def fake(idea_id, run_id, trade_id):
+        seen.update(idea=idea_id, run=run_id, trade=trade_id)
+        return False, {"status": "error", "message": "x"}, 404
+
+    monkeypatch.setattr(route_module, "get_trade_lineage", fake)
+    client = _client_logged_in(_app(), monkeypatch)
+    response = client.get("/api/backtest-results/IDEA-001/runs/r1/trades/T-000001/lineage")
+    assert response.status_code == 404
+    assert seen == {"idea": "IDEA-001", "run": "r1", "trade": "T-000001"}
+
+
+def test_new_routes_do_not_shadow_detail_or_export(monkeypatch):
+    monkeypatch.setattr(
+        route_module, "get_run_detail", lambda *_a: (True, {"status": "detail"}, 200)
+    )
+    monkeypatch.setattr(route_module, "export_run", lambda *_a: (False, {"status": "export"}, 404))
+    client = _client_logged_in(_app(), monkeypatch)
+    assert client.get("/api/backtest-results/IDEA-001/runs/r1").get_json()["status"] == "detail"
+    assert client.get("/api/backtest-results/IDEA-001/runs/r1/export").status_code == 404
+
+
+def test_trades_and_lineage_end_to_end(monkeypatch, tmp_path):
+    import json
+
+    import pandas as pd
+
+    from services import backtest_results_service as svc
+
+    rid = "2026-09-29-orb-v1"
+    runs = tmp_path / "research" / "ideas" / "idea-001-sample" / "runs"
+    (runs / rid / "evidence").mkdir(parents=True)
+    (runs / rid / "manifest.json").write_text(json.dumps({"schema": 3}), encoding="utf-8")
+    ts = pd.to_datetime(["2026-01-05 09:30", "2026-02-05 09:30"]).tz_localize("Asia/Kolkata")
+    pd.DataFrame(
+        {
+            "trade_id": ["T-000001", "T-000002"],
+            "symbol": ["AAA", "BBB"],
+            "entry_time": ts,
+            "net_r": [1.0, -1.0],
+            "exit_reason": ["TP", "SL"],
+        }
+    ).to_parquet(runs / rid / "evidence" / "trades.parquet", index=False)
+    record = {"run_id": rid, "schema": 3, "artifact_dir": f"{rid}/", "manifest_sha256": "a" * 64}
+    monkeypatch.setattr(
+        svc,
+        "_load",
+        lambda _r: [{"id": "IDEA-001", "folder": "idea-001-sample", "runs": [record]}],
+    )
+    monkeypatch.setattr(svc, "DEFAULT_ROOT", tmp_path)
+    client = _client_logged_in(_app(), monkeypatch)
+    base = f"/api/backtest-results/IDEA-001/runs/{rid}/trades"
+    page = client.get(base + "?subset=losers&sort=net_r&desc=1").get_json()["page"]
+    assert page["total"] == 1 and page["rows"][0]["trade_id"] == "T-000002"
+    assert page["rows"][0]["entry_time"] == "2026-02-05T09:30:00+05:30"
+    assert client.get(base + "?sort=nope").status_code == 400
+    lin = client.get(base + "/T-000001/lineage")
+    assert lin.status_code == 200
+    body = lin.get_json()["lineage"]
+    assert body["trade_id"] == "T-000001" and body["signal"] is None and body["fills"] == []
+    assert client.get(base + "/T-9/lineage").status_code == 400

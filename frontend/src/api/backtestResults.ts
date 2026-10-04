@@ -389,6 +389,150 @@ export interface RunDetail {
   missing_capabilities: string[]
   manifest_sha256: string | null
   created_ist: string | null
+  /** What actually ran at record time. Null for a run recorded before validity checks existed. */
+  validity: ValidityBlock | null
+  data_quality: DataQualityReport | null
+  trials: TrialsBlock | null
+  ledgers: LedgerSummary | null
+  cost_components: CostComponentSummary | null
+  /** True when evidence/trades.parquet exists, so the trade drill-down can open. */
+  has_trades: boolean
+  /** True when the lineage ledgers exist, so a trade can be followed to its signal and fills. */
+  has_ledgers: boolean
+}
+
+// ---- Evidence, data quality, cost decomposition and trade drill-down (build order 8) ---------
+// Read from the run folder's report.json, data_quality.json and Parquet evidence. Presentation only.
+
+export interface DataQualityItem {
+  check: string
+  severity: 'info' | 'warning'
+  detail: string
+  count: number
+  /** Up to ten symbol names affected. */
+  symbols: string[]
+}
+
+export interface DataQualityReport {
+  schema: number
+  status: 'PASS' | 'WARNING' | 'NOT_RUN'
+  /** A WARNING that affects validity makes the run INCONCLUSIVE. */
+  affects_validity: boolean
+  thresholds: Record<string, number>
+  items: DataQualityItem[]
+  summary: Record<string, unknown>
+  dropped: Record<string, unknown>
+  /** Plain statements of what the data layer does and does not handle. */
+  policy: { corporate_actions: string; closing_auction: string; timestamps: string }
+}
+
+export interface ValidityBlock {
+  ok: boolean
+  failures: { check: string; detail: string }[]
+  /** The checks that actually ran. A check not listed here did not run and is not a pass. */
+  checks_run: string[]
+}
+
+export interface TrialsBlock {
+  material: number
+  external: number
+  total: number
+  /** Where the number came from: 'trials.yaml' (the ledger). */
+  source: string
+}
+
+export interface LedgerSummary {
+  signals: number
+  accepted: number
+  excluded_by_reason: Record<string, number>
+  orders: number
+  filled: number
+  dropped: number
+  fills: number
+  trades: number
+  reconcile_problems: number
+  problems: string[]
+}
+
+export interface CostComponent {
+  /** For example 'brokerage', 'stt', 'exchange', 'gst', 'sebi', 'stamp', 'slippage'. */
+  key: string
+  label: string
+  mean_bps: number
+}
+
+/** Modelled per-trade costs (basis points of entry notional), averaged over the run's trades. */
+export interface CostComponentSummary {
+  trades: number
+  components: CostComponent[]
+  /** The sum of the components. The headline net figures use the engine's flat cost instead. */
+  modeled_cost_bps_mean: number
+  engine_cost_bps_mean: number | null
+}
+
+export type TradeSubset = 'all' | 'in_sample' | 'oos' | 'losers' | 'gap_exits'
+
+export interface TradeRow {
+  trade_id: string
+  symbol: string
+  side: string
+  entry_time: string
+  exit_time: string | null
+  entry_price: number | null
+  exit_price: number | null
+  exit_reason: string | null
+  gross_r: number | null
+  net_r: number | null
+  gross_bps: number | null
+  net_bps: number | null
+  cost_bps: number | null
+  signal_id?: string | null
+  order_id?: string | null
+  entry_fill_id?: string | null
+  exit_fill_id?: string | null
+  position_id?: string | null
+  [cost_component: string]: unknown
+}
+
+export interface TradesPage {
+  total: number
+  limit: number
+  offset: number
+  subset: TradeSubset
+  /** What the subset means, for example that purge and embargo exclusions are not applied. */
+  subset_note?: string | null
+  /** Set when the page is empty for a stated reason (for example no out-of-sample split). */
+  message?: string | null
+  rows: TradeRow[]
+}
+
+/** The chain behind one trade, from its ids. Each part is null when the run has no ledgers. */
+export interface TradeLineage {
+  trade_id: string
+  signal: Record<string, unknown> | null
+  order: Record<string, unknown> | null
+  fills: Record<string, unknown>[]
+  position_id: string | null
+  /** Parts that could not be resolved because the run's files lack the columns or ledgers. */
+  missing?: string[]
+}
+
+export interface TradesQuery {
+  subset?: TradeSubset
+  symbol?: string
+  reason?: string
+  sort?: string
+  desc?: boolean
+  limit?: number
+  offset?: number
+}
+
+export interface BacktestTradesResponse extends Envelope {
+  page?: TradesPage
+}
+
+export interface BacktestLineageResponse extends Envelope {
+  lineage?: TradeLineage
 }
 
 export interface BacktestRunDetailResponse extends Envelope {
@@ -691,6 +835,28 @@ export const backtestResultsApi = {
     unwrap(
       webClient.get<BacktestIdeaResponse>(`/api/backtest-results/${encodeURIComponent(ideaId)}`),
       'Failed to load backtest history'
+    ),
+
+  trades: (ideaId: string, runId: string, query: TradesQuery = {}): Promise<BacktestTradesResponse> => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+    }
+    const qs = params.toString()
+    return unwrap(
+      webClient.get<BacktestTradesResponse>(
+        `/api/backtest-results/${encodeURIComponent(ideaId)}/runs/${encodeURIComponent(runId)}/trades${qs ? `?${qs}` : ''}`
+      ),
+      'Failed to load trades'
+    )
+  },
+
+  lineage: (ideaId: string, runId: string, tradeId: string): Promise<BacktestLineageResponse> =>
+    unwrap(
+      webClient.get<BacktestLineageResponse>(
+        `/api/backtest-results/${encodeURIComponent(ideaId)}/runs/${encodeURIComponent(runId)}/trades/${encodeURIComponent(tradeId)}/lineage`
+      ),
+      'Failed to load trade lineage'
     ),
 
   run: (ideaId: string, runId: string): Promise<BacktestRunDetailResponse> =>

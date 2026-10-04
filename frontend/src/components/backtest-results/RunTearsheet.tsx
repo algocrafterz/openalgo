@@ -1,4 +1,4 @@
-import type { RunDetail, RunRecord } from '@/api/backtestResults'
+import type { RunDetail, RunRecord, TradeSubset } from '@/api/backtestResults'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   fmtNum,
@@ -80,10 +80,12 @@ export function RunTearsheet({
   run,
   ideaId,
   assumptions,
+  onShowTrades,
 }: {
   run: RunRecord
   ideaId?: string
   assumptions?: RunDetail['assumptions']
+  onShowTrades?: (subset: TradeSubset) => void
 }) {
   const series = run.series ?? {}
   return (
@@ -120,7 +122,9 @@ export function RunTearsheet({
           <MonthlyGrid rows={series.monthly ?? []} />
         </CardContent>
       </Card>
-      {run.evaluation && <EvaluationTable evaluation={run.evaluation} />}
+      {run.evaluation && (
+        <EvaluationTable evaluation={run.evaluation} onShowTrades={onShowTrades} />
+      )}
       {run.regimes && <RegimeTable regimes={run.regimes} />}
       <RunRobustness run={run} />
       <RunAssumptions run={run} assumptions={assumptions} />

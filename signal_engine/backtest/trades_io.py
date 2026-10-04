@@ -165,17 +165,26 @@ def _to_table(trades: Sequence[Trade], components: pd.DataFrame | None = None) -
     return pa.Table.from_arrays(arrays, schema=schema)
 
 
-def _parquet_bytes(table: pa.Table) -> bytes:
-    """Deterministic parquet bytes (no pandas metadata, no stats drift)."""
+#: Rows per row group in the ledger files. With sorted ids and statistics, a lookup by id
+#: touches one or two groups instead of decoding the whole file.
+LEDGER_ROW_GROUP_SIZE = 50_000
+
+
+def _parquet_bytes(table: pa.Table, *, prunable: bool = False) -> bytes:
+    """Deterministic parquet bytes (no pandas metadata). `prunable` writes row-group statistics
+    and bounded row groups, for ledger files that are read with filters; the trades table keeps
+    its pinned single-group, statistics-free layout."""
     sink = io.BytesIO()
+    extra = {"row_group_size": LEDGER_ROW_GROUP_SIZE} if prunable else {}
     pq.write_table(
         table,
         sink,
         compression="zstd",
         use_dictionary=False,
-        write_statistics=False,
+        write_statistics=prunable,
         data_page_version="2.0",
         store_schema=False,
+        **extra,
     )
     return sink.getvalue()
 
@@ -247,6 +256,20 @@ LEDGER_SCHEMAS: dict[str, pa.Schema] = {
 }
 
 
+#: ledger name -> (time column, id column). Frames are sorted by (symbol, time, id) before
+#: writing, so string ids, which start with the symbol, get tight min/max per row group.
+_LEDGER_SORT = {
+    "signals": ("bar_time", "signal_id"),
+    "orders": ("submit_time", "order_id"),
+    "fills": ("fill_time", "fill_id"),
+    "exclusions": ("bar_time", "exclusion_id"),
+}
+
+
+def _ledger_name(schema: pa.Schema) -> str | None:
+    return next((n for n, sch in LEDGER_SCHEMAS.items() if sch.equals(schema)), None)
+
+
 def _column_array(col: pd.Series, field: pa.Field) -> pa.Array:
     if pa.types.is_date32(field.type):
         values = [None if pd.isna(v) else pd.Timestamp(v).date() for v in col.tolist()]
@@ -262,15 +285,21 @@ def frame_parquet_bytes(frame: pd.DataFrame, schema: pa.Schema | None = None) ->
     With `schema` (for example `LEDGER_SCHEMAS["fills"]`) the columns must match it by name and
     are cast to its types, so a zero-row frame still carries the full schema. Without it the
     schema is inferred from the frame and the pandas metadata is dropped. The index is never
-    written.
+    written. A frame written with one of `LEDGER_SCHEMAS` is sorted by (symbol, time, id) and
+    written with row-group statistics and `LEDGER_ROW_GROUP_SIZE` rows per group, so id lookups
+    with pyarrow filters read only the matching groups.
     """
     if schema is None:
         table = pa.Table.from_pandas(frame, preserve_index=False)
         return _parquet_bytes(table.replace_schema_metadata(None))
     if list(frame.columns) != schema.names:
         raise ValueError(f"frame columns {list(frame.columns)} do not match schema {schema.names}")
+    ledger = _ledger_name(schema)
+    if ledger is not None:
+        time_col, id_col = _LEDGER_SORT[ledger]
+        frame = frame.sort_values(["symbol", time_col, id_col], kind="mergesort")
     arrays = [_column_array(frame[field.name], field) for field in schema]
-    return _parquet_bytes(pa.Table.from_arrays(arrays, schema=schema))
+    return _parquet_bytes(pa.Table.from_arrays(arrays, schema=schema), prunable=ledger is not None)
 
 
 def write_trades_parquet(

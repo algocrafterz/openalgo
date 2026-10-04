@@ -13,14 +13,19 @@ import csv
 import io
 import itertools
 import json
+import math
 import os
 import re
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import yaml
 
 from signal_engine.research.build_registry import RegistryError, load_ideas
@@ -599,6 +604,13 @@ def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any
         "missing_capabilities": [],
         "manifest_sha256": None,
         "created_ist": None,
+        "validity": None,
+        "data_quality": None,
+        "trials": None,
+        "ledgers": None,
+        "cost_components": None,
+        "has_trades": False,
+        "has_ledgers": False,
     }
 
 
@@ -712,6 +724,7 @@ def _read_run_folder(
     detail["verdict"] = _jsonable(report.get("verdict"))
     detail["promotion"] = _jsonable(report.get("promotion"))
     detail["next_action"] = _jsonable(report.get("next_action"))
+    _fill_evidence(folder, report, detail)
     detail["spec"] = spec
     if isinstance(assumptions, dict):
         detail["assumptions"] = {
@@ -765,6 +778,497 @@ def get_run_detail(
     detail["manifest_sha256"] = record.get("manifest_sha256")
     _read_run_folder(folder, runs_dir, run_id, detail)
     return True, {"status": "success", "run": detail}, 200
+
+
+# ---- Evidence read-model: validity, data quality, cost components, trades, lineage ------------
+
+#: Largest Parquet evidence file (bytes) and most rows decoded for interactive browsing. The
+#: single production worker is cooperative: a whole-file decode of a huge run would freeze it.
+_MAX_PARQUET_BYTES = 64 * 1024 * 1024
+_MAX_PARQUET_ROWS = 300_000
+_MAX_SAFE_INT = 2**53 - 1
+_TRADE_ID = re.compile(r"^T-\d{6,}\Z")
+_TRADE_SUBSETS = ("all", "in_sample", "oos", "losers", "gap_exits")
+_GAP_EXIT_REASONS = ("SL_GAP", "SL_GAP_ENTRY")
+_MIN_LIMIT, _MAX_LIMIT = 1, 500
+_COST_LABELS = (
+    ("brokerage", "Brokerage"),
+    ("stt", "STT"),
+    ("exchange", "Exchange charges"),
+    ("gst", "GST"),
+    ("sebi", "SEBI fee"),
+    ("stamp", "Stamp duty"),
+    ("slippage", "Slippage"),
+)
+_COST_COLUMNS = tuple(f"cost_{key}_bps" for key, _ in _COST_LABELS)
+_TRADE_COLUMNS = (
+    "trade_id",
+    "symbol",
+    "side",
+    "entry_time",
+    "exit_time",
+    "entry_price",
+    "exit_price",
+    "quantity",
+    "exit_reason",
+    "gross_r",
+    "net_r",
+    "gross_bps",
+    "net_bps",
+    "cost_bps",
+    "signal_id",
+    "order_id",
+    "entry_fill_id",
+    "exit_fill_id",
+    "position_id",
+    *_COST_COLUMNS,
+    "modeled_cost_bps",
+)
+_LINEAGE_COLUMNS = ("signal_id", "order_id", "position_id")
+_LEDGER_NAMES = ("signals", "orders", "fills")
+_IST_NAME = "Asia/Kolkata"
+_PARQUET_ERRORS = (OSError, ValueError, KeyError, TypeError, pa.ArrowException)
+_SUBSET_NOTES = {
+    "all": "every trade",
+    "in_sample": "entry before oos_start; purge and embargo exclusions are not applied here",
+    "oos": "entry on or after oos_start; purge and embargo exclusions are not applied here",
+    "losers": "net_r below zero",
+    "gap_exits": "exit reason SL_GAP or SL_GAP_ENTRY",
+}
+
+
+class _TooLarge(Exception):
+    """A parquet file is over the interactive size or row cap."""
+
+
+class _LedgerSchema(Exception):
+    """A ledger lacks a column the lookup needs."""
+
+
+class _Inconsistent(Exception):
+    """An id that must be unique matched several rows."""
+
+
+_CACHE_LOCK = threading.Lock()
+_FRAME_CACHE: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+_ORDER_CACHE: "OrderedDict[tuple, Any]" = OrderedDict()
+_COST_CACHE: "OrderedDict[tuple, Any]" = OrderedDict()
+_LOOKUP_CACHE: "OrderedDict[tuple, list]" = OrderedDict()
+_FRAME_CACHE_MAX, _ORDER_CACHE_MAX, _COST_CACHE_MAX, _LOOKUP_CACHE_MAX = 2, 4, 16, 256
+
+
+def _clear_evidence_caches() -> None:
+    with _CACHE_LOCK:
+        for cache in (_FRAME_CACHE, _ORDER_CACHE, _COST_CACHE, _LOOKUP_CACHE):
+            cache.clear()
+
+
+def _cache_get(cache: OrderedDict, key: tuple) -> Any:
+    with _CACHE_LOCK:
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+    return None
+
+
+def _cache_put(cache: OrderedDict, key: tuple, value: Any, limit: int) -> None:
+    with _CACHE_LOCK:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > limit:
+            cache.popitem(last=False)
+
+
+def _file_key(path: Path) -> tuple:
+    stat = path.stat()
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _open_guarded(path: Path) -> pq.ParquetFile:
+    """The file's ParquetFile, refusing one over the byte or row cap (no data decoded)."""
+    if path.stat().st_size > _MAX_PARQUET_BYTES:
+        raise _TooLarge(path.name)
+    handle = pq.ParquetFile(path)
+    if handle.metadata.num_rows > _MAX_PARQUET_ROWS:
+        raise _TooLarge(path.name)
+    return handle
+
+
+def _evidence_file(folder: Path, name: str) -> Path | None:
+    """`evidence/<name>.parquet` when it is a real file (not a symlink) inside `folder`."""
+    path = folder / "evidence" / f"{name}.parquet"
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        path.resolve().relative_to(folder.resolve())
+    except (OSError, ValueError):
+        return None
+    return path
+
+
+def _optional_block(value: Any) -> dict[str, Any] | None:
+    return _jsonable(value) if isinstance(value, dict) else None
+
+
+def _mean(series: pd.Series) -> float | None:
+    value = pd.to_numeric(series, errors="coerce").mean()
+    return None if pd.isna(value) else float(value)
+
+
+def _compute_cost_components(path: Path) -> dict[str, Any] | None:
+    handle = _open_guarded(path)
+    present = set(handle.schema_arrow.names)
+    wanted = [c for c in _COST_COLUMNS if c in present]
+    if not wanted or "modeled_cost_bps" not in present:
+        return None
+    columns = [*wanted, "modeled_cost_bps"] + (["cost_bps"] if "cost_bps" in present else [])
+    frame = handle.read(columns=columns).to_pandas()
+    components = [
+        {"key": key, "label": label, "mean_bps": _mean(frame[f"cost_{key}_bps"])}
+        for key, label in _COST_LABELS
+        if f"cost_{key}_bps" in frame.columns
+    ]
+    return {
+        "trades": int(len(frame)),
+        "components": components,
+        "modeled_cost_bps_mean": _mean(frame["modeled_cost_bps"]),
+        "engine_cost_bps_mean": _mean(frame["cost_bps"]) if "cost_bps" in frame.columns else None,
+    }
+
+
+def _cost_components(folder: Path) -> dict[str, Any] | None:
+    """Per-trade cost columns of evidence/trades.parquet, averaged. Nothing else is derived."""
+    path = _evidence_file(folder, "trades")
+    if path is None:
+        return None
+    try:
+        key = ("cost", *_file_key(path))
+        cached = _cache_get(_COST_CACHE, key)
+        if cached is not None:
+            return cached[0]
+        result = _compute_cost_components(path)
+    except _TooLarge:
+        logger.error("Trades file too large for cost components: %s", path.name)
+        return None
+    except _PARQUET_ERRORS:
+        logger.exception("Could not read cost components for a run")
+        return None
+    _cache_put(_COST_CACHE, key, (result,), _COST_CACHE_MAX)
+    return result
+
+
+def _fill_evidence(folder: Path, report: dict[str, Any], detail: dict[str, Any]) -> None:
+    detail["validity"] = _optional_block(report.get("validity"))
+    detail["trials"] = _optional_block(report.get("trials"))
+    detail["ledgers"] = _optional_block(report.get("ledgers"))
+    quality_path = folder / "data_quality.json"
+    quality = _read_json(quality_path, folder) if quality_path.exists() else None
+    if not isinstance(quality, dict):
+        quality = report.get("data_quality")
+    detail["data_quality"] = _optional_block(quality)
+    detail["has_trades"] = _evidence_file(folder, "trades") is not None
+    detail["has_ledgers"] = all(_evidence_file(folder, n) is not None for n in _LEDGER_NAMES)
+    detail["cost_components"] = _cost_components(folder) if detail["has_trades"] else None
+
+
+def _evidence_value(value: Any) -> Any:
+    """One cell as plain JSON: NaN/inf/NaT become None, timestamps ISO in IST, big ints strings."""
+    if value is None or value is pd.NaT:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
+    if isinstance(value, pd.Timestamp):
+        stamp = (
+            value.tz_localize(_IST_NAME) if value.tzinfo is None else value.tz_convert(_IST_NAME)
+        )
+        return stamp.isoformat()
+    if hasattr(value, "item") and not isinstance(value, str):
+        try:
+            value = value.item()
+        except (ValueError, AttributeError):
+            return str(value)
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value).decode("utf-8", errors="replace")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value if abs(value) <= _MAX_SAFE_INT else str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value if isinstance(value, str) else str(value)
+
+
+def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    cols = [str(c) for c in frame.columns]
+    out = []
+    for row in frame.astype(object).itertuples(index=False, name=None):
+        out.append({c: _evidence_value(v) for c, v in zip(cols, row, strict=True)})
+    return out
+
+
+def _resolve_evidence_folder(
+    idea_id: str, run_id: str, root: Path
+) -> tuple[Path | None, dict[str, Any] | None, tuple | None]:
+    """(run folder, record, None), or (None, record, error) with the ready-made error result."""
+    if not isinstance(run_id, str) or not _DETAIL_RUN_ID.match(run_id):
+        return None, None, _error("invalid run id", 400)
+    idea, failure = _find_idea(idea_id, root)
+    if failure:
+        return None, None, failure
+    record = next((r for r in idea.get("runs") or [] if r.get("run_id") == run_id), None)
+    if record is None:
+        return None, None, _error(f"Run not found: {run_id}", 404)
+    if record.get("schema") != 3 or not record.get("artifact_dir"):
+        return None, record, _error("no trades for this run", 404)
+    runs_dir = _idea_folder(idea, root) / "runs"
+    folder = _resolve_run_folder(record, runs_dir, run_id, root / "research" / "ideas")
+    if folder is None:
+        return None, record, _error("invalid run folder", 400)
+    return folder, record, None
+
+
+def _oos_start(record: dict[str, Any] | None) -> str | None:
+    value = _dict(_dict(record).get("split")).get("oos_start")
+    if isinstance(value, (date, datetime)):
+        value = value.isoformat()[:10]
+    try:
+        return date.fromisoformat(value).isoformat() if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _entry_stamps(frame: pd.DataFrame) -> pd.Series:
+    """Entry times as IST-aware timestamps (naive values are taken as IST); bad ones are NaT."""
+    stamps = pd.to_datetime(frame["entry_time"], errors="coerce")
+    if stamps.dt.tz is None:
+        return stamps.dt.tz_localize(_IST_NAME)
+    return stamps.dt.tz_convert(_IST_NAME)
+
+
+def _filter_mask(
+    frame: pd.DataFrame, subset: str, symbol: str | None, reason: str | None, oos_start: str | None
+) -> pd.Series:
+    mask = pd.Series(True, index=frame.index)
+    if subset == "losers":
+        mask &= pd.to_numeric(frame["net_r"], errors="coerce") < 0
+    elif subset == "gap_exits":
+        mask &= frame["exit_reason"].isin(_GAP_EXIT_REASONS)
+    elif subset in ("in_sample", "oos"):
+        if oos_start is None:
+            return pd.Series(False, index=frame.index)
+        stamps = _entry_stamps(frame)
+        cut = pd.Timestamp(oos_start).tz_localize(_IST_NAME)
+        mask &= stamps.notna() & ((stamps >= cut) if subset == "oos" else (stamps < cut))
+    if symbol is not None:
+        mask &= frame["symbol"] == symbol
+    if reason is not None:
+        mask &= frame["exit_reason"] == reason
+    return mask
+
+
+def _page_error(subset: Any, sort: Any, symbol: Any, reason: Any, limit: Any, offset: Any):
+    if subset not in _TRADE_SUBSETS:
+        return _error("invalid subset", 400)
+    if not isinstance(sort, str):
+        return _error("invalid sort column", 400)
+    for value in (symbol, reason):
+        if value is not None and not isinstance(value, str):
+            return _error("invalid filter", 400)
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not (_MIN_LIMIT <= limit <= _MAX_LIMIT)
+    ):
+        return _error(f"limit must be between {_MIN_LIMIT} and {_MAX_LIMIT}", 400)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return _error("invalid offset", 400)
+    return None
+
+
+def _schema_error(
+    names: set[str], subset: str, symbol: Any, reason: Any, sort: str, oos_start: str | None
+):
+    """A 400 when the file lacks a column the query needs, decided before any data is read."""
+    if sort not in names or sort not in _TRADE_COLUMNS:
+        return _error("invalid sort column", 400)
+    needs = {"losers": "net_r", "gap_exits": "exit_reason", "in_sample": "entry_time"}
+    needs["oos"] = "entry_time"
+    required = []
+    if subset in needs and not (subset in ("in_sample", "oos") and oos_start is None):
+        required.append(needs[subset])
+    if symbol is not None:
+        required.append("symbol")
+    if reason is not None:
+        required.append("exit_reason")
+    missing = [c for c in required if c not in names]
+    if missing:
+        return _error(f"this run's trades have no {missing[0]} column", 400)
+    return None
+
+
+def _load_frame(path: Path, handle: pq.ParquetFile) -> pd.DataFrame:
+    key = ("frame", *_file_key(path))
+    frame = _cache_get(_FRAME_CACHE, key)
+    if frame is None:
+        columns = [c for c in handle.schema_arrow.names if c in _TRADE_COLUMNS]
+        frame = handle.read(columns=columns).to_pandas()
+        _cache_put(_FRAME_CACHE, key, frame, _FRAME_CACHE_MAX)
+    return frame
+
+
+def _sorted_order(frame, path, subset, symbol, reason, sort, desc, oos_start):
+    key = ("order", *_file_key(path), subset, symbol, reason, sort, desc, oos_start)
+    order = _cache_get(_ORDER_CACHE, key)
+    if order is None:
+        mask = _filter_mask(frame, subset, symbol, reason, oos_start)
+        picked = frame.loc[mask, [sort]]
+        picked = picked.sort_values(sort, ascending=not desc, kind="mergesort", na_position="last")
+        order = picked.index.to_numpy()
+        _cache_put(_ORDER_CACHE, key, order, _ORDER_CACHE_MAX)
+    return order
+
+
+_TOO_LARGE_TRADES = "trades file is too large to browse interactively"
+_TOO_LARGE_LEDGER = "ledger too large for interactive lineage"
+
+
+def get_run_trades(
+    idea_id: str,
+    run_id: str,
+    *,
+    subset: str = "all",
+    symbol: str | None = None,
+    reason: str | None = None,
+    sort: str = "entry_time",
+    desc: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+    root: Path | None = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """One page of a run's trades from evidence/trades.parquet, filtered and sorted.
+
+    Read-only reshaping: the table's columns (lineage ids and cost components included) are
+    returned as written, with NaN/inf as null and timestamps as ISO strings in IST.
+    """
+    folder, record, failure = _resolve_evidence_folder(idea_id, run_id, root or DEFAULT_ROOT)
+    if failure:
+        return failure
+    bad = _page_error(subset, sort, symbol, reason, limit, offset)
+    if bad:
+        return bad
+    path = _evidence_file(folder, "trades")
+    if path is None:
+        return _error("no trades for this run", 404)
+    oos_start = _oos_start(record)
+    try:
+        handle = _open_guarded(path)
+        bad = _schema_error(set(handle.schema_arrow.names), subset, symbol, reason, sort, oos_start)
+        if bad:
+            return bad
+        frame = _load_frame(path, handle)
+        order = _sorted_order(frame, path, subset, symbol, reason, sort, desc, oos_start)
+        rows = _records(frame.loc[order[offset : offset + limit]])
+    except _TooLarge:
+        return _error(_TOO_LARGE_TRADES, 413)
+    except Exception:
+        logger.exception("Could not read trades for run %s", run_id)
+        return _error("Could not read the trades for this run", 500)
+    page = {
+        "total": int(len(order)),
+        "limit": limit,
+        "offset": offset,
+        "subset": subset,
+        "subset_note": _SUBSET_NOTES[subset],
+        "rows": rows,
+    }
+    response: dict[str, Any] = {"status": "success", "page": page}
+    if subset in ("in_sample", "oos") and oos_start is None:
+        response["message"] = "This run has no in-sample / out-of-sample split date."
+    return True, response, 200
+
+
+def _lookup(path: Path, column: str, value: str, label: str, schema_message: str) -> list:
+    """Records where `column == value`: size guarded, projected, pushed down, memoised."""
+    key = ("lookup", *_file_key(path), column, value)
+    cached = _cache_get(_LOOKUP_CACHE, key)
+    if cached is not None:
+        return cached
+    handle = _open_guarded(path)
+    names = handle.schema_arrow.names
+    if column not in names:
+        raise _LedgerSchema(schema_message)
+    table = pq.read_table(path, columns=names, filters=[(column, "==", value)])
+    records = _records(table.to_pandas())
+    _cache_put(_LOOKUP_CACHE, key, records, _LOOKUP_CACHE_MAX)
+    return records
+
+
+def _unique(records: list, what: str) -> dict[str, Any] | None:
+    if len(records) > 1:
+        raise _Inconsistent(what)
+    return dict(records[0]) if records else None
+
+
+def _sorted_fills(records: list) -> list[dict[str, Any]]:
+    return sorted(
+        (dict(r) for r in records),
+        key=lambda r: (r.get("fill_time") is None, r.get("fill_time") or "", r.get("leg") or 0),
+    )
+
+
+def _ledger_part(folder: Path, name: str, column: str, value: Any) -> list | None:
+    path = _evidence_file(folder, name)
+    if path is None or not isinstance(value, str):
+        return None
+    return _lookup(path, column, value, name, "ledger schema unexpected")
+
+
+def get_trade_lineage(
+    idea_id: str, run_id: str, trade_id: str, root: Path | None = None
+) -> tuple[bool, dict[str, Any], int]:
+    """The signal, order and fills behind one trade, found by id in the run's ledgers."""
+    if not isinstance(trade_id, str) or not _TRADE_ID.match(trade_id):
+        return _error("invalid trade id", 400)
+    folder, _record, failure = _resolve_evidence_folder(idea_id, run_id, root or DEFAULT_ROOT)
+    if failure:
+        return failure
+    path = _evidence_file(folder, "trades")
+    if path is None:
+        return _error("no trades for this run", 404)
+    try:
+        trade_rows = _lookup(path, "trade_id", trade_id, "trades", "trades schema unexpected")
+        if not trade_rows:
+            return _error(f"Trade not found: {trade_id}", 404)
+        trade = _unique(trade_rows, "trade")
+        missing = [c for c in _LINEAGE_COLUMNS if c not in trade]
+        signal = _unique(
+            _ledger_part(folder, "signals", "signal_id", trade.get("signal_id")) or [], "signal"
+        )
+        orders = _ledger_part(folder, "orders", "order_id", trade.get("order_id"))
+        order = _unique(orders or [], "order")
+        fills = _sorted_fills(
+            _ledger_part(folder, "fills", "order_id", trade.get("order_id")) or []
+        )
+    except _TooLarge:
+        return _error(_TOO_LARGE_LEDGER, 413)
+    except _LedgerSchema as exc:
+        return _error(str(exc), 422)
+    except _Inconsistent:
+        return _error("ledger inconsistent", 409)
+    except Exception:
+        logger.exception("Could not read lineage for run %s", run_id)
+        return _error("Could not read the lineage for this trade", 500)
+    lineage = {
+        "trade_id": trade_id,
+        "signal": signal,
+        "order": order,
+        "fills": fills,
+        "position_id": trade.get("position_id"),
+        "missing": missing,
+    }
+    return True, {"status": "success", "lineage": lineage}, 200
 
 
 def _get(run: dict[str, Any], path: tuple[str, ...]) -> Any:
