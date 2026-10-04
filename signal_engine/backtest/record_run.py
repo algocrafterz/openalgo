@@ -812,11 +812,29 @@ _SETTINGS_FIELDS = {
     "eligibility_min_prior_sessions": "execution.eligibility_min_prior_sessions",
     "eligibility_min_volume": "execution.eligibility_min_volume",
     "eligibility_min_price": "execution.eligibility_min_price",
-    "stop": "stop",
-    "capital_per_position": "portfolio.capital_per_position",
-    "parameters": "parameters",
-    "holding_period": "holding_period",
 }
+
+#: Strategy-intent fields of the frozen spec the run needs: `settings` key -> path in the intent.
+#: These are not in `frozen.resolved` (that holds execution and profile fields only), so they are
+#: read from `frozen.intent`. Without them the spec would not bind the strategy class, size
+#: trades that have no stop, or lift the holding cap.
+_INTENT_SETTINGS = {
+    "parameters": ("parameters",),
+    "stop": ("stop",),
+    "holding_period": ("holding_period",),
+    "capital_per_position": ("portfolio", "capital_per_position"),
+}
+
+
+def _intent_settings(intent: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, path in _INTENT_SETTINGS.items():
+        node: Any = intent
+        for step in path:
+            node = node.get(step) if isinstance(node, Mapping) else None
+        if node is not None:
+            out[name] = node
+    return out
 
 
 def session_inputs(frozen: Any, execution: Execution) -> dict[str, Any] | None:
@@ -860,6 +878,7 @@ def _execute_frozen(
         for name, field_name in _SETTINGS_FIELDS.items()
         if field_name in frozen.resolved
     }
+    settings.update(_intent_settings(frozen.intent))
     try:
         accepted = inspect.signature(execute).parameters
     except (TypeError, ValueError):

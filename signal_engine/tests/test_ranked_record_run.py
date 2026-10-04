@@ -156,3 +156,39 @@ class TestRecordedArtifact:
         before = br.load_ideas(root)[0]["verdict"]
         decisions.record(folder, path.stem, "keep", note="reference run")
         assert br.load_ideas(root)[0]["verdict"] == before
+
+
+class TestFrozenSpecReachesTheRun:
+    """The frozen spec's intent, not only its execution fields, must reach `execute_backtest`.
+
+    Binding the class to the spec, the fixed notional and the unlimited holding cap all depend on
+    these settings. Unit tests that pass them by hand would not notice if the real path dropped them.
+    """
+
+    def captured(self, tmp_path):
+        seen = {}
+
+        def spying(key, settings=None):
+            seen.update(settings or {})
+            return execute(key)
+
+        folder = _idea(tmp_path, "012")
+        _write_spec(folder, SPEC)
+        rr.record_idea(
+            tmp_path, "IDEA-012", execute=spying, run_date="2026-10-04", supported={"orb"}
+        )
+        return seen
+
+    def test_the_spec_parameters_are_handed_to_the_run(self, tmp_path):
+        assert self.captured(tmp_path)["parameters"] == SPEC["parameters"]
+
+    def test_the_stop_and_the_holding_period_are_handed_to_the_run(self, tmp_path):
+        seen = self.captured(tmp_path)
+        assert seen["stop"] == "none" and seen["holding_period"] == "none"
+
+    def test_the_capital_per_position_is_handed_to_the_run(self, tmp_path):
+        assert self.captured(tmp_path)["capital_per_position"] == 100000
+
+    def test_the_execution_settings_are_still_handed_over(self, tmp_path):
+        seen = self.captured(tmp_path)
+        assert seen["cost_bps"] == 24.0 and seen["warmup_bars"] == 20
