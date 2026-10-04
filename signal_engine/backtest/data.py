@@ -207,13 +207,18 @@ def _freq(interval: str) -> str:
 
 
 def historify_symbols(interval: str = "1m", db_path=None) -> list[str]:
-    """Symbols the local store actually holds at this interval, longest history first."""
+    """Symbols the local store actually holds at this interval, longest history first.
+
+    Equal histories are in symbol order. Without that tie-break the order is whatever the database
+    returns, and it flows into the trade list, so two runs on the same data would list the same
+    trades in a different order.
+    """
     import duckdb
     con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
     try:
         return [r[0] for r in con.execute(
             "SELECT symbol FROM market_data WHERE interval = ? "
-            "GROUP BY symbol ORDER BY count(*) DESC", [interval]).fetchall()]
+            "GROUP BY symbol ORDER BY count(*) DESC, symbol", [interval]).fetchall()]
     finally:
         con.close()
 
