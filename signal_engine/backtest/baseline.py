@@ -103,9 +103,11 @@ def random_entry_baseline(
     trade_net = np.empty(len(matched))
     for i, (trade, hold, opens, closes) in enumerate(matched):
         entries = rng.integers(0, len(closes) - hold, size=draws)
-        moves = (closes[entries + hold] - opens[entries]) / opens[entries] * 1e4
+        # A trade that exited at an open is matched against an open-to-open baseline.
+        exits = opens if getattr(trade, "exit_at_open", False) else closes
+        moves = (exits[entries + hold] - opens[entries]) / opens[entries] * 1e4
         base_gross[i] = trade.direction * moves.mean()
-        trade_net[i] = trade.r_net * trade.risk_pct * 100
+        trade_net[i] = trade.net_bps
     base_net = base_gross - round_trip_bps
     diff = trade_net - base_net
 
@@ -237,7 +239,7 @@ def random_entry_baseline_intraday(
         entries = pool[rng.integers(0, len(pool), size=draws)]
         moves = (closes[entries + hold] - opens[entries]) / opens[entries] * 1e4
         base_gross[i] = trade.direction * moves.mean()
-        trade_net[i] = trade.r_net * trade.risk_pct * 100
+        trade_net[i] = trade.net_bps
     base_net = base_gross - round_trip_bps
     diff = trade_net - base_net
 

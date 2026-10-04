@@ -182,6 +182,16 @@ class TestRuleWording:
         found = _problems(make_spec(holding_period=value))
         assert [p for p in found if p.field == "holding_period"] == []
 
+    @pytest.mark.parametrize("value", ["none", "None", "unlimited", "Unlimited"])
+    def test_an_explicit_no_maximum_is_accepted(self, value):
+        found = _problems(make_spec(holding_period=value))
+        assert [p for p in found if p.field == "holding_period"] == []
+
+    @pytest.mark.parametrize("value", ["no limit really", "until further notice", "open ended"])
+    def test_other_ways_of_saying_no_maximum_are_still_not_a_limit(self, value):
+        s = make_spec(holding_period=value)
+        assert [p.field for p in _problems(s, "intake")] == ["holding_period"]
+
 
 class TestDirectionAndProduct:
     @pytest.mark.parametrize("style", ["swing", "positional"])

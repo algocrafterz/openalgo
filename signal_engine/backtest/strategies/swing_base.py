@@ -5,6 +5,20 @@ Differs from the intraday `Strategy` base in one place that matters: the entry h
 triggered by today's OPEN, so the adapter is allowed to read `c["Open"][i]` - and
 nothing else from bar i. Reading High, Low or Close at i is lookahead and will invent
 an edge that does not exist.
+
+Two optional hooks are found by name, so a strategy that does not define them is unaffected:
+
+  prepare_panel(frames, params, calendar) -> frames
+      Called once, before the symbol-by-symbol run, with every symbol's frame and the run's
+      derived calendar. A strategy that ranks the universe computes its cross-sectional decision
+      here (see `backtest/panel.py`) and hands it to each symbol as columns.
+  exit_at_open(c, i, p, pos) -> str | None
+      Asked at bar i's open for an open position, never on its entry bar. A reason closes the
+      position at that open; it may read bar i's Open and anything at i-1 or earlier. The same
+      symbol is not bought again on that bar.
+
+`EntrySignal.sl` may be None for a strategy with no stop. Risk and R are then undefined and the
+trade carries its result as a return on the entry price.
 """
 
 from __future__ import annotations

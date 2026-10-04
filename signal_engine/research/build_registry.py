@@ -105,6 +105,9 @@ RUN_NUMERIC = {
         "payoff",
         "hurdle_t",
         "max_dd_r",
+        "max_dd_bps",
+        "total_cost_r",
+        "total_cost_bps",
         "days",
         "peak_concurrent",
         "median_concurrent",
@@ -118,8 +121,10 @@ RUN_HEAVY_KEYS = ("series", "evaluation", "regimes")
 
 #: Row statuses of an evaluation profile (backtest/evaluation.py owns their meaning).
 EVALUATION_STATUSES = ("pass", "fail", "report", "not_evaluated", "not_applicable")
-_SERIES_POINTS = ("equity_r", "drawdown_r")
+_SERIES_POINTS = ("equity_r", "drawdown_r", "equity_bps", "drawdown_bps")
+#: A monthly row is in R, or in bps for a run whose trades have no stop.
 _MONTHLY_KEYS = ("month", "n", "total_r", "net_r")
+_MONTHLY_BPS_KEYS = ("month", "n", "total_bps", "net_bps")
 
 
 def _is_num(value: Any) -> bool:
@@ -183,9 +188,10 @@ _COST_MODEL_NUMBERS = (
     "flat_bps",
     "mean_statutory_bps",
     "mean_total_bps",
-    "net_r",
-    "net_r_slip_2x",
 )
+#: The cost model's result in R, or in bps for a run whose trades have no stop.
+_COST_MODEL_R = ("net_r", "net_r_slip_2x")
+_COST_MODEL_BPS = ("net_bps", "net_bps_slip_2x")
 
 
 def _validate_cost_model(block: Any) -> list[str]:
@@ -195,6 +201,10 @@ def _validate_cost_model(block: Any) -> list[str]:
         and isinstance(block.get("model"), str)
         and isinstance(block.get("product"), str)
         and all(_is_num(block.get(k)) for k in _COST_MODEL_NUMBERS)
+        and (
+            all(_is_num(block.get(k)) for k in _COST_MODEL_R)
+            or all(_is_num(block.get(k)) for k in _COST_MODEL_BPS)
+        )
         and isinstance(block.get("total_bps_at"), dict)
         and all(_is_num(v) for v in block["total_bps_at"].values())
     )
@@ -202,7 +212,8 @@ def _validate_cost_model(block: Any) -> list[str]:
         return []
     return [
         "'cost_model' must be an object with string model and product, numeric "
-        f"{', '.join(_COST_MODEL_NUMBERS)}, and a total_bps_at object of numbers"
+        f"{', '.join(_COST_MODEL_NUMBERS)}, either {' and '.join(_COST_MODEL_R)} or "
+        f"{' and '.join(_COST_MODEL_BPS)}, and a total_bps_at object of numbers"
     ]
 
 
@@ -304,9 +315,18 @@ def _validate_run_v2(run: dict[str, Any]) -> list[str]:
             monthly = series.get("monthly")
             if "monthly" in series and not (
                 isinstance(monthly, list)
-                and all(isinstance(m, dict) and all(k in m for k in _MONTHLY_KEYS) for m in monthly)
+                and all(
+                    isinstance(m, dict)
+                    and (
+                        all(k in m for k in _MONTHLY_KEYS) or all(k in m for k in _MONTHLY_BPS_KEYS)
+                    )
+                    for m in monthly
+                )
             ):
-                problems.append(f"'series.monthly' rows need {', '.join(_MONTHLY_KEYS)}")
+                problems.append(
+                    f"'series.monthly' rows need {', '.join(_MONTHLY_KEYS)} "
+                    f"(or {', '.join(_MONTHLY_BPS_KEYS)} for a run with no stop)"
+                )
     return problems
 
 

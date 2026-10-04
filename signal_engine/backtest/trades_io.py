@@ -106,9 +106,8 @@ def trades_to_frame(
         raise ValueError(f"components has {len(components)} rows for {len(rows)} trades")
     gross_r = [float(t.r_gross) for t in rows]
     net_r = [float(t.r_net) for t in rows]
-    risk_pct = [float(t.risk_pct) for t in rows]
-    gross_bps = [g * p * 100 for g, p in zip(gross_r, risk_pct, strict=True)]
-    net_bps = [n * p * 100 for n, p in zip(net_r, risk_pct, strict=True)]
+    gross_bps = [t.gross_bps for t in rows]
+    net_bps = [t.net_bps for t in rows]
     data = {
         "trade_id": pd.Series([f"T-{i:06d}" for i in range(1, len(rows) + 1)], dtype=object),
         "symbol": pd.Series([t.symbol for t in rows], dtype=object),

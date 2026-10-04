@@ -66,7 +66,7 @@ class EntrySignal:
     """What a strategy returns when it wants a position on the next bar's open."""
 
     direction: int  # +1 long, -1 short
-    sl: float
+    sl: float | None  # None: no stop. Risk and R are then undefined, never invented
     tp: float
     tag: str = ""  # setup name, carried into the trade log
     meta: dict = field(default_factory=dict)
@@ -111,6 +111,31 @@ class Trade:
     entry_fill_id: str | None = None
     exit_fill_id: str | None = None
     position_id: str | None = None
+    # Stop-independent result as a fraction of the entry price. Set only for a trade that had
+    # no stop (risk, r_gross and r_net are then NaN); a stop-based trade leaves both None.
+    gross_ret: float | None = None
+    net_ret: float | None = None
+    #: The exit filled at the open of the exit bar (a strategy's exit-at-open), not at a close.
+    exit_at_open: bool = False
+
+    @property
+    def r_defined(self) -> bool:
+        """True when the trade has a stop distance, so its R multiples mean something."""
+        return bool(np.isfinite(self.r_gross) and np.isfinite(self.r_net))
+
+    @property
+    def gross_bps(self) -> float:
+        """Gross result in basis points of notional, with or without a stop."""
+        if self.gross_ret is not None:
+            return self.gross_ret * 1e4
+        return self.r_gross * self.risk_pct * 100
+
+    @property
+    def net_bps(self) -> float:
+        """Net result in basis points of notional, with or without a stop."""
+        if self.net_ret is not None:
+            return self.net_ret * 1e4
+        return self.r_net * self.risk_pct * 100
 
     @property
     def risk_pct(self) -> float:

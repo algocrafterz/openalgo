@@ -202,6 +202,10 @@ def _check_rule(out: _Collector, name: str, data: Mapping[str, Any], *, number: 
         out.intake(name, "needs at least one number or threshold")
 
 
+#: The single words that state a holding period has no maximum.
+NO_MAXIMUM_HOLD = ("none", "unlimited")
+
+
 def _check_holding_period(out: _Collector, data: Mapping[str, Any]) -> None:
     if "holding_period" not in data:
         out.missing("holding_period")
@@ -211,8 +215,14 @@ def _check_holding_period(out: _Collector, data: Mapping[str, Any]) -> None:
         out.validity("holding_period", "must be text")
         return
     joined = " ".join(items)
+    if len(items) == 1 and items[0].strip().lower() in NO_MAXIMUM_HOLD:
+        return  # an explicit "no maximum holding period"
     if not (_DIGIT.search(joined) or _SAME_SESSION.search(joined)):
-        out.intake("holding_period", "needs a limit such as '12 bars' or 'same session'")
+        out.intake(
+            "holding_period",
+            "needs a limit such as '12 bars' or 'same session', or the word none or unlimited "
+            "for no maximum",
+        )
 
 
 def _check_text(out: _Collector, name: str, data: Mapping[str, Any], *, required: bool) -> None:

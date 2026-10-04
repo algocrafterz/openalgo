@@ -65,7 +65,8 @@ class SwingRunConfig:
 
     #: Hard cap on holding period. Without it a trend exit can hold for years and one
     #: trade dominates the sample.
-    max_hold_bars: int = 120
+    #: None means no cap: a position is held until the strategy exits it or the data ends.
+    max_hold_bars: int | None = 120
 
     #: Bars at the start of each symbol's history that cannot produce a signal (counted as
     #: WARMUP exclusions). Zero changes nothing.
@@ -103,10 +104,18 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
 
     strategy.reset_symbol(p)
 
-    def close_out(reason: str, price: float, i: int) -> None:
+    def close_out(reason: str, price: float, i: int, at_open: bool = False) -> None:
         nonlocal pos, entry_day
         move = (price - pos.entry) if pos.direction == 1 else (pos.entry - price)
-        r_gross = move / pos.risk
+        if np.isnan(pos.risk):
+            # No stop: R has no denominator. The result is carried as a return on the entry price.
+            gross_ret = move / pos.entry
+            returns = {"gross_ret": gross_ret, "net_ret": gross_ret - cost_frac}
+            r_gross = r_net = float("nan")
+        else:
+            r_gross = move / pos.risk
+            r_net = r_gross - cost_frac * pos.entry / pos.risk
+            returns = {}
         trade = Trade(
             symbol=c.symbol,
             day=entry_day,
@@ -122,7 +131,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
             exit=float(price),
             reason=reason,
             r_gross=r_gross,
-            r_net=r_gross - cost_frac * pos.entry / pos.risk,
+            r_net=r_net,
+            exit_at_open=at_open,
+            **returns,
         )
         if rec is not None:
             b_fill((pos.entry_bar, pos.direction, 1, i, price, reason, 1))
@@ -130,13 +141,24 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
         trades.append(trade)
         pos, entry_day = None, None
 
+    exit_at_open = getattr(strategy, "exit_at_open", None)
+
     for i in range(n):
+        # 0. an open position may be closed at THIS bar's open, on what yesterday's close showed.
+        #    The same symbol is not bought again on that bar.
+        sold_at_open = False
+        if pos is not None and exit_at_open is not None:
+            reason = exit_at_open(c, i, p, pos)
+            if reason:
+                close_out(reason, float(o[i]), i, at_open=True)
+                sold_at_open = True
+
         # 1. flat: today's OPEN may trigger a setup armed by yesterday's CLOSE.
         if pos is None and i < warmup:
             # warm-up: the strategy sees the bar (on_bar below) but cannot open a position
             if rec is not None:
                 skip(i, _K_WARMUP)
-        elif pos is None:
+        elif pos is None and not sold_at_open:
             for d in (1, -1):
                 if d == 1 and not run.allow_longs:
                     if rec is not None:
@@ -150,6 +172,26 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
                 if sig is None:
                     continue
                 fill = float(o[i])
+                if sig.sl is None:
+                    # No stop: nothing to validate, and no risk distance is invented.
+                    if rec is not None:
+                        b_sig((i, d, sig.tag, fill, float("nan"), sig.tp, float("nan"), -1))
+                        b_ord((i, d, i, -1))
+                        b_fill((i, d, 0, i, fill, "", 1))
+                    pos = Position(
+                        direction=d,
+                        entry=fill,
+                        signal_price=fill,
+                        sl=float("nan"),
+                        sl_eff=float("nan"),
+                        tp=float(sig.tp),
+                        risk=float("nan"),
+                        tag=sig.tag,
+                        entry_bar=i,
+                    )
+                    entry_day = days[i]
+                    strategy.on_entry(c, i, p, sig)
+                    break
                 risk = abs(fill - float(sig.sl))
                 if risk <= 0 or np.isnan(risk):
                     if rec is not None:
@@ -208,7 +250,7 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
                 close_out("SL", pos.sl_eff, i)
             elif hit_tp:
                 close_out("TP", pos.tp, i)
-            elif i - pos.entry_bar >= run.max_hold_bars:
+            elif run.max_hold_bars is not None and i - pos.entry_bar >= run.max_hold_bars:
                 close_out("MAX_HOLD", close[i], i)
             elif i + 1 >= n:
                 close_out("EOD_DATA", close[i], i)

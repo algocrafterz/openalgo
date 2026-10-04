@@ -361,3 +361,30 @@ class TestReviewFixes:
             Momo(), None, frames, RUN, symbols=1, cuts=(0.2, 0.3, 0.4, 0.5, 0.6, 0.7)
         )
         assert len(res.checked) + len(res.skipped) <= 4
+
+
+class TestSameComparison:
+    """`_same` must treat identical infinities and NaNs as equal, as no-target and no-stop trades do."""
+
+    def test_identical_infinities_are_equal(self):
+        from signal_engine.backtest.truncation import _same
+
+        assert _same(float("inf"), float("inf"))
+        assert _same(float("-inf"), float("-inf"))
+
+    def test_opposite_infinities_are_not(self):
+        from signal_engine.backtest.truncation import _same
+
+        assert not _same(float("inf"), float("-inf"))
+
+    def test_two_nans_are_equal_and_nan_against_a_number_is_not(self):
+        from signal_engine.backtest.truncation import _same
+
+        assert _same(float("nan"), float("nan"))
+        assert not _same(float("nan"), 1.0)
+
+    def test_close_numbers_are_equal_and_distant_ones_are_not(self):
+        from signal_engine.backtest.truncation import _same
+
+        assert _same(100.0, 100.0 + 1e-12)
+        assert not _same(100.0, 100.01)

@@ -79,6 +79,7 @@ from signal_engine.research.build_registry import _parse_frontmatter
 from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.research.intake import spec, versions
 from signal_engine.research.intake import trials as trials_mod
+from signal_engine.research.intake.spec import NO_MAXIMUM_HOLD
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -185,6 +186,53 @@ def deployed_cost_model(
             SLIPPAGE_BPS_PER_SIDE if slippage_bps_per_side is None else float(slippage_bps_per_side)
         ),
     )
+
+
+class ParameterBindingError(ValueError):
+    """The strategy class's parameters are not the parameters of the frozen spec."""
+
+
+def check_parameter_binding(spec_parameters: Any, strategy_parameters: Mapping[str, Any]) -> None:
+    """Fail unless the strategy runs with exactly the frozen spec's parameters.
+
+    The frozen Strategy Version is the source of truth: a class default must never silently stand
+    in for a value the spec states, and a parameter the spec does not list must not exist. The
+    word none stands for no parameters.
+    """
+    spec = dict(spec_parameters) if isinstance(spec_parameters, Mapping) else {}
+    problems = []
+    for key in sorted(set(spec) | set(strategy_parameters)):
+        if key not in strategy_parameters:
+            problems.append(f"spec parameter '{key}' has no counterpart in the strategy class")
+        elif key not in spec:
+            problems.append(
+                f"strategy class parameter '{key}' = {strategy_parameters[key]!r} is not in "
+                "the frozen spec"
+            )
+        elif spec[key] != strategy_parameters[key]:
+            problems.append(
+                f"parameter '{key}': frozen spec {spec[key]!r}, strategy class "
+                f"{strategy_parameters[key]!r}"
+            )
+    if problems:
+        raise ParameterBindingError(
+            "the strategy class does not match the frozen spec: " + "; ".join(problems)
+        )
+
+
+def _hold_is_unlimited(value: Any) -> bool:
+    """True when the frozen holding period is the explicit word for no maximum."""
+    items = value if isinstance(value, (list, tuple)) else [value]
+    return (
+        len(items) == 1
+        and isinstance(items[0], str)
+        and items[0].strip().lower() in NO_MAXIMUM_HOLD
+    )
+
+
+def _stop_is_none(value: Any) -> bool:
+    items = value if isinstance(value, (list, tuple)) else [value]
+    return len(items) == 1 and isinstance(items[0], str) and items[0].strip().lower() == "none"
 
 
 def jsonable(value: Any) -> Any:
@@ -554,10 +602,16 @@ def execute_backtest(
     cli._register()
     cls, params_cls, kind = cli.REGISTRY[key]
     strategy, params = cls(), params_cls()
+    if "parameters" in cfg:
+        check_parameter_binding(cfg["parameters"], jsonable(params))
     collector = DataCollector()
     if kind == "swing":
         frames = data.from_historify_daily(min_sessions=500, end=until, collector=collector)
         run = SwingRunConfig(cost_bps=cfg.get("cost_bps", SWING_COST_BPS))
+        run = run.with_(**getattr(strategy, "run_overrides", {}))
+        if _hold_is_unlimited(cfg.get("holding_period")):
+            # The frozen spec says no maximum holding period, so no engine cap may stand in.
+            run = run.with_(max_hold_bars=None)
         bar_size = "1d"
     else:
         frames = data.from_historify(interval="5m", end=until, collector=collector)
@@ -577,13 +631,29 @@ def execute_backtest(
         adjusted_prices=kind == "swing",
     )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
-    kept = (
-        {s: layer.frames[s].copy() for s in _evenly_spaced(list(layer.frames), TRUNCATION_SYMBOLS)}
-        if run_truncation
-        else {}
+    # A strategy that ranks the whole universe prepares every symbol's frame together, from the
+    # run's own calendar, before the symbol-by-symbol run. Its look-ahead check then re-ranks on
+    # the truncated universe, so it keeps every frame; any other strategy keeps three.
+    prepare_panel = getattr(strategy, "prepare_panel", None)
+    engine_frames = (
+        layer.frames
+        if prepare_panel is None
+        else prepare_panel(layer.frames, params, layer.calendar)
+    )
+    if not run_truncation:
+        kept = {}
+    elif prepare_panel is None:
+        kept = {
+            s: layer.frames[s].copy()
+            for s in _evenly_spaced(list(layer.frames), TRUNCATION_SYMBOLS)
+        }
+    else:
+        kept = {s: f.copy() for s, f in layer.frames.items()}
+    panel_runner = (
+        None if prepare_panel is None else lambda fr: prepare_panel(fr, params, derive_calendar(fr))  # noqa: E731
     )
     engine_used = simulate_swing if kind == "swing" else simulate
-    bt = Backtest(strategy, layer.frames, run, engine=engine_used, release_raw=True)
+    bt = Backtest(strategy, engine_frames, run, engine=engine_used, release_raw=True)
     days = [_iso(d) for d in bt.days]
     # The recorder serves this one headline run; no other call below receives one.
     recorder = LedgerRecorder()
@@ -593,9 +663,20 @@ def execute_backtest(
     ledger_problems = recorder.reconcile(ledgers, trades)
     truncation = None
     if run_truncation:
-        truncation = truncation_check(strategy, params, kept, run, engine=engine_used).to_dict()
+        truncation = truncation_check(
+            strategy, params, kept, run, engine=engine_used, panel=panel_runner
+        ).to_dict()
         del kept
     cost_model = _cost_model_or_none(kind, cfg.get("slippage_bps_per_side"))
+    if (
+        cost_model is not None
+        and _stop_is_none(cfg.get("stop"))
+        and cfg.get("capital_per_position") is not None
+    ):
+        # No stop: risk over stop cannot size a trade, so each is the spec's fixed capital.
+        cost_model = dataclasses.replace(
+            cost_model, fixed_notional=float(cfg["capital_per_position"])
+        )
     cost_components = decompose_trades(trades, cost_model) if cost_model is not None else None
     baseline = None
     if kind != "swing":
@@ -727,6 +808,10 @@ _SETTINGS_FIELDS = {
     "eligibility_min_prior_sessions": "execution.eligibility_min_prior_sessions",
     "eligibility_min_volume": "execution.eligibility_min_volume",
     "eligibility_min_price": "execution.eligibility_min_price",
+    "stop": "stop",
+    "capital_per_position": "portfolio.capital_per_position",
+    "parameters": "parameters",
+    "holding_period": "holding_period",
 }
 
 

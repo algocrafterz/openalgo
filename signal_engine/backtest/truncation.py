@@ -10,6 +10,7 @@ that closed before the cut exactly.
 from __future__ import annotations
 
 import copy
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -24,6 +25,11 @@ MAX_CUTS_PER_SYMBOL = 4
 COVERAGE = (
     "Covers single-symbol inputs derived from the symbol's own frame only. Index or regime "
     "data (NIFTY, VIX), cross-sectional and universe-level features are NOT truncated."
+)
+COVERAGE_PANEL = (
+    "Covers inputs derived from the symbol's own frame and, because the strategy's cross-sectional "
+    "panel step is recomputed on the truncated universe, its ranking across symbols. Index or "
+    "regime data (NIFTY, VIX) are NOT truncated."
 )
 MIN_SESSION_BARS = 4
 MID_SESSION_FRACTION = 0.6
@@ -40,6 +46,8 @@ _COMPARED = (
     "sl",
     "tp",
     "legs",
+    "gross_ret",
+    "net_ret",
 )
 
 
@@ -93,9 +101,16 @@ def _run(strategy, params, symbol, df, run, engine):
 def _same(a, b) -> bool:
     if isinstance(a, float) or isinstance(b, float):
         try:
-            return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)))
+            x, y = float(a), float(b)
         except (TypeError, ValueError):
             return False
+        if x == y:
+            return True  # equal numbers, and identical infinities (a trade with no target)
+        if math.isnan(x) and math.isnan(y):
+            return True  # a trade with no stop has NaN risk and R on both runs
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return False
+        return abs(x - y) <= 1e-9 * max(1.0, abs(x))
     return a == b
 
 
@@ -198,23 +213,39 @@ def truncation_check(
     symbols: int = 3,
     cuts=(0.5, 0.8),
     mid_session: bool = True,
+    panel=None,
 ) -> TruncationResult:
     """Run the engine on full and truncated data and compare the earlier trades.
 
     `frames` is never mutated: each selected symbol's frame is copied.
+
+    `panel` is the strategy's cross-sectional step, a callable taking a mapping of symbol to frame
+    and returning the prepared mapping. `frames` must then hold every symbol: the step is run on
+    the whole universe, and again on the whole universe truncated at each cut, so a ranking that
+    uses data after the cut shows up as a trade that does not reproduce.
     """
     engine = engine or simulate
     started = time.perf_counter()
     checked, mismatches, skipped = [], [], []
+    prepared_full = panel({s: f.copy() for s, f in frames.items()}) if panel else None
     for sym in _pick_symbols(list(frames), symbols):
         df = frames[sym]
+        run_df = prepared_full[sym] if panel else df
         days = sorted(set(df.index.date))
         if len(days) < MIN_SESSIONS:
             skipped.append({"symbol": sym, "reason": f"only {len(days)} sessions"})
             continue
-        full, full_led = _run(strategy, params, sym, df.copy(), run, engine)
+        full, full_led = _run(strategy, params, sym, run_df.copy(), run, engine)
         for kind, label, cut_ts in _cut_points(df, days, cuts, mid_session):
-            part = df.loc[df.index < cut_ts].copy()
+            if panel:
+                universe = {
+                    s: f.loc[f.index < cut_ts].copy()
+                    for s, f in frames.items()
+                    if (f.index < cut_ts).any()
+                }
+                part = panel(universe)[sym]
+            else:
+                part = df.loc[df.index < cut_ts].copy()
             trunc, trunc_led = _run(strategy, params, sym, part, run, engine)
             bad_t, n_t = _compare(full, trunc, cut_ts, sym, label, kind)
             bad_s, n_s = _signal_mismatch(
@@ -234,4 +265,11 @@ def truncation_check(
             )
             mismatches += bad_t + bad_s
     elapsed = round(time.perf_counter() - started, 3)
-    return TruncationResult(not mismatches, checked, mismatches, skipped, elapsed)
+    return TruncationResult(
+        not mismatches,
+        checked,
+        mismatches,
+        skipped,
+        elapsed,
+        COVERAGE_PANEL if panel else COVERAGE,
+    )

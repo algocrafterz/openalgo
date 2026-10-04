@@ -11,6 +11,7 @@ This module must stay light: it does not import the harness, the data loaders or
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -40,6 +41,8 @@ _COST_MODEL_OUTPUTS = frozenset(
         "mean_total_bps",
         "net_r",
         "net_r_slip_2x",
+        "net_bps",
+        "net_bps_slip_2x",
         "trades",
         "modelled_net_pnl_rs",
         "modelled_total_cost_rs",
@@ -403,11 +406,37 @@ def _strategy_diff(a: _Run, b: _Run) -> dict[str, Any]:
 # ---- metrics --------------------------------------------------------------------------------
 
 
+def _has_no_r(frame: pd.DataFrame) -> bool:
+    """True when some trade has no R (it had no stop), so R is not a usable unit for the run."""
+    return bool(len(frame)) and not bool(np.isfinite(frame["net_r"].to_numpy(dtype=float)).all())
+
+
+_NO_R_NOTE = (
+    "A run here has no stop, so R is not defined: its equity curves, drawdown, monthly totals, "
+    "rolling mean and distribution are in basis points of notional, not R."
+)
+
+
+def _with_unit_note(warning: str | None, no_r: bool) -> str | None:
+    """The overlap warning, with the unit note appended when the curves are in bps."""
+    if not no_r:
+        return warning
+    return f"{warning} {_NO_R_NOTE}" if warning else _NO_R_NOTE
+
+
+def _bps_view(run: _Run) -> _Run:
+    """A copy of `run` whose R columns hold bps, so curves of any mix of runs share a unit."""
+    view = copy.copy(run)
+    view.frame = run.frame.assign(net_r=run.frame["net_bps"], gross_r=run.frame["gross_bps"])
+    return view
+
+
 def metrics_from_frame(frame: pd.DataFrame, n_trials: int = 1) -> dict[str, Any]:
     """Headline metrics of a retained-trades frame via `tearsheet.headline_metrics`.
 
     The session day is the entry date in IST. `risk_pct` is not stored, so it is recovered
-    from the bps columns (`bps = R x risk_pct x 100`).
+    from the bps columns (`bps = R x risk_pct x 100`). A frame with no R (trades without a
+    stop) is scored from its bps columns alone.
     """
     if "day" in frame.columns:
         days = frame["day"].tolist()
@@ -417,6 +446,11 @@ def metrics_from_frame(frame: pd.DataFrame, n_trials: int = 1) -> dict[str, Any]
     net_r = frame["net_r"].to_numpy(dtype=float)
     gross_bps = frame["gross_bps"].to_numpy(dtype=float)
     net_bps = frame["net_bps"].to_numpy(dtype=float)
+    if _has_no_r(frame):
+        nans = np.full(len(frame), np.nan)
+        return headline_metrics(
+            days, nans, nans, nans, n_trials=n_trials, gross_bps=gross_bps, net_bps=net_bps
+        )
     with np.errstate(divide="ignore", invalid="ignore"):
         from_gross = gross_bps / gross_r / 100
         from_net = net_bps / net_r / 100
@@ -737,7 +771,13 @@ def compare_run_folders(folder_a: Path, folder_b: Path) -> dict[str, Any]:
             "ranges": inc_ranges,
             "metrics": metrics_from_frame(_in_ranges(run.frame, inc_ranges), run.n_trials),
         }
-    curves, curves_common, curves_incremental = _curve_sets(a, b, common, inc_run, inc_ranges)
+    # The curves and distributions are drawn in R. If either run has no R they are drawn in bps for
+    # both, so the two are comparable. The series keys keep their names (the contract is fixed),
+    # so the unit is stated in the overlap warning instead.
+    no_r = _has_no_r(a.frame) or _has_no_r(b.frame)
+    ca, cb = (_bps_view(a), _bps_view(b)) if no_r else (a, b)
+    curves, curves_common, curves_incremental = _curve_sets(ca, cb, common, inc_run, inc_ranges)
+    warning = _with_unit_note(_warning(pa, pb, common, extra), no_r)
 
     return {
         "schema": SCHEMA,
@@ -755,7 +795,7 @@ def compare_run_folders(folder_a: Path, folder_b: Path) -> dict[str, Any]:
             "periods": {"a": _range(*pa), "b": _range(*pb)},
             "common": common,
             "extra": extra,
-            "warning": _warning(pa, pb, common, extra),
+            "warning": warning,
         },
         "views": {"full": full, "common": common_view, "incremental": incremental},
         "curves": curves,

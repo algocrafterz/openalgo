@@ -82,7 +82,11 @@ def _component_bps(product: str, exchange: str, bucket: float) -> tuple[float, .
 
 @dataclass(frozen=True)
 class CostModel:
-    """Sizing and charge assumptions for one deployment. No field has a default."""
+    """Sizing and charge assumptions for one deployment.
+
+    Only `fixed_notional` has a default. None sizes each trade by risk over its stop distance. A
+    rupee amount sizes every trade to that notional, which is what a strategy with no stop needs.
+    """
 
     capital: float
     risk_per_trade: float
@@ -90,6 +94,7 @@ class CostModel:
     product: str
     exchange: str
     slippage_bps_per_side: float
+    fixed_notional: float | None = None
 
     def __post_init__(self) -> None:
         if self.product not in PRODUCTS:
@@ -99,9 +104,18 @@ class CostModel:
                 raise ValueError(f"{name} must be positive")
         if self.slippage_bps_per_side < 0:
             raise ValueError("slippage_bps_per_side must not be negative")
+        if self.fixed_notional is not None and not self.fixed_notional > 0:
+            raise ValueError("fixed_notional must be positive")
 
     def notional(self, trade: Trade) -> float:
         """Rupees of stock the live sizer would have bought for this trade."""
+        if self.fixed_notional is not None:
+            return float(self.fixed_notional)
+        if not np.isfinite(trade.risk):
+            raise ValueError(
+                f"{trade.symbol} has no stop, so it cannot be sized by risk; "
+                "give the cost model a fixed_notional"
+            )
         stop_fraction = trade.risk / trade.entry
         sized = self.capital * self.risk_per_trade / stop_fraction
         return float(min(sized, self.capital * self.leverage))
@@ -136,8 +150,11 @@ def decompose_trades(trades, model: CostModel, slippage_mult: float = 1.0) -> pd
         return pd.DataFrame({c: np.empty(0, dtype=np.float64) for c in DECOMPOSITION_COLUMNS})
     entry = np.array([t.entry for t in rows], dtype=np.float64)
     risk = np.array([t.risk for t in rows], dtype=np.float64)
-    sized = model.capital * model.risk_per_trade / (risk / entry)
-    notional = np.minimum(sized, model.capital * model.leverage)
+    if model.fixed_notional is not None:
+        notional = np.full(len(rows), float(model.fixed_notional))
+    else:
+        sized = model.capital * model.risk_per_trade / (risk / entry)
+        notional = np.minimum(sized, model.capital * model.leverage)
     buckets = np.maximum(1.0, np.round(notional / _NOTIONAL_BUCKET))
     uniq, inverse = np.unique(buckets, return_inverse=True)
     table = np.array(
@@ -158,7 +175,11 @@ def recost(trades, model: CostModel, slippage_mult: float = 1.0) -> list[Trade]:
     out = []
     for t in trades:
         bps = model.trade_cost_bps(t, slippage_mult)
-        out.append(replace(t, r_net=t.r_gross - bps / 1e4 * t.entry / t.risk))
+        if t.gross_ret is not None:
+            # No stop: the result is a return on the entry price, restated directly.
+            out.append(replace(t, net_ret=t.gross_ret - bps / 1e4))
+        else:
+            out.append(replace(t, r_net=t.r_gross - bps / 1e4 * t.entry / t.risk))
     return out
 
 
@@ -171,21 +192,61 @@ PNL_BASIS = (
 )
 
 
+def _inr(amount: float) -> str:
+    """Rupees with Indian digit grouping, for example 1,00,000."""
+    digits = f"{int(round(amount))}"
+    head, tail = digits[:-3], digits[-3:]
+    groups = []
+    while len(head) > 2:
+        groups.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        groups.insert(0, head)
+    return ",".join([*groups, tail])
+
+
+def _pnl_basis(model: CostModel) -> str:
+    if model.fixed_notional is None:
+        return PNL_BASIS
+    return (
+        f"modelled: every trade is a fixed notional of Rs {_inr(model.fixed_notional)} "
+        "(capital per position) with no stop, with no limit on concurrent positions or total "
+        "capital; net is after the modelled statutory charges and slippage"
+    )
+
+
 def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | None:
-    """The optional `cost_model` record block, or None for an empty trade list."""
+    """The optional `cost_model` record block, or None for an empty trade list.
+
+    A run whose trades have no stop reports its results in bps (`net_bps`, `net_bps_slip_2x`),
+    not R, and sizes every trade to the model's `fixed_notional`.
+    """
     trades = list(trades)
     if not trades:
         return None
     statutory = np.array([model.statutory_bps(t) for t in trades])
     slippage = 2.0 * model.slippage_bps_per_side
     costed = recost(trades, model)
-    net = np.array([t.r_net for t in costed])
-    # Rupees: each trade is sized to `notional` and moves by (R x stop / entry) of it.
+    stressed_trades = recost(trades, model, slippage_mult=2.0)
     notional = np.array([model.notional(t) for t in trades])
-    stop_over_entry = np.array([t.risk / t.entry for t in trades])
-    net_rs = notional * net * stop_over_entry
-    cost_rs = notional * np.array([t.r_gross for t in trades]) * stop_over_entry - net_rs
-    stressed = np.array([t.r_net for t in recost(trades, model, slippage_mult=2.0)])
+    if all(t.r_defined for t in trades):
+        net = np.array([t.r_net for t in costed])
+        # Rupees: each trade is sized to `notional` and moves by (R x stop / entry) of it.
+        stop_over_entry = np.array([t.risk / t.entry for t in trades])
+        net_rs = notional * net * stop_over_entry
+        cost_rs = notional * np.array([t.r_gross for t in trades]) * stop_over_entry - net_rs
+        results = {
+            "net_r": round(float(net.mean()), 4),
+            "net_r_slip_2x": round(float(np.mean([t.r_net for t in stressed_trades])), 4),
+        }
+    else:
+        net_ret = np.array([t.net_ret for t in costed])
+        net_rs = notional * net_ret
+        cost_rs = notional * np.array([t.gross_ret for t in trades]) - net_rs
+        results = {
+            "net_bps": round(float(net_ret.mean()) * 1e4, 4),
+            "net_bps_slip_2x": round(float(np.mean([t.net_ret for t in stressed_trades])) * 1e4, 4),
+        }
     return {
         "model": MODEL_NAME,
         "product": model.product,
@@ -200,10 +261,10 @@ def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | 
         "total_bps_at": {
             f"{m:.1f}": round(float(statutory.mean()) + slippage * m, 3) for m in STRESS_LEVELS
         },
-        "net_r": round(float(net.mean()), 4),
-        "net_r_slip_2x": round(float(stressed.mean()), 4),
+        **results,
+        **({"fixed_notional": model.fixed_notional} if model.fixed_notional is not None else {}),
         "modelled_net_pnl_rs": round(float(net_rs.sum()), 2),
         "modelled_total_cost_rs": round(float(cost_rs.sum()), 2),
-        "pnl_basis": PNL_BASIS,
+        "pnl_basis": _pnl_basis(model),
         "trades": len(trades),
     }

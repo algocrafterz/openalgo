@@ -130,7 +130,35 @@ def _arrays(trades: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nd
     )
 
 
+def r_undefined(trades: Sequence) -> bool:
+    """True when some trade has no stop, so R multiples are not applicable to the run."""
+    return any(not t.r_defined for t in trades)
+
+
+def _bps_arrays(trades: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        np.array([_iso_day(t.day) for t in trades]),
+        np.array([t.gross_bps for t in trades], dtype=float),
+        np.array([t.net_bps for t in trades], dtype=float),
+    )
+
+
+def _core_from_bps(days: np.ndarray, gross_bps: np.ndarray, net_bps: np.ndarray) -> dict[str, Any]:
+    """`_core_arrays` for trades with no R: the same figures, read from per-trade bps."""
+    out: dict[str, Any] = {"trades": len(net_bps), "gross_bps": 0.0, "net_bps": 0.0}
+    if not len(net_bps):
+        return out
+    out["gross_bps"] = _num(gross_bps.mean()) or 0.0
+    out["net_bps"] = _num(net_bps.mean()) or 0.0
+    out["win_rate"] = round(float((net_bps > 0).mean()), 4)
+    _put(out, "t_stat", clustered_t(net_bps, days), 3)
+    _put(out, "sharpe", _daily_sharpe(net_bps, days), 3)
+    return out
+
+
 def _core(trades: Sequence) -> dict[str, Any]:
+    if r_undefined(trades):
+        return _core_from_bps(*_bps_arrays(trades))
     return _core_arrays(*_arrays(trades))
 
 
@@ -160,14 +188,23 @@ def headline_metrics(
     risk_pct: Sequence[float],
     *,
     n_trials: int = 1,
+    gross_bps: Sequence[float] | None = None,
+    net_bps: Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """The headline metrics of a run from plain per-trade arrays.
+
+    Pass `gross_bps` and `net_bps` (per trade, basis points of notional) for trades that have no
+    stop. R is then not applicable: the R-only metrics are left out, profit factor and drawdown
+    are computed in bps, and `r_defined` is False.
 
     The single implementation behind `build_run_record`'s `metrics` block and the run
     comparison's recomputed views. `days` are ISO session dates, `risk_pct` is the stop
     distance in percent of price. Unknown statistics are omitted, never zero.
     """
     d = np.array([str(x) for x in days])
+    if net_bps is not None:
+        gb, nb = (np.array(v, dtype=float) for v in (gross_bps, net_bps))
+        return _headline_from_bps(d, gb, nb, n_trials)
     g, n, p = (np.array(v, dtype=float) for v in (r_gross, r_net, risk_pct))
     out = _core_arrays(d, g, n, p)
     out["days"] = len(set(d.tolist()))
@@ -185,9 +222,41 @@ def headline_metrics(
     return out
 
 
+def _headline_from_bps(
+    d: np.ndarray, gb: np.ndarray, nb: np.ndarray, n_trials: int
+) -> dict[str, Any]:
+    out = _core_from_bps(d, gb, nb)
+    out["days"] = len(set(d.tolist()))
+    out["breakeven_cost_bps"] = out["gross_bps"]
+    _put(out, "hurdle_t", hurdle_t(n_trials), 3)
+    if not len(nb):
+        return out
+    out["r_defined"] = False
+    wins, losses = nb[nb > 0], nb[nb <= 0]
+    if len(wins) and len(losses) and losses.sum() != 0:
+        _put(out, "profit_factor", wins.sum() / abs(losses.sum()), 3)
+    out["max_dd_bps"] = round(_curves_arrays(d, nb)[2], 4)
+    out["total_cost_bps"] = round(float((gb - nb).sum()), 4)
+    return out
+
+
 def _monthly(trades: Sequence) -> list[dict[str, Any]]:
     if not trades:
         return []
+    if r_undefined(trades):
+        frame = pd.DataFrame(
+            {"month": [_iso_day(t.day)[:7] for t in trades], "b": [t.net_bps for t in trades]}
+        )
+        grouped = frame.groupby("month")["b"].agg(["size", "sum", "mean"])
+        return [
+            {
+                "month": m,
+                "n": int(row["size"]),
+                "total_bps": round(float(row["sum"]), 4),
+                "net_bps": round(float(row["mean"]), 4),
+            }
+            for m, row in grouped.iterrows()
+        ]
     frame = pd.DataFrame(
         {"month": [_iso_day(t.day)[:7] for t in trades], "r": [t.r_net for t in trades]}
     )
@@ -309,8 +378,17 @@ def build_run_record(
         raise ValueError(f"max_positions must be an integer >= 1, got {list(position_caps)!r}")
     trades = list(trades)
 
-    metrics = headline_metrics(*_arrays(trades), n_trials=n_trials)
-    equity, drawdown, _ = _daily_curves(trades)
+    no_r = r_undefined(trades)
+    if no_r:
+        days_arr, gross_arr, net_arr = _bps_arrays(trades)
+        nans = np.full(len(trades), np.nan)
+        metrics = headline_metrics(
+            days_arr, nans, nans, nans, n_trials=n_trials, gross_bps=gross_arr, net_bps=net_arr
+        )
+        equity, drawdown, _ = _curves_arrays(days_arr, net_arr)
+    else:
+        metrics = headline_metrics(*_arrays(trades), n_trials=n_trials)
+        equity, drawdown, _ = _daily_curves(trades)
 
     record: dict[str, Any] = {
         "run_id": run_id,
@@ -327,8 +405,10 @@ def build_run_record(
         "promoted": False,
         "cost_sensitivity": _cost_sensitivity(metrics["gross_bps"], costs["round_trip_bps"]),
         "series": {
-            "equity_r": downsample(equity, MAX_SERIES_POINTS),
-            "drawdown_r": downsample(drawdown, MAX_SERIES_POINTS, keep="min"),
+            ("equity_bps" if no_r else "equity_r"): downsample(equity, MAX_SERIES_POINTS),
+            ("drawdown_bps" if no_r else "drawdown_r"): downsample(
+                drawdown, MAX_SERIES_POINTS, keep="min"
+            ),
             "monthly": _monthly(trades),
         },
     }
@@ -344,7 +424,8 @@ def build_run_record(
         profile, record["position_caps"] = _position_caps(trades, caps)
         metrics["peak_concurrent"] = profile["peak"]
         metrics["median_concurrent"] = profile["median"]
-    if regime_days is not None:
+    if regime_days is not None and not no_r:
+        # Regime results are R-based, so they are left out for a run whose trades have no R.
         record["regimes"] = regime_block(trades, regime_days, source=regime_source)
     if cost_model is not None:
         profile = cost_profile(trades, cost_model, costs["round_trip_bps"])

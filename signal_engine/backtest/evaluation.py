@@ -233,8 +233,33 @@ def _num(value: Any, digits: int = 4) -> float | None:
     return round(value, digits) if math.isfinite(value) else None
 
 
+def _r_applies(trades: Sequence) -> bool:
+    """True when every trade has a stop, so its R multiples mean something."""
+    return all(t.r_defined for t in trades)
+
+
 def _r_net(trades: Sequence) -> np.ndarray:
-    return np.array([t.r_net for t in trades], dtype=float)
+    """Per-trade net result: R when every trade has a stop, else net bps (R is not defined).
+
+    The gates that use it test signs, ratios and shares, which do not depend on the unit.
+    Gates whose threshold is an absolute number of R are handled separately.
+    """
+    if _r_applies(trades):
+        return np.array([t.r_net for t in trades], dtype=float)
+    return np.array([t.net_bps for t in trades], dtype=float)
+
+
+def _fmt(value: float, trades: Sequence, digits: int = 3) -> str:
+    """A per-trade or total net result with its unit."""
+    if _r_applies(trades):
+        return f"{value:+.{digits}f}R"
+    return f"{value:+.{max(digits - 2, 1)}f} bps"
+
+
+_NO_STOP_NOTE = (
+    "the criterion is defined in R, the trade's own stop distance, and these trades have no stop; "
+    "a stop-independent threshold has to be defined by the owner"
+)
 
 
 def _day(trade: Any) -> pd.Timestamp:
@@ -272,10 +297,17 @@ def _g13(x: _Inputs) -> _Result:
     profile = x.cost_profile
     if profile is None:
         return "not_evaluated", None, threshold, "no per-trade cost model recorded for this run"
-    stressed = float(profile["net_r_slip_2x"])
     at = profile["total_bps_at"]
+    if "net_r_slip_2x" in profile:
+        stressed = float(profile["net_r_slip_2x"])
+        result = f"net {stressed:+.3f}R at 2.0x slippage (1.0x {float(profile['net_r']):+.3f}R)"
+    else:
+        stressed = float(profile["net_bps_slip_2x"])
+        result = (
+            f"net {stressed:+.2f} bps at 2.0x slippage (1.0x {float(profile['net_bps']):+.2f} bps)"
+        )
     evidence = (
-        f"net {stressed:+.3f}R at 2.0x slippage (1.0x {float(profile['net_r']):+.3f}R); total cost "
+        f"{result}; total cost "
         f"{at['1.0']:.2f} bps at 1.0x, {at['1.5']:.2f} bps at 1.5x, {at['2.0']:.2f} bps at 2.0x"
     )
     return ("pass" if stressed > 0 else "fail"), _num(stressed), threshold, evidence
@@ -285,6 +317,15 @@ def _g12(x: _Inputs) -> _Result:
     threshold = f">= {MIN_NET_R:+.2f}R per trade"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
+    if not _r_applies(x.trades):
+        mean_bps = float(_r_net(x.trades).mean())
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            f"{_NO_STOP_NOTE}; measured net expectancy is {mean_bps:+.2f} bps over "
+            f"{len(x.trades)} trades",
+        )
     mean = float(_r_net(x.trades).mean())
     status = "pass" if round(mean, 6) >= MIN_NET_R else "fail"
     return status, _num(mean), threshold, f"net expectancy {mean:+.3f}R over {len(x.trades)} trades"
@@ -309,6 +350,14 @@ def _g15(x: _Inputs) -> _Result:
     threshold = f"median cost <= {MAX_COST_R:.2f}R"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
+    if not _r_applies(x.trades):
+        median_bps = float(np.median([t.gross_bps - t.net_bps for t in x.trades]))
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            f"{_NO_STOP_NOTE}; median modelled cost is {median_bps:.2f} bps of notional per trade",
+        )
     cost_r = np.array([t.r_gross - t.r_net for t in x.trades], dtype=float)
     median = float(np.median(cost_r))
     status = "pass" if round(median, 6) <= MAX_COST_R else "fail"
@@ -455,8 +504,8 @@ def _g32(x: _Inputs) -> _Result:
         "pass" if holds else "fail",
         _num(oos),
         threshold,
-        f"OOS {oos:+.3f}R ({len(parts[1])} trades) vs in-sample {in_sample:+.3f}R "
-        f"({len(parts[0])} trades)",
+        f"OOS {_fmt(oos, x.trades)} ({len(parts[1])} trades) vs in-sample "
+        f"{_fmt(in_sample, x.trades)} ({len(parts[0])} trades)",
     )
 
 
@@ -500,8 +549,8 @@ def _g34(x: _Inputs) -> _Result:
         "pass" if holds else "fail",
         _num(weak),
         threshold,
-        f"half A {means[0]:+.3f}R ({len(halves[0])} trades), "
-        f"half B {means[1]:+.3f}R ({len(halves[1])} trades)",
+        f"half A {_fmt(means[0], x.trades)} ({len(halves[0])} trades), "
+        f"half B {_fmt(means[1], x.trades)} ({len(halves[1])} trades)",
     )
 
 
@@ -516,6 +565,15 @@ def _g44(x: _Inputs) -> _Result:
     yearly = frame.groupby("year")["r"].mean()
     share = float((yearly > 0).mean())
     worst_year, worst = int(yearly.idxmin()), float(yearly.min())
+    if not _r_applies(x.trades):
+        return (
+            "not_evaluated",
+            _num(share),
+            threshold,
+            f"{int((yearly > 0).sum())} of {len(yearly)} years net positive; worst {worst_year} "
+            f"at {worst:+.1f} bps. The worst-year limit is an absolute number of R and these "
+            "trades have no stop, so a stop-independent limit has to be defined by the owner",
+        )
     ok = share >= MIN_POSITIVE_YEAR_SHARE and worst >= WORST_YEAR_R
     return (
         "pass" if ok else "fail",
@@ -542,7 +600,7 @@ def _g45(x: _Inputs) -> _Result:
             "fail",
             None,
             threshold,
-            f"net profit {total:+.1f}R is not positive; {positive_share:.0%} of "
+            f"net profit {_fmt(total, x.trades, 1)} is not positive; {positive_share:.0%} of "
             f"{len(per_symbol)} symbols net positive",
         )
     top_share = float(per_symbol.head(TOP_SYMBOLS).sum()) / total
@@ -564,7 +622,7 @@ def _g46(x: _Inputs) -> _Result:
     shorts = [t for t in x.trades if t.direction == -1]
 
     def mean(side: list) -> str:
-        return f"{float(_r_net(side).mean()):+.3f}R" if side else "n/a"
+        return _fmt(float(_r_net(side).mean()), side) if side else "n/a"
 
     text = (
         f"{len(longs)} long / {len(shorts)} short trades; net {mean(longs)} long, "
