@@ -177,6 +177,7 @@ def headline_metrics(
         return out
     wins, losses = n[n > 0], n[n <= 0]
     _put(out, "expectancy_r", n.mean())
+    out["total_cost_r"] = round(float((g - n).sum()), 4)
     if len(wins) and len(losses) and losses.sum() != 0:
         _put(out, "profit_factor", wins.sum() / abs(losses.sum()), 3)
         _put(out, "payoff", wins.mean() / abs(losses.mean()), 3)

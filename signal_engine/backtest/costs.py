@@ -162,6 +162,15 @@ def recost(trades, model: CostModel, slippage_mult: float = 1.0) -> list[Trade]:
     return out
 
 
+#: How the rupee figures in `cost_profile` are produced; stored with them so they are never read
+#: as a portfolio result.
+PNL_BASIS = (
+    "modelled: each trade is sized independently to capital x risk per trade / stop fraction, "
+    "capped at capital x leverage, with no limit on concurrent positions or total capital; "
+    "net is after the modelled statutory charges and slippage"
+)
+
+
 def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | None:
     """The optional `cost_model` record block, or None for an empty trade list."""
     trades = list(trades)
@@ -169,7 +178,13 @@ def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | 
         return None
     statutory = np.array([model.statutory_bps(t) for t in trades])
     slippage = 2.0 * model.slippage_bps_per_side
-    net = np.array([t.r_net for t in recost(trades, model)])
+    costed = recost(trades, model)
+    net = np.array([t.r_net for t in costed])
+    # Rupees: each trade is sized to `notional` and moves by (R x stop / entry) of it.
+    notional = np.array([model.notional(t) for t in trades])
+    stop_over_entry = np.array([t.risk / t.entry for t in trades])
+    net_rs = notional * net * stop_over_entry
+    cost_rs = notional * np.array([t.r_gross for t in trades]) * stop_over_entry - net_rs
     stressed = np.array([t.r_net for t in recost(trades, model, slippage_mult=2.0)])
     return {
         "model": MODEL_NAME,
@@ -187,5 +202,8 @@ def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | 
         },
         "net_r": round(float(net.mean()), 4),
         "net_r_slip_2x": round(float(stressed.mean()), 4),
+        "modelled_net_pnl_rs": round(float(net_rs.sum()), 2),
+        "modelled_total_cost_rs": round(float(cost_rs.sum()), 2),
+        "pnl_basis": PNL_BASIS,
         "trades": len(trades),
     }

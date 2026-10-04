@@ -317,3 +317,10 @@ class TestBaselinePassThrough:
         m = build_run_record(trades, **META)["metrics"]
         assert m["net_bps"] > 0  # (9 * 50 - 9 * 20) / 18 = +15 bps per trade
         assert m["t_stat"] < 0  # daily means: +50, then nine days of -20
+
+
+def test_headline_metrics_carry_total_cost_in_r():
+    rec = build_run_record(_trades(), **META)
+    trades = _trades()
+    expected = sum(t.r_gross - t.r_net for t in trades)
+    assert rec["metrics"]["total_cost_r"] == pytest.approx(expected, abs=1e-3)

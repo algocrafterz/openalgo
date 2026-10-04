@@ -27,6 +27,7 @@ import yaml
 from signal_engine.backtest.record_run import idea_folders
 from signal_engine.research import build_registry
 from signal_engine.research.intake import (
+    decisions,
     execution,
     frontmatter,
     ledger,
@@ -385,6 +386,16 @@ def _summary(idea: str, c: trials.TrialCount) -> str:
     return f"{idea}: trials: material {c.material}, external {c.external}, total {c.total}"
 
 
+def _cmd_decide(idea: str, folder: Path, args) -> int:
+    try:
+        entry = decisions.record(folder, args.run, args.decision, args.note or "")
+    except decisions.DecisionError as exc:
+        _out(f"refused: {exc}")
+        return 1
+    _out(f"{idea}: {entry['run_id']} marked {entry['decision']}")
+    return 0
+
+
 def _cmd_trials(idea: str, folder: Path, args) -> int:
     try:
         if args.action == "show":
@@ -449,6 +460,13 @@ def _parser() -> argparse.ArgumentParser:
     trial_cmd.add_argument("idea")
     trial_cmd.add_argument("n", nargs="?", help="external trial count (add)")
     trial_cmd.add_argument("--reason", help="why the variants were searched outside (add)")
+    decide = sub.add_parser(
+        "decide", help="record keep or reject for a run (never affects the verdict)"
+    )
+    decide.add_argument("idea")
+    decide.add_argument("run")
+    decide.add_argument("decision", choices=decisions.DECISIONS)
+    decide.add_argument("--note", help="why")
     migrate = sub.add_parser(
         "migrate-classification",
         help="move legacy category/tags to strategy_category/strategy_tags",
@@ -488,6 +506,8 @@ def main(argv: list[str], root: Path | None = None) -> int:
     folder = folders[args.idea]
     if args.command == "trials":
         return _cmd_trials(args.idea, folder, args)
+    if args.command == "decide":
+        return _cmd_decide(args.idea, folder, args)
     if args.command in _LIFECYCLE:
         return _lifecycle_command(args, folder, root if root is not None else DEFAULT_ROOT)
     try:

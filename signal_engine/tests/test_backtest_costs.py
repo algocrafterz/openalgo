@@ -123,3 +123,50 @@ class TestProfile:
     def test_model_parameters_are_recorded(self):
         p = costs.cost_profile([_trade()], _model(), flat_bps=16.0)
         assert p["capital"] == 100_000.0 and p["product"] == "MIS" and p["leverage"] == 5.0
+
+
+class TestModelledPnl:
+    """cost_profile carries the modelled rupee P&L and the assumptions that produced it."""
+
+    def _profile(self, trades=None, **kw):
+        trades = trades or [
+            _trade(entry=100.0, risk=1.0, r_gross=2.0, r_net=1.9),
+            _trade(entry=100.0, risk=1.0, r_gross=-1.0, r_net=-1.1),
+        ]
+        return costs.cost_profile(trades, _model(**kw), flat_bps=16.0), trades
+
+    def test_total_cost_in_rupees_is_notional_times_cost_bps(self):
+        profile, trades = self._profile()
+        model = _model()
+        expected = sum(model.notional(t) * model.trade_cost_bps(t) / 1e4 for t in trades)
+        assert profile["modelled_total_cost_rs"] == pytest.approx(expected, abs=0.01)
+
+    def test_net_pnl_is_gross_less_modelled_cost(self):
+        profile, trades = self._profile()
+        model = _model()
+        gross = sum(model.notional(t) * t.r_gross * t.risk / t.entry for t in trades)
+        assert profile["modelled_net_pnl_rs"] == pytest.approx(
+            gross - profile["modelled_total_cost_rs"], abs=0.01
+        )
+
+    def test_a_known_trade_prices_exactly(self):
+        # Rs 1,00,000 notional (1% stop, Rs 1,000 risked): a +2R trade grosses Rs 2,000.
+        trade = _trade(entry=100.0, risk=1.0, r_gross=2.0, r_net=1.9)
+        profile, _ = self._profile([trade])
+        cost = 100_000.0 * _model().trade_cost_bps(trade) / 1e4
+        assert profile["modelled_net_pnl_rs"] == pytest.approx(2_000.0 - cost, abs=0.01)
+
+    def test_the_basis_is_labelled_modelled_and_states_the_sizing(self):
+        profile, _ = self._profile()
+        basis = profile["pnl_basis"]
+        assert basis.startswith("modelled")
+        for word in ("capital", "risk per trade", "leverage", "independently"):
+            assert word in basis
+        assert profile["capital"] == 100_000.0 and profile["leverage"] == 5.0
+
+    def test_the_new_keys_are_results_not_cost_assumptions(self):
+        from signal_engine.backtest import compare
+
+        for key in ("modelled_net_pnl_rs", "modelled_total_cost_rs"):
+            assert key in compare._COST_MODEL_OUTPUTS
+        assert "pnl_basis" in compare._COST_MODEL_OUTPUTS

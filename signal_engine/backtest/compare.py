@@ -35,7 +35,16 @@ DISTRIBUTION_BINS = 20
 ROLLING_MAX_WINDOW = 50
 #: report.json cost_model keys that are results of the trades, not cost assumptions.
 _COST_MODEL_OUTPUTS = frozenset(
-    {"mean_statutory_bps", "mean_total_bps", "net_r", "net_r_slip_2x", "trades"}
+    {
+        "mean_statutory_bps",
+        "mean_total_bps",
+        "net_r",
+        "net_r_slip_2x",
+        "trades",
+        "modelled_net_pnl_rs",
+        "modelled_total_cost_rs",
+        "pnl_basis",
+    }
 )
 
 
