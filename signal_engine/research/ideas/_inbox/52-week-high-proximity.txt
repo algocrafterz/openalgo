@@ -1,0 +1,5 @@
+Source: own words (candidate idea chosen by the researcher on 2026-10-04).
+
+Stocks that trade close to their 52-week high tend to keep outperforming, so buy the ones nearest it.
+
+Everything else (threshold, rebalance, number of stocks, exit, product, timing, sizing) was decided by the researcher in the onboarding questions of 2026-10-04 and is recorded in spec.yaml and assumptions.yaml.

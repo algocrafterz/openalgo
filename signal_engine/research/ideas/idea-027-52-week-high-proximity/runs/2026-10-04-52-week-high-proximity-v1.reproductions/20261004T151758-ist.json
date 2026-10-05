@@ -1,0 +1,20 @@
+{
+  "run_id": "2026-10-04-52-week-high-proximity-v1",
+  "reproducible": false,
+  "reasons": [
+    "trades differ: first at row 20 column symbol (recorded 'TATAELXSI', rerun 'INDIANB'); 32205 differing cells in 2683 of 2989 rows"
+  ],
+  "checks": {
+    "artifacts_verified": true,
+    "manifest_valid": true,
+    "manifest_reproducible": true,
+    "code_unchanged": true,
+    "rerun_completed": true,
+    "dataset_unchanged": true,
+    "calendar_unchanged": true,
+    "trades_match": false
+  },
+  "compared_trades": 2989,
+  "attempted_ist": "2026-10-04T15:17:58.386452+05:30",
+  "notes": []
+}

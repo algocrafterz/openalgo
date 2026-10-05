@@ -1,0 +1,18 @@
+{
+  "run_id": "2026-10-04-52-week-high-proximity-v2",
+  "reproducible": true,
+  "reasons": [],
+  "checks": {
+    "artifacts_verified": true,
+    "manifest_valid": true,
+    "manifest_reproducible": true,
+    "code_unchanged": true,
+    "rerun_completed": true,
+    "dataset_unchanged": true,
+    "calendar_unchanged": true,
+    "trades_match": true
+  },
+  "compared_trades": 2989,
+  "attempted_ist": "2026-10-04T15:22:46.658520+05:30",
+  "notes": []
+}

@@ -1,0 +1,14 @@
+{
+  "branch_label": null,
+  "direction": "long_only",
+  "name": "Proximity to the 52-week high",
+  "params_fingerprint": "50d75a58f82b0eaff8d98aa21761097406d312dbefb15b523d84e8341e628045",
+  "parent_version": null,
+  "product": "CNC",
+  "rules_fingerprint": "46a79b5ab762b8b267b9f4181d2c2f6d848e1cd55bbfab012d5e319cf982c858",
+  "strategy_fingerprint": "e063ad428e47d4148ea780d5326eee189a782d6ad6c05f53891ad26852e10715",
+  "strategy_id": "IDEA-027",
+  "style": "swing",
+  "timeframe": "1d",
+  "version": "v1"
+}

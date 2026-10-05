@@ -1,0 +1,67 @@
+schema_version: 2
+name: Proximity to the 52-week high
+
+source:
+  kind: own_words
+  ref: _inbox/52-week-high-proximity.txt
+
+profile: flattrade-nse-cash
+
+style: swing
+direction: long_only
+timeframe: 1d
+product: CNC
+
+entry:
+  - On each weekly rebalance day (the last session of the week), after the daily close, compute for every eligible stock the ratio of its close to the highest daily close of the trailing 252 sessions including that day
+  - A stock qualifies when that ratio is at least 0.95, meaning its close is within 5% of the 252-session high close
+  - Hold the 20 qualifying stocks with the highest ratio; if fewer than 20 qualify, hold only those and keep the rest of the capital in cash
+  - Buy orders fill at the next session's open
+exit:
+  - On each weekly rebalance day, sell every held stock that is not among the 20 qualifying stocks with the highest ratio, whether because its ratio fell below 0.95 or because it is outranked
+  - Sell orders fill at the next session's open
+stop: none
+take_profit: none
+holding_period: none
+
+indicators:
+  - {name: HIGHEST_CLOSE, period: 252, source: close}
+parameters:
+  lookback_sessions: 252
+  closeness_pct: 5
+  max_positions: 20
+  rebalance: weekly
+  rebalance_day: last_session_of_week
+
+timing:
+  signal_evaluation: bar_close
+  order_submission: signal_close
+  fill_model: next_bar_open
+
+filters: none
+session_window: none
+
+re_entry:
+  allowed: true
+  max_per_symbol_day: 1
+  trigger: same_signal
+
+sizing:
+  risk_per_trade_pct: 1.0
+  capital_per_trade: 100000
+
+portfolio:
+  mode: multi_position
+  max_concurrent: 20
+  max_trades_per_day: 40
+  capital_per_position: 100000
+  max_exposure: 2000000
+  selection: rank_by_score
+  conflict: skip_if_symbol_open
+
+disclosure:
+  prior_variants: 0
+  chart_peeking: false
+  destination: python
+
+kill_criterion: Net expectancy per trade is zero or negative after modelled costs.

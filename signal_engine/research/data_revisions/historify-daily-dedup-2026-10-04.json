@@ -1,0 +1,18 @@
+{
+  "name": "historify-daily-dedup-2026-10-04",
+  "rule": "interval D: on an IST date that has a bar stamped 05:30 IST, remove the symbol's other D rows for that date; dates without a 05:30 bar are not touched",
+  "applied_at": "2026-10-04 16:15 IST",
+  "dry_run": false,
+  "rows_before": 165794026,
+  "rows_after": 165791547,
+  "removed_rows": 2479,
+  "removed_differing_rows": 108,
+  "by_symbol": {
+    "SBIN": 2479
+  },
+  "unresolved_dates": [],
+  "dataset_fingerprint_before": "0749fc7d2c001b26bb64556576e1af00420b4cb9d166d7f789976b3cab17a943",
+  "dataset_fingerprint_after": "9e79bc69ac9c860b3bca4968f90ab8138d9fadc33faa95b0936cc90790e40bd6",
+  "fingerprint_basis": "197 symbols of run 2026-10-04-52-week-high-proximity-v2, interval 1d, as_of 2026-10-01",
+  "rollback": "insert the CSV rows back into market_data (columns symbol, exchange, interval=D, timestamp, open, high, low, close, volume); restores the before fingerprint"
+}

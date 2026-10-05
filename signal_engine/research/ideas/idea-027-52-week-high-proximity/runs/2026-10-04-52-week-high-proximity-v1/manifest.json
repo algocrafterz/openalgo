@@ -1,0 +1,119 @@
+{
+  "artifacts": {
+    "assumptions.json": "c735655a667de8c29eb826d9bd3e0d07e4090a5d7d38ae638bc92d2bdf885020",
+    "data_quality.json": "12ff93515d8bb7c2c62c6a51448bbcf0208ba2fe6bc4e43f7c99d5c6ab73f572",
+    "evidence/exclusions.parquet": "6b08e727340903fd1c84f8ea59e6e511e6aa5b916931f0ae86399429d5a9bbf4",
+    "evidence/fills.parquet": "9acf39abfc42137dc6b7de369bc978c58a96a804de3152d6d30ef936a66f768b",
+    "evidence/orders.parquet": "9a836bc1044b5b1f53b0349fffe81d10e689f35587bf93896cd05634abc6d456",
+    "evidence/signals.parquet": "dd60e0b1c1b1ce643923d0b6f3ef6cc0c25504410e34cad5441417b2e25d0ea6",
+    "evidence/trades.parquet": "b62823cbdec79270b5fc55938df5d551522375b50b122ff89a31deb0d19201d7",
+    "execution/config.json": "8b8495743266ce03a9349e2f81804d7e682f84da28fb108e7fad2236dc89f72c",
+    "execution/universe.parquet": "6296ade8ae915be8b0986a71f79fd375bf5d7ab3a71f8876a6be36cc755bd5eb",
+    "report/report.json": "8350ffdf84641441ec013981c1c3233de5f48be97fbaeff0850d0273b383d3cb",
+    "strategy/spec.yaml": "b2ada0ab66a9d4eb26657307e73e556ed2482015274252221ff07cfd817d3a8e",
+    "strategy/strategy.json": "a1446a0ce3fbc43882645f0251f8d37b0223a95bd2eb823a61de91b66386f21e"
+  },
+  "calendar_version": "historify-derived-4053382a",
+  "change_classes": [],
+  "created_ist": "2026-10-04T15:16:29.383951+05:30",
+  "dataset": {
+    "corporate_action_policy": "intraday: sessions whose open versus previous close ratio lies outside 0.75 to 1.33 are excluded as probable splits; daily: back-adjusted for detected splits; dividends, bonuses and rights issues are NOT detected",
+    "data_as_of": "2026-10-01",
+    "fingerprint": "0749fc7d2c001b26bb64556576e1af00420b4cb9d166d7f789976b3cab17a943",
+    "id": "historify",
+    "interval": "1d",
+    "source": "historify",
+    "symbol_count": 197
+  },
+  "deployment_profile": {
+    "name": "flattrade-nse-cash",
+    "product": "CNC",
+    "sha256": "a4e221f4fb56ba6a6f386bea1e6502e76aa16ff4bba19b9338d0dfd91f59b7ad"
+  },
+  "engine": {
+    "code_commit": "089013c345ddb5912f9a42c52eb959a8516a6e4e",
+    "code_dirty": false,
+    "dirty_paths": [],
+    "engine_version": "1.0"
+  },
+  "environment": {
+    "packages": {
+      "duckdb": "1.5.4",
+      "numpy": "2.4.4",
+      "pandas": "2.3.3",
+      "pyarrow": "23.0.1",
+      "pyyaml": "6.0.3"
+    },
+    "python": "3.12.3"
+  },
+  "fingerprints": {
+    "cost": "f5f3e030f15111924dcff4a648694cb464234b7a6a40bc855d0b784e939d4d60",
+    "dataset": "0749fc7d2c001b26bb64556576e1af00420b4cb9d166d7f789976b3cab17a943",
+    "execution": "e451b86d2bb16dd2a6ab1ec3531528a135fe47991910bdb799b7ad4f7342e9fd",
+    "params": "50d75a58f82b0eaff8d98aa21761097406d312dbefb15b523d84e8341e628045",
+    "profile": "a4e221f4fb56ba6a6f386bea1e6502e76aa16ff4bba19b9338d0dfd91f59b7ad",
+    "rules": "46a79b5ab762b8b267b9f4181d2c2f6d848e1cd55bbfab012d5e319cf982c858",
+    "strategy": "e063ad428e47d4148ea780d5326eee189a782d6ad6c05f53891ad26852e10715",
+    "universe": "97901dd6d3a94ef3e5a94ad8e6746d70c720331065ed2dbcf6334e4008b2c300"
+  },
+  "idea_id": "IDEA-027",
+  "missing_capabilities": [
+    "Spec schema split: strategy intent vs resolved execution configuration vs deployment profile; field class and per-field provenance",
+    "Spec validation: entry, exit, direction, timeframe, holding period, stop, signal evaluation, order submission, fill model, indicator source, reference prices, portfolio scope",
+    "Assumption ledger with materiality and confirmation; intake states",
+    "Strategy versions: append-only `versions.yaml`, automatic and branch labels, current and promoted pointers, rules, parameters and strategy fingerprints",
+    "Point-in-time universe membership and per-date eligibility",
+    "Direction validation (no shorts in swing or positional)",
+    "Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat)",
+    "Deployment profile: MIS force-flat 15:00, CNC carry-forward",
+    "Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version",
+    "Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade)",
+    "Run manifest and run folder layout; immutable artifacts retained and addressable",
+    "Per-component cost decomposition per trade",
+    "Validity vs performance failure handling in the gate runner",
+    "Trial counting under the acceptance-criteria definition",
+    "session.broker_cutoff is null: CNC delivery has no intraday broker cutoff",
+    "random.monte_carlo not captured until engine step 5",
+    "session.force_flat is null: CNC delivery has no force-flat, positions carry forward"
+  ],
+  "parent_run_id": null,
+  "period": {
+    "end": "2026-10-01",
+    "start": "2019-12-03"
+  },
+  "random": {
+    "monte_carlo": null,
+    "seed": 0
+  },
+  "reproducibility": {
+    "code_commit": true,
+    "dataset_fingerprint": true,
+    "deployment_profile": true,
+    "engine_version": true,
+    "execution_config": true,
+    "resolved_assumptions": true,
+    "strategy_fingerprint": true,
+    "strategy_version": true
+  },
+  "reproducible": true,
+  "run_id": "2026-10-04-52-week-high-proximity-v1",
+  "schema": 3,
+  "session": {
+    "broker_cutoff": null,
+    "exchange": "NSE cash 09:15-15:30 (derived calendar)",
+    "force_flat": null,
+    "strategy_window": "none"
+  },
+  "strategy": {
+    "branch_label": null,
+    "parent_version": null,
+    "version": "v1"
+  },
+  "universe": {
+    "definition": "historify-197-symbols",
+    "membership_source": "current_symbol_master",
+    "survivorship_bias": true,
+    "symbols_sha256": "7439a29a2620eb92825fbfcb8a7943cbc8ecf2faa2a6586fabccbbf71809b09d",
+    "version": "eligibility-27207f1b"
+  }
+}
