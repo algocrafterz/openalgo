@@ -394,7 +394,7 @@ entries:
   confidence: high
   materiality: medium
   reason: same as the spec timeframe
-  user_confirmed: false
+  user_confirmed: true
 - id: A-041
   field: execution.warmup_bars
   section: execution
@@ -403,7 +403,7 @@ entries:
   confidence: high
   materiality: medium
   reason: 'longest indicator period: RETURN_STDEV(252)'
-  user_confirmed: false
+  user_confirmed: true
 - id: A-042
   field: execution.slippage_bps_per_side
   section: execution
@@ -448,7 +448,7 @@ entries:
   confidence: high
   materiality: medium
   reason: 'listing age: earlier traded sessions required before a symbol is eligible'
-  user_confirmed: false
+  user_confirmed: true
 - id: A-047
   field: execution.eligibility_min_volume
   section: execution
@@ -457,7 +457,7 @@ entries:
   confidence: high
   materiality: medium
   reason: session volume must be above this to count as traded
-  user_confirmed: false
+  user_confirmed: true
 - id: A-048
   field: execution.eligibility_min_price
   section: execution
@@ -469,7 +469,7 @@ entries:
     so its prices are back-adjusted and not the traded price, and a nominal rupee
     floor would not be reliable. The eligibility filters that do apply are listing
     age, a bar on the session and non-zero volume'
-  user_confirmed: false
+  user_confirmed: true
 - id: A-049
   field: profile.carry_forward
   section: profile
@@ -478,4 +478,4 @@ entries:
   confidence: high
   materiality: medium
   reason: profile flattrade-nse-cash CNC
-  user_confirmed: false
+  user_confirmed: true
