@@ -218,9 +218,14 @@ def test_compare_route_returns_comparison_keys_end_to_end(monkeypatch, tmp_path)
 
     import services.backtest_results_service as svc
     from signal_engine.backtest import manifest
+    from signal_engine.backtest import record_run as rr
     from signal_engine.tests import test_backtest_compare as tc
     from signal_engine.tests import test_record_run as rrbase
+    from signal_engine.tests.published_fixtures import fake_resolution
 
+    # record_idea needs a published dataset version (plan Phase 4); a READY stand-in that reads
+    # no store, since these runs use a fake execution.
+    monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: fake_resolution())
     monkeypatch.setattr(
         manifest,
         "git_state",

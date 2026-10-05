@@ -417,6 +417,80 @@ def _split_adjust_daily(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _clean_daily(raw: pd.DataFrame, symbol: str, min_sessions: int,
+                 collector=None) -> pd.DataFrame | None:
+    """One symbol's daily rows (timestamp, open, high, low, close, volume) as an IST-dated OHLCV
+    frame: the last row per date kept, impossible bars dropped, the counts reported to
+    `collector`. None when the frame is empty or shorter than `min_sessions`."""
+    if raw.empty:
+        return None
+    raw = raw.copy()
+    raw.index = (pd.to_datetime(raw.pop("timestamp"), unit="s", utc=True)
+                 .dt.tz_convert("Asia/Kolkata").dt.normalize())
+    raw.columns = ["Open", "High", "Low", "Close", "Volume"]
+    n_raw = len(raw)
+    raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+    n_dedup = len(raw)
+    sane = ((raw["High"] >= raw["Low"]) & (raw["High"] >= raw["Open"]) &
+            (raw["High"] >= raw["Close"]) & (raw["Low"] <= raw["Open"]) &
+            (raw["Low"] <= raw["Close"]) & (raw["Low"] > 0))
+    raw = raw[sane]
+    if collector is not None:
+        collector.record_seen(symbol, n_raw)
+        collector.record_clean(symbol, duplicate_ts=n_raw - n_dedup,
+                               impossible=n_dedup - len(raw))
+    if len(raw) < min_sessions:
+        if collector is not None:
+            collector.record_min_sessions(symbol, len(raw))
+        return None
+    return raw
+
+
+class NoPublishedData(RuntimeError):
+    """No symbol of a published version meets the run's loader minimum."""
+
+
+def from_published_daily(con, symbols=None, end=None, min_sessions: int = 500,
+                         collector=None, allow_empty: bool = False) -> dict[str, pd.DataFrame]:
+    """Daily bars from a VERIFIED published dataset version (plan D20: never the landing store).
+
+    `con` is the connection `data_readiness.snapshot.open_version` yields; its `market_data`
+    view is the version's bars, already adjusted by the versioned corporate-action layer, so NO
+    heuristic split adjustment is applied here (it would rescale genuine large moves). Cleaning
+    and `min_sessions` match `from_historify_daily`. Symbols come in the same deterministic order
+    (longest history first, then symbol).
+    """
+    if collector is not None:
+        collector.interval = "1d"
+    # The cutoff is the last second of `end`'s session date; any time part is ignored, so
+    # 'YYYY-MM-DD 23:59:59' (record_run's form) does not reach into the next session.
+    end_ts = (int(pd.Timestamp(str(end)[:10], tz="Asia/Kolkata").timestamp()) + 86399
+              if end else None)
+    where, args = ["interval = 'D'"], []
+    if end_ts is not None:
+        where.append("timestamp <= ?")
+        args.append(end_ts)
+    order = con.execute(
+        f"SELECT symbol FROM market_data WHERE {' AND '.join(where)} "
+        "GROUP BY symbol ORDER BY count(*) DESC, symbol", args).fetchall()
+    wanted = None if symbols is None else set(symbols)
+    out: dict[str, pd.DataFrame] = {}
+    for (s,) in order:
+        if wanted is not None and s not in wanted:
+            continue
+        raw = con.execute(
+            "SELECT timestamp, open, high, low, close, volume FROM market_data "
+            f"WHERE symbol = ? AND {' AND '.join(where)} ORDER BY timestamp", [s, *args]).df()
+        clean = _clean_daily(raw, s, min_sessions, collector)
+        if clean is not None:
+            out[s] = _downcast(clean)
+    if collector is not None:
+        collector.symbols_loaded = len(out)
+    if not out and not allow_empty:
+        raise NoPublishedData(f"no published symbol has {min_sessions}+ daily sessions")
+    return out
+
+
 def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int = 500,
                          db_path=None, collector=None) -> dict[str, pd.DataFrame]:
     """Split-adjusted daily bars from Historify, for the swing engine.
@@ -450,27 +524,9 @@ def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int =
                 q += " AND timestamp <= ?"
                 args.append(int(pd.Timestamp(end, tz="Asia/Kolkata").timestamp()))
             raw = con.execute(q + " ORDER BY timestamp", args).df()
-            if raw.empty:
-                continue
-            raw.index = (pd.to_datetime(raw.pop("timestamp"), unit="s", utc=True)
-                         .dt.tz_convert("Asia/Kolkata").dt.normalize())
-            raw.columns = ["Open", "High", "Low", "Close", "Volume"]
-            n_raw = len(raw)
-            raw = raw[~raw.index.duplicated(keep="last")].sort_index()
-            n_dedup = len(raw)
-            sane = ((raw["High"] >= raw["Low"]) & (raw["High"] >= raw["Open"]) &
-                    (raw["High"] >= raw["Close"]) & (raw["Low"] <= raw["Open"]) &
-                    (raw["Low"] <= raw["Close"]) & (raw["Low"] > 0))
-            raw = raw[sane]
-            if collector is not None:
-                collector.record_seen(s, n_raw)
-                collector.record_clean(s, duplicate_ts=n_raw - n_dedup,
-                                       impossible=n_dedup - len(raw))
-            if len(raw) < min_sessions:
-                if collector is not None:
-                    collector.record_min_sessions(s, len(raw))
-                continue
-            out[s] = _downcast(_split_adjust_daily(raw))
+            clean = _clean_daily(raw, s, min_sessions, collector)
+            if clean is not None:
+                out[s] = _downcast(_split_adjust_daily(clean))
         if collector is not None:
             collector.symbols_loaded = len(out)
         if not out:

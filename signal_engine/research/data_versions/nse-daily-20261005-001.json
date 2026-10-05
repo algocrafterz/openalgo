@@ -1,0 +1,24 @@
+{
+  "cause": "first clean NSE daily version (plan rev. 4)",
+  "coverage": {
+    "end": "2026-10-01",
+    "rows": 474223,
+    "rows_by_series": {
+      "BE": 1628,
+      "EQ": 472595
+    },
+    "sessions": 2664,
+    "start": "2016-01-01",
+    "symbols": 211
+  },
+  "created_ist": "2026-10-05 01:29:57",
+  "dataset_version": "nse-daily-20261005-001",
+  "excluded_symbols": [
+    "CGPOWER",
+    "FORCEMOT"
+  ],
+  "parent": null,
+  "readiness_state": "READY_WITH_WARNINGS",
+  "root_hash": "c7ee36c2833cbbaa10eb70c90bfc74c244200d51933eca0b3d2db8cb7406505e",
+  "status": "published"
+}

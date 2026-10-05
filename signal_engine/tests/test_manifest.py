@@ -475,3 +475,31 @@ def test_fingerprint_unknown_bar_size_raises(tmp_path: Path, bar: str) -> None:
     _make_db(db)
     with pytest.raises(ValueError):
         mf.dataset_fingerprint(["AAA"], bar, "2026-01-05", db)
+
+
+def _schema4() -> dict[str, Any]:
+    m = good_manifest()
+    m.update(schema=4, preflight={"state": "READY"}, symbol_counts={"eligible": 1},
+             exclusions=[], data_policy_version="p", run_status="VALID", invalid_reason=None,
+             trial_counted=True)
+    m["dataset"] = {**m.get("dataset", {}), "version_id": "nse-daily-x-001"}
+    return m
+
+
+def test_schema_4_manifest_with_its_blocks_is_clean() -> None:
+    assert not [p for p in mf.validate_manifest(_schema4()) if "preflight" in p
+                or "symbol_counts" in p or "version_id" in p]
+
+
+@pytest.mark.parametrize("key", ["preflight", "symbol_counts"])
+def test_schema_4_null_block_is_refused(key: str) -> None:
+    """Review L3: a schema 4 run always has a resolved dataset, so these blocks are never null."""
+    m = _schema4()
+    m[key] = None
+    assert any(key in p for p in mf.validate_manifest(m))
+
+
+def test_schema_4_dataset_without_a_version_is_refused() -> None:
+    m = _schema4()
+    m["dataset"] = {k: v for k, v in m["dataset"].items() if k != "version_id"}
+    assert any("dataset.version_id" in p for p in mf.validate_manifest(m))

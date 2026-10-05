@@ -37,6 +37,10 @@ tmp/
 *.db
 *.duckdb
 *.duckdb.wal
+# Raw NSE bhavcopy files kept as ingestion evidence (signal_engine data pipeline)
+db/landing/
+# Published immutable dataset objects and manifests (git keeps signal_engine/research/data_versions/)
+db/datasets/
 *.sqlite
 *.log
 *.jsonl

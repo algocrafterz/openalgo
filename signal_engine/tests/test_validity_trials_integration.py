@@ -102,17 +102,17 @@ class TestValidityInReport:
         report = _report(_record(root))
         assert report["validity"] == {"ok": True, "failures": [], "checks_run": ["config"]}
 
-    def test_data_quality_failure_makes_the_run_inconclusive(self, root):
+    def test_data_quality_failure_makes_the_run_invalid_data(self, root):
+        """Plan D17 (Phase 4): a data-quality failure is the run status INVALID_DATA with no
+        verdict (it used to be an INCONCLUSIVE verdict)."""
         dq = {"status": "WARNING", "affects_validity": True, "items": ["12 impossible bars"]}
         report = _report(_record(root, execute=lambda key: _exe(data_quality=dq)))
         assert report["validity"]["ok"] is False
         assert report["validity"]["checks_run"] == ["data_quality", "config"]
         failure = report["validity"]["failures"][0]
         assert failure["check"] == "data_quality" and "12 impossible bars" in failure["detail"]
-        assert report["verdict"]["run_verdict"] == "INCONCLUSIVE"
-        assert report["verdict"]["primary_failed_gate"] is None
-        # performance gates are not evaluated: no diagnostic rows are attached either
-        assert all(r["gate"] is None for r in report["verdict"]["reasons"])
+        assert report["verdict"] is None and report["run_status"] == "INVALID_DATA"
+        assert "12 impossible bars" in report["next_action"]
         assert report["promotion"]["stages"]["backtest"]["decision"] == "NOT_READY"
 
     def test_passing_data_quality_is_recorded_as_run(self, root):
@@ -213,13 +213,14 @@ class TestTruncationFlag:
 
 class TestExecuteBacktestTruncation:
     def test_real_run_carries_a_truncation_result(self, store):  # noqa: F811
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", settings=SETTINGS, dataset=store["res"])
         assert exe.truncation is not None
         assert exe.truncation["ok"] is True, exe.truncation["mismatches"]
         assert exe.truncation["checked"]
 
     def test_skipped_leaves_none(self, store):  # noqa: F811
-        exe = rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        exe = rr.execute_backtest("k", settings=SETTINGS, run_truncation=False,
+                                  dataset=store["res"])
         assert exe.truncation is None
 
     def test_at_most_three_evenly_spaced_symbols_and_the_engine_used(
@@ -234,7 +235,7 @@ class TestExecuteBacktestTruncation:
             return TruncationResult(True, [{"symbol": "x", "cut": "c"}])
 
         monkeypatch.setattr(rr, "truncation_check", spy)
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", settings=SETTINGS, dataset=store["res"])
         symbols, engine, run = calls[0]
         assert 1 <= len(symbols) <= 3 and symbols == sorted(symbols)
         assert engine is None or engine.__name__ == "simulate"
@@ -808,6 +809,9 @@ def _swing_rows(seed):
     return rows
 
 
+_SWING: dict = {}
+
+
 @pytest.fixture(scope="module")
 def swing_db(tmp_path_factory):
     db = tmp_path_factory.mktemp("swing") / "d.duckdb"
@@ -832,6 +836,7 @@ def swing_env(swing_db, monkeypatch):
     from signal_engine.backtest import __main__ as cli
     from signal_engine.backtest import data
     from signal_engine.tests import test_evidence_ledgers as tel
+    from signal_engine.tests.test_data_session_integration import _store_resolution
 
     real = data.from_historify_daily
     calls = []
@@ -841,10 +846,10 @@ def swing_env(swing_db, monkeypatch):
         return truncation_check(strategy, params, frames, run, engine=engine, **kw)
 
     monkeypatch.setattr(cli, "_register", lambda: None)
-    monkeypatch.setattr(
-        data,
-        "from_historify_daily",
-        lambda **kw: real(db_path=swing_db, **{**kw, "min_sessions": 10}),
+    # Plan Phase 4: the run reads bars only through its resolution (this test's own store).
+    _SWING["res"] = _store_resolution(
+        ("AAA", "BBB", "CCC", "DDD", "EEE"),
+        daily=lambda **kw: real(db_path=swing_db, **{**kw, "min_sessions": 10}),
     )
     monkeypatch.setattr(rr, "random_entry_baseline", lambda *a, **k: None)
     monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
@@ -860,7 +865,7 @@ def swing_env(swing_db, monkeypatch):
 class TestSwingTruncation:
     def test_causal_swing_strategy_passes_with_the_swing_engine(self, swing_env):
         calls = swing_env(_SwingCausal)
-        exe = rr.execute_backtest("s", settings=SETTINGS)
+        exe = rr.execute_backtest("s", settings=SETTINGS, dataset=_SWING["res"])
         assert len(calls) == 1
         assert calls[0]["engine"] is simulate_swing
         assert isinstance(calls[0]["run"], SwingRunConfig)
@@ -871,11 +876,11 @@ class TestSwingTruncation:
 
     def test_lookahead_swing_strategy_fails(self, swing_env):
         swing_env(_SwingLookahead)
-        exe = rr.execute_backtest("s", settings=SETTINGS)
+        exe = rr.execute_backtest("s", settings=SETTINGS, dataset=_SWING["res"])
         assert exe.truncation["ok"] is False
         assert exe.truncation["mismatches"]
 
     def test_skipped_swing_run_has_no_truncation(self, swing_env):
         calls = swing_env(_SwingCausal)
-        exe = rr.execute_backtest("s", settings=SETTINGS, run_truncation=False)
+        exe = rr.execute_backtest("s", settings=SETTINGS, run_truncation=False, dataset=_SWING["res"])
         assert exe.truncation is None and calls == []

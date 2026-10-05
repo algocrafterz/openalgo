@@ -240,22 +240,24 @@ class TestRegimesInRecord:
         rec = json.loads(self._record(root).read_text())
         assert "regimes" not in rec
 
-    def test_loader_adds_a_valid_regimes_block_with_agreement(self, root):
-        rec = json.loads(self._record(root, regimes=_regime_inputs).read_text())
+    def test_a_loader_is_never_called_on_a_published_dataset_run(self, root):
+        """Owner decision 1 (plan Phase 4): NIFTY/VIX are not in any published dataset, so the
+        regime block is unavailable; no loader (live store or Yahoo) is ever called."""
+        called = []
+        rec = json.loads(self._record(root, regimes=lambda: called.append(1)
+                                      or _regime_inputs()).read_text())
+        assert called == [] and "regimes" not in rec
         assert br._validate_run(rec) == []
-        block = rec["regimes"]
-        assert block["source"]["vix_source"] == "test"
-        assert set(block["source"]["vol_agreement"]) == {"days", "exact", "opposite"}
-        assert 0 <= block["unclassified_trades"] <= rec["metrics"]["trades"]
+        assert "Regime analysis not available" in rec["notes"]
 
-    def test_loader_failure_still_records_and_says_so(self, root):
+    def test_a_broken_loader_cannot_affect_the_run(self, root):
         def broken():
             raise RuntimeError("offline")
 
         rec = json.loads(self._record(root, regimes=broken).read_text())
         assert "regimes" not in rec
-        assert "Regime analysis not recorded" in rec["notes"]
-        assert "offline" in rec["notes"]
+        assert "Regime analysis not available" in rec["notes"]
+        assert "offline" not in rec["notes"]
 
 
 class TestRecordIdea:

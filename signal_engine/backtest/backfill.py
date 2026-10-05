@@ -38,12 +38,20 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-#: One request per calendar month. ~7,500 one-minute bars against a cap near 58,000 -
+#: About one calendar month per request. ~7,500 one-minute bars against a cap near 58,000 -
 #: deliberately conservative, because the failure mode is silent.
-CHUNK_DAYS = 30
+#:
+#: Must stay BELOW Angel One's own 30-day 1m chunk. Angel's plugin
+#: (broker/angel/api/data.py) ends every internal chunk but the last at 00:00 of its final
+#: day, so a request of exactly 30 days silently drops that day's bars. 30 here produced 55
+#: missing 1m sessions spaced ~30 days apart (verified 2026-10-04: 2019-12-11..2020-01-09
+#: returned no 2020-01-09 bars; 2019-12-12..2020-01-09 did). 29 keeps every request
+#: inside one Angel chunk, whose end is the caller's 23:59.
+CHUNK_DAYS = 29
 
-#: Daily bars are small enough that the whole history fits one request.
-DAILY_CHUNK_DAYS = 4000
+#: Daily bars are small enough to fetch in a few requests. Kept below Angel's 2000-day
+#: daily chunk for the same reason as CHUNK_DAYS.
+DAILY_CHUNK_DAYS = 1999
 
 
 @dataclass

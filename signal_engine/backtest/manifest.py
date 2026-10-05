@@ -49,6 +49,20 @@ MANIFEST_KEYS: tuple[str, ...] = (
     "artifacts",
 )
 
+#: Keys a schema 4 manifest adds (plan Phase 4): the published dataset version, the preflight, the
+#: symbol counts, the run status and whether the run counted as a trial. Schema 3 manifests (runs
+#: recorded before Phase 4) stay valid without them.
+SCHEMA4_KEYS: tuple[str, ...] = (
+    "preflight",
+    "symbol_counts",
+    "exclusions",
+    "data_policy_version",
+    "run_status",
+    "invalid_reason",
+    "trial_counted",
+)
+SCHEMAS: tuple[int, ...] = (3, 4)
+
 NULLABLE: tuple[str, ...] = (
     "calendar_version",
     "session.exchange",
@@ -125,8 +139,23 @@ def _get(m: Mapping[str, Any], dotted: str) -> tuple[bool, Any]:
 def _check_structure(m: Mapping[str, Any]) -> list[str]:
     problems: list[str] = []
     schema = m.get("schema")
-    if isinstance(schema, bool) or schema != 3 or not isinstance(schema, int):
-        problems.append("schema must be the integer 3")
+    if isinstance(schema, bool) or not isinstance(schema, int) or schema not in SCHEMAS:
+        problems.append("schema must be the integer 3 or 4")
+    elif schema >= 4:
+        problems.extend(f"missing key: {k}" for k in SCHEMA4_KEYS if k not in m)
+        if m.get("run_status") not in ("VALID", "INVALID_DATA"):
+            problems.append("run_status must be VALID or INVALID_DATA")
+        if not isinstance(m.get("trial_counted"), bool):
+            problems.append("trial_counted must be a boolean")
+        elif m.get("run_status") == "INVALID_DATA" and m.get("trial_counted"):
+            problems.append("an INVALID_DATA run can never count as a trial")
+        # A schema 4 run always resolved one published version (plan D20): never null.
+        for key in ("preflight", "symbol_counts"):
+            if key in m and not isinstance(m[key], dict):
+                problems.append(f"{key} must be an object in a schema 4 manifest")
+        dataset = m.get("dataset")
+        if not (isinstance(dataset, dict) and isinstance(dataset.get("version_id"), str)):
+            problems.append("dataset.version_id must be recorded in a schema 4 manifest")
     for key in _STR_KEYS:
         if key in m and not isinstance(m[key], str):
             problems.append(f"{key} must be a string")

@@ -584,7 +584,7 @@ def _validate_run(run: Any, runs_dir: Path | None = None) -> list[str]:
                 problems.append(f"'{section}.{key}' must be a number, got {value!r}")
     problems.extend(_validate_run_v2(run))
     if "schema" in run:
-        if isinstance(run["schema"], bool) or run["schema"] != 3:
+        if isinstance(run["schema"], bool) or run["schema"] not in (3, 4):
             problems.append(f"unsupported schema {run['schema']!r}")
         else:
             field_problems = _v3_field_problems(run)

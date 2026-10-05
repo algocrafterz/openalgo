@@ -15,6 +15,7 @@ from signal_engine.backtest.change_class import (
 )
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests import test_run_artifact_write as raw
+from signal_engine.tests.published_fixtures import fake_resolution, frames_resolution
 from signal_engine.tests.test_record_run import SUPPORTED
 
 root = base.root
@@ -102,9 +103,16 @@ class TestRerun:
         manifest, _ = _new_manifest(root, old)
         assert manifest["change_classes"] == [DATA_RANGE_CHANGE]
 
-    def test_different_dataset_fingerprint_is_a_dataset_change(self, root):
+    def test_different_dataset_fingerprint_is_a_dataset_change(self, root, monkeypatch):
         old = _first(root)
-        assert _rerun(root, old, lambda key: _exec(), fp=lambda s, i, a: "e" * 64) == 0
+
+        def changed_data(*a, **k):
+            res = fake_resolution()
+            monkeypatch.setattr(res, "run_fingerprint", lambda symbols, end: "e" * 64)
+            return res
+
+        monkeypatch.setattr(rr, "prepare_data", changed_data)
+        assert _rerun(root, old, lambda key: _exec()) == 0
         manifest, _ = _new_manifest(root, old)
         assert manifest["change_classes"] == [DATASET_CHANGE]
 
@@ -226,17 +234,9 @@ class TestExecuteBacktestEnd:
     def test_end_reaches_every_loader_call(self, monkeypatch):
         import pandas as pd
 
-        from signal_engine.backtest import data
-
-        calls = []
-
-        def loader(**kw):
-            calls.append(kw.get("end"))
-            idx = pd.date_range("2026-01-05 09:15", periods=3, freq="5min", tz="Asia/Kolkata")
-            return {"AAA": pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=idx)}
-
-        monkeypatch.setattr(data, "from_historify", lambda **kw: loader(**kw))
-        monkeypatch.setattr(data, "from_historify_daily", lambda **kw: loader(**kw))
+        idx = pd.date_range("2026-01-05 09:15", periods=3, freq="5min", tz="Asia/Kolkata")
+        res = frames_resolution(
+            intraday={"AAA": pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=idx)})
 
         import signal_engine.backtest.harness as harness
 
@@ -250,9 +250,10 @@ class TestExecuteBacktestEnd:
         monkeypatch.setattr(harness, "Backtest", FakeBT)
         monkeypatch.setattr(rr, "sample_trades", lambda trades, n: list(trades))
         monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: {})
-        rr.execute_backtest("orb", end="2026-01-09")
+        rr.execute_backtest("orb", end="2026-01-09", dataset=res)
+        calls = [c[2] for c in res.source.calls]
         assert len(calls) == 2  # the universe load and the baseline reload
         assert all(c is not None and str(c).startswith("2026-01-09") for c in calls)
-        calls.clear()
-        rr.execute_backtest("orb")
-        assert calls == [None, None]
+        res.source.calls.clear()
+        rr.execute_backtest("orb", dataset=res)
+        assert [c[2] for c in res.source.calls] == [None, None]

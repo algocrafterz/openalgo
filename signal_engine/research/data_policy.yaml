@@ -1,0 +1,80 @@
+# Data-readiness policy: every threshold the data-readiness rules use.
+#
+# Versioned by content: the policy version is the sha256 of the parsed values (comments and key
+# order do not change it). Every audit and every backtest run records the version, so a later
+# policy change stays distinguishable from historical runs. Change a value only with the owner's
+# approval, and write the reason next to it.
+# Plan: signal_engine/docs/BACKTEST-DATA-QUALITY-IMPLEMENTATION-PLAN.md (sections 5 and 6).
+schema: 1
+
+thresholds:
+  # Share of invalid bars (impossible OHLC, non-positive price, negative volume, null OHLC) in the
+  # run scope above which the dataset is "widespread corruption" and the run is blocked.
+  # Reused from dq_run.DEFAULT_THRESHOLDS["bad_bar_share"].
+  bad_bar_share: 0.001
+  # A symbol missing more than this share of the calendar sessions inside its own first-to-last
+  # range is excluded (defect). Reused from dq_run "incomplete_symbol_session_share".
+  max_missing_session_share: 0.02
+  # A symbol with more than this share of zero-volume bars gets a WARNING.
+  # Reused from dq_run "zero_volume_pct" (5.0 percent).
+  zero_volume_share: 0.05
+  # A daily bar with high equal to low is a placeholder (excluded) only when its volume is below
+  # this share of the symbol's median volume over the previous sessions. Evidence: the
+  # 2026-09-13 Sunday rows have about 0.0002 of normal volume (SBIN 1,050 against 5-10 million),
+  # while real locked days trade normally. 1% separates the two by more than an order of magnitude.
+  placeholder_volume_ratio: 0.01
+  placeholder_lookback_sessions: 20
+  # A date that is not in the calendar is a panel-wide calendar error (BLOCK) when at least this
+  # share of the active symbols have bars on it; below this share it is an isolated bad session
+  # (excluded). Evidence: 2026-09-13 has bars for 208 of 211 daily symbols, while a stray bar
+  # touches one or two symbols. Half separates the two cases with a wide margin.
+  calendar_date_symbol_share: 0.5
+  # The latest 1m session of a symbol is incomplete when it has fewer bars than this share of the
+  # symbol's modal session bar count. Reused from session.SHORT_SESSION_BAR_SHARE.
+  latest_session_min_bar_share: 0.75
+  # A daily bar written (created_at, IST) before this time on its own session date was written
+  # while the session was still open, so it is incomplete. NSE continuous trading ends at 15:30.
+  daily_close_time: "15:30"
+
+exclusions:
+  # Owner decision D15 (2026-10-04): block when data-defect exclusions are above 10 symbols OR
+  # above 5% of the requested symbols, whichever is reached first. Eligibility exclusions (the
+  # strategy's own history or listing-age rules) do not count.
+  max_defect_excluded_symbols: 10
+  max_defect_excluded_symbol_share: 0.05
+
+diagnostics:
+  # Audit-only diagnostics (deferred as rules, plan section 6.4). They never block or exclude.
+  # A daily close-to-close move above 20% (the widest NSE price band for non-F&O stocks) that
+  # reverts on the next session by at least half is listed as a possible bad tick.
+  spike_return: 0.20
+  # Identical OHLC with zero volume on this many sessions in a row is listed as a possible
+  # stale or filled price.
+  stale_repeat_sessions: 3
+  # A daily volume outside this ratio band of the summed in-session 1m volume is listed.
+  # Evidence: SBIN's canonical daily rows sit at 1.001 to 1.186 of the 1m sum.
+  cross_volume_ratio_low: 0.9
+  cross_volume_ratio_high: 1.2
+
+adjustment:
+  # Price-adjustment basis checks (dimension "adjustment"; added 2026-10-04 after the store was
+  # found to mix raw and split/bonus-adjusted series in 80 of 211 symbols).
+  # ADJ-CROSS-BASIS: a session where the daily close and the last in-session 1m close differ by
+  # more than this share means the two intervals are on different adjustment bases. Normal
+  # disagreement (closing-price method vs last trade) is about 1%; the smallest common NSE
+  # corporate-action ratio (1:4 bonus) is 25% and the RELIANCE demerger factor is about 9%.
+  cross_basis_tolerance: 0.05
+  # ...and the symbol is excluded only when at least this many sessions disagree, because a basis
+  # mismatch spans every session before an ex-date while a one-off print error does not.
+  cross_basis_min_sessions: 5
+  # ADJ-JUMP: an overnight gap (open over the previous close) of at least this size whose ratio
+  # matches a corporate-action ratio below is an unadjusted split or bonus inside the series.
+  jump_min_move: 0.20
+  jump_ratio_tolerance: 0.015
+  # Price factors of common NSE events: 1:1 bonus or 2-for-1 split (0.5), 5-for-1 split (0.2),
+  # 10-for-1 split (0.1), FV 5 to 2 (0.4), 2:1 bonus (1/3), 1:2 bonus (2/3), 1:3 bonus (0.75),
+  # 4-for-1 split (0.25). The reciprocal (a consolidation) is checked too.
+  # 0.8 (1:4 bonus) is deliberately absent: it equals a 20% lower-circuit gap, and on the
+  # 2026-10-04 Angel rebuild all 9 hits at 0.8 were real crashes (2020-03-23, Paytm 2024-02-01,
+  # YESBANK 2020-07-23). A 1:4 bonus left unadjusted is therefore not detected by this rule.
+  jump_ratios: [0.5, 0.2, 0.1, 0.4, 0.3333, 0.6667, 0.75, 0.25]

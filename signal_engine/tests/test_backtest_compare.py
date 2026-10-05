@@ -53,19 +53,39 @@ def _execution_of(rows, start, end):
     )
 
 
+def _fingerprint_resolution(fingerprint):
+    """A READY fake resolution whose published-version run fingerprint is `fingerprint`
+    (plan Phase 4: the dataset fingerprint comes from the published version)."""
+    from signal_engine.tests.published_fixtures import fake_resolution
+
+    base_res = fake_resolution()
+
+    class _R(type(base_res)):
+        def run_fingerprint(self, symbols, end):
+            return fingerprint
+
+    return _R(base_res.manifest, base_res.report, base_res.contract, base_res.calendar)
+
+
 def _record(root, execution, *, fingerprint="d" * 64, **kw):
-    return rr.record_idea(
-        root,
-        IDEA,
-        execute=lambda key: execution,
-        run_date="2026-10-02",
-        supported=SUPPORTED,
-        git_state_fn=lambda r: CLEAN,
-        dataset_fingerprint_fn=lambda s, i, a: fingerprint,
-        readiness_missing_fn=lambda: ["Capability one"],
-        now=NOW,
-        **kw,
-    )
+    saved = rr.prepare_data
+    res = _fingerprint_resolution(fingerprint)
+    rr.prepare_data = lambda *a, **k: res
+    try:
+        return rr.record_idea(
+            root,
+            IDEA,
+            execute=lambda key: execution,
+            run_date="2026-10-02",
+            supported=SUPPORTED,
+            git_state_fn=lambda r: CLEAN,
+            dataset_fingerprint_fn=lambda s, i, a: fingerprint,
+            readiness_missing_fn=lambda: ["Capability one"],
+            now=NOW,
+            **kw,
+        )
+    finally:
+        rr.prepare_data = saved
 
 
 def _folder(flat: Path) -> Path:
@@ -149,7 +169,7 @@ class TestScope:
         assert scope["cost_bps_round_trip"] is not None
         assert scope["profile"]["name"] == "flattrade-nse-cash"
         assert len(scope["profile"]["sha256"]) == 64
-        assert scope["dataset"]["id"] == "historify"
+        assert scope["dataset"]["id"] == "nse-daily-fake-001"  # the published version (Phase 4)
         assert len(scope["dataset"]["fingerprint"]) == 64
         assert scope["dataset"]["interval"] == "5m"
 

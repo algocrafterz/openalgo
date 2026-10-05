@@ -211,6 +211,7 @@ EPOCH0 = int(pd.Timestamp("2025-01-01 09:15", tz=IST).timestamp())
 SESSION_MINUTES = 375  # 09:15 to 15:29 inclusive
 N_DAYS = 12
 LATE_FROM = 8  # LATE lists on day index 8, past the 5-session tolerance
+STORE_SYMBOLS = ("AAA", "BBB", "CCC", "DDD", "PENNY", "LATE", "THIN")
 
 
 def _make_store(path):
@@ -242,6 +243,34 @@ def _make_store(path):
         con.execute("INSERT INTO market_data SELECT * FROM rows_df")
     finally:
         con.close()
+
+
+class _StoreSource:
+    """Runs the real loaders on this test's OWN temporary store (test setup only; the run path
+    itself only ever reads through the resolution's source, never a store it names)."""
+
+    def __init__(self, daily=None, intraday=None):
+        self._daily, self._intraday = daily, intraday
+
+    def daily(self, symbols, end, min_sessions, collector=None):
+        return self._daily(symbols=symbols, end=end, collector=collector)
+
+    def intraday(self, symbols, interval, end, collector=None):
+        return self._intraday(symbols=symbols, interval=interval, end=end, collector=collector)
+
+
+def _store_resolution(symbols, daily=None, intraday=None):
+    """A READY resolution over the given loaders; its calendar is the store's own sessions."""
+    import contextlib
+
+    from signal_engine.tests.published_fixtures import frames_resolution
+
+    frames = intraday(interval="5m") if intraday else daily()
+    res = frames_resolution(daily=None if intraday else frames,
+                            intraday=frames if intraday else None, eligible=list(symbols))
+    source = _StoreSource(daily, intraday)
+    res.open = lambda: contextlib.nullcontext(source)
+    return res
 
 
 class _Strat(Script):
@@ -305,7 +334,7 @@ def store(store_db, monkeypatch):
 
     monkeypatch.setattr(cli, "_register", lambda: None)
     monkeypatch.setattr(cli, "REGISTRY", {"k": (_Strat, _Params, "intraday")})
-    monkeypatch.setattr(data, "from_historify", loader)
+    seen["res"] = _store_resolution(STORE_SYMBOLS, intraday=loader)
     monkeypatch.setattr(harness, "Backtest", SpyBacktest)
     monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
     monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
@@ -319,21 +348,21 @@ def _by_code(exe, code):
 
 class TestCollectorWiring:
     def test_split_day_rows_one_per_symbol_per_date(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         rows = _by_code(exe, "SPLIT_DAY")
         assert rows[["symbol", "scope", "count"]].values.tolist() == [["BBB", "symbol_session", 1]]
         assert rows["date"].tolist() == [dt.date(2025, 1, 10)]
         assert exe.data_report["dropped"]["split_days_dropped"] == {"BBB": ["2025-01-10"]}
 
     def test_min_sessions_rows_are_symbol_scoped(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         rows = _by_code(exe, "SYMBOL_MIN_SESSIONS")
         assert rows[["symbol", "scope", "count"]].values.tolist() == [["THIN", "symbol", 1]]
         assert "2" in rows["detail"].iloc[0]
         assert exe.data_report["dropped"]["symbols_dropped_min_sessions"] == {"THIN": 2}
 
     def test_bad_bar_counts_equal_an_independent_count(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         rows = _by_code(exe, "BAD_BAR")
         assert rows["symbol"].tolist() == ["AAA"] and set(rows["scope"]) == {"symbol"}
         # independent count of the rows added to AAA on day 0: a second 09:15 bar and a second
@@ -348,7 +377,7 @@ class TestCollectorWiring:
             assert part in detail
 
     def test_not_eligible_rows_equal_an_independent_count(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         rows = _by_code(exe, "NOT_ELIGIBLE")
         assert set(rows["scope"]) == {"symbol_session"} and set(rows["count"]) == {1}
         per_symbol = rows.groupby("symbol").size().to_dict()
@@ -365,7 +394,7 @@ class TestCollectorWiring:
         ]
 
     def test_dropped_sessions_are_absent_from_what_the_engine_sees(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         seen = store["frames"]
         assert sorted(seen) == ["AAA", "BBB", "CCC", "DDD", "LATE"]  # PENNY has none left
         gone = {dt.date(2025, 1, 9), dt.date(2025, 1, 10)}
@@ -375,7 +404,7 @@ class TestCollectorWiring:
         assert exe.ledger_problems == []
 
     def test_data_quality_is_built_on_the_frames_before_the_drop(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         rep = exe.data_report
         assert rep["summary"]["symbols"] == 6  # AAA to DDD, PENNY and LATE as loaded
         assert exe.symbols == ["AAA", "BBB", "CCC", "DDD", "LATE", "PENNY"]
@@ -385,7 +414,7 @@ class TestCollectorWiring:
         assert isinstance(exe.data_quality["affects_validity"], bool)
 
     def test_calendar_membership_and_universe_are_filled(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         assert exe.calendar.version.startswith("historify-derived-")
         assert len(exe.calendar.trading_days) == N_DAYS
         assert exe.calendar.trading_days[-1] == dt.date(2025, 1, 12)
@@ -407,12 +436,12 @@ class TestCollectorWiring:
         ]
 
     def test_run_sets_warmup_zero_by_default_and_has_no_warmup_rows(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         assert store["run"].warmup_bars == 0
         assert len(_by_code(exe, "WARMUP")) == 0
 
     def test_warmup_from_settings_reaches_the_engine(self, store):
-        exe = rr.execute_backtest("k", settings={**SETTINGS, "warmup_bars": 100})
+        exe = rr.execute_backtest("k", dataset=store["res"], settings={**SETTINGS, "warmup_bars": 100})
         assert store["run"].warmup_bars == 100
         assert exe.params["run"]["warmup_bars"] == 100
         rows = _by_code(exe, "WARMUP")
@@ -430,14 +459,14 @@ class TestCollectorWiring:
         assert exe.ledger_problems == []
 
     def test_without_eligibility_settings_nothing_is_dropped(self, store):
-        exe = rr.execute_backtest("k")
+        exe = rr.execute_backtest("k", dataset=store["res"])
         assert len(_by_code(exe, "NOT_ELIGIBLE")) == 0
         assert exe.universe_frame is None and exe.membership is None
         assert sorted(store["frames"]) == ["AAA", "BBB", "CCC", "DDD", "LATE", "PENNY"]
         assert exe.calendar is not None and exe.data_report is not None
 
     def test_ledgers_reconcile_with_the_data_layer_rows(self, store):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         assert exe.ledger_problems == []
         assert ev.reconcile_frames(exe.ledgers, exe.trades) == []
 
@@ -450,6 +479,11 @@ class _SwingStrat(SwingScript):
         out = df.copy()
         out["day"] = pd.Series(out.index.date, index=out.index)
         return out
+
+
+#: Long enough that the one planted duplicate stays under the 0.1% bad-bar share: above it the
+#: run is rejected at load before the engine (plan Phase 4), which is not what these tests check.
+SWING_DAYS = 220
 
 
 class TestSwingPath:
@@ -468,7 +502,7 @@ class TestSwingPath:
             rows = [
                 (sym, "D", EPOCH0 + d * 86400, 100.0, 101.0, 99.5, 100.0, 5)
                 for sym in ("AAA", "BBB", "CCC", "DDD", "EEE")
-                for d in range(40)
+                for d in range(SWING_DAYS)
             ]
             rows += [("AAA", "D", EPOCH0 + 3 * 86400, 100.0, 101.0, 99.5, 100.0, 5)]  # duplicate
             con.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?)", rows)
@@ -477,24 +511,23 @@ class TestSwingPath:
         real = data.from_historify_daily
         monkeypatch.setattr(cli, "_register", lambda: None)
         monkeypatch.setattr(cli, "REGISTRY", {"s": (_SwingStrat, _Params, "swing")})
-        monkeypatch.setattr(
-            data,
-            "from_historify_daily",
-            lambda **kw: real(db_path=db, **{**kw, "min_sessions": 10}),
-        )
         monkeypatch.setattr(rr, "random_entry_baseline", lambda *a, **k: None)
         monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+        return _store_resolution(
+            ("AAA", "BBB", "CCC", "DDD", "EEE"),
+            daily=lambda **kw: real(db_path=db, **{**kw, "min_sessions": 10}),
+        )
 
     def test_price_floor_does_not_delete_adjusted_daily_history(self, swing_store):
         settings = {**SETTINGS, "eligibility_min_price": 1000.0}
-        exe = rr.execute_backtest("s", settings=settings)
+        exe = rr.execute_backtest("s", settings=settings, dataset=swing_store)
         assert len(_by_code(exe, "NOT_ELIGIBLE")) == 0
 
     def test_swing_run_carries_the_data_layer_and_warmup(self, swing_store):
         settings = {**SETTINGS, "eligibility_min_prior_sessions": 3, "warmup_bars": 5}
-        exe = rr.execute_backtest("s", settings=settings)
+        exe = rr.execute_backtest("s", settings=settings, dataset=swing_store)
         assert exe.params["run"]["warmup_bars"] == 5
-        assert exe.calendar is not None and len(exe.calendar.trading_days) == 40
+        assert exe.calendar is not None and len(exe.calendar.trading_days) == SWING_DAYS
         assert exe.data_report["dropped"]["interval"] == "1d"
         bad = _by_code(exe, "BAD_BAR")
         assert set(bad["symbol"]) == {"AAA"} and int(bad["count"].sum()) == 1
@@ -514,7 +547,7 @@ class TestBaselinePopulation:
             return None
 
         monkeypatch.setattr(rr, "random_entry_baseline_intraday", baseline)
-        exe = rr.execute_backtest("k", settings=settings)
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=settings)
         return exe, seen
 
     def test_baseline_frames_exclude_ineligible_sessions(self, store, monkeypatch):
@@ -550,7 +583,7 @@ class TestCalendarAsOf:
             return real(frames, as_of=as_of)
 
         monkeypatch.setattr(rr, "derive_calendar", spy)
-        exe = rr.execute_backtest("k", settings=SETTINGS, end="2025-01-08")
+        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS, end="2025-01-08")
         assert got["as_of"] == dt.date(2025, 1, 8)
         assert exe.calendar.trading_days[-1] <= dt.date(2025, 1, 8)
 
@@ -560,7 +593,7 @@ class TestCalendarAsOf:
         monkeypatch.setattr(
             rr, "derive_calendar", lambda f, as_of=None: got.update(a=as_of) or real(f, as_of=as_of)
         )
-        rr.execute_backtest("k", settings=SETTINGS)
+        rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         assert got["a"] == dt.date(2025, 1, 12)
 
     def test_version_ignores_bars_appended_after_the_cutoff(self):
@@ -645,7 +678,9 @@ class TestManifestFields:
         assert m["session"]["exchange"].startswith("NSE")
         assert SESSION_RE.match(m["session"]["broker_cutoff"])
         assert m["session"]["force_flat"] == "15:00"
-        assert m["dataset"]["corporate_action_policy"] == dq_run.POLICY["corporate_actions"]
+        # Plan Phase 4: the dataset block comes from the published version; its corporate-action
+        # policy is the version's price basis.
+        assert m["dataset"]["corporate_action_policy"] == m["dataset"]["price_basis"]
 
     def test_universe_version_is_a_stable_hash_of_policy_and_frame(self, root, run_data):
         m = manifest_of(record(root, run_data))
@@ -759,7 +794,9 @@ class TestEvidenceFiles:
         assert set(report["data_quality"]) == {"status", "affects_validity", "items"}
         assert report["data_quality"]["status"] == step5_fields()["data_quality"]["status"]
 
-    def test_warning_that_affects_validity_makes_the_verdict_inconclusive(self, root, run_data):
+    def test_warning_that_affects_validity_makes_the_run_invalid_data(self, root, run_data):
+        """Plan D17 (Phase 4): a data-quality failure is the run status INVALID_DATA, never a
+        verdict (it used to be INCONCLUSIVE)."""
         bad = {
             "status": "WARNING",
             "affects_validity": True,
@@ -769,8 +806,8 @@ class TestEvidenceFiles:
         folder = record(root, run_data, data_quality=bad, data_report=report)
         out = tel.report_of(folder)
         assert out["data_quality"]["affects_validity"] is True
-        assert out["verdict"]["run_verdict"] == "INCONCLUSIVE"
-        assert "data quality" in out["verdict"]["reasons"][0]["text"].lower()
+        assert out["verdict"] is None and out["run_status"] == "INVALID_DATA"
+        assert "data quality" in out["next_action"].lower()
 
     def test_clean_data_does_not_force_inconclusive_on_its_own(self, root, run_data):
         out = tel.report_of(record(root, run_data))

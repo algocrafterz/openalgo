@@ -13,6 +13,7 @@ from signal_engine.backtest import truncation as tr
 from signal_engine.backtest.session import derive_calendar
 from signal_engine.backtest.swing_engine import SwingRunConfig, simulate_swing
 from signal_engine.tests import test_evidence_ledgers as tel
+from signal_engine.tests.published_fixtures import frames_resolution
 from signal_engine.tests.ranked_fixtures import RankedTop, RankParams, ranked_frames
 
 SPEC_PARAMS = {"n": 3, "closeness": 0.9, "window": 20}
@@ -79,7 +80,8 @@ def ranked(monkeypatch):
 
     monkeypatch.setattr(cli, "_register", lambda: None)
     monkeypatch.setattr(cli, "REGISTRY", {"k": (Strat, RankParams, "swing")})
-    monkeypatch.setattr(data, "from_historify_daily", lambda **kw: ranked_frames())
+    # Plan Phase 4: the run reads bars only through its dataset resolution.
+    seen["res"] = frames_resolution(daily=ranked_frames())
     monkeypatch.setattr(harness, "Backtest", Spy)
     monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
     return seen
@@ -89,22 +91,22 @@ class TestExecuteRankedBacktest:
     def test_a_mismatch_between_spec_and_class_fails_before_anything_runs(self, ranked):
         bad = {**SETTINGS, "parameters": {**SPEC_PARAMS, "closeness": 0.5}}
         with pytest.raises(rr.ParameterBindingError, match="closeness"):
-            rr.execute_backtest("k", settings=bad)
+            rr.execute_backtest("k", dataset=ranked["res"], settings=bad)
         assert ranked["backtests"] == 0
 
     def test_the_panel_hook_runs_once_on_the_data_layers_frames_and_calendar(self, ranked):
-        rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS, run_truncation=False)
         assert ranked["panel_calls"] == 1
         assert ranked["calendar_days"] == 130
 
     def test_the_engine_receives_the_schedule_columns(self, ranked):
-        rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS, run_truncation=False)
         frame = next(iter(ranked["frames"].values()))
         for column in ("rebalance_prev", "target_prev", "target_latest"):
             assert column in frame.columns
 
     def test_no_stop_with_a_capital_per_position_sizes_every_trade_to_it(self, ranked):
-        exe = rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        exe = rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS, run_truncation=False)
         assert exe.trades and all(not t.r_defined for t in exe.trades)
         assert exe.cost_model.fixed_notional == 100000.0
         assert set(exe.cost_components["modeled_cost_bps"].round(6)) <= {
@@ -118,7 +120,7 @@ class TestExecuteRankedBacktest:
             run_overrides = {}
 
         monkeypatch.setattr(cli, "REGISTRY", {"k": (NoOverride, RankParams, "swing")})
-        rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS, run_truncation=False)
         assert ranked["run"].max_hold_bars is None
 
     def test_a_finite_holding_period_is_not_turned_into_unlimited(self, ranked, monkeypatch):
@@ -127,25 +129,25 @@ class TestExecuteRankedBacktest:
 
         monkeypatch.setattr(cli, "REGISTRY", {"k": (NoOverride, RankParams, "swing")})
         settings = {**SETTINGS, "holding_period": "12 bars"}
-        rr.execute_backtest("k", settings=settings, run_truncation=False)
+        rr.execute_backtest("k", dataset=ranked["res"], settings=settings, run_truncation=False)
         assert ranked["run"].max_hold_bars == 120  # the engine default, untouched
 
     def test_a_strategy_run_override_reaches_the_swing_run_config(self, ranked):
-        exe = rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        exe = rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS, run_truncation=False)
         assert ranked["run"].max_hold_bars is None
         assert exe.params["run"]["max_hold_bars"] is None
 
     def test_the_frozen_parameters_are_what_the_run_records(self, ranked):
-        exe = rr.execute_backtest("k", settings=SETTINGS, run_truncation=False)
+        exe = rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS, run_truncation=False)
         assert exe.params["strategy"] == SPEC_PARAMS
 
     def test_a_stop_based_swing_run_keeps_its_risk_based_cost_model(self, ranked):
         settings = {k: v for k, v in SETTINGS.items() if k not in ("stop", "capital_per_position")}
-        exe = rr.execute_backtest("k", settings=settings, run_truncation=False)
+        exe = rr.execute_backtest("k", dataset=ranked["res"], settings=settings, run_truncation=False)
         assert exe.cost_model.fixed_notional is None
 
     def test_truncation_runs_on_the_whole_truncated_panel(self, ranked):
-        exe = rr.execute_backtest("k", settings=SETTINGS)
+        exe = rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS)
         assert exe.truncation is not None and exe.truncation["ok"] is True
         assert exe.truncation["checked"]
 

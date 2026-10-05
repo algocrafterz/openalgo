@@ -158,7 +158,7 @@ def test_v3_and_v2_in_same_idea_both_load(idea: Path):
     assert problems == [] and [r["run_id"] for r in runs] == [RUN_ID, "2026-10-01-orb-v2"]
 
 
-@pytest.mark.parametrize("value", [1, 4, "3", None, True])
+@pytest.mark.parametrize("value", [1, 5, "3", None, True])  # 4 is supported (plan Phase 4)
 def test_unsupported_schema(idea: Path, value):
     _setup(idea, schema=value)
     assert any("unsupported schema" in p for p in _problems(idea))

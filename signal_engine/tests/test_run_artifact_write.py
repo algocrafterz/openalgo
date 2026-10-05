@@ -16,6 +16,7 @@ from signal_engine.backtest.change_class import PARAMETER_CHANGE, RESEARCH_RERUN
 from signal_engine.research.intake import freeze as freeze_mod
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests.intake_fixtures import GOOD_SPEC, make_spec
+from signal_engine.tests.published_fixtures import fake_resolution
 from signal_engine.tests.test_record_run import SUPPORTED, _execution
 from signal_engine.timeutils import IST
 
@@ -40,6 +41,22 @@ FILES = {
 def _git(state):
     return lambda root_: state
 
+
+
+def _FingerprintResolution(result, seen=None):
+    """A fake resolution whose run fingerprint returns `result` (or raises it) and records the
+    (sorted symbols, as_of) it was asked for."""
+    base_res = fake_resolution()
+
+    class _R(type(base_res)):
+        def run_fingerprint(self, symbols, end):
+            if seen is not None:
+                seen.append((sorted(symbols), end))
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    return _R(base_res.manifest, base_res.report, base_res.contract, base_res.calendar)
 
 def _record(root, *, execute=None, run_date="2026-10-02", git=CLEAN, **kw):
     kw.setdefault("git_state_fn", _git(git))
@@ -80,10 +97,10 @@ class TestLayout:
         assert mf.validate_manifest(_manifest(path)) == []
         assert mf.verify_artifacts(_folder(path)) == []
 
-    def test_flat_record_is_schema_3_and_indexes_the_folder(self, root):
+    def test_flat_record_is_schema_4_and_indexes_the_folder(self, root):
         path = _record(root)
         flat = json.loads(path.read_text(encoding="utf-8"))
-        assert flat["schema"] == 3
+        assert flat["schema"] == 4  # plan Phase 4: published dataset version, run status
         assert flat["artifact_dir"] == f"{flat['run_id']}/"
         assert flat["manifest_sha256"] == mf.manifest_sha256(_folder(path))
         assert flat["strategy_version"] == _manifest(path)["strategy"]["version"]
@@ -116,7 +133,7 @@ class TestLayout:
         path = _record(root)
         report = json.loads((_folder(path) / "report" / "report.json").read_text(encoding="utf-8"))
         flat = json.loads(path.read_text(encoding="utf-8"))
-        assert report["schema"] == 3
+        assert report["schema"] == 4
         assert report["metrics"] == flat["metrics"]
         assert report["series"] == flat["series"]
         assert report["evaluation"] == flat.get("evaluation")
@@ -212,14 +229,15 @@ class TestFrozenContent:
     def test_manifest_identity_fields(self, root):
         path = _record(root)
         m = _manifest(path)
-        assert m["schema"] == 3
+        assert m["schema"] == 4
         assert m["run_id"] == path.stem
         assert m["created_ist"] == NOW.isoformat()
         assert m["idea_id"] == IDEA
         assert m["period"] == {"start": "2026-01-01", "end": "2026-02-20"}
         assert m["dataset"]["interval"] == "5m"
-        assert m["dataset"]["source"] == "historify"
-        assert m["dataset"]["id"] == "historify"
+        # plan Phase 4: the dataset is the run's published version, never "historify"
+        assert m["dataset"]["source"] == fake_resolution().manifest["source"]
+        assert m["dataset"]["id"] == fake_resolution().version_id
         assert m["fingerprints"]["profile"] == m["deployment_profile"]["sha256"]
         assert m["deployment_profile"]["name"] == "flattrade-nse-cash"
         assert m["deployment_profile"]["product"] == "MIS"
@@ -249,11 +267,13 @@ class TestFrozenContent:
             assert f"{path} not captured until engine step 5" in caps
 
     def test_empty_symbols_fingerprint_needs_no_database(self, root):
+        """The legacy store fingerprint function is never called (plan Phase 4): the run
+        fingerprint comes from the published version."""
         def boom(*a):
             raise AssertionError("database touched")
 
         m = _manifest(_record(root, dataset_fingerprint_fn=boom))
-        assert m["dataset"]["fingerprint"] == ra.sha256_hex(ra.canonical_json([]))
+        assert m["dataset"]["fingerprint"] == fake_resolution().run_fingerprint([], None)
         assert m["reproducibility"]["dataset_fingerprint"] is False
         assert m["reproducible"] is False
 
@@ -261,12 +281,15 @@ class TestFrozenContent:
         seen = []
         ex = rr.Execution(**{**_execution().__dict__, "symbols": ["B.NS", "A.NS"]})
 
-        def fp(symbols, interval, as_of):
-            seen.append((list(symbols), interval, as_of))
-            return "e" * 64
-
-        m = _manifest(_record(root, execute=lambda key: ex, dataset_fingerprint_fn=fp))
-        assert seen == [(["A.NS", "B.NS"], "5m", "2026-02-20")]
+        res = _FingerprintResolution("e" * 64, seen)
+        rr_prepare = rr.prepare_data
+        rr.prepare_data = lambda *a, **k: res
+        try:
+            m = _manifest(_record(root, execute=lambda key: ex))
+        finally:
+            rr.prepare_data = rr_prepare
+        # plan Phase 4: the run fingerprint is the published version's, over the run's symbols
+        assert seen == [(["A.NS", "B.NS"], "2026-02-20")]
         assert m["dataset"]["fingerprint"] == "e" * 64
         assert m["dataset"]["symbol_count"] == 2
         assert m["universe"]["symbols_sha256"] == ra.sha256_hex(ra.canonical_json(["A.NS", "B.NS"]))
@@ -457,6 +480,7 @@ class TestFailureLeavesNothing:
         runs = _runs(root)
         assert not runs.exists() or list(runs.iterdir()) == []
         monkeypatch.undo()
+        monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: fake_resolution())  # re-stub
         path = _record(root)
         assert path.stem == "2026-10-02-orb-v1"
 
@@ -602,18 +626,19 @@ class TestPreCommitFailuresLeaveNothing:
             _record(root, **kw)
         _nothing_written(root)
         monkeypatch.undo()
+        # undo() also removed conftest's published-dataset stub; reinstall it for the retry
+        monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: fake_resolution())
         assert _record(root).stem == "2026-10-02-orb-v1"
 
     def test_dataset_fingerprint_failure(self, root, monkeypatch):
-        def boom(s, i, a):
-            raise RuntimeError("store offline")
-
+        """The run fingerprint now comes from the published version (plan Phase 4); a version
+        whose objects cannot be read must still leave nothing behind."""
+        broken = _FingerprintResolution(RuntimeError("published object unreadable"))
         with_symbols = rr.Execution(**{**_execution().__dict__, "symbols": ["AAA"]})
         self._fail_then_succeed(
             root,
             monkeypatch,
-            lambda mp: None,
-            dataset_fingerprint_fn=boom,
+            lambda mp: mp.setattr(rr, "prepare_data", lambda *a, **k: broken),
             execute=lambda key: with_symbols,
         )
 
@@ -635,6 +660,7 @@ class TestPreCommitFailuresLeaveNothing:
             _record(root)
         _nothing_written(root)
         monkeypatch.undo()
+        monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: fake_resolution())  # re-stub
         assert _record(root).stem == "2026-10-02-orb-v1"
 
     def test_trades_bytes_failure(self, root, monkeypatch):

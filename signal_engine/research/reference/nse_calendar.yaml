@@ -1,0 +1,394 @@
+# NSE Capital Market (CM) segment trading calendar. Authoritative and versioned.
+#
+# Built from NSE circulars only. It is never derived from the Historify store or any vendor data.
+# The version is the sha256 of this file's bytes, so any edit (comments included) is a new version.
+# Loader and validation: signal_engine/backtest/data_readiness/calendar.py.
+#
+# Sections
+#   years             one block per covered year: the annual holiday circular.
+#   holidays          WEEKDAY closures only. Holidays that fall on a Saturday or Sunday are not
+#                     listed (the weekend already closes the market). Entries added after the
+#                     annual circular carry their own `source`.
+#   special_sessions  live sessions outside the normal weekday pattern: Muhurat trading, Union
+#                     Budget weekend sessions, and weekend live sessions (DR drills, rescheduled
+#                     days). A Muhurat session may fall on a listed weekday holiday; any other
+#                     special session must fall on a weekend.
+#   mock_sessions     NOT trading sessions. Mock trading on a weekend. Data stamped on these dates
+#                     is not real. This list is NOT exhaustive: NSE runs mock sessions on many
+#                     Saturdays. Only mocks with a found circular are listed.
+#   unconfirmed       dates where data was observed but no NSE source confirms a session (D10).
+#                     They classify as `unknown`, so data on them is an ERROR until confirmed.
+#
+# Verification (2026-10-04). Every date from 2016-01-01 to 2026-10-03 was checked against the NSE
+# CM bhavcopy archive (NSE's own published end-of-day record, one file per trading day):
+#   old format  https://nsearchives.nseindia.com/content/historical/EQUITIES/<YYYY>/<MON>/cm<DD><MON><YYYY>bhav.csv.zip  (to 2024-07-05)
+#   new format  https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_<YYYYMMDD>_F_0000.csv.zip  (from 2024-07-08)
+# Result: every weekday without a bhavcopy is listed below as a holiday, every listed holiday has
+# no bhavcopy, and the only weekend dates with a bhavcopy are the special sessions listed below.
+# This is a cross-check of the circulars, not the source of the calendar. Dates after 2026-10-03
+# rest on the 2026 circular alone and may still be amended by NSE.
+
+schema: 1
+exchange: NSE
+segment: CM
+regular_session: {open: "09:15", close: "15:30"}
+
+years:
+  2016:
+    holiday_count: 15
+    source: https://nsearchives.nseindia.com/content/historical/EQUITIES/2016/
+    verified: false
+    note: >-
+      The annual circular for 2016 (issued December 2015) was not found in the NSE archive. Dates
+      come from the NSE CM bhavcopy archive (no file = no trading); names from broker notices.
+  2017: {source: https://nsearchives.nseindia.com/content/circulars/CMTR33746.pdf, verified: true, holiday_count: 13}
+  2018: {source: https://nsearchives.nseindia.com/content/circulars/CMTR36475.pdf, verified: true, holiday_count: 16}
+  2019: {source: https://nsearchives.nseindia.com/content/circulars/CMTR39612.pdf, verified: true, holiday_count: 17}
+  2020: {source: https://nsearchives.nseindia.com/content/circulars/CMTR42877.pdf, verified: true, holiday_count: 12}
+  2021: {source: https://nsearchives.nseindia.com/content/circulars/CMTR46623.pdf, verified: true, holiday_count: 14}
+  2022: {source: https://nsearchives.nseindia.com/content/circulars/CMTR50560.pdf, verified: true, holiday_count: 13}
+  2023: {source: https://nsearchives.nseindia.com/content/circulars/CMTR54757.pdf, verified: true, holiday_count: 15}
+  2024: {source: https://nsearchives.nseindia.com/content/circulars/CMTR59722.pdf, verified: true, holiday_count: 17}
+  2025: {source: https://nsearchives.nseindia.com/content/circulars/CMTR65587.pdf, verified: true, holiday_count: 14}
+  2026:
+    holiday_count: 16
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf
+    verified: true
+    note: Cross-checked against the bhavcopy archive only up to 2026-10-03.
+
+holidays:
+  # 2016 (verified: false, see years.2016)
+  - {date: 2016-01-26, name: Republic Day}
+  - {date: 2016-03-07, name: Mahashivratri}
+  - {date: 2016-03-24, name: Holi}
+  - {date: 2016-03-25, name: Good Friday}
+  - {date: 2016-04-14, name: Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2016-04-15, name: Ram Navami}
+  - {date: 2016-04-19, name: Mahavir Jayanti}
+  - {date: 2016-07-06, name: Id-Ul-Fitr (Ramzan ID)}
+  - {date: 2016-08-15, name: Independence Day}
+  - {date: 2016-09-05, name: Ganesh Chaturthi}
+  - {date: 2016-09-13, name: Bakri ID}
+  - {date: 2016-10-11, name: Dasera}
+  - {date: 2016-10-12, name: Moharram}
+  - {date: 2016-10-31, name: Diwali-Balipratipada}
+  - {date: 2016-11-14, name: Gurunanak Jayanti}
+  # 2017 (CMTR33746)
+  - {date: 2017-01-26, name: Republic Day}
+  - {date: 2017-02-24, name: Mahashivratri}
+  - {date: 2017-03-13, name: Holi}
+  - {date: 2017-04-04, name: Ram Navami}
+  - {date: 2017-04-14, name: Good Friday / Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2017-05-01, name: Maharashtra Day}
+  - {date: 2017-06-26, name: Id-Ul-Fitr (Ramzan ID)}
+  - {date: 2017-08-15, name: Independence Day}
+  - {date: 2017-08-25, name: Ganesh Chaturthi}
+  - {date: 2017-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2017-10-19, name: Diwali-Laxmi Pujan (Muhurat trading held)}
+  - {date: 2017-10-20, name: Diwali-Balipratipada}
+  - {date: 2017-12-25, name: Christmas}
+  # 2018 (CMTR36475)
+  - {date: 2018-01-26, name: Republic Day}
+  - {date: 2018-02-13, name: Mahashivratri}
+  - {date: 2018-03-02, name: Holi}
+  - {date: 2018-03-29, name: Mahavir Jayanti}
+  - {date: 2018-03-30, name: Good Friday}
+  - {date: 2018-05-01, name: Maharashtra Day}
+  - {date: 2018-08-15, name: Independence Day}
+  - {date: 2018-08-22, name: Bakri ID}
+  - {date: 2018-09-13, name: Ganesh Chaturthi}
+  - {date: 2018-09-20, name: Moharram}
+  - {date: 2018-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2018-10-18, name: Dasera}
+  - {date: 2018-11-07, name: Diwali-Laxmi Pujan (Muhurat trading held)}
+  - {date: 2018-11-08, name: Diwali-Balipratipada}
+  - {date: 2018-11-23, name: Gurunanak Jayanti}
+  - {date: 2018-12-25, name: Christmas}
+  # 2019 (CMTR39612, plus two election closures)
+  - {date: 2019-03-04, name: Mahashivratri}
+  - {date: 2019-03-21, name: Holi}
+  - {date: 2019-04-17, name: Mahavir Jayanti}
+  - {date: 2019-04-19, name: Good Friday}
+  - date: 2019-04-29
+    name: General Elections in Mumbai (added after the annual circular)
+    source: https://nsearchives.nseindia.com/content/historical/EQUITIES/2019/APR/
+    verified: false
+    note: The amending circular was not found; the closure is confirmed by the absent bhavcopy.
+  - {date: 2019-05-01, name: Maharashtra Day}
+  - {date: 2019-06-05, name: Id-Ul-Fitr (Ramzan ID)}
+  - {date: 2019-08-12, name: Bakri Id}
+  - {date: 2019-08-15, name: Independence Day}
+  - {date: 2019-09-02, name: Ganesh Chaturthi}
+  - {date: 2019-09-10, name: Moharram}
+  - {date: 2019-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2019-10-08, name: Dasera}
+  - date: 2019-10-21
+    name: Maharashtra Legislative Assembly Elections (added after the annual circular)
+    source: https://nsearchives.nseindia.com/content/historical/EQUITIES/2019/OCT/
+    verified: false
+    note: The amending circular was not found; the closure is confirmed by the absent bhavcopy.
+  - {date: 2019-10-28, name: Diwali-Balipratipada}
+  - {date: 2019-11-12, name: Gurunanak Jayanti}
+  - {date: 2019-12-25, name: Christmas}
+  # 2020 (CMTR42877)
+  - {date: 2020-02-21, name: Mahashivratri}
+  - {date: 2020-03-10, name: Holi}
+  - {date: 2020-04-02, name: Ram Navami}
+  - {date: 2020-04-06, name: Mahavir Jayanti}
+  - {date: 2020-04-10, name: Good Friday}
+  - {date: 2020-04-14, name: Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2020-05-01, name: Maharashtra Day}
+  - {date: 2020-05-25, name: Id-Ul-Fitr (Ramzan ID)}
+  - {date: 2020-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2020-11-16, name: Diwali-Balipratipada}
+  - {date: 2020-11-30, name: Gurunanak Jayanti}
+  - {date: 2020-12-25, name: Christmas}
+  # 2021 (CMTR46623)
+  - {date: 2021-01-26, name: Republic Day}
+  - {date: 2021-03-11, name: Mahashivratri}
+  - {date: 2021-03-29, name: Holi}
+  - {date: 2021-04-02, name: Good Friday}
+  - {date: 2021-04-14, name: Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2021-04-21, name: Ram Navami}
+  - {date: 2021-05-13, name: Id-Ul-Fitr (Ramzan ID)}
+  - {date: 2021-07-21, name: Bakri Id}
+  - {date: 2021-08-19, name: Moharram}
+  - {date: 2021-09-10, name: Ganesh Chaturthi}
+  - {date: 2021-10-15, name: Dussehra}
+  - {date: 2021-11-04, name: Diwali-Laxmi Pujan (Muhurat trading held)}
+  - {date: 2021-11-05, name: Diwali-Balipratipada}
+  - {date: 2021-11-19, name: Gurunanak Jayanti}
+  # 2022 (CMTR50560)
+  - {date: 2022-01-26, name: Republic Day}
+  - {date: 2022-03-01, name: Mahashivratri}
+  - {date: 2022-03-18, name: Holi}
+  - {date: 2022-04-14, name: Dr. Baba Saheb Ambedkar Jayanti / Mahavir Jayanti}
+  - {date: 2022-04-15, name: Good Friday}
+  - {date: 2022-05-03, name: Id-Ul-Fitr (Ramzan ID)}
+  - {date: 2022-08-09, name: Moharram}
+  - {date: 2022-08-15, name: Independence Day}
+  - {date: 2022-08-31, name: Ganesh Chaturthi}
+  - {date: 2022-10-05, name: Dussehra}
+  - {date: 2022-10-24, name: Diwali-Laxmi Pujan (Muhurat trading held)}
+  - {date: 2022-10-26, name: Diwali-Balipratipada}
+  - {date: 2022-11-08, name: Gurunanak Jayanti}
+  # 2023 (CMTR54757; Bakri Id moved from 28 June to 29 June)
+  - {date: 2023-01-26, name: Republic Day}
+  - {date: 2023-03-07, name: Holi}
+  - {date: 2023-03-30, name: Ram Navami}
+  - {date: 2023-04-04, name: Mahavir Jayanti}
+  - {date: 2023-04-07, name: Good Friday}
+  - {date: 2023-04-14, name: Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2023-05-01, name: Maharashtra Day}
+  - date: 2023-06-29
+    name: Bakri Id (moved from 2023-06-28, which became a trading day)
+    source: https://nsearchives.nseindia.com/content/circulars/CMPT57291.pdf
+    verified: true
+    note: >-
+      NSE Clearing circular citing the Maharashtra notification of 2023-06-26 and the exchange
+      circular NSE/CMTR/57285 dated 2023-06-27 (that PDF is not in the archive).
+  - {date: 2023-08-15, name: Independence Day}
+  - {date: 2023-09-19, name: Ganesh Chaturthi}
+  - {date: 2023-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2023-10-24, name: Dussehra}
+  - {date: 2023-11-14, name: Diwali-Balipratipada}
+  - {date: 2023-11-27, name: Gurunanak Jayanti}
+  - {date: 2023-12-25, name: Christmas}
+  # 2024 (CMTR59722, plus three closures added during the year)
+  - date: 2024-01-22
+    name: Public holiday declared by the Government of Maharashtra (Ram Mandir consecration)
+    source: https://nsearchives.nseindia.com/content/circulars/COM60353.pdf
+    verified: true
+    note: >-
+      Cites trading holiday circular NSE/COM/60339 dated 2024-01-19. The same day NSE/MSD/60340
+      converted Saturday 2024-01-20 into a regular full trading session.
+  - {date: 2024-01-26, name: Republic Day}
+  - {date: 2024-03-08, name: Mahashivratri}
+  - {date: 2024-03-25, name: Holi}
+  - {date: 2024-03-29, name: Good Friday}
+  - {date: 2024-04-11, name: Id-Ul-Fitr (Ramadan Eid)}
+  - {date: 2024-04-17, name: Shri Ram Navmi}
+  - {date: 2024-05-01, name: Maharashtra Day}
+  - date: 2024-05-20
+    name: Parliamentary Elections in Mumbai
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR61518.pdf
+    verified: true
+  - {date: 2024-06-17, name: Bakri Id}
+  - {date: 2024-07-17, name: Moharram}
+  - {date: 2024-08-15, name: Independence Day / Parsi New Year}
+  - {date: 2024-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2024-11-01, name: Diwali Laxmi Pujan (Muhurat trading held)}
+  - {date: 2024-11-15, name: Gurunanak Jayanti}
+  - date: 2024-11-20
+    name: Assembly Elections in Maharashtra
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR64960.pdf
+    verified: true
+  - {date: 2024-12-25, name: Christmas}
+  # 2025 (CMTR65587)
+  - {date: 2025-02-26, name: Mahashivratri}
+  - {date: 2025-03-14, name: Holi}
+  - {date: 2025-03-31, name: Id-Ul-Fitr (Ramadan Eid)}
+  - {date: 2025-04-10, name: Shri Mahavir Jayanti}
+  - {date: 2025-04-14, name: Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2025-04-18, name: Good Friday}
+  - {date: 2025-05-01, name: Maharashtra Day}
+  - {date: 2025-08-15, name: Independence Day}
+  - {date: 2025-08-27, name: Ganesh Chaturthi}
+  - {date: 2025-10-02, name: Mahatma Gandhi Jayanti / Dussehra}
+  - {date: 2025-10-21, name: Diwali Laxmi Pujan (Muhurat trading held)}
+  - {date: 2025-10-22, name: Diwali-Balipratipada}
+  - {date: 2025-11-05, name: Prakash Gurpurb Sri Guru Nanak Dev}
+  - {date: 2025-12-25, name: Christmas}
+  # 2026 (CMTR71775, plus one closure added in January)
+  - date: 2026-01-15
+    name: Municipal Corporation Election in Maharashtra
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR72260.pdf
+    verified: true
+  - {date: 2026-01-26, name: Republic Day}
+  - {date: 2026-03-03, name: Holi}
+  - {date: 2026-03-26, name: Shri Ram Navami}
+  - {date: 2026-03-31, name: Shri Mahavir Jayanti}
+  - {date: 2026-04-03, name: Good Friday}
+  - {date: 2026-04-14, name: Dr. Baba Saheb Ambedkar Jayanti}
+  - {date: 2026-05-01, name: Maharashtra Day}
+  - {date: 2026-05-28, name: Bakri Id}
+  - {date: 2026-06-26, name: Muharram}
+  - {date: 2026-09-14, name: Ganesh Chaturthi}
+  - {date: 2026-10-02, name: Mahatma Gandhi Jayanti}
+  - {date: 2026-10-20, name: Dussehra}
+  - {date: 2026-11-10, name: Diwali-Balipratipada}
+  - {date: 2026-11-24, name: Prakash Gurpurb Sri Guru Nanak Dev}
+  - {date: 2026-12-25, name: Christmas}
+
+special_sessions:
+  # Muhurat trading. The annual circular names the date; a later circular gives the timings.
+  # `windows` is the CM normal-market window. null means the timings circular was not found.
+  - date: 2016-10-30
+    kind: muhurat
+    name: Diwali Muhurat trading (Sunday)
+    windows: null
+    source: https://nsearchives.nseindia.com/content/historical/EQUITIES/2016/OCT/cm30OCT2016bhav.csv.zip
+    verified: false
+    note: The 2016 circulars were not found; the session is confirmed by the published bhavcopy.
+  - date: 2017-10-19
+    kind: muhurat
+    name: Diwali Muhurat trading
+    windows: null
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR33746.pdf
+    verified: false
+    note: Date from the annual circular; the timings circular was not found.
+  - date: 2018-11-07
+    kind: muhurat
+    name: Diwali Muhurat trading
+    windows: null
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR36475.pdf
+    verified: false
+    note: Date from the annual circular; the timings circular was not found.
+  - date: 2019-10-27
+    kind: muhurat
+    name: Diwali Muhurat trading (Sunday)
+    windows: null
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR39612.pdf
+    verified: false
+    note: Date from the annual circular; the timings circular was not found.
+  - date: 2020-11-14
+    kind: muhurat
+    name: Diwali Muhurat trading (Saturday)
+    windows: null
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR42877.pdf
+    verified: false
+    note: Date from the annual circular; the timings circular was not found.
+  - date: 2021-11-04
+    kind: muhurat
+    name: Diwali Muhurat trading
+    windows: [["18:15", "19:15"]]
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR50050.pdf
+    verified: true
+  - date: 2022-10-24
+    kind: muhurat
+    name: Diwali Muhurat trading
+    windows: [["18:15", "19:15"]]
+    source: https://nsearchives.nseindia.com/content/circulars/FAOP54024.pdf
+    verified: false
+    note: Timings from the F&O segment circular; the CM circular was not found.
+  - date: 2023-11-12
+    kind: muhurat
+    name: Diwali Muhurat trading (Sunday)
+    windows: [["18:15", "19:15"]]
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR59124.pdf
+    verified: true
+  - date: 2024-11-01
+    kind: muhurat
+    name: Diwali Muhurat trading
+    windows: [["18:00", "19:00"]]
+    source: https://nsearchives.nseindia.com/content/circulars/CMPT64643.pdf
+    verified: false
+    note: >-
+      NSE Clearing CM circular (trade modification from 18:00); the 18:00-19:00 window matches the
+      debt segment circular NSE/DS/64799. The CM timings circular was not found.
+  - date: 2025-10-21
+    kind: muhurat
+    name: Diwali Muhurat trading
+    windows: [["13:45", "14:45"]]
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR70319.pdf
+    verified: true
+  - date: 2026-11-08
+    kind: muhurat
+    name: Diwali Muhurat trading (Sunday)
+    windows: null
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf
+    verified: false
+    note: Future session. NSE has not yet notified the timings.
+  # Union Budget weekend sessions at regular market timings.
+  - date: 2020-02-01
+    kind: budget
+    name: Union Budget live session (Saturday)
+    windows: [["09:15", "15:30"]]
+    source: https://nsearchives.nseindia.com/content/historical/EQUITIES/2020/FEB/cm01FEB2020bhav.csv.zip
+    verified: false
+    note: The announcing circular was not found; the session is confirmed by the published bhavcopy.
+  - date: 2025-02-01
+    kind: budget
+    name: Union Budget live session (Saturday)
+    windows: [["09:15", "15:30"]]
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR65729.pdf
+    verified: true
+  - date: 2026-02-01
+    kind: budget
+    name: Union Budget live session (Sunday)
+    windows: [["09:15", "15:30"]]
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR72349.pdf
+    verified: true
+  # Other weekend live sessions.
+  - date: 2024-01-20
+    kind: live_saturday
+    name: Regular full trading session on a Saturday (planned DR drill withdrawn)
+    windows: [["09:15", "15:30"]]
+    source: https://nsearchives.nseindia.com/content/circulars/MSD60340.pdf
+    verified: true
+    note: NSE/MSD/60340 withdrew the DR drill of NSE/MSD/59999 and set regular market timings.
+  - date: 2024-03-02
+    kind: live_saturday
+    name: Special live session with intraday switch to the DR site
+    windows: [["09:15", "10:00"], ["11:30", "12:30"]]
+    source: https://nsearchives.nseindia.com/content/circulars/MSD60677.pdf
+    verified: true
+  - date: 2024-05-18
+    kind: live_saturday
+    name: Special live session with intraday switch to the DR site
+    windows: [["09:15", "10:00"], ["11:30", "12:30"]]
+    source: https://nsearchives.nseindia.com/content/circulars/MSD61893.pdf
+    verified: true
+
+mock_sessions:
+  - date: 2023-09-30
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR58656.pdf
+  - date: 2025-12-13
+    source: https://nsearchives.nseindia.com/content/circulars/CMTR71767.pdf
+
+unconfirmed:
+  - date: 2026-09-13
+    note: >-
+      A Sunday. The store holds D bars for 208 symbols and one 1m bar on this date. No NSE circular
+      announces a session, and NSE published no CM bhavcopy for it, so it was not a live session.
+      It may be a mock session, but no source confirms that. Kept as ERROR (owner decision D10).

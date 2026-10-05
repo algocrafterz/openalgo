@@ -41,7 +41,7 @@ from signal_engine.research.intake.versions import require_aware
 from signal_engine.timeutils import IST
 
 ENGINE_VERSION = "1.0"
-SCHEMA = 3
+SCHEMA = 4
 #: Packages whose versions are pinned into the manifest (names as in uv.lock).
 ENVIRONMENT_PACKAGES = ("pandas", "numpy", "pyarrow", "duckdb", "pyyaml")
 _CONFIG_BASENAMES = ("config.yaml", "uv.lock", "pyproject.toml")
@@ -402,6 +402,7 @@ def _report(
         "validity": derived["validity"],
         "data_quality": derived["data_quality"],
         "verdict": derived["verdict"],
+        "run_status": derived.get("run_status", "VALID"),
         "promotion": derived["promotion"],
         "next_action": derived["next_action"],
         "n_trials": record.get("n_trials"),
@@ -458,8 +459,13 @@ def build_manifest(
     parent_run_id: str | None,
     change_classes: list[str],
     readiness_missing: Sequence[str],
+    resolution: Any = None,
+    run_status: str = "VALID",
+    invalid_reason: Sequence[str] = (),
+    trial_counted: bool = True,
 ) -> dict[str, Any]:
-    """Assemble the schema-3 manifest (every key of `manifest.MANIFEST_KEYS`)."""
+    """Assemble the schema-4 manifest (every key of `manifest.MANIFEST_KEYS` and
+    `manifest.SCHEMA4_KEYS`). `resolution` is the run's published dataset version and preflight."""
     symbols = sorted(execution.symbols)
     fingerprints = component_fingerprints(
         intent=frozen.intent,
@@ -559,8 +565,44 @@ def build_manifest(
         "reproducibility": reproducibility,
         "artifacts": artifacts,
     }
+    manifest.update(_published_blocks(resolution, dataset_fp, execution, run_status,
+                                      invalid_reason, trial_counted))
     manifest["missing_capabilities"] = [*readiness_missing, *_null_notes(manifest)]
     return manifest
+
+
+def _published_blocks(resolution: Any, dataset_fp: str, execution: Any, run_status: str,
+                      invalid_reason: Sequence[str], trial_counted: bool) -> dict[str, Any]:
+    """The schema 4 additions: the published version in `dataset`, the preflight, the symbol
+    counts and exclusions, the run status and the trial flag."""
+    out: dict[str, Any] = {"run_status": run_status, "invalid_reason": list(invalid_reason),
+                           "trial_counted": bool(trial_counted)}
+    if resolution is None:
+        out.update({"preflight": None, "symbol_counts": None, "exclusions": [],
+                    "data_policy_version": None})
+        return out
+    m, report = resolution.manifest, resolution.report
+    out["dataset_published"] = {
+        "id": m["dataset_version"], "version_id": m["dataset_version"],
+        "root_hash": m["root_hash"], "status": m.get("status"), "source": m.get("source"),
+        "interval": execution.data["bar_size"], "data_as_of": execution.data["as_of"],
+        "symbol_count": len(execution.symbols), "fingerprint": dataset_fp,
+        "fingerprint_algo": m.get("fingerprint_algo"), "run_fingerprint": dataset_fp,
+        "price_basis": m.get("price_basis"), "calendar_version": m.get("calendar_version"),
+        "corporate_action_version": m.get("corporate_action_version"),
+        "overrides_source": m.get("overrides_source"),
+        "series_rule_version": m.get("series_rule_version"), "coverage": m.get("coverage"),
+        "latest_session": m.get("as_of"), "known_limitations": m.get("known_limitations"),
+        "corporate_action_policy": m.get("price_basis"),
+    }
+    out["preflight"] = {"state": report.state, "reasons": list(report.reasons),
+                        "warnings": list(report.warnings), "sha256": report.sha256,
+                        "end": report.end, "universe": report.universe,
+                        "contract": report.contract, "calendar_check": report.calendar_check}
+    out["symbol_counts"] = {**report.counts, "loaded": len(execution.symbols)}
+    out["exclusions"] = list(report.exclusions)
+    out["data_policy_version"] = report.policy_version
+    return out
 
 
 @dataclass(frozen=True)
@@ -602,6 +644,11 @@ def prepare_run_artifact(
     readiness_missing: Sequence[str],
     parent_run_id: str | None,
     now: datetime,
+    resolution: Any = None,
+    run_status: str = "VALID",
+    invalid_reason: Sequence[str] = (),
+    trial_counted: bool = True,
+    validity: Mapping[str, Any] | None = None,
 ) -> PreparedRun:
     """Build and validate everything a run folder and its flat record need, writing nothing.
 
@@ -619,14 +666,15 @@ def prepare_run_artifact(
         _reproducibility(frozen, sorted(execution.symbols), engine).values()
     )
     ledgers = getattr(execution, "ledgers", None)
-    validity = run_validity_checks(
-        data_quality=getattr(execution, "data_quality", None),
-        intent=frozen.intent,
-        profiles_dir=None,
-        ledgers=ledgers,
-        trades=execution.trades,
-        truncation=getattr(execution, "truncation", None),
-    )
+    if validity is None:
+        validity = run_validity_checks(
+            data_quality=getattr(execution, "data_quality", None),
+            intent=frozen.intent,
+            profiles_dir=None,
+            ledgers=ledgers,
+            trades=execution.trades,
+            truncation=getattr(execution, "truncation", None),
+        )
     derived = _derived(
         record,
         readiness_missing,
@@ -635,6 +683,13 @@ def prepare_run_artifact(
         getattr(execution, "data_quality", None),
         validity,
     )
+    if run_status == "INVALID_DATA":
+        # Plan D17: INVALID_DATA is a run status, never a verdict, and never a trial.
+        derived = {**derived, "verdict": None, "run_status": run_status,
+                   "next_action": "Fix the data, then rerun. This run has no verdict and is "
+                                  "not a trial: " + "; ".join(invalid_reason)}
+    else:
+        derived = {**derived, "run_status": run_status}
     files: dict[str, bytes] = {
         "assumptions.json": _encode(_assumptions(frozen, idea_folder, created)),
         "strategy/spec.yaml": _encode(yaml.safe_dump(frozen.intent, sort_keys=True)),
@@ -663,11 +718,15 @@ def prepare_run_artifact(
     if universe_frame is not None:
         files["execution/universe.parquet"] = _encode(frame_parquet_bytes(universe_frame))
     artifacts = {rel: hashlib.sha256(files[rel]).hexdigest() for rel in sorted(files)}
-    dataset_fp = _symbols_fingerprint(
-        execution.symbols,
-        execution.data["bar_size"],
-        execution.data["as_of"],
-        dataset_fingerprint_fn,
+    dataset_fp = (
+        resolution.run_fingerprint(execution.symbols, execution.data["as_of"])
+        if resolution is not None
+        else _symbols_fingerprint(
+            execution.symbols,
+            execution.data["bar_size"],
+            execution.data["as_of"],
+            dataset_fingerprint_fn,
+        )
     )
     reference = reference_manifest(
         runs_dir,
@@ -688,7 +747,14 @@ def prepare_run_artifact(
         parent_run_id=parent_run_id,
         change_classes=[],
         readiness_missing=readiness_missing,
+        resolution=resolution,
+        run_status=run_status,
+        invalid_reason=invalid_reason,
+        trial_counted=trial_counted,
     )
+    published = manifest.pop("dataset_published", None)
+    if published is not None:
+        manifest["dataset"] = published
     manifest["change_classes"] = (
         first_run_classes() if reference is None else classify(reference, manifest)
     )
@@ -708,7 +774,10 @@ def prepare_run_artifact(
         "code_dirty": manifest["engine"]["code_dirty"],
         "promotion_eligible": manifest["reproducible"] and not manifest["engine"]["code_dirty"],
         "missing_capabilities": manifest["missing_capabilities"],
-        "run_verdict": derived["verdict"]["run_verdict"],
+        "run_verdict": None if derived["verdict"] is None else derived["verdict"]["run_verdict"],
+        "run_status": run_status,
+        "trial_counted": bool(trial_counted),
+        "dataset_version": None if resolution is None else resolution.version_id,
         "promotion_decision": derived["promotion"]["stages"]["backtest"]["decision"],
         "next_action": derived["next_action"],
     }

@@ -958,6 +958,12 @@ def _ts_keys(interface: str) -> list[str]:
 @pytest.fixture
 def real_pair(tmp_path, monkeypatch):
     """Two real run folders written by record_idea, served through a stubbed registry load."""
+    from signal_engine.backtest import record_run as rr
+    from signal_engine.tests.published_fixtures import fake_resolution
+
+    # record_idea needs a published dataset version (plan Phase 4); these runs use a fake
+    # execution, so a READY resolution that reads no store stands in for it.
+    monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: fake_resolution())
     rrbase._make_idea(tmp_path, "009", "orb", "backtest/strategies/orb.py")
     ex = tc._execution_of(tc.A_ROWS, "2026-03-01", "2026-03-10")
     ex_b = tc._execution_of(tc.B_ROWS, "2026-03-04", "2026-03-20")

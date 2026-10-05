@@ -48,6 +48,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import regime, regime_data, run_artifact
@@ -59,6 +60,8 @@ from signal_engine.backtest.baseline import (
 )
 from signal_engine.backtest.costs import CostModel, decompose_trades
 from signal_engine.backtest.data_collect import CLEAN_KEYS, DataCollector
+from signal_engine.backtest.data_readiness import preflight as preflight_mod
+from signal_engine.backtest.data_readiness import snapshot
 from signal_engine.backtest.dq_run import build_data_quality
 from signal_engine.backtest.eligibility import (
     MEMBERSHIP_SOURCE,
@@ -75,6 +78,7 @@ from signal_engine.backtest.session import Calendar, derive_calendar
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.truncation import truncation_check
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
+from signal_engine.backtest.validity import run_validity_checks
 from signal_engine.research import readiness
 from signal_engine.research.build_registry import _parse_frontmatter
 from signal_engine.research.intake import freeze as intake_freeze
@@ -101,6 +105,30 @@ _FOLDER = re.compile(r"^idea-(\d{3})-(.+)$")
 
 #: The shape of every run id this module generates; anything else is not a run.
 RUN_ID_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+-v\d+")
+
+
+#: Resolves the published dataset version and runs the preflight (plan Phase 4). Looked up at
+#: call time, so tests can install a stub; production always runs the real preflight.
+prepare_data = preflight_mod.prepare_data
+
+#: Run status (plan D17): INVALID_DATA is a status, never a research verdict.
+VALID, INVALID_DATA = "VALID", "INVALID_DATA"
+
+#: Recorded in the notes of every run on a published version (owner decision 2026-10-05).
+REGIME_UNAVAILABLE = ("Regime analysis not available: no published index dataset (NIFTY/VIX); "
+                      "no external source is used and the verdict is unaffected.")
+
+
+class PublishedDataRequired(RuntimeError):
+    """A recorded run reads only a published immutable dataset version (plan D20)."""
+
+
+class LoadRejected(RuntimeError):
+    """The data, as loaded, cannot be used: stopped before the engine, no run and no trial."""
+
+    def __init__(self, message: str, details: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.details = dict(details or {})
 
 
 class Unsupported(Exception):
@@ -574,8 +602,14 @@ def execute_backtest(
     settings: Mapping[str, Any] | None = None,
     end: str | None = None,
     run_truncation: bool = True,
+    dataset: preflight_mod.Resolution | None = None,
 ) -> Execution:
-    """Run strategy `key` with shipped defaults on the full Historify universe.
+    """Run strategy `key` on the eligible symbols of one published dataset version.
+
+    `dataset` is the run's `Resolution` (published version, preflight, contract, calendar). A run
+    without one raises PublishedDataRequired: the live landing store is never read (plan D20).
+    Every load, the baseline reload included, goes through one verified version connection
+    limited to the preflight's eligible symbols.
 
     `settings` is the frozen execution configuration (keys cost_bps, mis_squareoff_min,
     squareoff_margin_min, time_exit_min, slippage_bps_per_side, warmup_bars and the three
@@ -595,22 +629,52 @@ def execute_backtest(
     (`truncation.truncation_check`); the result is `Execution.truncation`. False skips it and
     leaves `Execution.truncation` None, which the validity block records as a check not run.
     """
+    if dataset is None:
+        raise PublishedDataRequired(
+            "a recorded run reads only a published dataset version (plan D20); none was resolved")
+    from signal_engine.backtest import __main__ as cli
+
+    cli._register()
+    try:
+        with dataset.open() as source:
+            return _execute_on(source, dataset, key, settings, end, run_truncation)
+    except (preflight_mod.DataUnavailable, snapshot.SnapshotError,
+            data_mod.NoPublishedData) as exc:
+        raise LoadRejected(str(exc), {"version": dataset.version_id}) from exc
+
+
+def _check_calendar_at_load(layer: _DataLayer, dataset: preflight_mod.Resolution) -> None:
+    """The calendar the engine derives from the loaded frames must be the official calendar's
+    sessions over the same range; otherwise the run stops before the engine."""
+    days = sorted(layer.calendar.trading_days)
+    if not days:
+        raise LoadRejected("calendar: no trading days in the loaded data")
+    expected = set(dataset.calendar.expected_sessions(days[0], days[-1]))
+    derived = set(days)
+    if derived != expected:
+        raise LoadRejected(
+            "calendar: the loaded sessions differ from the official calendar",
+            {"derived_only": sorted(str(d) for d in derived - expected)[:20],
+             "calendar_only": sorted(str(d) for d in expected - derived)[:20]})
+
+
+def _execute_on(source, dataset, key, settings, end, run_truncation) -> Execution:
+    """`execute_backtest` reading bars only from `source` (the resolution's data source)."""
     cfg = dict(settings or {})
     until = _end_of_session(end)
     from signal_engine.backtest import __main__ as cli
-    from signal_engine.backtest import data
     from signal_engine.backtest.harness import Backtest
     from signal_engine.backtest.swing_engine import SwingRunConfig, simulate_swing
     from signal_engine.backtest.types import RunConfig
 
-    cli._register()
     cls, params_cls, kind = cli.REGISTRY[key]
     strategy, params = cls(), params_cls()
     if "parameters" in cfg:
         check_parameter_binding(cfg["parameters"], jsonable(params))
     collector = DataCollector()
+    min_sessions = dataset.contract.loader_min_sessions
     if kind == "swing":
-        frames = data.from_historify_daily(min_sessions=500, end=until, collector=collector)
+        frames = source.daily(dataset.eligible, until, min_sessions, collector)
         run = SwingRunConfig(cost_bps=cfg.get("cost_bps", SWING_COST_BPS))
         run = run.with_(**getattr(strategy, "run_overrides", {}))
         if _hold_is_unlimited(cfg.get("holding_period")):
@@ -618,7 +682,7 @@ def execute_backtest(
             run = run.with_(max_hold_bars=None)
         bar_size = "1d"
     else:
-        frames = data.from_historify(interval="5m", end=until, collector=collector)
+        frames = source.intraday(dataset.eligible, "5m", until, collector)
         run = RunConfig(cost_bps=cfg.get("cost_bps", INTRADAY_COST_BPS)).with_(
             **getattr(strategy, "run_overrides", {})
         )
@@ -635,6 +699,12 @@ def execute_backtest(
         adjusted_prices=kind == "swing",
     )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
+    # Load-time rejection (plan section 8): a data defect that affects validity, or a calendar
+    # that differs from the official one, stops the run before the engine. No run, no trial.
+    if (layer.data_report or {}).get("affects_validity"):
+        raise LoadRejected("data quality affects validity at load",
+                           {"items": (layer.data_report or {}).get("items")})
+    _check_calendar_at_load(layer, dataset)
     # A strategy that ranks the whole universe prepares every symbol's frame together, from the
     # run's own calendar, before the symbol-by-symbol run. Its look-ahead check then re-ranks on
     # the truncated universe, so it keeps every frame; any other strategy keeps three.
@@ -691,9 +761,7 @@ def execute_backtest(
             baseline = random_entry_baseline_intraday(
                 sample,
                 _baseline_frames(
-                    data.from_historify(
-                        symbols=sorted({t.symbol for t in sample}), interval="5m", end=until
-                    ),
+                    source.intraday(sorted({t.symbol for t in sample}), "5m", until),
                     layer,
                     int(run.warmup_bars),
                 ),
@@ -701,12 +769,12 @@ def execute_backtest(
                 population_trades=len(trades),
             )
     if kind == "swing":
-        # The engine released its raw frames, so reload the (small, daily) panel.
+        # The engine released its raw frames, so reload the (small, daily) panel from the
+        # same source (the same verified version connection).
         baseline = random_entry_baseline(
             trades,
-            _baseline_frames(
-                data.from_historify_daily(min_sessions=500, end=until), layer, int(run.warmup_bars)
-            ),
+            _baseline_frames(source.daily(dataset.eligible, until, min_sessions), layer,
+                             int(run.warmup_bars)),
             float(run.cost_bps),
         )
     return Execution(
@@ -718,9 +786,9 @@ def execute_backtest(
             "run": jsonable(run),
         },
         data={
-            "source": "historify",
+            "source": f"published:{dataset.version_id}",
             "as_of": days[-1],
-            "universe": f"historify-{universe}-symbols",
+            "universe": f"{dataset.contract.universe_name}-{universe}-eligible-symbols",
             "bar_size": bar_size,
         },
         period={"start": days[0], "end": days[-1]},
@@ -870,6 +938,7 @@ def _execute_frozen(
     frozen: Any,
     end: str | None = None,
     run_truncation: bool = True,
+    dataset: preflight_mod.Resolution | None = None,
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
     them, then verify the cost."""
@@ -890,6 +959,8 @@ def _execute_frozen(
         kwargs["end"] = end
     if "run_truncation" in accepted:
         kwargs["run_truncation"] = run_truncation
+    if "dataset" in accepted:
+        kwargs["dataset"] = dataset
     execution = execute(key, **kwargs)
     expected = frozen.resolved["execution.cost_bps_round_trip"]["value"]
     actual = execution.costs.get("round_trip_bps")
@@ -936,9 +1007,18 @@ def record_idea(
     frozen: intake_freeze.FrozenSpec | None = None,
     end: str | None = None,
     run_truncation: bool = True,
+    dataset_version: str | None = None,
+    require_ready: bool = False,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
+
+    Data (plan Phase 4): after the freeze, `prepare_data` resolves exactly one published dataset
+    version (`dataset_version`, else the newest published one) and runs the preflight. NOT_READY
+    (or warnings with `require_ready`) raises DataNotReadyError with no run id, no folder and no
+    trial. A load-time rejection does the same with a record of stage "load". A run whose data
+    turns out invalid after the engine is sealed with run_status INVALID_DATA, no verdict, and is
+    never registered as a trial.
 
     The order is: key check, parent check, dirty check, freeze, version dry run, execute,
     run id, record build, second git read, then everything that can raise is built and validated
@@ -961,9 +1041,9 @@ def record_idea(
     module docstring). `n_trials` is the ledger's material entries plus its external count. `run_truncation=False` skips the look-ahead check; the validity block then
     lists no 'truncation' in `checks_run`.
 
-    `regimes` loads the NIFTY and VIX inputs for the per-regime block. Left empty the record
-    has no `regimes` block; a loader that raises is logged, the record is still written, and
-    its notes say the regime analysis is missing and why.
+    `regimes` is accepted for compatibility and not called: NIFTY and VIX are in no published
+    dataset version, so the record has no `regimes` block and its notes say the regime analysis
+    is unavailable (owner decision 2026-10-05). It never affects the verdict.
 
     Raises KeyError for an unknown idea, Unsupported when its module has no trade-list
     engine, spec.SpecError when a new idea has no complete spec.yaml, ValueError for a
@@ -1001,37 +1081,78 @@ def record_idea(
     else:
         register_version = False
 
-    execution = _execute_frozen(execute, key, frozen, end=end, run_truncation=run_truncation)
-    regime_days, regime_source, regime_note = _regime_inputs(regimes)
+    resolution = prepare_data(folder, frozen, dataset_version=dataset_version, end=end,
+                              require_ready=require_ready)
+    if resolution is None:  # the hook must resolve a published version or raise (plan D20)
+        raise PublishedDataRequired(f"{idea_id}: no published dataset version was resolved")
+    try:
+        execution = _execute_frozen(execute, key, frozen, end=end, run_truncation=run_truncation,
+                                    dataset=resolution)
+    except LoadRejected as exc:
+        report = dataclasses.replace(resolution.report, stage="load",
+                                     state=preflight_mod.st.NOT_READY, reasons=[str(exc)],
+                                     calendar_check={**resolution.report.calendar_check,
+                                                     "load_details": exc.details})
+        report.created_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        raise preflight_mod.DataNotReadyError(
+            report, preflight_mod.write_record(report, folder)) from exc
+    # Regime inputs (NIFTY, VIX) are not in any published dataset: the block is unavailable and
+    # no external source is used (owner decision 2026-10-05). It never affects the verdict.
+    regime_days, regime_source, regime_note = None, None, f" {REGIME_UNAVAILABLE}"
     # The id is chosen only now, after the long backtest, to keep the window in which another
     # process could take it as short as possible.
     run_id = next_run_id(runs_dir, run_date, run_slug(folder))
     stamp = now or datetime.now(IST)
     cost_model_json = jsonable(execution.cost_model)
     material = run_artifact.material_fingerprints(frozen, execution, cost_model_json)
-    # The trial is written now, right after the execution succeeded and before any artifact is
-    # built: a trial is an EVALUATED change. A run whose execution crashed counts nothing; a run
-    # that executed but whose artifact write then failed DOES count (it was evaluated). The write
-    # is idempotent, so a retry never double counts.
+    # Validity is decided BEFORE the ledger is touched (plan section 8): a run whose data is
+    # invalid is sealed as INVALID_DATA and never registered as a trial.
+    validity = run_validity_checks(
+        data_quality=execution.data_quality,
+        intent=frozen.intent,
+        profiles_dir=None,
+        ledgers=execution.ledgers,
+        trades=execution.trades,
+        truncation=execution.truncation,
+    )
+    data_failures = [f for f in validity["failures"] if f.get("check") == "data_quality"]
+    run_status = INVALID_DATA if data_failures else VALID
+    trial_counted = run_status == VALID
+    # A VALID trial is written now, right after the execution succeeded and before any artifact
+    # is built: a trial is an EVALUATED change. A run whose execution crashed counts nothing; a
+    # valid run whose artifact write then failed DOES count (it was evaluated). The write is
+    # idempotent, so a retry never double counts.
     try:
-        registered = trials_mod.register_material(folder, material, run_id, now=stamp)
-        if external_trials:
-            registered = trials_mod.add_external(
-                folder, external_trials, str(external_reason), now=stamp
-            )
+        if trial_counted:
+            registered = trials_mod.register_material(folder, material, run_id, now=stamp)
+            if external_trials:
+                registered = trials_mod.add_external(
+                    folder, external_trials, str(external_reason), now=stamp
+                )
+            count = registered.count
+        else:
+            if external_trials:
+                logger.warning("%s run %s is INVALID_DATA: its external trials are not recorded",
+                               idea_id, run_id)
+            count = trials_mod.count(folder)
     except Exception:
         logger.exception("Could not write the trial ledger of %s for run %s", idea_id, run_id)
         raise
     trials_block = {
-        "material": registered.count.material,
-        "external": registered.count.external,
-        "total": registered.count.total,
+        "material": count.material,
+        "external": count.external,
+        "total": count.total,
         "source": "trials.yaml",
     }
-    n_trials = trials_block["total"]
+    # An INVALID_DATA run has no verdict and is not a trial; its record still needs n_trials >= 1
+    # for the statistics it reports, so the ledger count is floored at 1 there and the note says
+    # so. The `trials` block always carries the true ledger counts.
+    n_trials = trials_block["total"] if trial_counted else max(trials_block["total"], 1)
     trials_note = (
         f"n_trials={n_trials} from trials.yaml: {trials_block['material']} material "
         f"configuration(s) and {trials_block['external']} external."
+        + ("" if trial_counted else
+           " This run is INVALID_DATA: it has no verdict and was NOT registered as a trial.")
     )
     record = build_run_record(
         execution.trades,
@@ -1090,6 +1211,11 @@ def record_idea(
         readiness_missing=readiness_missing,
         parent_run_id=parent,
         now=stamp,
+        resolution=resolution,
+        run_status=run_status,
+        invalid_reason=[f["detail"] for f in data_failures],
+        trial_counted=trial_counted,
+        validity=validity,
     )
     flat_text = serialise_run(prepared.flat)
     if register_version:
@@ -1261,7 +1387,8 @@ def main(
     )
     parser.add_argument("--validation", action="append", default=[], help="repeatable")
     parser.add_argument(
-        "--no-regimes", action="store_true", help="skip the per-regime block (no network needed)"
+        "--no-regimes", action="store_true",
+        help="no effect: the regime block is unavailable on published-dataset runs"
     )
     parser.add_argument(
         "--allow-dirty",
@@ -1269,6 +1396,15 @@ def main(
         help="record a run from uncommitted code (marked non-reproducible, not promotable)",
     )
     parser.add_argument("--run-date", default=datetime.now(IST).date().isoformat())
+    parser.add_argument(
+        "--dataset-version",
+        help="published dataset version to run on (default: the newest published version)",
+    )
+    parser.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="refuse to run when the data preflight is READY_WITH_WARNINGS",
+    )
     args = parser.parse_args(argv)
     if args.trials is not None:
         parser.error(
@@ -1307,10 +1443,9 @@ def main(
         return _reproduce_main(args, run, keys, hooks)
     load_regimes = None
     if not args.no_regimes:
-        # An injected `execute` is a test double: do not reach for the real data stores.
-        load_regimes = regimes or (regime_data.load_regime_inputs if execute is None else None)
-        if load_regimes is not None:
-            load_regimes = functools.cache(load_regimes)  # one load serves every idea in --all
+        # Regime inputs (NIFTY, VIX) are not in any published dataset, so a recorded run never
+        # loads them (owner decision 2026-10-05): no live-store read and no external source.
+        load_regimes = regimes
     ids = _ideas_with_module(args.root) if args.all else [args.idea or args.rerun]
     failures = 0
     for idea_id in ids:
@@ -1331,6 +1466,8 @@ def main(
                 "git_state_fn": git_state_fn,
                 "dataset_fingerprint_fn": dataset_fingerprint_fn,
                 "readiness_missing_fn": readiness_missing_fn,
+                "dataset_version": args.dataset_version,
+                "require_ready": args.require_ready,
             }
             if args.rerun:
                 common.pop("external_trials")

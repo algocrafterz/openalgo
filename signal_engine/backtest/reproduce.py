@@ -9,6 +9,7 @@ reported as reproduced without every check passing. An attempt is stored beside 
 
 from __future__ import annotations
 
+import io
 import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -21,7 +22,14 @@ import pandas as pd
 
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import record_run, run_artifact
-from signal_engine.backtest.trades_io import read_trades_parquet, trades_to_frame
+from signal_engine.backtest.data_readiness import preflight as preflight_mod
+from signal_engine.backtest.data_readiness import snapshot
+from signal_engine.backtest.trades_io import (
+    LEDGER_SCHEMAS,
+    frame_parquet_bytes,
+    read_trades_parquet,
+    trades_to_frame,
+)
 from signal_engine.research.build_registry import _parse_frontmatter
 from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.timeutils import IST
@@ -39,6 +47,7 @@ CHECKS = (
     "dataset_unchanged",
     "calendar_unchanged",
     "trades_match",
+    "ledgers_match",
 )
 #: Float tolerance for comparing trades, absolute.
 TOLERANCE = 1e-9
@@ -124,12 +133,12 @@ def _strategy_key(run_folder: Path, supported: Iterable[str] | None) -> str | No
     )
 
 
-def _differences(old: pd.DataFrame, new: pd.DataFrame) -> list[str]:
-    """Reasons the two trade tables differ, or an empty list when they match."""
+def _differences(old: pd.DataFrame, new: pd.DataFrame, label: str = "trades") -> list[str]:
+    """Reasons the two tables differ, or an empty list when they match."""
     if list(old.columns) != list(new.columns):
-        return [f"trade columns differ: {list(old.columns)} vs {list(new.columns)}"]
+        return [f"{label} columns differ: {list(old.columns)} vs {list(new.columns)}"]
     if len(old) != len(new):
-        return [f"trade count differs: {len(old)} recorded vs {len(new)} on rerun"]
+        return [f"{label} count differs: {len(old)} recorded vs {len(new)} on rerun"]
     bad_cells = 0
     bad_rows: set[int] = set()
     first: tuple[int, str, Any, Any] | None = None
@@ -152,7 +161,7 @@ def _differences(old: pd.DataFrame, new: pd.DataFrame) -> list[str]:
         return []
     row, col, was, now = first
     return [
-        f"trades differ: first at row {row} column {col} (recorded {was!r}, rerun {now!r}); "
+        f"{label} differ: first at row {row} column {col} (recorded {was!r}, rerun {now!r}); "
         f"{bad_cells} differing cells in {len(bad_rows)} of {len(old)} rows"
     ]
 
@@ -184,19 +193,71 @@ def _compare_trades(attempt: _Attempt, folder: Path, execution: Any) -> int:
     return min(len(old), len(new))
 
 
+def _compare_ledgers(attempt: _Attempt, folder: Path, execution: Any) -> None:
+    """Each recorded evidence ledger must equal the rerun's, row by row and in the recorded order.
+
+    The files are written sorted, so the rerun's frame is passed through the same writer first;
+    ids and values are then compared cell by cell. A run recorded without ledgers has nothing to
+    compare; a recorded ledger the rerun does not produce is a mismatch.
+    """
+    recorded = [n for n in LEDGER_SCHEMAS if (folder / "evidence" / f"{n}.parquet").exists()]
+    reasons: list[str] = []
+    rerun = getattr(execution, "ledgers", None) or {}
+    for name in recorded:
+        if name not in rerun:
+            reasons.append(f"ledger {name} was recorded but the rerun produced none")
+            continue
+        try:
+            old = pd.read_parquet(folder / "evidence" / f"{name}.parquet")
+            new = pd.read_parquet(
+                io.BytesIO(frame_parquet_bytes(rerun[name], LEDGER_SCHEMAS[name]))
+            )
+        except Exception as exc:
+            logger.exception("Cannot compare ledger %s for %s", name, folder.name)
+            reasons.append(f"ledger {name} could not be compared: {exc}")
+            continue
+        reasons.extend(_differences(old, new, f"ledger {name}"))
+    attempt.record("ledgers_match", not reasons, *reasons)
+
+
+def _resolution_for(manifest: dict[str, Any], *, root: str | Path = snapshot.DEFAULT_ROOT,
+                    git_dir: str | Path = snapshot.DEFAULT_GIT_DIR) -> preflight_mod.Resolution:
+    """The run's recorded published version (plan Phase 4, owner decision 2). Only that version
+    is used: it must still be published and its root hash must match the run's record; the
+    eligible symbols and the contract come from the run's own preflight block."""
+    from signal_engine.backtest.data_readiness.calendar import load_calendar
+    from signal_engine.backtest.data_readiness.contract import DataContract
+
+    dataset, pre = manifest["dataset"], manifest["preflight"]
+    m = snapshot.resolve_version(dataset["version_id"], root=root, git_dir=git_dir)
+    if m["root_hash"] != dataset["root_hash"]:
+        raise snapshot.SnapshotError("the recorded dataset version's root hash changed")
+    c = dict(pre["contract"])
+    c["universe_symbols"] = tuple(c["universe_symbols"])
+    c["notes"] = tuple(c.get("notes") or ())
+    report = preflight_mod.PreflightReport(
+        state=pre["state"], reasons=list(pre["reasons"]), warnings=list(pre["warnings"]),
+        dataset={"version_id": dataset["version_id"]}, contract=pre["contract"],
+        universe=pre["universe"], end=pre.get("end"))
+    return preflight_mod.Resolution(m, report, DataContract(**c), load_calendar(), Path(root),
+                                    Path(git_dir))
+
+
 def _rerun(attempt: _Attempt, folder: Path, manifest: dict[str, Any], execute: Any, key: str):
-    """Rebuild the frozen strategy and execute it up to `data_as_of`; None on any failure."""
+    """Rebuild the frozen strategy and execute it up to `data_as_of` on the run's recorded
+    published version; None on any failure."""
     try:
         frozen = intake_freeze.from_run_folder(folder)
+        resolution = _resolution_for(manifest)
         execution = record_run._execute_frozen(
-            execute, key, frozen, end=manifest["dataset"]["data_as_of"]
+            execute, key, frozen, end=manifest["dataset"]["data_as_of"], dataset=resolution
         )
     except Exception as exc:
         logger.exception("Reproduction rerun failed for %s", folder.name)
         attempt.record("rerun_completed", False, f"rerun failed: {type(exc).__name__}: {exc}")
-        return None
+        return None, None
     attempt.record("rerun_completed", True)
-    return execution
+    return execution, resolution
 
 
 def _check_dataset(
@@ -204,6 +265,7 @@ def _check_dataset(
     manifest: dict[str, Any],
     execution: Any,
     fingerprint_fn: Callable[[Sequence[str], str, str], str] | None,
+    resolution: Any = None,
 ) -> None:
     dataset = manifest["dataset"]
     if dataset.get("symbol_count") == 0:
@@ -213,12 +275,10 @@ def _check_dataset(
             "no symbols recorded in the manifest: the dataset cannot be verified",
         )
         return
-    now_fp = run_artifact._symbols_fingerprint(
-        execution.symbols,
-        dataset["interval"],
-        dataset["data_as_of"],
-        fingerprint_fn or manifest_mod.dataset_fingerprint,
-    )
+    if resolution is None:
+        attempt.record("dataset_unchanged", False, "no published dataset version was used")
+        return
+    now_fp = resolution.run_fingerprint(execution.symbols, dataset["data_as_of"])
     attempt.record(
         "dataset_unchanged",
         now_fp == dataset["fingerprint"],
@@ -294,10 +354,17 @@ def reproduce(
     invalid = (
         ["manifest unreadable"] if manifest is None else manifest_mod.validate_manifest(manifest)
     )
-    if manifest is not None and manifest.get("schema") != run_artifact.SCHEMA:
-        invalid = [*invalid, f"manifest schema is {manifest.get('schema')!r}, expected 3"]
+    legacy = manifest is not None and manifest.get("schema") == 3
+    if manifest is not None and manifest.get("schema") not in (3, run_artifact.SCHEMA):
+        invalid = [*invalid, f"manifest schema is {manifest.get('schema')!r}, expected 3 or 4"]
     attempt.record("manifest_valid", not invalid, *(f"manifest invalid: {p}" for p in invalid))
-    if manifest is not None and not invalid:
+    if legacy and not invalid:
+        # Owner decision 2 (2026-10-05): a schema 3 run predates published datasets. It stays
+        # historical evidence and is never re-executed against the live store.
+        attempt.notes.append("dataset_version: not_recorded")
+        attempt.record("rerun_completed", False, "schema 3 run: dataset_version not_recorded; "
+                       "historical evidence only, never re-executed against the live store")
+    elif manifest is not None and not invalid:
         ok = manifest["reproducible"] is True
         attempt.record("manifest_reproducible", ok, _why_not_reproducible(manifest))
         _check_code(attempt, manifest, root, git_state_fn)
@@ -309,11 +376,13 @@ def reproduce(
                     "rerun_completed", False, "rerun failed: the idea has no trade-list strategy"
                 )
             else:
-                execution = _rerun(attempt, folder, manifest, execute, key)
+                execution, resolution = _rerun(attempt, folder, manifest, execute, key)
                 if execution is not None:
-                    _check_dataset(attempt, manifest, execution, dataset_fingerprint_fn)
+                    _check_dataset(attempt, manifest, execution, dataset_fingerprint_fn,
+                                   resolution)
                     _check_calendar(attempt, manifest, execution)
                     compared = _compare_trades(attempt, folder, execution)
+                    _compare_ledgers(attempt, folder, execution)
     ok = all(attempt.checks.get(name) is True for name in CHECKS)
     report = ReproductionReport(
         run_id=folder.name,

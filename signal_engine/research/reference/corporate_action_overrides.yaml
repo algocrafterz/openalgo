@@ -1,0 +1,46 @@
+# Corporate-action overrides for the NSE canonical daily dataset (plan revision 4, D23).
+#
+# An override corrects how ONE announcement in the NSE corporate-action feed is turned into a
+# factor. It never states a factor by hand unless method is `fixed`, and every entry carries a
+# source. Changing this file changes the corporate-action version recorded in every dataset build.
+#
+#   match_kind  the kind the parser gave the announcement (default: kind)
+#   kind        what the event becomes
+#   method      fixed | open_over_prev_close | rights_tranches
+#
+# Owner decisions 2026-10-05.
+
+overrides:
+  # Rights issue with fully paid (4:25, Rs 10 + 500) and partly paid (2:25, Rs 10 + 605) shares.
+  # The NSE F&O circular computes the factor from the weighted issue price (545) and the last
+  # cum-rights close (775.85): AF = 0.942411. The tranche TERP below gives the same value.
+  - symbol: TATASTEEL
+    ex_date: 2018-01-31
+    match_kind: unresolved
+    kind: rights
+    method: rights_tranches
+    held: 25
+    tranches: [[4, 510], [2, 615]]
+    source: https://nsearchives.nseindia.com/content/circulars/FAOP36862.pdf (NSE/FAOP/36862, 2018-01-30, Annexure 1)
+
+  # "Scheme Of Arrangement" announcements that were spin-offs. Evidence from official NSE data
+  # only: the parent's ex-date open drops, and the spun-off company starts trading on NSE later.
+  # The factor uses the approved demerger method (ex-date open / previous close).
+  - symbol: ADANIENT
+    ex_date: 2018-04-05
+    match_kind: unresolved
+    kind: demerger
+    method: open_over_prev_close
+    source: NSE corporate-action feed "Scheme Of Arrangement"; ex-date open 133.00 vs previous close 151.45; ADANIGREEN first NSE session 2018-07-02 (bhavcopy)
+  - symbol: ADANIENT
+    ex_date: 2018-09-06
+    match_kind: unresolved
+    kind: demerger
+    method: open_over_prev_close
+    source: NSE corporate-action feed "Scheme Of Arrangement"; ex-date open 150.00 vs previous close 210.95; ADANIGAS (now ATGL) first NSE session 2018-11-20 (bhavcopy)
+  - symbol: GRASIM
+    ex_date: 2017-07-19
+    match_kind: unresolved
+    kind: demerger
+    method: open_over_prev_close
+    source: NSE corporate-action feed "Scheme Of Arrangement"; ex-date open 1070.05 vs previous close 1307.80; ABCAPITAL first NSE session 2017-09-15 (bhavcopy)

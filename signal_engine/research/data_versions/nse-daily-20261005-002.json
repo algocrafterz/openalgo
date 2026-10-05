@@ -1,0 +1,24 @@
+{
+  "cause": "add M&M and GVT&D (F&O universe symbols missing from v1's symbol list); overrides source recorded repo-relative",
+  "coverage": {
+    "end": "2026-10-01",
+    "rows": 477360,
+    "rows_by_series": {
+      "BE": 1675,
+      "EQ": 475685
+    },
+    "sessions": 2664,
+    "start": "2016-01-01",
+    "symbols": 213
+  },
+  "created_ist": "2026-10-05 10:35:24",
+  "dataset_version": "nse-daily-20261005-002",
+  "excluded_symbols": [
+    "CGPOWER",
+    "FORCEMOT"
+  ],
+  "parent": "nse-daily-20261005-001",
+  "readiness_state": "READY_WITH_WARNINGS",
+  "root_hash": "429123fbcbaccd2144e363b48d849d7349f07930b155ad2961c3f3d4aff20f30",
+  "status": "published"
+}

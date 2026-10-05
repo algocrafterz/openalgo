@@ -584,6 +584,10 @@ def _resolve_run_folder(
     return folder
 
 
+#: Run records with an artifact folder: schema 3, and schema 4 (published dataset version,
+#: preflight and run status; signal_engine plan Phase 4). Schema 2 records have no folder.
+_ARTIFACT_SCHEMAS = (3, 4)
+
 def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any]:
     return {
         "run_id": run_id,
@@ -767,7 +771,7 @@ def get_run_detail(
     record = next((r for r in idea.get("runs") or [] if r.get("run_id") == run_id), None)
     if record is None:
         return _error(f"Run not found: {run_id}", 404)
-    if record.get("schema") != 3 or not record.get("artifact_dir"):
+    if record.get("schema") not in _ARTIFACT_SCHEMAS or not record.get("artifact_dir"):
         detail = _empty_run_detail(run_id, record.get("schema", 2), False)
         return True, {"status": "success", "run": detail}, 200
     runs_dir = _idea_folder(idea, root) / "runs"
@@ -1020,7 +1024,7 @@ def _resolve_evidence_folder(
     record = next((r for r in idea.get("runs") or [] if r.get("run_id") == run_id), None)
     if record is None:
         return None, None, _error(f"Run not found: {run_id}", 404)
-    if record.get("schema") != 3 or not record.get("artifact_dir"):
+    if record.get("schema") not in _ARTIFACT_SCHEMAS or not record.get("artifact_dir"):
         return None, record, _error("no trades for this run", 404)
     runs_dir = _idea_folder(idea, root) / "runs"
     folder = _resolve_run_folder(record, runs_dir, run_id, root / "research" / "ideas")
@@ -1330,7 +1334,7 @@ def _detailed_comparison(
     `folder_rejected` is True when a schema 3 run's artifact_dir fails the same
     containment checks get_run_detail applies; the caller answers 400 then.
     """
-    if any(r.get("schema") != 3 or not r.get("artifact_dir") for r in (a, b)):
+    if any(r.get("schema") not in _ARTIFACT_SCHEMAS or not r.get("artifact_dir") for r in (a, b)):
         return None, _NO_FOLDER_NOTE, False
     runs_dir = _idea_folder(idea, root) / "runs"
     ideas_root = root / "research" / "ideas"

@@ -14,6 +14,7 @@ from signal_engine.backtest import reproduce as rp
 from signal_engine.tests import test_manifest as tm
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests import test_run_artifact_write as raw
+from signal_engine.tests.published_fixtures import fake_resolution
 from signal_engine.tests.test_record_run import SUPPORTED
 from signal_engine.timeutils import IST
 
@@ -182,9 +183,10 @@ class TestNotReproduced:
         dirty = {**raw.CLEAN, "dirty_paths": ["signal_engine/docs/x.md"]}
         assert _reproduce(folder, root, git_state_fn=raw._git(dirty)).reproducible is True
 
-    def test_dataset_fingerprint_change_fails_with_a_fingerprint_reason(self, root):
+    def test_dataset_fingerprint_change_fails_with_a_fingerprint_reason(self, root, monkeypatch):
         folder = _record(root)
-        report = _reproduce(folder, root, dataset_fingerprint_fn=lambda s, i, a: "e" * 64)
+        _fingerprint_now(monkeypatch, "e" * 64)
+        report = _reproduce(folder, root)
         assert report.reproducible is False
         assert report.checks["dataset_unchanged"] is False
         assert any(
@@ -249,40 +251,42 @@ class TestNotReproduced:
         assert _snapshot(folder) == before
 
 
-class TestRealDatasetFingerprint:
-    """The real manifest.dataset_fingerprint against a tiny temporary DuckDB."""
+def _fingerprint_now(monkeypatch, value):
+    """Make the recorded version's fingerprint over the same symbols and as-of read `value` now."""
+    res = fake_resolution()
+    monkeypatch.setattr(res, "run_fingerprint", lambda symbols, end: value)
+    monkeypatch.setattr(rp, "_resolution_for", lambda manifest: res)
 
-    def _setup(self, root, tmp_path):
-        db = tmp_path / "h.duckdb"
-        tm._make_db(db)
-        fn = lambda s, i, a: REAL_FINGERPRINT(s, i, a, db_path=db)  # noqa: E731
-        folder = _record(root, dataset_fingerprint_fn=fn)
-        return db, fn, folder
 
-    def test_unchanged_history_passes(self, root, tmp_path):
-        _, fn, folder = self._setup(root, tmp_path)
-        assert _reproduce(folder, root, dataset_fingerprint_fn=fn).reproducible is True
+class TestPublishedDatasetFingerprint:
+    """Replaced the live-store fingerprint check (plan Phase 4, owner decision 2): a schema 4 run
+    is compared on the published version's `run_fingerprint`."""
 
-    def test_rows_appended_after_as_of_still_pass(self, root, tmp_path):
-        db, fn, folder = self._setup(root, tmp_path)
-        con = duckdb.connect(str(db))
-        try:
-            late = tm.IST_DAY1 + 90 * tm.DAY
-            con.execute(f"INSERT INTO market_data VALUES ('AAA','1m',{late},1,1,1,500.0,5)")
-        finally:
-            con.close()
-        assert _reproduce(folder, root, dataset_fingerprint_fn=fn).reproducible is True
+    def test_unchanged_history_passes(self, root, monkeypatch):
+        folder = _record(root)
+        _fingerprint_now(monkeypatch, "d" * 64)
+        report = _reproduce(folder, root)
+        assert report.reproducible is True
+        assert report.checks["dataset_unchanged"] is True
 
-    def test_altered_historical_close_fails(self, root, tmp_path):
-        db, fn, folder = self._setup(root, tmp_path)
-        con = duckdb.connect(str(db))
-        try:
-            con.execute("UPDATE market_data SET close = 10.5 WHERE symbol='AAA' AND close = 10.0")
-        finally:
-            con.close()
-        report = _reproduce(folder, root, dataset_fingerprint_fn=fn)
+    def test_altered_historical_close_fails(self, root, monkeypatch):
+        folder = _record(root)
+        _fingerprint_now(monkeypatch, "f" * 64)
+        report = _reproduce(folder, root)
         assert report.reproducible is False
+        assert report.checks["dataset_unchanged"] is False
         assert any("dataset fingerprint changed" in r for r in report.reasons)
+
+    def test_fingerprint_is_taken_over_the_recorded_symbols_and_as_of(self, root, monkeypatch):
+        folder = _record(root)
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        seen = []
+        res = fake_resolution()
+        monkeypatch.setattr(res, "run_fingerprint",
+                            lambda symbols, end: seen.append((list(symbols), end)) or "d" * 64)
+        monkeypatch.setattr(rp, "_resolution_for", lambda m: res)
+        assert _reproduce(folder, root).reproducible is True
+        assert seen == [(["AAA", "BBB"], manifest["dataset"]["data_as_of"])]
 
 
 class TestCli:

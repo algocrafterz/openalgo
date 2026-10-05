@@ -23,6 +23,7 @@ from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.types import Ctx, Trade
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests import test_run_artifact_write as raw
+from signal_engine.tests.published_fixtures import frames_resolution
 from signal_engine.tests.test_backtest_ledgers import FLAT, RUN, Script, make_frame
 from signal_engine.tests.test_record_run import SUPPORTED
 
@@ -241,12 +242,12 @@ class TestHeadlineOnly:
 
         monkeypatch.setattr(cli, "_register", lambda: None)
         monkeypatch.setattr(cli, "REGISTRY", {"k": (Strat, Params, "intraday")})
-        monkeypatch.setattr(data, "from_historify", lambda **kw: {"AAA": df})
+        res = frames_resolution(intraday={"AAA": df})  # plan Phase 4: bars via the resolution
         monkeypatch.setattr(harness, "Backtest", FakeBacktest)
         monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
         monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: MODEL)
 
-        exe = rr.execute_backtest("k")
+        exe = rr.execute_backtest("k", dataset=res)
 
         assert len(built) == 1 and len(calls) == 1
         assert isinstance(calls[0]["recorder"], lg.LedgerRecorder)
@@ -277,10 +278,10 @@ class TestHeadlineOnly:
 
         monkeypatch.setattr(cli, "_register", lambda: None)
         monkeypatch.setattr(cli, "REGISTRY", {"k": (Strat, Params, "intraday")})
-        monkeypatch.setattr(data, "from_historify", lambda **kw: {"AAA": df})
+        res = frames_resolution(intraday={"AAA": df})  # plan Phase 4: bars via the resolution
         monkeypatch.setattr(harness, "Backtest", FakeBacktest)
         monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: None)
-        exe = rr.execute_backtest("k")
+        exe = rr.execute_backtest("k", dataset=res)
         assert exe.ledgers is not None
         assert exe.cost_components is None
 
@@ -844,6 +845,31 @@ class TestReproduceWithLedgers:
         assert report.reproducible is False
         assert any("signal_id" in r for r in report.reasons)
 
+    def test_identical_ledgers_are_reported_as_matching(self, root, run_data):
+        folder = record(root, run_data)
+        exe = ledger_execution(run_data)
+        report = _reproduce(folder, root, lambda key, settings=None, end=None: exe)
+        assert report.checks["ledgers_match"] is True, report.reasons
+
+    def test_a_changed_ledger_row_is_a_mismatch_even_when_the_trades_match(self, root, run_data):
+        folder = record(root, run_data)
+        frames = copy_frames(run_data[2])
+        fills = frames["fills"].copy()
+        fills.loc[fills.index[0], "fill_price"] += 0.05
+        frames["fills"] = fills
+        exe = ledger_execution(run_data, ledgers=frames)
+        report = _reproduce(folder, root, lambda key, settings=None, end=None: exe)
+        assert report.checks["trades_match"] is True
+        assert report.checks["ledgers_match"] is False
+        assert report.reproducible is False
+        assert any("fills" in r for r in report.reasons)
+
+    def test_a_recorded_ledger_the_rerun_lacks_is_a_mismatch(self, root, run_data):
+        folder = record(root, run_data)
+        exe = ledger_execution(run_data, ledgers=None)
+        report = _reproduce(folder, root, lambda key, settings=None, end=None: exe)
+        assert report.checks["ledgers_match"] is False
+
     def test_run_recorded_without_ledgers_still_reproduces_from_a_ledger_rerun(
         self, root, run_data
     ):
@@ -867,6 +893,7 @@ class TestReproduceWithLedgers:
         exe = ledger_execution(run_data)
         report = _reproduce(folder, root, lambda key, settings=None, end=None: exe)
         assert report.checks["trades_match"] is True, report.reasons
+        assert report.checks["ledgers_match"] is True
 
 
 class TestRecordRunPassesSession:
@@ -937,11 +964,11 @@ class TestLedgerProblemsCarried:
 
         monkeypatch.setattr(cli, "_register", lambda: None)
         monkeypatch.setattr(cli, "REGISTRY", {"k": (Strat, Params, "intraday")})
-        monkeypatch.setattr(data, "from_historify", lambda **kw: {"AAA": df})
+        res = frames_resolution(intraday={"AAA": df})  # plan Phase 4: bars via the resolution
         monkeypatch.setattr(harness, "Backtest", FakeBacktest)
         monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
         monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: MODEL)
-        assert rr.execute_backtest("k").ledger_problems == []
+        assert rr.execute_backtest("k", dataset=res).ledger_problems == []
 
         original = lg.LedgerRecorder.to_frames
 
@@ -951,7 +978,7 @@ class TestLedgerProblemsCarried:
             return frames
 
         monkeypatch.setattr(lg.LedgerRecorder, "to_frames", tampered)
-        problems = rr.execute_backtest("k").ledger_problems
+        problems = rr.execute_backtest("k", dataset=res).ledger_problems
         assert problems and any("orders" in p for p in problems)
 
 

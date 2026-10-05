@@ -93,3 +93,34 @@ def _block_real_openalgo_api_calls(monkeypatch):
     this is that same guarantee for outbound HTTP.
     """
     monkeypatch.setattr(httpx.AsyncClient, "post", _blocked_post)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_preflight: run record_run's real dataset preflight (no stub)")
+
+
+@pytest.fixture(autouse=True)
+def _published_dataset_stub(request, monkeypatch):
+    """record_run needs a published immutable dataset version (plan D20). Test roots have none,
+    and most record_run tests inject an `execute` that never reads data, so they get a READY
+    resolution that touches no store. Tests of the real preflight mark themselves
+    `real_preflight`. record_run is imported here so the stub never depends on import order."""
+    if request.node.get_closest_marker("real_preflight"):
+        return
+    from signal_engine.backtest import record_run as rr
+    from signal_engine.tests.published_fixtures import fake_resolution
+
+    monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: fake_resolution())
+
+
+@pytest.fixture(autouse=True)
+def _published_reproduce_stub(request, monkeypatch):
+    """reproduce rebuilds a schema 4 run from its recorded published version; test runs record the
+    fake version from `_published_dataset_stub`, so they reproduce against the same fake."""
+    if request.node.get_closest_marker("real_preflight"):
+        return
+    from signal_engine.backtest import reproduce as rp
+    from signal_engine.tests.published_fixtures import fake_resolution
+
+    monkeypatch.setattr(rp, "_resolution_for", lambda manifest: fake_resolution())
