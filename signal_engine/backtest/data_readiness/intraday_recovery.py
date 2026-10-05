@@ -95,8 +95,15 @@ def fetch_one(fetch: Fetch, req: dict, attempt: int, landing: Path) -> dict:
     return line
 
 
+PRIORITY = ("irrecoverability", "recovery", "provenance")   # the decide step needs the sample
+
+
+def _priority(purpose: str) -> int:
+    return min((i for i, p in enumerate(PRIORITY) if p in str(purpose)), default=len(PRIORITY))
+
+
 def pending(requests: pd.DataFrame, ledger: pd.DataFrame) -> list[tuple[dict, int]]:
-    """Requests still to fetch, with their next attempt number."""
+    """Requests still to fetch, with their next attempt number, in PRIORITY order."""
     done = set(ledger[ledger.outcome.isin(FINAL)].request_id)
     tries = ledger.groupby("request_id").size().to_dict() if len(ledger) else {}
     out = []
@@ -104,7 +111,7 @@ def pending(requests: pd.DataFrame, ledger: pd.DataFrame) -> list[tuple[dict, in
         n = tries.get(req["request_id"], 0)
         if req["request_id"] not in done and n < MAX_ATTEMPTS:
             out.append((req, n + 1))
-    return out
+    return sorted(out, key=lambda item: _priority(item[0].get("purpose", "")))
 
 
 def run(build: Path, fetch: Fetch, *, landing: Path = DEFAULT_LANDING, pause: float = PAUSE_S,

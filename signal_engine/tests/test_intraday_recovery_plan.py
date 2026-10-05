@@ -168,3 +168,11 @@ def test_irrecoverability_sample_is_seeded_and_capped_per_cell():
         "candidate:volume:2019"}
     req = ip.irrecoverability_requests(a)
     assert set(req.purpose) == {"irrecoverability"} and len(req) <= len(a)
+
+
+def test_pending_fetches_the_irrecoverability_sample_first():
+    req = pd.DataFrame({"request_id": ["a", "b", "c", "d"], "symbol": "AAA",
+                        "purpose": ["provenance", "recovery", "irrecoverability",
+                                    "provenance+recovery"]})
+    ledger = pd.DataFrame({"request_id": ["d"], "attempt": [1], "outcome": ["ok"]})
+    assert [r["request_id"] for r, _ in ir.pending(req, ledger)] == ["c", "b", "a"]

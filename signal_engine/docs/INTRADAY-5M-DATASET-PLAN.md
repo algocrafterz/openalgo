@@ -1,9 +1,15 @@
 # Intraday 5m Dataset: Design and Acceptance (for IDEA-029)
 
 Status: APPROVED by the owner on 2026-10-05 (Option B), with the locked policies of sections 2 to
-11. Snapshot taken and recovery running. Part A (general research data-quality policy) and
-Part B (its application to this dataset) are PROPOSED, awaiting owner review; no dataset rule is
-changed until they are approved. Nothing is published until every item of section 12 holds.
+11. Snapshot taken and recovery running. Parts A and B APPROVED by the owner on 2026-10-05 with
+amendments: MVP scope only; exactly three repairs; field families limited to price, volume and
+final_bar (indicator validity belongs to each strategy); the 30-session / 95% test and the 1%
+fallback reach are configurable policy assumptions; criteria 21-23 are metadata and
+reproducibility requirements, not extra quality gates. The policy is
+`signal_engine/research/reference/data_quality_policy.yaml` (sha256 = data_policy_version).
+Order: freeze policy, finish recovery, quality table, basic contract enforcement, build, measure,
+one strategy run, then decide on further machinery. Nothing is published until every item of
+section 12 holds.
 
 The plan builds the first published intraday dataset, `nse-intraday-5m-YYYYMMDD-001`, from the
 existing 1m store plus a targeted AngelOne recovery. It reuses the daily architecture (staging,
