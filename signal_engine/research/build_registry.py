@@ -35,7 +35,7 @@ from signal_engine.research.intake import lifecycle, spec, taxonomy, trials, ver
 
 #: The legacy `status` and `verdict` values. Both are derived for every entry (see
 #: `lifecycle.derive_status` / `derive_verdict`), never hand-written in frontmatter.
-STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved")
+STATUSES = ("inbox", "evaluating", "backtested", "paper", "live", "rejected", "shelved", "blocked")
 VERDICTS = ("none", "edge", "marginal", "no-edge", "inconclusive")
 HORIZONS = ("intraday", "swing", "positional")
 #: Frontmatter keys retired in favour of `strategy_category` / `strategy_tags`.
@@ -69,6 +69,10 @@ REJECTION_BASES = (
     "duplicate",
 )
 REJECTION_BASIS_REQUIRED_FROM = "2026-10-01"
+
+#: Why a blocked idea cannot be run yet. Blocked is a readiness state, not research evidence:
+#: the hypothesis is untested, so it has no verdict and no counted trial.
+BLOCK_REASONS = ("missing-published-intraday-dataset",)
 
 #: A lineage step smaller than this many net bps is noise, not progress.
 TREND_MIN_DELTA_BPS = 1.0
@@ -394,6 +398,7 @@ def _validate(
         if target and not (root / target).exists():
             problems.append(f"{field} '{target}' does not exist")
     problems.extend(_validate_rejection_basis(idea))
+    problems.extend(_validate_block_reason(idea))
     problems.extend(_validate_version_pointers(idea, folder))
     return problems
 
@@ -414,6 +419,22 @@ def _validate_rejection_basis(idea: dict[str, Any]) -> list[str]:
         return [f"rejection_basis '{basis}' not one of {', '.join(REJECTION_BASES)}"]
     if not rejected:
         return ["rejection_basis is only valid when research_state is rejected"]
+    return []
+
+
+def _validate_block_reason(idea: dict[str, Any]) -> list[str]:
+    reason = idea.get("block_reason")
+    blocked = idea.get("research_state") == "blocked"
+    if reason is None:
+        if blocked:
+            return [
+                f"block_reason is required for a blocked idea: one of {', '.join(BLOCK_REASONS)}"
+            ]
+        return []
+    if reason not in BLOCK_REASONS:
+        return [f"block_reason '{reason}' not one of {', '.join(BLOCK_REASONS)}"]
+    if not blocked:
+        return ["block_reason is only valid when research_state is blocked"]
     return []
 
 

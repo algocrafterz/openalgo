@@ -112,6 +112,24 @@ describe('BacktestResultsDetail additions', () => {
     expect(screen.getByTestId('research-notes')).toHaveTextContent('Decision log entry')
   })
 
+  it('shows why a blocked idea cannot run yet, with no run recorded', async () => {
+    renderPage({
+      status: 'success',
+      idea: {
+        ...IDEA,
+        status: 'blocked',
+        research_state: 'blocked',
+        block_reason: 'missing-published-intraday-dataset',
+      },
+      runs: [],
+      spec: null,
+    })
+    expect(await screen.findByTestId('block-reason')).toHaveTextContent(
+      'blocked: missing-published-intraday-dataset'
+    )
+    expect(screen.queryByTestId('rejection-basis')).not.toBeInTheDocument()
+  })
+
   it('degrades for an old record with none of the new blocks', async () => {
     renderPage({ status: 'success', idea: IDEA, runs: [makeRun()], spec: null })
     await waitFor(() => expect(screen.getByTestId('run-tearsheet')).toBeInTheDocument())

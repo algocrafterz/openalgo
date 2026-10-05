@@ -20,10 +20,12 @@ RESEARCH_STATES = (
     "evidence_against_edge",
     "shelved",
     "rejected",
+    "blocked",
 )
 DEFAULT_RESEARCH_STATE = "active"
-#: States that block a stage move forward until they change.
-BLOCKING_STATES = ("rejected", "shelved")
+#: States that block a stage move forward until they change. `blocked` is an untested idea that
+#: cannot be run yet (its `block_reason` says why); it is not research evidence against it.
+BLOCKING_STATES = ("rejected", "shelved", "blocked")
 #: Stages whose entry needs a promoted run.
 EVIDENCE_STAGES = ("paper", "live")
 
@@ -53,7 +55,7 @@ _STAGE_STATUS = {
 
 def derive_status(stage: str, research_state: str, has_runs: bool) -> str:
     """The legacy `status` for a stage and research state."""
-    if research_state in ("rejected", "shelved"):
+    if research_state in BLOCKING_STATES:
         return research_state
     if stage == "backtest":
         return "backtested" if has_runs else "evaluating"

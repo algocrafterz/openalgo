@@ -166,6 +166,7 @@ _IDEA_FIELDS = (
     "last_reviewed",
     "source",
     "rejection_basis",
+    "block_reason",
     "stage",
     "research_state",
     "strategy_category",

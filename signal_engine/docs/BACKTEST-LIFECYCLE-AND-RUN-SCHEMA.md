@@ -18,7 +18,7 @@ Five independent state dimensions. They are never merged into one field.
 | --- | --- | --- | --- | --- |
 | Intake state | idea (current spec and ledger) | DRAFT, NEEDS_CLARIFICATION, ASSUMPTION_REVIEW, BACKTEST_READY, BACKTEST_BLOCKED | Computed | Never stored; `intake_state()` |
 | Stage | idea | inbox, backtest, paper, live, retired | Researcher, gated by evidence | `idea.md` frontmatter `stage` |
-| Research state | idea | active, promising, needs_more_evidence, weak_evidence, evidence_against_edge, shelved, rejected | Researcher | `idea.md` frontmatter `research_state` |
+| Research state | idea | active, promising, needs_more_evidence, weak_evidence, evidence_against_edge, shelved, rejected, blocked (untested, cannot run yet; needs `block_reason`) | Researcher | `idea.md` frontmatter `research_state` |
 | Run verdict | run | EDGE, MARGINAL, NO_EDGE, INCONCLUSIVE | Computed at record time | In the run; immutable |
 | Promotion decision | run, per stage | READY_FOR_NEXT_STAGE, NOT_READY, BLOCKED | Computed at record time | In the run; immutable |
 

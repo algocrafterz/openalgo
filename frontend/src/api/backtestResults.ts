@@ -101,6 +101,8 @@ export interface IdeaCard {
   source?: { type?: string; author?: string; ref?: string }
   /** Why a rejected idea was rejected; absent on older ideas. */
   rejection_basis?: string
+  /** Why a blocked idea cannot be run yet. Blocked is not evidence: the idea is untested. */
+  block_reason?: string
   /** Workflow stage, set by the researcher and gated by evidence (not the legacy `status`). */
   stage?: Stage
   /** The researcher's own disposition. Separate from any run's calculated verdict. */
@@ -234,6 +236,7 @@ export type ResearchState =
   | 'evidence_against_edge'
   | 'shelved'
   | 'rejected'
+  | 'blocked'
 
 /** Calculated per run, never typed, never changes once the run is written. */
 export type RunVerdictValue = 'EDGE' | 'MARGINAL' | 'NO_EDGE' | 'INCONCLUSIVE'

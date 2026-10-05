@@ -40,6 +40,7 @@ const STATE_LABEL: Record<ResearchState, string> = {
   evidence_against_edge: 'Evidence against an edge',
   shelved: 'Shelved',
   rejected: 'Rejected',
+  blocked: 'Blocked',
 }
 
 const STAGE_LABEL: Record<Stage, string> = {

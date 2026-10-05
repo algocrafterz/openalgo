@@ -269,14 +269,26 @@ def _cmd_state(idea: str, folder: Path, args) -> int:
             )
     elif basis is not None:
         raise _BadInput("--rejection-basis only applies to the rejected state")
+    reason = (args.block_reason or "").strip() or None
+    if args.research_state == "blocked":
+        if reason not in build_registry.BLOCK_REASONS:
+            raise _BadInput(
+                f"blocked needs --block-reason, one of {', '.join(build_registry.BLOCK_REASONS)}"
+            )
+    elif reason is not None:
+        raise _BadInput("--block-reason only applies to the blocked state")
     updates: dict = {"research_state": args.research_state}
     if args.revisit_when is not None and args.revisit_when.strip():
         updates["revisit_when"] = args.revisit_when.strip()
     if basis is not None:
         updates["rejection_basis"] = basis
+    if reason is not None:
+        updates["block_reason"] = reason
     frontmatter.set_keys(folder, updates)
     if args.research_state != "rejected":
         frontmatter.remove_keys(folder, ["rejection_basis"])
+    if args.research_state != "blocked":
+        frontmatter.remove_keys(folder, ["block_reason"])
     _out(f"{idea}: research_state is now {args.research_state}")
     return 0
 
@@ -451,6 +463,7 @@ def _parser() -> argparse.ArgumentParser:
     research.add_argument("research_state", choices=lifecycle.RESEARCH_STATES)
     research.add_argument("--revisit-when", dest="revisit_when")
     research.add_argument("--rejection-basis", dest="rejection_basis")
+    research.add_argument("--block-reason", dest="block_reason")
     classify = sub.add_parser("classify", help="set strategy_category and strategy_tags")
     classify.add_argument("idea")
     classify.add_argument("--category")

@@ -188,6 +188,10 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
             <Badge variant="outline" data-testid="rejection-basis">
               rejected: {idea.rejection_basis}
             </Badge>
+          ) : idea.block_reason ? (
+            <Badge variant="outline" data-testid="block-reason">
+              blocked: {idea.block_reason}
+            </Badge>
           ) : (
             !detail &&
             isLatestRun && (

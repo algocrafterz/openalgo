@@ -75,6 +75,7 @@ class TestVocabulary:
             "evidence_against_edge",
             "shelved",
             "rejected",
+            "blocked",
         )
 
 
@@ -159,6 +160,40 @@ class TestRejectionBasisKeysOnResearchState:
         assert _entry(tmp_path)["rejection_basis"] == "overfit"
 
 
+class TestBlockReasonKeysOnResearchState:
+    def test_a_blocked_idea_needs_a_block_reason(self, tmp_path):
+        _idea(tmp_path, "stage: inbox\nresearch_state: blocked\n")
+        with pytest.raises(br.RegistryError, match="block_reason is required"):
+            br.load_ideas(tmp_path)
+
+    def test_an_unknown_block_reason_is_reported(self, tmp_path):
+        _idea(tmp_path, "stage: inbox\nresearch_state: blocked\n", "block_reason: busy\n")
+        with pytest.raises(br.RegistryError, match="block_reason 'busy' not one of"):
+            br.load_ideas(tmp_path)
+
+    def test_only_valid_when_research_state_is_blocked(self, tmp_path):
+        _idea(
+            tmp_path,
+            "stage: inbox\nresearch_state: active\n",
+            "block_reason: missing-published-intraday-dataset\n",
+        )
+        with pytest.raises(br.RegistryError, match="only valid when research_state is blocked"):
+            br.load_ideas(tmp_path)
+
+    def test_a_blocked_idea_with_a_reason_loads_with_no_verdict(self, tmp_path):
+        _idea(
+            tmp_path,
+            "stage: inbox\nresearch_state: blocked\n",
+            "block_reason: missing-published-intraday-dataset\n",
+        )
+        entry = _entry(tmp_path)
+        assert entry["block_reason"] == "missing-published-intraday-dataset"
+        assert entry["status"] == "blocked" and entry["verdict"] == "none"
+
+    def test_blocked_stops_a_stage_move_forward(self):
+        assert "blocked" in lifecycle.BLOCKING_STATES
+
+
 class TestSpecRequirementIsStageBased:
     @pytest.mark.parametrize("stage", ["backtest", "paper", "live"])
     def test_spec_is_required_from_backtest(self, tmp_path, stage):
@@ -208,6 +243,8 @@ class TestDerivedLegacyFields:
             ("backtest", "weak_evidence", False, "evaluating"),
             ("backtest", "evidence_against_edge", True, "backtested"),
             ("backtest", "needs_more_evidence", True, "backtested"),
+            ("inbox", "blocked", False, "blocked"),
+            ("backtest", "blocked", True, "blocked"),
         ],
     )
     def test_status_mapping(self, stage, state, has_runs, expected):

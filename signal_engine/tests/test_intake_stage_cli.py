@@ -69,7 +69,12 @@ class TestStageForward:
         assert _fm(folder)["stage"] == "inbox"
 
     @pytest.mark.parametrize(
-        "state, extra", [("rejected", ""), ("shelved", "revisit_when: later\n")]
+        "state, extra",
+        [
+            ("rejected", ""),
+            ("shelved", "revisit_when: later\n"),
+            ("blocked", "block_reason: missing-published-intraday-dataset\n"),
+        ],
     )
     def test_forward_is_refused_while_rejected_or_shelved(self, tmp_path, capsys, state, extra):
         folder = _idea(tmp_path, f"stage: inbox\nresearch_state: {state}\n", extra)
@@ -516,3 +521,37 @@ class TestReturnToPaperNeedsEvidence:
         folder = _idea(tmp_path, "stage: retired\n", versions=True)
         assert _run(tmp_path, "stage", "IDEA-001", "paper", "--reason", "retry") == 1
         assert _fm(folder)["stage"] == "retired"
+
+
+class TestBlockedNeedsAReason:
+    REASON = "missing-published-intraday-dataset"
+
+    def test_blocked_without_a_reason_exits_two_and_writes_nothing(self, tmp_path, capsys):
+        folder = _idea(tmp_path)
+        assert _run(tmp_path, "state", "IDEA-001", "blocked") == 2
+        assert "--block-reason" in capsys.readouterr().out
+        assert "research_state" not in _fm(folder)
+
+    def test_unknown_reason_exits_two(self, tmp_path):
+        folder = _idea(tmp_path)
+        assert _run(tmp_path, "state", "IDEA-001", "blocked", "--block-reason", "busy") == 2
+        assert "research_state" not in _fm(folder)
+
+    def test_blocked_with_a_reason_is_stored_and_registry_valid(self, tmp_path):
+        folder = _idea(tmp_path)
+        assert _run(tmp_path, "state", "IDEA-001", "blocked", "--block-reason", self.REASON) == 0
+        data = _fm(folder)
+        assert data["research_state"] == "blocked" and data["block_reason"] == self.REASON
+        assert br.load_ideas(tmp_path)[0]["status"] == "blocked"
+
+    def test_leaving_blocked_removes_the_reason_so_the_registry_stays_valid(self, tmp_path):
+        folder = _idea(tmp_path)
+        _run(tmp_path, "state", "IDEA-001", "blocked", "--block-reason", self.REASON)
+        assert _run(tmp_path, "state", "IDEA-001", "active") == 0
+        assert "block_reason" not in _fm(folder)
+        assert len(br.load_ideas(tmp_path)) == 1
+
+    def test_a_reason_on_another_state_is_refused(self, tmp_path):
+        folder = _idea(tmp_path)
+        assert _run(tmp_path, "state", "IDEA-001", "active", "--block-reason", self.REASON) == 2
+        assert "block_reason" not in _fm(folder)

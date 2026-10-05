@@ -2,7 +2,7 @@
 id: IDEA-000                # next free number; folder must be idea-000-<slug>
 title: Short human title
 stage: inbox                # inbox | backtest | paper | live | retired (move with `intake stage`)
-# research_state: active    # active | promising | needs_more_evidence | weak_evidence | evidence_against_edge | shelved | rejected (default active; `intake state`)
+# research_state: active    # active | promising | needs_more_evidence | weak_evidence | evidence_against_edge | shelved | rejected | blocked (default active; `intake state`)
 strategy_category: Other    # one of research/taxonomy.yaml (`intake classify`); absent means Other
 strategy_tags: []           # free-form discovery tags, e.g. [vwap, pullback]
 horizon: intraday           # intraday | swing | positional

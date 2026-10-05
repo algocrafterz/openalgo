@@ -338,6 +338,18 @@ class TestIdeaDetailExtras:
         ok, body, _ = svc.get_idea_results("IDEA-001", tmp_path)
         assert ok and body["idea"]["rejection_basis"] == "no-gross-edge"
 
+    def test_block_reason_is_on_the_idea(self, tmp_path):
+        _add_idea(tmp_path, "001", runs=[])
+        idea_md = tmp_path / "research" / "ideas" / "idea-001-sample" / "idea.md"
+        text = idea_md.read_text(encoding="utf-8")
+        text = text.replace("research_state: rejected", "research_state: blocked").replace(
+            "last_reviewed: 2026-09-29",
+            "last_reviewed: 2026-09-29\nblock_reason: missing-published-intraday-dataset",
+        )
+        idea_md.write_text(text, encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", tmp_path)
+        assert ok and body["idea"]["block_reason"] == "missing-published-intraday-dataset"
+
 
 class TestExportRun:
     RUN = "2026-09-30-s-v1"

@@ -122,6 +122,11 @@ describe('DecisionPanel research state', () => {
     expect(run).not.toHaveTextContent('Research state')
   })
 
+  it('labels a blocked idea as blocked', () => {
+    renderPanel({ researchState: 'blocked', stage: 'inbox' })
+    expect(screen.getByTestId('research-state')).toHaveTextContent('Blocked')
+  })
+
   it('never shows promising or robust as a verdict', () => {
     renderPanel({ researchState: 'promising' })
     expect(screen.getByTestId('verdict-badge')).not.toHaveTextContent(/promising|robust/i)
