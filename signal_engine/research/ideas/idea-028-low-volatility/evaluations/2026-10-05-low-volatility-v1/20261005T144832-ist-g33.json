@@ -1,0 +1,259 @@
+{
+  "kind": "corrected_gate_evaluation",
+  "run_id": "2026-10-05-low-volatility-v1",
+  "idea_id": "IDEA-028",
+  "evaluated_ist": "2026-10-05T14:48:32.372437+05:30",
+  "reason": "stats.walk_forward averaged r_net, which is NaN for trades without a stop, so every window scored NaN and G3.3 reported 0 positive windows whatever the trades earned. Fixed: G3.3 scores each trade with evaluation._r_net (R with a stop, else net bps), the unit the other gates use. No threshold, window length, split or trade changed.",
+  "scope": "G3.3 only; every other row is the sealed run's, unchanged",
+  "new_trial": false,
+  "sealed_run_unchanged": {
+    "folder_sha256": "7d98dabcdfe6b1cafeb9ac5d77e8ab9782935408d58652471068c9e3d010150d",
+    "record_sha256": "690b6fe8f0cff1e9c6b8f7377c06cc327dc69c39449eade4b7883271d2f76eef"
+  },
+  "inputs": {
+    "trades": "runs/2026-10-05-low-volatility-v1/evidence/trades.parquet",
+    "trades_count": 301
+  },
+  "identity": {
+    "strategy_fingerprint": "ada161313f0fce7ed389556562677aec9f7b4814e34f570952ad01b00b586c5f",
+    "params_fingerprint": "71e590f961443da85bec275a22b9b9e76889ddf770e4660e785661fa8638cb10",
+    "rules_fingerprint": "9357d6e084b3aaf865f0e3cba6c7327aac6dc39b31d847f06ffea194d6f9b06d",
+    "dataset_id": "nse-daily-20261005-002",
+    "dataset_fingerprint": "145d65ef910f6a530ce65f37899442b27127a07ca96a9519f7fcf78e8ad576d2"
+  },
+  "G3.3": {
+    "recorded": {
+      "evidence": "0 of 19 windows net positive (0 empty); shipped parameters held fixed in every window, so this is rolling stability, not a re-fit per window",
+      "gate": "G3.3",
+      "hard": false,
+      "status": "fail",
+      "threshold": "at least 4 rolling windows of 6 months; net above 0 in at least 60%",
+      "title": "Walk-forward",
+      "value": 0.0
+    },
+    "corrected": {
+      "status": "pass",
+      "value": 0.8947,
+      "threshold": "at least 4 rolling windows of 6 months; net above 0 in at least 60%",
+      "evidence": "17 of 19 windows net positive (0 empty); shipped parameters held fixed in every window, so this is rolling stability, not a re-fit per window"
+    },
+    "windows": [
+      {
+        "from": "2017-02-01",
+        "to": "2017-08-01",
+        "trades": 41,
+        "net_r": 3631.5926
+      },
+      {
+        "from": "2017-08-01",
+        "to": "2018-02-01",
+        "trades": 7,
+        "net_r": 2895.0248
+      },
+      {
+        "from": "2018-02-01",
+        "to": "2018-08-01",
+        "trades": 9,
+        "net_r": -384.622
+      },
+      {
+        "from": "2018-08-01",
+        "to": "2019-02-01",
+        "trades": 13,
+        "net_r": 453.709
+      },
+      {
+        "from": "2019-02-01",
+        "to": "2019-08-01",
+        "trades": 13,
+        "net_r": 493.7269
+      },
+      {
+        "from": "2019-08-01",
+        "to": "2020-02-01",
+        "trades": 15,
+        "net_r": 1075.2294
+      },
+      {
+        "from": "2020-02-01",
+        "to": "2020-08-01",
+        "trades": 20,
+        "net_r": 3730.8506
+      },
+      {
+        "from": "2020-08-01",
+        "to": "2021-02-01",
+        "trades": 15,
+        "net_r": 2687.2608
+      },
+      {
+        "from": "2021-02-01",
+        "to": "2021-08-01",
+        "trades": 23,
+        "net_r": 1491.7706
+      },
+      {
+        "from": "2021-08-01",
+        "to": "2022-02-01",
+        "trades": 18,
+        "net_r": 1624.6373
+      },
+      {
+        "from": "2022-02-01",
+        "to": "2022-08-01",
+        "trades": 11,
+        "net_r": 1767.523
+      },
+      {
+        "from": "2022-08-01",
+        "to": "2023-02-01",
+        "trades": 11,
+        "net_r": 1344.2048
+      },
+      {
+        "from": "2023-02-01",
+        "to": "2023-08-01",
+        "trades": 13,
+        "net_r": 2614.9066
+      },
+      {
+        "from": "2023-08-01",
+        "to": "2024-02-01",
+        "trades": 11,
+        "net_r": 2017.1664
+      },
+      {
+        "from": "2024-02-01",
+        "to": "2024-08-01",
+        "trades": 15,
+        "net_r": 1081.974
+      },
+      {
+        "from": "2024-08-01",
+        "to": "2025-02-01",
+        "trades": 12,
+        "net_r": 81.679
+      },
+      {
+        "from": "2025-02-01",
+        "to": "2025-08-01",
+        "trades": 15,
+        "net_r": 820.1263
+      },
+      {
+        "from": "2025-08-01",
+        "to": "2026-02-01",
+        "trades": 7,
+        "net_r": 68.6351
+      },
+      {
+        "from": "2026-02-01",
+        "to": "2026-08-01",
+        "trades": 23,
+        "net_r": -184.3937
+      }
+    ],
+    "window_unit": "net bps per trade (the stats row key is named net_r; these trades have no stop, so R is undefined)"
+  },
+  "G3.2_unchanged": {
+    "status": "fail",
+    "evidence": "OOS +476.9 bps (92 trades) vs in-sample +2109.3 bps (209 trades)"
+  },
+  "summary_counts": {
+    "recorded": {
+      "counts": {
+        "fail": 2,
+        "not_applicable": 9,
+        "not_evaluated": 35,
+        "pass": 12,
+        "report": 10
+      },
+      "hard_failed": []
+    },
+    "corrected": {
+      "counts": {
+        "pass": 13,
+        "fail": 1,
+        "report": 10,
+        "not_evaluated": 35,
+        "not_applicable": 9
+      },
+      "hard_failed": []
+    }
+  },
+  "verdict": {
+    "recorded": "MARGINAL",
+    "corrected": "MARGINAL",
+    "corrected_primary_failed_gate": "G0.1",
+    "corrected_open_gates": [
+      [
+        "G0.1",
+        "NOT_RUN"
+      ],
+      [
+        "G0.4",
+        "NOT_RUN"
+      ],
+      [
+        "G0.7",
+        "NOT_RUN"
+      ],
+      [
+        "G1.2",
+        "NOT_RUN"
+      ],
+      [
+        "G1.5",
+        "NOT_RUN"
+      ],
+      [
+        "G1.6",
+        "NOT_RUN"
+      ],
+      [
+        "G2.4",
+        "NOT_RUN"
+      ],
+      [
+        "G3.2",
+        "FAIL"
+      ],
+      [
+        "G4.1",
+        "NOT_RUN"
+      ],
+      [
+        "G4.2",
+        "NOT_RUN"
+      ],
+      [
+        "G4.3",
+        "NOT_RUN"
+      ],
+      [
+        "G4.4",
+        "NOT_RUN"
+      ],
+      [
+        "G4.8",
+        "NOT_RUN"
+      ],
+      [
+        "G5.1",
+        "NOT_RUN"
+      ],
+      [
+        "G5.3",
+        "NOT_RUN"
+      ],
+      [
+        "G5.4",
+        "NOT_RUN"
+      ],
+      [
+        "G5.5",
+        "NOT_RUN"
+      ]
+    ]
+  }
+}

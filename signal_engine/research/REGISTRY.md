@@ -9,7 +9,7 @@ Total ideas: **2**. Backtest runs recorded: **4** across 2 ideas. Last reviewed:
 
 | Status | Count |
 | --- | --- |
-| inbox | 1 |
+| backtested | 1 |
 | rejected | 1 |
 
 ## By category
@@ -24,4 +24,4 @@ Total ideas: **2**. Backtest runs recorded: **4** across 2 ideas. Last reviewed:
 | ID | Title | Status | Verdict | Category | Latest run | Result | Revisit when | Detail |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | IDEA-027 | Proximity to the 52-week high | rejected | no-edge | Momentum | 2026-10-05-52-week-high-proximity-v3: 4481 trades, gross 74.3012 / net 50.3012 bps | NO_EDGE on the published NSE dataset nse-daily-20261005-002 (run 2026-10-05-52-week-high-proximity-v3): net +50.3 bps over 4,481 trades, but G2.2 statistical significance FAIL (t 2.01 vs hurdle 2.25), G4.5 dispersion FAIL, and out-of-sample confirmation weak (t 0.19). | Not by tuning this version. Only a new, pre-specified hypothesis, recorded as a separate idea. | `research/ideas/idea-027-52-week-high-proximity/idea.md` |
-| IDEA-028 | Lowest realised volatility | inbox | marginal | Statistical / Quantitative | 2026-10-05-low-volatility-v1: 301 trades, gross 1634.358 / net 1610.358 bps |  | After the first backtest result is reviewed. | `research/ideas/idea-028-low-volatility/idea.md` |
+| IDEA-028 | Lowest realised volatility | backtested | marginal | Statistical / Quantitative | 2026-10-05-low-volatility-v1: 301 trades, gross 1634.358 / net 1610.358 bps | MARGINAL on nse-daily-20261005-002 (run 2026-10-05-low-volatility-v1): net +1,610 bps per trade over 301 trades, G2.2 t 5.66 (pass), no hard gate failed; G3.2 out-of-sample FAIL; G3.3 recorded 0 of 19 by an evaluator bug, 17 of 19 (pass) on the corrected evaluation. Diagnostics: below random entry into the same stocks and below the equal-weight eligible universe. | Not by tuning this version. Only a new, pre-specified hypothesis, recorded as a separate idea. | `research/ideas/idea-028-low-volatility/idea.md` |
