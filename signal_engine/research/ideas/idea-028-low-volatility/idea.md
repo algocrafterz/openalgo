@@ -68,10 +68,29 @@ Supporting diagnostics (not gates; they change no verdict):
   (t -0.88), after it -94 bps (t -2.06). It lost less in the 40 down months (-2.2% against -3.8%)
   and gained less in the 77 up months (+3.0% against +4.6%).
 
-Reading: the book was profitable and lower risk than the universe, but it earned less, its
-return per unit of risk was not better, and it did worse than random entry into the same stocks.
-The profit is explained by holding equities in a rising market at lower volatility, not by a
-low-volatility premium.
+### Final evidence (IDEA-028 v1)
+
+IDEA-028 v1 does not provide convincing evidence of a low-volatility selection edge. The
+portfolio was profitable, but the controlled comparisons do not show that low-volatility
+selection caused the return.
+
+| Question | Answer |
+| --- | --- |
+| Absolute profitability | YES (+1,610 bps net per trade) |
+| Statistical significance (G2.2) | YES, t 5.66 |
+| Out-of-sample robustness (G3.2) | FAIL (36% of in-sample against 40%) |
+| Walk-forward (G3.3, corrected) | PASS, 17 of 19 |
+| Dispersion (G4.5) / symbol hold-out | PASS / PASS |
+| Matched random-entry advantage | NO: strategy +1,467, random +1,776, difference -309 bps, t -1.81 |
+| Broad-universe advantage | NO: 14.6% a year against 20.8%; return/volatility 1.07 against 1.07 |
+| Low-volatility selection edge | NOT DEMONSTRATED |
+| Final research conclusion | Evidence against the low-volatility selection hypothesis |
+| Disposition | MARGINAL / evidence_against_edge |
+| Next action | Do not pursue IDEA-028 v1 further; revisit only through a separately specified hypothesis |
+
+Holding the 30 lowest-volatility stocks made money and had smaller drawdowns, but it did not
+outperform either matched random entry or the equal-weight eligible universe. The evidence
+therefore does not support a distinct low-volatility selection edge.
 
 ## Decision log
 
@@ -84,3 +103,4 @@ low-volatility premium.
 - 2026-10-05: researcher approval before the single v1 run. Six platform assumptions confirmed as they are (bar size 1d, warm-up 252, listing age 60, minimum volume 1, price floor 10 recorded but NOT applied to adjusted prices, carry-forward true). Missing-data behaviour confirmed: a missing required observation means no valid 252-return volatility, so the symbol is not ranked and cannot be in the 30; a held symbol that cannot be ranked is sold at the next open. 252 returns need 253 consecutive closes; the loader minimum stays 252. No change to v1.
 - 2026-10-05: G3.3 evaluator bug fixed (walk-forward windows now use the same per-trade unit as the other gates: R with a stop, net bps without). Sealed trades re-scored for G3.3 only: 17 of 19 windows positive, pass. The run record is not rewritten and no trial was added. G3.2 still fails; verdict stays MARGINAL. The same bug made IDEA-027's G3.3 read 0 of 19; G3.3 is not a hard gate there, so its NO_EDGE stands.
 - 2026-10-05: research state evidence_against_edge (existing taxonomy; not rejected, because no hard gate failed and the diagnostics are not gates). The frozen hypothesis, superior risk-adjusted returns from the lowest-volatility stocks, is not supported: G3.2 fails, the book trails random entry into the same stocks, and it trails the equal-weight eligible universe with the same return per unit of volatility, more so out of sample. Not tuned, not rerun, no v2. All runs and evidence are kept.
+- 2026-10-05: closed. The G3.3 change is an evaluator correctness fix, not a strategy revision or research iteration; 17 of 19 replaces the erroneous 0 of 19 in this summary, and the sealed run keeps its original record. No further work on v1: no tuning, no v2, no more trials or benchmarks. The universe comparison stays a diagnostic, not a gate, verdict rule or promotion requirement.
