@@ -1026,26 +1026,73 @@
       "summary": "Each month, hold the 30 F&O stocks with the lowest sample standard deviation of their last 252 daily returns; sell stocks that drop out of that set.",
       "title": "Lowest realised volatility",
       "verdict": "marginal"
+    },
+    {
+      "block_reason": "missing-published-intraday-dataset",
+      "classification": {
+        "direction": null,
+        "market": null,
+        "strategy_category": "Mean Reversion",
+        "strategy_tags": [
+          "vwap",
+          "vwap-bands",
+          "range-regime",
+          "intraday",
+          "long-short"
+        ],
+        "timeframe": null,
+        "trading_style": null
+      },
+      "folder": "idea-029-vwap-2sd-range-mean-reversion",
+      "horizon": "intraday",
+      "id": "IDEA-029",
+      "last_reviewed": "2026-10-05",
+      "research_state": "blocked",
+      "revisit_when": "When a published, verified 5m NSE intraday dataset version exists.",
+      "runs": [],
+      "source": {
+        "author": "researcher",
+        "captured": "2026-10-05",
+        "ref": "_inbox/vwap-2sd-range-mean-reversion.txt",
+        "type": "self"
+      },
+      "stage": "inbox",
+      "status": "blocked",
+      "strategy_category": "Mean Reversion",
+      "strategy_tags": [
+        "vwap",
+        "vwap-bands",
+        "range-regime",
+        "intraday",
+        "long-short"
+      ],
+      "summary": "In a range-bound regime (15m ADX and flat EMA20), fade a 5m excursion beyond the session VWAP 2SD band once price closes back inside the band and across EMA9; target VWAP, stop beyond the extreme.",
+      "title": "VWAP 2SD range mean reversion",
+      "verdict": "none"
     }
   ],
   "summary": {
     "by_category": {
+      "Mean Reversion": 1,
       "Momentum": 1,
       "Statistical / Quantitative": 1
     },
     "by_horizon": {
+      "intraday": 1,
       "swing": 2
     },
     "by_status": {
+      "blocked": 1,
       "rejected": 2
     },
     "by_verdict": {
       "marginal": 1,
-      "no-edge": 1
+      "no-edge": 1,
+      "none": 1
     },
     "ideas_with_runs": 2,
     "last_reviewed": "2026-10-05",
-    "total": 2,
+    "total": 3,
     "total_runs": 4
   }
 }

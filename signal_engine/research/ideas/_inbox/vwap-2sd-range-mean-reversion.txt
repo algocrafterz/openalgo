@@ -1,0 +1,30 @@
+VWAP 2SD range mean reversion (researcher's draft, 2026-10-05). DRAFT: not frozen, not run.
+
+Hypothesis: in a range-bound stock, when price makes a large excursion from session VWAP and then
+fails to sustain it, price is likely to revert toward VWAP. Not a simple band-touch strategy: a
+trade needs a range regime, a large VWAP deviation, a rejection of the extreme, a short-term
+reversal confirmation, and entry only after the confirmation completes.
+
+Market NSE equities; intraday; long and short; no overnight positions.
+Timeframes: 15m regime (ADX14, EMA20), 5m execution (session VWAP, VWAP SD bands, EMA9, ATR14).
+
+Rules (draft):
+- Regime (15m, completed bars only): ADX(14) <= 22 and
+  abs(EMA20[t] - EMA20[t-4]) <= 0.25 x ATR14_15m[t].
+- Long: 5m price reaches or penetrates VWAP - 2 SD with abs(price - VWAP) / ATR14_5m >= 0.75 at
+  the extreme; on a later 5m bar, close > EMA9 and close > lower band; enter long at the next 5m
+  open. Short is the mirror image.
+- Target: session VWAP. Stop: rejection extreme -/+ 0.20 x ATR14_5m, fixed at entry, not trailed.
+- One position per symbol, no pyramiding or averaging; a later setup may be taken the same session.
+- Square-off before the engine's intraday cutoff. Fixed notional Rs 1,00,000.
+- Parameters: vwap_sd 2.0; atr_period_5m 14; min_vwap_distance_atr 0.75; stop_buffer_atr 0.20;
+  adx_period_15m 14; adx_max 22; ema_regime_period_15m 20; ema_regime_lookback_bars 4;
+  ema_regime_max_change_atr 0.25; ema_entry_period_5m 9.
+- Costs as stated in the draft: 24 bps round trip, 4 bps slippage per side (conflicts with the
+  platform's 16 bps intraday cost; open decision 1).
+
+Open decisions before freezing (2026-10-05 review): 1 cost assumption; 2 VWAP SD formula; 3 which
+completed bar supplies the extreme/band values; 4 price used for displacement; 5 how long an
+extreme stays armed; 6 whether a deeper extreme updates the setup; 7 when the regime must be
+valid; 8 VWAP target definition; 9 entry already beyond VWAP; 10 re-entry; 11 15m indicator
+state across sessions; 12 final entry cutoff.
