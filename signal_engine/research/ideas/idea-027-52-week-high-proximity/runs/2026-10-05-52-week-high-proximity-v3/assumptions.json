@@ -1,0 +1,543 @@
+{
+  "entries": [
+    {
+      "confidence": "high",
+      "field": "name",
+      "id": "A-001",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Proximity to the 52-week high"
+    },
+    {
+      "confidence": "high",
+      "field": "source.kind",
+      "id": "A-002",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "own_words"
+    },
+    {
+      "confidence": "high",
+      "field": "source.ref",
+      "id": "A-003",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "_inbox/52-week-high-proximity.txt"
+    },
+    {
+      "confidence": "high",
+      "field": "profile",
+      "id": "A-004",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "flattrade-nse-cash"
+    },
+    {
+      "confidence": "high",
+      "field": "style",
+      "id": "A-005",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "swing"
+    },
+    {
+      "confidence": "high",
+      "field": "direction",
+      "id": "A-006",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "long_only"
+    },
+    {
+      "confidence": "high",
+      "field": "timeframe",
+      "id": "A-007",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "1d"
+    },
+    {
+      "confidence": "high",
+      "field": "product",
+      "id": "A-008",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "CNC"
+    },
+    {
+      "confidence": "high",
+      "field": "entry",
+      "id": "A-009",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "On each weekly rebalance day (the last session of the week), after the daily close, compute for every eligible stock the ratio of its close to the highest daily close of the trailing 252 sessions including that day",
+        "A stock qualifies when that ratio is at least 0.95, meaning its close is within 5% of the 252-session high close",
+        "Hold the 20 qualifying stocks with the highest ratio; if fewer than 20 qualify, hold only those and keep the rest of the capital in cash",
+        "Buy orders fill at the next session's open"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "exit",
+      "id": "A-010",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "On each weekly rebalance day, sell every held stock that is not among the 20 qualifying stocks with the highest ratio, whether because its ratio fell below 0.95 or because it is outranked",
+        "Sell orders fill at the next session's open"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "stop",
+      "id": "A-011",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "take_profit",
+      "id": "A-012",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "holding_period",
+      "id": "A-013",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "indicators",
+      "id": "A-014",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        {
+          "name": "HIGHEST_CLOSE",
+          "period": 252,
+          "source": "close"
+        }
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "parameters",
+      "id": "A-015",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "closeness_pct": 5,
+        "lookback_sessions": 252,
+        "max_positions": 20,
+        "rebalance": "weekly",
+        "rebalance_day": "last_session_of_week"
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "timing.signal_evaluation",
+      "id": "A-016",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "bar_close"
+    },
+    {
+      "confidence": "high",
+      "field": "timing.order_submission",
+      "id": "A-017",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "signal_close"
+    },
+    {
+      "confidence": "high",
+      "field": "timing.fill_model",
+      "id": "A-018",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "next_bar_open"
+    },
+    {
+      "confidence": "high",
+      "field": "filters",
+      "id": "A-019",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "session_window",
+      "id": "A-020",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.allowed",
+      "id": "A-021",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": true
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.max_per_symbol_day",
+      "id": "A-022",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.trigger",
+      "id": "A-023",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "same_signal"
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.risk_per_trade_pct",
+      "id": "A-024",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 1.0
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.capital_per_trade",
+      "id": "A-025",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 100000
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.mode",
+      "id": "A-026",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "multi_position"
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.max_concurrent",
+      "id": "A-027",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 20
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.max_trades_per_day",
+      "id": "A-028",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 40
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.capital_per_position",
+      "id": "A-029",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 100000
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.max_exposure",
+      "id": "A-030",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 2000000
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.selection",
+      "id": "A-031",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "rank_by_score"
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.conflict",
+      "id": "A-032",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "skip_if_symbol_open"
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.prior_variants",
+      "id": "A-033",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 0
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.chart_peeking",
+      "id": "A-034",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": false
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.destination",
+      "id": "A-035",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "python"
+    },
+    {
+      "confidence": "high",
+      "field": "kill_criterion",
+      "id": "A-036",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Net expectancy per trade is zero or negative after modelled costs."
+    },
+    {
+      "confidence": "high",
+      "field": "execution.product",
+      "id": "A-037",
+      "materiality": "medium",
+      "reason": "stated in the spec",
+      "section": "execution",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "CNC"
+    },
+    {
+      "confidence": "high",
+      "field": "execution.bar_size",
+      "id": "A-038",
+      "materiality": "medium",
+      "reason": "same as the spec timeframe",
+      "section": "execution",
+      "source": "derived",
+      "user_confirmed": false,
+      "value": "1d"
+    },
+    {
+      "confidence": "high",
+      "field": "execution.warmup_bars",
+      "id": "A-039",
+      "materiality": "medium",
+      "reason": "longest indicator period: HIGHEST_CLOSE(252)",
+      "section": "execution",
+      "source": "derived",
+      "user_confirmed": true,
+      "value": 252
+    },
+    {
+      "confidence": "high",
+      "field": "execution.slippage_bps_per_side",
+      "id": "A-040",
+      "materiality": "medium",
+      "reason": "house default for market orders",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 4.0
+    },
+    {
+      "confidence": "high",
+      "field": "execution.cost_bps_round_trip",
+      "id": "A-041",
+      "materiality": "medium",
+      "reason": "swing round-trip cost default",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 24.0
+    },
+    {
+      "confidence": "high",
+      "field": "execution.oos_fraction",
+      "id": "A-042",
+      "materiality": "low",
+      "reason": "G3.1 holdout fraction",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 0.3
+    },
+    {
+      "confidence": "high",
+      "field": "execution.embargo_sessions",
+      "id": "A-043",
+      "materiality": "low",
+      "reason": "G3.5 embargo after the cut",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_prior_sessions",
+      "id": "A-044",
+      "materiality": "medium",
+      "reason": "listing age: earlier traded sessions required before a symbol is eligible",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 60
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_volume",
+      "id": "A-045",
+      "materiality": "medium",
+      "reason": "session volume must be above this to count as traded",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_price",
+      "id": "A-046",
+      "materiality": "medium",
+      "reason": "platform default, NOT APPLIED to this run: the daily panel is split-adjusted, so its prices are back-adjusted and not the traded price, and a nominal rupee floor would not be reliable. The eligibility filters that do apply are listing age, a bar on the session and non-zero volume",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": true,
+      "value": 10.0
+    },
+    {
+      "confidence": "high",
+      "field": "profile.carry_forward",
+      "id": "A-047",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash CNC",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": true
+    }
+  ],
+  "next_id": 48,
+  "sealed_ist": "2026-10-05T11:00:32.333814+05:30"
+}

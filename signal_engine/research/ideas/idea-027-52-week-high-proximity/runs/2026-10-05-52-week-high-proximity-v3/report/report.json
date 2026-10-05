@@ -1,0 +1,5877 @@
+{
+  "baseline": {
+    "draws_per_trade": 20,
+    "excess_net_bps": -21.6417,
+    "excess_t_stat": -2.026,
+    "gross_bps": 95.9429,
+    "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+    "net_bps": 71.9429,
+    "seed": 0,
+    "skipped": 0,
+    "trade_net_bps": 50.3012,
+    "trades": 4481
+  },
+  "cost_model": {
+    "capital": 100000.0,
+    "exchange": "NSE",
+    "fixed_notional": 100000.0,
+    "flat_bps": 24.0,
+    "leverage": 1.0,
+    "mean_statutory_bps": 22.248,
+    "mean_total_bps": 30.248,
+    "model": "statutory-per-trade",
+    "modelled_net_pnl_rs": 1974016.56,
+    "modelled_total_cost_rs": 1355418.26,
+    "net_bps": 44.053,
+    "net_bps_slip_2x": 36.053,
+    "pnl_basis": "modelled: every trade is a fixed notional of Rs 1,00,000 (capital per position) with no stop, with no limit on concurrent positions or total capital; net is after the modelled statutory charges and slippage",
+    "product": "CNC",
+    "risk_per_trade": 0.01,
+    "slippage_bps_per_side": 4.0,
+    "total_bps_at": {
+      "1.0": 30.248,
+      "1.5": 34.248,
+      "2.0": 38.248
+    },
+    "trades": 4481
+  },
+  "cost_sensitivity": [
+    {
+      "net_bps": 74.3012,
+      "round_trip_bps": 0
+    },
+    {
+      "net_bps": 69.3012,
+      "round_trip_bps": 5
+    },
+    {
+      "net_bps": 64.3012,
+      "round_trip_bps": 10
+    },
+    {
+      "net_bps": 54.3012,
+      "round_trip_bps": 20
+    },
+    {
+      "net_bps": 50.3012,
+      "round_trip_bps": 24.0
+    }
+  ],
+  "data_quality": {
+    "affects_validity": false,
+    "items": [],
+    "status": "PASS"
+  },
+  "evaluation": {
+    "criteria": "docs/STRATEGY-ACCEPTANCE-CRITERIA.md",
+    "dimensions": [
+      {
+        "name": "edge",
+        "rows": [
+          {
+            "evidence": "the criterion is defined in R, the trade's own stop distance, and these trades have no stop; a stop-independent threshold has to be defined by the owner; measured net expectancy is +50.30 bps over 4481 trades",
+            "gate": "G1.2",
+            "hard": true,
+            "status": "not_evaluated",
+            "threshold": ">= +0.05R per trade",
+            "title": "Net expectancy at 1.0x cost",
+            "value": null
+          },
+          {
+            "evidence": "gross 74.30 bps against 24 bps round trip: comfortable",
+            "gate": "G1.4",
+            "hard": false,
+            "status": "report",
+            "threshold": "gross / cost >= 1.5 is comfortable",
+            "title": "Gross edge vs cost",
+            "value": 3.0959
+          }
+        ]
+      },
+      {
+        "name": "robustness",
+        "rows": [
+          {
+            "evidence": "needs a delayed-entry rerun",
+            "gate": "G4.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Latency",
+            "value": null
+          },
+          {
+            "evidence": "needs a pessimistic same-bar rerun",
+            "gate": "G4.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Bar resolution",
+            "value": null
+          },
+          {
+            "evidence": "top 10 symbols hold 57% of net profit; 54% of 197 symbols net positive",
+            "gate": "G4.5",
+            "hard": true,
+            "status": "fail",
+            "threshold": "top 10 symbols <= 40% of net profit, >= 50% of symbols net positive",
+            "title": "Dispersion",
+            "value": 0.5711
+          },
+          {
+            "evidence": "4481 long / 0 short trades; net +50.3 bps long, n/a short; one-sided (long only)",
+            "gate": "G4.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "longs and shorts reported separately; a one-sided strategy is declared",
+            "title": "Direction",
+            "value": 0
+          },
+          {
+            "evidence": "membership source current_symbol_master; survivorship bias True. The universe is today's symbol master applied to the past, not point-in-time membership: names that later left F&O or were delisted are absent and cannot be listed here because no historical membership source exists. Results are biased toward survivors",
+            "gate": "G4.7",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: the universe uses today's list, which is survivor-biased; test on symbols as they existed and list names that later left",
+            "title": "Survivorship",
+            "value": true
+          },
+          {
+            "evidence": "needs an event calendar",
+            "gate": "G4.8",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Event days",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "risk",
+        "rows": [
+          {
+            "evidence": "not implemented",
+            "gate": "G5.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Monte Carlo",
+            "value": null
+          },
+          {
+            "evidence": "3 slots: net +27.17 bps; 5 slots: net +32.47 bps; 10 slots: net +40.85 bps. The live max_open_positions is set in config.yaml and may not be among these",
+            "gate": "G5.2",
+            "hard": false,
+            "status": "report",
+            "threshold": "run with the live position and loss caps",
+            "title": "Live caps applied",
+            "value": 27.1719
+          },
+          {
+            "evidence": "a live-sizing check, not a trade-list one",
+            "gate": "G5.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Sizing",
+            "value": null
+          },
+          {
+            "evidence": "needs order size against bar volume",
+            "gate": "G5.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Capacity",
+            "value": null
+          },
+          {
+            "evidence": "needs a simultaneous-margin model",
+            "gate": "G5.5",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Margin",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "stability",
+        "rows": [
+          {
+            "evidence": "33.4% of trade days held out from 2023-07-13; whether it stayed untouched until the candidate was frozen is not recorded",
+            "gate": "G3.1",
+            "hard": false,
+            "status": "report",
+            "threshold": "last 30% to 40% of sessions",
+            "title": "Chronological hold-out",
+            "value": 0.334
+          },
+          {
+            "evidence": "OOS +30.3 bps (1712 trades) vs in-sample +62.6 bps (2769 trades)",
+            "gate": "G3.2",
+            "hard": false,
+            "status": "pass",
+            "threshold": "OOS net > 0 and >= 40% of in-sample",
+            "title": "Out-of-sample result",
+            "value": 30.3322
+          },
+          {
+            "evidence": "0 of 19 windows net positive (0 empty); shipped parameters held fixed in every window, so this is rolling stability, not a re-fit per window",
+            "gate": "G3.3",
+            "hard": false,
+            "status": "fail",
+            "threshold": "at least 4 rolling windows of 6 months; net above 0 in at least 60%",
+            "title": "Walk-forward",
+            "value": 0.0
+          },
+          {
+            "evidence": "half A +65.0 bps (2035 trades), half B +38.1 bps (2446 trades)",
+            "gate": "G3.4",
+            "hard": false,
+            "status": "pass",
+            "threshold": "both symbol halves net > 0, weaker >= 40% of stronger",
+            "title": "Symbol hold-out",
+            "value": 38.0975
+          },
+          {
+            "evidence": "20 trades straddled the cut and were purged from in-sample; embargo 1 session(s) removed 0 out-of-sample trades",
+            "gate": "G3.5",
+            "hard": false,
+            "status": "pass",
+            "threshold": "no trade straddles the split; embargo of at least 1 session",
+            "title": "Leakage and embargo",
+            "value": 20
+          }
+        ]
+      },
+      {
+        "name": "cost_sensitivity",
+        "rows": [
+          {
+            "evidence": "statutory schedule (CNC, NSE) priced per trade at the deployed notional (capital 100,000, risk 1.00% per trade, leverage 1x) plus 4 bps slippage per side: mean 30.25 bps against the engine's flat 24 bps",
+            "gate": "G1.1",
+            "hard": false,
+            "status": "pass",
+            "threshold": "statutory charges at deployed notional plus slippage",
+            "title": "Cost model",
+            "value": 30.248
+          },
+          {
+            "evidence": "net +36.05 bps at 2.0x slippage (1.0x +44.05 bps); total cost 30.25 bps at 1.0x, 34.25 bps at 1.5x, 38.25 bps at 2.0x",
+            "gate": "G1.3",
+            "hard": true,
+            "status": "pass",
+            "threshold": "net expectancy above 0 with slippage doubled (8 bps per side)",
+            "title": "Slippage stress",
+            "value": 36.053
+          },
+          {
+            "evidence": "the criterion is defined in R, the trade's own stop distance, and these trades have no stop; a stop-independent threshold has to be defined by the owner; median modelled cost is 24.00 bps of notional per trade",
+            "gate": "G1.5",
+            "hard": true,
+            "status": "not_evaluated",
+            "threshold": "median cost <= 0.40R",
+            "title": "Cost per trade in R",
+            "value": null
+          },
+          {
+            "evidence": "no accepted signals with a stop",
+            "gate": "G1.6",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "report: if a fixed floor sets most stops (more than 50% at one width), show results at other floors",
+            "title": "Stop floor",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "regime_robustness",
+        "rows": [
+          {
+            "evidence": "7 of 10 years net positive; worst 2018 at -72.7 bps. The worst-year limit is an absolute number of R and these trades have no stop, so a stop-independent limit has to be defined by the owner",
+            "gate": "G4.4",
+            "hard": true,
+            "status": "not_evaluated",
+            "threshold": ">= 60% of calendar years net positive, worst year >= -0.25R",
+            "title": "Sub-periods",
+            "value": 0.7
+          },
+          {
+            "evidence": "no regime block supplied for this run",
+            "gate": "X.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "heuristic (calibrated): net positive in every sampled regime of each judged dimension",
+            "title": "Regime dispersion",
+            "value": null
+          },
+          {
+            "evidence": "no regime block supplied for this run",
+            "gate": "X.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "hypothesis only; validate the filtered strategy out-of-sample",
+            "title": "Regime activation hypothesis",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "parameter_sensitivity",
+        "rows": [
+          {
+            "evidence": "needs a parameter sweep",
+            "gate": "G4.1",
+            "hard": true,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Parameter perturbation",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "statistical_confidence",
+        "rows": [
+          {
+            "evidence": "4481 trades",
+            "gate": "G2.1",
+            "hard": false,
+            "status": "pass",
+            "threshold": ">= 200 net trades",
+            "title": "Trade count",
+            "value": 4481
+          },
+          {
+            "evidence": "day-clustered t 2.01 against the larger of the criteria level 2.50 and the record's Sidak hurdle 2.25",
+            "gate": "G2.2",
+            "hard": true,
+            "status": "fail",
+            "threshold": ">= 2.50 at 2 trials",
+            "title": "Day-clustered t-statistic",
+            "value": 2.011
+          },
+          {
+            "evidence": "DSR 0.996 over 497 sessions at 2 trials (daily Sharpe 0.138 against a deflation threshold of 0.023); assumption: trial Sharpe variance is assumed to be the no-edge sampling variance, because only the trial count is recorded",
+            "gate": "G2.3",
+            "hard": false,
+            "status": "pass",
+            "threshold": "DSR >= 0.90 at the true trial count",
+            "title": "Deflated Sharpe",
+            "value": 0.9958
+          },
+          {
+            "evidence": "needs P&L for every variant tried on a common grid; stats.pbo_cscv is implemented and waits for a parameter grid",
+            "gate": "G2.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Probability of backtest overfitting",
+            "value": null
+          },
+          {
+            "evidence": "n_trials 2 from trials.yaml: 2 material and 0 external",
+            "gate": "G2.5",
+            "hard": false,
+            "status": "pass",
+            "threshold": "every variant tried is counted in trials.yaml; DSR and the t-hurdle use that count",
+            "title": "Trials ledger",
+            "value": 2
+          },
+          {
+            "evidence": "Newey-West t 2.28 over 497 sessions (plain daily t 3.08); compare with the G2.2 bar, which the trade-clustered t already has to clear",
+            "gate": "G2.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "t on daily aggregated P&L with a Newey-West autocorrelation adjustment",
+            "title": "Dependence (Newey-West)",
+            "value": 2.28
+          },
+          {
+            "evidence": "497 sessions observed against a minimum of 135 sessions: sufficient",
+            "gate": "G2.7",
+            "hard": false,
+            "status": "report",
+            "threshold": "sample length against the Minimum Track Record Length at 95 percent",
+            "title": "Track length",
+            "value": 134.5
+          }
+        ]
+      },
+      {
+        "name": "complexity",
+        "rows": [
+          {
+            "evidence": "5 strategy parameters",
+            "gate": "X.1",
+            "hard": false,
+            "status": "report",
+            "threshold": "fewer assumptions are better",
+            "title": "Strategy parameter count",
+            "value": 5
+          }
+        ]
+      },
+      {
+        "name": "integrity",
+        "rows": [
+          {
+            "evidence": "code review and adapter tests",
+            "gate": "G0.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Same logic in every mode",
+            "value": null
+          },
+          {
+            "evidence": "3 symbol(s) re-run at 6 cut(s): no earlier signal or trade changed",
+            "gate": "G0.2",
+            "hard": false,
+            "status": "pass",
+            "threshold": "a run on data cut at earlier sessions reproduces every earlier signal and trade",
+            "title": "Causality of every input",
+            "value": 3
+          },
+          {
+            "evidence": "stored as epoch seconds, converted to IST at load; all 5 ledger time columns are IST. open-time stamping is a property of each loader and is covered by its unit test, not re-proved per run",
+            "gate": "G0.3",
+            "hard": false,
+            "status": "pass",
+            "threshold": "all external times converted to IST at the boundary; bar timestamps are open-time",
+            "title": "Timestamps in IST",
+            "value": 0
+          },
+          {
+            "evidence": "daily bars: one bar per session, so there is no intraday coverage to check",
+            "gate": "G0.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "every symbol-session used has at least 370 one-minute bars (98.7% of a 375-bar session); gaps listed by name",
+            "title": "Data coverage",
+            "value": null
+          },
+          {
+            "evidence": "ledgers reconcile; exclusions by reason code: DIRECTION_DISABLED=360187, NOT_ELIGIBLE=4320, POSITION_OPEN=44061, WARMUP=51912",
+            "gate": "G0.5",
+            "hard": false,
+            "status": "pass",
+            "threshold": "ledgers reconcile exactly; every exclusion carries a known reason code",
+            "title": "No silent exclusion",
+            "value": 0
+          },
+          {
+            "evidence": "data layer: only the 09:15-15:29 continuous session is kept; bars outside it, including any closing-auction prints, are dropped by the loader. Whether a feature or strategy reads bars from 15:15 onward is a property of its code (features/session.py), not checked per run",
+            "gate": "G0.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: intraday level profiles use continuous-market bars only, stamped before 15:15",
+            "title": "Closing auction handled",
+            "value": null
+          },
+          {
+            "evidence": "pytest --cov",
+            "gate": "G0.7",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Test quality",
+            "value": null
+          },
+          {
+            "evidence": "policy: intraday: sessions whose open versus previous close ratio lies outside 0.75 to 1.33 are excluded as probable splits; daily: back-adjusted for detected splits; dividends, bonuses and rights issues are NOT detected. This run excluded 0 symbol-sessions across 0 symbols as probable splits. Limits: the 0.75 to 1.33 test cannot see dividends, bonuses or rights, and ex-date handling is not verified, so this gate does not pass",
+            "gate": "G0.8",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: split and bonus sessions excluded or adjusted; ex-date handling verified",
+            "title": "Corporate actions",
+            "value": 0
+          }
+        ]
+      },
+      {
+        "name": "deployment",
+        "rows": [
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.1",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Session and square-off",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.2",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Daily eligibility",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.3",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Circuits",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.4",
+            "hard": true,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Tick size",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.5",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Gap-through stops",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.6",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "SEBI retail algo framework",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.7",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Charges current",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.8",
+            "hard": false,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Closing auction awareness",
+            "value": null
+          },
+          {
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply",
+            "gate": "G6.9",
+            "hard": true,
+            "status": "not_applicable",
+            "threshold": "intraday MIS rules",
+            "title": "Backtest respects the square-off",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Paper incubation duration",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Signal parity",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Execution quality",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Paper tracking",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G7.5",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Capital ramp",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Kill switch",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Pre-trade controls",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Recovery",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Clock",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.5",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Broker sessions",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.6",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Audit trail",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.7",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Change control",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.8",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Alert escalation",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Decay watch",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Drawdown watch",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Re-validation",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Retirement",
+            "value": null
+          }
+        ]
+      }
+    ],
+    "horizon": "swing",
+    "summary": {
+      "counts": {
+        "fail": 3,
+        "not_applicable": 9,
+        "not_evaluated": 35,
+        "pass": 11,
+        "report": 10
+      },
+      "hard_failed": [
+        "G4.5",
+        "G2.2"
+      ]
+    },
+    "version": 1
+  },
+  "ledgers": {
+    "accepted": 4481,
+    "dropped": 0,
+    "excluded_by_reason": {
+      "DIRECTION_DISABLED": 360187,
+      "NOT_ELIGIBLE": 4320,
+      "POSITION_OPEN": 44061,
+      "WARMUP": 51912
+    },
+    "filled": 4481,
+    "fills": 8962,
+    "orders": 4481,
+    "problems": [],
+    "reconcile_problems": 0,
+    "signals": 4481,
+    "trades": 4481
+  },
+  "metrics": {
+    "breakeven_cost_bps": 74.3012,
+    "days": 497,
+    "gross_bps": 74.3012,
+    "hurdle_t": 2.253,
+    "max_dd_bps": 55711.9564,
+    "median_concurrent": 15.0,
+    "net_bps": 50.3012,
+    "peak_concurrent": 20,
+    "profit_factor": 1.227,
+    "r_defined": false,
+    "sharpe": 2.191,
+    "t_stat": 2.011,
+    "total_cost_bps": 107544.0002,
+    "trades": 4481,
+    "win_rate": 0.4238
+  },
+  "n_trials": 2,
+  "next_action": {
+    "action": "Compute the day-clustered t-statistic",
+    "gate": "G2.2",
+    "reason": "The edge must be statistically distinguishable from luck"
+  },
+  "notes": "Shipped default configuration on nse_fno_current-206-eligible-symbols. n_trials=2 from trials.yaml: 2 material configuration(s) and 0 external. Regime analysis not available: no published index dataset (NIFTY/VIX); no external source is used and the verdict is unaffected.",
+  "position_caps": [
+    {
+      "gross_bps": 51.1719,
+      "max_positions": 3,
+      "net_bps": 27.1719,
+      "sharpe": 0.616,
+      "t_stat": 0.537,
+      "taken_pct": 15.6,
+      "trades": 701,
+      "win_rate": 0.3951
+    },
+    {
+      "gross_bps": 56.472,
+      "max_positions": 5,
+      "net_bps": 32.472,
+      "sharpe": 0.893,
+      "t_stat": 0.904,
+      "taken_pct": 25.9,
+      "trades": 1159,
+      "win_rate": 0.3986
+    },
+    {
+      "gross_bps": 64.8542,
+      "max_positions": 10,
+      "net_bps": 40.8542,
+      "sharpe": 1.399,
+      "t_stat": 1.601,
+      "taken_pct": 51.0,
+      "trades": 2284,
+      "win_rate": 0.4208
+    }
+  ],
+  "promotion": {
+    "next_stage": null,
+    "stages": {
+      "backtest": {
+        "decision": "NOT_READY",
+        "gates": [
+          {
+            "gate": "G0.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G0.2",
+            "status": "PASS"
+          },
+          {
+            "gate": "G0.3",
+            "status": "PASS"
+          },
+          {
+            "gate": "G0.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G0.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G0.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G0.7",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G0.8",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G1.1",
+            "status": "PASS"
+          },
+          {
+            "gate": "G1.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G1.3",
+            "status": "PASS"
+          },
+          {
+            "gate": "G1.4",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G1.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G1.6",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G2.1",
+            "status": "PASS"
+          },
+          {
+            "gate": "G2.2",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G2.3",
+            "status": "PASS"
+          },
+          {
+            "gate": "G2.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G2.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G2.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G2.7",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G3.1",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G3.2",
+            "status": "PASS"
+          },
+          {
+            "gate": "G3.3",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G3.4",
+            "status": "PASS"
+          },
+          {
+            "gate": "G3.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G4.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G4.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G4.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G4.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G4.5",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G4.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G4.7",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G4.8",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.2",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G5.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G6.1",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.2",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.3",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.4",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.5",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.6",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.7",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.8",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "G6.9",
+            "status": "NOT_APPLICABLE"
+          },
+          {
+            "gate": "X.1",
+            "status": "REPORT"
+          },
+          {
+            "gate": "X.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "X.3",
+            "status": "NOT_RUN"
+          }
+        ],
+        "reasons": [
+          "gate G0.1 has not been run",
+          "gate G0.4 has not been run",
+          "gate G0.7 has not been run",
+          "gate G1.2 has not been run",
+          "gate G1.5 has not been run",
+          "gate G1.6 has not been run",
+          "gate G2.2 failed",
+          "gate G2.4 has not been run",
+          "gate G3.3 failed",
+          "gate G4.1 has not been run",
+          "gate G4.2 has not been run",
+          "gate G4.3 has not been run",
+          "gate G4.4 has not been run",
+          "gate G4.5 failed",
+          "gate G4.8 has not been run",
+          "gate G5.1 has not been run",
+          "gate G5.3 has not been run",
+          "gate G5.4 has not been run",
+          "gate G5.5 has not been run",
+          "gate X.2 has not been run",
+          "gate X.3 has not been run",
+          "engine readiness: Spec schema split: strategy intent vs resolved execution configuration vs deployment profile; field class and per-field provenance, Spec validation: entry, exit, direction, timeframe, holding period, stop, signal evaluation, order submission, fill model, indicator source, reference prices, portfolio scope, Assumption ledger with materiality and confirmation; intake states, Strategy versions: append-only `versions.yaml`, automatic and branch labels, current and promoted pointers, rules, parameters and strategy fingerprints, Point-in-time universe membership and per-date eligibility, Direction validation (no shorts in swing or positional), Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat), Deployment profile: MIS force-flat 15:00, CNC carry-forward, Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version, Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade), Run manifest and run folder layout; immutable artifacts retained and addressable, Per-component cost decomposition per trade, Validity vs performance failure handling in the gate runner, Trial counting under the acceptance-criteria definition"
+        ]
+      },
+      "live": {
+        "decision": "BLOCKED",
+        "gates": [
+          {
+            "gate": "G9.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.4",
+            "status": "NOT_RUN"
+          }
+        ],
+        "reasons": [
+          "the backtest stage is not ready"
+        ]
+      },
+      "paper": {
+        "decision": "BLOCKED",
+        "gates": [
+          {
+            "gate": "G7.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.6",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.7",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.8",
+            "status": "NOT_RUN"
+          }
+        ],
+        "reasons": [
+          "the backtest stage is not ready"
+        ]
+      }
+    }
+  },
+  "run_status": "VALID",
+  "schema": 4,
+  "series": {
+    "drawdown_bps": [
+      [
+        "2017-01-09",
+        0.0
+      ],
+      [
+        "2017-01-16",
+        0.0
+      ],
+      [
+        "2017-01-23",
+        0.0
+      ],
+      [
+        "2017-01-30",
+        -151.5591
+      ],
+      [
+        "2017-02-06",
+        0.0
+      ],
+      [
+        "2017-02-13",
+        -1139.9901
+      ],
+      [
+        "2017-02-20",
+        -732.1508
+      ],
+      [
+        "2017-02-27",
+        -2058.1333
+      ],
+      [
+        "2017-03-06",
+        -3438.9663
+      ],
+      [
+        "2017-03-14",
+        -2229.4228
+      ],
+      [
+        "2017-03-20",
+        0.0
+      ],
+      [
+        "2017-03-27",
+        -2450.9828
+      ],
+      [
+        "2017-04-03",
+        -2897.7913
+      ],
+      [
+        "2017-04-10",
+        0.0
+      ],
+      [
+        "2017-04-17",
+        0.0
+      ],
+      [
+        "2017-04-24",
+        0.0
+      ],
+      [
+        "2017-05-02",
+        0.0
+      ],
+      [
+        "2017-05-08",
+        -840.0029
+      ],
+      [
+        "2017-05-15",
+        -2662.791
+      ],
+      [
+        "2017-05-22",
+        -4132.2034
+      ],
+      [
+        "2017-05-29",
+        -4929.0815
+      ],
+      [
+        "2017-06-05",
+        -1145.1713
+      ],
+      [
+        "2017-06-12",
+        -1362.867
+      ],
+      [
+        "2017-06-19",
+        -4414.9468
+      ],
+      [
+        "2017-06-27",
+        -246.2055
+      ],
+      [
+        "2017-07-03",
+        0.0
+      ],
+      [
+        "2017-07-10",
+        0.0
+      ],
+      [
+        "2017-07-17",
+        0.0
+      ],
+      [
+        "2017-07-24",
+        -60.2528
+      ],
+      [
+        "2017-07-31",
+        -1373.5728
+      ],
+      [
+        "2017-08-07",
+        -2334.8774
+      ],
+      [
+        "2017-08-14",
+        0.0
+      ],
+      [
+        "2017-08-21",
+        0.0
+      ],
+      [
+        "2017-08-28",
+        0.0
+      ],
+      [
+        "2017-09-04",
+        0.0
+      ],
+      [
+        "2017-09-11",
+        -1035.851
+      ],
+      [
+        "2017-09-18",
+        -7010.4548
+      ],
+      [
+        "2017-09-25",
+        -6652.1008
+      ],
+      [
+        "2017-10-03",
+        -5517.8453
+      ],
+      [
+        "2017-10-09",
+        -4539.0672
+      ],
+      [
+        "2017-10-16",
+        -1467.8273
+      ],
+      [
+        "2017-10-23",
+        -432.7856
+      ],
+      [
+        "2017-10-30",
+        -1452.4369
+      ],
+      [
+        "2017-11-06",
+        -1162.6298
+      ],
+      [
+        "2017-11-13",
+        -2298.0206
+      ],
+      [
+        "2017-11-20",
+        0.0
+      ],
+      [
+        "2017-11-27",
+        -1862.2032
+      ],
+      [
+        "2017-12-04",
+        -2678.3251
+      ],
+      [
+        "2017-12-11",
+        -1989.3026
+      ],
+      [
+        "2017-12-18",
+        -551.5387
+      ],
+      [
+        "2017-12-26",
+        0.0
+      ],
+      [
+        "2018-01-01",
+        0.0
+      ],
+      [
+        "2018-01-08",
+        0.0
+      ],
+      [
+        "2018-01-15",
+        -4191.3691
+      ],
+      [
+        "2018-01-22",
+        -6596.1654
+      ],
+      [
+        "2018-01-29",
+        -13682.9275
+      ],
+      [
+        "2018-02-05",
+        -15241.6501
+      ],
+      [
+        "2018-02-12",
+        -15366.968
+      ],
+      [
+        "2018-02-19",
+        -10335.196
+      ],
+      [
+        "2018-02-26",
+        -12187.7935
+      ],
+      [
+        "2018-03-05",
+        -13597.973
+      ],
+      [
+        "2018-03-12",
+        -15613.7223
+      ],
+      [
+        "2018-03-19",
+        -14718.9555
+      ],
+      [
+        "2018-03-26",
+        -11056.8993
+      ],
+      [
+        "2018-04-02",
+        -6424.7024
+      ],
+      [
+        "2018-04-09",
+        -5969.1552
+      ],
+      [
+        "2018-04-16",
+        -1727.0984
+      ],
+      [
+        "2018-04-23",
+        -3876.9858
+      ],
+      [
+        "2018-04-30",
+        -4917.3259
+      ],
+      [
+        "2018-05-07",
+        -3619.1615
+      ],
+      [
+        "2018-05-14",
+        -4368.8289
+      ],
+      [
+        "2018-05-21",
+        -4762.2042
+      ],
+      [
+        "2018-05-28",
+        -2717.809
+      ],
+      [
+        "2018-06-04",
+        -4364.2656
+      ],
+      [
+        "2018-06-11",
+        -3201.035
+      ],
+      [
+        "2018-06-18",
+        -3375.2677
+      ],
+      [
+        "2018-06-25",
+        -3662.1226
+      ],
+      [
+        "2018-07-02",
+        -1973.8516
+      ],
+      [
+        "2018-07-09",
+        -1302.2005
+      ],
+      [
+        "2018-07-16",
+        0.0
+      ],
+      [
+        "2018-07-23",
+        0.0
+      ],
+      [
+        "2018-07-30",
+        0.0
+      ],
+      [
+        "2018-08-06",
+        -2610.2373
+      ],
+      [
+        "2018-08-13",
+        0.0
+      ],
+      [
+        "2018-08-20",
+        -667.4778
+      ],
+      [
+        "2018-08-27",
+        -2538.6757
+      ],
+      [
+        "2018-09-03",
+        -8143.4136
+      ],
+      [
+        "2018-09-10",
+        -14126.5267
+      ],
+      [
+        "2018-09-17",
+        -16414.5718
+      ],
+      [
+        "2018-09-24",
+        -18954.5076
+      ],
+      [
+        "2018-10-01",
+        -21316.9857
+      ],
+      [
+        "2018-10-22",
+        -22457.7732
+      ],
+      [
+        "2018-10-29",
+        -23376.0814
+      ],
+      [
+        "2018-11-05",
+        -24688.7929
+      ],
+      [
+        "2018-11-12",
+        -25799.687
+      ],
+      [
+        "2018-11-19",
+        -26488.9962
+      ],
+      [
+        "2018-11-26",
+        -26851.1184
+      ],
+      [
+        "2018-12-03",
+        -29292.4894
+      ],
+      [
+        "2018-12-10",
+        -29149.9477
+      ],
+      [
+        "2018-12-17",
+        -29998.14
+      ],
+      [
+        "2018-12-24",
+        -30185.8518
+      ],
+      [
+        "2018-12-31",
+        -30545.1119
+      ],
+      [
+        "2019-01-07",
+        -31103.4067
+      ],
+      [
+        "2019-01-14",
+        -30251.2903
+      ],
+      [
+        "2019-01-21",
+        -31307.5304
+      ],
+      [
+        "2019-01-28",
+        -32289.9386
+      ],
+      [
+        "2019-02-04",
+        -28870.9948
+      ],
+      [
+        "2019-02-11",
+        -28809.9296
+      ],
+      [
+        "2019-02-18",
+        -26387.7062
+      ],
+      [
+        "2019-02-25",
+        -25466.101
+      ],
+      [
+        "2019-03-05",
+        -25705.4743
+      ],
+      [
+        "2019-03-11",
+        -22967.4164
+      ],
+      [
+        "2019-03-18",
+        -23322.8177
+      ],
+      [
+        "2019-03-25",
+        -22857.1022
+      ],
+      [
+        "2019-04-01",
+        -23893.6949
+      ],
+      [
+        "2019-04-08",
+        -25111.9168
+      ],
+      [
+        "2019-04-15",
+        -26606.0727
+      ],
+      [
+        "2019-04-22",
+        -26705.9798
+      ],
+      [
+        "2019-04-30",
+        -29057.1119
+      ],
+      [
+        "2019-05-06",
+        -28800.6462
+      ],
+      [
+        "2019-05-13",
+        -29445.4647
+      ],
+      [
+        "2019-05-20",
+        -25934.9007
+      ],
+      [
+        "2019-05-27",
+        -26305.3782
+      ],
+      [
+        "2019-06-03",
+        -28466.4199
+      ],
+      [
+        "2019-06-10",
+        -29058.5141
+      ],
+      [
+        "2019-06-17",
+        -30058.3161
+      ],
+      [
+        "2019-06-24",
+        -29020.8728
+      ],
+      [
+        "2019-07-01",
+        -33632.8052
+      ],
+      [
+        "2019-07-08",
+        -38060.7301
+      ],
+      [
+        "2019-07-15",
+        -41782.3623
+      ],
+      [
+        "2019-07-22",
+        -39211.0372
+      ],
+      [
+        "2019-07-29",
+        -38630.2911
+      ],
+      [
+        "2019-08-05",
+        -38346.0292
+      ],
+      [
+        "2019-08-13",
+        -37842.5447
+      ],
+      [
+        "2019-08-19",
+        -38266.8142
+      ],
+      [
+        "2019-08-26",
+        -37511.1548
+      ],
+      [
+        "2019-09-03",
+        -38529.0545
+      ],
+      [
+        "2019-09-09",
+        -38273.672
+      ],
+      [
+        "2019-09-16",
+        -35916.3562
+      ],
+      [
+        "2019-09-23",
+        -33261.9581
+      ],
+      [
+        "2019-09-30",
+        -36583.9313
+      ],
+      [
+        "2019-10-07",
+        -30943.7406
+      ],
+      [
+        "2019-10-14",
+        -25901.2472
+      ],
+      [
+        "2019-10-22",
+        -25014.9547
+      ],
+      [
+        "2019-10-29",
+        -24557.8053
+      ],
+      [
+        "2019-11-04",
+        -28612.1587
+      ],
+      [
+        "2019-11-11",
+        -26175.2315
+      ],
+      [
+        "2019-11-18",
+        -23460.7107
+      ],
+      [
+        "2019-11-25",
+        -24632.5947
+      ],
+      [
+        "2019-12-02",
+        -23701.5471
+      ],
+      [
+        "2019-12-09",
+        -23259.9418
+      ],
+      [
+        "2019-12-16",
+        -22403.1104
+      ],
+      [
+        "2019-12-23",
+        -21101.4557
+      ],
+      [
+        "2019-12-30",
+        -16761.0722
+      ],
+      [
+        "2020-01-06",
+        -12753.9922
+      ],
+      [
+        "2020-01-13",
+        -9072.0082
+      ],
+      [
+        "2020-01-20",
+        -10808.7218
+      ],
+      [
+        "2020-01-27",
+        -16066.5771
+      ],
+      [
+        "2020-02-03",
+        -12383.6088
+      ],
+      [
+        "2020-02-10",
+        -16406.1208
+      ],
+      [
+        "2020-02-17",
+        -20408.2158
+      ],
+      [
+        "2020-02-24",
+        -25419.8805
+      ],
+      [
+        "2020-03-02",
+        -29194.34
+      ],
+      [
+        "2020-03-09",
+        -34789.3679
+      ],
+      [
+        "2020-04-13",
+        -38139.8349
+      ],
+      [
+        "2020-04-20",
+        -38008.5926
+      ],
+      [
+        "2020-04-27",
+        -41907.3679
+      ],
+      [
+        "2020-05-04",
+        -42776.2283
+      ],
+      [
+        "2020-05-11",
+        -44574.2644
+      ],
+      [
+        "2020-05-18",
+        -38144.9947
+      ],
+      [
+        "2020-05-26",
+        -31399.1505
+      ],
+      [
+        "2020-06-01",
+        -29989.7061
+      ],
+      [
+        "2020-06-08",
+        -26788.2978
+      ],
+      [
+        "2020-06-22",
+        -28304.0068
+      ],
+      [
+        "2020-07-06",
+        -24221.2248
+      ],
+      [
+        "2020-07-13",
+        -13184.4613
+      ],
+      [
+        "2020-07-20",
+        -7373.856
+      ],
+      [
+        "2020-07-27",
+        -5674.8563
+      ],
+      [
+        "2020-08-03",
+        -3489.4069
+      ],
+      [
+        "2020-08-10",
+        0.0
+      ],
+      [
+        "2020-08-17",
+        0.0
+      ],
+      [
+        "2020-08-24",
+        0.0
+      ],
+      [
+        "2020-08-31",
+        0.0
+      ],
+      [
+        "2020-09-07",
+        0.0
+      ],
+      [
+        "2020-09-14",
+        0.0
+      ],
+      [
+        "2020-09-21",
+        -2045.4214
+      ],
+      [
+        "2020-09-28",
+        0.0
+      ],
+      [
+        "2020-10-05",
+        -745.3104
+      ],
+      [
+        "2020-10-12",
+        0.0
+      ],
+      [
+        "2020-10-19",
+        -1294.6574
+      ],
+      [
+        "2020-10-26",
+        -21.0019
+      ],
+      [
+        "2020-11-02",
+        0.0
+      ],
+      [
+        "2020-11-09",
+        0.0
+      ],
+      [
+        "2020-11-17",
+        0.0
+      ],
+      [
+        "2020-11-23",
+        0.0
+      ],
+      [
+        "2020-12-01",
+        0.0
+      ],
+      [
+        "2020-12-07",
+        -1019.9269
+      ],
+      [
+        "2020-12-14",
+        0.0
+      ],
+      [
+        "2020-12-21",
+        -1054.7753
+      ],
+      [
+        "2020-12-28",
+        0.0
+      ],
+      [
+        "2021-01-04",
+        0.0
+      ],
+      [
+        "2021-01-11",
+        -4674.7217
+      ],
+      [
+        "2021-01-18",
+        -8130.9429
+      ],
+      [
+        "2021-01-25",
+        -10504.6873
+      ],
+      [
+        "2021-02-01",
+        0.0
+      ],
+      [
+        "2021-02-08",
+        0.0
+      ],
+      [
+        "2021-02-15",
+        -733.7948
+      ],
+      [
+        "2021-02-22",
+        0.0
+      ],
+      [
+        "2021-03-01",
+        0.0
+      ],
+      [
+        "2021-03-08",
+        -1142.91
+      ],
+      [
+        "2021-03-15",
+        -3720.8992
+      ],
+      [
+        "2021-03-22",
+        0.0
+      ],
+      [
+        "2021-03-30",
+        0.0
+      ],
+      [
+        "2021-04-05",
+        0.0
+      ],
+      [
+        "2021-04-12",
+        -2810.1611
+      ],
+      [
+        "2021-04-19",
+        -408.7561
+      ],
+      [
+        "2021-04-26",
+        0.0
+      ],
+      [
+        "2021-05-03",
+        0.0
+      ],
+      [
+        "2021-05-10",
+        -3600.7966
+      ],
+      [
+        "2021-05-17",
+        -645.9159
+      ],
+      [
+        "2021-05-24",
+        -115.5532
+      ],
+      [
+        "2021-05-31",
+        0.0
+      ],
+      [
+        "2021-06-07",
+        0.0
+      ],
+      [
+        "2021-06-14",
+        -5195.0456
+      ],
+      [
+        "2021-06-21",
+        -920.3541
+      ],
+      [
+        "2021-06-28",
+        -654.0646
+      ],
+      [
+        "2021-07-05",
+        0.0
+      ],
+      [
+        "2021-07-12",
+        0.0
+      ],
+      [
+        "2021-07-19",
+        -208.8119
+      ],
+      [
+        "2021-07-26",
+        0.0
+      ],
+      [
+        "2021-08-02",
+        -721.603
+      ],
+      [
+        "2021-08-09",
+        0.0
+      ],
+      [
+        "2021-08-16",
+        0.0
+      ],
+      [
+        "2021-08-23",
+        0.0
+      ],
+      [
+        "2021-08-30",
+        0.0
+      ],
+      [
+        "2021-09-06",
+        -1826.5623
+      ],
+      [
+        "2021-09-13",
+        0.0
+      ],
+      [
+        "2021-09-20",
+        0.0
+      ],
+      [
+        "2021-09-27",
+        -591.5889
+      ],
+      [
+        "2021-10-04",
+        0.0
+      ],
+      [
+        "2021-10-11",
+        0.0
+      ],
+      [
+        "2021-10-18",
+        -9161.5077
+      ],
+      [
+        "2021-10-25",
+        -13876.0205
+      ],
+      [
+        "2021-11-01",
+        -12362.0567
+      ],
+      [
+        "2021-11-08",
+        -13600.9865
+      ],
+      [
+        "2021-11-15",
+        -18942.5381
+      ],
+      [
+        "2021-11-22",
+        -25006.9355
+      ],
+      [
+        "2021-11-29",
+        -25275.7998
+      ],
+      [
+        "2021-12-06",
+        -25073.8933
+      ],
+      [
+        "2021-12-13",
+        -28855.3882
+      ],
+      [
+        "2021-12-20",
+        -28591.9167
+      ],
+      [
+        "2021-12-27",
+        -23423.043
+      ],
+      [
+        "2022-01-03",
+        -23322.5691
+      ],
+      [
+        "2022-01-10",
+        -22952.3867
+      ],
+      [
+        "2022-01-17",
+        -27218.3095
+      ],
+      [
+        "2022-01-24",
+        -33017.8344
+      ],
+      [
+        "2022-01-31",
+        -34277.6818
+      ],
+      [
+        "2022-02-07",
+        -39111.4646
+      ],
+      [
+        "2022-02-14",
+        -40575.8619
+      ],
+      [
+        "2022-02-21",
+        -41518.4184
+      ],
+      [
+        "2022-02-28",
+        -41919.7769
+      ],
+      [
+        "2022-03-07",
+        -40948.7804
+      ],
+      [
+        "2022-03-14",
+        -35771.186
+      ],
+      [
+        "2022-03-21",
+        -34939.9215
+      ],
+      [
+        "2022-03-28",
+        -35341.7646
+      ],
+      [
+        "2022-04-04",
+        -35105.6254
+      ],
+      [
+        "2022-04-11",
+        -40615.2667
+      ],
+      [
+        "2022-04-18",
+        -42557.2767
+      ],
+      [
+        "2022-04-25",
+        -45563.0474
+      ],
+      [
+        "2022-05-02",
+        -52232.7113
+      ],
+      [
+        "2022-05-09",
+        -53887.5559
+      ],
+      [
+        "2022-05-16",
+        -53916.1055
+      ],
+      [
+        "2022-05-23",
+        -55711.9564
+      ],
+      [
+        "2022-05-30",
+        -50012.2957
+      ],
+      [
+        "2022-06-06",
+        -53432.8938
+      ],
+      [
+        "2022-06-13",
+        -54926.2488
+      ],
+      [
+        "2022-06-27",
+        -53620.0411
+      ],
+      [
+        "2022-07-04",
+        -51895.1111
+      ],
+      [
+        "2022-07-11",
+        -43925.1452
+      ],
+      [
+        "2022-07-18",
+        -41756.5253
+      ],
+      [
+        "2022-07-25",
+        -39735.8809
+      ],
+      [
+        "2022-08-01",
+        -40405.56
+      ],
+      [
+        "2022-08-08",
+        -38485.3745
+      ],
+      [
+        "2022-08-16",
+        -36885.9564
+      ],
+      [
+        "2022-08-22",
+        -37475.0078
+      ],
+      [
+        "2022-08-29",
+        -32260.613
+      ],
+      [
+        "2022-09-05",
+        -31934.2736
+      ],
+      [
+        "2022-09-12",
+        -35176.213
+      ],
+      [
+        "2022-09-19",
+        -34296.5675
+      ],
+      [
+        "2022-09-26",
+        -32947.7821
+      ],
+      [
+        "2022-10-03",
+        -33389.1223
+      ],
+      [
+        "2022-10-10",
+        -32940.5002
+      ],
+      [
+        "2022-10-17",
+        -28418.5687
+      ],
+      [
+        "2022-10-24",
+        -27337.8641
+      ],
+      [
+        "2022-10-31",
+        -24061.5895
+      ],
+      [
+        "2022-11-07",
+        -18341.168
+      ],
+      [
+        "2022-11-14",
+        -17181.6741
+      ],
+      [
+        "2022-11-21",
+        -9046.1723
+      ],
+      [
+        "2022-11-28",
+        -6822.3826
+      ],
+      [
+        "2022-12-05",
+        -8907.4926
+      ],
+      [
+        "2022-12-12",
+        -14885.9909
+      ],
+      [
+        "2022-12-19",
+        -21104.5734
+      ],
+      [
+        "2022-12-26",
+        -21962.3628
+      ],
+      [
+        "2023-01-02",
+        -24201.383
+      ],
+      [
+        "2023-01-09",
+        -25571.8609
+      ],
+      [
+        "2023-01-16",
+        -25616.4056
+      ],
+      [
+        "2023-01-23",
+        -26442.8262
+      ],
+      [
+        "2023-01-30",
+        -24065.8169
+      ],
+      [
+        "2023-02-06",
+        -23305.0711
+      ],
+      [
+        "2023-02-13",
+        -23147.1543
+      ],
+      [
+        "2023-02-20",
+        -25211.6895
+      ],
+      [
+        "2023-02-27",
+        -25317.9411
+      ],
+      [
+        "2023-03-06",
+        -26696.5072
+      ],
+      [
+        "2023-03-13",
+        -29188.8269
+      ],
+      [
+        "2023-03-20",
+        -31270.8529
+      ],
+      [
+        "2023-03-27",
+        -28629.9338
+      ],
+      [
+        "2023-04-03",
+        -26005.6527
+      ],
+      [
+        "2023-04-10",
+        -25836.8873
+      ],
+      [
+        "2023-04-17",
+        -25802.0355
+      ],
+      [
+        "2023-04-24",
+        -15792.4626
+      ],
+      [
+        "2023-05-02",
+        -12915.4334
+      ],
+      [
+        "2023-05-08",
+        -10145.3994
+      ],
+      [
+        "2023-05-15",
+        -9223.5498
+      ],
+      [
+        "2023-05-22",
+        -6986.5126
+      ],
+      [
+        "2023-05-29",
+        -6122.6586
+      ],
+      [
+        "2023-06-05",
+        -2804.1788
+      ],
+      [
+        "2023-06-12",
+        0.0
+      ],
+      [
+        "2023-06-19",
+        -1938.741
+      ],
+      [
+        "2023-06-26",
+        0.0
+      ],
+      [
+        "2023-07-03",
+        0.0
+      ],
+      [
+        "2023-07-10",
+        0.0
+      ],
+      [
+        "2023-07-17",
+        0.0
+      ],
+      [
+        "2023-07-24",
+        0.0
+      ],
+      [
+        "2023-07-31",
+        -2850.4402
+      ],
+      [
+        "2023-08-07",
+        -6012.9978
+      ],
+      [
+        "2023-08-14",
+        -4581.0242
+      ],
+      [
+        "2023-08-21",
+        -5424.2311
+      ],
+      [
+        "2023-08-28",
+        -2308.6019
+      ],
+      [
+        "2023-09-04",
+        0.0
+      ],
+      [
+        "2023-09-11",
+        -4353.6456
+      ],
+      [
+        "2023-09-18",
+        -8574.6711
+      ],
+      [
+        "2023-09-25",
+        -9414.9
+      ],
+      [
+        "2023-10-03",
+        -12817.7932
+      ],
+      [
+        "2023-10-09",
+        -4363.1949
+      ],
+      [
+        "2023-10-16",
+        -7533.5431
+      ],
+      [
+        "2023-10-23",
+        -4419.1161
+      ],
+      [
+        "2023-10-30",
+        0.0
+      ],
+      [
+        "2023-11-06",
+        0.0
+      ],
+      [
+        "2023-11-13",
+        0.0
+      ],
+      [
+        "2023-11-20",
+        0.0
+      ],
+      [
+        "2023-11-28",
+        0.0
+      ],
+      [
+        "2023-12-04",
+        0.0
+      ],
+      [
+        "2023-12-11",
+        0.0
+      ],
+      [
+        "2023-12-18",
+        0.0
+      ],
+      [
+        "2023-12-26",
+        0.0
+      ],
+      [
+        "2024-01-01",
+        0.0
+      ],
+      [
+        "2024-01-08",
+        0.0
+      ],
+      [
+        "2024-01-15",
+        0.0
+      ],
+      [
+        "2024-01-23",
+        0.0
+      ],
+      [
+        "2024-01-29",
+        0.0
+      ],
+      [
+        "2024-02-05",
+        0.0
+      ],
+      [
+        "2024-02-12",
+        0.0
+      ],
+      [
+        "2024-02-19",
+        -2812.9193
+      ],
+      [
+        "2024-02-26",
+        -5207.5468
+      ],
+      [
+        "2024-03-04",
+        -7715.049
+      ],
+      [
+        "2024-03-11",
+        -11632.9276
+      ],
+      [
+        "2024-03-18",
+        -9981.6483
+      ],
+      [
+        "2024-03-26",
+        -5150.289
+      ],
+      [
+        "2024-04-01",
+        -4794.1081
+      ],
+      [
+        "2024-04-08",
+        -1528.4542
+      ],
+      [
+        "2024-04-15",
+        -1767.9222
+      ],
+      [
+        "2024-04-22",
+        0.0
+      ],
+      [
+        "2024-04-29",
+        0.0
+      ],
+      [
+        "2024-05-06",
+        0.0
+      ],
+      [
+        "2024-05-13",
+        0.0
+      ],
+      [
+        "2024-05-21",
+        0.0
+      ],
+      [
+        "2024-05-27",
+        0.0
+      ],
+      [
+        "2024-06-03",
+        -7511.9025
+      ],
+      [
+        "2024-06-10",
+        -5739.1946
+      ],
+      [
+        "2024-06-18",
+        -7070.3173
+      ],
+      [
+        "2024-06-24",
+        -3123.7548
+      ],
+      [
+        "2024-07-01",
+        -2951.5161
+      ],
+      [
+        "2024-07-08",
+        -2242.071
+      ],
+      [
+        "2024-07-15",
+        -6832.1377
+      ],
+      [
+        "2024-07-22",
+        -5885.9029
+      ],
+      [
+        "2024-07-29",
+        -5166.3773
+      ],
+      [
+        "2024-08-05",
+        -4416.915
+      ],
+      [
+        "2024-08-12",
+        0.0
+      ],
+      [
+        "2024-08-19",
+        0.0
+      ],
+      [
+        "2024-08-26",
+        0.0
+      ],
+      [
+        "2024-09-02",
+        -1158.1528
+      ],
+      [
+        "2024-09-09",
+        0.0
+      ],
+      [
+        "2024-09-16",
+        -2132.654
+      ],
+      [
+        "2024-09-23",
+        -8106.3441
+      ],
+      [
+        "2024-09-30",
+        -14234.4286
+      ],
+      [
+        "2024-10-07",
+        -12050.5284
+      ],
+      [
+        "2024-10-14",
+        -15275.2598
+      ],
+      [
+        "2024-10-21",
+        -19275.6395
+      ],
+      [
+        "2024-10-28",
+        -17786.4187
+      ],
+      [
+        "2024-11-04",
+        -18229.9307
+      ],
+      [
+        "2024-11-11",
+        -19972.8063
+      ],
+      [
+        "2024-11-18",
+        -20990.9614
+      ],
+      [
+        "2024-11-25",
+        -17585.5864
+      ],
+      [
+        "2024-12-02",
+        -14535.1747
+      ],
+      [
+        "2024-12-09",
+        -15859.8721
+      ],
+      [
+        "2024-12-16",
+        -19243.2288
+      ],
+      [
+        "2024-12-23",
+        -21260.5268
+      ],
+      [
+        "2024-12-30",
+        -23707.5791
+      ],
+      [
+        "2025-01-06",
+        -33844.8657
+      ],
+      [
+        "2025-01-13",
+        -35054.9468
+      ],
+      [
+        "2025-01-20",
+        -37187.9531
+      ],
+      [
+        "2025-01-27",
+        -38429.1959
+      ],
+      [
+        "2025-02-03",
+        -40108.9111
+      ],
+      [
+        "2025-02-10",
+        -43053.1291
+      ],
+      [
+        "2025-02-17",
+        -43960.1226
+      ],
+      [
+        "2025-02-24",
+        -45815.981
+      ],
+      [
+        "2025-03-10",
+        -48176.5519
+      ],
+      [
+        "2025-03-24",
+        -52422.2242
+      ],
+      [
+        "2025-04-01",
+        -51410.7001
+      ],
+      [
+        "2025-04-07",
+        -50603.9309
+      ],
+      [
+        "2025-04-15",
+        -51181.6405
+      ],
+      [
+        "2025-04-21",
+        -48041.1696
+      ],
+      [
+        "2025-04-28",
+        -44962.5814
+      ],
+      [
+        "2025-05-05",
+        -45730.2076
+      ],
+      [
+        "2025-05-12",
+        -43568.5049
+      ],
+      [
+        "2025-05-19",
+        -44682.2605
+      ],
+      [
+        "2025-05-26",
+        -44733.7911
+      ],
+      [
+        "2025-06-02",
+        -42306.9228
+      ],
+      [
+        "2025-06-09",
+        -39410.7259
+      ],
+      [
+        "2025-06-16",
+        -38799.422
+      ],
+      [
+        "2025-06-23",
+        -37605.2878
+      ],
+      [
+        "2025-06-30",
+        -39923.8671
+      ],
+      [
+        "2025-07-07",
+        -42342.6204
+      ],
+      [
+        "2025-07-14",
+        -43044.995
+      ],
+      [
+        "2025-07-21",
+        -40493.9789
+      ],
+      [
+        "2025-07-28",
+        -41459.9517
+      ],
+      [
+        "2025-08-04",
+        -40048.5408
+      ],
+      [
+        "2025-08-11",
+        -34386.8145
+      ],
+      [
+        "2025-08-18",
+        -34440.2767
+      ],
+      [
+        "2025-08-25",
+        -34649.4025
+      ],
+      [
+        "2025-09-01",
+        -34983.7668
+      ],
+      [
+        "2025-09-08",
+        -33871.1438
+      ],
+      [
+        "2025-09-15",
+        -35004.7707
+      ],
+      [
+        "2025-09-22",
+        -34964.8344
+      ],
+      [
+        "2025-09-29",
+        -31616.5924
+      ],
+      [
+        "2025-10-06",
+        -31708.3352
+      ],
+      [
+        "2025-10-13",
+        -32870.7172
+      ],
+      [
+        "2025-10-20",
+        -34324.4069
+      ],
+      [
+        "2025-10-27",
+        -31111.8906
+      ],
+      [
+        "2025-11-03",
+        -30202.6322
+      ],
+      [
+        "2025-11-10",
+        -31077.2748
+      ],
+      [
+        "2025-11-17",
+        -33936.6149
+      ],
+      [
+        "2025-11-24",
+        -33605.8524
+      ],
+      [
+        "2025-12-01",
+        -35884.4459
+      ],
+      [
+        "2025-12-08",
+        -34471.3542
+      ],
+      [
+        "2025-12-15",
+        -33084.4888
+      ],
+      [
+        "2025-12-22",
+        -32069.5348
+      ],
+      [
+        "2025-12-29",
+        -32126.2396
+      ],
+      [
+        "2026-01-05",
+        -36266.4798
+      ],
+      [
+        "2026-01-12",
+        -35959.7443
+      ],
+      [
+        "2026-01-19",
+        -38392.8661
+      ],
+      [
+        "2026-01-27",
+        -40646.0423
+      ],
+      [
+        "2026-02-02",
+        -39190.5175
+      ],
+      [
+        "2026-02-09",
+        -39432.1421
+      ],
+      [
+        "2026-02-16",
+        -39615.4373
+      ],
+      [
+        "2026-02-23",
+        -44288.2079
+      ],
+      [
+        "2026-03-02",
+        -50825.0785
+      ],
+      [
+        "2026-03-09",
+        -51166.9093
+      ],
+      [
+        "2026-03-16",
+        -52011.7499
+      ],
+      [
+        "2026-03-23",
+        -46952.2194
+      ],
+      [
+        "2026-03-30",
+        -46932.0108
+      ],
+      [
+        "2026-04-06",
+        -47274.2834
+      ],
+      [
+        "2026-04-13",
+        -32639.8089
+      ],
+      [
+        "2026-04-20",
+        -30410.0622
+      ],
+      [
+        "2026-04-27",
+        -31834.6525
+      ],
+      [
+        "2026-05-04",
+        -31982.8558
+      ],
+      [
+        "2026-05-11",
+        -31683.0352
+      ],
+      [
+        "2026-05-18",
+        -29490.145
+      ],
+      [
+        "2026-05-25",
+        -30582.5517
+      ],
+      [
+        "2026-06-01",
+        -33868.9271
+      ],
+      [
+        "2026-06-08",
+        -33546.3509
+      ],
+      [
+        "2026-06-15",
+        -30889.1254
+      ],
+      [
+        "2026-06-22",
+        -29011.2038
+      ],
+      [
+        "2026-06-29",
+        -30049.0807
+      ],
+      [
+        "2026-07-06",
+        -29360.1151
+      ],
+      [
+        "2026-07-13",
+        -29941.8095
+      ],
+      [
+        "2026-07-20",
+        -31221.894
+      ],
+      [
+        "2026-07-27",
+        -29457.2011
+      ],
+      [
+        "2026-08-03",
+        -29447.3362
+      ],
+      [
+        "2026-08-10",
+        -28806.7367
+      ],
+      [
+        "2026-08-17",
+        -30295.7186
+      ],
+      [
+        "2026-08-24",
+        -31875.2967
+      ],
+      [
+        "2026-08-31",
+        -37265.876
+      ],
+      [
+        "2026-09-07",
+        -39583.9586
+      ],
+      [
+        "2026-09-15",
+        -43188.8617
+      ],
+      [
+        "2026-09-21",
+        -45348.3925
+      ],
+      [
+        "2026-09-28",
+        -48561.4755
+      ]
+    ],
+    "equity_bps": [
+      [
+        "2017-01-09",
+        6443.5693
+      ],
+      [
+        "2017-01-16",
+        6831.0284
+      ],
+      [
+        "2017-01-23",
+        9780.5558
+      ],
+      [
+        "2017-01-30",
+        9628.9966
+      ],
+      [
+        "2017-02-06",
+        10401.503
+      ],
+      [
+        "2017-02-13",
+        9261.513
+      ],
+      [
+        "2017-02-20",
+        9669.3522
+      ],
+      [
+        "2017-02-27",
+        8343.3698
+      ],
+      [
+        "2017-03-06",
+        6962.5367
+      ],
+      [
+        "2017-03-14",
+        8172.0803
+      ],
+      [
+        "2017-03-20",
+        11234.2737
+      ],
+      [
+        "2017-03-27",
+        8783.2909
+      ],
+      [
+        "2017-04-03",
+        8336.4823
+      ],
+      [
+        "2017-04-10",
+        12923.1609
+      ],
+      [
+        "2017-04-17",
+        17225.5046
+      ],
+      [
+        "2017-04-24",
+        17658.5249
+      ],
+      [
+        "2017-05-02",
+        17747.9679
+      ],
+      [
+        "2017-05-08",
+        16907.965
+      ],
+      [
+        "2017-05-15",
+        15085.1769
+      ],
+      [
+        "2017-05-22",
+        13615.7645
+      ],
+      [
+        "2017-05-29",
+        12818.8864
+      ],
+      [
+        "2017-06-05",
+        16602.7966
+      ],
+      [
+        "2017-06-12",
+        16385.1009
+      ],
+      [
+        "2017-06-19",
+        13333.0211
+      ],
+      [
+        "2017-06-27",
+        17501.7624
+      ],
+      [
+        "2017-07-03",
+        19086.7922
+      ],
+      [
+        "2017-07-10",
+        19498.9532
+      ],
+      [
+        "2017-07-17",
+        20010.1378
+      ],
+      [
+        "2017-07-24",
+        19949.8849
+      ],
+      [
+        "2017-07-31",
+        18636.5649
+      ],
+      [
+        "2017-08-07",
+        17675.2604
+      ],
+      [
+        "2017-08-14",
+        20054.8871
+      ],
+      [
+        "2017-08-21",
+        20761.9599
+      ],
+      [
+        "2017-08-28",
+        22856.7091
+      ],
+      [
+        "2017-09-04",
+        24900.7831
+      ],
+      [
+        "2017-09-11",
+        23864.9321
+      ],
+      [
+        "2017-09-18",
+        17890.3283
+      ],
+      [
+        "2017-09-25",
+        18248.6823
+      ],
+      [
+        "2017-10-03",
+        19382.9378
+      ],
+      [
+        "2017-10-09",
+        20361.7159
+      ],
+      [
+        "2017-10-16",
+        23432.9558
+      ],
+      [
+        "2017-10-23",
+        24467.9976
+      ],
+      [
+        "2017-10-30",
+        23448.3462
+      ],
+      [
+        "2017-11-06",
+        23738.1533
+      ],
+      [
+        "2017-11-13",
+        22602.7625
+      ],
+      [
+        "2017-11-20",
+        25543.0229
+      ],
+      [
+        "2017-11-27",
+        23680.8198
+      ],
+      [
+        "2017-12-04",
+        22864.6978
+      ],
+      [
+        "2017-12-11",
+        23553.7203
+      ],
+      [
+        "2017-12-18",
+        24991.4843
+      ],
+      [
+        "2017-12-26",
+        30212.2612
+      ],
+      [
+        "2018-01-01",
+        30858.6044
+      ],
+      [
+        "2018-01-08",
+        30961.1136
+      ],
+      [
+        "2018-01-15",
+        26769.7445
+      ],
+      [
+        "2018-01-22",
+        24364.9482
+      ],
+      [
+        "2018-01-29",
+        17278.1861
+      ],
+      [
+        "2018-02-05",
+        15719.4635
+      ],
+      [
+        "2018-02-12",
+        15594.1456
+      ],
+      [
+        "2018-02-19",
+        20625.9176
+      ],
+      [
+        "2018-02-26",
+        18773.3202
+      ],
+      [
+        "2018-03-05",
+        17363.1406
+      ],
+      [
+        "2018-03-12",
+        15347.3914
+      ],
+      [
+        "2018-03-19",
+        16242.1581
+      ],
+      [
+        "2018-03-26",
+        19904.2143
+      ],
+      [
+        "2018-04-02",
+        24536.4112
+      ],
+      [
+        "2018-04-09",
+        24991.9585
+      ],
+      [
+        "2018-04-16",
+        29234.0152
+      ],
+      [
+        "2018-04-23",
+        27084.1279
+      ],
+      [
+        "2018-04-30",
+        26043.7877
+      ],
+      [
+        "2018-05-07",
+        27341.9521
+      ],
+      [
+        "2018-05-14",
+        26592.2847
+      ],
+      [
+        "2018-05-21",
+        26198.9094
+      ],
+      [
+        "2018-05-28",
+        28243.3046
+      ],
+      [
+        "2018-06-04",
+        26596.848
+      ],
+      [
+        "2018-06-11",
+        27760.0786
+      ],
+      [
+        "2018-06-18",
+        27585.8459
+      ],
+      [
+        "2018-06-25",
+        27298.991
+      ],
+      [
+        "2018-07-02",
+        28987.2621
+      ],
+      [
+        "2018-07-09",
+        29658.9132
+      ],
+      [
+        "2018-07-16",
+        31162.8117
+      ],
+      [
+        "2018-07-23",
+        34065.2935
+      ],
+      [
+        "2018-07-30",
+        38307.2973
+      ],
+      [
+        "2018-08-06",
+        35697.06
+      ],
+      [
+        "2018-08-13",
+        38804.3543
+      ],
+      [
+        "2018-08-20",
+        38136.8765
+      ],
+      [
+        "2018-08-27",
+        36265.6786
+      ],
+      [
+        "2018-09-03",
+        30660.9407
+      ],
+      [
+        "2018-09-10",
+        24677.8276
+      ],
+      [
+        "2018-09-17",
+        22389.7826
+      ],
+      [
+        "2018-09-24",
+        19849.8468
+      ],
+      [
+        "2018-10-01",
+        17487.3686
+      ],
+      [
+        "2018-10-22",
+        16346.5811
+      ],
+      [
+        "2018-10-29",
+        15428.2729
+      ],
+      [
+        "2018-11-05",
+        14115.5614
+      ],
+      [
+        "2018-11-12",
+        13004.6673
+      ],
+      [
+        "2018-11-19",
+        12315.3582
+      ],
+      [
+        "2018-11-26",
+        11953.2359
+      ],
+      [
+        "2018-12-03",
+        9511.8649
+      ],
+      [
+        "2018-12-10",
+        9654.4066
+      ],
+      [
+        "2018-12-17",
+        8806.2143
+      ],
+      [
+        "2018-12-24",
+        8618.5025
+      ],
+      [
+        "2018-12-31",
+        8259.2424
+      ],
+      [
+        "2019-01-07",
+        7700.9476
+      ],
+      [
+        "2019-01-14",
+        8553.064
+      ],
+      [
+        "2019-01-21",
+        7496.824
+      ],
+      [
+        "2019-01-28",
+        6514.4157
+      ],
+      [
+        "2019-02-04",
+        9933.3595
+      ],
+      [
+        "2019-02-11",
+        9994.4247
+      ],
+      [
+        "2019-02-18",
+        12416.6481
+      ],
+      [
+        "2019-02-25",
+        13338.2533
+      ],
+      [
+        "2019-03-05",
+        13098.8801
+      ],
+      [
+        "2019-03-11",
+        15836.938
+      ],
+      [
+        "2019-03-18",
+        15481.5366
+      ],
+      [
+        "2019-03-25",
+        15947.2521
+      ],
+      [
+        "2019-04-01",
+        14910.6594
+      ],
+      [
+        "2019-04-08",
+        13692.4375
+      ],
+      [
+        "2019-04-15",
+        12198.2816
+      ],
+      [
+        "2019-04-22",
+        12098.3745
+      ],
+      [
+        "2019-04-30",
+        9747.2424
+      ],
+      [
+        "2019-05-06",
+        10003.7082
+      ],
+      [
+        "2019-05-13",
+        9358.8896
+      ],
+      [
+        "2019-05-20",
+        12869.4536
+      ],
+      [
+        "2019-05-27",
+        12498.9761
+      ],
+      [
+        "2019-06-03",
+        10337.9344
+      ],
+      [
+        "2019-06-10",
+        9745.8402
+      ],
+      [
+        "2019-06-17",
+        8746.0382
+      ],
+      [
+        "2019-06-24",
+        9783.4815
+      ],
+      [
+        "2019-07-01",
+        5171.5491
+      ],
+      [
+        "2019-07-08",
+        743.6243
+      ],
+      [
+        "2019-07-15",
+        -2978.008
+      ],
+      [
+        "2019-07-22",
+        -406.6829
+      ],
+      [
+        "2019-07-29",
+        174.0632
+      ],
+      [
+        "2019-08-05",
+        458.3251
+      ],
+      [
+        "2019-08-13",
+        961.8096
+      ],
+      [
+        "2019-08-19",
+        537.5402
+      ],
+      [
+        "2019-08-26",
+        1293.1995
+      ],
+      [
+        "2019-09-03",
+        275.2998
+      ],
+      [
+        "2019-09-09",
+        530.6823
+      ],
+      [
+        "2019-09-16",
+        2887.9981
+      ],
+      [
+        "2019-09-23",
+        5542.3962
+      ],
+      [
+        "2019-09-30",
+        2220.423
+      ],
+      [
+        "2019-10-07",
+        7860.6138
+      ],
+      [
+        "2019-10-14",
+        12903.1071
+      ],
+      [
+        "2019-10-22",
+        13789.3996
+      ],
+      [
+        "2019-10-29",
+        14246.5491
+      ],
+      [
+        "2019-11-04",
+        10192.1956
+      ],
+      [
+        "2019-11-11",
+        12629.1229
+      ],
+      [
+        "2019-11-18",
+        15343.6436
+      ],
+      [
+        "2019-11-25",
+        14171.7596
+      ],
+      [
+        "2019-12-02",
+        15102.8072
+      ],
+      [
+        "2019-12-09",
+        15544.4126
+      ],
+      [
+        "2019-12-16",
+        16401.2439
+      ],
+      [
+        "2019-12-23",
+        17702.8986
+      ],
+      [
+        "2019-12-30",
+        22043.2821
+      ],
+      [
+        "2020-01-06",
+        26050.3622
+      ],
+      [
+        "2020-01-13",
+        29732.3462
+      ],
+      [
+        "2020-01-20",
+        27995.6325
+      ],
+      [
+        "2020-01-27",
+        22737.7772
+      ],
+      [
+        "2020-02-03",
+        26420.7455
+      ],
+      [
+        "2020-02-10",
+        22398.2335
+      ],
+      [
+        "2020-02-17",
+        18396.1385
+      ],
+      [
+        "2020-02-24",
+        13384.4739
+      ],
+      [
+        "2020-03-02",
+        9610.0143
+      ],
+      [
+        "2020-03-09",
+        4014.9864
+      ],
+      [
+        "2020-04-13",
+        664.5194
+      ],
+      [
+        "2020-04-20",
+        795.7617
+      ],
+      [
+        "2020-04-27",
+        -3103.0136
+      ],
+      [
+        "2020-05-04",
+        -3971.874
+      ],
+      [
+        "2020-05-11",
+        -5769.9101
+      ],
+      [
+        "2020-05-18",
+        659.3596
+      ],
+      [
+        "2020-05-26",
+        7405.2038
+      ],
+      [
+        "2020-06-01",
+        8814.6482
+      ],
+      [
+        "2020-06-08",
+        12016.0565
+      ],
+      [
+        "2020-06-22",
+        10500.3475
+      ],
+      [
+        "2020-07-06",
+        14583.1295
+      ],
+      [
+        "2020-07-13",
+        25619.893
+      ],
+      [
+        "2020-07-20",
+        31430.4983
+      ],
+      [
+        "2020-07-27",
+        33129.4981
+      ],
+      [
+        "2020-08-03",
+        35314.9474
+      ],
+      [
+        "2020-08-10",
+        39815.6553
+      ],
+      [
+        "2020-08-17",
+        41677.5394
+      ],
+      [
+        "2020-08-24",
+        44084.6699
+      ],
+      [
+        "2020-08-31",
+        46975.3444
+      ],
+      [
+        "2020-09-07",
+        48387.2201
+      ],
+      [
+        "2020-09-14",
+        49628.6197
+      ],
+      [
+        "2020-09-21",
+        47583.1983
+      ],
+      [
+        "2020-09-28",
+        49907.6722
+      ],
+      [
+        "2020-10-05",
+        49162.3618
+      ],
+      [
+        "2020-10-12",
+        53015.0152
+      ],
+      [
+        "2020-10-19",
+        51720.3579
+      ],
+      [
+        "2020-10-26",
+        52994.0133
+      ],
+      [
+        "2020-11-02",
+        60511.7239
+      ],
+      [
+        "2020-11-09",
+        61037.6186
+      ],
+      [
+        "2020-11-17",
+        65040.4057
+      ],
+      [
+        "2020-11-23",
+        65873.0763
+      ],
+      [
+        "2020-12-01",
+        69119.922
+      ],
+      [
+        "2020-12-07",
+        68099.995
+      ],
+      [
+        "2020-12-14",
+        71138.067
+      ],
+      [
+        "2020-12-21",
+        70083.2917
+      ],
+      [
+        "2020-12-28",
+        80125.4817
+      ],
+      [
+        "2021-01-04",
+        83636.2116
+      ],
+      [
+        "2021-01-11",
+        78961.4899
+      ],
+      [
+        "2021-01-18",
+        75505.2687
+      ],
+      [
+        "2021-01-25",
+        73131.5243
+      ],
+      [
+        "2021-02-01",
+        86274.9088
+      ],
+      [
+        "2021-02-08",
+        91248.7236
+      ],
+      [
+        "2021-02-15",
+        90514.9287
+      ],
+      [
+        "2021-02-22",
+        104955.8527
+      ],
+      [
+        "2021-03-01",
+        108191.1589
+      ],
+      [
+        "2021-03-08",
+        107048.2489
+      ],
+      [
+        "2021-03-15",
+        104470.2597
+      ],
+      [
+        "2021-03-22",
+        114478.3631
+      ],
+      [
+        "2021-03-30",
+        117816.9666
+      ],
+      [
+        "2021-04-05",
+        118227.7722
+      ],
+      [
+        "2021-04-12",
+        115417.6111
+      ],
+      [
+        "2021-04-19",
+        117819.0161
+      ],
+      [
+        "2021-04-26",
+        123568.7567
+      ],
+      [
+        "2021-05-03",
+        130922.685
+      ],
+      [
+        "2021-05-10",
+        127321.8885
+      ],
+      [
+        "2021-05-17",
+        130276.7691
+      ],
+      [
+        "2021-05-24",
+        130807.1318
+      ],
+      [
+        "2021-05-31",
+        135510.925
+      ],
+      [
+        "2021-06-07",
+        135620.2517
+      ],
+      [
+        "2021-06-14",
+        130425.2062
+      ],
+      [
+        "2021-06-21",
+        134699.8976
+      ],
+      [
+        "2021-06-28",
+        134966.1872
+      ],
+      [
+        "2021-07-05",
+        139355.1613
+      ],
+      [
+        "2021-07-12",
+        143297.0534
+      ],
+      [
+        "2021-07-19",
+        143088.2415
+      ],
+      [
+        "2021-07-26",
+        144693.1622
+      ],
+      [
+        "2021-08-02",
+        143971.5592
+      ],
+      [
+        "2021-08-09",
+        146128.9099
+      ],
+      [
+        "2021-08-16",
+        146520.7799
+      ],
+      [
+        "2021-08-23",
+        152443.6001
+      ],
+      [
+        "2021-08-30",
+        156145.2069
+      ],
+      [
+        "2021-09-06",
+        154318.6446
+      ],
+      [
+        "2021-09-13",
+        156734.7728
+      ],
+      [
+        "2021-09-20",
+        159588.0311
+      ],
+      [
+        "2021-09-27",
+        158996.4422
+      ],
+      [
+        "2021-10-04",
+        164491.1363
+      ],
+      [
+        "2021-10-11",
+        168226.9318
+      ],
+      [
+        "2021-10-18",
+        159065.4241
+      ],
+      [
+        "2021-10-25",
+        154350.9113
+      ],
+      [
+        "2021-11-01",
+        155864.8751
+      ],
+      [
+        "2021-11-08",
+        154625.9453
+      ],
+      [
+        "2021-11-15",
+        149284.3937
+      ],
+      [
+        "2021-11-22",
+        143219.9962
+      ],
+      [
+        "2021-11-29",
+        142951.1319
+      ],
+      [
+        "2021-12-06",
+        143153.0385
+      ],
+      [
+        "2021-12-13",
+        139371.5435
+      ],
+      [
+        "2021-12-20",
+        139635.0151
+      ],
+      [
+        "2021-12-27",
+        144803.8888
+      ],
+      [
+        "2022-01-03",
+        144904.3627
+      ],
+      [
+        "2022-01-10",
+        145274.5451
+      ],
+      [
+        "2022-01-17",
+        141008.6223
+      ],
+      [
+        "2022-01-24",
+        135209.0974
+      ],
+      [
+        "2022-01-31",
+        133949.2499
+      ],
+      [
+        "2022-02-07",
+        129115.4672
+      ],
+      [
+        "2022-02-14",
+        127651.0698
+      ],
+      [
+        "2022-02-21",
+        126708.5133
+      ],
+      [
+        "2022-02-28",
+        126307.1548
+      ],
+      [
+        "2022-03-07",
+        127278.1513
+      ],
+      [
+        "2022-03-14",
+        132455.7457
+      ],
+      [
+        "2022-03-21",
+        133287.0103
+      ],
+      [
+        "2022-03-28",
+        132885.1672
+      ],
+      [
+        "2022-04-04",
+        133121.3063
+      ],
+      [
+        "2022-04-11",
+        127611.6651
+      ],
+      [
+        "2022-04-18",
+        125669.655
+      ],
+      [
+        "2022-04-25",
+        122663.8844
+      ],
+      [
+        "2022-05-02",
+        115994.2205
+      ],
+      [
+        "2022-05-09",
+        114339.3759
+      ],
+      [
+        "2022-05-16",
+        114310.8263
+      ],
+      [
+        "2022-05-23",
+        112514.9754
+      ],
+      [
+        "2022-05-30",
+        118214.6361
+      ],
+      [
+        "2022-06-06",
+        114794.0379
+      ],
+      [
+        "2022-06-13",
+        113300.683
+      ],
+      [
+        "2022-06-27",
+        114606.8907
+      ],
+      [
+        "2022-07-04",
+        116331.8207
+      ],
+      [
+        "2022-07-11",
+        124301.7865
+      ],
+      [
+        "2022-07-18",
+        126470.4064
+      ],
+      [
+        "2022-07-25",
+        128491.0508
+      ],
+      [
+        "2022-08-01",
+        127821.3718
+      ],
+      [
+        "2022-08-08",
+        129741.5572
+      ],
+      [
+        "2022-08-16",
+        131340.9754
+      ],
+      [
+        "2022-08-22",
+        130751.924
+      ],
+      [
+        "2022-08-29",
+        135966.3188
+      ],
+      [
+        "2022-09-05",
+        136292.6581
+      ],
+      [
+        "2022-09-12",
+        133050.7188
+      ],
+      [
+        "2022-09-19",
+        133930.3642
+      ],
+      [
+        "2022-09-26",
+        135279.1496
+      ],
+      [
+        "2022-10-03",
+        134837.8094
+      ],
+      [
+        "2022-10-10",
+        135286.4315
+      ],
+      [
+        "2022-10-17",
+        139808.363
+      ],
+      [
+        "2022-10-24",
+        140889.0677
+      ],
+      [
+        "2022-10-31",
+        144165.3423
+      ],
+      [
+        "2022-11-07",
+        149885.7637
+      ],
+      [
+        "2022-11-14",
+        151045.2576
+      ],
+      [
+        "2022-11-21",
+        159180.7595
+      ],
+      [
+        "2022-11-28",
+        161404.5491
+      ],
+      [
+        "2022-12-05",
+        159319.4392
+      ],
+      [
+        "2022-12-12",
+        153340.9409
+      ],
+      [
+        "2022-12-19",
+        147122.3583
+      ],
+      [
+        "2022-12-26",
+        146264.5689
+      ],
+      [
+        "2023-01-02",
+        144025.5487
+      ],
+      [
+        "2023-01-09",
+        142655.0708
+      ],
+      [
+        "2023-01-16",
+        142610.5262
+      ],
+      [
+        "2023-01-23",
+        141784.1055
+      ],
+      [
+        "2023-01-30",
+        144161.1149
+      ],
+      [
+        "2023-02-06",
+        144921.8606
+      ],
+      [
+        "2023-02-13",
+        145079.7775
+      ],
+      [
+        "2023-02-20",
+        143015.2422
+      ],
+      [
+        "2023-02-27",
+        142908.9907
+      ],
+      [
+        "2023-03-06",
+        141530.4246
+      ],
+      [
+        "2023-03-13",
+        139038.1049
+      ],
+      [
+        "2023-03-20",
+        136956.0788
+      ],
+      [
+        "2023-03-27",
+        139596.9979
+      ],
+      [
+        "2023-04-03",
+        142221.2791
+      ],
+      [
+        "2023-04-10",
+        142390.0444
+      ],
+      [
+        "2023-04-17",
+        142424.8963
+      ],
+      [
+        "2023-04-24",
+        152434.4691
+      ],
+      [
+        "2023-05-02",
+        155311.4983
+      ],
+      [
+        "2023-05-08",
+        158081.5324
+      ],
+      [
+        "2023-05-15",
+        159003.382
+      ],
+      [
+        "2023-05-22",
+        161240.4192
+      ],
+      [
+        "2023-05-29",
+        162104.2732
+      ],
+      [
+        "2023-06-05",
+        165422.7529
+      ],
+      [
+        "2023-06-12",
+        168649.9175
+      ],
+      [
+        "2023-06-19",
+        166711.1765
+      ],
+      [
+        "2023-06-26",
+        169586.409
+      ],
+      [
+        "2023-07-03",
+        171223.9588
+      ],
+      [
+        "2023-07-10",
+        173470.6747
+      ],
+      [
+        "2023-07-17",
+        176074.6732
+      ],
+      [
+        "2023-07-24",
+        178228.8235
+      ],
+      [
+        "2023-07-31",
+        175378.3833
+      ],
+      [
+        "2023-08-07",
+        172215.8257
+      ],
+      [
+        "2023-08-14",
+        173647.7993
+      ],
+      [
+        "2023-08-21",
+        172804.5924
+      ],
+      [
+        "2023-08-28",
+        175920.2216
+      ],
+      [
+        "2023-09-04",
+        182584.2897
+      ],
+      [
+        "2023-09-11",
+        178230.6441
+      ],
+      [
+        "2023-09-18",
+        174009.6186
+      ],
+      [
+        "2023-09-25",
+        173169.3897
+      ],
+      [
+        "2023-10-03",
+        169766.4965
+      ],
+      [
+        "2023-10-09",
+        178221.0947
+      ],
+      [
+        "2023-10-16",
+        175050.7466
+      ],
+      [
+        "2023-10-23",
+        178165.1736
+      ],
+      [
+        "2023-10-30",
+        183825.5063
+      ],
+      [
+        "2023-11-06",
+        191962.9578
+      ],
+      [
+        "2023-11-13",
+        198761.2342
+      ],
+      [
+        "2023-11-20",
+        200069.7316
+      ],
+      [
+        "2023-11-28",
+        206934.4366
+      ],
+      [
+        "2023-12-04",
+        209760.8944
+      ],
+      [
+        "2023-12-11",
+        217160.626
+      ],
+      [
+        "2023-12-18",
+        217765.842
+      ],
+      [
+        "2023-12-26",
+        220768.2206
+      ],
+      [
+        "2024-01-01",
+        221964.2411
+      ],
+      [
+        "2024-01-08",
+        225119.4489
+      ],
+      [
+        "2024-01-15",
+        230618.2744
+      ],
+      [
+        "2024-01-23",
+        240324.0232
+      ],
+      [
+        "2024-01-29",
+        244363.7137
+      ],
+      [
+        "2024-02-05",
+        246206.2713
+      ],
+      [
+        "2024-02-12",
+        249583.3099
+      ],
+      [
+        "2024-02-19",
+        246770.3906
+      ],
+      [
+        "2024-02-26",
+        244375.7631
+      ],
+      [
+        "2024-03-04",
+        241868.2609
+      ],
+      [
+        "2024-03-11",
+        237950.3823
+      ],
+      [
+        "2024-03-18",
+        239601.6616
+      ],
+      [
+        "2024-03-26",
+        244433.0209
+      ],
+      [
+        "2024-04-01",
+        244789.2018
+      ],
+      [
+        "2024-04-08",
+        248054.8557
+      ],
+      [
+        "2024-04-15",
+        247815.3877
+      ],
+      [
+        "2024-04-22",
+        249851.1417
+      ],
+      [
+        "2024-04-29",
+        249958.1596
+      ],
+      [
+        "2024-05-06",
+        252478.0445
+      ],
+      [
+        "2024-05-13",
+        260891.8684
+      ],
+      [
+        "2024-05-21",
+        262514.2975
+      ],
+      [
+        "2024-05-27",
+        267614.5439
+      ],
+      [
+        "2024-06-03",
+        260102.6415
+      ],
+      [
+        "2024-06-10",
+        261875.3493
+      ],
+      [
+        "2024-06-18",
+        260544.2267
+      ],
+      [
+        "2024-06-24",
+        264490.7891
+      ],
+      [
+        "2024-07-01",
+        264663.0278
+      ],
+      [
+        "2024-07-08",
+        265372.473
+      ],
+      [
+        "2024-07-15",
+        260782.4063
+      ],
+      [
+        "2024-07-22",
+        261728.641
+      ],
+      [
+        "2024-07-29",
+        262448.1666
+      ],
+      [
+        "2024-08-05",
+        263197.629
+      ],
+      [
+        "2024-08-12",
+        269072.5049
+      ],
+      [
+        "2024-08-19",
+        271681.1749
+      ],
+      [
+        "2024-08-26",
+        272899.9986
+      ],
+      [
+        "2024-09-02",
+        271741.8459
+      ],
+      [
+        "2024-09-09",
+        273960.9574
+      ],
+      [
+        "2024-09-16",
+        271828.3033
+      ],
+      [
+        "2024-09-23",
+        265854.6133
+      ],
+      [
+        "2024-09-30",
+        259726.5287
+      ],
+      [
+        "2024-10-07",
+        261910.429
+      ],
+      [
+        "2024-10-14",
+        258685.6976
+      ],
+      [
+        "2024-10-21",
+        254685.3179
+      ],
+      [
+        "2024-10-28",
+        256174.5386
+      ],
+      [
+        "2024-11-04",
+        255731.0267
+      ],
+      [
+        "2024-11-11",
+        253988.1511
+      ],
+      [
+        "2024-11-18",
+        252969.996
+      ],
+      [
+        "2024-11-25",
+        256375.371
+      ],
+      [
+        "2024-12-02",
+        259425.7827
+      ],
+      [
+        "2024-12-09",
+        258101.0853
+      ],
+      [
+        "2024-12-16",
+        254717.7286
+      ],
+      [
+        "2024-12-23",
+        252700.4306
+      ],
+      [
+        "2024-12-30",
+        250253.3783
+      ],
+      [
+        "2025-01-06",
+        240116.0917
+      ],
+      [
+        "2025-01-13",
+        238906.0106
+      ],
+      [
+        "2025-01-20",
+        236773.0042
+      ],
+      [
+        "2025-01-27",
+        235531.7615
+      ],
+      [
+        "2025-02-03",
+        233852.0463
+      ],
+      [
+        "2025-02-10",
+        230907.8283
+      ],
+      [
+        "2025-02-17",
+        230000.8348
+      ],
+      [
+        "2025-02-24",
+        228144.9764
+      ],
+      [
+        "2025-03-10",
+        225784.4054
+      ],
+      [
+        "2025-03-24",
+        221538.7332
+      ],
+      [
+        "2025-04-01",
+        222550.2573
+      ],
+      [
+        "2025-04-07",
+        223357.0265
+      ],
+      [
+        "2025-04-15",
+        222779.3169
+      ],
+      [
+        "2025-04-21",
+        225919.7878
+      ],
+      [
+        "2025-04-28",
+        228998.376
+      ],
+      [
+        "2025-05-05",
+        228230.7498
+      ],
+      [
+        "2025-05-12",
+        230392.4525
+      ],
+      [
+        "2025-05-19",
+        229278.6969
+      ],
+      [
+        "2025-05-26",
+        229227.1663
+      ],
+      [
+        "2025-06-02",
+        231654.0346
+      ],
+      [
+        "2025-06-09",
+        234550.2315
+      ],
+      [
+        "2025-06-16",
+        235161.5354
+      ],
+      [
+        "2025-06-23",
+        236355.6696
+      ],
+      [
+        "2025-06-30",
+        234037.0903
+      ],
+      [
+        "2025-07-07",
+        231618.337
+      ],
+      [
+        "2025-07-14",
+        230915.9624
+      ],
+      [
+        "2025-07-21",
+        233466.9785
+      ],
+      [
+        "2025-07-28",
+        232501.0057
+      ],
+      [
+        "2025-08-04",
+        233912.4166
+      ],
+      [
+        "2025-08-11",
+        239574.1429
+      ],
+      [
+        "2025-08-18",
+        239520.6807
+      ],
+      [
+        "2025-08-25",
+        239311.5549
+      ],
+      [
+        "2025-09-01",
+        238977.1906
+      ],
+      [
+        "2025-09-08",
+        240089.8136
+      ],
+      [
+        "2025-09-15",
+        238956.1867
+      ],
+      [
+        "2025-09-22",
+        238996.123
+      ],
+      [
+        "2025-09-29",
+        242344.365
+      ],
+      [
+        "2025-10-06",
+        242252.6222
+      ],
+      [
+        "2025-10-13",
+        241090.2402
+      ],
+      [
+        "2025-10-20",
+        239636.5505
+      ],
+      [
+        "2025-10-27",
+        242849.0668
+      ],
+      [
+        "2025-11-03",
+        243758.3252
+      ],
+      [
+        "2025-11-10",
+        242883.6826
+      ],
+      [
+        "2025-11-17",
+        240024.3425
+      ],
+      [
+        "2025-11-24",
+        240355.105
+      ],
+      [
+        "2025-12-01",
+        238076.5115
+      ],
+      [
+        "2025-12-08",
+        239489.6031
+      ],
+      [
+        "2025-12-15",
+        240876.4686
+      ],
+      [
+        "2025-12-22",
+        241891.4226
+      ],
+      [
+        "2025-12-29",
+        241834.7178
+      ],
+      [
+        "2026-01-05",
+        237694.4776
+      ],
+      [
+        "2026-01-12",
+        238001.2131
+      ],
+      [
+        "2026-01-19",
+        235568.0912
+      ],
+      [
+        "2026-01-27",
+        233314.9151
+      ],
+      [
+        "2026-02-02",
+        234770.4399
+      ],
+      [
+        "2026-02-09",
+        234528.8153
+      ],
+      [
+        "2026-02-16",
+        234345.52
+      ],
+      [
+        "2026-02-23",
+        229672.7495
+      ],
+      [
+        "2026-03-02",
+        223135.8789
+      ],
+      [
+        "2026-03-09",
+        222794.0481
+      ],
+      [
+        "2026-03-16",
+        221949.2075
+      ],
+      [
+        "2026-03-23",
+        227008.738
+      ],
+      [
+        "2026-03-30",
+        227028.9466
+      ],
+      [
+        "2026-04-06",
+        226686.674
+      ],
+      [
+        "2026-04-13",
+        241321.1485
+      ],
+      [
+        "2026-04-20",
+        243550.8952
+      ],
+      [
+        "2026-04-27",
+        242126.3049
+      ],
+      [
+        "2026-05-04",
+        241978.1016
+      ],
+      [
+        "2026-05-11",
+        242277.9221
+      ],
+      [
+        "2026-05-18",
+        244470.8124
+      ],
+      [
+        "2026-05-25",
+        243378.4057
+      ],
+      [
+        "2026-06-01",
+        240092.0303
+      ],
+      [
+        "2026-06-08",
+        240414.6065
+      ],
+      [
+        "2026-06-15",
+        243071.832
+      ],
+      [
+        "2026-06-22",
+        244949.7536
+      ],
+      [
+        "2026-06-29",
+        243911.8767
+      ],
+      [
+        "2026-07-06",
+        244600.8423
+      ],
+      [
+        "2026-07-13",
+        244019.1479
+      ],
+      [
+        "2026-07-20",
+        242739.0633
+      ],
+      [
+        "2026-07-27",
+        244503.7563
+      ],
+      [
+        "2026-08-03",
+        244513.6211
+      ],
+      [
+        "2026-08-10",
+        245154.2207
+      ],
+      [
+        "2026-08-17",
+        243665.2388
+      ],
+      [
+        "2026-08-24",
+        242085.6607
+      ],
+      [
+        "2026-08-31",
+        236695.0814
+      ],
+      [
+        "2026-09-07",
+        234376.9988
+      ],
+      [
+        "2026-09-15",
+        230772.0957
+      ],
+      [
+        "2026-09-21",
+        228612.5649
+      ],
+      [
+        "2026-09-28",
+        225399.4819
+      ]
+    ],
+    "monthly": [
+      {
+        "month": "2017-01",
+        "n": 40,
+        "net_bps": 240.7249,
+        "total_bps": 9628.9966
+      },
+      {
+        "month": "2017-02",
+        "n": 45,
+        "net_bps": -28.5695,
+        "total_bps": -1285.6269
+      },
+      {
+        "month": "2017-03",
+        "n": 40,
+        "net_bps": 10.998,
+        "total_bps": 439.9211
+      },
+      {
+        "month": "2017-04",
+        "n": 50,
+        "net_bps": 177.5047,
+        "total_bps": 8875.2341
+      },
+      {
+        "month": "2017-05",
+        "n": 60,
+        "net_bps": -80.6606,
+        "total_bps": -4839.6386
+      },
+      {
+        "month": "2017-06",
+        "n": 38,
+        "net_bps": 123.2336,
+        "total_bps": 4682.8761
+      },
+      {
+        "month": "2017-07",
+        "n": 42,
+        "net_bps": 27.0191,
+        "total_bps": 1134.8025
+      },
+      {
+        "month": "2017-08",
+        "n": 42,
+        "net_bps": 100.4796,
+        "total_bps": 4220.1442
+      },
+      {
+        "month": "2017-09",
+        "n": 39,
+        "net_bps": -118.1545,
+        "total_bps": -4608.0268
+      },
+      {
+        "month": "2017-10",
+        "n": 51,
+        "net_bps": 101.9542,
+        "total_bps": 5199.6639
+      },
+      {
+        "month": "2017-11",
+        "n": 40,
+        "net_bps": 5.8118,
+        "total_bps": 232.4735
+      },
+      {
+        "month": "2017-12",
+        "n": 41,
+        "net_bps": 159.3035,
+        "total_bps": 6531.4415
+      },
+      {
+        "month": "2018-01",
+        "n": 60,
+        "net_bps": -215.5679,
+        "total_bps": -12934.0751
+      },
+      {
+        "month": "2018-02",
+        "n": 26,
+        "net_bps": 57.5052,
+        "total_bps": 1495.134
+      },
+      {
+        "month": "2018-03",
+        "n": 19,
+        "net_bps": 59.5207,
+        "total_bps": 1130.8942
+      },
+      {
+        "month": "2018-04",
+        "n": 33,
+        "net_bps": 186.0477,
+        "total_bps": 6139.5734
+      },
+      {
+        "month": "2018-05",
+        "n": 20,
+        "net_bps": 109.9758,
+        "total_bps": 2199.5169
+      },
+      {
+        "month": "2018-06",
+        "n": 26,
+        "net_bps": -36.3198,
+        "total_bps": -944.3136
+      },
+      {
+        "month": "2018-07",
+        "n": 24,
+        "net_bps": 458.6794,
+        "total_bps": 11008.3063
+      },
+      {
+        "month": "2018-08",
+        "n": 32,
+        "net_bps": -63.8006,
+        "total_bps": -2041.6187
+      },
+      {
+        "month": "2018-09",
+        "n": 25,
+        "net_bps": -656.6333,
+        "total_bps": -16415.8318
+      },
+      {
+        "month": "2018-10",
+        "n": 6,
+        "net_bps": -736.929,
+        "total_bps": -4421.5739
+      },
+      {
+        "month": "2018-11",
+        "n": 13,
+        "net_bps": -267.3105,
+        "total_bps": -3475.037
+      },
+      {
+        "month": "2018-12",
+        "n": 18,
+        "net_bps": -205.2219,
+        "total_bps": -3693.9935
+      },
+      {
+        "month": "2019-01",
+        "n": 16,
+        "net_bps": -109.0517,
+        "total_bps": -1744.8267
+      },
+      {
+        "month": "2019-02",
+        "n": 20,
+        "net_bps": 341.1919,
+        "total_bps": 6823.8377
+      },
+      {
+        "month": "2019-03",
+        "n": 19,
+        "net_bps": 137.3157,
+        "total_bps": 2608.9988
+      },
+      {
+        "month": "2019-04",
+        "n": 39,
+        "net_bps": -158.9746,
+        "total_bps": -6200.0097
+      },
+      {
+        "month": "2019-05",
+        "n": 28,
+        "net_bps": 98.2762,
+        "total_bps": 2751.7337
+      },
+      {
+        "month": "2019-06",
+        "n": 35,
+        "net_bps": -77.5856,
+        "total_bps": -2715.4946
+      },
+      {
+        "month": "2019-07",
+        "n": 29,
+        "net_bps": -331.3593,
+        "total_bps": -9609.4183
+      },
+      {
+        "month": "2019-08",
+        "n": 14,
+        "net_bps": 79.9383,
+        "total_bps": 1119.1362
+      },
+      {
+        "month": "2019-09",
+        "n": 34,
+        "net_bps": 27.2713,
+        "total_bps": 927.2235
+      },
+      {
+        "month": "2019-10",
+        "n": 34,
+        "net_bps": 353.7096,
+        "total_bps": 12026.1261
+      },
+      {
+        "month": "2019-11",
+        "n": 48,
+        "net_bps": -1.5581,
+        "total_bps": -74.7894
+      },
+      {
+        "month": "2019-12",
+        "n": 33,
+        "net_bps": 238.531,
+        "total_bps": 7871.5225
+      },
+      {
+        "month": "2020-01",
+        "n": 33,
+        "net_bps": 21.0453,
+        "total_bps": 694.4951
+      },
+      {
+        "month": "2020-02",
+        "n": 37,
+        "net_bps": -252.792,
+        "total_bps": -9353.3033
+      },
+      {
+        "month": "2020-03",
+        "n": 9,
+        "net_bps": -1041.0542,
+        "total_bps": -9369.4874
+      },
+      {
+        "month": "2020-04",
+        "n": 14,
+        "net_bps": -508.4286,
+        "total_bps": -7118.0
+      },
+      {
+        "month": "2020-05",
+        "n": 14,
+        "net_bps": 750.587,
+        "total_bps": 10508.2174
+      },
+      {
+        "month": "2020-06",
+        "n": 13,
+        "net_bps": 238.088,
+        "total_bps": 3095.1437
+      },
+      {
+        "month": "2020-07",
+        "n": 25,
+        "net_bps": 905.166,
+        "total_bps": 22629.1506
+      },
+      {
+        "month": "2020-08",
+        "n": 40,
+        "net_bps": 346.1462,
+        "total_bps": 13845.8463
+      },
+      {
+        "month": "2020-09",
+        "n": 32,
+        "net_bps": 91.6352,
+        "total_bps": 2932.3278
+      },
+      {
+        "month": "2020-10",
+        "n": 34,
+        "net_bps": 90.7747,
+        "total_bps": 3086.3411
+      },
+      {
+        "month": "2020-11",
+        "n": 36,
+        "net_bps": 357.7518,
+        "total_bps": 12879.063
+      },
+      {
+        "month": "2020-12",
+        "n": 66,
+        "net_bps": 215.9455,
+        "total_bps": 14252.4054
+      },
+      {
+        "month": "2021-01",
+        "n": 52,
+        "net_bps": -134.4992,
+        "total_bps": -6993.9574
+      },
+      {
+        "month": "2021-02",
+        "n": 60,
+        "net_bps": 530.4055,
+        "total_bps": 31824.3284
+      },
+      {
+        "month": "2021-03",
+        "n": 52,
+        "net_bps": 247.3291,
+        "total_bps": 12861.1139
+      },
+      {
+        "month": "2021-04",
+        "n": 33,
+        "net_bps": 174.2967,
+        "total_bps": 5751.7902
+      },
+      {
+        "month": "2021-05",
+        "n": 60,
+        "net_bps": 199.0361,
+        "total_bps": 11942.1682
+      },
+      {
+        "month": "2021-06",
+        "n": 58,
+        "net_bps": -9.392,
+        "total_bps": -544.7378
+      },
+      {
+        "month": "2021-07",
+        "n": 50,
+        "net_bps": 194.5395,
+        "total_bps": 9726.975
+      },
+      {
+        "month": "2021-08",
+        "n": 64,
+        "net_bps": 178.9382,
+        "total_bps": 11452.0447
+      },
+      {
+        "month": "2021-09",
+        "n": 57,
+        "net_bps": 50.0217,
+        "total_bps": 2851.2353
+      },
+      {
+        "month": "2021-10",
+        "n": 61,
+        "net_bps": -76.1562,
+        "total_bps": -4645.5309
+      },
+      {
+        "month": "2021-11",
+        "n": 52,
+        "net_bps": -219.2265,
+        "total_bps": -11399.7793
+      },
+      {
+        "month": "2021-12",
+        "n": 31,
+        "net_bps": 59.7664,
+        "total_bps": 1852.7569
+      },
+      {
+        "month": "2022-01",
+        "n": 39,
+        "net_bps": -278.3241,
+        "total_bps": -10854.6389
+      },
+      {
+        "month": "2022-02",
+        "n": 18,
+        "net_bps": -424.5608,
+        "total_bps": -7642.0951
+      },
+      {
+        "month": "2022-03",
+        "n": 28,
+        "net_bps": 234.929,
+        "total_bps": 6578.0124
+      },
+      {
+        "month": "2022-04",
+        "n": 33,
+        "net_bps": -309.7358,
+        "total_bps": -10221.2828
+      },
+      {
+        "month": "2022-05",
+        "n": 21,
+        "net_bps": -211.869,
+        "total_bps": -4449.2483
+      },
+      {
+        "month": "2022-06",
+        "n": 11,
+        "net_bps": -327.9769,
+        "total_bps": -3607.7454
+      },
+      {
+        "month": "2022-07",
+        "n": 22,
+        "net_bps": 631.0982,
+        "total_bps": 13884.1602
+      },
+      {
+        "month": "2022-08",
+        "n": 36,
+        "net_bps": 207.6463,
+        "total_bps": 7475.268
+      },
+      {
+        "month": "2022-09",
+        "n": 46,
+        "net_bps": -14.9385,
+        "total_bps": -687.1692
+      },
+      {
+        "month": "2022-10",
+        "n": 45,
+        "net_bps": 197.4709,
+        "total_bps": 8886.1927
+      },
+      {
+        "month": "2022-11",
+        "n": 39,
+        "net_bps": 442.0309,
+        "total_bps": 17239.2068
+      },
+      {
+        "month": "2022-12",
+        "n": 35,
+        "net_bps": -432.5709,
+        "total_bps": -15139.9802
+      },
+      {
+        "month": "2023-01",
+        "n": 47,
+        "net_bps": -44.7543,
+        "total_bps": -2103.454
+      },
+      {
+        "month": "2023-02",
+        "n": 19,
+        "net_bps": -65.9013,
+        "total_bps": -1252.1242
+      },
+      {
+        "month": "2023-03",
+        "n": 17,
+        "net_bps": -194.8231,
+        "total_bps": -3311.9928
+      },
+      {
+        "month": "2023-04",
+        "n": 27,
+        "net_bps": 475.4619,
+        "total_bps": 12837.4712
+      },
+      {
+        "month": "2023-05",
+        "n": 41,
+        "net_bps": 235.8489,
+        "total_bps": 9669.8041
+      },
+      {
+        "month": "2023-06",
+        "n": 55,
+        "net_bps": 136.0388,
+        "total_bps": 7482.1358
+      },
+      {
+        "month": "2023-07",
+        "n": 73,
+        "net_bps": 79.3421,
+        "total_bps": 5791.9743
+      },
+      {
+        "month": "2023-08",
+        "n": 57,
+        "net_bps": 9.5059,
+        "total_bps": 541.8383
+      },
+      {
+        "month": "2023-09",
+        "n": 69,
+        "net_bps": -39.8671,
+        "total_bps": -2750.832
+      },
+      {
+        "month": "2023-10",
+        "n": 64,
+        "net_bps": 166.5018,
+        "total_bps": 10656.1167
+      },
+      {
+        "month": "2023-11",
+        "n": 47,
+        "net_bps": 491.6794,
+        "total_bps": 23108.9303
+      },
+      {
+        "month": "2023-12",
+        "n": 60,
+        "net_bps": 230.5631,
+        "total_bps": 13833.784
+      },
+      {
+        "month": "2024-01",
+        "n": 80,
+        "net_bps": 294.9437,
+        "total_bps": 23595.4931
+      },
+      {
+        "month": "2024-02",
+        "n": 61,
+        "net_bps": 0.1975,
+        "total_bps": 12.0494
+      },
+      {
+        "month": "2024-03",
+        "n": 51,
+        "net_bps": 1.1227,
+        "total_bps": 57.2578
+      },
+      {
+        "month": "2024-04",
+        "n": 68,
+        "net_bps": 81.252,
+        "total_bps": 5525.1387
+      },
+      {
+        "month": "2024-05",
+        "n": 61,
+        "net_bps": 289.4489,
+        "total_bps": 17656.3844
+      },
+      {
+        "month": "2024-06",
+        "n": 60,
+        "net_bps": -52.0626,
+        "total_bps": -3123.7548
+      },
+      {
+        "month": "2024-07",
+        "n": 74,
+        "net_bps": -27.603,
+        "total_bps": -2042.6225
+      },
+      {
+        "month": "2024-08",
+        "n": 50,
+        "net_bps": 209.0366,
+        "total_bps": 10451.832
+      },
+      {
+        "month": "2024-09",
+        "n": 80,
+        "net_bps": -164.6684,
+        "total_bps": -13173.4699
+      },
+      {
+        "month": "2024-10",
+        "n": 40,
+        "net_bps": -88.7998,
+        "total_bps": -3551.9901
+      },
+      {
+        "month": "2024-11",
+        "n": 35,
+        "net_bps": 5.7381,
+        "total_bps": 200.8323
+      },
+      {
+        "month": "2024-12",
+        "n": 40,
+        "net_bps": -153.0498,
+        "total_bps": -6121.9926
+      },
+      {
+        "month": "2025-01",
+        "n": 23,
+        "net_bps": -640.0703,
+        "total_bps": -14721.6168
+      },
+      {
+        "month": "2025-02",
+        "n": 15,
+        "net_bps": -492.4523,
+        "total_bps": -7386.7851
+      },
+      {
+        "month": "2025-03",
+        "n": 12,
+        "net_bps": -550.5203,
+        "total_bps": -6606.2432
+      },
+      {
+        "month": "2025-04",
+        "n": 16,
+        "net_bps": 466.2277,
+        "total_bps": 7459.6428
+      },
+      {
+        "month": "2025-05",
+        "n": 23,
+        "net_bps": 9.9474,
+        "total_bps": 228.7903
+      },
+      {
+        "month": "2025-06",
+        "n": 32,
+        "net_bps": 150.3101,
+        "total_bps": 4809.924
+      },
+      {
+        "month": "2025-07",
+        "n": 37,
+        "net_bps": -41.5158,
+        "total_bps": -1536.0846
+      },
+      {
+        "month": "2025-08",
+        "n": 23,
+        "net_bps": 296.1108,
+        "total_bps": 6810.5492
+      },
+      {
+        "month": "2025-09",
+        "n": 36,
+        "net_bps": 84.2447,
+        "total_bps": 3032.8101
+      },
+      {
+        "month": "2025-10",
+        "n": 35,
+        "net_bps": 14.4201,
+        "total_bps": 504.7018
+      },
+      {
+        "month": "2025-11",
+        "n": 46,
+        "net_bps": -54.2166,
+        "total_bps": -2493.9618
+      },
+      {
+        "month": "2025-12",
+        "n": 43,
+        "net_bps": 34.4096,
+        "total_bps": 1479.6128
+      },
+      {
+        "month": "2026-01",
+        "n": 46,
+        "net_bps": -185.2131,
+        "total_bps": -8519.8027
+      },
+      {
+        "month": "2026-02",
+        "n": 41,
+        "net_bps": -88.8333,
+        "total_bps": -3642.1656
+      },
+      {
+        "month": "2026-03",
+        "n": 29,
+        "net_bps": -91.1656,
+        "total_bps": -2643.8029
+      },
+      {
+        "month": "2026-04",
+        "n": 29,
+        "net_bps": 520.5986,
+        "total_bps": 15097.3582
+      },
+      {
+        "month": "2026-05",
+        "n": 39,
+        "net_bps": 32.1051,
+        "total_bps": 1252.1008
+      },
+      {
+        "month": "2026-06",
+        "n": 42,
+        "net_bps": 12.7017,
+        "total_bps": 533.471
+      },
+      {
+        "month": "2026-07",
+        "n": 34,
+        "net_bps": 17.4082,
+        "total_bps": 591.8796
+      },
+      {
+        "month": "2026-08",
+        "n": 41,
+        "net_bps": -190.4555,
+        "total_bps": -7808.6749
+      },
+      {
+        "month": "2026-09",
+        "n": 28,
+        "net_bps": -403.4143,
+        "total_bps": -11295.5995
+      }
+    ]
+  },
+  "split": {
+    "embargo_sessions": 1,
+    "embargoed_oos": 0,
+    "oos_start": "2023-07-13",
+    "purged_in_sample": 20,
+    "type": "oos"
+  },
+  "trials": {
+    "external": 0,
+    "material": 2,
+    "source": "trials.yaml",
+    "total": 2
+  },
+  "validity": {
+    "checks_run": [
+      "data_quality",
+      "config",
+      "lineage",
+      "truncation"
+    ],
+    "failures": [],
+    "ok": true
+  },
+  "verdict": {
+    "caps_applied": [],
+    "primary_failed_gate": "G2.2",
+    "reasons": [
+      {
+        "evidence_ref": "evaluation:G2.2",
+        "gate": "G2.2",
+        "status": "FAIL",
+        "text": "A hard requirement was not met: Day-clustered t-statistic (G2.2) failed."
+      },
+      {
+        "evidence_ref": "evaluation:G4.5",
+        "gate": "G4.5",
+        "status": "FAIL",
+        "text": "A hard requirement was not met: Dispersion (G4.5) failed."
+      }
+    ],
+    "run_verdict": "NO_EDGE"
+  }
+}

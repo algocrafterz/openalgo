@@ -24,10 +24,10 @@
         "delta_vs_parent": null,
         "edge_bar": 2.5,
         "edge_status": "below_bar",
-        "latest_run_id": "2026-10-04-52-week-high-proximity-v2",
-        "runs": 2,
+        "latest_run_id": "2026-10-05-52-week-high-proximity-v3",
+        "runs": 3,
         "trend": "insufficient",
-        "trials_sum": 4
+        "trials_sum": 6
       },
       "research_state": "active",
       "revisit_when": "After the first backtest result is reviewed.",
@@ -487,6 +487,241 @@
             "source": "trials.yaml",
             "total": 2
           }
+        },
+        {
+          "artifact_dir": "2026-10-05-52-week-high-proximity-v3/",
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -21.6417,
+            "excess_t_stat": -2.026,
+            "gross_bps": 95.9429,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 71.9429,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": 50.3012,
+            "trades": 4481
+          },
+          "change_classes": [
+            "UNIVERSE_CHANGE",
+            "DATASET_CHANGE",
+            "DATA_RANGE_CHANGE",
+            "ENGINE_CHANGE"
+          ],
+          "change_note": "first clean run on published NSE daily dataset nse-daily-20261005-002",
+          "code_dirty": false,
+          "code_version": "7c0665d3b",
+          "cost_model": {
+            "capital": 100000.0,
+            "exchange": "NSE",
+            "fixed_notional": 100000.0,
+            "flat_bps": 24.0,
+            "leverage": 1.0,
+            "mean_statutory_bps": 22.248,
+            "mean_total_bps": 30.248,
+            "model": "statutory-per-trade",
+            "modelled_net_pnl_rs": 1974016.56,
+            "modelled_total_cost_rs": 1355418.26,
+            "net_bps": 44.053,
+            "net_bps_slip_2x": 36.053,
+            "pnl_basis": "modelled: every trade is a fixed notional of Rs 1,00,000 (capital per position) with no stop, with no limit on concurrent positions or total capital; net is after the modelled statutory charges and slippage",
+            "product": "CNC",
+            "risk_per_trade": 0.01,
+            "slippage_bps_per_side": 4.0,
+            "total_bps_at": {
+              "1.0": 30.248,
+              "1.5": 34.248,
+              "2.0": 38.248
+            },
+            "trades": 4481
+          },
+          "cost_sensitivity": [
+            {
+              "net_bps": 74.3012,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 69.3012,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 64.3012,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 54.3012,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 50.3012,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-10-01",
+            "bar_size": "1d",
+            "source": "published:nse-daily-20261005-002",
+            "universe": "nse_fno_current-206-eligible-symbols"
+          },
+          "dataset_version": "nse-daily-20261005-002",
+          "date": "2026-10-05",
+          "evaluation_summary": {
+            "counts": {
+              "fail": 3,
+              "not_applicable": 9,
+              "not_evaluated": 35,
+              "pass": 11,
+              "report": 10
+            },
+            "hard_failed": [
+              "G4.5",
+              "G2.2"
+            ]
+          },
+          "in_sample": {
+            "gross_bps": 85.8752,
+            "net_bps": 61.8752,
+            "sharpe": 2.518,
+            "t_stat": 2.156,
+            "trades": 2749,
+            "win_rate": 0.4274
+          },
+          "manifest_sha256": "d58f175e520a8adfe63626da6c39e4879d60219ee8eb43a56a5417556025794c",
+          "metrics": {
+            "breakeven_cost_bps": 74.3012,
+            "days": 497,
+            "gross_bps": 74.3012,
+            "hurdle_t": 2.253,
+            "max_dd_bps": 55711.9564,
+            "median_concurrent": 15.0,
+            "net_bps": 50.3012,
+            "peak_concurrent": 20,
+            "profit_factor": 1.227,
+            "r_defined": false,
+            "sharpe": 2.191,
+            "t_stat": 2.011,
+            "total_cost_bps": 107544.0002,
+            "trades": 4481,
+            "win_rate": 0.4238
+          },
+          "missing_capabilities": [
+            "Spec schema split: strategy intent vs resolved execution configuration vs deployment profile; field class and per-field provenance",
+            "Spec validation: entry, exit, direction, timeframe, holding period, stop, signal evaluation, order submission, fill model, indicator source, reference prices, portfolio scope",
+            "Assumption ledger with materiality and confirmation; intake states",
+            "Strategy versions: append-only `versions.yaml`, automatic and branch labels, current and promoted pointers, rules, parameters and strategy fingerprints",
+            "Point-in-time universe membership and per-date eligibility",
+            "Direction validation (no shorts in swing or positional)",
+            "Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat)",
+            "Deployment profile: MIS force-flat 15:00, CNC carry-forward",
+            "Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version",
+            "Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade)",
+            "Run manifest and run folder layout; immutable artifacts retained and addressable",
+            "Per-component cost decomposition per trade",
+            "Validity vs performance failure handling in the gate runner",
+            "Trial counting under the acceptance-criteria definition",
+            "session.broker_cutoff is null: CNC delivery has no intraday broker cutoff",
+            "random.monte_carlo not captured until engine step 5",
+            "session.force_flat is null: CNC delivery has no force-flat, positions carry forward"
+          ],
+          "n_trials": 2,
+          "next_action": {
+            "action": "Compute the day-clustered t-statistic",
+            "gate": "G2.2",
+            "reason": "The edge must be statistically distinguishable from luck"
+          },
+          "notes": "Shipped default configuration on nse_fno_current-206-eligible-symbols. n_trials=2 from trials.yaml: 2 material configuration(s) and 0 external. Regime analysis not available: no published index dataset (NIFTY/VIX); no external source is used and the verdict is unaffected.",
+          "out_of_sample": {
+            "gross_bps": 54.3322,
+            "net_bps": 30.3322,
+            "sharpe": 1.474,
+            "t_stat": 0.193,
+            "trades": 1712,
+            "win_rate": 0.4176
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": false,
+              "cost_bps": 24.0,
+              "max_hold_bars": null,
+              "min_sl_pct": 0.005,
+              "warmup_bars": 252
+            },
+            "strategy": {
+              "closeness_pct": 5,
+              "lookback_sessions": 252,
+              "max_positions": 20,
+              "rebalance": "weekly",
+              "rebalance_day": "last_session_of_week"
+            },
+            "strategy_class": "HighProximity"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-10-01",
+            "start": "2016-01-01"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 51.1719,
+              "max_positions": 3,
+              "net_bps": 27.1719,
+              "sharpe": 0.616,
+              "t_stat": 0.537,
+              "taken_pct": 15.6,
+              "trades": 701,
+              "win_rate": 0.3951
+            },
+            {
+              "gross_bps": 56.472,
+              "max_positions": 5,
+              "net_bps": 32.472,
+              "sharpe": 0.893,
+              "t_stat": 0.904,
+              "taken_pct": 25.9,
+              "trades": 1159,
+              "win_rate": 0.3986
+            },
+            {
+              "gross_bps": 64.8542,
+              "max_positions": 10,
+              "net_bps": 40.8542,
+              "sharpe": 1.399,
+              "t_stat": 1.601,
+              "taken_pct": 51.0,
+              "trades": 2284,
+              "win_rate": 0.4208
+            }
+          ],
+          "promoted": false,
+          "promotion_decision": "NOT_READY",
+          "promotion_eligible": true,
+          "reproducible": true,
+          "run_id": "2026-10-05-52-week-high-proximity-v3",
+          "run_status": "VALID",
+          "run_verdict": "NO_EDGE",
+          "schema": 4,
+          "split": {
+            "embargo_sessions": 1,
+            "embargoed_oos": 0,
+            "oos_start": "2023-07-13",
+            "purged_in_sample": 20,
+            "type": "oos"
+          },
+          "strategy_fingerprint": "e063ad428e47d4148ea780d5326eee189a782d6ad6c05f53891ad26852e10715",
+          "strategy_version": "v1",
+          "trial_counted": true,
+          "trials": {
+            "external": 0,
+            "material": 2,
+            "source": "trials.yaml",
+            "total": 2
+          }
         }
       ],
       "source": {
@@ -507,7 +742,7 @@
       ],
       "summary": "Each week, hold the 20 stocks whose close is nearest to their 252-session high close, provided they are within 5% of it; sell stocks that drop out of that set.",
       "title": "Proximity to the 52-week high",
-      "verdict": "inconclusive"
+      "verdict": "no-edge"
     }
   ],
   "summary": {
@@ -521,11 +756,11 @@
       "inbox": 1
     },
     "by_verdict": {
-      "inconclusive": 1
+      "no-edge": 1
     },
     "ideas_with_runs": 1,
     "last_reviewed": "2026-10-04",
     "total": 1,
-    "total_runs": 2
+    "total_runs": 3
   }
 }
