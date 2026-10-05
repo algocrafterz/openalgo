@@ -281,6 +281,7 @@ Every converted session must satisfy, against the NSE adjusted daily bar (blocki
   exclude the session (`excluded:volume`; this removes the doubled-volume sessions of 2018-19).
 - Per bar: raw_equivalent_volume = volume / c; canonical_volume = raw_equivalent_volume /
   volume_factor (the daily dataset's convention: adjusted volume = raw volume / volume factor).
+  Canonical volume is a float and is not rounded, so 5m and daily sums carry no rounding error.
 - The Angel total is normally 0.95 to 1.00 of NSE because minute bars exclude the pre-open
   auction volume.
 
@@ -340,13 +341,20 @@ Measured before cleanup: in 2016-18 half of the sessions are complete (95th perc
 beyond the ceiling, the dataset is NOT_READY (section 10.2); the threshold is not loosened to
 avoid that.
 
-### 7.4 Calendar addition (required)
+### 7.4 Session template (required)
 
-`nse_calendar.yaml` has one fixed `regular_session` (09:15-15:30). Add a dated template:
+`nse_calendar.yaml` has one fixed `regular_session` (09:15-15:30). The dated template lives in its
+own file, `signal_engine/research/reference/nse_session_template.yaml`, not in
+`nse_calendar.yaml`: the calendar's sha256 is the calendar version that the published daily
+datasets and the sealed IDEA-027 and IDEA-028 runs record, and an edit would break their
+reproduce check. The template's sha256 is recorded in the intraday contract.
 
 - until 2026-07-31: continuous window 09:15-15:29 (375 minutes);
 - from 2026-08-03: continuous window 09:15-15:14 (360 minutes) and one closing-auction print
-  stamped 15:28 or 15:29 (measured: 361 bars).
+  stamped 15:28 or 15:29 (measured: 361 bars);
+- 2024-03-02 and 2024-05-18 (NSE special live sessions with a switch to the DR site): two
+  windows, 09:15-09:59 and 11:30-12:29, as in `nse_calendar.yaml`;
+- Muhurat sessions have no template (section 9).
 
 The window check reads the template; it is not a new calendar implementation.
 
@@ -413,7 +421,8 @@ extreme-gap evidence of 6.2.
 
 ```text
 requested symbol-sessions = expected NSE sessions (nse-daily-20261005-002 rows, series EQ/BE)
-                            for the 213 symbols, 2017-01-01 to 2026-10-01
+                            for the 213 symbols, 2017-01-01 to 2026-10-01, minus Muhurat
+                            sessions (out of scope, listed separately with their count)
 excluded symbol-sessions  = requested sessions that are not published, for any reason in 9
                             marked "Yes" (listed ranges, conversion, volume, missing minutes,
                             MISSING after recovery)

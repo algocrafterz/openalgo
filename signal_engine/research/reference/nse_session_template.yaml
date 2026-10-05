@@ -1,0 +1,40 @@
+# NSE CM intraday session template: which minutes a 1m bar may carry, by date range.
+#
+# Kept apart from nse_calendar.yaml on purpose: that file's sha256 is the calendar version that
+# published daily datasets and sealed runs record, so an edit there would change it. This file is
+# used only by the intraday dataset build (INTRADAY-5M-DATASET-PLAN.md section 7.4); its sha256 is
+# recorded in that dataset's contract.
+#
+# Times are IST minute stamps of 1m bars (a bar stamped 15:29 covers 15:29:00-15:29:59).
+#   continuous       continuous-trading windows, each [first minute, last minute]
+#   closing_auction  minute stamps on which the closing-auction print may appear; null before CAS
+#
+# The first template whose date range covers a session applies, so single-day special sessions
+# are listed first. Muhurat sessions have no template: they are out of scope for the intraday
+# dataset (plan section 9).
+
+schema: 1
+templates:
+  - from: 2024-03-02
+    to: 2024-03-02
+    continuous: [["09:15", "09:59"], ["11:30", "12:29"]]
+    closing_auction: null
+    source: NSE special live session with an intraday switch to the DR site (nse_calendar.yaml)
+  - from: 2024-05-18
+    to: 2024-05-18
+    continuous: [["09:15", "09:59"], ["11:30", "12:29"]]
+    closing_auction: null
+    source: NSE special live session with an intraday switch to the DR site (nse_calendar.yaml)
+  - from: 2016-01-01
+    to: 2026-07-31
+    continuous: [["09:15", "15:29"]]
+    closing_auction: null
+    source: NSE CM market timings (normal market 09:15-15:30)
+  - from: 2026-08-03
+    to: null
+    continuous: [["09:15", "15:14"]]
+    closing_auction: ["15:28", "15:29"]
+    source: >-
+      Closing Auction Session, SEBI circular 16 Jan 2026; NSE/CMTR/73362 (18 Mar 2026); live
+      3 Aug 2026 (NSE/CMTR/75479). Continuous trading ends 15:15. Print stamps measured on
+      AngelOne 1m data 2026-08-03 to 2026-10-01 (361 bars: 09:15-15:14 plus one at 15:28/15:29).

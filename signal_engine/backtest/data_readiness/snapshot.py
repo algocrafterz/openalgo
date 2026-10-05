@@ -290,6 +290,11 @@ def verify(version_id: str, *, root: str | Path = DEFAULT_ROOT,
         p = _object_path(root, m.get(name, ""))
         if not p.exists() or sha256_file(p) != m.get(name):
             res.errors.append(f"{name} object missing or hash mismatch")
+    # Intraday versions also carry their ledgers and report as objects (none for daily ones).
+    for name, sha in sorted((m.get("extra_objects") or {}).items()):
+        p = _object_path(root, sha)
+        if not p.exists() or sha256_file(p) != sha:
+            res.errors.append(f"extra object {name} missing or hash mismatch")
     ip = _object_path(root, m.get("index_sha256", ""))
     if ip.exists() and sha256_file(ip) == m.get("index_sha256"):
         index = pd.read_parquet(ip)
