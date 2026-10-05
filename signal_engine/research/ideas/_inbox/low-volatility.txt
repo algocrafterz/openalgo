@@ -1,0 +1,21 @@
+Lowest realised volatility (researcher's own words, 2026-10-05)
+
+Hypothesis: stocks with the lowest trailing realised volatility may generate superior
+risk-adjusted forward returns (the low-risk anomaly: Ang, Hodrick, Xing and Zhang 2006;
+Baker, Bradley and Wurgler 2011). NSE publishes indices built on the same idea (the
+NIFTY Low Volatility 30 family selects the 30 lowest-volatility stocks by one-year daily
+standard deviation). The index is research context only, not equivalent evidence: its
+universe, weighting, rebalancing, execution and costs differ.
+
+Rules as decided by the researcher:
+- Universe: today's NSE F&O list (current membership, not point-in-time; survivorship bias).
+- On the last session of each calendar month, after the close, compute each stock's sample
+  standard deviation (ddof 1) of its last 252 daily close-to-close returns
+  r_t = Close_t / Close_(t-1) - 1 on adjusted closes. Not annualised.
+- 252 returns need 253 consecutive closes on the official NSE sessions. A stock missing any
+  session in that window is not ranked on that rebalance day.
+- Hold the 30 lowest-volatility stocks, equal fixed notional (Rs 1,00,000 each).
+- Keep a held stock that stays in the 30; sell one that leaves; buy one that enters.
+- All orders at the next session's open. No stop, no target, no maximum holding period.
+- Kill criterion: net expectancy per trade zero or negative after costs; the platform's
+  hard gates decide the verdict.

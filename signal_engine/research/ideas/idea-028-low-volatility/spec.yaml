@@ -1,0 +1,78 @@
+schema_version: 2
+name: Lowest realised volatility
+
+source:
+  kind: own_words
+  ref: _inbox/low-volatility.txt
+
+profile: flattrade-nse-cash
+
+style: swing
+direction: long_only
+timeframe: 1d
+product: CNC
+
+universe:
+  type: current_fno
+  exchange: NSE
+  membership_basis: current
+  point_in_time: false
+  survivorship_bias: true
+
+entry:
+  - On each rebalance day, the last session of each calendar month that has a next session, after the daily close, compute for every eligible stock the daily return r_t = Close_t / Close_(t-1) - 1 for each of the trailing 252 sessions, on the published adjusted closes
+  - A stock is ranked only when it has 253 consecutive closes on the official NSE sessions ending on the rebalance day, which gives 252 consecutive daily returns; a stock missing any session in that window is not ranked on that rebalance day
+  - Volatility is the sample standard deviation with ddof 1 of those 252 returns, not annualised
+  - Rank the ranked stocks from lowest to highest volatility; ties are broken by the platform's hash of symbol and date
+  - Hold the 30 stocks with the lowest volatility; a held stock that is still among the 30 is kept, not sold and bought again
+  - Buy orders for stocks that newly enter the 30 fill at the next session's open
+exit:
+  - On each rebalance day, sell every held stock that is not among the 30 lowest-volatility ranked stocks, including a held stock that is not ranked that day
+  - Sell orders fill at the next session's open
+stop: none
+take_profit: none
+holding_period: none
+
+indicators:
+  - {name: RETURN_STDEV, period: 252, source: close}
+parameters:
+  vol_lookback_returns: 252
+  max_positions: 30
+  rebalance: monthly
+  rebalance_day: last_session_of_month
+
+timing:
+  signal_evaluation: bar_close
+  order_submission: signal_close
+  fill_model: next_bar_open
+
+filters: none
+session_window: none
+
+re_entry:
+  allowed: true
+  max_per_symbol_day: 1
+  trigger: same_signal
+
+# risk_per_trade_pct is informational only: there is no stop, so no stop-based risk unit.
+sizing:
+  risk_per_trade_pct: 1.0
+  capital_per_trade: 100000
+
+portfolio:
+  mode: multi_position
+  max_concurrent: 30
+  max_trades_per_day: 60
+  capital_per_position: 100000
+  max_exposure: 3000000
+  selection: rank_by_score
+  conflict: skip_if_symbol_open
+
+disclosure:
+  prior_variants: 0
+  chart_peeking: false
+  destination: python
+
+rationale: Tests the low-risk anomaly on NSE F&O stocks. 30 holdings gives a diversified low-volatility portfolio and matches the NIFTY Low Volatility 30 reference, but positions are equal fixed notional, not the index weighting; inverse-volatility weighting and volatility scaling are not used. Monthly rebalancing suits a slow-moving ranking and adds no turnover the hypothesis does not need.
+
+kill_criterion: Net expectancy per trade is zero or negative after modelled costs.

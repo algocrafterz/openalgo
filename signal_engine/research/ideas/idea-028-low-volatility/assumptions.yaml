@@ -1,0 +1,481 @@
+next_id: 50
+open_questions: []
+blocked_reason: null
+entries:
+- id: A-001
+  field: name
+  section: intent
+  value: Lowest realised volatility
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-002
+  field: source.kind
+  section: intent
+  value: own_words
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-003
+  field: source.ref
+  section: intent
+  value: _inbox/low-volatility.txt
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-004
+  field: profile
+  section: intent
+  value: flattrade-nse-cash
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-005
+  field: style
+  section: intent
+  value: swing
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-006
+  field: direction
+  section: intent
+  value: long_only
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-007
+  field: timeframe
+  section: intent
+  value: 1d
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-008
+  field: product
+  section: intent
+  value: CNC
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-009
+  field: entry
+  section: intent
+  value:
+  - On each rebalance day, the last session of each calendar month that has a next
+    session, after the daily close, compute for every eligible stock the daily return
+    r_t = Close_t / Close_(t-1) - 1 for each of the trailing 252 sessions, on the
+    published adjusted closes
+  - A stock is ranked only when it has 253 consecutive closes on the official NSE
+    sessions ending on the rebalance day, which gives 252 consecutive daily returns;
+    a stock missing any session in that window is not ranked on that rebalance day
+  - Volatility is the sample standard deviation with ddof 1 of those 252 returns,
+    not annualised
+  - Rank the ranked stocks from lowest to highest volatility; ties are broken by the
+    platform's hash of symbol and date
+  - Hold the 30 stocks with the lowest volatility; a held stock that is still among
+    the 30 is kept, not sold and bought again
+  - Buy orders for stocks that newly enter the 30 fill at the next session's open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-010
+  field: exit
+  section: intent
+  value:
+  - On each rebalance day, sell every held stock that is not among the 30 lowest-volatility
+    ranked stocks, including a held stock that is not ranked that day
+  - Sell orders fill at the next session's open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-011
+  field: stop
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-012
+  field: take_profit
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-013
+  field: holding_period
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-014
+  field: indicators
+  section: intent
+  value:
+  - name: RETURN_STDEV
+    period: 252
+    source: close
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-015
+  field: parameters
+  section: intent
+  value:
+    vol_lookback_returns: 252
+    max_positions: 30
+    rebalance: monthly
+    rebalance_day: last_session_of_month
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-016
+  field: timing.signal_evaluation
+  section: intent
+  value: bar_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-017
+  field: timing.order_submission
+  section: intent
+  value: signal_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-018
+  field: timing.fill_model
+  section: intent
+  value: next_bar_open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-019
+  field: filters
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-020
+  field: session_window
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-021
+  field: re_entry.allowed
+  section: intent
+  value: true
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-022
+  field: re_entry.max_per_symbol_day
+  section: intent
+  value: 1
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-023
+  field: re_entry.trigger
+  section: intent
+  value: same_signal
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-024
+  field: sizing.risk_per_trade_pct
+  section: intent
+  value: 1.0
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-025
+  field: sizing.capital_per_trade
+  section: intent
+  value: 100000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-026
+  field: portfolio.mode
+  section: intent
+  value: multi_position
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-027
+  field: portfolio.max_concurrent
+  section: intent
+  value: 30
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-028
+  field: portfolio.max_trades_per_day
+  section: intent
+  value: 60
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-029
+  field: portfolio.capital_per_position
+  section: intent
+  value: 100000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-030
+  field: portfolio.max_exposure
+  section: intent
+  value: 3000000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-031
+  field: portfolio.selection
+  section: intent
+  value: rank_by_score
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-032
+  field: portfolio.conflict
+  section: intent
+  value: skip_if_symbol_open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-033
+  field: disclosure.prior_variants
+  section: intent
+  value: 0
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-034
+  field: disclosure.chart_peeking
+  section: intent
+  value: false
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-035
+  field: disclosure.destination
+  section: intent
+  value: python
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-036
+  field: universe
+  section: intent
+  value:
+    type: current_fno
+    exchange: NSE
+    membership_basis: current
+    point_in_time: false
+    survivorship_bias: true
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-037
+  field: rationale
+  section: intent
+  value: Tests the low-risk anomaly on NSE F&O stocks. 30 holdings gives a diversified
+    low-volatility portfolio and matches the NIFTY Low Volatility 30 reference, but
+    positions are equal fixed notional, not the index weighting; inverse-volatility
+    weighting and volatility scaling are not used. Monthly rebalancing suits a slow-moving
+    ranking and adds no turnover the hypothesis does not need.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-038
+  field: kill_criterion
+  section: intent
+  value: Net expectancy per trade is zero or negative after modelled costs.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-039
+  field: execution.product
+  section: execution
+  value: CNC
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in the spec
+  user_confirmed: true
+- id: A-040
+  field: execution.bar_size
+  section: execution
+  value: 1d
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: same as the spec timeframe
+  user_confirmed: false
+- id: A-041
+  field: execution.warmup_bars
+  section: execution
+  value: 252
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: 'longest indicator period: RETURN_STDEV(252)'
+  user_confirmed: false
+- id: A-042
+  field: execution.slippage_bps_per_side
+  section: execution
+  value: 4.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: house default for market orders
+  user_confirmed: true
+- id: A-043
+  field: execution.cost_bps_round_trip
+  section: execution
+  value: 24.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: swing round-trip cost default
+  user_confirmed: true
+- id: A-044
+  field: execution.oos_fraction
+  section: execution
+  value: 0.3
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.1 holdout fraction
+  user_confirmed: true
+- id: A-045
+  field: execution.embargo_sessions
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.5 embargo after the cut
+  user_confirmed: true
+- id: A-046
+  field: execution.eligibility_min_prior_sessions
+  section: execution
+  value: 60
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: 'listing age: earlier traded sessions required before a symbol is eligible'
+  user_confirmed: false
+- id: A-047
+  field: execution.eligibility_min_volume
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: session volume must be above this to count as traded
+  user_confirmed: false
+- id: A-048
+  field: execution.eligibility_min_price
+  section: execution
+  value: 10.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: 'platform default, NOT APPLIED to this run: the daily panel is split-adjusted,
+    so its prices are back-adjusted and not the traded price, and a nominal rupee
+    floor would not be reliable. The eligibility filters that do apply are listing
+    age, a bar on the session and non-zero volume'
+  user_confirmed: false
+- id: A-049
+  field: profile.carry_forward
+  section: profile
+  value: true
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash CNC
+  user_confirmed: false

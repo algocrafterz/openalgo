@@ -745,24 +745,70 @@
       "summary": "Each week, hold the 20 stocks whose close is nearest to their 252-session high close, provided they are within 5% of it; sell stocks that drop out of that set.",
       "title": "Proximity to the 52-week high",
       "verdict": "no-edge"
+    },
+    {
+      "backtest_module": "backtest/strategies/low_volatility.py",
+      "classification": {
+        "direction": "long_only",
+        "market": "NSE/BSE cash equity",
+        "strategy_category": "Statistical / Quantitative",
+        "strategy_tags": [
+          "low-volatility",
+          "low-risk-anomaly",
+          "cross-sectional",
+          "ranked-portfolio",
+          "monthly-rebalance"
+        ],
+        "timeframe": "1d",
+        "trading_style": "swing"
+      },
+      "folder": "idea-028-low-volatility",
+      "horizon": "swing",
+      "id": "IDEA-028",
+      "last_reviewed": "2026-10-05",
+      "research_state": "active",
+      "revisit_when": "After the first backtest result is reviewed.",
+      "runs": [],
+      "source": {
+        "author": "researcher",
+        "captured": "2026-10-05",
+        "ref": "_inbox/low-volatility.txt",
+        "type": "self"
+      },
+      "stage": "inbox",
+      "status": "inbox",
+      "strategy_category": "Statistical / Quantitative",
+      "strategy_tags": [
+        "low-volatility",
+        "low-risk-anomaly",
+        "cross-sectional",
+        "ranked-portfolio",
+        "monthly-rebalance"
+      ],
+      "summary": "Each month, hold the 30 F&O stocks with the lowest sample standard deviation of their last 252 daily returns; sell stocks that drop out of that set.",
+      "title": "Lowest realised volatility",
+      "verdict": "none"
     }
   ],
   "summary": {
     "by_category": {
-      "Momentum": 1
+      "Momentum": 1,
+      "Statistical / Quantitative": 1
     },
     "by_horizon": {
-      "swing": 1
+      "swing": 2
     },
     "by_status": {
+      "inbox": 1,
       "rejected": 1
     },
     "by_verdict": {
-      "no-edge": 1
+      "no-edge": 1,
+      "none": 1
     },
     "ideas_with_runs": 1,
     "last_reviewed": "2026-10-05",
-    "total": 1,
+    "total": 2,
     "total_runs": 3
   }
 }

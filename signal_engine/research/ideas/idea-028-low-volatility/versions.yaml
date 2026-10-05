@@ -1,0 +1,5 @@
+- version: v1
+  strategy_fingerprint: ada161313f0fce7ed389556562677aec9f7b4814e34f570952ad01b00b586c5f
+  parent: null
+  created_ist: '2026-10-05T13:22:17+05:30'
+  note: v1 frozen before the first backtest
