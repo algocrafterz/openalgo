@@ -591,6 +591,31 @@ def _check_profile(out: _Collector, data: Mapping[str, Any], profiles_dir: Path 
             out.validity("session_window.entry", problem)
 
 
+def _check_universe(out: _Collector, data: Mapping[str, Any]) -> None:
+    """An optional explicit universe: a known declaration type with each key at its one value."""
+    if "universe" not in data:
+        return
+    block = data["universe"]
+    if not isinstance(block, Mapping):
+        out.validity("universe", "must be a mapping with type, exchange, membership_basis, "
+                                 "point_in_time and survivorship_bias")
+        return
+    kind = block.get("type")
+    if kind not in fields.UNIVERSE_DECLARATIONS:
+        out.validity("universe.type",
+                     f"must be one of {', '.join(fields.UNIVERSE_DECLARATIONS)}, got {kind!r}")
+        return
+    expected = fields.UNIVERSE_DECLARATIONS[kind]
+    for key in block:
+        if key != "type" and key not in expected:
+            out.validity(f"universe.{key}", "unknown field")
+    for key, value in expected.items():
+        if key not in block:
+            out.validity(f"universe.{key}", f"is required for type {kind}")
+        elif type(block[key]) is not type(value) or block[key] != value:
+            out.validity(f"universe.{key}", f"must be {value!r} for type {kind}")
+
+
 def validate_spec(data: Any, profiles_dir: Path | None = None) -> list[Problem]:
     """Every problem with a spec, or an empty list when it is complete and concrete."""
     if not isinstance(data, Mapping):
@@ -610,6 +635,7 @@ def validate_spec(data: Any, profiles_dir: Path | None = None) -> list[Problem]:
     _check_sizing(out, data)
     _check_portfolio(out, data)
     _check_optional(out, data)
+    _check_universe(out, data)
     _check_profile(out, data, profiles_dir)
     return out.items
 

@@ -13,6 +13,7 @@ class and default materiality are defined exactly once. Classes follow checklist
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 INTENT = "intent"
 EXECUTION = "execution"
@@ -45,6 +46,12 @@ SELECTIONS = ("chronological", "rank_by_score", "equal_allocation")
 CONFLICTS = ("skip_if_symbol_open", "close_and_reverse", "ignore_opposite_signal")
 RE_ENTRY_TRIGGERS = ("after_stop", "after_target", "after_time_exit", "same_signal")
 DESTINATIONS = ("python", "pine_tradingview")
+#: The universe declarations a spec can make, and the only value each key may hold for it. The
+#: current F&O list is today's membership applied to the past: never point-in-time, always biased.
+UNIVERSE_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "current_fno": {"exchange": "NSE", "membership_basis": "current", "point_in_time": False,
+                    "survivorship_bias": True},
+}
 PRICE_SOURCES = ("open", "high", "low", "close", "hl2", "hlc3", "ohlc4", "volume")
 REFERENCE_PRICES = (
     "entry_fill",
@@ -120,6 +127,7 @@ FIELDS: tuple[FieldDef, ...] = (
     _f("disclosure.prior_variants", INTENT, DISCLOSURE, LOW),
     _f("disclosure.chart_peeking", INTENT, DISCLOSURE, LOW),
     _f("disclosure.destination", INTENT, DISCLOSURE, LOW, DESTINATIONS),
+    _f("universe", INTENT, OPTIONAL, HIGH),
     _f("rationale", INTENT, OPTIONAL, LOW),
     _f("kill_criterion", INTENT, OPTIONAL, LOW),
     _f("execution.product", EXECUTION, DERIVABLE, MEDIUM, PRODUCTS),

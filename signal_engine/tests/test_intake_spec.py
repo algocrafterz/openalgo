@@ -520,3 +520,38 @@ class TestEntryWindowAgainstProfile:
         found = _problems(make_spec(session_window={"entry": "14:30-09:20"}))
         assert [p.field for p in found] == ["session_window.entry"]
         assert "start before" in found[0].message
+
+
+CURRENT_FNO = {"type": "current_fno", "exchange": "NSE", "membership_basis": "current",
+               "point_in_time": False, "survivorship_bias": True}
+
+
+class TestUniverse:
+    """An optional, explicit universe declaration; the only kind today is the current F&O list."""
+
+    def test_absent_universe_is_clean(self):
+        assert spec.validate_spec(make_spec()) == []
+
+    def test_the_current_fno_declaration_is_clean(self):
+        assert spec.validate_spec(make_spec(universe=CURRENT_FNO)) == []
+
+    def test_it_is_an_optional_high_materiality_intent_field(self):
+        f = fields.get("universe")
+        assert (f.section, f.cls, f.materiality) == (fields.INTENT, fields.OPTIONAL, fields.HIGH)
+
+    @pytest.mark.parametrize("key, value", [
+        ("type", "nifty_50"), ("exchange", "BSE"), ("membership_basis", "point_in_time"),
+        ("point_in_time", True), ("survivorship_bias", False)])
+    def test_a_value_the_declaration_cannot_hold_is_validity(self, key, value):
+        found = _texts(make_spec(universe={**CURRENT_FNO, key: value}), "validity")
+        assert any(f"universe.{key}" in t for t in found)
+
+    def test_a_missing_or_unknown_key_is_validity(self):
+        u = {k: v for k, v in CURRENT_FNO.items() if k != "exchange"}
+        assert any("universe.exchange" in t for t in _texts(make_spec(universe=u), "validity"))
+        found = _texts(make_spec(universe={**CURRENT_FNO, "sector": "IT"}), "validity")
+        assert any("universe.sector: unknown field" in t for t in found)
+
+    def test_a_symbol_list_is_not_a_declaration(self):
+        assert any(t.startswith("universe") for t in
+                   _texts(make_spec(universe=["INFY", "TCS"]), "validity"))

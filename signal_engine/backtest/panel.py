@@ -6,6 +6,7 @@ three generic parts of that:
 
   WEEKLY DATES      the last session of each ISO week in the run's calendar. The final session
                     of the calendar never rebalances: there is no next session to fill on.
+  MONTHLY DATES     the same rule for the last session of each calendar month.
   SESSION WINDOW    a trailing window counted in CALENDAR sessions, not in rows. Eligibility and
                     data cleaning delete rows from a symbol's frame, so a 252-row rolling max
                     would silently reach further back than 252 sessions. Here a missing row is
@@ -37,6 +38,15 @@ def weekly_rebalance_sessions(sessions: Sequence[date]) -> list[date]:
         return []
     last_of_week = [max(group) for _, group in groupby(ordered, key=lambda d: d.isocalendar()[:2])]
     return [d for d in last_of_week if d != ordered[-1]]
+
+
+def monthly_rebalance_sessions(sessions: Sequence[date]) -> list[date]:
+    """The last session of each calendar month, leaving out the final session of the calendar."""
+    ordered = sorted(set(sessions))
+    if not ordered:
+        return []
+    last_of_month = [max(group) for _, group in groupby(ordered, key=lambda d: (d.year, d.month))]
+    return [d for d in last_of_month if d != ordered[-1]]
 
 
 def close_panel(frames: Mapping[str, pd.DataFrame], sessions: Sequence[date]) -> pd.DataFrame:

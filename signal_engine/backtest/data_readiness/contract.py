@@ -13,7 +13,8 @@ value:
   that also dropped symbols the strategy can use (owner decision 2026-10-05);
 * session exclusion: a daily lookback strategy may not drop single sessions (owner decision
   for IDEA-027), intraday sessions are independent;
-* universe: the spec's declared universe, else the platform default (today's NSE F&O list).
+* universe: the spec's declared universe (a symbol list, or the `current_fno` declaration, which is
+  today's NSE F&O list), else the platform default (the same list).
   The universe is never redefined as "whatever the dataset holds": preflight resolves universe
   -> dataset availability -> requested -> exclusions -> eligible and records each step.
 """
@@ -99,12 +100,16 @@ def _universe(frozen: Any) -> tuple[str, str, tuple[str, ...]]:
     declared = frozen.intent.get("universe")
     if isinstance(declared, list) and declared:
         return "spec", "spec.yaml universe", tuple(str(s) for s in declared)
-    if declared not in (None, "", []):
+    source = DEFAULT_UNIVERSE_SOURCE
+    if isinstance(declared, dict) and declared.get("type") == "current_fno":
+        source = (f"declared in the spec ({json.dumps(declared, sort_keys=True)}); "
+                  f"{DEFAULT_UNIVERSE_SOURCE}")
+    elif declared not in (None, "", []):
         raise ContractError(f"unsupported universe declaration {declared!r}")
     from signal_engine.backtest import data
 
     symbols = tuple(sorted(s.removesuffix(".NS") for s in data.NSE_FNO))
-    return DEFAULT_UNIVERSE, DEFAULT_UNIVERSE_SOURCE, symbols
+    return DEFAULT_UNIVERSE, source, symbols
 
 
 def resolve_contract(frozen: Any) -> DataContract:

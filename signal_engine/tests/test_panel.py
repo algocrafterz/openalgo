@@ -63,6 +63,33 @@ class TestWeeklyRebalanceSessions:
         ]
 
 
+class TestMonthlyRebalanceSessions:
+    def test_it_is_the_last_session_of_each_calendar_month(self):
+        sess = sessions_between(date(2026, 1, 1), 45)  # 1 Jan to early March
+        assert panel.monthly_rebalance_sessions(sess) == [date(2026, 1, 30), date(2026, 2, 27)]
+
+    def test_a_month_end_holiday_makes_the_previous_session_the_rebalance(self):
+        sess = sessions_between(date(2026, 1, 1), 45, holidays={date(2026, 1, 30)})
+        assert panel.monthly_rebalance_sessions(sess)[0] == date(2026, 1, 29)
+
+    def test_the_final_available_session_never_rebalances(self):
+        # data ends on the last session of February: there is no next session to execute on
+        sess = [d for d in sessions_between(date(2026, 1, 1), 45) if d <= date(2026, 2, 27)]
+        assert panel.monthly_rebalance_sessions(sess) == [date(2026, 1, 30)]
+
+    def test_a_partial_final_month_does_not_rebalance(self):
+        sess = [d for d in sessions_between(date(2026, 1, 1), 45) if d <= date(2026, 2, 11)]
+        assert panel.monthly_rebalance_sessions(sess) == [date(2026, 1, 30)]
+
+    def test_it_accepts_unsorted_duplicates(self):
+        sess = sessions_between(date(2026, 1, 1), 45)
+        assert panel.monthly_rebalance_sessions(sess[::-1] + sess) == [
+            date(2026, 1, 30), date(2026, 2, 27)]
+
+    def test_an_empty_calendar_has_no_rebalance(self):
+        assert panel.monthly_rebalance_sessions([]) == []
+
+
 class TestCloseAndTrailingHigh:
     def test_the_panel_is_indexed_by_the_calendar_not_by_each_symbols_rows(self):
         sess = sessions_between(date(2026, 1, 5), 6)

@@ -50,6 +50,7 @@ def _register():
         LiquiditySweep,
         LiquiditySweepParams,
     )
+    from signal_engine.backtest.strategies.low_volatility import LowVolatility, LowVolatilityParams
     from signal_engine.backtest.strategies.nr_breakout import NrBreakout, NrBreakoutParams
     from signal_engine.backtest.strategies.open_drive import OpenDrive, OpenDriveParams
     from signal_engine.backtest.strategies.orb import Orb, OrbParams
@@ -69,6 +70,7 @@ def _register():
     REGISTRY["ibs_meanrev"] = (IbsMeanRev, IbsMeanRevParams, "swing")
     REGISTRY["key_level"] = (KeyLevel, KeyLevelParams, "intraday")
     REGISTRY["liquidity_sweep"] = (LiquiditySweep, LiquiditySweepParams, "swing")
+    REGISTRY["low_volatility"] = (LowVolatility, LowVolatilityParams, "swing")
     REGISTRY["nr_breakout"] = (NrBreakout, NrBreakoutParams, "intraday")
     REGISTRY["open_drive"] = (OpenDrive, OpenDriveParams, "intraday")
     REGISTRY["orb"] = (Orb, OrbParams, "intraday")

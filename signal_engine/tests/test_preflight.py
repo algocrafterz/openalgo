@@ -62,6 +62,20 @@ class TestContract:
         assert not any(s.endswith(".NS") for s in c.universe_symbols)
         assert len(c.universe_version) == 64
 
+    def test_a_declared_current_fno_universe_is_the_fno_list_with_its_declaration(self):
+        declared = {"type": "current_fno", "exchange": "NSE", "membership_basis": "current",
+                    "point_in_time": False, "survivorship_bias": True}
+        c = dc.resolve_contract(_frozen(universe=declared))
+        default = dc.resolve_contract(_frozen())
+        assert c.universe_name == dc.DEFAULT_UNIVERSE
+        assert c.universe_symbols == default.universe_symbols
+        assert c.universe_version == default.universe_version
+        assert "declared in the spec" in c.universe_source and "survivorship bias" in c.universe_source
+
+    def test_an_unknown_universe_declaration_is_refused(self):
+        with pytest.raises(dc.ContractError):
+            dc.resolve_contract(_frozen(universe={"type": "nifty_50"}))
+
     def test_declared_universe_is_respected(self):
         c = dc.resolve_contract(_frozen(universe=["AAA", "BBB"]))
         assert c.universe_symbols == ("AAA", "BBB") and c.universe_name == "spec"
