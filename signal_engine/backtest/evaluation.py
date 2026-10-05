@@ -737,7 +737,7 @@ def _g33(x: _Inputs) -> _Result:
     )
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    wf = stats.walk_forward(x.trades, months=WALK_FORWARD_MONTHS)
+    wf = stats.walk_forward(x.trades, months=WALK_FORWARD_MONTHS, values=_r_net(x.trades))
     if wf["windows"] < MIN_WALK_FORWARD_WINDOWS:
         return (
             "not_evaluated",

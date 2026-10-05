@@ -1,5 +1,7 @@
 """Gates that became computable: G1.1, G1.3, G2.3, G2.6, G2.7, G3.3, G3.5."""
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -24,6 +26,19 @@ def _t(day, r_net, symbol="A.NS", exit_day=None):
         reason="tp",
         r_gross=r_net + 0.1,
         r_net=r_net,
+    )
+
+
+def _no_stop(trade):
+    """The same trade without a stop: R is undefined, the result is a return on notional."""
+    return dataclasses.replace(
+        trade,
+        sl=float("nan"),
+        risk=float("nan"),
+        r_gross=float("nan"),
+        r_net=float("nan"),
+        gross_ret=(trade.r_net + 0.1) / 100,
+        net_ret=trade.r_net / 100,
     )
 
 
@@ -146,6 +161,18 @@ class TestWalkForward:
         row = _row(_evaluate(_noisy_book(n=100)), "G3.3")
         assert row["status"] == "not_evaluated"
         assert "4" in row["evidence"]
+
+    def test_trades_without_a_stop_are_scored_in_net_bps(self):
+        # Regression: G3.3 read r_net, which is NaN without a stop, so every window scored
+        # NaN and the gate reported "0 of N windows net positive" whatever the trades earned.
+        book = [_no_stop(t) for t in _noisy_book(n=1000, mean=0.3, seed=1)]
+        row = _row(_evaluate(book), "G3.3")
+        assert row["status"] == "pass"
+        assert not row["evidence"].startswith("0 of")
+
+    def test_losing_trades_without_a_stop_still_fail(self):
+        book = [_no_stop(t) for t in _noisy_book(n=1000, mean=-0.3, seed=1)]
+        assert _row(_evaluate(book), "G3.3")["status"] == "fail"
 
 
 class TestLeakage:

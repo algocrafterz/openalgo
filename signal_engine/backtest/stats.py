@@ -193,18 +193,29 @@ def walk_forward_windows(
     return out
 
 
-def walk_forward(trades, months: int = 6, start: Any = None, end: Any = None) -> dict[str, Any]:
+def walk_forward(
+    trades, months: int = 6, start: Any = None, end: Any = None, values: Any = None
+) -> dict[str, Any]:
     """Net result per rolling window with the strategy's parameters held fixed.
 
     This is a stability check across successive windows, not a re-fit per window: the
     shipped defaults are what every window scores. A window with no trades counts as not
     positive, so a strategy cannot pass by being silent for years.
+
+    `values` is each trade's net result in the caller's unit, in trade order; it defaults to
+    `r_net`. A trade without a stop has no R (`r_net` is NaN), so a caller scoring such trades
+    passes another unit, such as net bps.
     """
     trades = list(trades)
     if not trades:
         return {"windows": 0, "positive": 0, "empty": 0, "share_positive": float("nan"), "rows": []}
     days = pd.DatetimeIndex([pd.Timestamp(t.day).normalize() for t in trades])
-    r = np.array([t.r_net for t in trades], dtype=float)
+    if values is None:
+        r = np.array([t.r_net for t in trades], dtype=float)
+    else:
+        r = np.asarray(values, dtype=float)
+        if r.shape != (len(trades),):
+            raise ValueError(f"values has {r.size} entries for {len(trades)} trades")
     windows = walk_forward_windows(start or days.min(), end or days.max(), months)
     rows = []
     for lo, hi in windows:

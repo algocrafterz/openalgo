@@ -124,3 +124,17 @@ class TestWalkForward:
         out = stats.walk_forward(trades, months=6, start="2020-01-01", end="2022-12-31")
         assert out["empty"] == 4
         assert out["positive"] == 2
+
+    def test_per_trade_values_replace_r_when_given(self):
+        days = pd.date_range("2020-01-01", "2022-12-31", freq="7D")
+        trades = [_T(d, float("nan")) for d in days]
+        values = [5.0 if d.year != 2021 else -5.0 for d in days]
+        out = stats.walk_forward(
+            trades, months=6, start="2020-01-01", end="2022-12-31", values=values
+        )
+        assert out["positive"] == 4
+
+    def test_values_must_match_the_trades(self):
+        trades = [_T(pd.Timestamp("2020-02-01"), 0.3)]
+        with pytest.raises(ValueError):
+            stats.walk_forward(trades, months=6, values=[1.0, 2.0])
