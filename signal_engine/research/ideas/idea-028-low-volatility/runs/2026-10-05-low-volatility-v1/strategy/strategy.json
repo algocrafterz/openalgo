@@ -1,0 +1,14 @@
+{
+  "branch_label": null,
+  "direction": "long_only",
+  "name": "Lowest realised volatility",
+  "params_fingerprint": "71e590f961443da85bec275a22b9b9e76889ddf770e4660e785661fa8638cb10",
+  "parent_version": null,
+  "product": "CNC",
+  "rules_fingerprint": "9357d6e084b3aaf865f0e3cba6c7327aac6dc39b31d847f06ffea194d6f9b06d",
+  "strategy_fingerprint": "ada161313f0fce7ed389556562677aec9f7b4814e34f570952ad01b00b586c5f",
+  "strategy_id": "IDEA-028",
+  "style": "swing",
+  "timeframe": "1d",
+  "version": "v1"
+}

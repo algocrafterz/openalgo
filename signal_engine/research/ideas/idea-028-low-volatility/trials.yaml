@@ -1,0 +1,9 @@
+- trial: 1
+  kind: material
+  run_id: 2026-10-05-low-volatility-v1
+  fingerprints:
+    rules: 9357d6e084b3aaf865f0e3cba6c7327aac6dc39b31d847f06ffea194d6f9b06d
+    params: 71e590f961443da85bec275a22b9b9e76889ddf770e4660e785661fa8638cb10
+    execution: e451b86d2bb16dd2a6ab1ec3531528a135fe47991910bdb799b7ad4f7342e9fd
+    cost: f5f3e030f15111924dcff4a648694cb464234b7a6a40bc855d0b784e939d4d60
+  created_ist: '2026-10-05T14:18:55+05:30'

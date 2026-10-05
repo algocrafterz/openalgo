@@ -766,9 +766,245 @@
       "horizon": "swing",
       "id": "IDEA-028",
       "last_reviewed": "2026-10-05",
+      "lineage": {
+        "delta_vs_parent": null,
+        "edge_bar": 2.5,
+        "edge_status": "clears_bar",
+        "latest_run_id": "2026-10-05-low-volatility-v1",
+        "runs": 1,
+        "trend": "insufficient",
+        "trials_sum": 1
+      },
       "research_state": "active",
       "revisit_when": "After the first backtest result is reviewed.",
-      "runs": [],
+      "runs": [
+        {
+          "artifact_dir": "2026-10-05-low-volatility-v1/",
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": -309.1429,
+            "excess_t_stat": -1.805,
+            "gross_bps": 1800.1756,
+            "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+            "net_bps": 1776.1756,
+            "seed": 0,
+            "skipped": 2,
+            "trade_net_bps": 1467.0327,
+            "trades": 299
+          },
+          "change_classes": [],
+          "change_note": "single clean v1 run on published NSE daily dataset nse-daily-20261005-002",
+          "code_dirty": false,
+          "code_version": "4123f5cdb",
+          "cost_model": {
+            "capital": 100000.0,
+            "exchange": "NSE",
+            "fixed_notional": 100000.0,
+            "flat_bps": 24.0,
+            "leverage": 1.0,
+            "mean_statutory_bps": 22.248,
+            "mean_total_bps": 30.248,
+            "model": "statutory-per-trade",
+            "modelled_net_pnl_rs": 4828370.84,
+            "modelled_total_cost_rs": 91046.85,
+            "net_bps": 1604.1099,
+            "net_bps_slip_2x": 1596.1099,
+            "pnl_basis": "modelled: every trade is a fixed notional of Rs 1,00,000 (capital per position) with no stop, with no limit on concurrent positions or total capital; net is after the modelled statutory charges and slippage",
+            "product": "CNC",
+            "risk_per_trade": 0.01,
+            "slippage_bps_per_side": 4.0,
+            "total_bps_at": {
+              "1.0": 30.248,
+              "1.5": 34.248,
+              "2.0": 38.248
+            },
+            "trades": 301
+          },
+          "cost_sensitivity": [
+            {
+              "net_bps": 1634.358,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 1629.358,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": 1624.358,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": 1614.358,
+              "round_trip_bps": 20
+            },
+            {
+              "net_bps": 1610.358,
+              "round_trip_bps": 24.0
+            }
+          ],
+          "costs": {
+            "model": "flat-round-trip-bps",
+            "round_trip_bps": 24.0
+          },
+          "data": {
+            "as_of": "2026-10-01",
+            "bar_size": "1d",
+            "source": "published:nse-daily-20261005-002",
+            "universe": "nse_fno_current-206-eligible-symbols"
+          },
+          "dataset_version": "nse-daily-20261005-002",
+          "date": "2026-10-05",
+          "evaluation_summary": {
+            "counts": {
+              "fail": 2,
+              "not_applicable": 9,
+              "not_evaluated": 35,
+              "pass": 12,
+              "report": 10
+            },
+            "hard_failed": []
+          },
+          "in_sample": {
+            "gross_bps": 1357.2219,
+            "net_bps": 1333.2219,
+            "sharpe": 5.784,
+            "t_stat": 3.45,
+            "trades": 179,
+            "win_rate": 0.6536
+          },
+          "manifest_sha256": "1ed9dd24821add1139e8b86d82e01ee6e375c449845cce692482cd68402c0280",
+          "metrics": {
+            "breakeven_cost_bps": 1634.358,
+            "days": 114,
+            "gross_bps": 1634.358,
+            "hurdle_t": 1.972,
+            "max_dd_bps": 11475.7432,
+            "median_concurrent": 29.0,
+            "net_bps": 1610.358,
+            "peak_concurrent": 30,
+            "profit_factor": 5.412,
+            "r_defined": false,
+            "sharpe": 4.863,
+            "t_stat": 5.657,
+            "total_cost_bps": 7224.0007,
+            "trades": 301,
+            "win_rate": 0.6512
+          },
+          "missing_capabilities": [
+            "Spec schema split: strategy intent vs resolved execution configuration vs deployment profile; field class and per-field provenance",
+            "Spec validation: entry, exit, direction, timeframe, holding period, stop, signal evaluation, order submission, fill model, indicator source, reference prices, portfolio scope",
+            "Assumption ledger with materiality and confirmation; intake states",
+            "Strategy versions: append-only `versions.yaml`, automatic and branch labels, current and promoted pointers, rules, parameters and strategy fingerprints",
+            "Point-in-time universe membership and per-date eligibility",
+            "Direction validation (no shorts in swing or positional)",
+            "Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat)",
+            "Deployment profile: MIS force-flat 15:00, CNC carry-forward",
+            "Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version",
+            "Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade)",
+            "Run manifest and run folder layout; immutable artifacts retained and addressable",
+            "Per-component cost decomposition per trade",
+            "Validity vs performance failure handling in the gate runner",
+            "Trial counting under the acceptance-criteria definition",
+            "session.broker_cutoff is null: CNC delivery has no intraday broker cutoff",
+            "random.monte_carlo not captured until engine step 5",
+            "session.force_flat is null: CNC delivery has no force-flat, positions carry forward"
+          ],
+          "n_trials": 1,
+          "next_action": {
+            "action": "Verify that backtest and live share one code path",
+            "gate": "G0.1",
+            "reason": "Divergent logic makes results unreliable"
+          },
+          "notes": "Shipped default configuration on nse_fno_current-206-eligible-symbols. n_trials=1 from trials.yaml: 1 material configuration(s) and 0 external. Regime analysis not available: no published index dataset (NIFTY/VIX); no external source is used and the verdict is unaffected.",
+          "out_of_sample": {
+            "gross_bps": 500.8573,
+            "net_bps": 476.8573,
+            "sharpe": 6.358,
+            "t_stat": 2.592,
+            "trades": 92,
+            "win_rate": 0.5761
+          },
+          "params": {
+            "engine": "swing",
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": false,
+              "cost_bps": 24.0,
+              "max_hold_bars": null,
+              "min_sl_pct": 0.005,
+              "warmup_bars": 252
+            },
+            "strategy": {
+              "max_positions": 30,
+              "rebalance": "monthly",
+              "rebalance_day": "last_session_of_month",
+              "vol_lookback_returns": 252
+            },
+            "strategy_class": "LowVolatility"
+          },
+          "parent_run_id": null,
+          "period": {
+            "end": "2026-10-01",
+            "start": "2016-01-01"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 1559.4962,
+              "max_positions": 3,
+              "net_bps": 1535.4962,
+              "sharpe": 6.811,
+              "t_stat": 2.149,
+              "taken_pct": 11.6,
+              "trades": 35,
+              "win_rate": 0.6
+            },
+            {
+              "gross_bps": 2607.8776,
+              "max_positions": 5,
+              "net_bps": 2583.8776,
+              "sharpe": 5.385,
+              "t_stat": 2.593,
+              "taken_pct": 13.3,
+              "trades": 40,
+              "win_rate": 0.65
+            },
+            {
+              "gross_bps": 1942.0205,
+              "max_positions": 10,
+              "net_bps": 1918.0205,
+              "sharpe": 4.993,
+              "t_stat": 4.311,
+              "taken_pct": 32.2,
+              "trades": 97,
+              "win_rate": 0.6907
+            }
+          ],
+          "promoted": false,
+          "promotion_decision": "NOT_READY",
+          "promotion_eligible": true,
+          "reproducible": true,
+          "run_id": "2026-10-05-low-volatility-v1",
+          "run_status": "VALID",
+          "run_verdict": "MARGINAL",
+          "schema": 4,
+          "split": {
+            "embargo_sessions": 1,
+            "embargoed_oos": 0,
+            "oos_start": "2023-07-13",
+            "purged_in_sample": 30,
+            "type": "oos"
+          },
+          "strategy_fingerprint": "ada161313f0fce7ed389556562677aec9f7b4814e34f570952ad01b00b586c5f",
+          "strategy_version": "v1",
+          "trial_counted": true,
+          "trials": {
+            "external": 0,
+            "material": 1,
+            "source": "trials.yaml",
+            "total": 1
+          }
+        }
+      ],
       "source": {
         "author": "researcher",
         "captured": "2026-10-05",
@@ -787,7 +1023,7 @@
       ],
       "summary": "Each month, hold the 30 F&O stocks with the lowest sample standard deviation of their last 252 daily returns; sell stocks that drop out of that set.",
       "title": "Lowest realised volatility",
-      "verdict": "none"
+      "verdict": "marginal"
     }
   ],
   "summary": {
@@ -803,12 +1039,12 @@
       "rejected": 1
     },
     "by_verdict": {
-      "no-edge": 1,
-      "none": 1
+      "marginal": 1,
+      "no-edge": 1
     },
-    "ideas_with_runs": 1,
+    "ideas_with_runs": 2,
     "last_reviewed": "2026-10-05",
     "total": 2,
-    "total_runs": 3
+    "total_runs": 4
   }
 }

@@ -1,0 +1,64 @@
+{
+  "profile": {
+    "broker": "flattrade",
+    "market": "NSE/BSE cash equity",
+    "name": "flattrade-nse-cash",
+    "products": {
+      "CNC": {
+        "carry_forward": true
+      },
+      "MIS": {
+        "exit_convention": "engine_exit_before_force_flat",
+        "force_flat": "15:00",
+        "latest_exit_bar_close": "14:55",
+        "standing_time_exit": "14:45"
+      }
+    }
+  },
+  "resolved": {
+    "execution.bar_size": {
+      "ledger_id": "A-040",
+      "value": "1d"
+    },
+    "execution.cost_bps_round_trip": {
+      "ledger_id": "A-043",
+      "value": 24.0
+    },
+    "execution.eligibility_min_price": {
+      "ledger_id": "A-048",
+      "value": 10.0
+    },
+    "execution.eligibility_min_prior_sessions": {
+      "ledger_id": "A-046",
+      "value": 60
+    },
+    "execution.eligibility_min_volume": {
+      "ledger_id": "A-047",
+      "value": 1
+    },
+    "execution.embargo_sessions": {
+      "ledger_id": "A-045",
+      "value": 1
+    },
+    "execution.oos_fraction": {
+      "ledger_id": "A-044",
+      "value": 0.3
+    },
+    "execution.product": {
+      "ledger_id": "A-039",
+      "value": "CNC"
+    },
+    "execution.slippage_bps_per_side": {
+      "ledger_id": "A-042",
+      "value": 4.0
+    },
+    "execution.warmup_bars": {
+      "ledger_id": "A-041",
+      "value": 252
+    },
+    "profile.carry_forward": {
+      "ledger_id": "A-049",
+      "value": true
+    }
+  }
+}

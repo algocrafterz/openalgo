@@ -1,0 +1,2504 @@
+{
+  "run_id": "2026-10-05-low-volatility-v1",
+  "date": "2026-10-05",
+  "code_version": "4123f5cdb",
+  "data": {
+    "source": "published:nse-daily-20261005-002",
+    "as_of": "2026-10-01",
+    "universe": "nse_fno_current-206-eligible-symbols",
+    "bar_size": "1d"
+  },
+  "period": {
+    "start": "2016-01-01",
+    "end": "2026-10-01"
+  },
+  "costs": {
+    "model": "flat-round-trip-bps",
+    "round_trip_bps": 24.0
+  },
+  "metrics": {
+    "trades": 301,
+    "gross_bps": 1634.358,
+    "net_bps": 1610.358,
+    "win_rate": 0.6512,
+    "t_stat": 5.657,
+    "sharpe": 4.863,
+    "days": 114,
+    "breakeven_cost_bps": 1634.358,
+    "hurdle_t": 1.972,
+    "r_defined": false,
+    "profit_factor": 5.412,
+    "max_dd_bps": 11475.7432,
+    "total_cost_bps": 7224.0007,
+    "peak_concurrent": 30,
+    "median_concurrent": 29.0
+  },
+  "params": {
+    "strategy_class": "LowVolatility",
+    "engine": "swing",
+    "strategy": {
+      "vol_lookback_returns": 252,
+      "max_positions": 30,
+      "rebalance": "monthly",
+      "rebalance_day": "last_session_of_month"
+    },
+    "run": {
+      "allow_longs": true,
+      "allow_shorts": false,
+      "cost_bps": 24.0,
+      "min_sl_pct": 0.005,
+      "max_hold_bars": null,
+      "warmup_bars": 252
+    }
+  },
+  "parent_run_id": null,
+  "change_note": "single clean v1 run on published NSE daily dataset nse-daily-20261005-002",
+  "n_trials": 1,
+  "promoted": false,
+  "cost_sensitivity": [
+    {
+      "round_trip_bps": 0,
+      "net_bps": 1634.358
+    },
+    {
+      "round_trip_bps": 5,
+      "net_bps": 1629.358
+    },
+    {
+      "round_trip_bps": 10,
+      "net_bps": 1624.358
+    },
+    {
+      "round_trip_bps": 20,
+      "net_bps": 1614.358
+    },
+    {
+      "round_trip_bps": 24.0,
+      "net_bps": 1610.358
+    }
+  ],
+  "series": {
+    "equity_bps": [
+      [
+        "2017-02-01",
+        137647.9139
+      ],
+      [
+        "2017-03-01",
+        135479.5575
+      ],
+      [
+        "2017-04-03",
+        139028.1065
+      ],
+      [
+        "2017-05-02",
+        139657.205
+      ],
+      [
+        "2017-06-01",
+        140706.9158
+      ],
+      [
+        "2017-07-03",
+        148895.2985
+      ],
+      [
+        "2017-08-01",
+        147952.8851
+      ],
+      [
+        "2017-09-01",
+        172344.3935
+      ],
+      [
+        "2017-11-01",
+        172067.4215
+      ],
+      [
+        "2017-12-01",
+        169073.2451
+      ],
+      [
+        "2018-01-01",
+        169160.4721
+      ],
+      [
+        "2018-02-01",
+        170145.4302
+      ],
+      [
+        "2018-03-01",
+        170981.607
+      ],
+      [
+        "2018-04-02",
+        172916.1739
+      ],
+      [
+        "2018-05-02",
+        172801.5739
+      ],
+      [
+        "2018-06-01",
+        169292.162
+      ],
+      [
+        "2018-07-02",
+        165698.8737
+      ],
+      [
+        "2018-08-01",
+        167513.3617
+      ],
+      [
+        "2018-09-03",
+        164929.8045
+      ],
+      [
+        "2018-10-01",
+        164055.8196
+      ],
+      [
+        "2018-11-01",
+        165009.9365
+      ],
+      [
+        "2018-12-03",
+        171646.1222
+      ],
+      [
+        "2019-01-01",
+        171597.0909
+      ],
+      [
+        "2019-02-01",
+        171380.1141
+      ],
+      [
+        "2019-03-01",
+        178351.8992
+      ],
+      [
+        "2019-04-01",
+        171663.6317
+      ],
+      [
+        "2019-05-02",
+        171072.1532
+      ],
+      [
+        "2019-06-03",
+        177282.1589
+      ],
+      [
+        "2019-07-01",
+        178015.5402
+      ],
+      [
+        "2019-08-01",
+        178730.8112
+      ],
+      [
+        "2019-09-03",
+        188644.7295
+      ],
+      [
+        "2019-10-01",
+        190367.6702
+      ],
+      [
+        "2019-11-01",
+        185455.8
+      ],
+      [
+        "2019-12-02",
+        194143.9807
+      ],
+      [
+        "2020-02-01",
+        194040.1298
+      ],
+      [
+        "2020-03-02",
+        202786.897
+      ],
+      [
+        "2020-04-01",
+        237289.2801
+      ],
+      [
+        "2020-05-04",
+        255097.0001
+      ],
+      [
+        "2020-06-01",
+        259302.6846
+      ],
+      [
+        "2020-07-01",
+        268760.9931
+      ],
+      [
+        "2020-08-03",
+        279519.3418
+      ],
+      [
+        "2020-09-01",
+        283895.3856
+      ],
+      [
+        "2020-10-01",
+        302258.001
+      ],
+      [
+        "2020-11-02",
+        303924.649
+      ],
+      [
+        "2020-12-01",
+        305583.8519
+      ],
+      [
+        "2021-01-01",
+        309069.9055
+      ],
+      [
+        "2021-02-01",
+        310601.4896
+      ],
+      [
+        "2021-03-01",
+        314397.8339
+      ],
+      [
+        "2021-04-01",
+        325207.2617
+      ],
+      [
+        "2021-05-03",
+        335425.386
+      ],
+      [
+        "2021-06-01",
+        336365.6766
+      ],
+      [
+        "2021-07-01",
+        343380.6301
+      ],
+      [
+        "2021-08-02",
+        346943.5281
+      ],
+      [
+        "2021-09-01",
+        346692.3188
+      ],
+      [
+        "2021-10-01",
+        350286.6255
+      ],
+      [
+        "2021-11-01",
+        350514.304
+      ],
+      [
+        "2021-12-01",
+        361334.493
+      ],
+      [
+        "2022-01-03",
+        372624.1014
+      ],
+      [
+        "2022-02-01",
+        371885.1962
+      ],
+      [
+        "2022-03-02",
+        371870.8518
+      ],
+      [
+        "2022-04-01",
+        371991.0322
+      ],
+      [
+        "2022-05-02",
+        379138.3831
+      ],
+      [
+        "2022-06-01",
+        388648.4007
+      ],
+      [
+        "2022-07-01",
+        392066.8545
+      ],
+      [
+        "2022-08-01",
+        392555.7533
+      ],
+      [
+        "2022-09-01",
+        407852.97
+      ],
+      [
+        "2022-10-03",
+        407787.3986
+      ],
+      [
+        "2022-11-01",
+        407403.9125
+      ],
+      [
+        "2022-12-01",
+        407112.354
+      ],
+      [
+        "2023-01-02",
+        406853.1077
+      ],
+      [
+        "2023-02-01",
+        414800.7104
+      ],
+      [
+        "2023-03-01",
+        428244.3075
+      ],
+      [
+        "2023-04-03",
+        433429.1144
+      ],
+      [
+        "2023-05-02",
+        436761.6076
+      ],
+      [
+        "2023-06-01",
+        438528.9653
+      ],
+      [
+        "2023-07-03",
+        440846.8937
+      ],
+      [
+        "2023-08-01",
+        454050.2541
+      ],
+      [
+        "2023-10-03",
+        455692.7592
+      ],
+      [
+        "2023-11-01",
+        459151.9695
+      ],
+      [
+        "2023-12-01",
+        462963.8839
+      ],
+      [
+        "2024-01-01",
+        463035.7236
+      ],
+      [
+        "2024-02-01",
+        464925.1656
+      ],
+      [
+        "2024-03-01",
+        469480.6289
+      ],
+      [
+        "2024-04-01",
+        472665.31
+      ],
+      [
+        "2024-05-02",
+        476508.8982
+      ],
+      [
+        "2024-06-03",
+        479268.1109
+      ],
+      [
+        "2024-07-01",
+        479265.3335
+      ],
+      [
+        "2024-08-01",
+        479089.802
+      ],
+      [
+        "2024-09-02",
+        479108.8313
+      ],
+      [
+        "2024-10-01",
+        479419.6714
+      ],
+      [
+        "2024-11-01",
+        479944.7922
+      ],
+      [
+        "2024-12-02",
+        479629.5185
+      ],
+      [
+        "2025-01-01",
+        480245.4818
+      ],
+      [
+        "2025-02-01",
+        481669.8289
+      ],
+      [
+        "2025-03-03",
+        485054.8378
+      ],
+      [
+        "2025-04-01",
+        485986.9696
+      ],
+      [
+        "2025-05-02",
+        489138.4195
+      ],
+      [
+        "2025-06-02",
+        490640.4554
+      ],
+      [
+        "2025-07-01",
+        492547.376
+      ],
+      [
+        "2025-08-01",
+        493385.1088
+      ],
+      [
+        "2025-09-01",
+        496193.5101
+      ],
+      [
+        "2025-10-01",
+        495428.9875
+      ],
+      [
+        "2025-11-03",
+        495470.2345
+      ],
+      [
+        "2025-12-01",
+        493867.2116
+      ],
+      [
+        "2026-01-01",
+        493027.8216
+      ],
+      [
+        "2026-02-01",
+        491296.8799
+      ],
+      [
+        "2026-03-02",
+        489635.7432
+      ],
+      [
+        "2026-04-01",
+        494125.378
+      ],
+      [
+        "2026-05-04",
+        489588.6397
+      ],
+      [
+        "2026-06-01",
+        489834.4038
+      ],
+      [
+        "2026-07-01",
+        488786.7657
+      ],
+      [
+        "2026-08-03",
+        487309.1116
+      ],
+      [
+        "2026-09-01",
+        485306.6358
+      ],
+      [
+        "2026-10-01",
+        484717.767
+      ]
+    ],
+    "drawdown_bps": [
+      [
+        "2017-02-01",
+        0.0
+      ],
+      [
+        "2017-03-01",
+        -2168.3564
+      ],
+      [
+        "2017-04-03",
+        0.0
+      ],
+      [
+        "2017-05-02",
+        0.0
+      ],
+      [
+        "2017-06-01",
+        0.0
+      ],
+      [
+        "2017-07-03",
+        0.0
+      ],
+      [
+        "2017-08-01",
+        -942.4134
+      ],
+      [
+        "2017-09-01",
+        0.0
+      ],
+      [
+        "2017-11-01",
+        -276.9719
+      ],
+      [
+        "2017-12-01",
+        -3271.1483
+      ],
+      [
+        "2018-01-01",
+        -3183.9213
+      ],
+      [
+        "2018-02-01",
+        -2198.9633
+      ],
+      [
+        "2018-03-01",
+        -1362.7865
+      ],
+      [
+        "2018-04-02",
+        0.0
+      ],
+      [
+        "2018-05-02",
+        -114.6
+      ],
+      [
+        "2018-06-01",
+        -3624.0119
+      ],
+      [
+        "2018-07-02",
+        -7217.3001
+      ],
+      [
+        "2018-08-01",
+        -5402.8122
+      ],
+      [
+        "2018-09-03",
+        -7986.3693
+      ],
+      [
+        "2018-10-01",
+        -8860.3543
+      ],
+      [
+        "2018-11-01",
+        -7906.2374
+      ],
+      [
+        "2018-12-03",
+        -1270.0517
+      ],
+      [
+        "2019-01-01",
+        -1319.083
+      ],
+      [
+        "2019-02-01",
+        -1536.0598
+      ],
+      [
+        "2019-03-01",
+        0.0
+      ],
+      [
+        "2019-04-01",
+        -6688.2675
+      ],
+      [
+        "2019-05-02",
+        -7279.746
+      ],
+      [
+        "2019-06-03",
+        -1069.7403
+      ],
+      [
+        "2019-07-01",
+        -336.359
+      ],
+      [
+        "2019-08-01",
+        0.0
+      ],
+      [
+        "2019-09-03",
+        0.0
+      ],
+      [
+        "2019-10-01",
+        0.0
+      ],
+      [
+        "2019-11-01",
+        -4911.8702
+      ],
+      [
+        "2019-12-02",
+        0.0
+      ],
+      [
+        "2020-02-01",
+        -103.8509
+      ],
+      [
+        "2020-03-02",
+        0.0
+      ],
+      [
+        "2020-04-01",
+        0.0
+      ],
+      [
+        "2020-05-04",
+        0.0
+      ],
+      [
+        "2020-06-01",
+        0.0
+      ],
+      [
+        "2020-07-01",
+        0.0
+      ],
+      [
+        "2020-08-03",
+        0.0
+      ],
+      [
+        "2020-09-01",
+        0.0
+      ],
+      [
+        "2020-10-01",
+        0.0
+      ],
+      [
+        "2020-11-02",
+        0.0
+      ],
+      [
+        "2020-12-01",
+        0.0
+      ],
+      [
+        "2021-01-01",
+        0.0
+      ],
+      [
+        "2021-02-01",
+        0.0
+      ],
+      [
+        "2021-03-01",
+        0.0
+      ],
+      [
+        "2021-04-01",
+        0.0
+      ],
+      [
+        "2021-05-03",
+        0.0
+      ],
+      [
+        "2021-06-01",
+        0.0
+      ],
+      [
+        "2021-07-01",
+        0.0
+      ],
+      [
+        "2021-08-02",
+        0.0
+      ],
+      [
+        "2021-09-01",
+        -251.2093
+      ],
+      [
+        "2021-10-01",
+        0.0
+      ],
+      [
+        "2021-11-01",
+        0.0
+      ],
+      [
+        "2021-12-01",
+        0.0
+      ],
+      [
+        "2022-01-03",
+        0.0
+      ],
+      [
+        "2022-02-01",
+        -738.9053
+      ],
+      [
+        "2022-03-02",
+        -753.2496
+      ],
+      [
+        "2022-04-01",
+        -633.0693
+      ],
+      [
+        "2022-05-02",
+        0.0
+      ],
+      [
+        "2022-06-01",
+        0.0
+      ],
+      [
+        "2022-07-01",
+        0.0
+      ],
+      [
+        "2022-08-01",
+        0.0
+      ],
+      [
+        "2022-09-01",
+        0.0
+      ],
+      [
+        "2022-10-03",
+        -65.5714
+      ],
+      [
+        "2022-11-01",
+        -449.0575
+      ],
+      [
+        "2022-12-01",
+        -740.616
+      ],
+      [
+        "2023-01-02",
+        -999.8623
+      ],
+      [
+        "2023-02-01",
+        0.0
+      ],
+      [
+        "2023-03-01",
+        0.0
+      ],
+      [
+        "2023-04-03",
+        0.0
+      ],
+      [
+        "2023-05-02",
+        0.0
+      ],
+      [
+        "2023-06-01",
+        0.0
+      ],
+      [
+        "2023-07-03",
+        0.0
+      ],
+      [
+        "2023-08-01",
+        0.0
+      ],
+      [
+        "2023-10-03",
+        0.0
+      ],
+      [
+        "2023-11-01",
+        0.0
+      ],
+      [
+        "2023-12-01",
+        0.0
+      ],
+      [
+        "2024-01-01",
+        0.0
+      ],
+      [
+        "2024-02-01",
+        0.0
+      ],
+      [
+        "2024-03-01",
+        0.0
+      ],
+      [
+        "2024-04-01",
+        0.0
+      ],
+      [
+        "2024-05-02",
+        0.0
+      ],
+      [
+        "2024-06-03",
+        0.0
+      ],
+      [
+        "2024-07-01",
+        -2.7774
+      ],
+      [
+        "2024-08-01",
+        -178.3088
+      ],
+      [
+        "2024-09-02",
+        -159.2796
+      ],
+      [
+        "2024-10-01",
+        0.0
+      ],
+      [
+        "2024-11-01",
+        0.0
+      ],
+      [
+        "2024-12-02",
+        -315.2737
+      ],
+      [
+        "2025-01-01",
+        0.0
+      ],
+      [
+        "2025-02-01",
+        0.0
+      ],
+      [
+        "2025-03-03",
+        0.0
+      ],
+      [
+        "2025-04-01",
+        0.0
+      ],
+      [
+        "2025-05-02",
+        0.0
+      ],
+      [
+        "2025-06-02",
+        0.0
+      ],
+      [
+        "2025-07-01",
+        0.0
+      ],
+      [
+        "2025-08-01",
+        0.0
+      ],
+      [
+        "2025-09-01",
+        0.0
+      ],
+      [
+        "2025-10-01",
+        -764.5226
+      ],
+      [
+        "2025-11-03",
+        -723.2756
+      ],
+      [
+        "2025-12-01",
+        -2326.2985
+      ],
+      [
+        "2026-01-01",
+        -3165.6886
+      ],
+      [
+        "2026-02-01",
+        -4896.6302
+      ],
+      [
+        "2026-03-02",
+        -6557.7669
+      ],
+      [
+        "2026-04-01",
+        -2068.1322
+      ],
+      [
+        "2026-05-04",
+        -6604.8704
+      ],
+      [
+        "2026-06-01",
+        -6359.1063
+      ],
+      [
+        "2026-07-01",
+        -7406.7444
+      ],
+      [
+        "2026-08-03",
+        -8884.3985
+      ],
+      [
+        "2026-09-01",
+        -10886.8743
+      ],
+      [
+        "2026-10-01",
+        -11475.7432
+      ]
+    ],
+    "monthly": [
+      {
+        "month": "2017-02",
+        "n": 30,
+        "total_bps": 137647.9139,
+        "net_bps": 4588.2638
+      },
+      {
+        "month": "2017-03",
+        "n": 2,
+        "total_bps": -2168.3564,
+        "net_bps": -1084.1782
+      },
+      {
+        "month": "2017-04",
+        "n": 3,
+        "total_bps": 3548.549,
+        "net_bps": 1182.8497
+      },
+      {
+        "month": "2017-05",
+        "n": 2,
+        "total_bps": 629.0985,
+        "net_bps": 314.5492
+      },
+      {
+        "month": "2017-06",
+        "n": 2,
+        "total_bps": 1049.7109,
+        "net_bps": 524.8554
+      },
+      {
+        "month": "2017-07",
+        "n": 2,
+        "total_bps": 8188.3827,
+        "net_bps": 4094.1913
+      },
+      {
+        "month": "2017-08",
+        "n": 1,
+        "total_bps": -942.4134,
+        "net_bps": -942.4134
+      },
+      {
+        "month": "2017-09",
+        "n": 2,
+        "total_bps": 24391.5084,
+        "net_bps": 12195.7542
+      },
+      {
+        "month": "2017-11",
+        "n": 1,
+        "total_bps": -276.9719,
+        "net_bps": -276.9719
+      },
+      {
+        "month": "2017-12",
+        "n": 2,
+        "total_bps": -2994.1764,
+        "net_bps": -1497.0882
+      },
+      {
+        "month": "2018-01",
+        "n": 1,
+        "total_bps": 87.227,
+        "net_bps": 87.227
+      },
+      {
+        "month": "2018-02",
+        "n": 2,
+        "total_bps": 984.9581,
+        "net_bps": 492.479
+      },
+      {
+        "month": "2018-03",
+        "n": 2,
+        "total_bps": 836.1768,
+        "net_bps": 418.0884
+      },
+      {
+        "month": "2018-04",
+        "n": 1,
+        "total_bps": 1934.5669,
+        "net_bps": 1934.5669
+      },
+      {
+        "month": "2018-05",
+        "n": 1,
+        "total_bps": -114.6,
+        "net_bps": -114.6
+      },
+      {
+        "month": "2018-06",
+        "n": 2,
+        "total_bps": -3509.4119,
+        "net_bps": -1754.706
+      },
+      {
+        "month": "2018-07",
+        "n": 1,
+        "total_bps": -3593.2882,
+        "net_bps": -3593.2882
+      },
+      {
+        "month": "2018-08",
+        "n": 1,
+        "total_bps": 1814.488,
+        "net_bps": 1814.488
+      },
+      {
+        "month": "2018-09",
+        "n": 2,
+        "total_bps": -2583.5572,
+        "net_bps": -1291.7786
+      },
+      {
+        "month": "2018-10",
+        "n": 2,
+        "total_bps": -873.985,
+        "net_bps": -436.9925
+      },
+      {
+        "month": "2018-11",
+        "n": 3,
+        "total_bps": 954.1169,
+        "net_bps": 318.039
+      },
+      {
+        "month": "2018-12",
+        "n": 3,
+        "total_bps": 6636.1857,
+        "net_bps": 2212.0619
+      },
+      {
+        "month": "2019-01",
+        "n": 2,
+        "total_bps": -49.0312,
+        "net_bps": -24.5156
+      },
+      {
+        "month": "2019-02",
+        "n": 1,
+        "total_bps": -216.9769,
+        "net_bps": -216.9769
+      },
+      {
+        "month": "2019-03",
+        "n": 3,
+        "total_bps": 6971.7851,
+        "net_bps": 2323.9284
+      },
+      {
+        "month": "2019-04",
+        "n": 3,
+        "total_bps": -6688.2675,
+        "net_bps": -2229.4225
+      },
+      {
+        "month": "2019-05",
+        "n": 2,
+        "total_bps": -591.4785,
+        "net_bps": -295.7392
+      },
+      {
+        "month": "2019-06",
+        "n": 3,
+        "total_bps": 6210.0057,
+        "net_bps": 2070.0019
+      },
+      {
+        "month": "2019-07",
+        "n": 1,
+        "total_bps": 733.3813,
+        "net_bps": 733.3813
+      },
+      {
+        "month": "2019-08",
+        "n": 3,
+        "total_bps": 715.271,
+        "net_bps": 238.4237
+      },
+      {
+        "month": "2019-09",
+        "n": 2,
+        "total_bps": 9913.9183,
+        "net_bps": 4956.9591
+      },
+      {
+        "month": "2019-10",
+        "n": 3,
+        "total_bps": 1722.9407,
+        "net_bps": 574.3136
+      },
+      {
+        "month": "2019-11",
+        "n": 3,
+        "total_bps": -4911.8702,
+        "net_bps": -1637.2901
+      },
+      {
+        "month": "2019-12",
+        "n": 4,
+        "total_bps": 8688.1807,
+        "net_bps": 2172.0452
+      },
+      {
+        "month": "2020-02",
+        "n": 3,
+        "total_bps": -103.8509,
+        "net_bps": -34.617
+      },
+      {
+        "month": "2020-03",
+        "n": 4,
+        "total_bps": 8746.7672,
+        "net_bps": 2186.6918
+      },
+      {
+        "month": "2020-04",
+        "n": 6,
+        "total_bps": 34502.383,
+        "net_bps": 5750.3972
+      },
+      {
+        "month": "2020-05",
+        "n": 3,
+        "total_bps": 17807.72,
+        "net_bps": 5935.9067
+      },
+      {
+        "month": "2020-06",
+        "n": 2,
+        "total_bps": 4205.6845,
+        "net_bps": 2102.8423
+      },
+      {
+        "month": "2020-07",
+        "n": 2,
+        "total_bps": 9458.3085,
+        "net_bps": 4729.1542
+      },
+      {
+        "month": "2020-08",
+        "n": 2,
+        "total_bps": 10758.3487,
+        "net_bps": 5379.1743
+      },
+      {
+        "month": "2020-09",
+        "n": 2,
+        "total_bps": 4376.0438,
+        "net_bps": 2188.0219
+      },
+      {
+        "month": "2020-10",
+        "n": 5,
+        "total_bps": 18362.6154,
+        "net_bps": 3672.5231
+      },
+      {
+        "month": "2020-11",
+        "n": 1,
+        "total_bps": 1666.648,
+        "net_bps": 1666.648
+      },
+      {
+        "month": "2020-12",
+        "n": 2,
+        "total_bps": 1659.2029,
+        "net_bps": 829.6014
+      },
+      {
+        "month": "2021-01",
+        "n": 3,
+        "total_bps": 3486.0537,
+        "net_bps": 1162.0179
+      },
+      {
+        "month": "2021-02",
+        "n": 2,
+        "total_bps": 1531.5841,
+        "net_bps": 765.792
+      },
+      {
+        "month": "2021-03",
+        "n": 2,
+        "total_bps": 3796.3443,
+        "net_bps": 1898.1722
+      },
+      {
+        "month": "2021-04",
+        "n": 9,
+        "total_bps": 10809.4278,
+        "net_bps": 1201.0475
+      },
+      {
+        "month": "2021-05",
+        "n": 4,
+        "total_bps": 10218.1243,
+        "net_bps": 2554.5311
+      },
+      {
+        "month": "2021-06",
+        "n": 3,
+        "total_bps": 940.2906,
+        "net_bps": 313.4302
+      },
+      {
+        "month": "2021-07",
+        "n": 3,
+        "total_bps": 7014.9535,
+        "net_bps": 2338.3178
+      },
+      {
+        "month": "2021-08",
+        "n": 4,
+        "total_bps": 3562.8979,
+        "net_bps": 890.7245
+      },
+      {
+        "month": "2021-09",
+        "n": 5,
+        "total_bps": -251.2093,
+        "net_bps": -50.2419
+      },
+      {
+        "month": "2021-10",
+        "n": 2,
+        "total_bps": 3594.3068,
+        "net_bps": 1797.1534
+      },
+      {
+        "month": "2021-11",
+        "n": 4,
+        "total_bps": 227.6785,
+        "net_bps": 56.9196
+      },
+      {
+        "month": "2021-12",
+        "n": 2,
+        "total_bps": 10820.1891,
+        "net_bps": 5410.0945
+      },
+      {
+        "month": "2022-01",
+        "n": 1,
+        "total_bps": 11289.6084,
+        "net_bps": 11289.6084
+      },
+      {
+        "month": "2022-02",
+        "n": 1,
+        "total_bps": -738.9053,
+        "net_bps": -738.9053
+      },
+      {
+        "month": "2022-03",
+        "n": 1,
+        "total_bps": -14.3444,
+        "net_bps": -14.3444
+      },
+      {
+        "month": "2022-04",
+        "n": 1,
+        "total_bps": 120.1803,
+        "net_bps": 120.1803
+      },
+      {
+        "month": "2022-05",
+        "n": 2,
+        "total_bps": 7147.351,
+        "net_bps": 3573.6755
+      },
+      {
+        "month": "2022-06",
+        "n": 3,
+        "total_bps": 9510.0176,
+        "net_bps": 3170.0059
+      },
+      {
+        "month": "2022-07",
+        "n": 3,
+        "total_bps": 3418.4537,
+        "net_bps": 1139.4846
+      },
+      {
+        "month": "2022-08",
+        "n": 1,
+        "total_bps": 488.8988,
+        "net_bps": 488.8988
+      },
+      {
+        "month": "2022-09",
+        "n": 2,
+        "total_bps": 15297.2167,
+        "net_bps": 7648.6083
+      },
+      {
+        "month": "2022-10",
+        "n": 2,
+        "total_bps": -65.5714,
+        "net_bps": -32.7857
+      },
+      {
+        "month": "2022-11",
+        "n": 2,
+        "total_bps": -383.4861,
+        "net_bps": -191.743
+      },
+      {
+        "month": "2022-12",
+        "n": 2,
+        "total_bps": -291.5585,
+        "net_bps": -145.7793
+      },
+      {
+        "month": "2023-01",
+        "n": 2,
+        "total_bps": -259.2463,
+        "net_bps": -129.6232
+      },
+      {
+        "month": "2023-02",
+        "n": 3,
+        "total_bps": 7947.6027,
+        "net_bps": 2649.2009
+      },
+      {
+        "month": "2023-03",
+        "n": 2,
+        "total_bps": 13443.5971,
+        "net_bps": 6721.7986
+      },
+      {
+        "month": "2023-04",
+        "n": 3,
+        "total_bps": 5184.8069,
+        "net_bps": 1728.269
+      },
+      {
+        "month": "2023-05",
+        "n": 2,
+        "total_bps": 3332.4932,
+        "net_bps": 1666.2466
+      },
+      {
+        "month": "2023-06",
+        "n": 1,
+        "total_bps": 1767.3577,
+        "net_bps": 1767.3577
+      },
+      {
+        "month": "2023-07",
+        "n": 2,
+        "total_bps": 2317.9283,
+        "net_bps": 1158.9642
+      },
+      {
+        "month": "2023-08",
+        "n": 2,
+        "total_bps": 13203.3604,
+        "net_bps": 6601.6802
+      },
+      {
+        "month": "2023-10",
+        "n": 2,
+        "total_bps": 1642.5051,
+        "net_bps": 821.2526
+      },
+      {
+        "month": "2023-11",
+        "n": 2,
+        "total_bps": 3459.2103,
+        "net_bps": 1729.6052
+      },
+      {
+        "month": "2023-12",
+        "n": 3,
+        "total_bps": 3811.9144,
+        "net_bps": 1270.6381
+      },
+      {
+        "month": "2024-01",
+        "n": 2,
+        "total_bps": 71.8397,
+        "net_bps": 35.9198
+      },
+      {
+        "month": "2024-02",
+        "n": 3,
+        "total_bps": 1889.442,
+        "net_bps": 629.814
+      },
+      {
+        "month": "2024-03",
+        "n": 2,
+        "total_bps": 4555.4633,
+        "net_bps": 2277.7316
+      },
+      {
+        "month": "2024-04",
+        "n": 2,
+        "total_bps": 3184.6811,
+        "net_bps": 1592.3406
+      },
+      {
+        "month": "2024-05",
+        "n": 2,
+        "total_bps": 3843.5882,
+        "net_bps": 1921.7941
+      },
+      {
+        "month": "2024-06",
+        "n": 2,
+        "total_bps": 2759.2127,
+        "net_bps": 1379.6064
+      },
+      {
+        "month": "2024-07",
+        "n": 4,
+        "total_bps": -2.7774,
+        "net_bps": -0.6944
+      },
+      {
+        "month": "2024-08",
+        "n": 3,
+        "total_bps": -175.5314,
+        "net_bps": -58.5105
+      },
+      {
+        "month": "2024-09",
+        "n": 2,
+        "total_bps": 19.0293,
+        "net_bps": 9.5146
+      },
+      {
+        "month": "2024-10",
+        "n": 3,
+        "total_bps": 310.8401,
+        "net_bps": 103.6134
+      },
+      {
+        "month": "2024-11",
+        "n": 1,
+        "total_bps": 525.1207,
+        "net_bps": 525.1207
+      },
+      {
+        "month": "2024-12",
+        "n": 1,
+        "total_bps": -315.2737,
+        "net_bps": -315.2737
+      },
+      {
+        "month": "2025-01",
+        "n": 2,
+        "total_bps": 615.9633,
+        "net_bps": 307.9816
+      },
+      {
+        "month": "2025-02",
+        "n": 3,
+        "total_bps": 1424.3471,
+        "net_bps": 474.7824
+      },
+      {
+        "month": "2025-03",
+        "n": 2,
+        "total_bps": 3385.0089,
+        "net_bps": 1692.5044
+      },
+      {
+        "month": "2025-04",
+        "n": 1,
+        "total_bps": 932.1318,
+        "net_bps": 932.1318
+      },
+      {
+        "month": "2025-05",
+        "n": 3,
+        "total_bps": 3151.4499,
+        "net_bps": 1050.4833
+      },
+      {
+        "month": "2025-06",
+        "n": 3,
+        "total_bps": 1502.0359,
+        "net_bps": 500.6786
+      },
+      {
+        "month": "2025-07",
+        "n": 3,
+        "total_bps": 1906.9206,
+        "net_bps": 635.6402
+      },
+      {
+        "month": "2025-08",
+        "n": 1,
+        "total_bps": 837.7328,
+        "net_bps": 837.7328
+      },
+      {
+        "month": "2025-09",
+        "n": 1,
+        "total_bps": 2808.4013,
+        "net_bps": 2808.4013
+      },
+      {
+        "month": "2025-10",
+        "n": 1,
+        "total_bps": -764.5226,
+        "net_bps": -764.5226
+      },
+      {
+        "month": "2025-11",
+        "n": 1,
+        "total_bps": 41.247,
+        "net_bps": 41.247
+      },
+      {
+        "month": "2025-12",
+        "n": 2,
+        "total_bps": -1603.0229,
+        "net_bps": -801.5115
+      },
+      {
+        "month": "2026-01",
+        "n": 1,
+        "total_bps": -839.39,
+        "net_bps": -839.39
+      },
+      {
+        "month": "2026-02",
+        "n": 2,
+        "total_bps": -1730.9417,
+        "net_bps": -865.4708
+      },
+      {
+        "month": "2026-03",
+        "n": 2,
+        "total_bps": -1661.1367,
+        "net_bps": -830.5683
+      },
+      {
+        "month": "2026-04",
+        "n": 4,
+        "total_bps": 4489.6347,
+        "net_bps": 1122.4087
+      },
+      {
+        "month": "2026-05",
+        "n": 7,
+        "total_bps": -4536.7382,
+        "net_bps": -648.1055
+      },
+      {
+        "month": "2026-06",
+        "n": 6,
+        "total_bps": 245.7641,
+        "net_bps": 40.9607
+      },
+      {
+        "month": "2026-07",
+        "n": 2,
+        "total_bps": -1047.6381,
+        "net_bps": -523.819
+      },
+      {
+        "month": "2026-08",
+        "n": 4,
+        "total_bps": -1477.6541,
+        "net_bps": -369.4135
+      },
+      {
+        "month": "2026-09",
+        "n": 2,
+        "total_bps": -2002.4758,
+        "net_bps": -1001.2379
+      },
+      {
+        "month": "2026-10",
+        "n": 3,
+        "total_bps": -588.8688,
+        "net_bps": -196.2896
+      }
+    ]
+  },
+  "split": {
+    "type": "oos",
+    "oos_start": "2023-07-13",
+    "embargo_sessions": 1,
+    "purged_in_sample": 30,
+    "embargoed_oos": 0
+  },
+  "in_sample": {
+    "trades": 179,
+    "gross_bps": 1357.2219,
+    "net_bps": 1333.2219,
+    "win_rate": 0.6536,
+    "t_stat": 3.45,
+    "sharpe": 5.784
+  },
+  "out_of_sample": {
+    "trades": 92,
+    "gross_bps": 500.8573,
+    "net_bps": 476.8573,
+    "win_rate": 0.5761,
+    "t_stat": 2.592,
+    "sharpe": 6.358
+  },
+  "position_caps": [
+    {
+      "max_positions": 3,
+      "trades": 35,
+      "gross_bps": 1559.4962,
+      "net_bps": 1535.4962,
+      "win_rate": 0.6,
+      "t_stat": 2.149,
+      "sharpe": 6.811,
+      "taken_pct": 11.6
+    },
+    {
+      "max_positions": 5,
+      "trades": 40,
+      "gross_bps": 2607.8776,
+      "net_bps": 2583.8776,
+      "win_rate": 0.65,
+      "t_stat": 2.593,
+      "sharpe": 5.385,
+      "taken_pct": 13.3
+    },
+    {
+      "max_positions": 10,
+      "trades": 97,
+      "gross_bps": 1942.0205,
+      "net_bps": 1918.0205,
+      "win_rate": 0.6907,
+      "t_stat": 4.311,
+      "sharpe": 4.993,
+      "taken_pct": 32.2
+    }
+  ],
+  "cost_model": {
+    "model": "statutory-per-trade",
+    "product": "CNC",
+    "exchange": "NSE",
+    "capital": 100000.0,
+    "risk_per_trade": 0.01,
+    "leverage": 1.0,
+    "slippage_bps_per_side": 4.0,
+    "flat_bps": 24.0,
+    "mean_statutory_bps": 22.248,
+    "mean_total_bps": 30.248,
+    "total_bps_at": {
+      "1.0": 30.248,
+      "1.5": 34.248,
+      "2.0": 38.248
+    },
+    "net_bps": 1604.1099,
+    "net_bps_slip_2x": 1596.1099,
+    "fixed_notional": 100000.0,
+    "modelled_net_pnl_rs": 4828370.84,
+    "modelled_total_cost_rs": 91046.85,
+    "pnl_basis": "modelled: every trade is a fixed notional of Rs 1,00,000 (capital per position) with no stop, with no limit on concurrent positions or total capital; net is after the modelled statutory charges and slippage",
+    "trades": 301
+  },
+  "evaluation": {
+    "version": 1,
+    "criteria": "docs/STRATEGY-ACCEPTANCE-CRITERIA.md",
+    "horizon": "swing",
+    "dimensions": [
+      {
+        "name": "edge",
+        "rows": [
+          {
+            "gate": "G1.2",
+            "title": "Net expectancy at 1.0x cost",
+            "status": "not_evaluated",
+            "hard": true,
+            "value": null,
+            "threshold": ">= +0.05R per trade",
+            "evidence": "the criterion is defined in R, the trade's own stop distance, and these trades have no stop; a stop-independent threshold has to be defined by the owner; measured net expectancy is +1610.36 bps over 301 trades"
+          },
+          {
+            "gate": "G1.4",
+            "title": "Gross edge vs cost",
+            "status": "report",
+            "hard": false,
+            "value": 68.0982,
+            "threshold": "gross / cost >= 1.5 is comfortable",
+            "evidence": "gross 1634.36 bps against 24 bps round trip: comfortable"
+          }
+        ]
+      },
+      {
+        "name": "robustness",
+        "rows": [
+          {
+            "gate": "G4.2",
+            "title": "Latency",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs a delayed-entry rerun"
+          },
+          {
+            "gate": "G4.3",
+            "title": "Bar resolution",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs a pessimistic same-bar rerun"
+          },
+          {
+            "gate": "G4.5",
+            "title": "Dispersion",
+            "status": "pass",
+            "hard": true,
+            "value": 0.3661,
+            "threshold": "top 10 symbols <= 40% of net profit, >= 50% of symbols net positive",
+            "evidence": "top 10 symbols hold 37% of net profit; 79% of 99 symbols net positive"
+          },
+          {
+            "gate": "G4.6",
+            "title": "Direction",
+            "status": "report",
+            "hard": false,
+            "value": 0,
+            "threshold": "longs and shorts reported separately; a one-sided strategy is declared",
+            "evidence": "301 long / 0 short trades; net +1610.4 bps long, n/a short; one-sided (long only)"
+          },
+          {
+            "gate": "G4.7",
+            "title": "Survivorship",
+            "status": "report",
+            "hard": false,
+            "value": true,
+            "threshold": "report: the universe uses today's list, which is survivor-biased; test on symbols as they existed and list names that later left",
+            "evidence": "membership source current_symbol_master; survivorship bias True. The universe is today's symbol master applied to the past, not point-in-time membership: names that later left F&O or were delisted are absent and cannot be listed here because no historical membership source exists. Results are biased toward survivors"
+          },
+          {
+            "gate": "G4.8",
+            "title": "Event days",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs an event calendar"
+          }
+        ]
+      },
+      {
+        "name": "risk",
+        "rows": [
+          {
+            "gate": "G5.1",
+            "title": "Monte Carlo",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "not implemented"
+          },
+          {
+            "gate": "G5.2",
+            "title": "Live caps applied",
+            "status": "report",
+            "hard": false,
+            "value": 1535.4962,
+            "threshold": "run with the live position and loss caps",
+            "evidence": "3 slots: net +1535.50 bps; 5 slots: net +2583.88 bps; 10 slots: net +1918.02 bps. The live max_open_positions is set in config.yaml and may not be among these"
+          },
+          {
+            "gate": "G5.3",
+            "title": "Sizing",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "a live-sizing check, not a trade-list one"
+          },
+          {
+            "gate": "G5.4",
+            "title": "Capacity",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs order size against bar volume"
+          },
+          {
+            "gate": "G5.5",
+            "title": "Margin",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs a simultaneous-margin model"
+          }
+        ]
+      },
+      {
+        "name": "stability",
+        "rows": [
+          {
+            "gate": "G3.1",
+            "title": "Chronological hold-out",
+            "status": "report",
+            "hard": false,
+            "value": 0.3333,
+            "threshold": "last 30% to 40% of sessions",
+            "evidence": "33.3% of trade days held out from 2023-07-13; whether it stayed untouched until the candidate was frozen is not recorded"
+          },
+          {
+            "gate": "G3.2",
+            "title": "Out-of-sample result",
+            "status": "fail",
+            "hard": false,
+            "value": 476.8573,
+            "threshold": "OOS net > 0 and >= 40% of in-sample",
+            "evidence": "OOS +476.9 bps (92 trades) vs in-sample +2109.3 bps (209 trades)"
+          },
+          {
+            "gate": "G3.3",
+            "title": "Walk-forward",
+            "status": "fail",
+            "hard": false,
+            "value": 0.0,
+            "threshold": "at least 4 rolling windows of 6 months; net above 0 in at least 60%",
+            "evidence": "0 of 19 windows net positive (0 empty); shipped parameters held fixed in every window, so this is rolling stability, not a re-fit per window"
+          },
+          {
+            "gate": "G3.4",
+            "title": "Symbol hold-out",
+            "status": "pass",
+            "hard": false,
+            "value": 1586.2601,
+            "threshold": "both symbol halves net > 0, weaker >= 40% of stronger",
+            "evidence": "half A +1633.7 bps (153 trades), half B +1586.3 bps (148 trades)"
+          },
+          {
+            "gate": "G3.5",
+            "title": "Leakage and embargo",
+            "status": "pass",
+            "hard": false,
+            "value": 30,
+            "threshold": "no trade straddles the split; embargo of at least 1 session",
+            "evidence": "30 trades straddled the cut and were purged from in-sample; embargo 1 session(s) removed 0 out-of-sample trades"
+          }
+        ]
+      },
+      {
+        "name": "cost_sensitivity",
+        "rows": [
+          {
+            "gate": "G1.1",
+            "title": "Cost model",
+            "status": "pass",
+            "hard": false,
+            "value": 30.248,
+            "threshold": "statutory charges at deployed notional plus slippage",
+            "evidence": "statutory schedule (CNC, NSE) priced per trade at the deployed notional (capital 100,000, risk 1.00% per trade, leverage 1x) plus 4 bps slippage per side: mean 30.25 bps against the engine's flat 24 bps"
+          },
+          {
+            "gate": "G1.3",
+            "title": "Slippage stress",
+            "status": "pass",
+            "hard": true,
+            "value": 1596.1099,
+            "threshold": "net expectancy above 0 with slippage doubled (8 bps per side)",
+            "evidence": "net +1596.11 bps at 2.0x slippage (1.0x +1604.11 bps); total cost 30.25 bps at 1.0x, 34.25 bps at 1.5x, 38.25 bps at 2.0x"
+          },
+          {
+            "gate": "G1.5",
+            "title": "Cost per trade in R",
+            "status": "not_evaluated",
+            "hard": true,
+            "value": null,
+            "threshold": "median cost <= 0.40R",
+            "evidence": "the criterion is defined in R, the trade's own stop distance, and these trades have no stop; a stop-independent threshold has to be defined by the owner; median modelled cost is 24.00 bps of notional per trade"
+          },
+          {
+            "gate": "G1.6",
+            "title": "Stop floor",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "report: if a fixed floor sets most stops (more than 50% at one width), show results at other floors",
+            "evidence": "no accepted signals with a stop"
+          }
+        ]
+      },
+      {
+        "name": "regime_robustness",
+        "rows": [
+          {
+            "gate": "G4.4",
+            "title": "Sub-periods",
+            "status": "not_evaluated",
+            "hard": true,
+            "value": 0.9,
+            "threshold": ">= 60% of calendar years net positive, worst year >= -0.25R",
+            "evidence": "9 of 10 years net positive; worst 2026 at -277.3 bps. The worst-year limit is an absolute number of R and these trades have no stop, so a stop-independent limit has to be defined by the owner"
+          },
+          {
+            "gate": "X.2",
+            "title": "Regime dispersion",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "heuristic (calibrated): net positive in every sampled regime of each judged dimension",
+            "evidence": "no regime block supplied for this run"
+          },
+          {
+            "gate": "X.3",
+            "title": "Regime activation hypothesis",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "hypothesis only; validate the filtered strategy out-of-sample",
+            "evidence": "no regime block supplied for this run"
+          }
+        ]
+      },
+      {
+        "name": "parameter_sensitivity",
+        "rows": [
+          {
+            "gate": "G4.1",
+            "title": "Parameter perturbation",
+            "status": "not_evaluated",
+            "hard": true,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs a parameter sweep"
+          }
+        ]
+      },
+      {
+        "name": "statistical_confidence",
+        "rows": [
+          {
+            "gate": "G2.1",
+            "title": "Trade count",
+            "status": "pass",
+            "hard": false,
+            "value": 301,
+            "threshold": ">= 200 net trades",
+            "evidence": "301 trades"
+          },
+          {
+            "gate": "G2.2",
+            "title": "Day-clustered t-statistic",
+            "status": "pass",
+            "hard": true,
+            "value": 5.657,
+            "threshold": ">= 2.50 at 1 trials",
+            "evidence": "day-clustered t 5.66 against the larger of the criteria level 2.50 and the record's Sidak hurdle 1.97"
+          },
+          {
+            "gate": "G2.3",
+            "title": "Deflated Sharpe",
+            "status": "pass",
+            "hard": false,
+            "value": 1.0,
+            "threshold": "DSR >= 0.90 at the true trial count",
+            "evidence": "DSR 1.000 over 114 sessions at 1 trials (daily Sharpe 0.306 against a deflation threshold of 0.000); assumption: trial Sharpe variance is assumed to be the no-edge sampling variance, because only the trial count is recorded"
+          },
+          {
+            "gate": "G2.4",
+            "title": "Probability of backtest overfitting",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs P&L for every variant tried on a common grid; stats.pbo_cscv is implemented and waits for a parameter grid"
+          },
+          {
+            "gate": "G2.5",
+            "title": "Trials ledger",
+            "status": "pass",
+            "hard": false,
+            "value": 1,
+            "threshold": "every variant tried is counted in trials.yaml; DSR and the t-hurdle use that count",
+            "evidence": "n_trials 1 from trials.yaml: 1 material and 0 external"
+          },
+          {
+            "gate": "G2.6",
+            "title": "Dependence (Newey-West)",
+            "status": "report",
+            "hard": false,
+            "value": 3.207,
+            "threshold": "t on daily aggregated P&L with a Newey-West autocorrelation adjustment",
+            "evidence": "Newey-West t 3.21 over 114 sessions (plain daily t 3.28); compare with the G2.2 bar, which the trade-clustered t already has to clear"
+          },
+          {
+            "gate": "G2.7",
+            "title": "Track length",
+            "status": "report",
+            "hard": false,
+            "value": 10.1,
+            "threshold": "sample length against the Minimum Track Record Length at 95 percent",
+            "evidence": "114 sessions observed against a minimum of 10 sessions: sufficient"
+          }
+        ]
+      },
+      {
+        "name": "complexity",
+        "rows": [
+          {
+            "gate": "X.1",
+            "title": "Strategy parameter count",
+            "status": "report",
+            "hard": false,
+            "value": 4,
+            "threshold": "fewer assumptions are better",
+            "evidence": "4 strategy parameters"
+          }
+        ]
+      },
+      {
+        "name": "integrity",
+        "rows": [
+          {
+            "gate": "G0.1",
+            "title": "Same logic in every mode",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "code review and adapter tests"
+          },
+          {
+            "gate": "G0.2",
+            "title": "Causality of every input",
+            "status": "pass",
+            "hard": false,
+            "value": 1,
+            "threshold": "a run on data cut at earlier sessions reproduces every earlier signal and trade",
+            "evidence": "1 symbol(s) re-run at 1 cut(s): no earlier signal or trade changed"
+          },
+          {
+            "gate": "G0.3",
+            "title": "Timestamps in IST",
+            "status": "pass",
+            "hard": false,
+            "value": 0,
+            "threshold": "all external times converted to IST at the boundary; bar timestamps are open-time",
+            "evidence": "stored as epoch seconds, converted to IST at load; all 5 ledger time columns are IST. open-time stamping is a property of each loader and is covered by its unit test, not re-proved per run"
+          },
+          {
+            "gate": "G0.4",
+            "title": "Data coverage",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "every symbol-session used has at least 370 one-minute bars (98.7% of a 375-bar session); gaps listed by name",
+            "evidence": "daily bars: one bar per session, so there is no intraday coverage to check"
+          },
+          {
+            "gate": "G0.5",
+            "title": "No silent exclusion",
+            "status": "pass",
+            "hard": false,
+            "value": 0,
+            "threshold": "ledgers reconcile exactly; every exclusion carries a known reason code",
+            "evidence": "ledgers reconcile; exclusions by reason code: DIRECTION_DISABLED=336578, NOT_ELIGIBLE=4320, POSITION_OPEN=71850, WARMUP=51912"
+          },
+          {
+            "gate": "G0.6",
+            "title": "Closing auction handled",
+            "status": "report",
+            "hard": false,
+            "value": null,
+            "threshold": "report: intraday level profiles use continuous-market bars only, stamped before 15:15",
+            "evidence": "data layer: only the 09:15-15:29 continuous session is kept; bars outside it, including any closing-auction prints, are dropped by the loader. Whether a feature or strategy reads bars from 15:15 onward is a property of its code (features/session.py), not checked per run"
+          },
+          {
+            "gate": "G0.7",
+            "title": "Test quality",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "pytest --cov"
+          },
+          {
+            "gate": "G0.8",
+            "title": "Corporate actions",
+            "status": "report",
+            "hard": false,
+            "value": 0,
+            "threshold": "report: split and bonus sessions excluded or adjusted; ex-date handling verified",
+            "evidence": "policy: intraday: sessions whose open versus previous close ratio lies outside 0.75 to 1.33 are excluded as probable splits; daily: back-adjusted for detected splits; dividends, bonuses and rights issues are NOT detected. This run excluded 0 symbol-sessions across 0 symbols as probable splits. Limits: the 0.75 to 1.33 test cannot see dividends, bonuses or rights, and ex-date handling is not verified, so this gate does not pass"
+          }
+        ]
+      },
+      {
+        "name": "deployment",
+        "rows": [
+          {
+            "gate": "G6.1",
+            "title": "Session and square-off",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.2",
+            "title": "Daily eligibility",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.3",
+            "title": "Circuits",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.4",
+            "title": "Tick size",
+            "status": "not_applicable",
+            "hard": true,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.5",
+            "title": "Gap-through stops",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.6",
+            "title": "SEBI retail algo framework",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.7",
+            "title": "Charges current",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.8",
+            "title": "Closing auction awareness",
+            "status": "not_applicable",
+            "hard": false,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G6.9",
+            "title": "Backtest respects the square-off",
+            "status": "not_applicable",
+            "hard": true,
+            "value": null,
+            "threshold": "intraday MIS rules",
+            "evidence": "swing books hold CNC delivery; MIS session and square-off gates do not apply"
+          },
+          {
+            "gate": "G7.1",
+            "title": "Paper incubation duration",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs paper data"
+          },
+          {
+            "gate": "G7.2",
+            "title": "Signal parity",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs paper data"
+          },
+          {
+            "gate": "G7.3",
+            "title": "Execution quality",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs paper data"
+          },
+          {
+            "gate": "G7.4",
+            "title": "Paper tracking",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs paper data"
+          },
+          {
+            "gate": "G7.5",
+            "title": "Capital ramp",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs live data"
+          },
+          {
+            "gate": "G8.1",
+            "title": "Kill switch",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.2",
+            "title": "Pre-trade controls",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.3",
+            "title": "Recovery",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.4",
+            "title": "Clock",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.5",
+            "title": "Broker sessions",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.6",
+            "title": "Audit trail",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.7",
+            "title": "Change control",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G8.8",
+            "title": "Alert escalation",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "operational"
+          },
+          {
+            "gate": "G9.1",
+            "title": "Decay watch",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs live data"
+          },
+          {
+            "gate": "G9.2",
+            "title": "Drawdown watch",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs live data"
+          },
+          {
+            "gate": "G9.3",
+            "title": "Re-validation",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs live data"
+          },
+          {
+            "gate": "G9.4",
+            "title": "Retirement",
+            "status": "not_evaluated",
+            "hard": false,
+            "value": null,
+            "threshold": "",
+            "evidence": "needs live data"
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "counts": {
+        "pass": 12,
+        "fail": 2,
+        "report": 10,
+        "not_evaluated": 35,
+        "not_applicable": 9
+      },
+      "hard_failed": []
+    }
+  },
+  "trials": {
+    "material": 1,
+    "external": 0,
+    "total": 1,
+    "source": "trials.yaml"
+  },
+  "baseline": {
+    "method": "same-symbol random entry, same holding period in bars, same direction, open to close, round-trip cost deducted",
+    "draws_per_trade": 20,
+    "seed": 0,
+    "trades": 299,
+    "skipped": 2,
+    "gross_bps": 1800.1756,
+    "net_bps": 1776.1756,
+    "trade_net_bps": 1467.0327,
+    "excess_net_bps": -309.1429,
+    "excess_t_stat": -1.805
+  },
+  "notes": "Shipped default configuration on nse_fno_current-206-eligible-symbols. n_trials=1 from trials.yaml: 1 material configuration(s) and 0 external. Regime analysis not available: no published index dataset (NIFTY/VIX); no external source is used and the verdict is unaffected.",
+  "schema": 4,
+  "artifact_dir": "2026-10-05-low-volatility-v1/",
+  "manifest_sha256": "1ed9dd24821add1139e8b86d82e01ee6e375c449845cce692482cd68402c0280",
+  "strategy_version": "v1",
+  "strategy_fingerprint": "ada161313f0fce7ed389556562677aec9f7b4814e34f570952ad01b00b586c5f",
+  "change_classes": [],
+  "reproducible": true,
+  "code_dirty": false,
+  "promotion_eligible": true,
+  "missing_capabilities": [
+    "Spec schema split: strategy intent vs resolved execution configuration vs deployment profile; field class and per-field provenance",
+    "Spec validation: entry, exit, direction, timeframe, holding period, stop, signal evaluation, order submission, fill model, indicator source, reference prices, portfolio scope",
+    "Assumption ledger with materiality and confirmation; intake states",
+    "Strategy versions: append-only `versions.yaml`, automatic and branch labels, current and promoted pointers, rules, parameters and strategy fingerprints",
+    "Point-in-time universe membership and per-date eligibility",
+    "Direction validation (no shorts in swing or positional)",
+    "Exchange calendar with `calendar_version`; session model (exchange, strategy, broker cutoff, force-flat)",
+    "Deployment profile: MIS force-flat 15:00, CNC carry-forward",
+    "Corporate-action policy and `data_quality.json`; warm-up derived from indicators; dataset identity and version",
+    "Trade, order and fill, signal, exclusion ledgers with lineage ids (signal, order, fill, position, trade)",
+    "Run manifest and run folder layout; immutable artifacts retained and addressable",
+    "Per-component cost decomposition per trade",
+    "Validity vs performance failure handling in the gate runner",
+    "Trial counting under the acceptance-criteria definition",
+    "session.broker_cutoff is null: CNC delivery has no intraday broker cutoff",
+    "random.monte_carlo not captured until engine step 5",
+    "session.force_flat is null: CNC delivery has no force-flat, positions carry forward"
+  ],
+  "run_verdict": "MARGINAL",
+  "run_status": "VALID",
+  "trial_counted": true,
+  "dataset_version": "nse-daily-20261005-002",
+  "promotion_decision": "NOT_READY",
+  "next_action": {
+    "action": "Verify that backtest and live share one code path",
+    "reason": "Divergent logic makes results unreliable",
+    "gate": "G0.1"
+  }
+}
