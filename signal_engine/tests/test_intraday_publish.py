@@ -32,9 +32,11 @@ def _build(tmp_path, state="READY_WITH_WARNINGS", ok=True):
     pd.DataFrame({"symbol": ["AAA"], "session": pd.to_datetime(["2024-01-02"]),
                   "timestamp": [TS], "open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0],
                   "volume": [5.0], "n_minutes": [5]}).to_parquet(b / "five/AAA/2024.parquet")
-    pd.DataFrame({c: [None] for c in pub._LEDGER_COLS}).assign(
-        symbol="AAA", cls="legacy", status="converted", origin="legacy",
-        method="high+low").to_parquet(b / "session_ledger.parquet")
+    pd.DataFrame({c: [None] for c in pub.QUALITY_COLS}).assign(
+        symbol="AAA", cls="legacy", price_status="converted", origin="legacy", method="high+low",
+        price_valid=True, volume_valid=True, final_bar_valid=True,
+        final_bar_convention="both").to_parquet(b / "session_ledger.parquet")
+    (b / "irrecoverability.json").write_text(json.dumps({"cells": {}}))
     pd.DataFrame({"symbol": ["AAA"], "result": ["exact"]}).to_parquet(b / "provenance.parquet")
     pd.DataFrame({"request_id": ["r0"]}).to_parquet(b / "requests.parquet")
     (b / "recovery_ledger.jsonl").write_text(json.dumps(
@@ -45,8 +47,9 @@ def _build(tmp_path, state="READY_WITH_WARNINGS", ok=True):
               "snapshot_root_hash": "s" * 64, "template_sha256": "t" * 64,
               "provenance": {"sampled_sessions": 1, "exact_share": 1.0, "wilson_lower_95": 0.2,
                              "coverage": 0.1, "passed": True, "statement": "x"},
-              "sessions": {"requested": 1, "published": 1, "out_of_scope_muhurat": 0},
-              "exclusions": {"overall_rate": 0.0}}
+              "sessions": {"requested": 1, "out_of_scope_muhurat": 0,
+                           "valid": {"price": 1, "volume": 1, "final_bar": 1}},
+              "alerts": [], "usable_range_removals": [], "metadata": {"22_policy": True}}
     (b / "report.json").write_text(json.dumps(report))
     return b
 
@@ -87,6 +90,9 @@ def test_published_version_verifies_and_is_never_rewritten(tmp_path, store):
     m = json.loads((root / "versions" / "nse-intraday-5m-test-001.json").read_text())
     assert m["frequency"] == "5m" and m["root_hash"] == out["root_hash"]
     assert m["contract"]["provenance_statement"] == "x"
+    assert m["data_policy_version"] == pub.ic.policy_version()
+    assert set(m["extra_objects"]) >= {"quality_table", "data_quality_policy",
+                                       "irrecoverability", "report"}
     with pytest.raises(sn.SnapshotError):
         _publish(b, store)
     p = sn._object_path(root, m["extra_objects"]["provenance"])

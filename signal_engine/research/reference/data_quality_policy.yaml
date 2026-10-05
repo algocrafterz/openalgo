@@ -1,0 +1,58 @@
+# Research data-quality policy (INTRADAY-5M-DATASET-PLAN.md Part A). Approved 2026-10-05.
+#
+# The sha256 of this file's bytes is the data_policy_version that a dataset version and every
+# run using it record. Any edit (comments included) is a new policy version, and a material
+# change requires a new dataset version. Thresholds live here only; strategy code never holds
+# them. Published daily versions keep the policy they recorded; this file applies to versions
+# published after it.
+
+schema: 1
+
+# Quality is reported per field family. Indicators (VWAP, ATR, EMA, ...) are derived from these
+# by each strategy; there is no flag per indicator.
+field_families: [price, volume, final_bar]
+
+# The only repairs allowed (A3). Anything else is recover, exclude or unresolved.
+repairs_allowed:
+  - price_basis_conversion            # section 6: per-session factor to the canonical NSE basis
+  - corporate_action_volume_scaling   # section 6.4: volume scaled by a documented factor
+  - foreign_bar_removal               # section 4 C1/C2: bars identifiable as another vendor's
+
+# Exclusion rates (excluded requested symbol-sessions / requested symbol-sessions), per field
+# family. Alerts require a written assessment answering the seven questions of A7 with a
+# disposition. Guardrails remove the year or symbol from that family's usable range; they are
+# never waived.
+alerts:
+  overall: 0.02
+  year: 0.03
+  month: 0.10
+  symbol: 0.05
+guardrails:
+  year: 0.10
+  symbol: 0.25
+
+# A4: is a defect systematic enough at the source that bulk re-fetching is pointless?
+# Per (defect type, year) cell, up to sample_max sessions are drawn with the seed and re-fetched;
+# if at least identical_share come back identical to the stored data, the cell is irrecoverable
+# at the source and is not bulk re-fetched.
+irrecoverability:
+  sample_max: 30
+  identical_share: 0.95
+  seed: 29
+
+# Provenance verification of a legacy store (plan 5.5): share of a stratified sample that must
+# match a fresh fetch with the same request parameters exactly.
+provenance:
+  exact_share: 0.99
+
+intraday:
+  # Policy assumption, not a market fact: a fallback-converted session's unused extreme may lie
+  # inside the NSE extreme by at most this share. Chosen because the measured gaps in
+  # 2023-06..2024-03 are one-sided with medians of 0.04% (high) and 0.11% (low), and 1% keeps
+  # every gap of that pattern while rejecting outliers (measured max 17%). Revisit after the
+  # dataset impact is measured.
+  fallback_reach: 0.01
+  partial_session:
+    edge_minutes: 15                  # no bar in the first or last 15 minutes of a window
+    missing_minute_percentile: 99     # threshold N (section 7.3)
+    missing_minute_step: 5

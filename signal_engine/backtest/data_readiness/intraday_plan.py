@@ -52,6 +52,8 @@ RECOVER_NEGVOL = "recover:negative_volume"
 RECOVER_REPLACED = "recover:replaced_symbol"
 RECOVER_CONTAMINATED = "recover:contaminated_failing"
 OUT_OF_SCOPE_MUHURAT = "out_of_scope:muhurat"
+CANDIDATE = "candidate:"          # fails a rule; recovered only if its cell proves recoverable
+IRRECOVERABILITY = ic.POLICY["irrecoverability"]
 CALENDAR_PATH = ic.TEMPLATE_PATH.parent / "nse_calendar.yaml"
 
 
@@ -116,19 +118,64 @@ def assess_symbol(bars: pd.DataFrame, ref: pd.DataFrame,
     return ledger, removed[["symbol", "timestamp", "rule"]]
 
 
+_LEDGER_COLS = ["symbol", "session", "status", "structure_ok", "edge_ok", "volume_ok",
+                "final_bar_convention", "contaminated", "negative_volume"]
+
+
+def defect_type(d: pd.DataFrame) -> pd.Series:
+    """The first failing field-family rule of a legacy session, or None (Part A2):
+    price_conversion, structure, partial_session, volume, final_bar."""
+    flag = lambda col: d[col].fillna(False).astype(bool)  # noqa: E731
+    conditions = [~d.status.isin(ic.PUBLISHABLE), ~flag("structure_ok"), ~flag("edge_ok"),
+                  ~flag("volume_ok"), d.final_bar_convention.eq("none")]
+    names = ["price_conversion", "structure", "partial_session", "volume", "final_bar"]
+    out = pd.Series(None, index=d.index, dtype=object)
+    for cond, name in zip(reversed(conditions), reversed(names), strict=True):
+        out[cond.fillna(True).astype(bool)] = name
+    return out
+
+
 def classify(ref: pd.DataFrame, legacy: pd.DataFrame) -> pd.DataFrame:
-    """One row per expected (symbol, session) with its class (plan 4 and 5.3)."""
-    cols = ["symbol", "session", "status", "structure_ok", "contaminated", "negative_volume"]
-    d = ref[["symbol", "session"]].merge(legacy[cols], on=["symbol", "session"], how="left")
-    publishable = d.status.isin(ic.PUBLISHABLE) & d.structure_ok.fillna(False).astype(bool)
+    """One row per expected (symbol, session) with its class (plan 4, 5.3 and Part B3).
+
+    A legacy session failing any field-family rule is a recovery candidate in the cell
+    (defect type, year); `decide_cells` turns a candidate into recover:<type> or legacy."""
+    d = ref[["symbol", "session"]].merge(legacy[_LEDGER_COLS], on=["symbol", "session"],
+                                         how="left")
+    dtype = defect_type(d)
     cls = pd.Series(LEGACY, index=d.index, dtype=object)
-    cls[d.contaminated.fillna(False).astype(bool) & ~publishable] = RECOVER_CONTAMINATED
+    cls[dtype.notna()] = CANDIDATE + dtype[dtype.notna()]
+    cls[d.contaminated.fillna(False).astype(bool) & dtype.notna()] = RECOVER_CONTAMINATED
     cls[d.negative_volume.fillna(False).astype(bool)] = RECOVER_NEGVOL
     cls[d.status.isna()] = RECOVER_GAP
     cls[d.symbol.isin(REPLACED_SYMBOLS)] = RECOVER_REPLACED
     cls[d.session.isin(muhurat_dates())] = OUT_OF_SCOPE_MUHURAT
     d["cls"] = cls
+    d["defect_type"] = dtype
     return d
+
+
+def irrecoverability_sample(classes: pd.DataFrame) -> pd.DataFrame:
+    """Part A4: up to sample_max sessions per (defect type, year) cell, drawn with the seed."""
+    cand = classes[classes.cls.str.startswith(CANDIDATE)]
+    rows = []
+    for (cell, yr), part in cand.groupby([cand.cls, cand.session.dt.year], sort=True):
+        keys = sorted(zip(part.symbol, part.session.dt.date, strict=True))
+        n = min(IRRECOVERABILITY["sample_max"], len(keys))
+        rng = random.Random(f"{IRRECOVERABILITY['seed']}:{cell}:{yr}")
+        for sym, day in sorted(rng.sample(keys, n)):
+            rows.append({"symbol": sym, "session": pd.Timestamp(day), "cell": f"{cell}:{yr}",
+                         "cell_size": len(keys)})
+    return pd.DataFrame(rows, columns=["symbol", "session", "cell", "cell_size"])
+
+
+def irrecoverability_requests(sample: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (sym, cell), part in sample.groupby(["symbol", "cell"], sort=True):
+        for a, b in windows(part.session):
+            rows.append({"symbol": sym, "start": a, "end": b, "purpose": "irrecoverability",
+                         "stratum": f"cell:{cell}"})
+    return pd.DataFrame(rows, columns=["symbol", "start", "end", "purpose", "stratum"])
 
 
 # ---------------------------------------------------------------- requests
@@ -185,8 +232,11 @@ def provenance_requests(classes: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_requests(classes: pd.DataFrame) -> pd.DataFrame:
-    req = pd.concat([recovery_requests(classes), provenance_requests(classes)], ignore_index=True)
+def build_requests(classes: pd.DataFrame, sample: pd.DataFrame | None = None) -> pd.DataFrame:
+    parts = [recovery_requests(classes), provenance_requests(classes)]
+    if sample is not None and len(sample):
+        parts.append(irrecoverability_requests(sample))
+    req = pd.concat([p for p in parts if len(p)], ignore_index=True)
     req["request_id"] = [request_id(s, a, b) for s, a, b in zip(req.symbol, req.start, req.end, strict=False)]
     # The same window can serve recovery and provenance; it is fetched once.
     req = req.groupby(["request_id", "symbol", "start", "end"], as_index=False, sort=True).agg(
@@ -202,7 +252,9 @@ def replan(out: Path, snapshot_root: str, daily_version: str) -> pd.DataFrame:
     ref = pd.read_parquet(out / "reference.parquet")
     legacy = pd.read_parquet(out / "legacy_ledger.parquet")
     classes = classify(ref, legacy)
-    requests = build_requests(classes)
+    sample = irrecoverability_sample(classes)
+    requests = build_requests(classes, sample)
+    sample.to_parquet(out / "irrecoverability_sample.parquet", index=False)
     classes.to_parquet(out / "classification.parquet", index=False)
     requests.to_parquet(out / "requests.parquet", index=False)
     summary = {
@@ -214,6 +266,7 @@ def replan(out: Path, snapshot_root: str, daily_version: str) -> pd.DataFrame:
         "classes": classes.cls.value_counts().to_dict(),
         "legacy_out_of_scope_sessions": int((legacy.status == "excluded:no_nse_row").sum()),
         "legacy_status": legacy.status.value_counts().to_dict(),
+        "candidate_cells": int(sample.cell.nunique()) if len(sample) else 0,
         "requests": requests.purpose.value_counts().to_dict(),
         "requests_total": len(requests),
     }

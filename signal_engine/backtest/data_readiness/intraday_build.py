@@ -72,27 +72,7 @@ def fetched_sessions(symbol: str, ledger: pd.DataFrame, requests: pd.DataFrame) 
 
 # ---------------------------------------------------------------- provenance (plan 5.5)
 
-def compare_session(legacy: pd.DataFrame, fresh: pd.DataFrame) -> str:
-    """exact | scaled (one price multiplier) | mismatch | fresh_missing."""
-    if fresh.empty:
-        return "fresh_missing"
-    a = legacy.sort_values("timestamp")
-    b = fresh.sort_values("timestamp")
-    if len(a) != len(b) or not np.array_equal(a.timestamp.to_numpy(), b.timestamp.to_numpy()):
-        return "mismatch"
-    fields = ["open", "high", "low", "close"]
-    pa, pb = a[fields].to_numpy(float), b[fields].to_numpy(float)
-    if np.array_equal(pa, pb) and np.array_equal(a.volume.to_numpy(), b.volume.to_numpy()):
-        return "exact"
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ratio = pb / pa
-        r = float(ratio.mean())
-        vol = b.volume.to_numpy(float) / a.volume.to_numpy(float)
-    one_multiplier = (np.isfinite(ratio).all() and abs(r - 1) > SCALED_RTOL
-                      and np.ptp(ratio) <= SCALED_RTOL * abs(r))
-    volume_follows = np.array_equal(a.volume.to_numpy(), b.volume.to_numpy()) or (
-        np.isfinite(vol).all() and np.allclose(vol, 1 / r, rtol=SCALED_RTOL))
-    return "scaled" if one_multiplier and volume_follows else "mismatch"
+compare_session = ir.compare_session
 
 
 def provenance_rows(symbol: str, legacy: pd.DataFrame, fetched: pd.DataFrame,
@@ -140,7 +120,7 @@ def unify_symbol(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
             .reset_index(drop=True) if parts else pd.DataFrame(columns=[*_BAR_COLS, "session",
                                                                          "origin"]))
 
-    sessions = cls[["symbol", "session", "cls"]].copy()
+    sessions = cls[["symbol", "session", "cls", "defect_type", "contaminated"]].copy()
     if len(bars):
         led = ic.convert_sessions(ic.summarise(bars, templates), ref[ref.symbol == symbol])
         led["structure_ok"] = ic.structure_ok(led)
@@ -152,30 +132,54 @@ def unify_symbol(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
                                    missing_minutes=np.nan)
     sessions.loc[sessions.cls == ip.OUT_OF_SCOPE_MUHURAT, "status"] = ip.OUT_OF_SCOPE_MUHURAT
     sessions.loc[sessions.status.isna(), "status"] = "missing"
-    bad = sessions.status.isin(ic.PUBLISHABLE) & ~sessions.structure_ok.fillna(False).astype(bool)
-    sessions.loc[bad, "status"] = "excluded:structure"
     return bars, sessions, prov
 
 
 # ---------------------------------------------------------------- missing-minute policy
 
 def missing_minute_threshold(sessions: pd.DataFrame) -> dict:
-    """Plan 7.3: N = the 99th percentile of missing minutes over sessions that pass every
-    blocking 7.1 and 7.2 rule, rounded up to the next multiple of 5."""
-    pop = sessions[sessions.status.isin(ic.PUBLISHABLE)]
+    """Plan 7.3 / A5: N = the policy percentile of missing minutes over sessions whose prices
+    and volume pass every rule except the threshold itself (volume completeness shows the
+    session's trading is captured), rounded up to the policy step."""
+    v = ic.field_validity(sessions)
+    pop = sessions[v.volume_valid]
     p = float(np.percentile(pop.missing_minutes, MISSING_PERCENTILE))
     n = int(math.ceil(p / MISSING_STEP) * MISSING_STEP)
     by_year = pop.groupby(pop.session.dt.year).missing_minutes.describe(
         percentiles=[0.5, 0.9, 0.95, 0.99])
-    return {"method": f"P{MISSING_PERCENTILE} of missing minutes over sessions passing 7.1 and "
-                      f"7.2, rounded up to a multiple of {MISSING_STEP}",
+    return {"method": f"P{MISSING_PERCENTILE} of missing minutes over price- and volume-valid "
+                      f"sessions, rounded up to a multiple of {MISSING_STEP}",
             "population": int(len(pop)), "percentile_value": p, "N": n,
             "by_year": json.loads(by_year.round(2).to_json(orient="index"))}
 
 
-def apply_threshold(sessions: pd.DataFrame, n: int) -> pd.DataFrame:
-    over = sessions.status.isin(ic.PUBLISHABLE) & (sessions.missing_minutes > n)
-    return sessions.assign(status=sessions.status.where(~over, "excluded:missing_minutes"))
+def quality_table(sessions: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Part A6: one row per expected session with its status, defect, treatment, origin and a
+    validity flag per field family. The dataset makes no claim about any strategy."""
+    s = sessions.copy()
+    v = ic.field_validity(s, missing_threshold=n)
+    s[v.columns] = v
+    scope = s.cls.eq(ip.OUT_OF_SCOPE_MUHURAT)
+    s.loc[scope, v.columns] = False
+    price_ok = s.status.isin(ic.PUBLISHABLE)
+    structure = s.structure_ok.fillna(False).astype(bool)
+    s["price_status"] = s.status.where(~price_ok | ~structure | s.price_valid,
+                                       "excluded:partial_session")
+    s.loc[price_ok & ~structure, "price_status"] = "excluded:structure"
+    s.loc[s.price_valid, "price_status"] = s.status
+    defect = ip.defect_type(s.assign(final_bar_convention=s.final_bar_convention.fillna("none")))
+    defect[~s.price_valid & defect.isna()] = "partial_session"
+    defect[s.status.eq("missing")] = "missing_session"
+    defect[scope] = "out_of_scope_session"
+    s["final_defect"] = defect
+    origin = s.origin.fillna("")
+    legacy_defect = origin.eq("legacy") & s.defect_type.notna()
+    s["treatment"] = np.select(
+        [scope, s.status.eq("missing"), origin.str.startswith("recovered"),
+         legacy_defect, origin.eq("legacy") & s.contaminated.fillna(False).astype(bool)],
+        ["expected:out_of_scope", "excluded:missing_session", "recovered",
+         "unresolved:irrecoverable_at_source", "repaired:foreign_bar_removal"], "accepted")
+    return s
 
 
 # ---------------------------------------------------------------- run
@@ -191,6 +195,8 @@ def run(snapshot_folder: Path) -> Path:
     templates = ic.load_templates()
     ref = pd.read_parquet(build / "reference.parquet")
     classes = pd.read_parquet(build / "classification.parquet")
+    if classes.cls.str.startswith(ip.CANDIDATE).any():
+        raise RuntimeError("recovery candidates are undecided; run --decide first")
     requests = pd.read_parquet(build / "requests.parquet")
     ledger = ir.read_ledger(build)
     unified_dir = build / "unified"
@@ -209,7 +215,8 @@ def run(snapshot_folder: Path) -> Path:
             logger.info(f"build: unified {i + 1} of {len(symbols)} symbols")
     sessions = pd.concat(ledgers, ignore_index=True)
     policy = missing_minute_threshold(sessions)
-    sessions = apply_threshold(sessions, policy["N"])
+    policy["data_policy_version"] = ic.policy_version()
+    sessions = quality_table(sessions, policy["N"])
     (build / "policy.json").write_text(json.dumps(policy, indent=1) + "\n")
     pd.concat(provs, ignore_index=True).to_parquet(build / "provenance.parquet", index=False)
     sessions.to_parquet(build / "session_ledger.parquet", index=False)
@@ -236,15 +243,74 @@ def run(snapshot_folder: Path) -> Path:
         "template_sha256": _snapshot.sha256_file(ic.TEMPLATE_PATH),
         "conversion_spec_version": ic.CONVERSION_SPEC_VERSION,
         "missing_minute_N": policy["N"],
-        "status_counts": sessions.status.value_counts().to_dict()}, indent=1) + "\n")
+        "data_policy_version": ic.policy_version(),
+        "status_counts": sessions.price_status.value_counts().to_dict()}, indent=1) + "\n")
     logger.info(f"build: finished {build}")
     return build
+
+
+# ---------------------------------------------------------------- irrecoverability (A4)
+
+def decide_cells(snapshot_folder: Path) -> dict:
+    """Score the irrecoverability sample and turn every candidate into recover:<type> or legacy.
+
+    A cell is irrecoverable at the source when at least `identical_share` of its sample comes
+    back identical; its sessions stay legacy (flagged unresolved), except sampled sessions that
+    came back different, which are replaced. Other cells are recovered in full."""
+    manifest = fz.load(snapshot_folder)
+    build = snapshot_folder.parent / f"build-{manifest['root_hash'][:12]}"
+    sample = pd.read_parquet(build / "irrecoverability_sample.parquet")
+    classes = pd.read_parquet(build / "classification.parquet")
+    requests = pd.read_parquet(build / "requests.parquet")
+    ledger = ir.read_ledger(build)
+    rows = []
+    for sym, part in sample.groupby("symbol", sort=True):
+        legacy = ic.clean(ic.with_clock(ip.read_symbol(snapshot_folder, manifest, sym)))[0]
+        fetched = fetched_sessions(sym, ledger, requests)
+        if len(fetched):
+            fetched = ic.clean(fetched)[0]
+        for r in part.itertuples():
+            rows.append({"symbol": sym, "session": r.session, "cell": r.cell,
+                         "result": compare_session(legacy[legacy.session == r.session],
+                                                   fetched[fetched.session == r.session])})
+    res = pd.DataFrame(rows, columns=["symbol", "session", "cell", "result"])
+    share = res.assign(same=res.result.eq("exact")).groupby("cell").same.agg(["mean", "size"])
+    limit = ip.IRRECOVERABILITY["identical_share"]
+    cells = {cell: {"sampled": int(n), "identical_share": round(float(m), 4),
+                    "decision": "irrecoverable_at_source" if m >= limit else "recover"}
+             for cell, (m, n) in share.iterrows()}
+    cell_of = classes.cls + ":" + classes.session.dt.year.astype(str)
+    cand = classes.cls.str.startswith(ip.CANDIDATE)
+    recover_cell = cell_of.map(lambda k: cells.get(k, {}).get("decision") == "recover")
+    differs = set(zip(res[~res.result.eq("exact")].symbol, res[~res.result.eq("exact")].session,
+                      strict=True))
+    sampled_diff = pd.Series([(s, d) in differs for s, d in zip(classes.symbol, classes.session,
+                                                                 strict=True)],
+                             index=classes.index)
+    to_recover = cand & (recover_cell | sampled_diff)
+    classes.loc[to_recover, "cls"] = "recover:" + classes.loc[to_recover, "defect_type"]
+    classes.loc[cand & ~to_recover, "cls"] = ip.LEGACY
+    requests = ip.build_requests(classes, sample)
+    res.to_parquet(build / "irrecoverability_results.parquet", index=False)
+    classes.to_parquet(build / "classification.parquet", index=False)
+    requests.to_parquet(build / "requests.parquet", index=False)
+    out = {"policy": ip.IRRECOVERABILITY, "data_policy_version": ic.policy_version(),
+           "cells": cells, "sessions_to_recover": int(to_recover.sum()),
+           "requests_total": len(requests)}
+    (build / "irrecoverability.json").write_text(json.dumps(out, indent=1) + "\n")
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="signal_engine.backtest.data_readiness.intraday_build")
     ap.add_argument("--snapshot", required=True, type=Path)
+    ap.add_argument("--decide", action="store_true",
+                    help="score the irrecoverability sample and finalise the recovery plan")
     args = ap.parse_args(argv)
+    if args.decide:
+        out = decide_cells(args.snapshot)
+        print({k: v for k, v in out.items() if k != "cells"})
+        return 0
     print(run(args.snapshot))
     return 0
 

@@ -50,11 +50,18 @@ class DataContract:
     universe_symbols: tuple[str, ...]
     universe_version: str
     notes: tuple[str, ...] = field(default=())
+    # Intraday only: the dataset field families the strategy uses (data-quality policy). None =
+    # not declared, so every family is required (the conservative default).
+    field_families: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["universe_symbols"] = list(self.universe_symbols)
         d["notes"] = list(self.notes)
+        if self.field_families is None:
+            d.pop("field_families")
+        else:
+            d["field_families"] = list(self.field_families)
         return d
 
 
@@ -112,6 +119,15 @@ def _universe(frozen: Any) -> tuple[str, str, tuple[str, ...]]:
     return DEFAULT_UNIVERSE, source, symbols
 
 
+def _field_families(frozen: Any) -> tuple[str, ...] | None:
+    declared = (frozen.intent.get("data") or {}).get("field_families")
+    if declared in (None, [], ()):
+        return None
+    if not isinstance(declared, list) or not all(isinstance(f, str) for f in declared):
+        raise ContractError(f"data.field_families must be a list of names, got {declared!r}")
+    return tuple(declared)
+
+
 def resolve_contract(frozen: Any) -> DataContract:
     """The data contract of a frozen spec. Raises ContractError for an unusable spec."""
     frequency = _frequency(frozen.intent.get("timeframe"))
@@ -133,4 +149,5 @@ def resolve_contract(frozen: Any) -> DataContract:
         universe_symbols=symbols,
         universe_version=version,
         notes=notes,
+        field_families=_field_families(frozen) if not daily else None,
     )

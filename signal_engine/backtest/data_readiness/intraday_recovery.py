@@ -2,7 +2,7 @@
 
 Every request of `requests.parquet` (intraday_plan) is fetched through the history service with
 the in-memory secondary broker login (never `auth_db`). Each response is stored as
-`<landing>/<request_id>.json.gz` (gzip mtime 0, so equal content gives equal bytes) and every
+`<landing>/<request_id>.json.gz` (gzip level GZIP_LEVEL, mtime 0: equal content gives equal bytes) and every
 attempt is one line of the append-only `recovery_ledger.jsonl` in the build folder:
 
     request_id, symbol, start, end, attempt, requested_ist, outcome (ok | empty | error),
@@ -26,6 +26,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from signal_engine.research.intake.fingerprints import canonical_json
@@ -39,7 +40,9 @@ DEFAULT_LANDING = _REPO / "db" / "landing" / "angel-1m"
 LEDGER = "recovery_ledger.jsonl"
 MAX_ATTEMPTS = 3
 PAUSE_S = 0.55
+GZIP_LEVEL = 6                # level 9 cost 1.6 s per response; 6 is 5% larger, fixed for determinism
 FINAL = ("ok", "empty")
+SCALED_RTOL = 1e-6
 
 # fetch(symbol, start "YYYY-MM-DD", end "YYYY-MM-DD") -> (ok, response dict, http status)
 Fetch = Callable[[str, str, str], tuple[bool, dict, int]]
@@ -53,7 +56,7 @@ def read_ledger(build: Path) -> pd.DataFrame:
 
 
 def _store(landing: Path, request_id: str, body: dict) -> tuple[str, str]:
-    blob = gzip.compress(canonical_json(body).encode(), mtime=0)
+    blob = gzip.compress(canonical_json(body).encode(), compresslevel=GZIP_LEVEL, mtime=0)
     sha = hashlib.sha256(blob).hexdigest()
     path = landing / f"{request_id}.json.gz"
     tmp = path.with_name(path.name + ".tmp")
@@ -145,6 +148,29 @@ def verify(build: Path) -> list[str]:
 
 def load_response(path: str) -> dict:
     return json.loads(gzip.decompress(_abs(path).read_bytes()))
+
+
+def compare_session(legacy: pd.DataFrame, fresh: pd.DataFrame) -> str:
+    """exact | scaled (one price multiplier) | mismatch | fresh_missing."""
+    if fresh.empty:
+        return "fresh_missing"
+    a = legacy.sort_values("timestamp")
+    b = fresh.sort_values("timestamp")
+    if len(a) != len(b) or not np.array_equal(a.timestamp.to_numpy(), b.timestamp.to_numpy()):
+        return "mismatch"
+    fields = ["open", "high", "low", "close"]
+    pa, pb = a[fields].to_numpy(float), b[fields].to_numpy(float)
+    if np.array_equal(pa, pb) and np.array_equal(a.volume.to_numpy(), b.volume.to_numpy()):
+        return "exact"
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = pb / pa
+        r = float(ratio.mean())
+        vol = b.volume.to_numpy(float) / a.volume.to_numpy(float)
+    one_multiplier = (np.isfinite(ratio).all() and abs(r - 1) > SCALED_RTOL
+                      and np.ptp(ratio) <= SCALED_RTOL * abs(r))
+    volume_follows = np.array_equal(a.volume.to_numpy(), b.volume.to_numpy()) or (
+        np.isfinite(vol).all() and np.allclose(vol, 1 / r, rtol=SCALED_RTOL))
+    return "scaled" if one_multiplier and volume_follows else "mismatch"
 
 
 def angel_fetch() -> Fetch:

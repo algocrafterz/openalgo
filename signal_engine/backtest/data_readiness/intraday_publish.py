@@ -23,8 +23,8 @@ from pathlib import Path
 import pandas as pd
 
 from signal_engine.backtest.data_readiness import intraday_convert as ic
+from signal_engine.backtest.data_readiness import intraday_plan as ip
 from signal_engine.backtest.data_readiness import intraday_recovery as ir
-from signal_engine.backtest.data_readiness import intraday_report as rp
 from signal_engine.backtest.data_readiness import snapshot as sn
 from signal_engine.backtest.data_readiness import state as st
 from signal_engine.backtest.data_readiness.calendar import load_calendar
@@ -43,8 +43,12 @@ LIMITATIONS = ("legacy row-level provenance unavailable (sample-verified); divid
                "renames not joined; universe is today's F&O list (survivorship); minute bars "
                "exclude pre-open auction volume; NSE daily extremes may lie outside the minute "
                "range (2023-06 to 2024-03)")
-_LEDGER_COLS = ["symbol", "session", "cls", "origin", "status", "method", "k", "vol_c",
-                "vol_ratio", "missing_minutes", "open_ok", "close_ok", "volume_ok", "contained"]
+QUALITY_COLS = ["symbol", "session", "cls", "origin", "price_status", "final_defect",
+                "treatment", "price_valid", "volume_valid", "final_bar_valid",
+                "final_bar_convention", "method", "k", "vol_c", "vol_ratio", "missing_minutes",
+                "open_ok", "contained"]
+_TEXT_COLS = ("cls", "origin", "price_status", "final_defect", "treatment",
+              "final_bar_convention", "method")
 
 
 def _sha_bytes(blob: bytes) -> str:
@@ -61,15 +65,18 @@ def content(build: Path) -> tuple[list[tuple[dict, bytes]], dict[str, bytes]]:
                          "rows": len(df), "first_timestamp": int(df.timestamp.min()),
                          "last_timestamp": int(df.timestamp.max())}, blob))
     ledger = pd.read_parquet(build / "session_ledger.parquet")
+    quality = ledger[QUALITY_COLS].astype(dict.fromkeys(_TEXT_COLS, str))
     extras = {
-        "session_ledger": sn._parquet_bytes(
-            ledger[_LEDGER_COLS].astype({"cls": str, "status": str, "origin": str,
-                                         "method": str})),
+        "quality_table": sn._parquet_bytes(quality),
+        "data_quality_policy": ic.POLICY_PATH.read_bytes(),
+        "irrecoverability": (build / "irrecoverability.json").read_bytes(),
         "provenance": sn._parquet_bytes(pd.read_parquet(build / "provenance.parquet")),
         "recovery_ledger": sn._parquet_bytes(ir.read_ledger(build).astype({"sessions": str})),
         "requests": sn._parquet_bytes(pd.read_parquet(build / "requests.parquet")),
         "report": (build / "report.json").read_bytes(),
     }
+    if (build / "assessment.yaml").exists():
+        extras["assessment"] = (build / "assessment.yaml").read_bytes()
     return objects, extras
 
 
@@ -102,8 +109,14 @@ def contract(build: Path, report: dict, daily: dict) -> dict:
                        "open_tol_reported": ic.OPEN_TOL},
         "missing_minute_threshold": {"N": policy["N"], "method": policy["method"]},
         "missing_session_policy": "an expected session with no bars after recovery is MISSING",
-        "exclusion_policy": "session-level; Muhurat sessions out of scope",
-        "exclusion_ceilings": {"overall": rp.OVERALL_CEILING, "yearly": rp.YEARLY_CEILING},
+        "exclusion_policy": "per session and field family (quality table); Muhurat sessions out "
+                            "of scope",
+        "field_families": list(ic.FIELD_FAMILIES),
+        "final_bar_convention": "per session: official_close | last_trade | both | none "
+                                "(Part B2); before 2023-06 the final bar usually carries the "
+                                "official close, which is not a traded price",
+        "data_policy_version": ic.policy_version(),
+        "usable_range_removals": report["usable_range_removals"],
         "readiness": report["readiness_state"],
     }
 
@@ -118,7 +131,7 @@ def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
             root: Path = sn.DEFAULT_ROOT, git_dir: Path = sn.DEFAULT_GIT_DIR,
             dry_run: bool = False) -> dict:
     report = json.loads((build / "report.json").read_text())
-    failed = [k for k, v in report["criteria"].items() if not v]
+    failed = [k for k, v in {**report["criteria"], **report.get("metadata", {})}.items() if not v]
     if report["readiness_state"] == st.NOT_READY or failed:
         raise sn.SnapshotError(f"build is {report['readiness_state']}; failed criteria {failed}")
     if (root / "versions" / f"{version_id}.json").exists() or (
@@ -147,16 +160,21 @@ def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
         "contract": contract(build, report, daily),
         "coverage": {"start": "2017-01-01", "end": "2026-10-01",
                      "symbols": int(index.symbol.nunique()), "rows": int(index.rows.sum()),
-                     "sessions_published": sess["published"],
+                     "sessions_price_valid": sess["valid"]["price"],
                      "sessions_requested": sess["requested"]},
         "readiness_state": report["readiness_state"],
-        "warnings": [f"{sess['requested'] - sess['published']} requested sessions excluded "
-                     f"(rate {report['exclusions']['overall_rate']})",
-                     f"{sess['out_of_scope_muhurat']} Muhurat sessions out of scope"],
+        "warnings": [*(f"{f}: {sess['requested'] - n} requested sessions invalid"
+                       for f, n in sess["valid"].items()),
+                     f"{sess['out_of_scope_muhurat']} Muhurat sessions out of scope",
+                     *(f"alert {a['id']} rate {a['rate']}" for a in report["alerts"])],
         "excluded_symbols": [],
         "audit_sha256": extra_shas["report"], "index_sha256": _sha_bytes(index_blob),
         "events_sha256": daily["events_sha256"], "extra_objects": extra_shas,
         "content_hash": content_hash, "objects": len(index),
+        "data_policy_version": ic.policy_version(),
+        "field_families": list(ic.FIELD_FAMILIES),
+        "usable_range_removals": report["usable_range_removals"],
+        "out_of_scope_sessions": sorted(str(d.date()) for d in ip.muhurat_dates()),
         "fingerprint_algo": sn.FINGERPRINT_ALGO, "staging_build": build.name,
     }
     for _, blob in objects:
@@ -174,6 +192,7 @@ def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
         "status": "published", "cause": cause, "created_ist": body["created_ist"],
         "frequency": "5m", "coverage": body["coverage"],
         "readiness_state": body["readiness_state"], "content_hash": content_hash,
+        "data_policy_version": body["data_policy_version"],
         "excluded_symbols": []})
     logger.info(f"published {version_id} root {root_hash[:12]} objects {len(index)}")
     return {"dry_run": False, "root_hash": root_hash, "content_hash": content_hash,

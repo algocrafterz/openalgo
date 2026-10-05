@@ -49,7 +49,7 @@ def _full(day, scale=1.0, vol=100, last=929, auction=None):
 def _ref(day, **kw):
     base = {"symbol": "AAA", "session": pd.Timestamp(day), "raw_open": 100.0, "raw_high": 110.0,
             "raw_low": 90.0, "raw_volume": 37500.0, "price_factor": 1.0, "volume_factor": 1.0,
-            "ref_close": 105.0}
+            "ref_close": 105.0, "raw_close": 105.0}
     base.update(kw)
     return pd.DataFrame([base])
 
@@ -154,8 +154,16 @@ def test_volume_scaled_inversely_with_a_split_picks_c_one_over_k():
     assert r.status == ic.CONVERTED
 
 
-def test_volume_outside_the_band_is_excluded():
-    assert _ledger(_full(PRE, vol=200), _ref(PRE)).status == "excluded:volume"
+def _valid(row):
+    led = pd.DataFrame([row]).assign(structure_ok=True)
+    return ic.field_validity(led).iloc[0]
+
+
+def test_volume_outside_the_band_invalidates_volume_only():
+    r = _ledger(_full(PRE, vol=200), _ref(PRE))
+    v = _valid(r)
+    assert r.status == ic.CONVERTED and not r.volume_ok
+    assert v.price_valid and not v.volume_valid and v.final_bar_valid
 
 
 def test_volume_below_nse_by_pre_open_share_is_accepted():
@@ -163,17 +171,40 @@ def test_volume_below_nse_by_pre_open_share_is_accepted():
     assert r.vol_ratio == pytest.approx(0.9) and r.status == ic.CONVERTED
 
 
-# ---------------------------------------------------------------- close (7.1)
+# ---------------------------------------------------------------- final-bar convention (B2)
 
-def test_close_not_matching_nse_is_excluded():
-    assert _ledger(_full(PRE), _ref(PRE, ref_close=106.0)).status == "excluded:close"
+@pytest.mark.parametrize("last, official, want", [
+    (105.0, 105.0, "both"), (106.0, 105.0, "official_close"), (105.0, 106.0, "last_trade"),
+    (106.0, 107.0, "none")])
+def test_final_bar_convention_before_the_auction(last, official, want):
+    r = _ledger(_full(PRE), _ref(PRE, ref_close=last, raw_close=official))
+    assert r.final_bar_convention == want and r.status == ic.CONVERTED
+    assert _valid(r).final_bar_valid == (want != "none") and _valid(r).price_valid
 
 
-def test_auction_era_close_uses_the_auction_print():
+def test_auction_era_final_bar_must_be_the_official_close():
     b = _full(CAS, last=914, auction=929)
-    ok = _ref(CAS, ref_close=106.0, raw_volume=36100.0)
-    assert _ledger(b, ok).status == ic.CONVERTED
-    assert _ledger(b, ok.assign(ref_close=105.0)).status == "excluded:close"
+    ok = _ref(CAS, ref_close=106.0, raw_close=106.0, raw_volume=36100.0)
+    assert _ledger(b, ok).final_bar_convention == "official_close"
+    bad = _ledger(b, ok.assign(ref_close=105.0, raw_close=105.0))
+    assert bad.final_bar_convention == "none" and bad.status == ic.CONVERTED
+
+
+def test_session_missing_its_opening_or_closing_minutes_is_partial():
+    late = _full(PRE)
+    late = late[late.timestamp >= late.timestamp.min() + 20 * 60]
+    s = ic.summarise(late, T)
+    assert not s.edge_ok.item()
+    r = ic.convert_sessions(s, _ref(PRE)).assign(structure_ok=True)
+    assert not ic.field_validity(r).price_valid.item()
+    assert ic.summarise(_full(PRE), T).edge_ok.item()
+
+
+def test_missing_minute_threshold_invalidates_price():
+    r = _ledger(_full(PRE), _ref(PRE))
+    led = pd.DataFrame([r]).assign(structure_ok=True, missing_minutes=40)
+    assert not ic.field_validity(led, missing_threshold=30).price_valid.item()
+    assert ic.field_validity(led, missing_threshold=40).price_valid.item()
 
 
 def test_session_without_an_nse_row_is_excluded():
@@ -198,8 +229,8 @@ def test_canonical_bars_apply_k_price_factor_c_and_volume_factor():
 
 
 def test_excluded_sessions_produce_no_bars():
-    bars = _full(PRE, vol=200)
-    ledger = ic.convert_sessions(ic.summarise(bars, T), _ref(PRE))
+    bars = _full(PRE)
+    ledger = ic.convert_sessions(ic.summarise(bars, T), _ref(PRE, raw_high=108.0, raw_low=89.0))
     assert ic.convert_bars(ic.with_clock(bars), ledger).empty
 
 

@@ -29,8 +29,12 @@ def _classes():
         "symbol": ["AAA"] * 4 + ["EMAMILTD"],
         "session": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04",
                                    "2024-01-02"]),
-        "status": ["converted", "excluded:volume", "converted", "excluded:volume", "converted"],
+        "status": ["converted", "excluded:range_not_contained", "converted", "converted",
+                   "converted"],
         "structure_ok": [True, True, True, True, True],
+        "edge_ok": [True, True, True, True, True],
+        "volume_ok": [True, True, True, False, True],
+        "final_bar_convention": ["both", "both", "both", "both", "both"],
         "contaminated": [False, True, False, False, False],
         "negative_volume": [False, False, True, False, False]})
     return ip.classify(ref, legacy)
@@ -42,16 +46,15 @@ def test_classification_follows_the_cleanup_policy():
     assert got[("AAA", 1)] == ip.LEGACY
     assert got[("AAA", 2)] == ip.RECOVER_CONTAMINATED       # contaminated and failing
     assert got[("AAA", 3)] == ip.RECOVER_NEGVOL
-    assert got[("AAA", 4)] == ip.LEGACY                     # clean but failing: excluded later
+    assert got[("AAA", 4)] == ip.CANDIDATE + "volume"       # clean but failing: cell test
     assert got[("AAA", 5)] == ip.RECOVER_GAP
     assert got[("EMAMILTD", 2)] == ip.RECOVER_REPLACED
 
 
 def test_muhurat_sessions_are_out_of_scope_and_never_requested():
     ref = pd.DataFrame({"symbol": "AAA", "session": pd.to_datetime(["2024-11-01", "2024-11-04"])})
-    legacy = pd.DataFrame({"symbol": pd.Series([], dtype=object), "session": pd.to_datetime([]),
-                           "status": pd.Series([], dtype=object), "structure_ok": [],
-                           "contaminated": [], "negative_volume": []})
+    legacy = pd.DataFrame({c: pd.Series([], dtype=object) for c in ip._LEDGER_COLS}).assign(
+        session=pd.to_datetime([]))
     c = ip.classify(ref, legacy)
     assert list(c.cls) == [ip.OUT_OF_SCOPE_MUHURAT, ip.RECOVER_GAP]
     assert list(ip.recovery_requests(c).start) == [ip.block(date(2024, 11, 4))[0]]
@@ -66,8 +69,8 @@ def test_requests_are_deterministic_and_deduplicated():
 
 def test_provenance_sample_has_a_window_per_symbol_year_and_regime():
     ref = pd.DataFrame({"symbol": "AAA", "session": pd.bdate_range("2020-01-01", "2020-12-31")})
-    legacy = ref.assign(status="converted", structure_ok=True, contaminated=False,
-                        negative_volume=False)
+    legacy = ref.assign(status="converted", structure_ok=True, edge_ok=True, volume_ok=True,
+                        final_bar_convention="both", contaminated=False, negative_volume=False)
     req = ip.provenance_requests(ip.classify(ref, legacy))
     assert "regime:2020-03 COVID crash" in set(req.stratum)
     years = req[req.stratum.str.startswith("year:")]
@@ -78,8 +81,8 @@ def test_provenance_sample_has_a_window_per_symbol_year_and_regime():
 
 def test_provenance_draw_does_not_depend_on_classification():
     ref = pd.DataFrame({"symbol": "AAA", "session": pd.bdate_range("2020-01-01", "2020-12-31")})
-    legacy = ref.assign(status="converted", structure_ok=True, contaminated=False,
-                        negative_volume=False)
+    legacy = ref.assign(status="converted", structure_ok=True, edge_ok=True, volume_ok=True,
+                        final_bar_convention="both", contaminated=False, negative_volume=False)
     a = ip.provenance_requests(ip.classify(ref, legacy))
     worse = legacy.assign(status=["excluded:volume"] * 50 + ["converted"] * (len(legacy) - 50),
                           contaminated=True)
@@ -151,3 +154,17 @@ def test_landing_bytes_are_deterministic_and_tampering_is_detected(tmp_path):
     assert ir.verify(build) == []
     (tmp_path / "landing" / "r0.json.gz").write_bytes(b"x")
     assert ir.verify(build) == ["landing file of r0 missing or changed"]
+
+
+def test_irrecoverability_sample_is_seeded_and_capped_per_cell():
+    days = pd.bdate_range("2019-01-01", "2019-12-31")
+    ref = pd.DataFrame({"symbol": "AAA", "session": days})
+    legacy = ref.assign(status="converted", structure_ok=True, edge_ok=True, volume_ok=False,
+                        final_bar_convention="both", contaminated=False, negative_volume=False)
+    c = ip.classify(ref, legacy)
+    a, b = ip.irrecoverability_sample(c), ip.irrecoverability_sample(c)
+    pd.testing.assert_frame_equal(a, b)
+    assert len(a) == ip.IRRECOVERABILITY["sample_max"] and set(a.cell) == {
+        "candidate:volume:2019"}
+    req = ip.irrecoverability_requests(a)
+    assert set(req.purpose) == {"irrecoverability"} and len(req) <= len(a)

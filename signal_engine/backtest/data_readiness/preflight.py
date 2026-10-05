@@ -2,7 +2,8 @@
 
 Order of checks (the first NOT_READY ends the preflight; nothing is executed or counted):
 
-1. interval: the version holds the contract frequency (only daily versions exist today);
+1. interval: the version holds the contract frequency; an intraday version continues in
+   intraday_access.run_preflight (quality table against the contract's field families);
 2. dataset integrity: every hash of the resolved published version verifies;
 3. calendar compatibility for the requested range only: the version's sessions in
    [coverage start, end] must equal the current official calendar's sessions there. A calendar
@@ -91,7 +92,9 @@ def _dataset_block(m: dict) -> dict[str, Any]:
             "corporate_action_version": m.get("corporate_action_version"),
             "overrides_source": m.get("overrides_source"),
             "series_rule_version": m.get("series_rule_version"),
-            "coverage": m.get("coverage"), "known_limitations": m.get("known_limitations")}
+            "coverage": m.get("coverage"), "known_limitations": m.get("known_limitations"),
+            **({"data_policy_version": m["data_policy_version"]}
+               if m.get("data_policy_version") else {})}
 
 
 def _session_dates(con) -> set[date]:
@@ -158,6 +161,12 @@ def run_preflight(*, manifest: dict, contract: DataContract, calendar: NseCalend
                              policy_version=policy.version, end=stop.isoformat())
     if manifest.get("frequency") != contract.frequency:
         return _finish(report, st.NOT_READY, ["no_published_interval"])
+    if contract.frequency != "D":
+        from signal_engine.backtest.data_readiness import intraday_access
+
+        return intraday_access.run_preflight(report, manifest=manifest, contract=contract,
+                                             calendar=calendar, stop=stop, start=start,
+                                             root=root, git_dir=git_dir)
     end_ts = int(pd.Timestamp(stop).timestamp())
     try:
         with snapshot.open_version(vid, root=root, git_dir=git_dir, end_ts=end_ts) as con:
@@ -300,9 +309,16 @@ class PublishedSource:
                                          min_sessions=min_sessions, collector=collector)
 
     def intraday(self, symbols, interval, end, collector=None):
-        raise DataUnavailable(
-            f"no published intraday ({interval}) dataset version; "
-            f"{self._resolution.version_id} holds {self._resolution.manifest.get('frequency')} bars")
+        m = self._resolution.manifest
+        if m.get("frequency") != interval:
+            raise DataUnavailable(
+                f"no published intraday ({interval}) dataset version; "
+                f"{self._resolution.version_id} holds {m.get('frequency')} bars")
+        from signal_engine.backtest.data_readiness import intraday_access
+
+        return intraday_access.read_bars(self._con, m, self._resolution.contract, symbols,
+                                         interval, end, root=self._resolution.root,
+                                         collector=collector)
 
 
 def _open_source(self: Resolution):

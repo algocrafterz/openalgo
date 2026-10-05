@@ -29,12 +29,14 @@ def _session(day, price=100.0, vol=100, symbol="AAA", minutes=range(555, 930)):
 def _ref(*days):
     return pd.DataFrame([{"symbol": "AAA", "session": pd.Timestamp(d), "raw_open": 100.0,
                           "raw_high": 110.0, "raw_low": 90.0, "raw_volume": 37500.0,
-                          "price_factor": 1.0, "volume_factor": 1.0, "ref_close": 100.0}
+                          "price_factor": 1.0, "volume_factor": 1.0, "ref_close": 100.0,
+                          "raw_close": 100.0}
                          for d in days])
 
 
 def _classes(mapping):
-    return pd.DataFrame([{"symbol": "AAA", "session": pd.Timestamp(d), "cls": c}
+    return pd.DataFrame([{"symbol": "AAA", "session": pd.Timestamp(d), "cls": c,
+                          "defect_type": None, "contaminated": False}
                          for d, c in mapping.items()])
 
 
@@ -86,14 +88,31 @@ def test_compare_session_outcomes():
     assert ib.compare_session(a, scaled) == "scaled"
 
 
-def test_missing_minute_threshold_is_p99_of_passing_sessions_rounded_up_to_5():
-    s = pd.DataFrame({"session": pd.Timestamp(D1), "status": ic.CONVERTED,
-                      "missing_minutes": np.arange(100)})
-    s = pd.concat([s, pd.DataFrame({"session": [pd.Timestamp(D1)], "status": ["excluded:volume"],
-                                    "missing_minutes": [999]})], ignore_index=True)
+def _ledger_rows(missing, volume_ok=True, status=ic.CONVERTED):
+    n = len(missing)
+    return pd.DataFrame({"session": pd.Timestamp(D1), "status": status, "structure_ok": True,
+                         "edge_ok": True, "volume_ok": volume_ok, "final_bar_convention": "both",
+                         "missing_minutes": missing, "cls": ip.LEGACY,
+                         "defect_type": None, "contaminated": False,
+                         "origin": "legacy"}, index=range(n))
+
+
+def test_missing_minute_threshold_is_p99_of_volume_valid_sessions_rounded_up_to_5():
+    s = pd.concat([_ledger_rows(np.arange(100)), _ledger_rows([999], volume_ok=False)],
+                  ignore_index=True)
     pol = ib.missing_minute_threshold(s)
     assert pol["population"] == 100 and pol["percentile_value"] == np.percentile(range(100), 99)
     assert pol["N"] == 100
-    out = ib.apply_threshold(s, 98)
-    assert (out.status == "excluded:missing_minutes").sum() == 1
-    assert out.status.iloc[-1] == "excluded:volume"
+
+
+def test_quality_table_flags_each_field_family_and_treatment():
+    s = pd.concat([_ledger_rows([0, 99]), _ledger_rows([0], volume_ok=False),
+                   _ledger_rows([0], status="unresolved")], ignore_index=True)
+    s.loc[2, "defect_type"] = "volume"
+    q = ib.quality_table(s, 98)
+    assert list(q.price_valid) == [True, False, True, False]
+    assert list(q.volume_valid) == [True, False, False, False]
+    assert list(q.price_status) == [ic.CONVERTED, "excluded:partial_session", ic.CONVERTED,
+                                    ic.UNRESOLVED]
+    assert q.treatment[2] == "unresolved:irrecoverable_at_source"
+    assert q.treatment[0] == "accepted"

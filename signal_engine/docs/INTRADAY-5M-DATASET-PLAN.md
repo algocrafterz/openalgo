@@ -1,7 +1,9 @@
 # Intraday 5m Dataset: Design and Acceptance (for IDEA-029)
 
 Status: APPROVED by the owner on 2026-10-05 (Option B), with the locked policies of sections 2 to
-11. The build may start. Nothing is published until every item of section 12 holds.
+11. Snapshot taken and recovery running. Part A (general research data-quality policy) and
+Part B (its application to this dataset) are PROPOSED, awaiting owner review; no dataset rule is
+changed until they are approved. Nothing is published until every item of section 12 holds.
 
 The plan builds the first published intraday dataset, `nse-intraday-5m-YYYYMMDD-001`, from the
 existing 1m store plus a targeted AngelOne recovery. It reuses the daily architecture (staging,
@@ -38,6 +40,255 @@ Two rules apply to the whole workstream:
   kind, is an input to any decision in this plan. Every threshold that is set from measured data
   (section 7.3) is set from data-quality measurements only, and is frozen in the contract before
   IDEA-029 runs.
+
+## Part A. Research data-quality policy (general, PROPOSED)
+
+This part applies to every dataset version published from now on. It does not change the
+published daily versions (`nse-daily-20261005-001`, `-002`) or any sealed run; they keep the
+policy version they recorded.
+
+Principle: **a data defect is never silently repaired, silently dropped, or silently allowed to
+influence a recorded research result.** Every anomaly is detected, classified, treated by a
+deterministic rule, recorded in the validation report, reflected in readiness, and preserved in
+the immutable version metadata. The goal is known, deterministic, documented and research-safe
+data, not perfect data.
+
+### A1. Authority
+
+```text
+1. Exchange reference         NSE official daily data (bhavcopy), the NSE calendar, NSE circulars
+2. Research-normalised data   published versions (canonical NSE basis, versioned policy)
+3. Source / vendor data       AngelOne (intraday), other brokers; documented conventions
+4. Legacy / unverified data   historify.duckdb; usable only through a frozen, verified snapshot
+```
+
+A lower level never overrides a higher one. Where a source and the exchange disagree, the source
+is wrong or uses a different definition; it is never the reference. The published dataset is on
+the canonical research basis wherever that is technically possible; where it is not, the
+version says so field by field.
+
+### A2. Defect types (what is wrong)
+
+| Type | Unit | Example |
+|---|---|---|
+| MISSING_BAR | bar | a minute with no bar inside an otherwise complete session |
+| PARTIAL_SESSION | session | missing minutes above the policy threshold, or a truncated start or end |
+| MISSING_SESSION | session | an expected exchange session with no bars |
+| DUPLICATE_BAR | bar | two bars with the same (symbol, timestamp) |
+| CORRUPT_BAR | bar | a hard invariant fails: high < max(open, close, low), low > min(open, close, high), price <= 0, volume < 0 |
+| OUT_OF_WINDOW_BAR | bar | off-grid timestamp, or a minute outside the session template |
+| MIXED_SOURCE | session | bars of two vendors inside one session |
+| SOURCE_DEFINITION_DIFFERENCE | field | the source defines a field differently from the exchange (for example, which price the last bar closes at) |
+| BASIS_DIFFERENCE | session | the source's corporate-action adjustment differs from the canonical basis |
+| VOLUME_ANOMALY_EXPLAINED | session | volume differs from the exchange for a documented reason (pre-open auction excluded, corporate-action scaling) |
+| VOLUME_ANOMALY_UNRESOLVED | session | volume differs from the exchange and the cause is not established |
+| PRICE_REFERENCE_MISMATCH | session | a price field disagrees with the exchange reference beyond tolerance under every documented definition |
+| SOURCE_INCOMPLETENESS | session | the source omits some trades (the exchange extremes lie outside the minute range) |
+| OUT_OF_SCOPE_SESSION | session | a session the dataset does not cover by declared policy (Muhurat) |
+| CONCENTRATION | dataset | exclusions clustered by period, symbol, event or basis |
+
+### A3. Treatment classes (what is done)
+
+```text
+EXPECTED                   -> ACCEPT, count, report
+DETERMINISTIC_REPAIRABLE   -> REPAIR by a documented, versioned transformation -> REVALIDATE
+RECOVERABLE                -> RE-FETCH / REBUILD the whole session -> REVALIDATE
+OBSERVATION_EXCLUSION      -> EXCLUDE the affected observation (session or field family) -> RECORD
+UNRESOLVED                 -> EXCLUDE the affected observation, flag it UNRESOLVED -> RECORD;
+                              it counts toward materiality (A7)
+DATASET_LEVEL_FAILURE      -> NOT_READY
+```
+
+Allowed repairs are limited to transformations whose definition is known and documented:
+conversion between price bases (section 6), corporate-action volume scaling with a known factor
+(6.4), and removal of bars identified as foreign to the source (MIXED_SOURCE, C1/C2). Never
+allowed: changing an OHLC value to satisfy an invariant, forward-filling or interpolating a bar
+or a session, scaling volume by a factor that has no documented cause, or mixing bars of two
+sources inside one session.
+
+Whether an exclusion is safe for a given strategy is not decided by the dataset. The dataset
+excludes and records the observation (OBSERVATION_EXCLUSION); the strategy's preflight decides
+whether the strategy is still testable (A6).
+
+### A4. Order of treatment
+
+```text
+validate -> classify -> recover (if RECOVERABLE and material) -> revalidate
+         -> repair (if DETERMINISTIC_REPAIRABLE) -> revalidate
+         -> exclude and record (otherwise)
+```
+
+Recovery is preferred to exclusion. It is not mandatory when the defect is expected,
+immaterial, or known to be irrecoverable at the source. Irrecoverability is established by
+evidence, not assumed: for each (defect type, year) cell, a seeded sample of up to 30 sessions is
+re-fetched first. If at least 95% of the sample comes back identical to the stored data, the
+cell is declared irrecoverable at the source and is not bulk re-fetched. Otherwise the whole cell
+is recovered. Each such decision, with its sample, is recorded in the report.
+
+### A5. Missing data
+
+- MISSING_BAR: allowed when the session's volume completeness check passes (the minute had no
+  trade). Never filled. The dataset publishes the per-session missing-minute count.
+- PARTIAL_SESSION: missing minutes above the threshold N (7.3), or no bar in the first or last
+  15 minutes of a continuous window. Recover; otherwise exclude the session.
+- MISSING_SESSION: recover; otherwise exclude and list. Never manufactured from neighbouring
+  data.
+- A missing or excluded session breaks every rolling calculation that needs it. The dataset
+  never hides this; the strategy contract decides how its indicators restart (A6).
+
+### A6. Dataset quality versus strategy compatibility
+
+The dataset carries no strategy assumption. It publishes:
+
+- the bars of every session that passes the generic rules;
+- a quality table: one row per expected (symbol, session) with its status, defect types,
+  treatment, origin, and a validity flag per field family (`price`, `volume`, `final_bar`);
+- the exclusion ledger and the validation report.
+
+A session whose prices pass but whose volume is UNRESOLVED is published with `volume` marked
+invalid; it is not dropped for every strategy, and it is not silently usable for a volume
+strategy.
+
+Each strategy's data contract, frozen with its specification, declares:
+
+- the field families it uses (for example, IDEA-029: price, volume);
+- the observations it needs (minutes per session, lookback sessions, its higher timeframes);
+- its rule for an unavailable observation (skip the session, restart a warm-up, exclude the
+  symbol).
+
+The preflight joins the contract to the quality table:
+
+```text
+required observation available            -> usable
+required observation flagged or excluded  -> excluded for this run (recorded in the run)
+exclusions material for this strategy     -> NOT_READY for this strategy (A8)
+```
+
+`PublishedSource.intraday` applies the contract; a contract that declares no field families
+gets the conservative default: any flagged session is unavailable. For IDEA-029 the impact on
+VWAP, VWAP standard deviation, ATR, EMA, ADX, the 15m aggregation and the setup state is assessed
+in its specification, before its freeze, from the quality table; missing data is not assumed to
+be harmless because VWAP can still be computed.
+
+### A7. Materiality and concentration
+
+Percentages are alerts and guardrails, not the definition of quality. For every field family the
+report computes the exclusion rate (excluded requested symbol-sessions / requested
+symbol-sessions) overall, by year, by month, by symbol, by corporate-action event, and by source
+or basis class.
+
+| Level | Rule | Effect |
+|---|---|---|
+| Alert | overall > 2%, any year > 3%, any month > 10%, any symbol > 5% | a written assessment is required in the report |
+| Hard guardrail | any year > 10%, or any symbol > 25% (field family) | that year or symbol is removed from the dataset's usable range for that field family, recorded in the version; it is not waived |
+| Dataset failure | an integrity, structure, provenance or determinism gate fails | NOT_READY |
+
+The written assessment answers, for each alert: (1) is the defect material; (2) is it
+concentrated; (3) is it a definition difference or a real defect; (4) which field families it
+affects; (5) can the observations be safely excluded; (6) can another source resolve them; (7)
+should the period leave the usable range. The thresholds and the questions are part of the
+versioned policy; they are not changed for a strategy.
+
+### A8. Readiness
+
+Dataset readiness (generic):
+
+- READY: every gate passes; no exclusion, no unresolved defect, no alert.
+- READY_WITH_WARNINGS: every gate passes; the defects are known, classified, recorded and
+  bounded (inside the hard guardrails, every alert assessed).
+- NOT_READY: any dataset-level gate fails, or a defect is unclassified.
+
+Strategy readiness (preflight, per run): READY or READY_WITH_WARNINGS as above for the
+observations the contract needs; NOT_READY when an unresolved defect affects a field family the
+strategy uses and its affected observations exceed the A7 guardrails inside the run's range, or
+are concentrated in a way the assessment found material. The run records the dataset readiness,
+the strategy readiness and every excluded observation.
+
+### A9. Immutability and reproducibility
+
+A defect found after publication never changes the version: v1 stays, a corrected v2 is
+published, existing runs stay on v1. Every run records `dataset_version`, `dataset_fingerprint`,
+`dataset_root_hash`, `calendar_version`, `price_basis`, `corporate_action_version` and
+`data_policy_version`. The policy is versioned as a file
+(`signal_engine/research/reference/data_quality_policy.yaml`, sha256 = `data_policy_version`);
+a material policy change is a new policy version and requires a new dataset version.
+
+## Part B. Application to the intraday dataset (PROPOSED)
+
+### B1. Current findings classified
+
+| Finding | Type | Treatment | Status |
+|---|---|---|---|
+| Flattrade bars (:55-:59 stamps, 09:14 pre-open) | MIXED_SOURCE | DETERMINISTIC_REPAIRABLE: remove the foreign bars, revalidate; RECOVERABLE if still failing | as planned (section 4) |
+| Negative volume | CORRUPT_BAR | RECOVERABLE | recovery running |
+| Boundary, scattered and partial gaps | MISSING_SESSION | RECOVERABLE; otherwise OBSERVATION_EXCLUSION | recovery running |
+| SBIN and similar: volume about 1.85x NSE, fresh fetch correct | VOLUME_ANOMALY of the legacy store (source data defect) | RECOVERABLE: replace session | to recover (B3) |
+| Final bar closes at the official close (mostly before 2023-06) or the last trade (after) | SOURCE_DEFINITION_DIFFERENCE | EXPECTED once the convention is recorded per session (B2) | proposed |
+| Final bar matches neither close (mostly 2023-07 to 2024-06) | PRICE_REFERENCE_MISMATCH, with SOURCE_INCOMPLETENESS | UNRESOLVED; irrecoverability test (A4); field family `final_bar` invalid | proposed |
+| NSE extremes outside the minute range (2023-06 to 2024-03) | SOURCE_INCOMPLETENESS | EXPECTED when bounded (within 1%, rule 6.3); UNRESOLVED beyond | as planned |
+| 2018-19 volume 2-3x NSE, fresh fetch identical | VOLUME_ANOMALY_UNRESOLVED | UNRESOLVED; field family `volume` invalid; cause investigation (B4) | proposed |
+| Vendor adjustment basis per session | BASIS_DIFFERENCE | DETERMINISTIC_REPAIRABLE (section 6) | as planned |
+| Muhurat sessions | OUT_OF_SCOPE_SESSION | EXPECTED, listed | as planned |
+
+### B2. The final-bar convention (SOURCE_DEFINITION_DIFFERENCE)
+
+Before 2026-08-03 the NSE official close is a 30-minute average, not a traded price. The vendor's
+last minute bar carries either that official close or the last traded price, and the two coexist
+in several years (measured share matching only the official close: 65% in 2017, 29% in 2023, 2%
+in 2024; matching only the last trade: under 9% before 2023, 57% in 2024). So the convention is
+recorded per session, not per era:
+
+```text
+final_bar_convention = official_close  if final close / k within 0.1% of the NSE official close only
+                     = last_trade      if within 0.1% of NSE last only
+                     = both            if within 0.1% of both
+                     = none            otherwise (PRICE_REFERENCE_MISMATCH)
+from 2026-08-03: the auction print must equal the official close (one definition)
+```
+
+Canonical representation: the bar values stay as delivered (on the canonical basis); the quality
+table carries `final_bar_convention`; the canonical session close is the NSE official close from
+the daily dataset. Consequence recorded in the contract: before 2023-06 the last minute bar's
+close is usually not a traded price. A strategy that trades or measures at the final bar must
+declare the `final_bar` field family. Sessions with `none` have `final_bar` invalid; their other
+bars stay valid only if every other rule passes.
+
+### B3. Recovery of blocking-rule failures
+
+Recover every legacy session that fails a blocking rule and is RECOVERABLE and material, then
+revalidate. Cells known to be irrecoverable by the A4 sample test are not bulk re-fetched. Measured
+evidence so far (24 sessions): 2018-19 volume and 2023-24 final-bar failures came back identical
+(candidates for irrecoverable); SBIN volume failures were fixed by a fresh fetch.
+
+### B4. 2018-19 volume anomaly
+
+Not normalised. Before any classification beyond UNRESOLVED, the cause is investigated read-only:
+whether the excess is uniform across a session's bars (a constant multiple suggests a
+double-counted feed), whether it coincides with an exchange or vendor change, and whether it
+correlates with corporate actions. Until a cause is established and documented, those sessions
+publish prices with `volume` invalid.
+
+### B5. Changes to the publishing criteria (section 12)
+
+| # | Change |
+|---|---|
+| 4, 5 | unchanged in substance; evaluated through the defect ledger |
+| 8 | replaced: "every alert of A7 has a written assessment; no hard guardrail is breached inside the usable range; usable ranges per field family recorded" |
+| 9 | the close rule becomes the per-session convention rule of B2; `none` sets `final_bar` invalid instead of excluding the session |
+| 10 | missing minutes become PARTIAL_SESSION (A5); the N method is unchanged |
+| 15 | extended: the quality table (per session, per field family) is published as a version object |
+| 20 | extended: `PublishedSource.intraday` applies the strategy contract to the quality table and records the exclusions in the run |
+| new 21 | every anomaly in the build has a defect type and a treatment class (no unclassified defect) |
+| new 22 | `data_policy_version` recorded in the manifest and in every run that uses the version |
+| new 23 | the A4 irrecoverability decisions, with their samples, are in the report |
+
+### B6. The 3% yearly ceiling
+
+It stays, as an alert (A7), not a hard gate. A breach requires the written assessment of A7; it
+never raises a threshold and never excludes more data to pass. The hard guardrail becomes 10% of a
+year per field family; a breach removes that year from the usable range for that field family and
+is recorded in the version. Whether a strategy can run on what remains is its own preflight
+decision (A6, A8).
 
 ## 1. Pipeline
 
