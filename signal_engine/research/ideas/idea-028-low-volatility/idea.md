@@ -2,7 +2,8 @@
 id: IDEA-028
 title: Lowest realised volatility
 stage: backtest
-research_state: evidence_against_edge
+research_state: rejected
+rejection_basis: not-robust
 result: "MARGINAL on nse-daily-20261005-002 (run 2026-10-05-low-volatility-v1): net +1,610 bps per trade over 301 trades, G2.2 t 5.66 (pass), no hard gate failed; G3.2 out-of-sample FAIL; G3.3 recorded 0 of 19 by an evaluator bug, 17 of 19 (pass) on the corrected evaluation. Diagnostics: below random entry into the same stocks and below the equal-weight eligible universe."
 strategy_category: Statistical / Quantitative
 strategy_tags: [low-volatility, low-risk-anomaly, cross-sectional, ranked-portfolio, monthly-rebalance]
@@ -85,7 +86,7 @@ selection caused the return.
 | Broad-universe advantage | NO: 14.6% a year against 20.8%; return/volatility 1.07 against 1.07 |
 | Low-volatility selection edge | NOT DEMONSTRATED |
 | Final research conclusion | Evidence against the low-volatility selection hypothesis |
-| Disposition | MARGINAL / evidence_against_edge |
+| Disposition | MARGINAL / rejected (not-robust) |
 | Next action | Do not pursue IDEA-028 v1 further; revisit only through a separately specified hypothesis |
 
 Holding the 30 lowest-volatility stocks made money and had smaller drawdowns, but it did not
@@ -104,3 +105,4 @@ therefore does not support a distinct low-volatility selection edge.
 - 2026-10-05: G3.3 evaluator bug fixed (walk-forward windows now use the same per-trade unit as the other gates: R with a stop, net bps without). Sealed trades re-scored for G3.3 only: 17 of 19 windows positive, pass. The run record is not rewritten and no trial was added. G3.2 still fails; verdict stays MARGINAL. The same bug made IDEA-027's G3.3 read 0 of 19; G3.3 is not a hard gate there, so its NO_EDGE stands.
 - 2026-10-05: research state evidence_against_edge (existing taxonomy; not rejected, because no hard gate failed and the diagnostics are not gates). The frozen hypothesis, superior risk-adjusted returns from the lowest-volatility stocks, is not supported: G3.2 fails, the book trails random entry into the same stocks, and it trails the equal-weight eligible universe with the same return per unit of volatility, more so out of sample. Not tuned, not rerun, no v2. All runs and evidence are kept.
 - 2026-10-05: closed. The G3.3 change is an evaluator correctness fix, not a strategy revision or research iteration; 17 of 19 replaces the erroneous 0 of 19 in this summary, and the sealed run keeps its original record. No further work on v1: no tuning, no v2, no more trials or benchmarks. The universe comparison stays a diagnostic, not a gate, verdict rule or promotion requirement.
+- 2026-10-05: researcher decision: research state changed from evidence_against_edge to rejected (rejection_basis not-robust, existing taxonomy). Basis: G3.2 out-of-sample FAIL, the book trails random entry into the same stocks and the equal-weight eligible universe, it does worse out of sample, and the low-volatility edge is not demonstrated. The run verdict stays MARGINAL as recorded. The corrected G3.3 (17 of 19, pass) remains an evaluator correctness fix and does not change this conclusion. No v2, no tuning, no further trials or benchmarks; all evidence kept.

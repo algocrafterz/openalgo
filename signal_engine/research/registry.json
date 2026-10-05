@@ -775,7 +775,8 @@
         "trend": "insufficient",
         "trials_sum": 1
       },
-      "research_state": "evidence_against_edge",
+      "rejection_basis": "not-robust",
+      "research_state": "rejected",
       "result": "MARGINAL on nse-daily-20261005-002 (run 2026-10-05-low-volatility-v1): net +1,610 bps per trade over 301 trades, G2.2 t 5.66 (pass), no hard gate failed; G3.2 out-of-sample FAIL; G3.3 recorded 0 of 19 by an evaluator bug, 17 of 19 (pass) on the corrected evaluation. Diagnostics: below random entry into the same stocks and below the equal-weight eligible universe.",
       "revisit_when": "Not by tuning this version. Only a new, pre-specified hypothesis, recorded as a separate idea.",
       "runs": [
@@ -1013,7 +1014,7 @@
         "type": "self"
       },
       "stage": "backtest",
-      "status": "backtested",
+      "status": "rejected",
       "strategy_category": "Statistical / Quantitative",
       "strategy_tags": [
         "low-volatility",
@@ -1036,8 +1037,7 @@
       "swing": 2
     },
     "by_status": {
-      "backtested": 1,
-      "rejected": 1
+      "rejected": 2
     },
     "by_verdict": {
       "marginal": 1,
