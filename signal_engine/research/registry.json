@@ -19,7 +19,7 @@
       "folder": "idea-027-52-week-high-proximity",
       "horizon": "swing",
       "id": "IDEA-027",
-      "last_reviewed": "2026-10-04",
+      "last_reviewed": "2026-10-05",
       "lineage": {
         "delta_vs_parent": null,
         "edge_bar": 2.5,
@@ -29,8 +29,10 @@
         "trend": "insufficient",
         "trials_sum": 6
       },
-      "research_state": "active",
-      "revisit_when": "After the first backtest result is reviewed.",
+      "rejection_basis": "not-robust",
+      "research_state": "rejected",
+      "result": "NO_EDGE on the published NSE dataset nse-daily-20261005-002 (run 2026-10-05-52-week-high-proximity-v3): net +50.3 bps over 4,481 trades, but G2.2 statistical significance FAIL (t 2.01 vs hurdle 2.25), G4.5 dispersion FAIL, and out-of-sample confirmation weak (t 0.19).",
+      "revisit_when": "Not by tuning this version. Only a new, pre-specified hypothesis, recorded as a separate idea.",
       "runs": [
         {
           "artifact_dir": "2026-10-04-52-week-high-proximity-v1/",
@@ -730,8 +732,8 @@
         "ref": "_inbox/52-week-high-proximity.txt",
         "type": "self"
       },
-      "stage": "inbox",
-      "status": "inbox",
+      "stage": "backtest",
+      "status": "rejected",
       "strategy_category": "Momentum",
       "strategy_tags": [
         "cross-sectional",
@@ -753,13 +755,13 @@
       "swing": 1
     },
     "by_status": {
-      "inbox": 1
+      "rejected": 1
     },
     "by_verdict": {
       "no-edge": 1
     },
     "ideas_with_runs": 1,
-    "last_reviewed": "2026-10-04",
+    "last_reviewed": "2026-10-05",
     "total": 1,
     "total_runs": 3
   }
