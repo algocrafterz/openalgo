@@ -118,7 +118,8 @@ def _fetcher(script):
     return fetch, calls
 
 
-def test_every_outcome_is_a_ledger_line_and_responses_are_hashed(tmp_path):
+def test_every_outcome_is_a_ledger_line_and_responses_are_hashed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ir, "source_alive", lambda f: True)
     build = _build(tmp_path)
     fetch, _ = _fetcher(["ok", "empty", "error"])
     counts = ir.run(build, fetch, landing=tmp_path / "landing", pause=0)
@@ -176,3 +177,41 @@ def test_pending_fetches_the_irrecoverability_sample_first():
                                     "provenance+recovery"]})
     ledger = pd.DataFrame({"request_id": ["d"], "attempt": [1], "outcome": ["ok"]})
     assert [r["request_id"] for r, _ in ir.pending(req, ledger)] == ["c", "b", "a"]
+
+
+def test_empty_answer_with_a_dead_source_is_an_error_and_stops_the_pass(tmp_path):
+    build = _build(tmp_path)
+    calls = []
+
+    def fetch(symbol, start, end):
+        calls.append(symbol)
+        return True, {"status": "success", "data": []}, 200   # Invalid Token, swallowed
+
+    counts = ir.run(build, fetch, landing=tmp_path / "landing", pause=0)
+    assert counts == {"ok": 0, "empty": 0, "error": 1}
+    line = ir.read_ledger(build).iloc[0]
+    assert line.outcome == "error" and "canary empty" in line.message
+    assert calls == ["AAA", ir.CANARY[0]]
+
+
+def test_empty_answer_with_a_live_source_is_final(tmp_path):
+    build = _build(tmp_path, n=1)
+
+    def fetch(symbol, start, end):
+        rows = [] if symbol == "AAA" else [{"timestamp": TS, "open": 1, "high": 1, "low": 1,
+                                            "close": 1, "volume": 1}]
+        return True, {"status": "success", "data": rows}, 200
+
+    assert ir.run(build, fetch, landing=tmp_path / "landing", pause=0)["empty"] == 1
+
+
+def test_void_reopens_empty_answers_recorded_while_the_source_was_down(tmp_path, monkeypatch):
+    build = _build(tmp_path, n=2)
+    fetch, _ = _fetcher(["ok", "empty"])
+    monkeypatch.setattr(ir, "source_alive", lambda f: True)
+    ir.run(build, fetch, landing=tmp_path / "landing", pause=0)
+    assert ir.void_empty_after(build, "2000-01-01T00:00:00+05:30", "test outage") == 1
+    reqs = pd.read_parquet(build / "requests.parquet")
+    todo = ir.pending(reqs, ir.read_ledger(build))
+    assert [r["request_id"] for r, _ in todo] == ["r1"]
+    assert any("r1 has no final outcome" in e for e in ir.verify(build))

@@ -53,8 +53,8 @@ def _response_bars(path: str, symbol: str) -> pd.DataFrame:
 def fetched_sessions(symbol: str, ledger: pd.DataFrame, requests: pd.DataFrame) -> pd.DataFrame:
     """All fetched bars of one symbol, one source per session: a recovery response before a
     provenance-only response, then the earliest window (deterministic)."""
-    final = ledger[(ledger.symbol == symbol) & (ledger.outcome == "ok")]
-    final = final.drop_duplicates("request_id", keep="last").merge(
+    last = ir.latest(ledger[ledger.symbol == symbol])
+    final = last[last.outcome == "ok"].merge(
         requests[["request_id", "purpose"]], on="request_id")
     final = final.assign(rank=~final.purpose.str.contains("recovery")).sort_values(
         ["rank", "start", "request_id"])

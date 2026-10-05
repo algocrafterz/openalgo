@@ -8,8 +8,13 @@ attempt is one line of the append-only `recovery_ledger.jsonl` in the build fold
     request_id, symbol, start, end, attempt, requested_ist, outcome (ok | empty | error),
     message, n_bars, sessions, path, sha256
 
-An error is a ledger line, never a silent gap. A rerun skips requests with a final outcome and
-retries errors up to MAX_ATTEMPTS. INTRADAY-5M-DATASET-PLAN.md section 5.1.
+An error is a ledger line, never a silent gap. The latest line of a request decides its state; a
+rerun skips requests whose latest line is final (ok, empty) and retries errors up to
+MAX_ATTEMPTS. The broker plugin turns a failed request (an expired session: "Invalid Token") into
+an empty success, so an empty answer is checked against a canary request that must return data;
+if the canary is empty too, the line is an error and the pass stops. Lines recorded while the
+source was down are voided by appending a `void` line with the reason (`--void-empty-after`).
+INTRADAY-5M-DATASET-PLAN.md section 5.1.
 
     uv run python -m signal_engine.backtest.data_readiness.intraday_recovery \
         --build db/staging/intraday/build-<root12>
@@ -42,6 +47,8 @@ MAX_ATTEMPTS = 3
 PAUSE_S = 0.55
 GZIP_LEVEL = 6                # level 9 cost 1.6 s per response; 6 is 5% larger, fixed for determinism
 FINAL = ("ok", "empty")
+VOID = "void"
+CANARY = ("RELIANCE", "2026-09-01", "2026-09-29")   # always traded; must return data
 SCALED_RTOL = 1e-6
 
 # fetch(symbol, start "YYYY-MM-DD", end "YYYY-MM-DD") -> (ok, response dict, http status)
@@ -53,6 +60,11 @@ def read_ledger(build: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=["request_id", "attempt", "outcome"])
     return pd.DataFrame([json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()])
+
+
+def latest(ledger: pd.DataFrame) -> pd.DataFrame:
+    """The deciding (last) ledger line of every request."""
+    return ledger.drop_duplicates("request_id", keep="last")
 
 
 def _store(landing: Path, request_id: str, body: dict) -> tuple[str, str]:
@@ -104,14 +116,25 @@ def _priority(purpose: str) -> int:
 
 def pending(requests: pd.DataFrame, ledger: pd.DataFrame) -> list[tuple[dict, int]]:
     """Requests still to fetch, with their next attempt number, in PRIORITY order."""
-    done = set(ledger[ledger.outcome.isin(FINAL)].request_id)
-    tries = ledger.groupby("request_id").size().to_dict() if len(ledger) else {}
+    last = latest(ledger)
+    done = set(last[last.outcome.isin(FINAL)].request_id)
+    errors = ledger[ledger.outcome == "error"]
+    tries = errors.groupby("request_id").size().to_dict() if len(errors) else {}
     out = []
     for req in requests.to_dict("records"):
         n = tries.get(req["request_id"], 0)
         if req["request_id"] not in done and n < MAX_ATTEMPTS:
             out.append((req, n + 1))
     return sorted(out, key=lambda item: _priority(item[0].get("purpose", "")))
+
+
+def source_alive(fetch: Fetch) -> bool:
+    """The canary request returns data: the source session works."""
+    try:
+        ok, resp, _ = fetch(*CANARY)
+    except Exception:  # an unreachable source is a dead source here
+        return False
+    return bool(ok and (resp.get("data") or []))
 
 
 def run(build: Path, fetch: Fetch, *, landing: Path = DEFAULT_LANDING, pause: float = PAUSE_S,
@@ -123,14 +146,40 @@ def run(build: Path, fetch: Fetch, *, landing: Path = DEFAULT_LANDING, pause: fl
     with open(build / LEDGER, "a", encoding="utf-8") as fh:
         for i, (req, attempt) in enumerate(todo):
             line = fetch_one(fetch, req, attempt, landing)
+            dead = line["outcome"] == "empty" and not source_alive(fetch)
+            if dead:
+                line.update(outcome="error", path=None, sha256=None,
+                            message="canary empty: source session invalid; pass stopped")
             fh.write(json.dumps(line) + "\n")
             fh.flush()
             counts[line["outcome"]] += 1
+            if dead:
+                logger.error(f"recovery: source session invalid at {line['requested_ist']}; "
+                             "pass stopped, rerun after a fresh login")
+                break
             if i % 200 == 0:
                 logger.info(f"recovery: {i + 1} of {len(todo)}; {counts}")
             time.sleep(pause)
     logger.info(f"recovery: pass finished; {counts}")
     return counts
+
+
+def void_empty_after(build: Path, after_ist: str, reason: str) -> int:
+    """Append a void line for every request whose latest line is `empty` and was recorded at or
+    after `after_ist` (the source was down). The voided requests are fetched again."""
+    ledger = read_ledger(build)
+    last = latest(ledger)
+    when = pd.to_datetime(last.requested_ist)
+    hit = last[(last.outcome == "empty") & (when >= pd.Timestamp(after_ist))]
+    now = datetime.now(IST).isoformat()
+    with open(build / LEDGER, "a", encoding="utf-8") as fh:
+        for row in hit.itertuples():
+            fh.write(json.dumps({"request_id": row.request_id, "symbol": row.symbol,
+                                 "start": row.start, "end": row.end, "attempt": row.attempt,
+                                 "requested_ist": now, "outcome": VOID, "message": reason,
+                                 "n_bars": 0, "sessions": [], "path": None,
+                                 "sha256": None}) + "\n")
+    return len(hit)
 
 
 def _abs(path: str) -> Path:
@@ -143,7 +192,8 @@ def verify(build: Path) -> list[str]:
     exists and hashes to its recorded sha256."""
     ledger = read_ledger(build)
     requests = pd.read_parquet(build / "requests.parquet")
-    final = ledger[ledger.outcome.isin(FINAL)].drop_duplicates("request_id", keep="last")
+    last = latest(ledger)
+    final = last[last.outcome.isin(FINAL)]
     errors = [f"request {r} has no final outcome"
               for r in sorted(set(requests.request_id) - set(final.request_id))]
     for row in final.itertuples():
@@ -199,7 +249,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--build", required=True, type=Path)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--void-empty-after", default=None,
+                    help="IST timestamp; void empty answers recorded from then (source down)")
+    ap.add_argument("--reason", default=None)
     args = ap.parse_args(argv)
+    if args.void_empty_after:
+        if not args.reason:
+            ap.error("--void-empty-after needs --reason")
+        print(void_empty_after(args.build, args.void_empty_after, args.reason), "voided")
+        return 0
     if args.verify:
         errors = verify(args.build)
         print("\n".join(errors[:50]) or "recovery ledger verifies")
