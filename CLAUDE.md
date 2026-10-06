@@ -1,9 +1,9 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repository. This file carries what is
-**not discoverable by reading the code**: product context, invariants, runtime
-constraints, and conventions. Structure, commands, and config are discoverable —
-read them from the repo.
+Guidance for Claude Code working in this repository. This file carries what is not reliably discoverable from the code alone, or what is
+dangerous to infer incorrectly: product context, invariants, runtime constraints,
+and conventions. Structure, commands, and config are discoverable — read them from
+the repo.
 
 ## Overview
 
@@ -25,6 +25,179 @@ auto square-off) and support Telegram alerts.
 
 Repository: https://github.com/marketcalls/openalgo
 Documentation: https://docs.openalgo.in
+
+
+## Agent Behavior
+
+### Understand Before Acting
+
+- Read relevant code, tests, configuration, and documentation before changing behavior.
+- Do not speculate about code that you have not inspected.
+- Use repository evidence instead of assumptions.
+- Follow existing repository patterns before introducing a new pattern.
+
+### Ambiguity and Assumptions
+
+**Do not silently assume requirements that can materially change the result.**
+
+- If ambiguity can materially change behavior, scope, architecture, data semantics, or acceptance criteria, ask one targeted clarifying question before making changes.
+- Ask the single question that resolves the highest-impact ambiguity.
+- Resolve minor ambiguity from existing repository evidence.
+- State any material assumption before implementation.
+- Never invent requirements, APIs, field names, business rules, or expected behavior.
+- If evidence is insufficient, say so rather than guessing.
+
+### Scope and Design
+
+**Make the smallest change that correctly solves the requested problem.**
+
+- Do not modify unrelated files or code.
+- Do not reformat, reorder, rename, or restyle code that does not need to change.
+- Do not perform opportunistic refactoring or cleanup.
+- Do not introduce abstractions, flexibility, or dependencies for hypothetical future requirements.
+- Preserve existing architecture and naming unless the task requires a change.
+- Prefer extending an existing correct pattern over creating a parallel pattern.
+- Treat unusual existing code as intentional until repository evidence shows otherwise.
+- Prefer incremental changes over architectural rewrites.
+- If a broader refactor is necessary, explain why before doing it.
+- Do not fix unrelated problems unless they block the requested work or are explicitly included.
+
+### Planning
+
+**Match planning effort to task complexity.**
+
+- Trivial changes: inspect, change, verify.
+- Multi-file or behavior-changing work: inspect the relevant code, state a concise plan, then implement.
+- Architectural, migration, security, concurrency, trading-logic, or production-impacting changes: plan before implementation.
+- Do not add planning ceremony to changes whose scope and implementation are obvious.
+
+### AI Model Workflow
+
+**Use only the latest Opus and the latest Sonnet. Simple task: Sonnet. Complex task: Opus, plan, Sonnet, tests, Opus review.**
+
+- Use no other model (no Haiku, no Fable, no older version). Select by alias `opus` or `sonnet`.
+- Simple, fully specified task: Sonnet only.
+- Non-trivial task (architecture, complex debugging, unfamiliar code, shared libraries, data pipelines, CI/CD, trading or backtesting logic, brokers, streaming, migrations, security, significant regression risk): spawn an Opus subagent to write `docs/plans/<change>.md`, then a Sonnet subagent to implement it, then an Opus subagent to review the diff.
+- Test: if deciding WHAT to build is substantially harder than typing HOW to build it, start with Opus.
+- Always pass `model` explicitly when you spawn a subagent. Do not rely on the default subagent model.
+- Pass work between phases through the plan file, not through chat history.
+
+Full procedure, prompt templates, and escalation rules: [`docs/AI_WORKFLOW.md`](docs/AI_WORKFLOW.md).
+
+### Tests
+
+**Treat tests as verification, not as a substitute for the intended behavior.**
+
+- Do not modify tests merely to make an implementation pass.
+- Do not weaken assertions to hide a failure.
+- Do not hard-code values that only satisfy existing tests.
+- Do not mock away the behavior being tested.
+- Do not modify production behavior solely to satisfy an incorrect test.
+- When a test conflicts with the intended behavior, identify the conflict explicitly.
+- Add or update tests when the change introduces or changes observable behavior.
+
+### Verification
+
+**Do not claim success without evidence.**
+
+- Run the narrowest relevant test or verification first.
+- Run required repository checks after the change.
+- Inspect the complete final diff before declaring the task complete.
+- Verify the implementation against the requested behavior, not only against passing tests.
+- Report what was verified and what could not be verified.
+- Never claim that a test, command, build, deployment, or other action succeeded unless it actually ran successfully.
+- Fix the cause of a failed check. Do not bypass it with `--no-verify`, disabled lint rules, skipped tests, weakened assertions, or suppressed errors.
+
+### Evidence and External Research
+
+**Ground technical claims in evidence.**
+
+- Do not claim that a function, configuration, API, test, or behavior exists without verifying it.
+- Distinguish observed facts from assumptions and recommendations.
+- When repository evidence is insufficient, inspect more of the repository before guessing.
+- When external information is required, research it instead of guessing.
+- Prefer primary or authoritative sources for technical specifications, APIs, security requirements, and regulatory information.
+- When external research materially affects an implementation, record the relevant source or rationale in the appropriate project documentation.
+
+### Trading Behavior
+
+**Never change trading behavior implicitly.**
+
+- Treat changes to entries, exits, position sizing, order types, timing, filters, risk controls, and execution behavior as behavior changes.
+- Do not infer trading rules from implementation details.
+- Preserve existing trading behavior unless the requested change explicitly changes it.
+- Before implementation, identify the old behavior and the intended new behavior when trading behavior changes.
+- Test boundary conditions around market hours, order states, position states, and failure paths.
+
+### Destructive and External Actions
+
+**Prefer reversible local actions.**
+
+- Do not delete files, branches, database data, or migrations without explicit authorization.
+- Do not use destructive commands as shortcuts.
+- Do not force-push, reset published history, amend published commits, or bypass safety checks without explicit authorization.
+- Do not deploy, publish, send messages, modify shared infrastructure, or change production state unless explicitly requested.
+- Do not discard unfamiliar working-tree changes. Inspect them first.
+
+### Dependencies and Generated Files
+
+- Search existing dependencies and utilities before adding a package.
+- Prefer the standard library or existing project functionality when appropriate.
+- If a new dependency is necessary, verify compatibility with the supported runtime before adding it.
+- Identify whether a file is generated before modifying it.
+- Modify the source or generator instead of manually editing generated artifacts.
+- Rebuild generated artifacts using the repository's documented process.
+- Do not commit generated output unless the repository explicitly requires it.
+
+### Communication
+
+**Use ASD-STE100 principles for technical prose.**
+
+- Use active voice and direct instructions where practical.
+- Keep sentences short and unambiguous.
+- Give one instruction per sentence when the instructions are independent.
+- Put a condition before a command when the condition must be understood first.
+- Use precise, consistent terminology. Do not rotate synonyms for the same concept.
+- Prefer simple words when they preserve technical accuracy.
+- Use lists for multiple independent actions.
+- Do not omit words or context merely to make a sentence shorter.
+- Treat these as communication principles, not as full ASD-STE100 compliance; do not apply controlled-dictionary or sentence-length requirements to code, identifiers, API syntax, logs, quoted material, or required technical terminology.
+- Accuracy and technical precision take priority over simplification.
+
+### Instruction Hygiene
+
+**Keep this file focused on durable repository-wide rules.**
+
+- Do not add task-specific instructions to `CLAUDE.md`.
+- Do not copy documentation into `CLAUDE.md`.
+- Prefer pointing to the authoritative file.
+- Add a rule when an agent repeatedly makes the same project-specific mistake.
+- Remove rules that are obsolete, duplicated, or discoverable from repository tooling.
+- Put domain-specific procedures in the appropriate skill or rule file.
+
+### Source of Truth
+
+**Use the authoritative source for each type of information.**
+
+- Code is authoritative for implemented behavior.
+- Tests are authoritative for tested behavior.
+- Configuration is authoritative for runtime configuration.
+- `docs/` is authoritative for user-facing documentation.
+- Skills are authoritative for procedural workflows.
+- Do not duplicate information when a stable source can be referenced.
+- When two sources disagree, investigate the discrepancy instead of choosing one silently.
+
+### Final Diff Review
+
+**Review the complete diff before finishing.**
+
+Check that:
+
+- Every changed file is required by the task.
+- Every changed hunk has a reason.
+- No unrelated formatting or refactoring was introduced.
+- No debug code, temporary files, secrets, credentials, or unintended generated artifacts were added.
+- Tests and documentation reflect the actual behavior change.
 
 ## signal_engine layout
 
