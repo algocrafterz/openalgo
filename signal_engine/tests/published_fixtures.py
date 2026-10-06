@@ -80,7 +80,8 @@ def fake_resolution(version_id: str = "nse-daily-fake-001"):
                 "corporate_action_version": "ca-test", "overrides_source": "none",
                 "series_rule_version": "1", "fingerprint_algo": "snapshot-v1",
                 "coverage": {"start": "2026-01-01", "end": "2026-02-20", "symbols": 1},
-                "known_limitations": "test", "excluded_symbols": []}
+                "known_limitations": "test", "excluded_symbols": [],
+                "contract": {"daily_version": "nse-daily-fake-001", "daily_root_hash": "r" * 64}}
     report = pf.PreflightReport(state=st.READY, reasons=[], warnings=[],
                                 dataset={"version_id": version_id}, contract=contract.to_dict(),
                                 universe={"eligible": ["A.NS"], "unavailable": []},
@@ -100,8 +101,8 @@ class FrameSource:
     """In-memory bars with the `PublishedSource` interface, for engine-wiring tests. It filters
     by symbols, `end` and (daily) `min_sessions` the way the published loader does."""
 
-    def __init__(self, daily=None, intraday=None):
-        self._daily, self._intraday = daily, intraday
+    def __init__(self, daily=None, intraday=None, factors=None):
+        self._daily, self._intraday, self._factors = daily, intraday, factors
         self.calls: list[tuple] = []
 
     @staticmethod
@@ -134,7 +135,17 @@ class FrameSource:
         return self._cut(self._intraday, symbols, end)
 
 
-def frames_resolution(daily=None, intraday=None, eligible=None, loader_min_sessions=0):
+    def session_price_factors(self, symbols, end):
+        """Factor 1.0 for every intraday session (raw == loaded), unless `factors` is given."""
+        if self._factors is not None:
+            return {s: dict(self._factors.get(s, {})) for s in symbols}
+        frames = self._cut(self._intraday or {}, symbols, end)
+        return {s: dict.fromkeys(sorted({ts.date() for ts in f.index}), 1.0)
+                for s, f in frames.items()}
+
+
+def frames_resolution(daily=None, intraday=None, eligible=None, loader_min_sessions=0,
+                      factors=None):
     """A READY resolution whose data source is the given frames (no store at all). The official
     calendar is the frames' own session dates, so the load-time calendar check passes for
     consistent frames."""
@@ -150,7 +161,7 @@ def frames_resolution(daily=None, intraday=None, eligible=None, loader_min_sessi
     weekend = {d: None for d in days if d.weekday() >= 5}
     cal = calendar_for([d for d in days if d.weekday() < 5] or days)
     cal = dataclasses.replace(cal, specials={**dict(cal.specials), **weekend})
-    source = FrameSource(daily, intraday)
+    source = FrameSource(daily, intraday, factors)
 
     class _Frames(type(base)):
         def open(self):

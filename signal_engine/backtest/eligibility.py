@@ -7,7 +7,7 @@ say so, and the survivorship gate reports the bias rather than passing it.
 
 A symbol-session is eligible when the symbol has at least `min_prior_sessions` earlier traded
 sessions in the calendar, traded that day, session volume is above `min_volume` and the session
-close is at or above `min_price`.
+close is at or above `min_price` (the NSE raw close when `price_factors` is given).
 
 Two limits of the data, stated rather than hidden. The listing-age rule only applies to a symbol
 whose first session lies more than `LISTING_TOLERANCE_SESSIONS` calendar sessions after the
@@ -15,7 +15,7 @@ panel's first session, i.e. one that appears to list inside the panel; a symbol 
 panel start is exempt, because its true listing date is unknown (a data-start effect: it may
 have listed years earlier). The price floor is skipped for split-adjusted prices
 (`adjusted_prices=True`, the daily swing panel), where a stock adjusted below the floor in the
-past would otherwise lose real history.
+past would otherwise lose real history. `adjusted_prices=True` with `price_factors` is refused.
 """
 
 from __future__ import annotations
@@ -42,6 +42,11 @@ PRICE_FLOOR_NOT_APPLIED = (
     "not applied to the split-adjusted daily panel: its prices are back-adjusted, not the "
     "traded price"
 )
+#: Version of the eligibility policy. 2: the price floor tests the NSE raw close, not the frame.
+ELIGIBILITY_POLICY_VERSION = 2
+BASIS_NSE_RAW = "nse_raw_last_bar_close"
+BASIS_NOT_APPLIED = "not_applied_back_adjusted"
+BASIS_AS_LOADED = "frame_close_as_loaded"
 REASONS = (LISTING_AGE, NO_TRADE, ZERO_VOLUME, PRICE_FLOOR)
 
 UNIVERSE_COLUMNS = (
@@ -89,8 +94,27 @@ def _daily(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return uniq, volume, close
 
 
+def _raw_close(symbol: str, days: np.ndarray, close: np.ndarray, factors) -> np.ndarray:
+    """Session close divided by its price factor; a missing or invalid factor raises."""
+    out = np.empty(close.size)
+    for i, day in enumerate(days):
+        d = date.fromisoformat(str(day))
+        f = (factors or {}).get(d)
+        if f is None or not np.isfinite(f) or f <= 0:
+            raise ValueError(f"no valid price factor for {symbol} on {d}: {f!r}")
+        # Rounded so a raw price stored as raw * factor round-trips exactly at the floor.
+        out[i] = round(close[i] / f, 6)
+    return out
+
+
 def _symbol(
-    cal: np.ndarray, df: pd.DataFrame, policy: EligibilityPolicy, adjusted_prices: bool = False
+    cal: np.ndarray,
+    df: pd.DataFrame,
+    policy: EligibilityPolicy,
+    adjusted_prices: bool = False,
+    factors=None,
+    use_factors: bool = False,
+    symbol: str = "",
 ):
     days, volume, close = _daily(df)
     pos = np.searchsorted(cal, days)
@@ -98,6 +122,8 @@ def _symbol(
     days, volume, close, pos = days[inside], volume[inside], close[inside], pos[inside]
     if days.size == 0:
         return None
+    if use_factors:
+        close = _raw_close(symbol, days, close, factors)
     traded = np.zeros(cal.size, dtype=bool)
     traded[pos] = True
     vol = np.zeros(cal.size)
@@ -129,17 +155,30 @@ def compute_eligibility(
     calendar,
     *,
     adjusted_prices: bool = False,
+    price_factors: Mapping[str, Mapping[date, float]] | None = None,
 ) -> EligibilityResult:
     """Per-symbol, per-date eligibility over the calendar. Symbols are sorted by name.
 
     `adjusted_prices=True` skips the price floor (split-adjusted daily panel).
+    `price_factors` maps symbol to {session date: adjusted/raw price factor}; the floor then
+    tests the NSE raw close (last-bar close / factor). A traded session without a factor raises.
     """
+    if adjusted_prices and price_factors is not None:
+        raise ValueError("adjusted_prices=True cannot be combined with price_factors")
     cal = np.array(sorted(calendar.trading_days), dtype="datetime64[D]")
     rows = []
     ineligible: dict[str, dict[date, str]] = {}
     for name in sorted(frames):
         out = (
-            _symbol(cal, frames[name], policy, adjusted_prices)
+            _symbol(
+                cal,
+                frames[name],
+                policy,
+                adjusted_prices,
+                (price_factors or {}).get(name),
+                price_factors is not None,
+                name,
+            )
             if cal.size and len(frames[name])
             else None
         )

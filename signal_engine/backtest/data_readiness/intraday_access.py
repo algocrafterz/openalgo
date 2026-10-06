@@ -286,6 +286,38 @@ def _by_year(avail: pd.DataFrame) -> dict[str, dict[str, int]]:
             for y, g in bad.groupby(years) if len(g)}
 
 
+def session_price_factors(manifest: dict, symbols, end_ts: int | None,
+                          root=snapshot.DEFAULT_ROOT,
+                          git_dir=snapshot.DEFAULT_GIT_DIR) -> dict[str, dict[date, float]]:
+    """Per symbol and session, the daily version's `price_factor` (adjusted / NSE raw close).
+
+    The daily version is the one the intraday manifest pins (`contract.daily_version`, checked
+    against `contract.daily_root_hash`). Intraday prices are back-adjusted with these factors, so
+    `last-bar close / price_factor` is the NSE raw close of the session."""
+    pinned = manifest.get("contract") or {}
+    version, root_hash = pinned.get("daily_version"), pinned.get("daily_root_hash")
+    if not version or not root_hash:
+        raise snapshot.SnapshotError(
+            f"{manifest.get('dataset_version')} does not pin contract.daily_version and "
+            "contract.daily_root_hash; price factors cannot be read")
+    names = sorted(set(symbols))
+    out: dict[str, dict[date, float]] = {s: {} for s in names}
+    if not names:
+        return out
+    sql = "SELECT symbol, session, price_factor FROM bars WHERE list_contains(?, symbol)"
+    args: list = [names]
+    if end_ts is not None:
+        sql += " AND session <= ?"
+        args.append(pd.Timestamp(int(end_ts), unit="s", tz="UTC").tz_convert(IST).date())
+    with snapshot.open_version(version, root=root, git_dir=git_dir, symbols=names,
+                               expected_root=root_hash) as con:
+        rows = con.execute(sql, args).df()
+    for sym, ses, fac in zip(rows.symbol, pd.to_datetime(rows.session).dt.date,
+                             rows.price_factor, strict=True):
+        out[sym][ses] = float(fac)
+    return out
+
+
 def read_bars(con, manifest: dict, contract, symbols, interval: str, end,
               root=snapshot.DEFAULT_ROOT, collector=None) -> dict[str, pd.DataFrame]:
     """Bars of the available sessions, one frame per symbol (IST index; Open..Volume, plus

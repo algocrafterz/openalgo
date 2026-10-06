@@ -100,6 +100,79 @@ class TestTheRunRecordsWhatWasApplied:
         assert "PRICE_FLOOR" in {r for d in raw.dropped.values() for r in d.values()}
 
 
+class TestRawFloorBasis:
+    SRC = {
+        "daily_version": "nse-daily-x-001",
+        "daily_root_hash": "h" * 64,
+        "field": "price_factor",
+        "formula": "last-bar close / price_factor",
+    }
+
+    @staticmethod
+    def _frames():
+        frames = ranked_frames(n_sym=2, n=12)
+        factors = {
+            s: dict.fromkeys(sorted({ts.date() for ts in f.index}), 1.0) for s, f in frames.items()
+        }
+        return frames, factors
+
+    def test_layer_records_raw_floor_basis_and_source(self):
+        frames, factors = self._frames()
+        m = rr._build_data_layer(
+            frames, DataCollector(), CFG, price_factors=factors, price_floor_source=self.SRC
+        ).membership
+        assert m["price_floor_basis"] == "nse_raw_last_bar_close"
+        assert m["price_floor_source"]["daily_version"] == "nse-daily-x-001"
+        assert m["price_floor_source"]["daily_root_hash"] == "h" * 64
+        assert m["eligibility_policy_version"] == 2
+        assert m["price_floor_applied"] is True
+
+    def test_swing_layer_records_not_applied_basis(self):
+        m = rr._build_data_layer(
+            ranked_frames(n_sym=2, n=12), DataCollector(), CFG, adjusted_prices=True
+        ).membership
+        assert m["price_floor_basis"] == "not_applied_back_adjusted"
+        assert m["price_floor_applied"] is False
+        assert m["eligibility_policy_version"] == 2
+
+    def test_no_factors_records_frame_close_basis(self):
+        m = self._plain().membership
+        assert m["price_floor_basis"] == "frame_close_as_loaded"
+        assert m["price_floor_source"] is None
+
+    def _plain(self):
+        return rr._build_data_layer(ranked_frames(n_sym=2, n=12), DataCollector(), CFG)
+
+    def test_universe_version_differs_by_floor_basis(self):
+        from signal_engine.backtest import run_artifact as ra
+
+        frames, factors = self._frames()
+        raw = rr._build_data_layer(
+            frames, DataCollector(), CFG, price_factors=factors, price_floor_source=self.SRC
+        )
+        plain = self._plain()
+        v_raw = ra.universe_version(raw.membership, raw.universe_frame)
+        v_plain = ra.universe_version(plain.membership, plain.universe_frame)
+        assert v_raw != v_plain
+        assert v_raw == ra.universe_version(raw.membership, raw.universe_frame)
+
+    def test_universe_version_without_basis_is_the_legacy_hash(self):
+        from signal_engine.backtest import run_artifact as ra
+        from signal_engine.backtest.fingerprints import canonical_json, sha256_hex
+
+        layer = self._plain()
+        legacy = dict(layer.membership)
+        for k in ("price_floor_basis", "eligibility_policy_version", "price_floor_source"):
+            legacy.pop(k)
+        import json
+
+        records = json.loads(layer.universe_frame.to_json(orient="records"))
+        want = "eligibility-" + sha256_hex(
+            canonical_json({"policy": legacy["eligibility_policy"], "universe": records})
+        )[:8]
+        assert ra.universe_version(legacy, layer.universe_frame) == want
+
+
 class TestTheEvidenceSaysWhatApplied:
     def membership(self, applied):
         m = dict(step5_fields()["membership"])
@@ -130,3 +203,23 @@ class TestTheEvidenceSaysWhatApplied:
             "G6.2",
         )
         assert "min_price=10.0" in row["evidence"]
+
+    def test_g62_names_the_raw_basis_and_factor_source(self):
+        m = dict(step5_fields()["membership"])
+        m.update(
+            price_floor_applied=True,
+            price_floor_basis="nse_raw_last_bar_close",
+            price_floor_source={"daily_version": "nse-daily-20261005-002"},
+        )
+        row = gate(evaluate(membership=m, ledgers=ledgers_with_not_eligible()), "G6.2")
+        assert (
+            "min_price=10.0 on NSE raw last-bar close (factors from nse-daily-20261005-002)"
+            in row["evidence"]
+        )
+
+    def test_g62_labels_a_legacy_membership_without_a_basis(self):
+        m = dict(step5_fields()["membership"])
+        m["price_floor_applied"] = True
+        m.pop("price_floor_basis", None)
+        row = gate(evaluate(membership=m, ledgers=ledgers_with_not_eligible()), "G6.2")
+        assert "legacy v1: min_price=10.0 applied to the session close as loaded" in row["evidence"]

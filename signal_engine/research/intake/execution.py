@@ -155,7 +155,7 @@ def _profile_rows(profile: Profile, product: str) -> list[_Row]:
     return rows
 
 
-_MIN_PRICE_REASON_RAW = "session close floor in rupees, excludes penny-priced sessions"
+_MIN_PRICE_REASON_RAW = "floor in rupees on the NSE raw (unadjusted) session close, excludes penny-priced sessions"
 
 #: Why a daily swing run records the price floor but does not apply it (see eligibility.py).
 MIN_PRICE_NOT_APPLIED = (

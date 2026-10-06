@@ -68,6 +68,56 @@ class TestReasons:
         raw = el.compute_eligibility({"A": f}, POLICY, CAL)
         assert set(raw.ineligible["A"].values()) == {"PRICE_FLOOR"}
 
+    @staticmethod
+    def _factors(value, days=DAYS):
+        return {"A": dict.fromkeys(days, value)}
+
+    def test_raw_floor_keeps_adjusted_penny_session(self):
+        f = _frame(DAYS, close=6.12)
+        kept = el.compute_eligibility({"A": f}, POLICY, CAL, price_factors=self._factors(0.2))
+        assert "A" not in kept.ineligible  # raw 30.6
+        plain = el.compute_eligibility({"A": f}, POLICY, CAL)
+        assert set(plain.ineligible["A"].values()) == {"PRICE_FLOOR"}
+
+    def test_raw_floor_still_excludes_genuine_penny_session(self):
+        f = _frame(DAYS, close=8.0)
+        res = el.compute_eligibility({"A": f}, POLICY, CAL, price_factors=self._factors(1.0))
+        assert set(res.ineligible["A"].values()) == {"PRICE_FLOOR"}
+
+    def test_raw_floor_excludes_when_adjusted_above_but_raw_below(self):
+        f = _frame(DAYS, close=12.0)
+        res = el.compute_eligibility({"A": f}, POLICY, CAL, price_factors=self._factors(2.0))
+        assert set(res.ineligible["A"].values()) == {"PRICE_FLOOR"}  # raw 6.0
+
+    def test_raw_floor_boundary_exactly_ten_is_eligible(self):
+        f = _frame(DAYS, close=10.0)
+        res = el.compute_eligibility({"A": f}, POLICY, CAL, price_factors=self._factors(1.0))
+        assert "A" not in res.ineligible
+
+    def test_raw_floor_at_ten_survives_factor_round_trip(self):
+        # 10 * f / f is 9.999999999999998 in floats for this factor.
+        f = 0.486623
+        assert (10.0 * f) / f < 10.0
+        res = el.compute_eligibility(
+            {"A": _frame(DAYS, close=10.0 * f)}, POLICY, CAL, price_factors=self._factors(f)
+        )
+        assert "A" not in res.ineligible
+
+    def test_missing_factor_raises(self):
+        f = _frame(DAYS, close=100.0)
+        factors = {"A": {d: 1.0 for d in DAYS if d != DAYS[4]}}
+        with pytest.raises(ValueError, match=r"A on 2026-03-06"):
+            el.compute_eligibility({"A": f}, POLICY, CAL, price_factors=factors)
+        with pytest.raises(ValueError, match="no valid price factor for A"):
+            el.compute_eligibility({"A": f}, POLICY, CAL, price_factors={})
+
+    def test_adjusted_prices_with_factors_raises(self):
+        with pytest.raises(ValueError, match="price_factors"):
+            el.compute_eligibility(
+                {"A": _frame(DAYS)}, POLICY, CAL, adjusted_prices=True,
+                price_factors=self._factors(1.0),
+            )
+
     def test_no_trade(self):
         days = [d for d in DAYS if d != DAYS[6]]
         res = el.compute_eligibility({"A": _frame(days)}, POLICY, CAL)

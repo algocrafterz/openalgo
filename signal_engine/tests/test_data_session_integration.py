@@ -258,6 +258,12 @@ class _StoreSource:
     def intraday(self, symbols, interval, end, collector=None):
         return self._intraday(symbols=symbols, interval=interval, end=end, collector=collector)
 
+    def session_price_factors(self, symbols, end):
+        """Raw == loaded in this store: factor 1.0 for every session."""
+        frames = self._intraday(symbols=symbols, interval="5m", end=end, collector=None)
+        return {s: dict.fromkeys(sorted({ts.date() for ts in f.index}), 1.0)
+                for s, f in frames.items()}
+
 
 def _store_resolution(symbols, daily=None, intraday=None):
     """A READY resolution over the given loaders; its calendar is the store's own sessions."""

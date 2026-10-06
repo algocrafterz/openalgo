@@ -254,12 +254,18 @@ def _profile_rules(frozen: Any, product: str) -> Any:
 
 
 def universe_version(membership: Mapping[str, Any] | None, universe_frame: Any) -> str | None:
-    """`eligibility-<sha8>` of the eligibility policy and the universe records, or None."""
+    """`eligibility-<sha8>` of the eligibility policy, its price-floor basis and version, and the
+    universe records, or None. A different basis gives a different version."""
     if universe_frame is None:
         return None
     policy = (membership or {}).get("eligibility_policy")
     records = json.loads(universe_frame.to_json(orient="records"))
-    digest = sha256_hex(canonical_json({"policy": policy, "universe": records}))
+    body: dict[str, Any] = {"policy": policy, "universe": records}
+    basis = (membership or {}).get("price_floor_basis")
+    if basis is not None:
+        body["price_floor_basis"] = basis
+        body["eligibility_policy_version"] = (membership or {}).get("eligibility_policy_version")
+    digest = sha256_hex(canonical_json(body))
     return "eligibility-" + digest[:8]
 
 
@@ -517,6 +523,14 @@ def build_manifest(
     if membership is not None:
         universe["membership_source"] = membership.get("membership_source")
         universe["survivorship_bias"] = membership.get("survivorship_bias")
+        if membership.get("price_floor_basis") is not None:
+            universe["price_floor"] = {
+                "applied": membership.get("price_floor_applied"),
+                "basis": membership["price_floor_basis"],
+                "min_price": (membership.get("eligibility_policy") or {}).get("min_price"),
+                "source": membership.get("price_floor_source"),
+                "eligibility_policy_version": membership.get("eligibility_policy_version"),
+            }
     has_data_report = getattr(execution, "data_report", None) is not None
     code_dirty = bool(engine["code_dirty"])
     reproducibility = _reproducibility(frozen, symbols, engine)

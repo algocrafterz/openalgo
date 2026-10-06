@@ -1337,6 +1337,16 @@ def _g62(x: _Inputs) -> _Result:
         # Report what was applied: the floor is in the policy but this run skipped it.
         policy = {k: v for k, v in policy.items() if k != "min_price"}
         floor = "min_price not applied (split-adjusted daily prices)"
+    elif policy and x.membership.get("price_floor_basis") == "nse_raw_last_bar_close":
+        src = x.membership.get("price_floor_source") or {}
+        floor = (f"min_price={policy.get('min_price')} on NSE raw last-bar close "
+                 f"(factors from {src.get('daily_version')})")
+        policy = {k: v for k, v in policy.items() if k != "min_price"}
+    elif policy and x.membership.get("price_floor_applied") and not x.membership.get(
+            "price_floor_basis"):
+        floor = (f"legacy v1: min_price={policy.get('min_price')} applied to the session close "
+                 "as loaded (back-adjusted for a published intraday dataset)")
+        policy = {k: v for k, v in policy.items() if k != "min_price"}
     else:
         floor = ""
     policy_text = (

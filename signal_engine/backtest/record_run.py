@@ -65,6 +65,10 @@ from signal_engine.backtest.data_readiness import preflight as preflight_mod
 from signal_engine.backtest.data_readiness import snapshot
 from signal_engine.backtest.dq_run import build_data_quality
 from signal_engine.backtest.eligibility import (
+    BASIS_AS_LOADED,
+    BASIS_NOT_APPLIED,
+    BASIS_NSE_RAW,
+    ELIGIBILITY_POLICY_VERSION,
     MEMBERSHIP_SOURCE,
     PRICE_FLOOR_NOT_APPLIED,
     SURVIVORSHIP_BIAS,
@@ -525,6 +529,8 @@ def _build_data_layer(
     cfg: Mapping[str, Any],
     as_of: date | None = None,
     adjusted_prices: bool = False,
+    price_factors: Mapping[str, Mapping[date, float]] | None = None,
+    price_floor_source: Mapping[str, Any] | None = None,
     expected_bars_for: Callable[[date], int] | None = None,
     official: Any = None,
     out_of_scope: Sequence[date] = (),
@@ -535,7 +541,9 @@ def _build_data_layer(
     harness releases its raw frames as it goes. Data quality is audited on the frames as
     loaded (before any eligibility drop). The calendar ignores sessions after `as_of` (the
     run's `end`; the last loaded session when None). `adjusted_prices` marks the split-adjusted
-    daily panel, for which the price floor is not applied. `expected_bars_for` is the dataset's
+    daily panel, for which the price floor is not applied. `price_factors` (symbol -> date ->
+    adjusted/raw factor) makes the floor test the NSE raw close; `price_floor_source` records
+    where the factors came from. `expected_bars_for` is the dataset's
     session shape for the completeness audit (see `intraday_session_shape`).
 
     With `official` (the published dataset's NSE calendar) the official calendar owns the run's
@@ -573,13 +581,25 @@ def _build_data_layer(
     policy = _eligibility_policy(cfg)
     if policy is None:
         return _DataLayer(calendar, report, None, None, {}, frames, calendar_check=check)
-    result = compute_eligibility(frames, policy, calendar, adjusted_prices=adjusted_prices)
+    result = compute_eligibility(
+        frames, policy, calendar, adjusted_prices=adjusted_prices, price_factors=price_factors
+    )
+    if adjusted_prices:
+        basis = BASIS_NOT_APPLIED
+    elif price_factors is not None:
+        basis = BASIS_NSE_RAW
+    else:
+        basis = BASIS_AS_LOADED
     kept, dropped = apply_eligibility(frames, result)
     membership = {
         "membership_source": MEMBERSHIP_SOURCE,
         "survivorship_bias": SURVIVORSHIP_BIAS,
-        # The floor is part of the policy but is skipped for the split-adjusted daily panel.
+        "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
+        # The floor is part of the policy but is skipped for the split-adjusted daily panel;
+        # an intraday run tests the NSE raw close (last-bar close / daily price factor).
         "price_floor_applied": not adjusted_prices,
+        "price_floor_basis": basis,
+        "price_floor_source": dict(price_floor_source) if price_floor_source else None,
         "price_floor_note": PRICE_FLOOR_NOT_APPLIED if adjusted_prices else None,
         "eligibility_policy": {
             "min_prior_sessions": policy.min_prior_sessions,
@@ -744,6 +764,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         check_parameter_binding(cfg["parameters"], jsonable(params))
     collector = DataCollector()
     min_sessions = dataset.contract.loader_min_sessions
+    price_factors = price_floor_source = None
     if kind == "swing":
         frames = source.daily(dataset.eligible, until, min_sessions, collector)
         run = SwingRunConfig(cost_bps=cfg.get("cost_bps", SWING_COST_BPS))
@@ -754,6 +775,14 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         bar_size = "1d"
     else:
         frames = source.intraday(dataset.eligible, "5m", until, collector)
+        price_factors = source.session_price_factors(sorted(frames), until)
+        pinned = dataset.manifest["contract"]
+        price_floor_source = {
+            "daily_version": pinned["daily_version"],
+            "daily_root_hash": pinned["daily_root_hash"],
+            "field": "price_factor",
+            "formula": "last-bar close / price_factor",
+        }
         run = RunConfig(cost_bps=cfg.get("cost_bps", INTRADAY_COST_BPS)).with_(
             **getattr(strategy, "run_overrides", {})
         )
@@ -769,6 +798,8 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         cfg,
         as_of=date.fromisoformat(end) if end else None,
         adjusted_prices=kind == "swing",
+        price_factors=price_factors,
+        price_floor_source=price_floor_source,
         expected_bars_for=None if kind == "swing" else intraday_session_shape(),
         official=dataset.calendar,
         out_of_scope=[date.fromisoformat(d)

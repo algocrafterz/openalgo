@@ -321,6 +321,15 @@ class PublishedSource:
                                          interval, end, root=self._resolution.root,
                                          collector=collector)
 
+    def session_price_factors(self, symbols, end):
+        from signal_engine.backtest.data_readiness import intraday_access
+
+        # `end` may carry a time ("YYYY-MM-DD 23:59:59"); the bound is the end of that date.
+        end_ts = None if not end else int(pd.Timestamp(str(end)[:10], tz=IST).timestamp()) + 86399
+        return intraday_access.session_price_factors(
+            self._resolution.manifest, symbols, end_ts, root=self._resolution.root,
+            git_dir=self._resolution.git_dir)
+
 
 def _open_source(self: Resolution):
     from contextlib import contextmanager
@@ -328,7 +337,8 @@ def _open_source(self: Resolution):
     @contextmanager
     def _cm():
         end = self.report.end
-        end_ts = None if not end else int(pd.Timestamp(end, tz=IST).timestamp()) + 86399
+        # `end` may carry a time ("YYYY-MM-DD 23:59:59"); the bound is the end of that date.
+        end_ts = None if not end else int(pd.Timestamp(str(end)[:10], tz=IST).timestamp()) + 86399
         with snapshot.open_version(self.version_id, root=self.root, git_dir=self.git_dir,
                                    symbols=self.eligible, end_ts=end_ts,
                                    expected_root=self.manifest["root_hash"]) as con:
