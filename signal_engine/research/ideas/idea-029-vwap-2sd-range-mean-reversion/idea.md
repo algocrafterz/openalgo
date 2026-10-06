@@ -92,3 +92,8 @@ data:
   - Fixed generically: every intraday run now measures completeness against the dataset's session template. Daily runs and the legacy fixed count are unchanged.
   - Verified on the loaded data: every 73-bar session has all 72 bins from 09:15 to 15:10 plus the 15:25 auction bar.
   - The strategy and its data contract are unchanged.
+- 2026-10-06: second run attempt refused at load, before any backtest (no run, no trial). The cause was outside the strategy.
+  - The run calendar was derived from the bars with an 80% symbol quorum, and had to equal the official NSE calendar.
+  - Fixed generically: the official calendar now owns the run calendar. Bars on a non-session still reject the run. Empty official sessions are named.
+  - On this data: 2,408 trading days and 9 Muhurat sessions listed out of scope. 8 empty sessions are named (5 ALL_SYMBOLS_INVALID; 3 ALL_EXCLUDED_BY_CONTRACT, which are the 2020-03-13 and 2020-03-23 halts and the 2024-05-18 special session). 18 sessions with valid data that the quorum had dropped are now kept.
+  - The strategy and its data contract are unchanged.
