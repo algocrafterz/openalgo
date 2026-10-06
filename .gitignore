@@ -41,6 +41,8 @@ tmp/
 db/landing/
 # Published immutable dataset objects and manifests (git keeps signal_engine/research/data_versions/)
 db/datasets/
+# Intraday build staging (frozen 1m snapshots, conversion and 5m builds); generated, never committed
+db/staging/
 *.sqlite
 *.log
 *.jsonl

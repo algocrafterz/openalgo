@@ -1028,7 +1028,6 @@
       "verdict": "marginal"
     },
     {
-      "block_reason": "missing-published-intraday-dataset",
       "classification": {
         "direction": null,
         "market": null,
@@ -1046,9 +1045,8 @@
       "folder": "idea-029-vwap-2sd-range-mean-reversion",
       "horizon": "intraday",
       "id": "IDEA-029",
-      "last_reviewed": "2026-10-05",
-      "research_state": "blocked",
-      "revisit_when": "When a published, verified 5m NSE intraday dataset version exists.",
+      "last_reviewed": "2026-10-06",
+      "research_state": "active",
       "runs": [],
       "source": {
         "author": "researcher",
@@ -1057,7 +1055,7 @@
         "type": "self"
       },
       "stage": "inbox",
-      "status": "blocked",
+      "status": "inbox",
       "strategy_category": "Mean Reversion",
       "strategy_tags": [
         "vwap",
@@ -1082,7 +1080,7 @@
       "swing": 2
     },
     "by_status": {
-      "blocked": 1,
+      "inbox": 1,
       "rejected": 2
     },
     "by_verdict": {
@@ -1091,7 +1089,7 @@
       "none": 1
     },
     "ideas_with_runs": 2,
-    "last_reviewed": "2026-10-05",
+    "last_reviewed": "2026-10-06",
     "total": 3,
     "total_runs": 4
   }
