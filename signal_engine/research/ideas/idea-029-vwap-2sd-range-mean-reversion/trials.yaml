@@ -1,0 +1,9 @@
+- trial: 1
+  kind: material
+  run_id: 2026-10-06-vwap-2sd-range-mean-reversion-v1
+  fingerprints:
+    rules: 79ed754335a42549327ac67bcb90d773e92cad8c1a96ec3bbcf8057deddd0e59
+    params: dc3adbab184040a240ebc8c02287a5a7958ea69bb385d118b3f25a908713acbc
+    execution: 5f0035dd764a9ea939285a47932c0c6164c81839d8e73a12b4a9d3710c523332
+    cost: c2a44fcb4b28e25897cca62aa55bec47c108d939938259cccb9a3365c2c70ac8
+  created_ist: '2026-10-06T19:51:54+05:30'
