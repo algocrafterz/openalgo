@@ -35,7 +35,9 @@ $principal = New-ScheduledTaskPrincipal `
 
 # -------------------------------------------------------
 # Task 1: Auto Start
-# Launches openalgoctl.ps1 run -- starts app.py + signal engine, then
+# Launches openalgoctl.ps1 dailystart -- first stops anything already running (so every
+# trading day begins from a clean slate, even if a stack was left up from an earlier
+# session), then runs: fresh login, app.py + signal engine, then
 # BLOCKS until either process exits or AutoStop kills them at 3:30 PM.
 # StartWhenAvailable: fires at next login if machine was off at 8:50.
 # -------------------------------------------------------
@@ -44,7 +46,7 @@ Unregister-ScheduledTask -TaskName "openAlgoAutoStart" -Confirm:$false -ErrorAct
 
 $startAction = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ps1Path`" run"
+    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ps1Path`" dailystart"
 
 $startTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $days -At $startTime
 

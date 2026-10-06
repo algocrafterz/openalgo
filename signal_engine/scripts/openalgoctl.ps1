@@ -21,7 +21,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "run", "stop", "restart", "status", "squareoff")]
+    [ValidateSet("start", "run", "dailystart", "stop", "restart", "status", "squareoff")]
     [string]$Command
 )
 
@@ -50,7 +50,7 @@ $servicePidFile = "$PSScriptRoot\openalgo-service.pid"
 
 if (-not $Command) {
 
-    Write-Host "Usage: .\openalgoctl.ps1 {start|run|stop|restart|status|squareoff}" -ForegroundColor Yellow
+    Write-Host "Usage: .\openalgoctl.ps1 {start|run|dailystart|stop|restart|status|squareoff}" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  start      Start in hidden window, return after health check"
     Write-Host "  run        Start in foreground, block until exit (Task Scheduler)"
@@ -369,6 +369,19 @@ try {
         "stop" {
             Invoke-Ctl "stop"
             Stop-ServiceWindow
+        }
+
+        "dailystart" {
+            # Used only by the 08:50 openAlgoAutoStart task. Always begin the trading day
+            # from a clean slate: stop whatever is running (a stack left up from an earlier
+            # session, a manual evening run, a wedged supervisor), then 'run', which logs in
+            # fresh and starts app.py plus the signal engine. When nothing is running the
+            # stop is a logged no-op. Plain 'run' is left alone: it refuses to start over a
+            # live instance, which is right for the watchdog and for manual use.
+            Invoke-Ctl "stop daily_restart"
+            Stop-ServiceWindow
+            Start-Sleep -Seconds 3
+            Invoke-Ctl "run"
         }
 
         "restart" {

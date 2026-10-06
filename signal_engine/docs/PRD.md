@@ -4483,7 +4483,7 @@ Update `REDIRECT_URL` + broker credentials in `.env`, then restart. TOTP brokers
 
 | Time | Task | Action |
 |------|------|--------|
-| 8:50 AM | `openAlgoAutoStart` | Calls `openalgoctl.ps1 run` -- starts app.py + signal engine, **stays running all day** |
+| 8:50 AM | `openAlgoAutoStart` | Calls `openalgoctl.ps1 dailystart` -- stops anything already running (2026-10-06: a stack left up from the evening before made plain `run` refuse, so the day started on a stale engine whose runner never woke), then runs a fresh login + app.py + signal engine, **stays running all day** |
 | 9:00 AM-4:00 PM | `openAlgoWatchdog` | Calls `openalgoctl.ps1 start` every 5 min -- no-op if healthy, relaunches if crashed |
 | 9:05 AM-4:00 PM | `openAlgoHeartbeatCheck` | Runs `heartbeat_check.ps1` every 10 min -- alerts if `signal_engine/logs/heartbeat.txt` is stale, independent of WSL/bash/Python |
 | 2:55 PM | `openAlgoSquareOff` | Calls `openalgoctl.ps1 squareoff` -- failsafe MIS close (WakeToRun). **Now fires BEFORE the engine's own 3:00 PM exit** (moved from 3:02 PM on 2026-09-17), so it unconditionally force-closes MIS positions every day rather than only when the engine failed to — confirm this is the intended behavior |
@@ -5629,3 +5629,40 @@ trade counters, tracker position, trades.db rows and P&L. Exits are owned by the
 - Each order is stamped with its broker when placed and each closed trade carries it (`strategy_order_tags.broker`, `strategy_closed_trades.broker`), so charges are isolated per broker and a future broker gets its own fee schedule (`portfolio/broker_fees.py`). Trades with no recorded broker, or a broker without a published entry, are priced on an assumed default and labelled. Migration: `upgrade/migrate_strategy_book_broker.py`. Details in `docs/strategy-daily-performance.md`.
 - The intraday NSE exchange fee was corrected from 0.00297% to the published 0.00307%.
 - No broker plugin here exposes a brokerage or charges API, so a new broker is not priced automatically. What is automatic is the warning: a trade whose broker has no verified entry in `portfolio/broker_fees.py` is priced on the assumed default, logged once by name, labelled "[assumed broker rates]" on the Performance cards and broker card, and flagged in the nightly `pages_vs_fills` report; a verified schedule asks for a re-check after 180 days (`attention_for`, `uncovered_brokers`). Adding a broker is a few lines after reading its charges page.
+
+## Daily 08:50 Clean Start (2026-10-06)
+
+**Symptom.** A manual evening start on 2026-10-05 left the stack running. At 08:50 the
+`openAlgoAutoStart` task ran plain `run`, which refuses to start over a live instance, so no fresh
+daily start happened. The engine that had crossed the day boundary never started its BREAKOUT-PY
+runner session: no warm-up, no cycles and no trades from 09:00 until a manual restart at 09:50. The
+process stayed alive, so no supervisor check noticed. The cause of the missed wake-up is
+unconfirmed; the old process was gone before it could be inspected.
+
+**Decision.** Do not add overnight polling or per-minute checks. Instead, make 08:50 deterministic:
+every weekday starts from a clean slate, whatever was left running.
+
+**Change.**
+
+- New `openalgoctl.ps1 dailystart` command, used only by the 08:50 `openAlgoAutoStart` task. It runs
+  `openalgoctl.sh stop daily_restart`, kills the service window, waits 3s, then runs `run` (fresh
+  login, app.py, signal engine). With nothing running the stop is a logged no-op.
+- `openalgoctl.sh stop` now accepts a reason argument (`stop daily_restart`), carried into the stop
+  sentinel and the shutdown notification. With no argument it behaves as before (`scheduled`).
+- `createTaskOpenAlgoScheduler.ps1` registers AutoStart with `dailystart`. An already registered
+  task keeps calling `run` until the script is re-run.
+- Unchanged: the 5-minute watchdog (`start`), manual `start` and `run`, the 15:30/16:00 stop, and the
+  15-minute broker-session healthcheck. Nothing new runs outside 08:50 on weekdays.
+
+**Verification.** Both PowerShell files parse; `bash -n` passes; `tests/test_openalgoctl.sh` passes
+(16 checks). `dailystart` was not run end to end because that would stop a live stack. First real run
+is the next weekday 08:50; check `scripts/openalgoctl.log` for a DAILYSTART entry, the stop, and a
+successful start.
+
+**Known, not fixed.** The browser or login session open at 08:50 is ended by the stop and needs a
+new login. A broker token that is still valid is reused without a new TOTP; yesterday's token has
+always expired by 08:50, so the daily login is a real one.
+
+**In plain terms:** every weekday at 08:50 the system now shuts down whatever was left running and
+starts a clean, freshly logged-in session. It does nothing extra overnight and does not watch what
+you do outside market hours.

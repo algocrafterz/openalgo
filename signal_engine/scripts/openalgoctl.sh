@@ -685,7 +685,7 @@ fi
 case "${1:-}" in
     start)     cmd_start ;;
     run)       cmd_run ;;
-    stop)      cmd_stop ;;
+    stop)      STOP_REASON="${2:-${STOP_REASON:-scheduled}}" cmd_stop ;;
     restart)   cmd_restart ;;
     status)    cmd_status ;;
     squareoff) cmd_squareoff ;;
