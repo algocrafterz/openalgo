@@ -44,7 +44,7 @@ class TestIntradayBaseline:
     def test_returns_the_same_shape_as_the_swing_baseline(self):
         f = _frame()
         trades = [_trade(f, 25 + 20 * i, 6) for i in range(10)]
-        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 16.0, draws=10)
+        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=10)
         for key in ("method", "trades", "gross_bps", "net_bps", "excess_net_bps", "trade_net_bps"):
             assert key in out
         assert out["trades"] == 10
@@ -60,22 +60,20 @@ class TestIntradayBaseline:
             opens[k * 10] = closes[k * 10]  # the gap belongs between sessions, not inside one
         f = f.assign(Close=closes, Open=opens)
         trades = [_trade(f, 12, 4)]
-        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 0.0, draws=200)
+        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=200)
         assert abs(out["gross_bps"]) < 500  # an overnight doubling would be ~10000 bps
 
     def test_deterministic_for_a_seed(self):
         f = _frame()
         trades = [_trade(f, 25 + 20 * i, 6) for i in range(8)]
-        a = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 16.0, draws=10, seed=3)
-        b = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 16.0, draws=10, seed=3)
+        a = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=10, seed=3)
+        b = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=10, seed=3)
         assert a == b
 
     def test_samples_when_there_are_more_trades_than_the_cap(self):
         f = _frame(days=60)
         trades = [_trade(f, 25 + 20 * i, 6) for i in range(50)]
-        out = baseline.random_entry_baseline_intraday(
-            trades, {"A.NS": f}, 16.0, draws=5, max_trades=20
-        )
+        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=5, max_trades=20)
         assert out["trades"] == 20
         assert out["population_trades"] == 50
         assert out["sampled"] is True
@@ -83,31 +81,31 @@ class TestIntradayBaseline:
     def test_no_sampling_flag_when_under_the_cap(self):
         f = _frame()
         trades = [_trade(f, 25 + 20 * i, 6) for i in range(5)]
-        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 16.0, draws=5)
+        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=5)
         assert out["sampled"] is False
 
     def test_trade_without_a_frame_is_skipped_and_counted(self):
         f = _frame()
         trades = [_trade(f, 25, 6), _trade(f, 45, 6, symbol="MISSING.NS")]
-        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 16.0, draws=5)
+        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=5)
         assert out["skipped"] == 1
 
     def test_no_matchable_trade_returns_none(self):
         f = _frame()
-        assert baseline.random_entry_baseline_intraday([], {"A.NS": f}, 16.0) is None
+        assert baseline.random_entry_baseline_intraday([], {"A.NS": f}) is None
 
     def test_edge_beats_the_random_baseline_on_a_trending_book(self):
         f = _frame(days=60, drift=0.0)
         trades = [_trade(f, 25 + 20 * i, 6, r_net=0.5) for i in range(40)]
-        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, 16.0, draws=20)
+        out = baseline.random_entry_baseline_intraday(trades, {"A.NS": f}, draws=20)
         assert out["excess_net_bps"] > 0
 
     def test_short_trades_are_compared_short(self):
         f = _frame(days=40, drift=0.0008, seed=4)
         long_t = [_trade(f, 25 + 20 * i, 6, direction=1) for i in range(20)]
         short_t = [_trade(f, 25 + 20 * i, 6, direction=-1) for i in range(20)]
-        lo = baseline.random_entry_baseline_intraday(long_t, {"A.NS": f}, 0.0, draws=30)
-        sh = baseline.random_entry_baseline_intraday(short_t, {"A.NS": f}, 0.0, draws=30)
+        lo = baseline.random_entry_baseline_intraday(long_t, {"A.NS": f}, draws=30)
+        sh = baseline.random_entry_baseline_intraday(short_t, {"A.NS": f}, draws=30)
         assert lo["gross_bps"] == pytest.approx(-sh["gross_bps"], rel=1e-6)
 
 
@@ -128,6 +126,6 @@ class TestSampling:
         f = _frame(days=60)
         trades = [_trade(f, 25 + 20 * i, 6) for i in range(10)]
         out = baseline.random_entry_baseline_intraday(
-            trades, {"A.NS": f}, 16.0, draws=5, population_trades=500
+            trades, {"A.NS": f}, draws=5, population_trades=500
         )
         assert out["sampled"] is True and out["population_trades"] == 500

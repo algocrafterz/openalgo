@@ -18,11 +18,12 @@ from signal_engine.backtest import manifest as mf
 from signal_engine.backtest import record_run as rr
 from signal_engine.backtest import reproduce as rp
 from signal_engine.backtest import trades_io
-from signal_engine.backtest.costs import CostModel, decompose_trades
+from signal_engine.backtest.costs import decompose_trades
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.types import Ctx, Trade
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests import test_run_artifact_write as raw
+from signal_engine.tests.cost_fixtures import make_model, statutory
 from signal_engine.tests.published_fixtures import frames_resolution
 from signal_engine.tests.test_backtest_ledgers import FLAT, RUN, Script, make_frame
 from signal_engine.tests.test_record_run import SUPPORTED
@@ -37,14 +38,14 @@ SESSION = {
     "bar_minutes": 5,
     "entry_window": "09:20-14:30",
 }
-MODEL = CostModel(
-    capital=100000.0,
-    risk_per_trade=0.01,
-    leverage=5.0,
-    product="MIS",
-    exchange="NSE",
-    slippage_bps_per_side=4.0,
-)
+MODEL = make_model(capital=100000.0)
+
+
+def deployed_model(kind="intraday", *args, **kwargs):
+    """Stands in for `record_run.deployed_cost_model`: MIS for intraday, unlevered CNC for swing."""
+    return MODEL if kind == "intraday" else dataclasses.replace(MODEL, product="CNC", leverage=1.0)
+
+
 PLAN_COLUMNS = {
     "signals": [
         "signal_id",
@@ -143,15 +144,15 @@ def copy_frames(frames):
 def ledger_execution(run_data, **over):
     trades, rec, frames, days = run_data
     exe = base._execution()
+    trades = over.pop("trades", trades)
     fields = dict(
         exe.__dict__,
-        trades=list(trades),
+        **statutory(list(trades), 16.0, capital=100000.0),
         days=days,
         data={**exe.data, "as_of": days[-1]},
         period={"start": days[0], "end": days[-1]},
         symbols=["AAA", "BBB"],
         ledgers=copy_frames(frames),
-        cost_components=decompose_trades(trades, MODEL),
     )
     fields.update(over)
     return rr.Execution(**fields)
@@ -196,7 +197,7 @@ def evaluate(trades, **kw):
 
 class TestExecutionDefaults:
     def test_new_fields_default_to_none(self):
-        exe = base._execution()
+        exe = rr.Execution(trades=[], params={}, data={}, period={}, costs={}, days=[])
         assert exe.ledgers is None
         assert exe.cost_components is None
 
@@ -245,7 +246,7 @@ class TestHeadlineOnly:
         res = frames_resolution(intraday={"AAA": df})  # plan Phase 4: bars via the resolution
         monkeypatch.setattr(harness, "Backtest", FakeBacktest)
         monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
-        monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: MODEL)
+        monkeypatch.setattr(rr, "deployed_cost_model", deployed_model)
 
         exe = rr.execute_backtest("k", dataset=res)
 
@@ -256,7 +257,7 @@ class TestHeadlineOnly:
         assert list(exe.cost_components.columns) == list(trades_io.COST_COMPONENT_COLUMNS)
         assert len(exe.cost_components) == len(exe.trades) == 1
 
-    def test_no_cost_model_leaves_components_none(self, monkeypatch):
+    def test_no_cost_model_refuses_the_run(self, monkeypatch):
         from signal_engine.backtest import __main__ as cli
         from signal_engine.backtest import data, harness
 
@@ -280,10 +281,13 @@ class TestHeadlineOnly:
         monkeypatch.setattr(cli, "REGISTRY", {"k": (Strat, Params, "intraday")})
         res = frames_resolution(intraday={"AAA": df})  # plan Phase 4: bars via the resolution
         monkeypatch.setattr(harness, "Backtest", FakeBacktest)
-        monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: None)
-        exe = rr.execute_backtest("k", dataset=res)
-        assert exe.ledgers is not None
-        assert exe.cost_components is None
+
+        def unavailable(*a, **k):
+            raise KeyError("config.yaml is missing sizing.sandbox_capital")
+
+        monkeypatch.setattr(rr, "deployed_cost_model", unavailable)
+        with pytest.raises(rr.CostModelUnavailable, match="sandbox_capital"):
+            rr.execute_backtest("k", dataset=res)
 
 
 # ---- the artifact ----------------------------------------------------------------------------
@@ -339,7 +343,8 @@ class TestEvidenceFiles:
             assert (first / rel).read_bytes() == (second / rel).read_bytes()
 
     def test_run_without_ledgers_is_unchanged(self, root):
-        path = raw._record(root, execute=lambda key: base._execution())
+        plain = rr.Execution(**{**base._execution().__dict__, "cost_components": None})
+        path = raw._record(root, execute=lambda key: plain)
         folder = raw._folder(path)
         found = {p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file()}
         assert found == raw.FILES
@@ -885,7 +890,7 @@ class TestReproduceWithLedgers:
                 exit_fill_id=None,
                 position_id=None,
             )
-            for t in run_data[0]
+            for t in plain.trades
         ]
         plain = rr.Execution(**{**plain.__dict__, "trades": stripped})
         path = raw._record(root, execute=lambda key: plain)
@@ -967,7 +972,7 @@ class TestLedgerProblemsCarried:
         res = frames_resolution(intraday={"AAA": df})  # plan Phase 4: bars via the resolution
         monkeypatch.setattr(harness, "Backtest", FakeBacktest)
         monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
-        monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: MODEL)
+        monkeypatch.setattr(rr, "deployed_cost_model", deployed_model)
         assert rr.execute_backtest("k", dataset=res).ledger_problems == []
 
         original = lg.LedgerRecorder.to_frames
@@ -1008,7 +1013,9 @@ class TestCostComponentResidual:
     def test_components_still_sum_to_the_total_with_an_unknown_charge_key(self, monkeypatch):
         from signal_engine.backtest import costs
 
-        monkeypatch.setattr(costs, "india_intraday", lambda exchange="NSE": _ExtraKeySchedule())
+        monkeypatch.setattr(
+            costs, "india_intraday", lambda exchange="NSE", broker=None: _ExtraKeySchedule()
+        )
         costs._component_bps.cache_clear()
         costs._statutory_bps.cache_clear()
         try:
@@ -1044,7 +1051,8 @@ class TestReproduceColumns:
     def test_changed_value_in_an_old_column_still_fails(self, root, run_data):
         folder = record(root, run_data, cost_components=None)
         trades = list(run_data[0])
-        trades[1] = dataclasses.replace(trades[1], r_net=trades[1].r_net + 1.0)
+        # The run's net is restated from the gross result, so an old column changes via r_gross.
+        trades[1] = dataclasses.replace(trades[1], r_gross=trades[1].r_gross + 1.0)
         exe = ledger_execution(run_data, trades=trades)
         report = _reproduce(folder, root, lambda key, settings=None, end=None: exe)
         assert report.reproducible is False

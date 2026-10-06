@@ -55,10 +55,13 @@ def execution_fingerprint(resolved: Mapping[str, Mapping[str, Any]]) -> str:
 
 
 def cost_fingerprint(resolved: Mapping[str, Mapping[str, Any]], cost_model: Any) -> str:
-    """Hash slippage, round-trip cost and the cost model (a JSON-able mapping or None)."""
+    """Hash slippage and the primary cost identity (a JSON-able mapping or None).
+
+    The frozen flat round-trip figure is only a comparison scenario now, so it is not hashed:
+    changing it must not create a new trial.
+    """
     payload = {
         "slippage": resolved[SLIPPAGE_FIELD]["value"],
-        "round_trip_bps": resolved[ROUND_TRIP_FIELD]["value"],
         "model": cost_model,
     }
     return sha256_hex(canonical_json(payload))

@@ -40,10 +40,11 @@ import pandas as pd
 from scipy import stats as _st
 
 from signal_engine.backtest import splits, stats
+from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.backtest.metrics import hurdle_t
 from signal_engine.research.build_registry import EVALUATION_STATUSES as STATUSES
 
-EVALUATION_VERSION = 1
+EVALUATION_VERSION = 2
 CRITERIA_DOC = "docs/STRATEGY-ACCEPTANCE-CRITERIA.md"
 
 DIMENSIONS = (
@@ -198,6 +199,9 @@ class _Inputs:
     params: dict[str, Any] | None
     regimes: dict[str, Any] | None = None
     cost_profile: dict[str, Any] | None = None
+    #: The record's `costs.model`: `statutory-per-trade` when the trades carry the statutory net,
+    #: `flat-round-trip-bps` for the older flat basis, None when not stated.
+    cost_basis: str | None = None
     split: dict[str, Any] | None = None
     ledgers: dict[str, Any] | None = None
     session: dict[str, Any] | None = None
@@ -266,6 +270,16 @@ def _day(trade: Any) -> pd.Timestamp:
     return pd.Timestamp(trade.day)
 
 
+def _is_statutory(x: _Inputs) -> bool:
+    return x.cost_basis == MODEL_NAME
+
+
+def _basis_text(x: _Inputs) -> str:
+    """Names the cost basis the trades carry: model, broker and mean cost."""
+    broker = ((x.cost_profile or {}).get("broker") or {}).get("key", "unknown")
+    return f"statutory-per-trade, broker {broker}, mean {x.cost_bps:.2f} bps"
+
+
 def _g11(x: _Inputs) -> _Result:
     threshold = "statutory charges at deployed notional plus slippage"
     profile = x.cost_profile
@@ -278,8 +292,8 @@ def _g11(x: _Inputs) -> _Result:
             f"at the deployed notional (capital {profile['capital']:,.0f}, risk "
             f"{profile['risk_per_trade']:.2%} per trade, leverage {profile['leverage']:g}x) plus "
             f"{profile['slippage_bps_per_side']:g} bps slippage per side: mean "
-            f"{profile['mean_total_bps']:.2f} bps against the engine's flat "
-            f"{profile['flat_bps']:g} bps",
+            f"{profile['mean_total_bps']:.2f} bps against the "
+            f"{'legacy ' if _is_statutory(x) else 'engine '}flat {profile['flat_bps']:g} bps",
         )
     if x.cost_model is None:
         return "not_evaluated", None, threshold, ""
@@ -310,6 +324,11 @@ def _g13(x: _Inputs) -> _Result:
         f"{result}; total cost "
         f"{at['1.0']:.2f} bps at 1.0x, {at['1.5']:.2f} bps at 1.5x, {at['2.0']:.2f} bps at 2.0x"
     )
+    scenarios = profile.get("scenarios") or []
+    if scenarios:
+        evidence += "; other scenarios, report only: " + ", ".join(
+            f"{s['id']} net {s['net_bps']:+.2f} bps" for s in scenarios if s["id"] != "primary"
+        )
     return ("pass" if stressed > 0 else "fail"), _num(stressed), threshold, evidence
 
 
@@ -328,7 +347,10 @@ def _g12(x: _Inputs) -> _Result:
         )
     mean = float(_r_net(x.trades).mean())
     status = "pass" if round(mean, 6) >= MIN_NET_R else "fail"
-    return status, _num(mean), threshold, f"net expectancy {mean:+.3f}R over {len(x.trades)} trades"
+    evidence = f"net expectancy {mean:+.3f}R over {len(x.trades)} trades"
+    if _is_statutory(x):
+        evidence += f" ({_basis_text(x)})"
+    return status, _num(mean), threshold, evidence
 
 
 def _g14(x: _Inputs) -> _Result:
@@ -338,12 +360,14 @@ def _g14(x: _Inputs) -> _Result:
         return "not_evaluated", None, threshold, "gross bps or cost not available"
     ratio = float(gross) / x.cost_bps
     verdict = "comfortable" if ratio >= COMFORT_GROSS_OVER_COST else "thin"
-    return (
-        "report",
-        _num(ratio),
-        threshold,
-        f"gross {float(gross):.2f} bps against {x.cost_bps:g} bps round trip: {verdict}",
-    )
+    evidence = f"gross {float(gross):.2f} bps against {x.cost_bps:g} bps round trip: {verdict}"
+    flat = (x.cost_profile or {}).get("flat_bps")
+    if _is_statutory(x) and flat:
+        evidence += (
+            f" (primary mean, {_basis_text(x)}); legacy flat {float(flat):g} bps would give "
+            f"{float(gross) / float(flat):.2f}, secondary"
+        )
+    return "report", _num(ratio), threshold, evidence
 
 
 def _g15(x: _Inputs) -> _Result:
@@ -361,7 +385,10 @@ def _g15(x: _Inputs) -> _Result:
     cost_r = np.array([t.r_gross - t.r_net for t in x.trades], dtype=float)
     median = float(np.median(cost_r))
     status = "pass" if round(median, 6) <= MAX_COST_R else "fail"
-    return status, _num(median), threshold, f"median cost {median:.3f}R per trade"
+    evidence = f"median cost {median:.3f}R per trade"
+    if _is_statutory(x):
+        evidence += f" ({_basis_text(x)})"
+    return status, _num(median), threshold, evidence
 
 
 def _g21(x: _Inputs) -> _Result:
@@ -1462,6 +1489,7 @@ def evaluate(
         horizon=horizon,
         cost_bps=float(cost_bps),
         cost_model=cost_model,
+        cost_basis=cost_model,
         oos_start=oos_start,
         position_caps=position_caps,
         params=params,

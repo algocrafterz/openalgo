@@ -16,6 +16,7 @@ import yaml
 from signal_engine.backtest import record_run as rr
 from signal_engine.backtest.types import Trade
 from signal_engine.research import build_registry as br
+from signal_engine.tests.cost_fixtures import statutory
 from signal_engine.tests.intake_fixtures import GOOD_SPEC
 
 SUPPORTED = {"orb", "ema9_vwap"}
@@ -66,7 +67,7 @@ def _execution(n=40):
     days = _days(n)
     trades = [_trade(d, 1.1 if i % 3 else -1.0, 1.0 if i % 3 else -1.1) for i, d in enumerate(days)]
     return rr.Execution(
-        trades=trades,
+        **statutory(trades, 16.0),
         params={"strategy": {"or_minutes": 15}, "run": {"cost_bps": 16.0}},
         data={
             "source": "historify",
@@ -75,7 +76,6 @@ def _execution(n=40):
             "bar_size": "5m",
         },
         period={"start": days[0].isoformat(), "end": days[-1].isoformat()},
-        costs={"model": "india_intraday_bps", "round_trip_bps": 16.0},
         days=[d.isoformat() for d in days],
     )
 
@@ -455,3 +455,110 @@ class TestBaselineInRecord:
     def test_no_baseline_means_no_key(self, root):
         rec = json.loads(self._record(root, _execution()).read_text())
         assert "baseline" not in rec
+
+
+def _declare_reference_lines(root: Path, levels: list) -> None:
+    path = root / "research" / "ideas" / "idea-009-orb" / "spec.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["costs"] = {"reference_round_trip_bps": levels}
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+def _record_with_settings(root: Path, seen: dict) -> Path:
+    def execute(key, settings=None):
+        seen.update(settings or {})
+        trades = _execution().trades
+        return rr.Execution(
+            **{
+                **_execution().__dict__,
+                **statutory(trades, 16.0, reference_bps=(settings or {}).get(
+                    "reference_round_trip_bps", ())),
+            }
+        )
+
+    return rr.record_idea(
+        root, "IDEA-009", execute=execute, run_date="2026-09-30", supported=SUPPORTED
+    )
+
+
+class TestStatutoryCostBasisRecord:
+    def test_record_reports_32_bps_scenario_when_spec_declares_it(self, root):
+        _declare_reference_lines(root, [32])
+        seen: dict = {}
+        record = json.loads(_record_with_settings(root, seen).read_text(encoding="utf-8"))
+        assert seen["reference_round_trip_bps"] == [32]
+        ids = [s["id"] for s in record["cost_model"]["scenarios"]]
+        assert ids == ["primary", "generic_discount_broker", "flat_32bps", "legacy_flat"]
+        assert record["costs"]["reference_round_trip_bps"] == [32.0]
+        assert record["costs"]["model"] == "statutory-per-trade"
+        assert br._validate_run(record) == []
+
+    def test_no_reference_scenarios_without_declaration(self, root):
+        seen: dict = {}
+        record = json.loads(_record_with_settings(root, seen).read_text(encoding="utf-8"))
+        assert "reference_round_trip_bps" not in seen
+        ids = [s["id"] for s in record["cost_model"]["scenarios"]]
+        assert ids == ["primary", "generic_discount_broker", "legacy_flat"]
+        assert record["costs"]["reference_round_trip_bps"] == []
+
+    def test_changing_reference_lines_does_not_add_a_trial(self, root):
+        from signal_engine.research.intake import trials as trials_mod
+
+        folder = root / "research" / "ideas" / "idea-009-orb"
+        _declare_reference_lines(root, [32])
+        _record_with_settings(root, {})
+        _declare_reference_lines(root, [48, 64])
+        _record_with_settings(root, {})
+        assert trials_mod.count(folder).material == 1
+
+    def test_record_refuses_run_without_statutory_model(self, root):
+        ideas = root / "research" / "ideas" / "idea-009-orb"
+
+        def snapshot():
+            return sorted(p.relative_to(ideas).as_posix() for p in ideas.rglob("*"))
+
+        before = snapshot()
+
+        def execute(key, settings=None):
+            raise rr.CostModelUnavailable("per-trade cost model unavailable: no config")
+
+        with pytest.raises(rr.CostModelUnavailable):
+            rr.record_idea(
+                root, "IDEA-009", execute=execute, run_date="2026-09-30", supported=SUPPORTED
+            )
+        assert snapshot() == before
+        assert not (ideas / "trials.yaml").exists() and not (ideas / "runs").exists()
+
+
+class TestPrimaryCostModel:
+    def test_the_profile_broker_prices_the_model(self):
+        model = rr._primary_cost_model("intraday", {"broker": "flattrade", "product": "MIS"})
+        assert model.broker == "flattrade" and model.product == "MIS"
+
+    def test_a_missing_config_key_is_a_cost_model_fault_not_a_fallback(self, tmp_path, monkeypatch):
+        bad = tmp_path / "config.yaml"
+        bad.write_text("sizing: {sandbox_capital: 100000}\n", encoding="utf-8")
+        monkeypatch.setattr(rr, "CONFIG_PATH", bad)
+        with pytest.raises(rr.CostModelUnavailable, match="risk_per_trade|broker"):
+            rr._primary_cost_model("intraday", {})
+
+    def test_product_must_match_the_frozen_product(self):
+        with pytest.raises(rr.CostModelUnavailable, match="execution.product"):
+            rr._primary_cost_model("intraday", {"product": "CNC"})
+
+    def test_unknown_exchange_rejected(self, tmp_path, monkeypatch):
+        config = yaml.safe_load(rr.CONFIG_PATH.read_text(encoding="utf-8"))
+        config["broker"]["exchange"] = "MCX"
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(config), encoding="utf-8")
+        monkeypatch.setattr(rr, "CONFIG_PATH", path)
+        with pytest.raises(rr.CostModelUnavailable, match="exchange"):
+            rr._primary_cost_model("swing", {})
+
+    def test_no_stop_without_fixed_notional_fails(self):
+        with pytest.raises(rr.CostModelUnavailable, match="fixed notional"):
+            rr._primary_cost_model("swing", {"stop": "none"})
+        model = rr._primary_cost_model(
+            "swing", {"stop": "none", "capital_per_position": 100000}
+        )
+        assert model.fixed_notional == 100000.0

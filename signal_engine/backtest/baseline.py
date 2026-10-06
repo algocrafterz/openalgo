@@ -8,7 +8,8 @@ beta cannot pass for skill.
 Definition, fixed here so runs stay comparable:
 
   MATCHED PER TRADE.  Each trade is paired with random entries on the SAME symbol, held for
-  the SAME number of bars, in the SAME direction, with the same round-trip cost deducted.
+  the SAME number of bars, in the SAME direction, with that trade's own round-trip cost
+  deducted (the gap between its gross and net bps, so a per-trade cost model is honoured).
   Hold is counted in bars, so a Friday-to-Monday hold is one bar.
 
   OPEN TO CLOSE.  The baseline enters at a bar's open and leaves at a later bar's close,
@@ -42,7 +43,7 @@ DRAWS_PER_TRADE = 20
 
 METHOD = (
     "same-symbol random entry, same holding period in bars, same direction, "
-    "open to close, round-trip cost deducted"
+    "open to close, the matched trade's own round-trip cost deducted"
 )
 
 
@@ -62,7 +63,6 @@ def _put(target: dict[str, Any], key: str, value: float, digits: int = 4) -> Non
 def random_entry_baseline(
     trades: Sequence[Any],
     frames: Mapping[str, pd.DataFrame],
-    round_trip_bps: float,
     *,
     draws: int = DRAWS_PER_TRADE,
     seed: int = 0,
@@ -101,6 +101,7 @@ def random_entry_baseline(
     rng = np.random.default_rng(seed)
     base_gross = np.empty(len(matched))
     trade_net = np.empty(len(matched))
+    trade_cost = np.empty(len(matched))
     for i, (trade, hold, opens, closes) in enumerate(matched):
         entries = rng.integers(0, len(closes) - hold, size=draws)
         # A trade that exited at an open is matched against an open-to-open baseline.
@@ -108,7 +109,8 @@ def random_entry_baseline(
         moves = (exits[entries + hold] - opens[entries]) / opens[entries] * 1e4
         base_gross[i] = trade.direction * moves.mean()
         trade_net[i] = trade.net_bps
-    base_net = base_gross - round_trip_bps
+        trade_cost[i] = trade.gross_bps - trade.net_bps
+    base_net = base_gross - trade_cost
     diff = trade_net - base_net
 
     out: dict[str, Any] = {
@@ -129,7 +131,8 @@ def random_entry_baseline(
 
 METHOD_INTRADAY = (
     "same-symbol random entry, same holding period in bars, same direction, same session, "
-    "open of the entry bar to close of the exit bar, round-trip cost deducted"
+    "open of the entry bar to close of the exit bar, the matched trade's own round-trip cost "
+    "deducted"
 )
 
 #: Trades the intraday baseline scores at most. Each is paired with `draws` random entries on
@@ -166,7 +169,6 @@ def sample_trades(trades: Sequence[Any], max_trades: int, seed: int = 0) -> list
 def random_entry_baseline_intraday(
     trades: Sequence[Any],
     frames: Mapping[str, pd.DataFrame],
-    round_trip_bps: float,
     *,
     draws: int = DRAWS_PER_TRADE,
     seed: int = 0,
@@ -233,6 +235,7 @@ def random_entry_baseline_intraday(
 
     base_gross = np.empty(len(matched))
     trade_net = np.empty(len(matched))
+    trade_cost = np.empty(len(matched))
     for i, (trade, hold) in enumerate(matched):
         opens, closes, _, _ = prepared[trade.symbol]
         pool = starts_cache[(trade.symbol, hold)]
@@ -240,7 +243,8 @@ def random_entry_baseline_intraday(
         moves = (closes[entries + hold] - opens[entries]) / opens[entries] * 1e4
         base_gross[i] = trade.direction * moves.mean()
         trade_net[i] = trade.net_bps
-    base_net = base_gross - round_trip_bps
+        trade_cost[i] = trade.gross_bps - trade.net_bps
+    base_net = base_gross - trade_cost
     diff = trade_net - base_net
 
     out: dict[str, Any] = {

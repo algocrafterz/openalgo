@@ -23,6 +23,7 @@ from signal_engine.backtest.change_class import (
     STRATEGY_CHANGE,
 )
 from signal_engine.tests import test_record_run as base
+from signal_engine.tests.cost_fixtures import make_model, statutory
 from signal_engine.tests.intake_fixtures import make_spec
 from signal_engine.tests.test_record_run import SUPPORTED, _execution, _trade
 from signal_engine.timeutils import IST
@@ -39,12 +40,17 @@ TS_FILE = REPO / "frontend" / "src" / "api" / "backtestResults.ts"
 
 def _execution_of(rows, start, end):
     """An Execution whose trades are (day, r_gross, r_net) rows over the stated period."""
-    trades = [_trade(date.fromisoformat(d), g, n) for d, g, n in rows]
+    # The trades are costed by the statutory model, so the hand-computed fixtures are stated in
+    # net R. Every row costs 0.2R at its 1 percent stop (20 bps): the model is given the
+    # slippage that makes its total exactly that, and each trade's gross is its net plus 0.2R,
+    # so the statutory restatement returns the stated net.
+    trades = [_trade(date.fromisoformat(d), n + 0.2, n) for d, _, n in rows]
     template = _execution()
+    stat = make_model().statutory_bps(trades[0]) if trades else 0.0
     return rr.Execution(
         **{
             **template.__dict__,
-            "trades": trades,
+            **statutory(trades, 16.0, slippage_bps_per_side=(20.0 - stat) / 2.0),
             "period": {"start": start, "end": end},
             "days": [d for d, _, _ in rows],
             "symbols": ["A.NS"],
@@ -356,7 +362,7 @@ class TestCostAndDatasetAndExecution:
         ex = _execution()
         a = _folder(_record(root, ex))
         report = json.loads((a / "report" / "report.json").read_text(encoding="utf-8"))
-        report["cost_model"] = {"model": "m", "leverage": 5.0, "total_bps_at": {"1.0": 3.0}}
+        report["cost_model"] = {"model": "m", "leverage": 7.0, "total_bps_at": {"1.0": 3.0}}
         tmp = a.parent / "variant"
         shutil.copytree(a, tmp)
         target = tmp / "report" / "report.json"
@@ -367,11 +373,29 @@ class TestCostAndDatasetAndExecution:
         assert cost["cost_model.leverage"] == {
             "field": "cost_model.leverage",
             "label": cost["cost_model.leverage"]["label"],
-            "a": None,
-            "b": 5.0,
+            "a": 5.0,
+            "b": 7.0,
             "changed": True,
         }
         assert "cost_model.total_bps_at" not in cost
+
+    def test_compare_shows_cost_basis_row_defaulting_to_flat(self, root):
+        ex = _execution()
+        a = _folder(_record(root, ex))
+        assert _fields(compare.compare_run_folders(a, a)["cost"])["cost_basis"]["a"] == (
+            "statutory-per-trade"
+        )
+        report = json.loads((a / "report" / "report.json").read_text(encoding="utf-8"))
+        report.pop("costs")  # a report written before the costs block was exported
+        tmp = a.parent / "variant"
+        shutil.copytree(a, tmp)
+        target = tmp / "report" / "report.json"
+        target.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        target.write_text(json.dumps(report), encoding="utf-8")
+        row = _fields(compare.compare_run_folders(a, tmp)["cost"])["cost_basis"]
+        assert row["a"] == "statutory-per-trade"
+        assert row["b"] == "flat-round-trip-bps"
+        assert row["changed"] is True
 
     def test_dataset_fingerprint_change(self, root):
         ex = _execution_of(A_ROWS, "2026-03-01", "2026-03-10")

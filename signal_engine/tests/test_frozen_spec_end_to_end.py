@@ -60,7 +60,7 @@ def seen(monkeypatch):
     res = frames_resolution(daily=ranked_frames())
     monkeypatch.setattr(rr, "prepare_data", lambda *a, **k: res)
     monkeypatch.setattr(harness, "Backtest", Spy)
-    monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+    monkeypatch.setattr(rr, "deployed_cost_model", tel.deployed_model)
     return log
 
 

@@ -343,7 +343,7 @@ def store(store_db, monkeypatch):
     seen["res"] = _store_resolution(STORE_SYMBOLS, intraday=loader)
     monkeypatch.setattr(harness, "Backtest", SpyBacktest)
     monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
-    monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+    monkeypatch.setattr(rr, "deployed_cost_model", tel.deployed_model)
     return seen
 
 
@@ -519,7 +519,7 @@ class TestSwingPath:
         monkeypatch.setattr(cli, "_register", lambda: None)
         monkeypatch.setattr(cli, "REGISTRY", {"s": (_SwingStrat, _Params, "swing")})
         monkeypatch.setattr(rr, "random_entry_baseline", lambda *a, **k: None)
-        monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+        monkeypatch.setattr(rr, "deployed_cost_model", tel.deployed_model)
         return _store_resolution(
             ("AAA", "BBB", "CCC", "DDD", "EEE"),
             daily=lambda **kw: real(db_path=db, **{**kw, "min_sessions": 10}),
@@ -548,7 +548,7 @@ class TestBaselinePopulation:
     def _capture(self, store, monkeypatch, settings):
         seen = {}
 
-        def baseline(trades, frames, cost, **kw):
+        def baseline(trades, frames, **kw):
             seen["frames"] = dict(frames)
             seen["trades"] = list(trades)
             return None

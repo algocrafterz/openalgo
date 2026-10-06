@@ -81,10 +81,26 @@ def test_slippage_moves_cost_only():
 
 
 def test_round_trip_cost_moves_cost_only():
+    """New contract: the frozen flat round-trip figure is a comparison scenario, not the charged
+    cost, so changing it leaves every fingerprint unchanged. Slippage (part of the primary
+    model) still moves the cost fingerprint."""
     base = fp.component_fingerprints(**_kwargs())
     kw = _kwargs()
     kw["resolved"]["execution.cost_bps_round_trip"]["value"] = 33
+    assert _changed(base, fp.component_fingerprints(**kw)) == set()
+    kw = _kwargs()
+    kw["resolved"]["execution.slippage_bps_per_side"]["value"] = 6
     assert _changed(base, fp.component_fingerprints(**kw)) == {"cost"}
+
+
+def test_cost_fingerprint_ignores_legacy_flat():
+    from signal_engine.backtest import costs
+    from signal_engine.tests.cost_fixtures import make_model
+
+    identity = costs.cost_identity(make_model())
+    a, b = _resolved(), _resolved()
+    b["execution.cost_bps_round_trip"]["value"] = 99
+    assert fp.cost_fingerprint(a, identity) == fp.cost_fingerprint(b, identity)
 
 
 def test_cost_model_change_moves_cost_only_and_none_ok():
@@ -164,3 +180,74 @@ def test_inputs_not_mutated():
 def test_profile_fingerprint_matches_shipped_profile():
     profile = load_profile("flattrade-nse-cash")
     assert fp.profile_fingerprint(profile.as_dict()) == profile.sha256
+
+
+def _identity(**changes):
+    from signal_engine.backtest import costs
+    from signal_engine.tests.cost_fixtures import make_model
+
+    return costs.cost_identity(make_model(**changes))
+
+
+def _cost_fp(identity) -> str:
+    return fp.cost_fingerprint(_resolved(), identity)
+
+
+def _trades():
+    import pandas as pd
+
+    from signal_engine.backtest.types import Trade
+
+    return [
+        Trade(
+            symbol="A.NS",
+            day=f"2026-01-{d:02d}",
+            direction=1,
+            tag="t",
+            entry_time=pd.Timestamp(f"2026-01-{d:02d} 09:20"),
+            entry=100.0,
+            signal_price=100.0,
+            sl=99.0,
+            tp=0.0,
+            risk=1.0,
+            exit_time=f"2026-01-{d:02d} 15:00",
+            reason="tp",
+            r_gross=0.5,
+            r_net=0.3,
+        )
+        for d in range(2, 12)
+    ]
+
+
+def test_cost_fingerprint_changes_with_rate_table_or_broker(monkeypatch):
+    import dataclasses
+
+    from signal_engine.backtest import costs
+
+    base_identity = _identity()
+    base = _cost_fp(base_identity)
+    assert _cost_fp(_identity(broker=None)) != base
+    assert _cost_fp(_identity(broker="some-new-broker")) != base
+    assert _cost_fp(_identity(slippage_bps_per_side=5.0)) != base
+
+    original = costs._schedule
+    monkeypatch.setattr(
+        costs, "_schedule", lambda *a: dataclasses.replace(original(*a), tax_rate=0.2)
+    )
+    changed = _identity()
+    assert changed["rate_table_sha256"] != base_identity["rate_table_sha256"]
+    assert _cost_fp(changed) != base
+
+
+def test_cost_fingerprint_ignores_scenarios_and_reference_lines():
+    from signal_engine.backtest import costs
+    from signal_engine.tests.cost_fixtures import make_model
+
+    identity = costs.cost_identity(make_model())
+    assert not any("scenario" in k or "reference" in k for k in identity)
+    one = costs.cost_profile(_trades(), make_model(), 16.0, reference_bps=(32.0,))
+    two = costs.cost_profile(_trades(), make_model(), 16.0, reference_bps=(48.0, 64.0))
+    # The scenario set differs, but the identity the fingerprint reads does not move.
+    assert one["scenarios_sha256"] != two["scenarios_sha256"]
+    assert one["rate_table_sha256"] == two["rate_table_sha256"]
+    assert _cost_fp(costs.cost_identity(make_model())) == _cost_fp(identity)

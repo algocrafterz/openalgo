@@ -14,6 +14,7 @@ tagged:
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -540,6 +541,28 @@ def _check_information_boundary(out: _Collector, data: Mapping[str, Any]) -> Non
         out.validity("information_boundary", "must be a non-empty list of non-blank text")
 
 
+def _check_costs(out: _Collector, data: Mapping[str, Any]) -> None:
+    if "costs" not in data:
+        return
+    block = data["costs"]
+    if not isinstance(block, Mapping):
+        out.validity("costs", "must be a mapping")
+        return
+    for key in block:
+        if key != "reference_round_trip_bps":
+            out.validity(f"costs.{key}", "unknown field")
+    if "reference_round_trip_bps" not in block:
+        return
+    name, levels = "costs.reference_round_trip_bps", block["reference_round_trip_bps"]
+    if not isinstance(levels, list) or not levels:
+        out.validity(name, "must be a non-empty list of numbers")
+        return
+    if not all(_is_number(v) and math.isfinite(v) and 0 < v <= 1000 for v in levels):
+        out.validity(name, "each level must be a finite number above 0 and at most 1000")
+    elif len(set(levels)) != len(levels):
+        out.validity(name, "levels must be unique")
+
+
 def _check_multi_position(out: _Collector, block: Mapping[str, Any]) -> None:
     if "scope" in block:
         out.validity("portfolio.scope", "applies only to single_position")
@@ -736,6 +759,7 @@ def validate_spec(data: Any, profiles_dir: Path | None = None) -> list[Problem]:
     _check_information_boundary(out, data)
     _check_portfolio(out, data)
     _check_optional(out, data)
+    _check_costs(out, data)
     _check_universe(out, data)
     _check_profile(out, data, profiles_dir)
     return out.items

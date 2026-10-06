@@ -85,7 +85,7 @@ def test_daily_spec_records_the_real_resolution(tmp_path, monkeypatch, version):
     def execute(key, dataset=None, **k):
         seen["eligible"] = dataset.eligible
         ex = _execution()
-        return dataclasses.replace(ex, costs={**ex.costs, "round_trip_bps": 24.0})   # swing
+        return dataclasses.replace(ex, costs={**ex.costs, "flat_round_trip_bps": 24.0})   # swing
 
     flat = json.loads(_record(root, execute).read_text())
     m = json.loads((root / IDEA / "runs" / flat["artifact_dir"] / "manifest.json").read_text())

@@ -471,7 +471,7 @@ class TestRunIds:
 
 class TestFailureLeavesNothing:
     def test_artifact_failure_leaves_no_folder_flat_record_or_run_id(self, root, monkeypatch):
-        def boom(trades):
+        def boom(trades, **kw):
             raise RuntimeError("disk on fire")
 
         monkeypatch.setattr(ra, "trades_parquet_bytes", boom)
@@ -512,6 +512,9 @@ class TestSettings:
             "eligibility_min_prior_sessions": 60,
             "eligibility_min_volume": 1,
             "eligibility_min_price": 10.0,
+            "product": "MIS",
+            # the deployment profile's broker prices brokerage
+            "broker": "flattrade",
             # the frozen spec's intent, so the run is bound to the spec and not to class defaults
             "parameters": {"ema_fast": 9, "ema_slow": 20, "atr_len": 14},
             "stop": ["1 ATR(14) below entry"],
@@ -528,11 +531,22 @@ class TestSettings:
         _record(root, execute=execute)
         assert calls == ["orb"]
 
-    def test_cost_mismatch_raises_and_writes_nothing(self, root):
+    def test_execute_frozen_checks_flat_secondary_against_frozen(self, root):
         wrong = _execution()
-        wrong = rr.Execution(**{**wrong.__dict__, "costs": {"model": "x", "round_trip_bps": 99.0}})
+        wrong = rr.Execution(
+            **{**wrong.__dict__, "costs": {**wrong.costs, "flat_round_trip_bps": 99.0}}
+        )
         with pytest.raises(ValueError, match="did not use the frozen configuration"):
             _record(root, execute=lambda key: wrong)
+        assert not _runs(root).exists()
+
+    def test_execute_frozen_rejects_flat_headline_execution(self, root):
+        flat = _execution()
+        flat = rr.Execution(
+            **{**flat.__dict__, "costs": {"model": "flat-round-trip-bps", "round_trip_bps": 16.0}}
+        )
+        with pytest.raises(ValueError, match="statutory cost basis"):
+            _record(root, execute=lambda key: flat)
         assert not _runs(root).exists()
 
     def test_execution_fills_symbols_field(self):
@@ -664,7 +678,7 @@ class TestPreCommitFailuresLeaveNothing:
         assert _record(root).stem == "2026-10-02-orb-v1"
 
     def test_trades_bytes_failure(self, root, monkeypatch):
-        def boom(trades):
+        def boom(trades, **kw):
             raise RuntimeError("disk on fire")
 
         self._fail_then_succeed(

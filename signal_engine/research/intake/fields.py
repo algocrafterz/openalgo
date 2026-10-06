@@ -131,6 +131,7 @@ FIELDS: tuple[FieldDef, ...] = (
     _f("portfolio.sector_limit", INTENT, OPTIONAL, MEDIUM, condition=_MULTI),
     _f("portfolio.correlation_limit", INTENT, OPTIONAL, MEDIUM, condition=_MULTI),
     _f("order_types", INTENT, OPTIONAL, MEDIUM),
+    _f("costs.reference_round_trip_bps", INTENT, DISCLOSURE, LOW),
     _f("disclosure.prior_variants", INTENT, DISCLOSURE, LOW),
     _f("disclosure.chart_peeking", INTENT, DISCLOSURE, LOW),
     _f("disclosure.destination", INTENT, DISCLOSURE, LOW, DESTINATIONS),

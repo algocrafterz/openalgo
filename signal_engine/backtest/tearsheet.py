@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 
 from signal_engine.backtest.concurrency import apply_position_cap, concurrency_profile
-from signal_engine.backtest.costs import CostModel, cost_profile
+from signal_engine.backtest.costs import MODEL_NAME, CostModel, cost_profile
 from signal_engine.backtest.metrics import clustered_t, hurdle_t
 from signal_engine.backtest.regime import regime_block
 from signal_engine.backtest.splits import purge_and_embargo
@@ -272,9 +272,30 @@ def _monthly(trades: Sequence) -> list[dict[str, Any]]:
     ]
 
 
-def _cost_sensitivity(gross_bps: float, model_bps: float) -> list[dict[str, float]]:
-    levels = sorted({*SENSITIVITY_BPS, round(float(model_bps), 4)})
+def _cost_sensitivity(
+    gross_bps: float, model_bps: float, extra_bps: Sequence[float] = ()
+) -> list[dict[str, float]]:
+    levels = sorted(
+        {*SENSITIVITY_BPS, round(float(model_bps), 4), *(round(float(b), 4) for b in extra_bps)}
+    )
     return [{"round_trip_bps": c, "net_bps": round(gross_bps - c, 4)} for c in levels]
+
+
+STATUTORY_MODEL = MODEL_NAME
+
+
+def _check_statutory_net(trades: Sequence, profile: dict[str, Any]) -> None:
+    """The trades of a statutory-basis record must carry the cost model's net, not a flat one."""
+    if r_undefined(trades):
+        label, mean = "net_bps", float(np.mean([t.net_bps for t in trades]))
+    else:
+        label, mean = "net_r", float(np.mean([t.r_net for t in trades]))
+    modelled = float(profile[label])
+    if abs(mean - modelled) > 1e-4:
+        raise ValueError(
+            f"costs.model is {STATUTORY_MODEL} but the trades' mean {label} {mean:.4f} differs "
+            f"from the cost model's {modelled:.4f}: the trades were not restated under it"
+        )
 
 
 def _split(trades: Sequence, oos_start: str) -> tuple[list, list]:
@@ -352,9 +373,12 @@ def build_run_record(
     per market regime, each trade placed by its entry day. `regime_source` records where the
     regime inputs came from. Leave `regime_days` empty to skip.
 
-    `cost_model` adds the optional `cost_model` block: the same trades priced per trade with
-    the statutory schedule at the deployed notional (G1.1, G1.3). The headline metrics stay on
-    the engine's flat cost so runs remain comparable with earlier records.
+    `cost_model` adds the optional `cost_model` block: the trades priced per trade with the
+    statutory schedule at the deployed notional (G1.1, G1.3). This function does not choose a
+    cost basis: the headline metrics read the net result the trades carry. When `costs["model"]`
+    is `statutory-per-trade` the trades must already carry the cost model's net, and a mean
+    that differs from the block's raises ValueError. A record with a flat `costs.model` is the
+    older basis, where the block is a secondary view.
 
     `embargo_sessions` (with `oos_start`) purges in-sample trades that exit on or after the
     cut and skips the first sessions of the out-of-sample window (G3.5); what was removed is
@@ -403,7 +427,14 @@ def build_run_record(
         "change_note": change_note,
         "n_trials": n_trials,
         "promoted": False,
-        "cost_sensitivity": _cost_sensitivity(metrics["gross_bps"], costs["round_trip_bps"]),
+        "cost_sensitivity": _cost_sensitivity(
+            metrics["gross_bps"],
+            costs["round_trip_bps"],
+            [
+                *([costs["flat_round_trip_bps"]] if "flat_round_trip_bps" in costs else []),
+                *costs.get("reference_round_trip_bps", ()),
+            ],
+        ),
         "series": {
             ("equity_bps" if no_r else "equity_r"): downsample(equity, MAX_SERIES_POINTS),
             ("drawdown_bps" if no_r else "drawdown_r"): downsample(
@@ -427,10 +458,20 @@ def build_run_record(
     if regime_days is not None and not no_r:
         # Regime results are R-based, so they are left out for a run whose trades have no R.
         record["regimes"] = regime_block(trades, regime_days, source=regime_source)
+    statutory = costs.get("model") == STATUTORY_MODEL
+    if statutory and trades and cost_model is None:
+        raise ValueError("costs.model is statutory-per-trade but no cost model was given")
     if cost_model is not None:
-        profile = cost_profile(trades, cost_model, costs["round_trip_bps"])
+        profile = cost_profile(
+            trades,
+            cost_model,
+            costs.get("flat_round_trip_bps", costs["round_trip_bps"]),
+            costs.get("reference_round_trip_bps", ()),
+        )
         if profile is not None:
             record["cost_model"] = profile
+            if statutory:
+                _check_statutory_net(trades, profile)
     # Imported here: evaluation pulls in the registry and the data loaders, which a read-only
     # consumer of `headline_metrics` (the run comparison) must not pay for at import time.
     from signal_engine.backtest.evaluation import evaluate

@@ -15,7 +15,7 @@ from signal_engine.backtest.types import Ctx
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests.published_fixtures import frames_resolution
 from signal_engine.tests.test_backtest_ledgers import FLAT, RUN, Script, make_frame
-from signal_engine.tests.test_evidence_ledgers import MODEL
+from signal_engine.tests.test_evidence_ledgers import deployed_model
 from signal_engine.tests.test_run_artifact_write import (  # noqa: F401
     _folder,
     _manifest,
@@ -43,7 +43,7 @@ def _execute_with(monkeypatch, strategy_cls):
     monkeypatch.setattr(cli, "REGISTRY", {"k": (strategy_cls, Params, "intraday")})
     monkeypatch.setattr(harness, "Backtest", FakeBacktest)
     monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
-    monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: MODEL)
+    monkeypatch.setattr(rr, "deployed_cost_model", deployed_model)
     res = frames_resolution(intraday={"AAA": df})
     return rr.execute_backtest("k", dataset=res)
 

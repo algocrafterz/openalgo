@@ -8,6 +8,7 @@ import yaml
 
 from signal_engine.backtest import record_run as rr
 from signal_engine.tests import test_record_run as base
+from signal_engine.tests.cost_fixtures import statutory
 from signal_engine.tests.test_record_run import SUPPORTED, _execution
 
 root = base.root  # the idea-folder fixture, shared with test_record_run
@@ -53,7 +54,9 @@ class TestRecordWiring:
     def test_run_record_carries_embargo_and_the_cost_model(self, root, config_path):
         model = rr.deployed_cost_model("intraday", config_path)
         execution = _execution()
-        execution = rr.Execution(**{**execution.__dict__, "cost_model": model})
+        execution = rr.Execution(
+            **{**execution.__dict__, **statutory(execution.trades, 16.0, model=model)}
+        )
         path = rr.record_idea(
             root,
             "IDEA-009",
@@ -65,15 +68,23 @@ class TestRecordWiring:
         assert record["split"]["embargo_sessions"] == rr.EMBARGO_SESSIONS
         assert record["cost_model"]["model"] == "statutory-per-trade"
 
-    def test_run_without_a_cost_model_still_records(self, root):
-        path = rr.record_idea(
-            root,
-            "IDEA-009",
-            execute=lambda key: _execution(),
-            run_date="2026-10-01",
-            supported=SUPPORTED,
+    def test_run_without_a_cost_model_is_refused(self, root):
+        flat = _execution()
+        flat = rr.Execution(
+            **{
+                **flat.__dict__,
+                "cost_model": None,
+                "costs": {"model": "flat-round-trip-bps", "round_trip_bps": 16.0},
+            }
         )
-        assert "cost_model" not in json.loads(path.read_text(encoding="utf-8"))
+        with pytest.raises(ValueError, match="statutory cost basis"):
+            rr.record_idea(
+                root,
+                "IDEA-009",
+                execute=lambda key: flat,
+                run_date="2026-10-01",
+                supported=SUPPORTED,
+            )
 
     def test_embargo_is_one_session(self):
         assert rr.EMBARGO_SESSIONS == 1

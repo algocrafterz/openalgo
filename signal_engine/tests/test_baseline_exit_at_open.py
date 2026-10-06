@@ -42,8 +42,8 @@ def trade(idx, exit_at_open):
 
 def test_an_open_exit_is_matched_against_an_open_to_open_baseline():
     f, idx = frames()
-    at_close = random_entry_baseline([trade(idx, False)], f, 24.0, draws=200)
-    at_open = random_entry_baseline([trade(idx, True)], f, 24.0, draws=200)
+    at_close = random_entry_baseline([trade(idx, False)], f, draws=200)
+    at_open = random_entry_baseline([trade(idx, True)], f, draws=200)
     # same seed, same draws: the only difference is exiting at the open instead of the close,
     # which is 1.0 on a price near 100 to 130, so roughly 80 to 100 bps lower
     gap = at_close["gross_bps"] - at_open["gross_bps"]
@@ -53,6 +53,6 @@ def test_an_open_exit_is_matched_against_an_open_to_open_baseline():
 def test_a_trade_without_the_flag_keeps_the_old_open_to_close_baseline():
     f, idx = frames()
     t = trade(idx, False)
-    out = random_entry_baseline([t], f, 24.0, draws=200)
+    out = random_entry_baseline([t], f, draws=200)
     assert out["method"].endswith("round-trip cost deducted")
     assert out["gross_bps"] > 70.0  # the +1.0 close premium is in the baseline

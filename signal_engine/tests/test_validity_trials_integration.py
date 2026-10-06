@@ -852,7 +852,7 @@ def swing_env(swing_db, monkeypatch):
         daily=lambda **kw: real(db_path=swing_db, **{**kw, "min_sessions": 10}),
     )
     monkeypatch.setattr(rr, "random_entry_baseline", lambda *a, **k: None)
-    monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+    monkeypatch.setattr(rr, "deployed_cost_model", tel.deployed_model)
     monkeypatch.setattr(rr, "truncation_check", spy)
 
     def use(strategy_cls):

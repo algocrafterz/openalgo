@@ -677,3 +677,47 @@ class TestEarlierIdeasUnchanged:
             current = strategy_fingerprint(rules_fingerprint(data),
                                            params_fingerprint(data.get("parameters")))
             assert current == versions[-1]["strategy_fingerprint"]
+
+
+class TestCostsReferenceLines:
+    def test_costs_reference_round_trip_bps_valid(self):
+        assert spec.validate_spec(make_spec(costs={"reference_round_trip_bps": [32]})) == []
+        assert (
+            spec.validate_spec(make_spec(costs={"reference_round_trip_bps": [32, 48.5, 1000]})) == []
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            [0],
+            [-5],
+            [float("nan")],
+            [float("inf")],
+            [1000.5],
+            [32, 32],
+            [],
+            32,
+            "32",
+            [True],
+            ["32"],
+        ],
+    )
+    def test_costs_reference_rejects_zero_negative_nan_duplicate_nonlist(self, value):
+        problems = _problems(make_spec(costs={"reference_round_trip_bps": value}))
+        assert [p.field for p in problems] == ["costs.reference_round_trip_bps"]
+
+    def test_costs_reference_rejects_unknown_key_and_non_mapping(self):
+        found = _problems(make_spec(costs={"reference_round_trip_bps": [32], "other": 1}))
+        assert [p.field for p in found] == ["costs.other"]
+        assert [p.field for p in _problems(make_spec(costs=[32]))] == ["costs"]
+
+    def test_costs_field_is_registered_as_optional_intent(self):
+        field = next(f for f in fields.FIELDS if f.name == "costs.reference_round_trip_bps")
+        assert field.section == fields.INTENT
+
+    def test_reference_lines_leave_rules_fingerprint_unchanged(self):
+        from signal_engine.research.intake.fingerprints import rules_fingerprint
+
+        plain = make_spec()
+        with_lines = make_spec(costs={"reference_round_trip_bps": [32]})
+        assert rules_fingerprint(plain) == rules_fingerprint(with_lines)

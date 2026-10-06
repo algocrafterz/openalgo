@@ -84,3 +84,16 @@ def test_no_edge_verdict_overrides_a_rising_trend():
     assert out["state"] == "improving"
     assert out["action"] == "stop_and_reject"
     assert "no-edge" in out["reason"]
+
+
+def test_evolution_excludes_runs_on_an_earlier_cost_basis():
+    flat, stat = "flat-round-trip-bps", "statutory-per-trade"
+    runs = [_run(1, -20), _run(2, -18), _run(3, 0), _run(4, 0.5)]
+    for r in runs[:2]:
+        r["costs"] = {"model": flat}
+    for r in runs[2:]:
+        r["costs"] = {"model": stat}
+    out = assess_evolution(runs)
+    assert out["cost_basis_changed"] is True
+    assert [rid for rid, _ in out["series"]] == ["R3", "R4"]
+    assert out["state"] == "insufficient_history"

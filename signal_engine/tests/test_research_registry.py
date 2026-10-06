@@ -417,3 +417,96 @@ def test_markdown_and_site_group_by_strategy_category(base: Path):
     assert "## By category" in md and "| Momentum | 1 |" in md
     assert "intraday-momentum" not in md
     assert '<span class="tag">Momentum</span>' in br.render_html(ideas)
+
+
+# ---------------------------------------------------------------------------
+# Cost basis: flat records (every committed one) load unchanged; statutory ones must agree with
+# their cost_model block.
+# ---------------------------------------------------------------------------
+
+IDEAS_DIR = Path(__file__).resolve().parents[1] / "research" / "ideas"
+
+
+def _statutory_record() -> dict:
+    from signal_engine.tests.cost_fixtures import make_model
+    from signal_engine.tests.test_statutory_headline import _book, _record
+
+    record, _ = _record(_book(), make_model())
+    return json.loads(json.dumps(record))
+
+
+def test_old_flat_basis_record_still_loads():
+    runs = IDEAS_DIR / "idea-029-vwap-2sd-range-mean-reversion" / "runs"
+    path = runs / "2026-10-06-vwap-2sd-range-mean-reversion-v1.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["costs"]["model"] == "flat-round-trip-bps"
+    assert br._validate_run(record, runs) == []
+    loaded, problems = br.load_runs(runs.parent)
+    assert problems == []
+    assert [br.cost_basis(r) for r in loaded] == ["flat-round-trip-bps"]
+
+
+def test_all_committed_records_load_unchanged():
+    folders = [p for p in sorted(IDEAS_DIR.glob("idea-*")) if (p / "runs").is_dir()]
+    assert folders
+    for folder in folders:
+        runs, problems = br.load_runs(folder)
+        assert problems == [], folder.name
+        assert all(br.cost_basis(r) == "flat-round-trip-bps" for r in runs), folder.name
+
+
+def test_cost_basis_reads_unrecognised_or_missing_model_as_flat():
+    assert br.cost_basis({"costs": {"model": "zerodha-mis"}}) == "flat-round-trip-bps"
+    assert br.cost_basis({}) == "flat-round-trip-bps"
+    assert br.cost_basis({"costs": {"model": "statutory-per-trade"}}) == "statutory-per-trade"
+
+
+def test_statutory_record_requires_consistent_cost_model():
+    good = _statutory_record()
+    assert br._validate_run(good) == []
+    missing = {k: v for k, v in good.items() if k != "cost_model"}
+    assert any("no cost_model" in p for p in br._validate_run(missing))
+    drift = {
+        **good,
+        "costs": {**good["costs"], "round_trip_bps": good["costs"]["round_trip_bps"] + 1},
+    }
+    assert any("mean_total_bps" in p for p in br._validate_run(drift))
+    stale = {**good, "costs": {**good["costs"], "rate_table_sha256": "0" * 64}}
+    assert any("rate_table_sha256" in p for p in br._validate_run(stale))
+    no_flat = {
+        **good,
+        "costs": {k: v for k, v in good["costs"].items() if k != "flat_round_trip_bps"},
+    }
+    assert any("flat_round_trip_bps" in p for p in br._validate_run(no_flat))
+    no_broker = {**good, "costs": {k: v for k, v in good["costs"].items() if k != "broker"}}
+    assert any("costs.broker" in p for p in br._validate_run(no_broker))
+
+
+def _lineage_run(i: int, net: float, model: str, parent: str | None) -> dict:
+    return {
+        "run_id": f"R{i}",
+        "date": f"2026-10-{i:02d}",
+        "parent_run_id": parent,
+        "costs": {"model": model, "round_trip_bps": 16.0},
+        "metrics": {"trades": 100, "gross_bps": net + 16, "net_bps": net, "t_stat": 1.0},
+    }
+
+
+def test_lineage_flags_cost_basis_change_and_excludes_it_from_trend():
+    flat, stat = "flat-round-trip-bps", "statutory-per-trade"
+    # The basis change moves net by +20 bps, which is the cost basis, not progress.
+    runs = [
+        _lineage_run(1, -20.0, flat, None),
+        _lineage_run(2, 0.0, stat, "R1"),
+        _lineage_run(3, 0.2, stat, "R2"),
+    ]
+    out = br.lineage(runs)
+    assert out["trend"] == "stagnant"
+    assert out["delta_vs_parent"]["parent_run_id"] == "R2"
+    assert "cost_basis_changed" not in out["delta_vs_parent"]
+    crossing = br.lineage(runs[:2])
+    assert crossing["delta_vs_parent"]["cost_basis_changed"] is True
+    assert crossing["trend"] == "insufficient"
+    # Same basis throughout: the step counts as before.
+    same = [_lineage_run(1, -20.0, flat, None), _lineage_run(2, 0.0, flat, "R1")]
+    assert br.lineage(same)["trend"] == "improving"

@@ -31,7 +31,16 @@ def _exec(n=40, mutate=None, symbols=("AAA", "BBB")):
     trades = list(execution.trades)
     if mutate is not None:
         trades = mutate(trades)
-    return rr.Execution(**{**execution.__dict__, "trades": trades, "symbols": list(symbols)})
+    # The cost components are one row per trade, so they follow a shortened trade list.
+    components = execution.cost_components.iloc[: len(trades)].reset_index(drop=True)
+    return rr.Execution(
+        **{
+            **execution.__dict__,
+            "trades": trades,
+            "symbols": list(symbols),
+            "cost_components": components,
+        }
+    )
 
 
 def _record(root_, **kw):
@@ -369,3 +378,40 @@ class TestNoVacuousPass:
         with pytest.raises(ValueError, match="now must be timezone-aware"):
             _reproduce(folder, root, now=datetime(2026, 10, 2, 11, 0))
         assert not (folder.parent / f"{folder.name}.reproductions").exists()
+
+
+class TestFlatRecordCostBasis:
+    """A flat-basis record is rerun on the statutory basis, so its net columns are not compared."""
+
+    def _folder(self, tmp_path, model):
+        from signal_engine.backtest.trades_io import write_trades_parquet
+
+        folder = tmp_path / "run-v1"
+        (folder / "evidence").mkdir(parents=True)
+        (tmp_path / "run-v1.json").write_text(
+            json.dumps({"costs": {"model": model, "round_trip_bps": 16.0}}), encoding="utf-8"
+        )
+        flat_trades = [replace(t, r_net=t.r_gross - 0.16) for t in _exec().trades]
+        write_trades_parquet(flat_trades, folder / "evidence" / "trades.parquet")
+        return folder
+
+    def test_flat_record_with_other_net_columns_still_reproduces(self, tmp_path):
+        folder = self._folder(tmp_path, "flat-round-trip-bps")
+        attempt = rp._Attempt()
+        rp._compare_trades(attempt, folder, _exec())
+        assert attempt.checks["trades_match"] is True, attempt.reasons
+        assert any("cost basis changed: flat record" in n for n in attempt.notes)
+
+    def test_flat_record_still_fails_on_a_basis_independent_column(self, tmp_path):
+        folder = self._folder(tmp_path, "flat-round-trip-bps")
+        changed = _exec(mutate=lambda t: [replace(t[0], r_gross=t[0].r_gross + 1.0), *t[1:]])
+        attempt = rp._Attempt()
+        rp._compare_trades(attempt, folder, changed)
+        assert attempt.checks["trades_match"] is False
+
+    def test_statutory_record_compares_net_columns(self, tmp_path):
+        folder = self._folder(tmp_path, "statutory-per-trade")
+        attempt = rp._Attempt()
+        rp._compare_trades(attempt, folder, _exec())
+        assert attempt.checks["trades_match"] is False
+        assert any("net_r" in r or "net_bps" in r for r in attempt.reasons)

@@ -22,6 +22,7 @@ import pandas as pd
 
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import record_run, run_artifact
+from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.backtest.data_readiness import preflight as preflight_mod
 from signal_engine.backtest.data_readiness import snapshot
 from signal_engine.backtest.trades_io import (
@@ -30,7 +31,7 @@ from signal_engine.backtest.trades_io import (
     read_trades_parquet,
     trades_to_frame,
 )
-from signal_engine.research.build_registry import _parse_frontmatter
+from signal_engine.research.build_registry import _parse_frontmatter, cost_basis
 from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
@@ -166,6 +167,19 @@ def _differences(old: pd.DataFrame, new: pd.DataFrame, label: str = "trades") ->
     ]
 
 
+#: Trade columns whose values depend on how the trades were costed.
+_BASIS_DEPENDENT = ("net_r", "net_bps", "cost_bps")
+
+
+def _recorded_cost_basis(folder: Path) -> str:
+    """The cost basis of the recorded run (read from its flat record), flat when unreadable."""
+    try:
+        record = json.loads((folder.parent / f"{folder.name}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "flat-round-trip-bps"
+    return cost_basis(record)
+
+
 def _compare_trades(attempt: _Attempt, folder: Path, execution: Any) -> int:
     try:
         old = read_trades_parquet(folder / "evidence" / "trades.parquet")
@@ -188,6 +202,13 @@ def _compare_trades(attempt: _Attempt, folder: Path, execution: Any) -> int:
         )
     if set(old.columns) <= set(new.columns):
         new = new[list(old.columns)]
+    if _recorded_cost_basis(folder) != MODEL_NAME:
+        # A rerun is always on the statutory basis; a flat record's net columns cannot match it.
+        skipped = [c for c in old.columns if c in _BASIS_DEPENDENT and c in new.columns]
+        old, new = old.drop(columns=skipped), new.drop(columns=skipped)
+        attempt.notes.append(
+            "cost basis changed: flat record, net columns not compared (" + ", ".join(skipped) + ")"
+        )
     reasons = _differences(old, new)
     attempt.record("trades_match", not reasons, *reasons)
     return min(len(old), len(new))

@@ -15,6 +15,7 @@ from signal_engine.backtest import record_run as rr
 from signal_engine.backtest.types import Trade
 from signal_engine.research import build_registry as br
 from signal_engine.research.intake import spec
+from signal_engine.tests.cost_fixtures import statutory
 from signal_engine.tests.intake_fixtures import GOOD_SPEC, make_spec
 
 IDEA_MD = """---
@@ -68,7 +69,7 @@ def _trade(day):
 def _execute(key):
     days = [date(2026, 1 + i // 20, 1 + i % 20) for i in range(40)]
     return rr.Execution(
-        trades=[_trade(d) for d in days],
+        **statutory([_trade(d) for d in days], 16.0),
         params={},
         data={
             "source": "historify",
@@ -77,7 +78,6 @@ def _execute(key):
             "bar_size": "5m",
         },
         period={"start": days[0].isoformat(), "end": days[-1].isoformat()},
-        costs={"model": "flat-round-trip-bps", "round_trip_bps": 16.0},
         days=[d.isoformat() for d in days],
     )
 

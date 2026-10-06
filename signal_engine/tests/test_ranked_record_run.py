@@ -68,14 +68,16 @@ def execute(key):
         exchange="NSE",
         slippage_bps_per_side=4.0,
         fixed_notional=100_000.0,
+        broker="flattrade",
     )
+    trades, cost_block = rr.statutory_execution(trades, model, 24.0)
     days = [d.isoformat() for d in calendar.trading_days]
     return rr.Execution(
         trades=trades,
         params={"strategy": {"n": 3, "closeness": 0.9, "window": 20}, "engine": "swing"},
         data={"source": "historify", "as_of": days[-1], "universe": "u", "bar_size": "1d"},
         period={"start": days[0], "end": days[-1]},
-        costs={"model": "flat-round-trip-bps", "round_trip_bps": 24.0},
+        costs=cost_block,
         days=days,
         cost_model=model,
         cost_components=costs.decompose_trades(trades, model),

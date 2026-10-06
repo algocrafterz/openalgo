@@ -58,7 +58,18 @@ from signal_engine.backtest.baseline import (
     random_entry_baseline_intraday,
     sample_trades,
 )
-from signal_engine.backtest.costs import CostModel, decompose_trades
+from signal_engine.backtest.costs import (
+    COST_MODEL_VERSION,
+    MODEL_NAME,
+    CostModel,
+    CostModelUnavailable,
+    broker_identity,
+    cost_identity,
+    decompose_trades,
+    mean_total_bps,
+    model_rate_table_sha256,
+    recost,
+)
 from signal_engine.backtest.data_collect import CLEAN_KEYS, DataCollector
 from signal_engine.backtest.data_readiness import intraday_access as ia_reasons
 from signal_engine.backtest.data_readiness import preflight as preflight_mod
@@ -90,7 +101,7 @@ from signal_engine.backtest.truncation import truncation_check
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
 from signal_engine.backtest.validity import run_validity_checks
 from signal_engine.research import readiness
-from signal_engine.research.build_registry import _parse_frontmatter
+from signal_engine.research.build_registry import _parse_frontmatter, cost_basis
 from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.research.intake import spec, versions
 from signal_engine.research.intake import trials as trials_mod
@@ -99,6 +110,9 @@ from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: `Execution.costs["model"]` of every recorded run: statutory charges priced per trade.
+STATUTORY_MODEL = MODEL_NAME
 
 #: Engine defaults, identical to the `python -m signal_engine.backtest` CLI.
 INTRADAY_COST_BPS = 16.0
@@ -196,14 +210,18 @@ def _evenly_spaced(keys: Sequence[str], n: int) -> list[str]:
 
 
 def deployed_cost_model(
-    kind: str, config_path: Path | None = None, slippage_bps_per_side: float | None = None
+    kind: str,
+    config_path: Path | None = None,
+    slippage_bps_per_side: float | None = None,
+    broker: str | None = None,
 ) -> CostModel:
     """The per-trade cost model for the deployment in `config.yaml`.
 
     Capital and risk per trade come from `sizing`, exchange and MIS margin from `broker`.
     Intraday is MIS at the broker's leverage (1 / mis_margin_pct); swing is unlevered CNC
     delivery. A missing key raises KeyError naming it: there are no defaults for deployed
-    sizing, because a silent default would price trades against capital nobody runs.
+    sizing, because a silent default would price trades against capital nobody runs. `broker`
+    is the deployment profile's broker, whose own brokerage prices the trades.
     """
     if kind not in ("intraday", "swing"):
         raise ValueError(f"kind must be intraday or swing, got {kind!r}")
@@ -228,6 +246,7 @@ def deployed_cost_model(
         slippage_bps_per_side=(
             SLIPPAGE_BPS_PER_SIDE if slippage_bps_per_side is None else float(slippage_bps_per_side)
         ),
+        broker=broker,
     )
 
 
@@ -442,13 +461,69 @@ def default_oos_start(
     return trade_days[int(len(trade_days) * (1 - fraction))]
 
 
-def _cost_model_or_none(kind: str, slippage_bps_per_side: float | None = None) -> CostModel | None:
-    """The deployed cost model, or None (logged) when config.yaml cannot supply it."""
+def _primary_cost_model(kind: str, cfg: Mapping[str, Any]) -> CostModel:
+    """The statutory cost model that prices every trade of a recorded run.
+
+    Built before the engine runs, so a configuration fault stops the run before any execution
+    (no run, no trial). There is no fallback to a flat cost: a model that cannot be built, a
+    product that differs from the frozen one, an exchange that is not NSE or BSE, or trades with
+    no stop and no fixed notional all raise `CostModelUnavailable`.
+    """
     try:
-        return deployed_cost_model(kind, slippage_bps_per_side=slippage_bps_per_side)
-    except (KeyError, OSError, ValueError, yaml.YAMLError):
-        logger.exception("Per-trade cost model unavailable; record has no cost_model block")
-        return None
+        model = deployed_cost_model(
+            kind, slippage_bps_per_side=cfg.get("slippage_bps_per_side"), broker=cfg.get("broker")
+        )
+    except CostModelUnavailable:
+        raise
+    except (KeyError, OSError, ValueError, yaml.YAMLError) as exc:
+        raise CostModelUnavailable(f"per-trade cost model unavailable: {exc}") from exc
+    frozen_product = cfg.get("product")
+    if frozen_product is not None and frozen_product != model.product:
+        raise CostModelUnavailable(
+            f"cost model product {model.product} differs from the frozen execution.product "
+            f"{frozen_product}"
+        )
+    if cfg.get("sizing_basis") == "fixed_notional":
+        # The spec states every trade is a fixed notional: costs are priced at that amount.
+        if cfg.get("capital_per_trade") is None:
+            raise CostModelUnavailable(
+                "sizing.basis is fixed_notional but sizing.capital_per_trade is unset"
+            )
+        return dataclasses.replace(model, fixed_notional=float(cfg["capital_per_trade"]))
+    if _stop_is_none(cfg.get("stop")):
+        # No stop: risk over stop cannot size a trade, so each is the spec's fixed capital.
+        if cfg.get("capital_per_position") is None:
+            raise CostModelUnavailable(
+                "the spec has no stop and no fixed notional (portfolio.capital_per_position), "
+                "so trades cannot be sized for costing"
+            )
+        return dataclasses.replace(model, fixed_notional=float(cfg["capital_per_position"]))
+    return model
+
+
+def statutory_execution(
+    trades: Sequence[Any],
+    model: CostModel,
+    flat_bps: float,
+    reference_bps: Sequence[float] = (),
+) -> tuple[list, dict[str, Any]]:
+    """The trades restated under `model`, and the `Execution.costs` block that says so.
+
+    The one place a recorded run's headline cost basis is applied. The restated trades carry the
+    statutory net; `flat_bps` (the frozen engine figure) and `reference_bps` (the spec's reference
+    lines) are kept as comparison scenarios only.
+    """
+    restated = recost(trades, model)
+    costs = {
+        "model": STATUTORY_MODEL,
+        "broker": broker_identity(model.broker),
+        "round_trip_bps": mean_total_bps(restated, model),
+        "flat_round_trip_bps": float(flat_bps),
+        "rate_table_sha256": model_rate_table_sha256(model),
+        "cost_model_version": COST_MODEL_VERSION,
+        "reference_round_trip_bps": [float(b) for b in reference_bps],
+    }
+    return restated, costs
 
 
 def _apply_profile_settings(run: Any, cfg: Mapping[str, Any]) -> Any:
@@ -759,6 +834,8 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     from signal_engine.backtest.types import RunConfig
 
     cls, params_cls, kind = cli.REGISTRY[key]
+    # The statutory cost model is built first: a fault stops the run before any data is read.
+    cost_model = _primary_cost_model(kind, cfg)
     strategy, params = cls(), params_cls()
     if "parameters" in cfg:
         check_parameter_binding(cfg["parameters"], jsonable(params))
@@ -852,24 +929,11 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
             strategy, params, kept, run, engine=engine_used, panel=panel_runner
         ).to_dict()
         del kept
-    cost_model = _cost_model_or_none(kind, cfg.get("slippage_bps_per_side"))
-    if cost_model is not None and cfg.get("sizing_basis") == "fixed_notional":
-        # The spec states every trade is a fixed notional: costs are priced at that amount.
-        if cfg.get("capital_per_trade") is None:
-            raise ValueError("sizing.basis is fixed_notional but sizing.capital_per_trade is unset")
-        cost_model = dataclasses.replace(
-            cost_model, fixed_notional=float(cfg["capital_per_trade"])
-        )
-    elif (
-        cost_model is not None
-        and _stop_is_none(cfg.get("stop"))
-        and cfg.get("capital_per_position") is not None
-    ):
-        # No stop: risk over stop cannot size a trade, so each is the spec's fixed capital.
-        cost_model = dataclasses.replace(
-            cost_model, fixed_notional=float(cfg["capital_per_position"])
-        )
-    cost_components = decompose_trades(trades, cost_model) if cost_model is not None else None
+    # Every metric, split, gate and baseline reads the trades, so they are restated once here.
+    trades, costs = statutory_execution(
+        trades, cost_model, run.cost_bps, cfg.get("reference_round_trip_bps", ())
+    )
+    cost_components = decompose_trades(trades, cost_model)
     baseline = None
     if kind != "swing":
         # Intraday: score a seeded sample of trades, loading only the symbols that sample
@@ -883,7 +947,6 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
                     layer,
                     int(run.warmup_bars),
                 ),
-                float(run.cost_bps),
                 population_trades=len(trades),
             )
     if kind == "swing":
@@ -893,7 +956,6 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
             trades,
             _baseline_frames(source.daily(dataset.eligible, until, min_sessions), layer,
                              int(run.warmup_bars)),
-            float(run.cost_bps),
         )
     return Execution(
         trades=trades,
@@ -910,7 +972,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
             "bar_size": bar_size,
         },
         period={"start": days[0], "end": days[-1]},
-        costs={"model": "flat-round-trip-bps", "round_trip_bps": float(run.cost_bps)},
+        costs=costs,
         days=days,
         baseline=baseline,
         cost_model=cost_model,
@@ -1000,6 +1062,7 @@ _SETTINGS_FIELDS = {
     "eligibility_min_prior_sessions": "execution.eligibility_min_prior_sessions",
     "eligibility_min_volume": "execution.eligibility_min_volume",
     "eligibility_min_price": "execution.eligibility_min_price",
+    "product": "execution.product",
 }
 
 #: Strategy-intent fields of the frozen spec the run needs: `settings` key -> path in the intent.
@@ -1013,6 +1076,7 @@ _INTENT_SETTINGS = {
     "capital_per_position": ("portfolio", "capital_per_position"),
     "sizing_basis": ("sizing", "basis"),
     "capital_per_trade": ("sizing", "capital_per_trade"),
+    "reference_round_trip_bps": ("costs", "reference_round_trip_bps"),
 }
 
 
@@ -1072,6 +1136,11 @@ def _execute_frozen(
         if field_name in frozen.resolved
     }
     settings.update(_intent_settings(frozen.intent))
+    # The deployment profile's broker prices brokerage; a profile with none is priced on the
+    # portfolio default schedule, and the record says so.
+    broker = frozen.profile.get("broker") if isinstance(frozen.profile, Mapping) else None
+    if broker is not None:
+        settings["broker"] = broker
     try:
         accepted = inspect.signature(execute).parameters
     except (TypeError, ValueError):
@@ -1086,11 +1155,16 @@ def _execute_frozen(
     if "dataset" in accepted:
         kwargs["dataset"] = dataset
     execution = execute(key, **kwargs)
+    if execution.costs.get("model") != STATUTORY_MODEL:
+        raise ValueError(
+            "execution did not use the statutory cost basis: costs.model is "
+            f"{execution.costs.get('model')!r}, expected {STATUTORY_MODEL!r}"
+        )
     expected = frozen.resolved["execution.cost_bps_round_trip"]["value"]
-    actual = execution.costs.get("round_trip_bps")
+    actual = execution.costs.get("flat_round_trip_bps")
     if actual is None or float(actual) != float(expected):
         raise ValueError(
-            "execution did not use the frozen configuration: round_trip_bps "
+            "execution did not use the frozen configuration: flat_round_trip_bps "
             f"{actual!r} != frozen {expected!r}"
         )
     return execution
@@ -1227,7 +1301,7 @@ def record_idea(
     # process could take it as short as possible.
     run_id = next_run_id(runs_dir, run_date, run_slug(folder))
     stamp = now or datetime.now(IST)
-    cost_model_json = jsonable(execution.cost_model)
+    cost_model_json = jsonable(cost_identity(execution.cost_model))
     material = run_artifact.material_fingerprints(frozen, execution, cost_model_json)
     # Validity is decided BEFORE the ledger is touched (plan section 8): a run whose data is
     # invalid is sealed as INVALID_DATA and never registered as a trial.
@@ -1448,7 +1522,8 @@ def _summary_line(path: Path) -> str:
     m = record["metrics"]
     return (
         f"wrote {path.name}: {m['trades']} trades, gross {m['gross_bps']} / "
-        f"net {m['net_bps']} bps, t {m.get('t_stat', 'n/a')} vs hurdle {m.get('hurdle_t', 'n/a')}\n"
+        f"net {m['net_bps']} bps, t {m.get('t_stat', 'n/a')} vs hurdle {m.get('hurdle_t', 'n/a')}, "
+        f"cost basis {cost_basis(record)}\n"
     )
 
 

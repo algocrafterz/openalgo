@@ -119,7 +119,7 @@ def test_execute_on_keeps_an_adjusted_penny_session_with_raw_above_floor(monkeyp
     monkeypatch.setattr(cli, "_register", lambda: None)
     monkeypatch.setattr(cli, "REGISTRY", {"k": (_Strat, _Params, "intraday")})
     monkeypatch.setattr(rr, "random_entry_baseline_intraday", lambda *a, **k: None)
-    monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+    monkeypatch.setattr(rr, "deployed_cost_model", tel.deployed_model)
     res = frames_resolution(intraday=frames, factors=factors, eligible=["ADA", "PEN"])
     exe = rr.execute_backtest("k", dataset=res, settings=SETTINGS)
     ex = exe.ledgers["exclusions"]

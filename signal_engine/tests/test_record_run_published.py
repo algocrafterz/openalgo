@@ -39,6 +39,10 @@ def published(tmp_path):
     return publish_fixture(tmp_path, SYMS, DAYS, rows=rows)
 
 
+#: The strategy has no stop, so every trade is a fixed notional for costing.
+NO_STOP_SETTINGS = {"stop": ["none"], "capital_per_position": 100000}
+
+
 def _resolution(published, eligible=SYMS, calendar=None):
     root, git_dir, vid, cal = published
     m = snapshot.resolve_version(vid, root=root, git_dir=git_dir)
@@ -69,7 +73,7 @@ def no_landing_store(monkeypatch):
 
 
 def test_execute_reads_only_the_published_version(published, no_landing_store):
-    ex = rr.execute_backtest("high_proximity", settings={}, run_truncation=False,
+    ex = rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False,
                              dataset=_resolution(published))
     assert ex.data["source"].startswith("published:nse-daily-test-001")
     assert set(ex.symbols) <= set(SYMS) and ex.days
@@ -84,26 +88,26 @@ def test_recorded_run_uses_single_pass(published, no_landing_store, monkeypatch)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(harness, "Backtest", spy)
-    rr.execute_backtest("high_proximity", settings={}, run_truncation=False,
+    rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False,
                         dataset=_resolution(published))
     assert seen["single_pass"] is True and seen["release_raw"] is True
 
 
 def test_excluded_symbols_are_never_loaded(published, no_landing_store):
-    ex = rr.execute_backtest("high_proximity", settings={}, run_truncation=False,
+    ex = rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False,
                              dataset=_resolution(published, eligible=("AAA", "BBB", "CCC")))
     assert "DDD" not in ex.symbols
 
 
 def test_a_run_without_a_published_dataset_is_refused():
     with pytest.raises(rr.PublishedDataRequired):
-        rr.execute_backtest("high_proximity", settings={}, run_truncation=False)
+        rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False)
 
 
 def test_calendar_mismatch_at_load_is_rejected_before_the_engine(published):
     wrong = calendar_for([d for d in DAYS if d != DAYS[400]], version="cal-other")
     with pytest.raises(rr.LoadRejected, match="calendar"):
-        rr.execute_backtest("high_proximity", settings={}, run_truncation=False,
+        rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False,
                             dataset=_resolution(published, calendar=wrong))
 
 
@@ -268,4 +272,4 @@ def test_a_version_that_fails_to_open_is_a_load_rejection(published):
     res = _resolution(published)
     res = dataclasses.replace(res, manifest={**res.manifest, "root_hash": "0" * 64})
     with pytest.raises(rr.LoadRejected, match="root hash"):
-        rr.execute_backtest("high_proximity", settings={}, run_truncation=False, dataset=res)
+        rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False, dataset=res)

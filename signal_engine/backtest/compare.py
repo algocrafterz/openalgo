@@ -47,6 +47,7 @@ _COST_MODEL_OUTPUTS = frozenset(
         "modelled_net_pnl_rs",
         "modelled_total_cost_rs",
         "pnl_basis",
+        "scenarios",
     }
 )
 
@@ -340,8 +341,17 @@ def _cost_model_scalars(run: _Run) -> dict[str, Any]:
     }
 
 
+def _cost_basis(run: _Run) -> str:
+    """How the run's trades were costed; a report without a costs block reads as flat."""
+    # Imported here: the registry pulls in the data loaders, which this module must not load.
+    from signal_engine.research.build_registry import cost_basis
+
+    return cost_basis({"costs": _dict(run.report.get("costs"))})
+
+
 def _cost_diff(a: _Run, b: _Run) -> list[dict[str, Any]]:
     out = [
+        _field("cost_basis", "Cost basis", _cost_basis(a), _cost_basis(b)),
         _field(
             "slippage_bps_per_side",
             "Slippage (bps per side)",

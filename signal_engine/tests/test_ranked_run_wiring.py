@@ -83,7 +83,7 @@ def ranked(monkeypatch):
     # Plan Phase 4: the run reads bars only through its dataset resolution.
     seen["res"] = frames_resolution(daily=ranked_frames())
     monkeypatch.setattr(harness, "Backtest", Spy)
-    monkeypatch.setattr(rr, "_cost_model_or_none", lambda kind, slip=None: tel.MODEL)
+    monkeypatch.setattr(rr, "deployed_cost_model", tel.deployed_model)
     return seen
 
 
@@ -143,8 +143,13 @@ class TestExecuteRankedBacktest:
 
     def test_a_stop_based_swing_run_keeps_its_risk_based_cost_model(self, ranked):
         settings = {k: v for k, v in SETTINGS.items() if k not in ("stop", "capital_per_position")}
-        exe = rr.execute_backtest("k", dataset=ranked["res"], settings=settings, run_truncation=False)
-        assert exe.cost_model.fixed_notional is None
+        assert rr._primary_cost_model("swing", settings).fixed_notional is None
+        # This strategy's trades have no stop, so a risk-sized model cannot price them: the run
+        # stops instead of recording a basis it cannot apply.
+        with pytest.raises(rr.CostModelUnavailable, match="no stop"):
+            rr.execute_backtest(
+                "k", dataset=ranked["res"], settings=settings, run_truncation=False
+            )
 
     def test_truncation_runs_on_the_whole_truncated_panel(self, ranked):
         exe = rr.execute_backtest("k", dataset=ranked["res"], settings=SETTINGS)
@@ -223,10 +228,10 @@ class TestFixedNotionalSizingBasis:
         assert exe.cost_model.fixed_notional == 100000.0
 
     def test_the_risk_basis_and_no_basis_keep_risk_sizing(self, ranked):
-        assert self.run(ranked, stop="1 ATR below entry").cost_model.fixed_notional is None
-        risk = self.run(ranked, stop="1 ATR below entry", sizing_basis="risk",
-                        capital_per_trade=100000)
-        assert risk.cost_model.fixed_notional is None
+        base = {k: v for k, v in SETTINGS.items() if k not in ("stop", "capital_per_position")}
+        for extra in ({}, {"sizing_basis": "risk", "capital_per_trade": 100000}):
+            model = rr._primary_cost_model("swing", {**base, "stop": "1 ATR below entry", **extra})
+            assert model.fixed_notional is None
 
     def test_no_basis_and_no_stop_still_uses_the_capital_per_position(self, ranked):
         exe = self.run(ranked, stop="none", capital_per_position=70000)

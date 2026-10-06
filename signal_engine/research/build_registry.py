@@ -31,6 +31,7 @@ from typing import Any
 import yaml
 
 from signal_engine.backtest import manifest as run_manifest
+from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.research.intake import lifecycle, spec, taxonomy, trials, versions
 
 #: The legacy `status` and `verdict` values. Both are derived for every entry (see
@@ -81,6 +82,13 @@ TREND_WINDOW_STEPS = 3
 #: Day-clustered t-statistic a run must reach before its level counts as evidence of an
 #: edge (acceptance criteria G2.2); a run's own trial hurdle raises it, never lowers it.
 EDGE_T_FLOOR = 2.5
+
+#: How a run's trades were costed. `flat-round-trip-bps` is the older basis (one flat figure in
+#: every trade); `statutory-per-trade` prices each trade with the statutory schedule and the
+#: deployment profile's broker. A run's net is comparable only with runs on the same basis.
+FLAT_COST_BASIS = "flat-round-trip-bps"
+STATUTORY_COST_BASIS = MODEL_NAME
+COST_BASES = (FLAT_COST_BASIS, STATUTORY_COST_BASIS)
 
 #: A run record is one reproducible backtest execution, stored as
 #: research/ideas/<idea>/runs/<run-id>.json. The required keys are what someone needs to
@@ -221,6 +229,45 @@ def _validate_cost_model(block: Any) -> list[str]:
     ]
 
 
+def cost_basis(run: dict[str, Any]) -> str:
+    """The basis `run` was costed on; a record whose `costs.model` is not a basis reads as flat."""
+    model = (run.get("costs") or {}).get("model")
+    return model if model in COST_BASES else FLAT_COST_BASIS
+
+
+def _validate_costs(run: dict[str, Any]) -> list[str]:
+    """A statutory record must agree with its cost_model block.
+
+    Any other `costs.model` (the flat basis, and the free-text names earlier records carry) reads
+    as flat and loads unchanged.
+    """
+    costs = run.get("costs")
+    if not isinstance(costs, dict) or costs.get("model") != STATUTORY_COST_BASIS:
+        return []
+    problems: list[str] = []
+    if not _is_num(costs.get("flat_round_trip_bps")):
+        problems.append("'costs.flat_round_trip_bps' must be a number for a statutory record")
+    block = run.get("cost_model")
+    if block is None and (run.get("metrics") or {}).get("trades") == 0:
+        return problems  # a run with no trades has nothing to price, so no cost_model block
+    if not isinstance(block, dict):
+        return [
+            *problems,
+            f"costs.model is {STATUTORY_COST_BASIS} but the record has no cost_model",
+        ]
+    if not (
+        _is_num(costs.get("round_trip_bps"))
+        and _is_num(block.get("mean_total_bps"))
+        and abs(costs["round_trip_bps"] - block["mean_total_bps"]) < 1e-6
+    ):
+        problems.append("'costs.round_trip_bps' must equal cost_model.mean_total_bps")
+    if costs.get("rate_table_sha256") != block.get("rate_table_sha256"):
+        problems.append("'costs.rate_table_sha256' must match cost_model.rate_table_sha256")
+    if not (isinstance(costs.get("broker"), dict) and isinstance(costs["broker"].get("key"), str)):
+        problems.append("'costs.broker' must be an object with a string key")
+    return problems
+
+
 def _validate_evaluation(block: Any) -> list[str]:
     """The evaluation profile is optional; when present it must be a list of gate rows."""
     dimensions = block.get("dimensions") if isinstance(block, dict) else None
@@ -288,6 +335,7 @@ def _validate_run_v2(run: dict[str, Any]) -> list[str]:
             )
     if "cost_model" in run:
         problems.extend(_validate_cost_model(run["cost_model"]))
+    problems.extend(_validate_costs(run))
     split = run.get("split")
     if isinstance(split, dict) and "embargo_sessions" in split:
         for key in ("embargo_sessions", "purged_in_sample", "embargoed_oos"):
@@ -669,12 +717,18 @@ def latest_run(idea: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _step(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
-    """What changed from `parent` to `child`: net bps, trades and, if both have it, t."""
+    """What changed from `parent` to `child`: net bps, trades and, if both have it, t.
+
+    `cost_basis_changed` is present (true) only when the two runs were costed on different bases: their net
+    figures are then not comparable and the step is left out of the trend.
+    """
     pm, cm = parent["metrics"], child["metrics"]
     out: dict[str, Any] = {
         "parent_run_id": parent["run_id"],
         "net_bps": round(cm["net_bps"] - pm["net_bps"], 4),
     }
+    if cost_basis(parent) != cost_basis(child):
+        out["cost_basis_changed"] = True
     if "t_stat" in pm and "t_stat" in cm:
         out["t_stat"] = round(cm["t_stat"] - pm["t_stat"], 4)
     out["trades"] = cm["trades"] - pm["trades"]
@@ -691,7 +745,8 @@ def lineage(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     The trend follows the latest run's own parent chain (side branches do not count) and
     sums the last `TREND_WINDOW_STEPS` steps of net bps: improving, regressing, or
-    stagnant when the sum is inside `TREND_MIN_DELTA_BPS`. The trend is about direction
+    stagnant when the sum is inside `TREND_MIN_DELTA_BPS`. A step across a change of cost basis
+    (`cost_basis_changed`) compares unlike nets and is left out of the sum. The trend is about direction
     only; `edge_status` says whether the latest level clears `edge_bar`, so a rising line
     that is still below the bar is not mistaken for promise. `trials_sum` adds `n_trials`
     over every run. Runs recorded without a trial count contribute 1 each, so it is a
@@ -707,8 +762,9 @@ def lineage(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     chain.reverse()
     window = chain[-(TREND_WINDOW_STEPS + 1) :]
     steps = [_step(p, c) for p, c in zip(window, window[1:], strict=False)]
-    total = sum(s["net_bps"] for s in steps)
-    if not steps:
+    comparable = [s for s in steps if not s.get("cost_basis_changed")]
+    total = sum(s["net_bps"] for s in comparable)
+    if not comparable:
         trend = "insufficient"
     elif total >= TREND_MIN_DELTA_BPS:
         trend = "improving"

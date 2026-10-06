@@ -22,6 +22,7 @@ NON_RULE_KEYS = (
     "profile",
     "parameters",
     "disclosure",
+    "costs",
     "rationale",
     "kill_criterion",
 )

@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from signal_engine.research.build_registry import edge_bar
+from signal_engine.research.build_registry import cost_basis, edge_bar
 
 MIN_RUNS = 3
 MIN_EXHAUSTED_RUNS = 4
@@ -51,8 +51,14 @@ def assess_evolution(runs: Sequence[dict[str, Any]], verdict: str | None = None)
         if ordered and all(_metric(r, "excess_net_bps") is not None for r in ordered)
         else "net_bps"
     )
-    series = [(r["run_id"], _metric(r, metric)) for r in ordered if _metric(r, metric) is not None]
-    base = {"metric": metric, "runs": len(series), "series": series}
+    scored = [r for r in ordered if _metric(r, metric) is not None]
+    # Nets costed on different bases are not comparable: only runs on the latest run's basis
+    # count toward the trajectory, so a step across a basis change is excluded.
+    same_basis = [r for r in scored if cost_basis(r) == cost_basis(scored[-1])] if scored else []
+    series = [(r["run_id"], _metric(r, metric)) for r in same_basis]
+    base: dict[str, Any] = {"metric": metric, "runs": len(series), "series": series}
+    if len(same_basis) != len(scored):
+        base["cost_basis_changed"] = True
 
     if len(series) < MIN_RUNS:
         return {
@@ -60,7 +66,12 @@ def assess_evolution(runs: Sequence[dict[str, Any]], verdict: str | None = None)
             "state": "insufficient_history",
             "action": "keep_iterating",
             "best_run": None,
-            "reason": f"{len(series)} comparable runs; need {MIN_RUNS} to judge a trend",
+            "reason": f"{len(series)} comparable runs; need {MIN_RUNS} to judge a trend"
+            + (
+                "; earlier runs use a different cost basis"
+                if len(same_basis) != len(scored)
+                else ""
+            ),
         }
 
     values = [v for _, v in series]

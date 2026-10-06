@@ -64,6 +64,7 @@ _REPORT_BLOCKS = (
     "position_caps",
     "regimes",
     "cost_model",
+    "costs",
     "split",
     "baseline",
     "cost_sensitivity",

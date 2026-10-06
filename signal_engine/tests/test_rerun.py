@@ -3,7 +3,6 @@
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +12,7 @@ from signal_engine.backtest.change_class import (
     DATASET_CHANGE,
     RESEARCH_RERUN,
 )
+from signal_engine.backtest.types import Trade
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests import test_run_artifact_write as raw
 from signal_engine.tests.published_fixtures import fake_resolution, frames_resolution
@@ -245,7 +245,13 @@ class TestExecuteBacktestEnd:
                 self.days = [pd.Timestamp("2026-01-05")]
 
             def trades(self, *a, **k):
-                return [SimpleNamespace(symbol="AAA", entry=100.0, risk=1.0, position_id=None)]
+                return [
+                    Trade(
+                        symbol="AAA", day=idx[0].date(), direction=1, tag="t", entry_time=idx[0],
+                        entry=100.0, signal_price=100.0, sl=99.0, tp=0.0, risk=1.0,
+                        exit_time=idx[1], r_gross=0.5, r_net=0.3,
+                    )
+                ]
 
         monkeypatch.setattr(harness, "Backtest", FakeBT)
         monkeypatch.setattr(rr, "sample_trades", lambda trades, n: list(trades))
