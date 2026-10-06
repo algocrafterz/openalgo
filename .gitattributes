@@ -4,3 +4,10 @@
 # Reference files whose sha256 is a recorded version (calendar_version, data_policy_version,
 # session template): their bytes must not depend on the checkout's line-ending settings.
 signal_engine/research/reference/*.yaml text eol=lf
+
+# Research records are hashed into recorded versions (manifest_sha256, spec, profile, policy and
+# dataset-version hashes): their bytes must not depend on the checkout's line-ending settings.
+signal_engine/research/**/*.yaml text eol=lf
+signal_engine/research/**/*.json text eol=lf
+signal_engine/research/ideas/*/runs/** -text
+signal_engine/research/ideas/*/preflight/** -text
