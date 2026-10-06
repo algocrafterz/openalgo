@@ -98,3 +98,18 @@ def test_auction_era_bins_between_continuous_end_and_auction_are_flagged():
 def test_bar_count_above_the_template_maximum_is_flagged():
     m1 = _one(CAS, range(555, 930))     # continuous minutes the auction era does not have
     assert _check(m1)["7_bar_count"] == 1
+
+
+class TestExpectedBins:
+    """The 5m bins a session can hold, taken from the session template, not a fixed 75."""
+
+    def test_pre_auction_session_has_75_bins(self):
+        assert i5.expected_bins(date(2026, 7, 31), T) == i5.MAX_BARS_PRE_CAS == 75
+
+    def test_closing_auction_session_has_73_bins(self):
+        # continuous 09:15-15:14 is 72 bins; the auction print is its own 15:25 bin
+        assert i5.expected_bins(date(2026, 8, 3), T) == i5.MAX_BARS_CAS == 73
+
+    def test_special_session_counts_only_its_windows(self):
+        # 09:15-09:59 (9 bins) and 11:30-12:29 (12 bins)
+        assert i5.expected_bins(date(2024, 3, 2), T) == 21

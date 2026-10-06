@@ -86,3 +86,9 @@ data:
   - (3) A would-be confirmation with an invalid regime, or before warm-up, cancels the setup. It is not carried to a later bar.
   - (4) A confirmation consumes only its own setup, also when the 2-trade cap blocks it. An opposite setup keeps its state. A fill cancels any remaining setup, because of the existing re-entry rule.
   - (5) The live validator's minimum stop distance is an execution constraint, not a filter. A new tag with no `strategy_profiles` override gets the global `risk.min_sl_pct` of 0.5%, so the baseline uses 0.5%, not 0.2% (BREAKOUT's override). Rejected signals are counted as STOP_TOO_TIGHT.
+- 2026-10-06: first run attempt refused at load, before any backtest (no run, no trial). The cause was outside the strategy.
+  - The generic load-time completeness audit assumed a fixed 75-bar 5m session (09:15-15:29).
+  - The published dataset's own session template has 73 bins from 2026-08-03 (closing auction), so 8,276 complete sessions (2.07%) counted as incomplete, above the 2% limit.
+  - Fixed generically: every intraday run now measures completeness against the dataset's session template. Daily runs and the legacy fixed count are unchanged.
+  - Verified on the loaded data: every 73-bar session has all 72 bins from 09:15 to 15:10 plus the 15:25 auction bar.
+  - The strategy and its data contract are unchanged.

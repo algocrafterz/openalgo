@@ -87,8 +87,14 @@ def build_data_quality(
     short_sessions=(),
     thresholds: dict | None = None,
     max_symbols: int | None = None,
+    expected_bars_for=None,
 ) -> dict:
-    """The `data_quality.json` content for one run. See the module docstring."""
+    """The `data_quality.json` content for one run. See the module docstring.
+
+    `expected_bars_for(day) -> int` is the dataset's own session shape. When given, session
+    completeness is measured against it instead of the fixed 09:15-15:29 bar count, which
+    predates the closing auction.
+    """
     th = dict(DEFAULT_THRESHOLDS)
     if thresholds:
         unknown = set(thresholds) - set(th)
@@ -183,12 +189,15 @@ def build_data_quality(
         short = set(short_sessions)
         sess, incomplete = {}, {}
         for s in rows:
-            exp = dataquality.expected_bars(interval)
             counts = frames[s].groupby(frames[s].index.date).size()
             if short:  # half-day and special sessions are short by design, not incomplete
                 counts = counts[[d not in short for d in counts.index]]
+            if expected_bars_for is None:
+                exp = dataquality.expected_bars(interval)
+            else:
+                exp = np.array([expected_bars_for(d) for d in counts.index], dtype=float)
             sess[s] = int(len(counts))
-            incomplete[s] = int((counts < exp * floor).sum())
+            incomplete[s] = int((counts.to_numpy() < exp * floor).sum())
         n_sess, n_inc = sum(sess.values()), sum(incomplete.values())
         summary["sessions_checked"] = n_sess
         if n_sess:

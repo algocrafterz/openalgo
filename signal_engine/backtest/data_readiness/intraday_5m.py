@@ -22,6 +22,17 @@ MAX_BARS_CAS = 73
 VOLUME_RTOL = 1e-12                   # float sums taken in a different order
 
 
+def expected_bins(day, templates) -> int:
+    """The number of 5m bins a session can hold, from its session template.
+
+    A bin exists for every continuous-trading minute and every closing-auction minute; this is
+    the dataset's own session shape (75 before 2026-08-03, 73 with the closing auction).
+    """
+    t = ic.template_for(day, templates)
+    minutes = [m for a, b in t.windows for m in range(a, b + 1)] + list(t.auction)
+    return len({(m - ANCHOR) // BIN for m in minutes})
+
+
 def _session_epoch(session: pd.Series) -> pd.Series:
     return (session.dt.tz_localize("Asia/Kolkata").astype("int64") // 10**9).astype("int64")
 

@@ -516,6 +516,7 @@ def _build_data_layer(
     cfg: Mapping[str, Any],
     as_of: date | None = None,
     adjusted_prices: bool = False,
+    expected_bars_for: Callable[[date], int] | None = None,
 ) -> _DataLayer:
     """Calendar, data quality, eligibility and the frames the engine will run on.
 
@@ -523,7 +524,8 @@ def _build_data_layer(
     harness releases its raw frames as it goes. Data quality is audited on the frames as
     loaded (before any eligibility drop). The calendar ignores sessions after `as_of` (the
     run's `end`; the last loaded session when None). `adjusted_prices` marks the split-adjusted
-    daily panel, for which the price floor is not applied.
+    daily panel, for which the price floor is not applied. `expected_bars_for` is the dataset's
+    session shape for the completeness audit (see `intraday_session_shape`).
     """
     calendar = derive_calendar(frames, as_of=as_of if as_of is not None else _last_session(frames))
     report = None
@@ -534,6 +536,7 @@ def _build_data_layer(
             calendar=calendar.trading_days,
             short_sessions=calendar.short_sessions,
             max_symbols=DQ_MAX_SYMBOLS,
+            expected_bars_for=expected_bars_for,
         )
         report = {
             **report,
@@ -662,6 +665,18 @@ def _check_calendar_at_load(layer: _DataLayer, dataset: preflight_mod.Resolution
              "calendar_only": sorted(str(d) for d in expected - derived)[:20]})
 
 
+def intraday_session_shape() -> Callable[[date], int]:
+    """Bars per session of the published 5m data, from the NSE session template.
+
+    The published intraday dataset is built on these templates (75 bins before the closing
+    auction, 73 from 2026-08-03), so the load-time completeness audit measures against them.
+    """
+    from signal_engine.backtest.data_readiness import intraday_5m, intraday_convert
+
+    templates = intraday_convert.load_templates()
+    return lambda day: intraday_5m.expected_bins(day, templates)
+
+
 def _execute_on(source, dataset, key, settings, end, run_truncation) -> Execution:
     """`execute_backtest` reading bars only from `source` (the resolution's data source)."""
     cfg = dict(settings or {})
@@ -702,6 +717,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         cfg,
         as_of=date.fromisoformat(end) if end else None,
         adjusted_prices=kind == "swing",
+        expected_bars_for=None if kind == "swing" else intraday_session_shape(),
     )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
     # Load-time rejection (plan section 8): a data defect that affects validity, or a calendar

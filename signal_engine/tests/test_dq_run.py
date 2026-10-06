@@ -288,3 +288,51 @@ def test_incomplete_sessions_detail_says_sample():
     rep = build_data_quality(frames, _col(n=4), max_symbols=2)
     assert rep["summary"]["audited_symbols"] == ["S0", "S3"]
     assert "sample" in _item(rep, "incomplete_sessions")["detail"]
+
+
+def _drop_bins(df: pd.DataFrame, hhmm: tuple[str, ...]) -> pd.DataFrame:
+    keep = ~pd.Index(df.index.strftime("%H:%M")).isin(hhmm)
+    return df[keep]
+
+
+def test_session_shape_from_the_dataset_replaces_the_fixed_75():
+    # every session has 73 bars (15:15 and 15:20 absent), as in a closing-auction session
+    df = _drop_bins(_good(_panel(n_days=50)), ("15:15", "15:20"))
+    legacy = build_data_quality({"S0": df}, _col(n=1))
+    assert legacy["affects_validity"] is True  # 73 of 75 is below the 98% floor
+    shaped = build_data_quality({"S0": df}, _col(n=1), expected_bars_for=lambda d: 73)
+    assert shaped["affects_validity"] is False and shaped["status"] == "PASS"
+
+
+def test_session_shape_still_catches_a_missing_bar():
+    # the dataset says 73; a session that also lost a mid-day bar is still incomplete
+    df = _drop_bins(_good(_panel(n_days=50)), ("15:15", "15:20"))
+    days = pd.Series(df.index.date, index=df.index)
+    first = sorted(set(days))[:2]  # 4% of symbol-sessions
+    # two mid-day bars: 71 of 73 is below the 98% floor (one missing bar is tolerated)
+    hole = days.isin(first) & pd.Index(df.index.strftime("%H:%M")).isin(("12:00", "12:05"))
+    df = df[(~hole).to_numpy()]
+    rep = build_data_quality({"S0": df}, _col(n=1), expected_bars_for=lambda d: 73)
+    assert rep["affects_validity"] is True
+    assert _item(rep, "incomplete_sessions")["count"] == 2
+
+
+def test_session_shape_is_per_date():
+    # pre-auction days hold 75 bars, auction days 73; neither is incomplete
+    df = _good(_panel(n_days=50))
+    days = pd.Series(df.index.date, index=df.index)
+    late = set(sorted(set(days))[25:])
+    auction = days.isin(late) & pd.Index(df.index.strftime("%H:%M")).isin(("15:15", "15:20"))
+    df = df[(~auction).to_numpy()]
+    rep = build_data_quality(
+        {"S0": df}, _col(n=1), expected_bars_for=lambda d: 73 if d in late else 75
+    )
+    assert rep["affects_validity"] is False and rep["status"] == "PASS"
+
+
+def test_intraday_runs_use_the_published_session_template():
+    from signal_engine.backtest.record_run import intraday_session_shape
+
+    shape = intraday_session_shape()
+    assert shape(dt.date(2026, 7, 31)) == 75
+    assert shape(dt.date(2026, 8, 3)) == 73
