@@ -73,16 +73,16 @@ Documentation: https://docs.openalgo.in
 
 ### AI Model Workflow
 
-**Use only the latest Opus and the latest Sonnet. Simple task: Sonnet. Complex task: Opus, plan, Sonnet, tests, Opus review.**
+**Use only the `opus` and `sonnet` model aliases. Opus decides and reviews. Sonnet executes.**
 
-- Use no other model (no Haiku, no Fable, no older version). Select by alias `opus` or `sonnet`.
-- Simple, fully specified task: Sonnet only.
-- Non-trivial task (architecture, complex debugging, unfamiliar code, shared libraries, data pipelines, CI/CD, trading or backtesting logic, brokers, streaming, migrations, security, significant regression risk): spawn an Opus subagent to write `docs/plans/<change>.md`, then a Sonnet subagent to implement it, then an Opus subagent to review the diff.
-- Test: if deciding WHAT to build is substantially harder than typing HOW to build it, start with Opus.
-- Always pass `model` explicitly when you spawn a subagent. Do not rely on the default subagent model.
-- Pass work between phases through the plan file, not through chat history.
+- Is deciding WHAT to do substantially harder than implementing HOW? If no, use Sonnet directly. If yes, use Opus for design, Sonnet for implementation, and Opus for review when it is warranted.
+- Opus review is mandatory for trading or backtest logic, financial calculations, broker or order execution, market-data ingestion or transformation, migrations, security, architecture changes, and significant regression risk.
+- Scale the plan to the task. Do not write a plan file for a trivial change.
+- For a non-trivial task, state which workflow you use and each phase when it starts (`Reasoning phase: Opus`). If you skip Opus, briefly say why. State `Plan written to: docs/plans/<change>.md` when you write a plan file.
+- Do not start implementation before the user approves the plan when the change alters trading behavior, security, or architecture.
+- Do not pin model version IDs. Do not use Haiku or other models for this workflow. Pass `model` explicitly when you spawn a subagent.
 
-Full procedure, prompt templates, and escalation rules: [`docs/AI_WORKFLOW.md`](docs/AI_WORKFLOW.md).
+Load the `ai-model-workflow` skill (`.claude/skills/ai-model-workflow/SKILL.md`) before a non-trivial task or any subagent spawn.
 
 ### Tests
 
@@ -221,6 +221,7 @@ the source file in `docs/` and every reader sees the change.
 
 Detailed procedures live in `.claude/skills/` and load on demand:
 
+- **`ai-model-workflow`** — before any non-trivial task or any subagent spawn: which model (`opus` or `sonnet` alias only) does which phase
 - **`fd-audit`** — run after any change touching DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
