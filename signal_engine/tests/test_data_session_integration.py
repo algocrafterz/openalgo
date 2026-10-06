@@ -415,10 +415,11 @@ class TestCollectorWiring:
 
     def test_calendar_membership_and_universe_are_filled(self, store):
         exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
-        assert exe.calendar.version.startswith("historify-derived-")
+        # the published dataset's official calendar owns the run calendar; same trading days
+        assert exe.calendar.version.startswith("nse-official-")
         assert len(exe.calendar.trading_days) == N_DAYS
         assert exe.calendar.trading_days[-1] == dt.date(2025, 1, 12)
-        assert exe.calendar.source == "derived_from_market_data"
+        assert exe.calendar.source == "official_nse_calendar"
         assert exe.membership["membership_source"] == MEMBERSHIP_SOURCE
         assert exe.membership["survivorship_bias"] is True
         assert exe.membership["eligibility_policy"] == {
@@ -576,22 +577,25 @@ class TestBaselinePopulation:
 class TestCalendarAsOf:
     def test_end_is_passed_as_the_calendar_cutoff(self, store, monkeypatch):
         got = {}
-        real = rr.derive_calendar
+        real = rr.official_calendar
 
-        def spy(frames, as_of=None):
+        def spy(frames, official, as_of=None, out_of_scope=()):
             got["as_of"] = as_of
-            return real(frames, as_of=as_of)
+            return real(frames, official, as_of=as_of, out_of_scope=out_of_scope)
 
-        monkeypatch.setattr(rr, "derive_calendar", spy)
+        monkeypatch.setattr(rr, "official_calendar", spy)
         exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS, end="2025-01-08")
         assert got["as_of"] == dt.date(2025, 1, 8)
         assert exe.calendar.trading_days[-1] <= dt.date(2025, 1, 8)
 
     def test_without_end_the_last_loaded_session_is_used(self, store, monkeypatch):
         got = {}
-        real = rr.derive_calendar
+        real = rr.official_calendar
         monkeypatch.setattr(
-            rr, "derive_calendar", lambda f, as_of=None: got.update(a=as_of) or real(f, as_of=as_of)
+            rr,
+            "official_calendar",
+            lambda f, o, as_of=None, out_of_scope=(): got.update(a=as_of)
+            or real(f, o, as_of=as_of, out_of_scope=out_of_scope),
         )
         rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         assert got["a"] == dt.date(2025, 1, 12)

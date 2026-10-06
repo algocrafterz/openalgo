@@ -1,4 +1,11 @@
-"""Derived exchange calendar and session model.
+"""Run calendar and session model.
+
+A run on a published dataset takes its trading days from the official NSE calendar
+(`official_calendar`): the calendar decides whether the market was scheduled to trade, and data
+quality decides only whether a symbol-session is usable. `derive_calendar` below infers the days
+from market data and is used only where no authoritative calendar is available.
+
+Derived calendar:
 
 No official NSE holiday list exists in the repo, so the calendar is derived from market data and
 labelled so (`source = "derived_from_market_data"`). A date is a trading day when at least 80% of
@@ -25,6 +32,8 @@ from signal_engine.research.intake.fingerprints import canonical_json, sha256_he
 
 SOURCE = "derived_from_market_data"
 VERSION_PREFIX = "historify-derived-"
+OFFICIAL_SOURCE = "official_nse_calendar"
+OFFICIAL_VERSION_PREFIX = "nse-official-"
 MIN_SYMBOL_SHARE = 0.80
 SHORT_SESSION_BAR_SHARE = 0.75
 SESSION_CLOSE_MINUTE = 15 * 60 + 15
@@ -86,10 +95,8 @@ def _short_sessions(stats: list[tuple[np.ndarray, np.ndarray, np.ndarray]], keep
     return flagged
 
 
-def derive_calendar(
-    frames: Mapping[str, pd.DataFrame], as_of: date | str | None = None
-) -> Calendar:
-    """Derive the trading calendar from the symbols' bars, ignoring dates after `as_of`."""
+def _frame_stats(frames: Mapping[str, pd.DataFrame], as_of: date | str | None) -> list:
+    """Per symbol with bars: (dates, bar counts, last-bar minutes), ignoring dates after as_of."""
     cutoff = _as_of_date(as_of)
     cutoff64 = np.datetime64(cutoff, "D") if cutoff else None
     stats = []
@@ -103,6 +110,44 @@ def derive_calendar(
             days, counts, minutes = days[keep], counts[keep], minutes[keep]
         if days.size:
             stats.append((days, counts, minutes))
+    return stats
+
+
+def loaded_sessions(frames: Mapping[str, pd.DataFrame], as_of: date | str | None = None) -> set:
+    """Every date on which at least one frame has a bar, ignoring dates after `as_of`."""
+    return {d for days, _, _ in _frame_stats(frames, as_of) for d in days.tolist()}
+
+
+def official_calendar(
+    frames: Mapping[str, pd.DataFrame],
+    official: Any,
+    as_of: date | str | None = None,
+    out_of_scope: Any = (),
+) -> Calendar:
+    """The run calendar from the official NSE calendar, over the loaded range.
+
+    Trading days are the official sessions from the first loaded date to `as_of` (the last
+    loaded date when None), minus the dataset's declared out-of-scope sessions. No data share
+    decides whether a date was a trading day. Short sessions are still read from the bars,
+    because they describe the shape of the data, not the schedule.
+    """
+    stats = _frame_stats(frames, as_of)
+    loaded = {d for days, _, _ in stats for d in days.tolist()}
+    if not loaded:
+        return Calendar((), (), OFFICIAL_SOURCE, OFFICIAL_VERSION_PREFIX + "empty")
+    last = _as_of_date(as_of) or max(loaded)
+    skip = set(out_of_scope)
+    days_out = tuple(d for d in official.expected_sessions(min(loaded), last) if d not in skip)
+    short_out = tuple(sorted(_short_sessions(stats, set(days_out))))
+    digest = sha256_hex(canonical_json([official.version, [d.isoformat() for d in days_out]]))
+    return Calendar(days_out, short_out, OFFICIAL_SOURCE, OFFICIAL_VERSION_PREFIX + digest[:8])
+
+
+def derive_calendar(
+    frames: Mapping[str, pd.DataFrame], as_of: date | str | None = None
+) -> Calendar:
+    """Derive the trading calendar from the symbols' bars, ignoring dates after `as_of`."""
+    stats = _frame_stats(frames, as_of)
     month_n: Counter = Counter()
     day_n: Counter = Counter()
     for days, _, _ in stats:

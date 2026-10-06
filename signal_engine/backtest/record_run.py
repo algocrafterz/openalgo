@@ -60,6 +60,7 @@ from signal_engine.backtest.baseline import (
 )
 from signal_engine.backtest.costs import CostModel, decompose_trades
 from signal_engine.backtest.data_collect import CLEAN_KEYS, DataCollector
+from signal_engine.backtest.data_readiness import intraday_access as ia_reasons
 from signal_engine.backtest.data_readiness import preflight as preflight_mod
 from signal_engine.backtest.data_readiness import snapshot
 from signal_engine.backtest.dq_run import build_data_quality
@@ -74,7 +75,12 @@ from signal_engine.backtest.eligibility import (
 )
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.ledgers import LedgerRecorder
-from signal_engine.backtest.session import Calendar, derive_calendar
+from signal_engine.backtest.session import (
+    Calendar,
+    derive_calendar,
+    loaded_sessions,
+    official_calendar,
+)
 from signal_engine.backtest.tearsheet import build_run_record
 from signal_engine.backtest.truncation import truncation_check
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION
@@ -508,6 +514,9 @@ class _DataLayer:
     frames: dict[str, pd.DataFrame]
     #: The eligibility result, kept so the baselines drop the same sessions; None without a policy.
     eligibility: EligibilityResult | None = None
+    #: With an official calendar: out-of-scope sessions, official sessions with no usable symbol
+    #: (date -> reason) and loaded dates that are not official sessions. Empty when derived.
+    calendar_check: dict[str, Any] = field(default_factory=dict)
 
 
 def _build_data_layer(
@@ -517,6 +526,8 @@ def _build_data_layer(
     as_of: date | None = None,
     adjusted_prices: bool = False,
     expected_bars_for: Callable[[date], int] | None = None,
+    official: Any = None,
+    out_of_scope: Sequence[date] = (),
 ) -> _DataLayer:
     """Calendar, data quality, eligibility and the frames the engine will run on.
 
@@ -526,8 +537,19 @@ def _build_data_layer(
     run's `end`; the last loaded session when None). `adjusted_prices` marks the split-adjusted
     daily panel, for which the price floor is not applied. `expected_bars_for` is the dataset's
     session shape for the completeness audit (see `intraday_session_shape`).
+
+    With `official` (the published dataset's NSE calendar) the official calendar owns the run's
+    trading days: a date is never dropped because its data is poor. `out_of_scope` are the
+    dataset's declared out-of-scope sessions (Muhurat). Without it the calendar is derived from
+    the bars.
     """
-    calendar = derive_calendar(frames, as_of=as_of if as_of is not None else _last_session(frames))
+    cut = as_of if as_of is not None else _last_session(frames)
+    check: dict[str, Any] = {}
+    if official is None:
+        calendar = derive_calendar(frames, as_of=cut)
+    else:
+        calendar = official_calendar(frames, official, as_of=cut, out_of_scope=out_of_scope)
+        check = _calendar_check(calendar, loaded_sessions(frames, cut), collector, out_of_scope)
     report = None
     if collector.interval:
         report = build_data_quality(
@@ -545,11 +567,12 @@ def _build_data_layer(
                 "version": calendar.version,
                 "sessions": len(calendar.trading_days),
                 "short_sessions": [d.isoformat() for d in calendar.short_sessions],
+                **check,
             },
         }
     policy = _eligibility_policy(cfg)
     if policy is None:
-        return _DataLayer(calendar, report, None, None, {}, frames)
+        return _DataLayer(calendar, report, None, None, {}, frames, calendar_check=check)
     result = compute_eligibility(frames, policy, calendar, adjusted_prices=adjusted_prices)
     kept, dropped = apply_eligibility(frames, result)
     membership = {
@@ -564,7 +587,24 @@ def _build_data_layer(
             "min_price": policy.min_price,
         },
     }
-    return _DataLayer(calendar, report, result.universe_frame, membership, dropped, kept, result)
+    return _DataLayer(calendar, report, result.universe_frame, membership, dropped, kept, result,
+                      calendar_check=check)
+
+
+def _calendar_check(calendar: Calendar, loaded: set, collector: DataCollector,
+                    out_of_scope: Sequence[date]) -> dict[str, Any]:
+    """Official sessions with no usable symbol, named with their reason, and loaded dates that
+    are not official sessions (an anomaly the load check rejects)."""
+    days = calendar.trading_days
+    if not days:
+        return {"out_of_scope_sessions": [], "empty_sessions": {},
+                "bars_on_non_sessions": sorted(d.isoformat() for d in loaded)}
+    sessions = set(days)
+    scope = sorted(d.isoformat() for d in out_of_scope if days[0] <= d <= days[-1])
+    empty = {d.isoformat(): collector.empty_sessions.get(d, ia_reasons.NO_VALID_DATA)
+             for d in sorted(sessions - loaded)}
+    return {"out_of_scope_sessions": scope, "empty_sessions": empty,
+            "bars_on_non_sessions": sorted(d.isoformat() for d in loaded - sessions)}
 
 
 def _record_data_exclusions(
@@ -650,12 +690,24 @@ def execute_backtest(
         raise LoadRejected(str(exc), {"version": dataset.version_id}) from exc
 
 
-def _check_calendar_at_load(layer: _DataLayer, dataset: preflight_mod.Resolution) -> None:
-    """The calendar the engine derives from the loaded frames must be the official calendar's
-    sessions over the same range; otherwise the run stops before the engine."""
+def _check_calendar_at_load(
+    layer: _DataLayer, dataset: preflight_mod.Resolution | None = None
+) -> None:
+    """Stop the run before the engine when the loaded data disagrees with the calendar.
+
+    With the official calendar: bars on a date that is not an official session reject the run;
+    an official session with no usable symbol does not, because `calendar_check` names it with
+    its reason. With a derived calendar: it must equal the official sessions over its range.
+    """
     days = sorted(layer.calendar.trading_days)
     if not days:
         raise LoadRejected("calendar: no trading days in the loaded data")
+    if layer.calendar_check:
+        anomalies = layer.calendar_check.get("bars_on_non_sessions") or []
+        if anomalies:
+            raise LoadRejected("calendar: bars on dates that are not official sessions",
+                               {"dates": anomalies[:20], "count": len(anomalies)})
+        return
     expected = set(dataset.calendar.expected_sessions(days[0], days[-1]))
     derived = set(days)
     if derived != expected:
@@ -718,6 +770,9 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         as_of=date.fromisoformat(end) if end else None,
         adjusted_prices=kind == "swing",
         expected_bars_for=None if kind == "swing" else intraday_session_shape(),
+        official=dataset.calendar,
+        out_of_scope=[date.fromisoformat(d)
+                      for d in dataset.manifest.get("out_of_scope_sessions") or []],
     )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
     # Load-time rejection (plan section 8): a data defect that affects validity, or a calendar
@@ -725,7 +780,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     if (layer.data_report or {}).get("affects_validity"):
         raise LoadRejected("data quality affects validity at load",
                            {"items": (layer.data_report or {}).get("items")})
-    _check_calendar_at_load(layer, dataset)
+    _check_calendar_at_load(layer)
     # A strategy that ranks the whole universe prepares every symbol's frame together, from the
     # run's own calendar, before the symbol-by-symbol run. Its look-ahead check then re-ranks on
     # the truncated universe, so it keeps every frame; any other strategy keeps three.

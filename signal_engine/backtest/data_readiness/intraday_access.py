@@ -142,6 +142,33 @@ def data_exclusions(con, contract, candidates: pd.DataFrame, symbols) -> pd.Data
     return m[m.reason.notna()][cols].reset_index(drop=True)
 
 
+#: Why an official session in the loaded range has no usable symbol (the run calendar keeps it).
+NO_VALID_DATA = "NO_VALID_DATA"
+ALL_SYMBOLS_INVALID = "ALL_SYMBOLS_INVALID"
+ALL_EXCLUDED_BY_CONTRACT = "ALL_EXCLUDED_BY_CONTRACT"
+_CONTRACT_REASONS = (DATA_MISSING_BIN, DATA_MIN_N_MINUTES)
+
+
+def empty_session_reasons(avail: pd.DataFrame, loaded: set) -> dict[date, str]:
+    """Each session of `avail` with no loaded bars, and why.
+
+    ALL_EXCLUDED_BY_CONTRACT: at least one symbol passed the field families and the data
+    contract excluded every such symbol. ALL_SYMBOLS_INVALID: no symbol passed the field
+    families. NO_VALID_DATA: a symbol was available but no bars were served.
+    """
+    out: dict[date, str] = {}
+    for day, g in avail.groupby(avail.session.dt.date):
+        if day in loaded:
+            continue
+        if g.available.any():
+            out[day] = NO_VALID_DATA
+        elif g.reason.isin(_CONTRACT_REASONS).any():
+            out[day] = ALL_EXCLUDED_BY_CONTRACT
+        else:
+            out[day] = ALL_SYMBOLS_INVALID
+    return out
+
+
 def apply_data_exclusions(con, contract, avail: pd.DataFrame, symbols) -> pd.DataFrame:
     """`avail` with the sessions the data contract excludes marked unavailable and named."""
     bad = data_exclusions(con, contract, avail[avail.available], symbols)
@@ -304,4 +331,7 @@ def read_bars(con, manifest: dict, contract, symbols, interval: str, end,
         out[s] = raw
     if collector is not None:
         collector.symbols_loaded = len(out)
+        loaded = {d for f in out.values() for d in pd.unique(f.index.date)}
+        requested = avail[avail.symbol.isin(list(symbols))]
+        collector.empty_sessions.update(empty_session_reasons(requested, loaded))
     return out

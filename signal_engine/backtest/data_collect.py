@@ -21,6 +21,9 @@ class DataCollector:
     rows_seen: dict[str, int] = field(default_factory=dict)
     symbols_loaded: int = 0
     interval: str = ""
+    #: Sessions in the loaded range on which no requested symbol was usable, with the reason
+    #: (intraday_access.empty_session_reasons). Reported by the run calendar check.
+    empty_sessions: dict[dt.date, str] = field(default_factory=dict)
 
     def record_clean(
         self, symbol: str, duplicate_ts: int = 0, outside_hours: int = 0, impossible: int = 0
@@ -82,6 +85,7 @@ class DataCollector:
             for s, days in src.split_days_dropped.items():
                 out.record_split_days(s, days)
             out.symbols_dropped_min_sessions.update(src.symbols_dropped_min_sessions)
+            out.empty_sessions.update(src.empty_sessions)
             for s, n in src.rows_seen.items():
                 out.record_seen(s, n)
         return out
