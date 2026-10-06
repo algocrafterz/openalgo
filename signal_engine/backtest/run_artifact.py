@@ -23,6 +23,7 @@ import yaml
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import next_action as next_action_mod
 from signal_engine.backtest import promotion as promotion_mod
+from signal_engine.backtest import run_diagnostics
 from signal_engine.backtest import verdict as verdict_mod
 from signal_engine.backtest.artifacts import RunFolder, _encode
 from signal_engine.backtest.change_class import classify, first_run_classes
@@ -571,6 +572,25 @@ def build_manifest(
     return manifest
 
 
+def _run_diagnostics_block(execution: Any, resolution: Any, idea_folder: Path) -> dict[str, Any]:
+    """Optional manifest keys: what the data contract excluded, the bars' n_minutes mix, the
+    strategy's own counters and the spec file's provenance. A key is absent when it has no
+    content, so a run without them keeps the manifest it always had."""
+    out: dict[str, Any] = {}
+    by_year = None if resolution is None else resolution.report.universe.get(
+        "session_exclusions_by_year")
+    diag = {"data_contract_exclusions_by_year": by_year,
+            "n_minutes_distribution": getattr(execution, "n_minutes_distribution", None),
+            "strategy_diagnostics": getattr(execution, "strategy_diagnostics", None)}
+    diag = {k: v for k, v in diag.items() if v is not None}
+    if diag:
+        out["run_diagnostics"] = diag
+    source = run_diagnostics.spec_provenance(idea_folder)
+    if source is not None:
+        out["spec_source"] = source
+    return out
+
+
 def _published_blocks(resolution: Any, dataset_fp: str, execution: Any, run_status: str,
                       invalid_reason: Sequence[str], trial_counted: bool) -> dict[str, Any]:
     """The schema 4 additions: the published version in `dataset`, the preflight, the symbol
@@ -755,6 +775,7 @@ def prepare_run_artifact(
     published = manifest.pop("dataset_published", None)
     if published is not None:
         manifest["dataset"] = published
+    manifest.update(_run_diagnostics_block(execution, resolution, idea_folder))
     manifest["change_classes"] = (
         first_run_classes() if reference is None else classify(reference, manifest)
     )

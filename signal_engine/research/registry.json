@@ -1028,9 +1028,10 @@
       "verdict": "marginal"
     },
     {
+      "backtest_module": "backtest/strategies/vwap_reversion.py",
       "classification": {
-        "direction": null,
-        "market": null,
+        "direction": "both",
+        "market": "NSE/BSE cash equity",
         "strategy_category": "Mean Reversion",
         "strategy_tags": [
           "vwap",
@@ -1039,8 +1040,8 @@
           "intraday",
           "long-short"
         ],
-        "timeframe": null,
-        "trading_style": null
+        "timeframe": "5m",
+        "trading_style": "intraday"
       },
       "folder": "idea-029-vwap-2sd-range-mean-reversion",
       "horizon": "intraday",

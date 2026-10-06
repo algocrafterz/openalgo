@@ -6,6 +6,7 @@ research_state: active
 strategy_category: Mean Reversion
 strategy_tags: [vwap, vwap-bands, range-regime, intraday, long-short]
 horizon: intraday
+backtest_module: backtest/strategies/vwap_reversion.py
 source:
   type: self
   author: researcher
@@ -19,16 +20,17 @@ last_reviewed: 2026-10-06
 
 ## Idea
 
-The researcher's draft is in `_inbox/vwap-2sd-range-mean-reversion.txt`. It is a draft: no spec,
-no strategy version, no freeze and no run exist.
+The researcher's draft is in `_inbox/vwap-2sd-range-mean-reversion.txt`. The rules, with the twelve
+draft decisions resolved, are in `spec.yaml`.
 
 ## Analysis and backtest
 
-Not tested. There is no verdict and no counted trial. The published 5m dataset
-`nse-intraday-5m-20261006-001` now exists. Twelve specification decisions stay open (listed in the
-inbox draft); they are resolved before the spec is frozen.
+Not tested. There is no verdict and no counted trial. The twelve draft decisions were approved with
+amendments on 2026-10-06 (see the decision log). The plan is one recorded baseline run on
+`nse-intraday-5m-20261006-001` with no parameter optimisation, no sweep and no filter added after
+seeing the result.
 
-## Data contract (proposed, not frozen)
+## Data contract (approved 2026-10-06, in spec.yaml)
 
 What the strategy needs from `nse-intraday-5m-20261006-001`, enforced at preflight and on read.
 It goes into `spec.yaml` as written here when the spec is frozen.
@@ -49,7 +51,10 @@ data:
   auction print never enters a signal.
 - **Bin completeness**: all 72 5m bins from 09:15 to 15:10 must exist. A missing bin breaks the
   bar count of EMA9, ATR14 and the 15m aggregation.
-- **min_n_minutes = 1**: any published bar is usable. Measured on the price+volume-available
+- **min_n_minutes = 1**: an availability threshold, not a statement that a 5m bar built from
+  fewer minutes is as reliable as a full one. `n_minutes` is kept on every bar and its distribution
+  is reported, so sensitivity at 2, 3 and 5 can be tested later as a separate experiment (not now).
+  Any published bar is usable. Measured on the price+volume-available
   sessions: n_minutes < 5 falls from about 10% of bars (2017-2019) to under 0.5% (2025-2026) and is
   concentrated in the least liquid names (OFSS, BAJAJHLDNG, FORCEMOT), which reads as minutes with
   no trade rather than lost data. A bar from fewer minutes has the right OHLCV for the trades that
@@ -60,11 +65,24 @@ data:
   is filled, repaired or interpolated. Excluded symbol-sessions are listed in the preflight report
   with their reason and counted by year in the run record. Preflight is NOT_READY when no symbol
   is eligible. Indicator series continue across an excluded session (decision 11).
-- **Not enforced yet**: the spec schema does not accept a `data:` block, and the read path does not
-  expose `n_minutes` or check bin completeness. Both are needed before preflight.
+- **Enforcement**: the spec schema validates the `data:` block, and the same session-exclusion
+  rule runs at preflight and on read.
 
 ## Decision log
 
 - 2026-10-05: recorded as blocked (block_reason missing-published-intraday-dataset). Blocked is a data-readiness state, not research evidence: not rejected, not no-edge, not inconclusive, not shelved. The legacy Historify minute data is not used for a recorded run.
 - 2026-10-05: plan: build the minimum 1m -> 5m published intraday dataset, then resolve the open decisions, freeze v1, preflight and run once.
 - 2026-10-06: unblocked (research_state active): `nse-intraday-5m-20261006-001` is published. Data contract proposed (price + volume, complete 09:15-15:10 bins, min_n_minutes 1); the twelve decisions go to review before the freeze.
+- 2026-10-06: the twelve decisions approved with amendments, and written into `spec.yaml`:
+  - (1) costs are the platform per-trade India MIS model (statutory lines plus 4 bps slippage per side) at a fixed Rs 1,00,000 notional (`sizing.basis: fixed_notional`). The run records the charge lines, slippage, notional, product and cost-model version, and stresses slippage at 1.5x and 2x. The draft's 32 bps is a secondary reference line only, not a gate.
+  - (2) to (10) and (12) as recommended.
+  - (11) reworded: stateful indicators are continuous across sessions, and an excluded session contributes no observation. Warm-up is at least 100 completed 15m bars from eligible sessions per symbol, not "the first four sessions".
+  - Added an explicit information boundary (`information_boundary` in the spec), covered by regression tests.
+  - Stop ATR: the 0.20 ATR stop buffer uses ATR14_5m at the confirmation bar's close. The draft did not name the bar; this is the decision point.
+  - A deeper extreme that fails the band or displacement test cancels the setup, so the stop is never left inside a traded-through range.
+- 2026-10-06: five implementation gaps found in review, decided before the freeze. These replace the two choices above that the draft left open.
+  - (1) The stop buffer uses ATR14_5m at the extreme bar. A deeper extreme restates both the extreme and the ATR.
+  - (2) A deeper extreme that fails the band or displacement test cancels the setup.
+  - (3) A would-be confirmation with an invalid regime, or before warm-up, cancels the setup. It is not carried to a later bar.
+  - (4) A confirmation consumes only its own setup, also when the 2-trade cap blocks it. An opposite setup keeps its state. A fill cancels any remaining setup, because of the existing re-entry rule.
+  - (5) The live validator's minimum stop distance is an execution constraint, not a filter. A new tag with no `strategy_profiles` override gets the global `risk.min_sl_pct` of 0.5%, so the baseline uses 0.5%, not 0.2% (BREAKOUT's override). Rejected signals are counted as STOP_TOO_TIGHT.

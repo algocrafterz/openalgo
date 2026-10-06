@@ -51,6 +51,10 @@ BAD_BAR = "BAD_BAR"
 NOT_ELIGIBLE = "NOT_ELIGIBLE"
 WARMUP = "WARMUP"
 
+# Raised only by a run with RunConfig.skip_fill_beyond_levels; appended after the reserved
+# codes so every existing code keeps its number.
+ENTRY_SKIPPED_BEYOND_LEVEL = "ENTRY_SKIPPED_BEYOND_LEVEL"
+
 LIVE_CODES: tuple[str, ...] = (
     MAX_TRADES_DAY,
     OPEN_WINDOW,
@@ -73,7 +77,8 @@ RESERVED_CODES: tuple[str, ...] = (
     NOT_ELIGIBLE,
     WARMUP,
 )
-REASON_CODES: tuple[str, ...] = LIVE_CODES + RESERVED_CODES
+OPT_IN_CODES: tuple[str, ...] = (ENTRY_SKIPPED_BEYOND_LEVEL,)
+REASON_CODES: tuple[str, ...] = LIVE_CODES + RESERVED_CODES + OPT_IN_CODES
 
 #: code -> small int, used by the engines in the hot loop. Order is part of the contract.
 CODE_INDEX: dict[str, int] = {c: k for k, c in enumerate(REASON_CODES)}

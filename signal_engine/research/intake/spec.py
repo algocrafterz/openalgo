@@ -431,14 +431,113 @@ def _check_sizing(out: _Collector, data: Mapping[str, Any]) -> None:
         out.validity("sizing", "must be a mapping")
         return
     for key in block:
-        if key not in ("risk_per_trade_pct", "capital_per_trade"):
+        if key not in ("risk_per_trade_pct", "capital_per_trade", "basis"):
             out.validity(f"sizing.{key}", "unknown field")
+    if "basis" in block:
+        _check_enum(out, "sizing.basis", block["basis"])
     for key in ("risk_per_trade_pct", "capital_per_trade"):
         name = f"sizing.{key}"
         if key not in block:
             out.missing(name)
         elif not (_is_number(block[key]) and block[key] > 0):
             out.validity(name, "must be a positive number")
+
+
+_BAR_MINUTES = re.compile(r"^(\d+)([mh])$")
+_CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_SESSION_OPEN_MINUTE = 9 * 60 + 15
+
+
+def _bar_minutes(timeframe: Any) -> int | None:
+    """Minutes in one bar of an intraday timeframe, None for daily or unknown."""
+    hit = _BAR_MINUTES.match(timeframe) if isinstance(timeframe, str) else None
+    if hit is None:
+        return None
+    return int(hit.group(1)) * (60 if hit.group(2) == "h" else 1)
+
+
+def _clock_minute(value: Any) -> int | None:
+    if not (isinstance(value, str) and _CLOCK.match(value)):
+        return None
+    return int(value[:2]) * 60 + int(value[3:])
+
+
+def _check_data_bins(out: _Collector, block: Mapping[str, Any], bar: int | None) -> None:
+    bins = block["complete_bins"]
+    if not isinstance(bins, Mapping) or set(bins) != {"first", "last"}:
+        out.validity("data.complete_bins", "must be a mapping with exactly first and last")
+        return
+    minutes = {}
+    for key in ("first", "last"):
+        minutes[key] = _clock_minute(bins[key])
+        if minutes[key] is None:
+            out.validity(f"data.complete_bins.{key}", "must be a time as HH:MM text")
+    if None in minutes.values():
+        return
+    if minutes["first"] >= minutes["last"]:
+        out.validity("data.complete_bins", "first must be before last")
+    if bar:
+        for key, minute in minutes.items():
+            if (minute - _SESSION_OPEN_MINUTE) % bar:
+                out.validity(f"data.complete_bins.{key}",
+                             f"is not on the {bar} minute bar grid that starts at 09:15")
+
+
+def _check_data(out: _Collector, data: Mapping[str, Any]) -> None:
+    """The optional data contract: frequency, field families, availability threshold, bins."""
+    if "data" not in data:
+        return
+    block = data["data"]
+    if not isinstance(block, Mapping):
+        out.validity("data", "must be a mapping")
+        return
+    allowed = ("frequency", "field_families", "min_n_minutes", "complete_bins")
+    for key in block:
+        if key not in allowed:
+            out.validity(f"data.{key}", "unknown field")
+    for key in allowed:
+        if key not in block:
+            out.missing(f"data.{key}")
+    timeframe = data.get("timeframe")
+    bar = _bar_minutes(timeframe)
+    if "frequency" in block:
+        freq = block["frequency"]
+        if _check_enum(out, "data.frequency", freq) and freq != timeframe:
+            out.validity("data.frequency", f"must equal the spec timeframe {timeframe!r}")
+        elif freq == timeframe and bar is None:
+            out.validity("data.frequency", "must be an intraday frequency")
+    if "field_families" in block:
+        _check_families(out, block["field_families"])
+    if "min_n_minutes" in block:
+        value = block["min_n_minutes"]
+        if not (_is_int(value) and value >= 1 and (bar is None or value <= bar)):
+            top = f"{bar}" if bar else "the bar length in minutes"
+            out.validity("data.min_n_minutes", f"must be an integer from 1 to {top}")
+    if "complete_bins" in block:
+        _check_data_bins(out, block, bar)
+
+
+def _check_families(out: _Collector, value: Any) -> None:
+    from signal_engine.backtest.data_readiness.intraday_convert import FIELD_FAMILIES
+
+    if not (isinstance(value, list) and value and all(isinstance(v, str) for v in value)):
+        out.validity("data.field_families", "must be a non-empty list of family names")
+        return
+    unknown = sorted(set(value) - set(FIELD_FAMILIES))
+    if unknown:
+        out.validity("data.field_families",
+                     f"unknown {', '.join(unknown)}; known {', '.join(FIELD_FAMILIES)}")
+    if len(set(value)) != len(value):
+        out.validity("data.field_families", "lists a family twice")
+
+
+def _check_information_boundary(out: _Collector, data: Mapping[str, Any]) -> None:
+    if "information_boundary" not in data:
+        return
+    value = data["information_boundary"]
+    ok = isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value)
+    if not ok:
+        out.validity("information_boundary", "must be a non-empty list of non-blank text")
 
 
 def _check_multi_position(out: _Collector, block: Mapping[str, Any]) -> None:
@@ -633,6 +732,8 @@ def validate_spec(data: Any, profiles_dir: Path | None = None) -> list[Problem]:
     _check_session_window(out, data)
     _check_re_entry(out, data)
     _check_sizing(out, data)
+    _check_data(out, data)
+    _check_information_boundary(out, data)
     _check_portfolio(out, data)
     _check_optional(out, data)
     _check_universe(out, data)

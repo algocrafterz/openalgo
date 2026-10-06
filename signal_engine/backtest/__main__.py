@@ -58,6 +58,10 @@ def _register():
     from signal_engine.backtest.strategies.turtle_soup import TurtleSoup, TurtleSoupParams
     from signal_engine.backtest.strategies.value_area_fade import FadeParams, ValueAreaFade
     from signal_engine.backtest.strategies.value_zone import ValueZone, ValueZoneParams
+    from signal_engine.backtest.strategies.vwap_reversion import (
+        VwapReversion,
+        VwapReversionParams,
+    )
     REGISTRY["breakout"] = (Breakout, BreakoutParams, "intraday")
     REGISTRY["dhb"] = (Dhb, DhbParams, "intraday")
     REGISTRY["ema9"] = (Ema9, Ema9Params, "intraday")
@@ -78,6 +82,7 @@ def _register():
     REGISTRY["turtle_soup"] = (TurtleSoup, TurtleSoupParams, "intraday")
     REGISTRY["value_area_fade"] = (ValueAreaFade, FadeParams, "intraday")
     REGISTRY["value_zone"] = (ValueZone, ValueZoneParams, "swing")
+    REGISTRY["vwap_reversion"] = (VwapReversion, VwapReversionParams, "intraday")
 
 
 def main() -> None:

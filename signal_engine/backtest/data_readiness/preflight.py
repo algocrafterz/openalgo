@@ -166,7 +166,8 @@ def run_preflight(*, manifest: dict, contract: DataContract, calendar: NseCalend
 
         return intraday_access.run_preflight(report, manifest=manifest, contract=contract,
                                              calendar=calendar, stop=stop, start=start,
-                                             root=root, git_dir=git_dir)
+                                             root=root, git_dir=git_dir,
+                                             require_ready=require_ready)
     end_ts = int(pd.Timestamp(stop).timestamp())
     try:
         with snapshot.open_version(vid, root=root, git_dir=git_dir, end_ts=end_ts) as con:

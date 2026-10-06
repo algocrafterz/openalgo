@@ -30,6 +30,7 @@ import pandas as pd
 
 from portfolio.costs import india_delivery, india_intraday
 from signal_engine.backtest.types import Trade
+from signal_engine.research.intake.fingerprints import canonical_json, sha256_hex
 
 PRODUCTS = ("MIS", "CNC")
 MODEL_NAME = "statutory-per-trade"
@@ -215,6 +216,31 @@ def _pnl_basis(model: CostModel) -> str:
     )
 
 
+def rate_table(product: str, exchange: str) -> dict[str, Any]:
+    """The statutory rate lines the model prices trades with, as plain data.
+
+    Read from the same `portfolio.costs` schedule as `_statutory_bps`, so the table cannot drift
+    from the numbers: schedule name, tax rate (GST) and, per charge, its basis, rate, flat amount,
+    per-order cap and whether the tax applies.
+    """
+    schedule = india_intraday(exchange) if product == "MIS" else india_delivery(exchange)
+    return {
+        "schedule": schedule.name,
+        "tax_label": schedule.tax_label,
+        "tax_rate": schedule.tax_rate,
+        "charges": {
+            c.key: {"basis": c.basis, "rate": c.rate, "flat": c.flat, "cap": c.cap,
+                    "taxed": c.taxed}
+            for c in schedule.charges
+        },
+    }
+
+
+def rate_table_sha256(table: dict[str, Any]) -> str:
+    """Version of a rate table: any change to a rate is a different hash."""
+    return sha256_hex(canonical_json(table))
+
+
 def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | None:
     """The optional `cost_model` record block, or None for an empty trade list.
 
@@ -225,6 +251,7 @@ def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | 
     if not trades:
         return None
     statutory = np.array([model.statutory_bps(t) for t in trades])
+    table = rate_table(model.product, model.exchange)
     slippage = 2.0 * model.slippage_bps_per_side
     costed = recost(trades, model)
     stressed_trades = recost(trades, model, slippage_mult=2.0)
@@ -255,6 +282,10 @@ def cost_profile(trades, model: CostModel, flat_bps: float) -> dict[str, Any] | 
         "risk_per_trade": model.risk_per_trade,
         "leverage": model.leverage,
         "slippage_bps_per_side": model.slippage_bps_per_side,
+        "notional_basis": "fixed_notional" if model.fixed_notional is not None else "risk",
+        "stress_levels": list(STRESS_LEVELS),
+        "rate_table": table,
+        "rate_table_sha256": rate_table_sha256(table),
         "flat_bps": float(flat_bps),
         "mean_statutory_bps": round(float(statutory.mean()), 3),
         "mean_total_bps": round(float(statutory.mean()) + slippage, 3),

@@ -1,0 +1,593 @@
+next_id: 54
+open_questions: []
+blocked_reason: null
+entries:
+- id: A-001
+  field: name
+  section: intent
+  value: VWAP 2SD range mean reversion
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-002
+  field: source.kind
+  section: intent
+  value: own_words
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-003
+  field: source.ref
+  section: intent
+  value: _inbox/vwap-2sd-range-mean-reversion.txt
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-004
+  field: profile
+  section: intent
+  value: flattrade-nse-cash
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-005
+  field: style
+  section: intent
+  value: intraday
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-006
+  field: direction
+  section: intent
+  value: both
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-007
+  field: timeframe
+  section: intent
+  value: 5m
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-008
+  field: product
+  section: intent
+  value: MIS
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-009
+  field: entry
+  section: intent
+  value:
+  - Bars are 5m, open-time stamped, IST; a bar is completed at its open time plus
+    5 minutes and every rule below reads completed bars only
+  - Session VWAP and SD reset each session and accumulate from the 09:15 bar; typical
+    price tp = (High + Low + Close) / 3; VWAP = sum(volume x tp) / sum(volume); SD
+    = sqrt(max(sum(volume x tp^2) / sum(volume) - VWAP^2, 0)); bands are VWAP +/-
+    2.0 x SD; every value is as of the close of the bar it belongs to, including that
+    bar
+  - EMA9 of close and Wilder ATR14 on 5m bars run continuously across eligible sessions;
+    an excluded session contributes no observation and does not reset them
+  - The 15m series is built from the 5m bars of each eligible session in fixed blocks
+    of three starting at 09:15 (09:15, 09:30, ..., 15:00), so a session has 24 15m
+    bars; a 15m bar is completed at its open time plus 15 minutes; ADX14, EMA20 and
+    Wilder ATR14 on 15m run continuously across eligible sessions with no reset
+  - Regime is valid when, on the latest completed 15m bar whose close is at or before
+    the decision bar's close, ADX14 <= 22 and abs(EMA20[t] - EMA20[t-4]) <= 0.25 x
+    ATR14_15m[t], where t-4 is four completed 15m bars earlier
+  - Warm-up - a symbol generates no signal until at least 100 completed 15m bars from
+    eligible sessions exist for it, counted from its first eligible observation in
+    the dataset
+  - Long arming - a completed 5m bar e arms a long setup when Low[e] <= lower band[e]
+    and (VWAP[e] - Low[e]) / ATR14_5m[e] >= 0.75; the extreme is Low[e]
+  - While armed, each later completed bar k is evaluated in this order - (1) if Low[k]
+    < extreme, bar k replaces the setup when it passes the same band and 0.75 ATR
+    displacement test (the extreme becomes Low[k], the arm window restarts from k),
+    else the setup is cancelled; (2) if High[k] >= VWAP[k] the setup is cancelled;
+    (3) if Close[k] > EMA9[k] and Close[k] > lower band[k] and the regime is valid
+    at k, bar k is the confirmation bar
+  - A setup stays armed for at most 6 completed bars after the extreme bar (arm_bars
+    6) and is cancelled at the entry cutoff; the extreme bar itself cannot confirm
+  - Entry is a market order at the open of the bar after the confirmation bar; the
+    trade is skipped, not entered and exited, when that open is at or above the target
+    or at or below the stop for a long
+  - Short is the mirror image - High[e] >= upper band[e] and (High[e] - VWAP[e]) /
+    ATR14_5m[e] >= 0.75, a higher high replaces or cancels the setup, Low[k] <= VWAP[k]
+    cancels it, confirmation is Close[k] < EMA9[k] and Close[k] < upper band[k] with
+    a valid regime
+  - The first possible confirmation bar is the 09:15 bar, completed at 09:20, so the
+    first entry fill is at the 09:20 open; the last entry fill is at the 14:15 open
+  - One position per symbol at a time; a setup cannot form while a position is open;
+    a re-entry needs a new extreme bar formed after the bar on which the previous
+    trade exited; at most 2 trades per symbol per session, and the run reports how
+    often that cap blocks a confirmation
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-010
+  field: exit
+  section: intent
+  value:
+  - Target is the live session VWAP, worked as a limit order - on each bar j in the
+    trade, the target is VWAP as of the close of bar j-1; a long exits when High[j]
+    >= that target, a short when Low[j] <= it, filled at the target, or at Open[j]
+    when the bar opens already beyond the target
+  - When one bar reaches both the stop and the target, the stop is assumed to fill
+    first
+  - Standing time exit at 14:45 from the deployment profile, before the 15:00 MIS
+    square-off; no position is held overnight
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-011
+  field: stop
+  section: intent
+  value:
+  - Long stop = extreme - 0.20 x ATR14_5m, short stop = extreme + 0.20 x ATR14_5m,
+    where the extreme is the setup's latest extreme and ATR14_5m is the value at the
+    confirmation bar's close; the stop is fixed at entry and never trailed
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-012
+  field: take_profit
+  section: intent
+  value:
+  - Session VWAP, recomputed each bar as stated in exit; there is no fixed price target
+    and no partial exit
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-013
+  field: holding_period
+  section: intent
+  value: Intraday only; every position is closed by 14:45 on the session it opened
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-014
+  field: indicators
+  section: intent
+  value:
+  - name: VWAP
+    anchor: session
+    source: hlc3
+  - name: VWAP_SD
+    anchor: session
+    source: hlc3
+  - name: EMA
+    period: 9
+    source: close
+  - name: ATR
+    period: 14
+    source: close
+  - name: EMA_15M
+    period: 20
+    source: close
+  - name: ATR_15M
+    period: 14
+    source: close
+  - name: ADX_15M
+    period: 14
+    source: close
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-015
+  field: parameters
+  section: intent
+  value:
+    vwap_sd: 2.0
+    atr_period_5m: 14
+    min_vwap_distance_atr: 0.75
+    stop_buffer_atr: 0.2
+    adx_period_15m: 14
+    adx_max: 22.0
+    ema_regime_period_15m: 20
+    ema_regime_lookback_bars: 4
+    ema_regime_max_change_atr: 0.25
+    atr_period_15m: 14
+    ema_entry_period_5m: 9
+    arm_bars: 6
+    warmup_15m_bars: 100
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-016
+  field: timing.signal_evaluation
+  section: intent
+  value: bar_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-017
+  field: timing.order_submission
+  section: intent
+  value: signal_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-018
+  field: timing.fill_model
+  section: intent
+  value: next_bar_open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-019
+  field: filters
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-020
+  field: session_window
+  section: intent
+  value:
+    entry: 09:20-14:15
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-021
+  field: re_entry.allowed
+  section: intent
+  value: true
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-022
+  field: re_entry.max_per_symbol_day
+  section: intent
+  value: 2
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-023
+  field: re_entry.trigger
+  section: intent
+  value: same_signal
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-024
+  field: sizing.risk_per_trade_pct
+  section: intent
+  value: 1.0
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-025
+  field: sizing.capital_per_trade
+  section: intent
+  value: 100000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-026
+  field: sizing.basis
+  section: intent
+  value: fixed_notional
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-027
+  field: data.frequency
+  section: intent
+  value: 5m
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-028
+  field: data.field_families
+  section: intent
+  value:
+  - price
+  - volume
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-029
+  field: data.min_n_minutes
+  section: intent
+  value: 1
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-030
+  field: data.complete_bins
+  section: intent
+  value:
+    first: 09:15
+    last: '15:10'
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-031
+  field: information_boundary
+  section: intent
+  value:
+  - A decision at the close of 5m bar k reads only bars with open time <= k
+  - VWAP, VWAP SD and the bands at bar k include bar k and no later bar
+  - EMA9 and ATR14 on 5m at bar k include bar k and no later bar
+  - A 15m bar, and EMA20, ATR14 and ADX14 on it, is used only after all three of its
+    5m bars are completed
+  - The target used on bar j is VWAP as of the close of bar j-1, never bar j
+  - The stop is fixed from values at the confirmation bar's close
+  - The skip rule at entry reads only the entry bar's open, which is known when the
+    order would fill
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-032
+  field: portfolio.mode
+  section: intent
+  value: single_position
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-033
+  field: portfolio.scope
+  section: intent
+  value: per_symbol
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-034
+  field: disclosure.prior_variants
+  section: intent
+  value: 0
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-035
+  field: disclosure.chart_peeking
+  section: intent
+  value: false
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-036
+  field: disclosure.destination
+  section: intent
+  value: python
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-037
+  field: universe
+  section: intent
+  value:
+    type: current_fno
+    exchange: NSE
+    membership_basis: current
+    point_in_time: false
+    survivorship_bias: true
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-038
+  field: rationale
+  section: intent
+  value: Tests whether a large excursion beyond the session VWAP 2SD band in a range-bound
+    15m regime reverts toward VWAP after the extreme is rejected. All twelve open
+    draft decisions were resolved in the 2026-10-06 review before this freeze. Costs
+    are the platform per-trade India MIS model at the fixed notional; the draft's
+    32 bps round trip is reported only as a secondary reference line.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-039
+  field: kill_criterion
+  section: intent
+  value: Net expectancy per trade is zero or negative after modelled costs.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-040
+  field: execution.product
+  section: execution
+  value: MIS
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in the spec
+  user_confirmed: true
+- id: A-041
+  field: execution.bar_size
+  section: execution
+  value: 5m
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: same as the spec timeframe
+  user_confirmed: false
+- id: A-042
+  field: execution.warmup_bars
+  section: execution
+  value: 20
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: 'longest indicator period: EMA_15M(20)'
+  user_confirmed: false
+- id: A-043
+  field: execution.slippage_bps_per_side
+  section: execution
+  value: 4.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: house default for market orders
+  user_confirmed: false
+- id: A-044
+  field: execution.cost_bps_round_trip
+  section: execution
+  value: 16.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: intraday round-trip cost default
+  user_confirmed: false
+- id: A-045
+  field: execution.oos_fraction
+  section: execution
+  value: 0.3
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.1 holdout fraction
+  user_confirmed: false
+- id: A-046
+  field: execution.embargo_sessions
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.5 embargo after the cut
+  user_confirmed: false
+- id: A-047
+  field: execution.eligibility_min_prior_sessions
+  section: execution
+  value: 60
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: 'listing age: earlier traded sessions required before a symbol is eligible'
+  user_confirmed: false
+- id: A-048
+  field: execution.eligibility_min_volume
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: session volume must be above this to count as traded
+  user_confirmed: false
+- id: A-049
+  field: execution.eligibility_min_price
+  section: execution
+  value: 10.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: session close floor in rupees, excludes penny-priced sessions
+  user_confirmed: false
+- id: A-050
+  field: profile.mis_squareoff_min
+  section: profile
+  value: 900
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-051
+  field: profile.squareoff_margin_min
+  section: profile
+  value: 5
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-052
+  field: profile.time_exit_min
+  section: profile
+  value: 885
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-053
+  field: profile.carry_forward
+  section: profile
+  value: false
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false

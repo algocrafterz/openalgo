@@ -555,3 +555,125 @@ class TestUniverse:
     def test_a_symbol_list_is_not_a_declaration(self):
         assert any(t.startswith("universe") for t in
                    _texts(make_spec(universe=["INFY", "TCS"]), "validity"))
+
+
+DATA_BLOCK = {
+    "frequency": "5m",
+    "field_families": ["price", "volume"],
+    "min_n_minutes": 1,
+    "complete_bins": {"first": "09:15", "last": "15:10"},
+}
+
+
+def _data(**changes):
+    block = {**DATA_BLOCK, **changes}
+    return make_spec(data={k: v for k, v in block.items() if v is not None})
+
+
+class TestDataContractBlock:
+    def test_complete_block_validates(self):
+        assert spec.validate_spec(_data()) == []
+
+    def test_block_is_optional(self):
+        assert "data" not in GOOD_SPEC
+        assert spec.validate_spec(GOOD_SPEC) == []
+
+    def test_unknown_key_and_non_mapping(self):
+        assert [p.field for p in _problems(make_spec(data={**DATA_BLOCK, "extra": 1}))] == [
+            "data.extra"]
+        assert [p.field for p in _problems(make_spec(data="5m"))] == ["data"]
+
+    @pytest.mark.parametrize("key", list(DATA_BLOCK))
+    def test_every_key_is_required_when_the_block_is_present(self, key):
+        found = _problems(_data(**{key: None}))
+        assert [(p.kind, p.field) for p in found] == [("intake", f"data.{key}")]
+
+    def test_frequency_must_be_known_and_equal_the_timeframe(self):
+        assert [p.field for p in _problems(_data(frequency="7m"))] == ["data.frequency"]
+        assert [p.field for p in _problems(_data(frequency="15m"))] == ["data.frequency"]
+
+    def test_frequency_must_be_intraday(self):
+        s = make_spec(timeframe="1d", data={**DATA_BLOCK, "frequency": "1d"})
+        assert "data.frequency" in [p.field for p in _problems(s)]
+
+    @pytest.mark.parametrize("value", [[], "price", ["vwap"], ["price", "price"], [1]])
+    def test_field_families_must_be_known_non_empty_names(self, value):
+        assert [p.field for p in _problems(_data(field_families=value))] == [
+            "data.field_families"]
+
+    def test_all_known_families_are_accepted(self):
+        assert spec.validate_spec(_data(field_families=["price", "volume", "final_bar"])) == []
+
+    @pytest.mark.parametrize("value", [0, 6, -1, 1.5, True, "1"])
+    def test_min_n_minutes_is_an_int_from_one_to_the_bar_length(self, value):
+        assert [p.field for p in _problems(_data(min_n_minutes=value))] == [
+            "data.min_n_minutes"]
+
+    @pytest.mark.parametrize("value", [1, 5])
+    def test_min_n_minutes_boundaries_are_accepted(self, value):
+        assert spec.validate_spec(_data(min_n_minutes=value)) == []
+
+    @pytest.mark.parametrize("bins", [
+        "09:15-15:10", {"first": "09:15"}, {"first": "09:15", "last": "15:10", "x": 1}])
+    def test_complete_bins_shape(self, bins):
+        assert [p.field for p in _problems(_data(complete_bins=bins))] == [
+            "data.complete_bins"]
+
+    def test_complete_bins_times_must_be_clock_text(self):
+        found = _problems(_data(complete_bins={"first": 915, "last": "25:00"}))
+        assert [p.field for p in found] == ["data.complete_bins.first",
+                                            "data.complete_bins.last"]
+
+    def test_complete_bins_first_before_last(self):
+        for bins in ({"first": "15:10", "last": "09:15"}, {"first": "09:15", "last": "09:15"}):
+            assert [p.field for p in _problems(_data(complete_bins=bins))] == [
+                "data.complete_bins"]
+
+    def test_complete_bins_must_sit_on_the_frequency_grid(self):
+        found = _problems(_data(complete_bins={"first": "09:17", "last": "15:12"}))
+        assert [p.field for p in found] == ["data.complete_bins.first",
+                                            "data.complete_bins.last"]
+
+
+class TestSizingBasisAndInformationBoundary:
+    def test_basis_accepts_the_two_values(self):
+        for basis in ("fixed_notional", "risk"):
+            sizing = {**GOOD_SPEC["sizing"], "basis": basis}
+            assert spec.validate_spec(make_spec(sizing=sizing)) == []
+
+    def test_basis_rejects_other_values(self):
+        sizing = {**GOOD_SPEC["sizing"], "basis": "kelly"}
+        assert [p.field for p in _problems(make_spec(sizing=sizing))] == ["sizing.basis"]
+
+    def test_information_boundary_valid(self):
+        assert spec.validate_spec(make_spec(information_boundary=["reads bars up to k"])) == []
+
+    @pytest.mark.parametrize("value", [[], "text", ["ok", "  "], [3], {"a": 1}])
+    def test_information_boundary_must_be_a_list_of_non_blank_text(self, value):
+        assert [p.field for p in _problems(make_spec(information_boundary=value))] == [
+            "information_boundary"]
+
+    def test_new_fields_are_in_the_catalog_for_the_ledger(self):
+        for name in ("sizing.basis", "data.frequency", "data.field_families",
+                     "data.min_n_minutes", "data.complete_bins", "information_boundary"):
+            assert fields.get(name).section == fields.INTENT
+
+
+class TestEarlierIdeasUnchanged:
+    def test_idea_027_and_028_still_validate_with_their_frozen_fingerprints(self):
+        from signal_engine.research.intake.fingerprints import (
+            params_fingerprint,
+            rules_fingerprint,
+            strategy_fingerprint,
+        )
+
+        ideas = TEMPLATE.parents[1]
+        for pattern in ("idea-027*", "idea-028*"):
+            folder = next(ideas.glob(pattern))
+            data = yaml.safe_load((folder / "spec.yaml").read_text(encoding="utf-8"))
+            assert spec.validate_spec(data) == []
+            assert not {"data", "information_boundary"} & set(data)
+            versions = yaml.safe_load((folder / "versions.yaml").read_text(encoding="utf-8"))
+            current = strategy_fingerprint(rules_fingerprint(data),
+                                           params_fingerprint(data.get("parameters")))
+            assert current == versions[-1]["strategy_fingerprint"]

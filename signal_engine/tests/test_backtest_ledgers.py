@@ -132,8 +132,10 @@ def strip(trades):
 class TestCodesAndIds:
     def test_taxonomy_complete_and_unique(self):
         assert len(ledgers.LIVE_CODES) == 12
-        assert len(ledgers.REASON_CODES) == 18
-        assert len(set(ledgers.REASON_CODES)) == 18
+        # 12 live + 6 reserved + 1 opt-in (ENTRY_SKIPPED_BEYOND_LEVEL, skip-at-fill rule)
+        assert ledgers.OPT_IN_CODES == ("ENTRY_SKIPPED_BEYOND_LEVEL",)
+        assert len(ledgers.REASON_CODES) == 19
+        assert len(set(ledgers.REASON_CODES)) == 19
         for code in (
             "POSITION_CAP",
             "SYMBOL_MIN_SESSIONS",

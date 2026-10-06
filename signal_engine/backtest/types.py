@@ -57,6 +57,12 @@ class RunConfig:
     #: The skipped bars are counted as WARMUP exclusions. Zero changes nothing.
     warmup_bars: int = 0
 
+    #: Skip-at-fill rule. When True, an entry whose fill (the next bar's open) is already at or
+    #: beyond the signal's target or stop is not taken: no trade, the order is dropped as
+    #: ENTRY_SKIPPED_BEYOND_LEVEL and the strategy's on_fill_skipped() is told. False keeps the
+    #: legacy behaviour (a fill through the stop is taken and closed as SL_GAP_ENTRY).
+    skip_fill_beyond_levels: bool = False
+
     def with_(self, **kw) -> RunConfig:
         return replace(self, **kw)
 

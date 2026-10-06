@@ -51,7 +51,7 @@ import yaml
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import manifest as manifest_mod
-from signal_engine.backtest import regime, regime_data, run_artifact
+from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics
 from signal_engine.backtest.baseline import (
     INTRADAY_MAX_TRADES,
     random_entry_baseline,
@@ -166,6 +166,10 @@ class Execution:
     membership: dict[str, Any] | None = None
     #: Look-ahead check result (`TruncationResult.to_dict()`), or None when it was not run.
     truncation: dict[str, Any] | None = None
+    #: Bars read by n_minutes (overall and by year), or None when the bars carry no n_minutes.
+    n_minutes_distribution: dict[str, Any] | None = None
+    #: The strategy's own `diagnostics()` counters after the headline run, or None without any.
+    strategy_diagnostics: dict[str, int] | None = None
 
 
 #: Symbols the look-ahead check re-runs on truncated data.
@@ -691,6 +695,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     if "warmup_bars" in cfg:
         run = run.with_(warmup_bars=int(cfg["warmup_bars"]))
     loaded_symbols, universe = sorted(frames), len(frames)
+    n_minutes = run_diagnostics.n_minutes_distribution(frames)
     layer = _build_data_layer(
         frames,
         collector,
@@ -732,6 +737,8 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     # The recorder serves this one headline run; no other call below receives one.
     recorder = LedgerRecorder()
     trades = bt.trades(params, "all", recorder=recorder)
+    # Read before the truncation check re-runs the same strategy instance.
+    diagnostics = run_diagnostics.strategy_diagnostics(strategy)
     _record_data_exclusions(recorder, collector, layer.dropped)
     ledgers = recorder.to_frames()
     ledger_problems = recorder.reconcile(ledgers, trades)
@@ -742,7 +749,14 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         ).to_dict()
         del kept
     cost_model = _cost_model_or_none(kind, cfg.get("slippage_bps_per_side"))
-    if (
+    if cost_model is not None and cfg.get("sizing_basis") == "fixed_notional":
+        # The spec states every trade is a fixed notional: costs are priced at that amount.
+        if cfg.get("capital_per_trade") is None:
+            raise ValueError("sizing.basis is fixed_notional but sizing.capital_per_trade is unset")
+        cost_model = dataclasses.replace(
+            cost_model, fixed_notional=float(cfg["capital_per_trade"])
+        )
+    elif (
         cost_model is not None
         and _stop_is_none(cfg.get("stop"))
         and cfg.get("capital_per_position") is not None
@@ -806,6 +820,8 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         data_report=layer.data_report,
         membership=layer.membership,
         truncation=truncation,
+        n_minutes_distribution=n_minutes,
+        strategy_diagnostics=diagnostics,
     )
 
 
@@ -891,6 +907,8 @@ _INTENT_SETTINGS = {
     "stop": ("stop",),
     "holding_period": ("holding_period",),
     "capital_per_position": ("portfolio", "capital_per_position"),
+    "sizing_basis": ("sizing", "basis"),
+    "capital_per_trade": ("sizing", "capital_per_trade"),
 }
 
 
@@ -902,6 +920,8 @@ def _intent_settings(intent: Mapping[str, Any]) -> dict[str, Any]:
             node = node.get(step) if isinstance(node, Mapping) else None
         if node is not None:
             out[name] = node
+    if "sizing_basis" not in out:
+        out.pop("capital_per_trade", None)  # only meaningful with a stated basis
     return out
 
 

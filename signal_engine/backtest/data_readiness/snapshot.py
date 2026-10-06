@@ -383,9 +383,12 @@ def open_version(version_id: str, *, root: str | Path = DEFAULT_ROOT,
     con = duckdb.connect(":memory:")
     try:
         con.execute(f"CREATE VIEW bars AS SELECT * FROM read_parquet({files!r})")
+        # Intraday objects carry the number of source minutes of each bar; daily ones do not.
+        has_n = "n_minutes" in {r[0] for r in con.execute("DESCRIBE bars").fetchall()}
         con.execute(
             "CREATE VIEW market_data AS SELECT symbol, exchange, interval, timestamp, open, high, "
-            f"low, close, volume, 0::BIGINT AS oi, TIMESTAMP '{m['created_ist']}' AS created_at "
+            f"low, close, volume, {'n_minutes, ' if has_n else ''}0::BIGINT AS oi, "
+            f"TIMESTAMP '{m['created_ist']}' AS created_at "
             "FROM bars" + (f" WHERE {' AND '.join(where)}" if where else ""))
         yield con
     finally:

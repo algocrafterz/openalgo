@@ -169,3 +169,38 @@ class TestProfile:
         assert "net_r" in profile and "net_bps" not in profile
         assert "fixed_notional" not in profile
         assert br._validate_cost_model(profile) == []
+
+
+class TestCostProfileRecordsTheRateTable:
+    def profile(self, **kw):
+        trades = [no_stop(0.01), no_stop(-0.01, symbol="B.NS")]
+        return costs.cost_profile(trades, model(product="MIS", **kw), flat_bps=16.0)
+
+    def test_the_model_basis_notional_and_stress_levels_are_recorded(self):
+        p = self.profile()
+        assert (p["model"], p["product"], p["exchange"]) == ("statutory-per-trade", "MIS", "NSE")
+        assert p["notional_basis"] == "fixed_notional" and p["fixed_notional"] == FIXED
+        assert p["slippage_bps_per_side"] == 4.0
+        assert p["stress_levels"] == [1.0, 1.5, 2.0]
+        assert set(p["total_bps_at"]) == {"1.0", "1.5", "2.0"}
+
+    def test_the_risk_basis_is_labelled_for_a_stop_sized_model(self):
+        p = costs.cost_profile([stop_based()], model(product="MIS", fixed_notional=None), 16.0)
+        assert p["notional_basis"] == "risk" and "fixed_notional" not in p
+
+    def test_the_statutory_rate_lines_are_the_intraday_schedule(self):
+        table = self.profile()["rate_table"]
+        assert table["tax_label"] == "GST" and table["tax_rate"] == 0.18
+        assert set(table["charges"]) == {"brokerage", "stt", "exchange_txn", "sebi", "stamp_duty"}
+        assert table["charges"]["stt"]["basis"] == "sell"
+        assert table["charges"]["stt"]["rate"] == 0.00025
+        assert table["charges"]["brokerage"]["cap"] == 20.0
+
+    def test_the_hash_identifies_the_table_and_follows_any_change(self):
+        p = self.profile()
+        assert p["rate_table_sha256"] == costs.rate_table_sha256(p["rate_table"])
+        assert len(p["rate_table_sha256"]) == 64
+        changed = {**p["rate_table"], "tax_rate": 0.19}
+        assert costs.rate_table_sha256(changed) != p["rate_table_sha256"]
+        assert costs.rate_table_sha256(costs.rate_table("MIS", "NSE")) == p["rate_table_sha256"]
+        assert costs.rate_table_sha256(costs.rate_table("CNC", "NSE")) != p["rate_table_sha256"]

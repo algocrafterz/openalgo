@@ -45,6 +45,7 @@ PORTFOLIO_SCOPES = ("global", "per_symbol")
 SELECTIONS = ("chronological", "rank_by_score", "equal_allocation")
 CONFLICTS = ("skip_if_symbol_open", "close_and_reverse", "ignore_opposite_signal")
 RE_ENTRY_TRIGGERS = ("after_stop", "after_target", "after_time_exit", "same_signal")
+SIZING_BASES = ("fixed_notional", "risk")
 DESTINATIONS = ("python", "pine_tradingview")
 #: The universe declarations a spec can make, and the only value each key may hold for it. The
 #: current F&O list is today's membership applied to the past: never point-in-time, always biased.
@@ -113,6 +114,12 @@ FIELDS: tuple[FieldDef, ...] = (
     _f("re_entry.trigger", INTENT, DEFAULTABLE, LOW, RE_ENTRY_TRIGGERS, condition=_RE),
     _f("sizing.risk_per_trade_pct", INTENT, BLOCKER, HIGH),
     _f("sizing.capital_per_trade", INTENT, BLOCKER, HIGH),
+    _f("sizing.basis", INTENT, OPTIONAL, HIGH, SIZING_BASES),
+    _f("data.frequency", INTENT, OPTIONAL, HIGH, TIMEFRAMES),
+    _f("data.field_families", INTENT, OPTIONAL, HIGH),
+    _f("data.min_n_minutes", INTENT, OPTIONAL, HIGH),
+    _f("data.complete_bins", INTENT, OPTIONAL, HIGH),
+    _f("information_boundary", INTENT, OPTIONAL, MEDIUM),
     _f("portfolio.mode", INTENT, BLOCKER, HIGH, PORTFOLIO_MODES),
     _f("portfolio.scope", INTENT, DERIVABLE, HIGH, PORTFOLIO_SCOPES, condition="single_position"),
     _f("portfolio.max_concurrent", INTENT, BLOCKER, HIGH, condition=_MULTI),

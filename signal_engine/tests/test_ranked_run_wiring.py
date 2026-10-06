@@ -202,3 +202,43 @@ class TestPanelTruncation:
     def test_the_coverage_note_says_the_ranking_was_recomputed(self):
         result = _truncation(CausalPanel)
         assert "panel" in result.coverage.lower()
+
+
+class TestFixedNotionalSizingBasis:
+    """sizing.basis fixed_notional prices every trade's costs at sizing.capital_per_trade."""
+
+    def run(self, ranked, **extra):
+        base = {k: v for k, v in SETTINGS.items() if k not in ("stop", "capital_per_position")}
+        return rr.execute_backtest("k", dataset=ranked["res"], settings={**base, **extra},
+                                   run_truncation=False)
+
+    def test_the_basis_binds_the_cost_model_even_when_the_spec_has_a_stop(self, ranked):
+        exe = self.run(ranked, stop="1 ATR below entry", sizing_basis="fixed_notional",
+                       capital_per_trade=100000)
+        assert exe.cost_model.fixed_notional == 100000.0
+
+    def test_the_basis_wins_over_a_portfolio_capital_per_position(self, ranked):
+        exe = self.run(ranked, stop="none", capital_per_position=50000,
+                       sizing_basis="fixed_notional", capital_per_trade=100000)
+        assert exe.cost_model.fixed_notional == 100000.0
+
+    def test_the_risk_basis_and_no_basis_keep_risk_sizing(self, ranked):
+        assert self.run(ranked, stop="1 ATR below entry").cost_model.fixed_notional is None
+        risk = self.run(ranked, stop="1 ATR below entry", sizing_basis="risk",
+                        capital_per_trade=100000)
+        assert risk.cost_model.fixed_notional is None
+
+    def test_no_basis_and_no_stop_still_uses_the_capital_per_position(self, ranked):
+        exe = self.run(ranked, stop="none", capital_per_position=70000)
+        assert exe.cost_model.fixed_notional == 70000.0
+
+    def test_a_fixed_notional_basis_without_an_amount_is_refused(self, ranked):
+        with pytest.raises(ValueError, match="capital_per_trade"):
+            self.run(ranked, stop="1 ATR below entry", sizing_basis="fixed_notional")
+
+    def test_the_intent_settings_carry_the_sizing_block(self):
+        got = rr._intent_settings({"sizing": {"basis": "fixed_notional",
+                                              "capital_per_trade": 100000,
+                                              "risk_per_trade_pct": 1.0}})
+        assert got == {"sizing_basis": "fixed_notional", "capital_per_trade": 100000}
+        assert rr._intent_settings({"sizing": {"capital_per_trade": 1}}) == {}

@@ -61,3 +61,30 @@ def clv(df: pd.DataFrame) -> pd.Series:
     """Close location value in [0, 1]: where the close sits inside the bar; 0.5 for a flat bar."""
     rng = df["High"] - df["Low"]
     return ((df["Close"] - df["Low"]) / rng.where(rng > 0)).fillna(0.5)
+
+
+def session_vwap_sd(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Session VWAP of hlc3 and its volume-weighted standard deviation.
+
+    tp = (High + Low + Close) / 3; VWAP = sum(v * tp) / sum(v);
+    SD = sqrt(max(sum(v * tp^2) / sum(v) - VWAP^2, 0)), both accumulated from the session's
+    first bar and including the current one. NaN while cumulative volume is 0.
+    """
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3
+    day = pd.Series(df.index.date, index=df.index)
+    volume = df["Volume"].groupby(day).cumsum().replace(0, np.nan)
+    vwap = (tp * df["Volume"]).groupby(day).cumsum() / volume
+    second = (tp * tp * df["Volume"]).groupby(day).cumsum() / volume
+    sd = np.sqrt((second - vwap * vwap).clip(lower=0.0))
+    return vwap, sd
+
+
+def adx(df: pd.DataFrame, n: int = 14) -> pd.Series:
+    """ADX (ta.dmi's adx): Wilder-smoothed DX, running continuously across sessions."""
+    up, dn = df["High"].diff(), -df["Low"].diff()
+    plus = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=df.index)
+    minus = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=df.index)
+    a = rma(true_range(df), n).replace(0, np.nan)
+    pdi, mdi = 100 * rma(plus, n) / a, 100 * rma(minus, n) / a
+    dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
+    return rma(dx, n)

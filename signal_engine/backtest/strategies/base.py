@@ -31,6 +31,10 @@ class Strategy(ABC):
     #: cutoff is being reported on a fraction of its own signals, which reads as a weak
     #: strategy rather than as a misconfigured harness. Leave empty to take the defaults.
     run_overrides: dict = {}
+    #: True: the engine asks target() for the take-profit level on every bar of an open
+    #: position instead of using the fixed signal target, and a bar that opens beyond that
+    #: level fills at its open. False (every strategy before IDEA-029) leaves the engine as is.
+    dynamic_target: bool = False
 
     # ---- required -------------------------------------------------------
 
@@ -84,6 +88,26 @@ class Strategy(ABC):
 
     def trail(self, c: Ctx, i: int, p, pos: Position) -> float | None:
         """Return a new stop level, or None to leave it. The engine only ever ratchets."""
+        return None
+
+    def target(self, c: Ctx, j: int, p, pos: Position) -> float:
+        """The take-profit level on bar j, read only when `dynamic_target` is True.
+
+        Must use data from bars <= j - 1 only: the level is a resting order placed before
+        bar j trades. The stop still wins a bar that reaches both.
+        """
+        return pos.tp
+
+    def on_fill(self, c: Ctx, i: int, p, pos: Position) -> None:
+        """Called when a pending signal fills at bar i's open."""
+        return None
+
+    def on_fill_skipped(self, c: Ctx, i: int, p, sig: EntrySignal) -> None:
+        """Called when RunConfig.skip_fill_beyond_levels drops the fill at bar i's open."""
+        return None
+
+    def on_exit(self, c: Ctx, i: int, p, trade) -> None:
+        """Called when the position closes on bar i, with the finished Trade."""
         return None
 
     def custom_exit(self, c: Ctx, i: int, p, pos: Position) -> str | None:

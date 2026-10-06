@@ -43,6 +43,7 @@ _K_NO_NEXT = CODE_INDEX["NO_NEXT_BAR"]
 _K_DROP_SESSION = CODE_INDEX["ORDER_DROPPED_SESSION_END"]
 _K_DROP_POS = CODE_INDEX["ORDER_DROPPED_POSITION_OPEN"]
 _K_WARMUP = CODE_INDEX["WARMUP"]
+_K_SKIP_FILL = CODE_INDEX["ENTRY_SKIPPED_BEYOND_LEVEL"]
 
 
 def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Trade]:
@@ -73,6 +74,9 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
     strategy.reset_symbol(p)
     cost_frac = run.cost_bps / 100.0 / 100.0  # bps -> fraction of notional
     warmup = run.warmup_bars
+    # Both opt-in; with the defaults neither changes a single comparison below.
+    dyn_target = bool(getattr(strategy, "dynamic_target", False))
+    skip_fill = run.skip_fill_beyond_levels
 
     # Broker MIS square-off guard: the exit bar must CLOSE margin minutes before the broker's
     # auto square-off, so the latest allowed exit-bar stamp is square-off - margin - bar length.
@@ -138,6 +142,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             b_stamp((trade, cur_sig, pos.direction, legs))
         trades.append(trade)
         pos = None
+        strategy.on_exit(c, i, p, trade)
 
     for i in range(n):
         if new_sess[i]:
@@ -152,7 +157,21 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             sig, sig_px = pending
             pending = None
             fill = float(o[i])
-            if pos is None:
+            if (
+                pos is None
+                and skip_fill
+                and (
+                    (fill >= sig.tp or fill <= sig.sl)
+                    if sig.direction == 1
+                    else (fill <= sig.tp or fill >= sig.sl)
+                )
+            ):
+                # Skip-at-fill: the open is already at/beyond the target or the stop, so the
+                # order is not taken. Not a trade, so it uses no daily slot or direction.
+                if rec is not None:
+                    b_ord((pend_i, sig.direction, -1, _K_SKIP_FILL))
+                strategy.on_fill_skipped(c, i, p, sig)
+            elif pos is None:
                 pos = Position(
                     direction=sig.direction,
                     entry=fill,
@@ -176,6 +195,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                         sig.direction, fill, float(sig.sl), pos.targets, run.exit_plan
                     )
                 trades_today += 1
+                strategy.on_fill(c, i, p, pos)
                 if rec is not None:
                     cur_sig, legs_logged = pend_i, 0
                     b_ord((pend_i, sig.direction, i, -1))
@@ -228,14 +248,18 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
 
             gapped = (o[i] <= pos.sl_eff) if d == 1 else (o[i] >= pos.sl_eff)
             hit_sl = (low[i] <= pos.sl_eff) if d == 1 else (h[i] >= pos.sl_eff)
-            hit_tp = (h[i] >= pos.tp) if d == 1 else (low[i] <= pos.tp)
+            tp = strategy.target(c, i, p, pos) if dyn_target else pos.tp
+            hit_tp = (h[i] >= tp) if d == 1 else (low[i] <= tp)
 
             if gapped:
                 close_out("SL_GAP", o[i], i)
             elif hit_sl:
                 close_out("SL", pos.sl_eff, i)
             elif hit_tp:
-                close_out("TP", pos.tp, i)
+                if dyn_target:
+                    # a resting limit: a bar that opens through it fills at the open
+                    tp = max(float(o[i]), tp) if d == 1 else min(float(o[i]), tp)
+                close_out("TP", tp, i)
             else:
                 reason = ""
                 if mins[i] >= time_exit_min:

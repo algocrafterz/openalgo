@@ -53,6 +53,11 @@ class DataContract:
     # Intraday only: the dataset field families the strategy uses (data-quality policy). None =
     # not declared, so every family is required (the conservative default).
     field_families: tuple[str, ...] | None = None
+    # Intraday only: a session is usable only when every bin from first to last (inclusive, on the
+    # frequency grid) is present and each of those bars was built from at least min_n_minutes
+    # source minutes. None = not declared, nothing is enforced.
+    min_n_minutes: int | None = None
+    complete_bins: tuple[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -62,6 +67,12 @@ class DataContract:
             d.pop("field_families")
         else:
             d["field_families"] = list(self.field_families)
+        if self.min_n_minutes is None:
+            d.pop("min_n_minutes")
+        if self.complete_bins is None:
+            d.pop("complete_bins")
+        else:
+            d["complete_bins"] = list(self.complete_bins)
         return d
 
 
@@ -128,6 +139,26 @@ def _field_families(frozen: Any) -> tuple[str, ...] | None:
     return tuple(declared)
 
 
+def _min_n_minutes(frozen: Any) -> int | None:
+    declared = (frozen.intent.get("data") or {}).get("min_n_minutes")
+    if declared is None:
+        return None
+    value = _int(declared)
+    if value is None or value < 1:
+        raise ContractError(f"data.min_n_minutes must be a positive integer, got {declared!r}")
+    return value
+
+
+def _complete_bins(frozen: Any) -> tuple[str, str] | None:
+    declared = (frozen.intent.get("data") or {}).get("complete_bins")
+    if declared is None:
+        return None
+    if not (isinstance(declared, dict) and set(declared) == {"first", "last"}
+            and all(isinstance(v, str) for v in declared.values())):
+        raise ContractError(f"data.complete_bins needs first and last as HH:MM, got {declared!r}")
+    return declared["first"], declared["last"]
+
+
 def resolve_contract(frozen: Any) -> DataContract:
     """The data contract of a frozen spec. Raises ContractError for an unusable spec."""
     frequency = _frequency(frozen.intent.get("timeframe"))
@@ -150,4 +181,6 @@ def resolve_contract(frozen: Any) -> DataContract:
         universe_version=version,
         notes=notes,
         field_families=_field_families(frozen) if not daily else None,
+        min_n_minutes=_min_n_minutes(frozen) if not daily else None,
+        complete_bins=_complete_bins(frozen) if not daily else None,
     )

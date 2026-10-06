@@ -13,6 +13,7 @@ bucket of a day reads the previous day's last bucket close.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 SESSION_OPEN_MINUTE = 9 * 60 + 15
@@ -31,3 +32,53 @@ def htf_prev_close(df: pd.DataFrame, minutes: int = 15) -> pd.Series:
     bucket_close = df["Close"].groupby(keys, sort=False).last()
     prev = bucket_close.shift(1)
     return pd.Series(prev.reindex(keys).values, index=df.index, name="htf_prev_close")
+
+
+#: Fixed 15-minute blocks per session: 09:15, 09:30, ..., 15:00 (the last closes at 15:15).
+BLOCKS_PER_SESSION = 24
+
+
+def resample_15m(df: pd.DataFrame, bar_minutes: int = 5) -> pd.DataFrame:
+    """Fixed 15-minute bars built from 5-minute bars, anchored at 09:15 in every session.
+
+    O = first open, H = max, L = min, C = last close, V = sum. Only COMPLETE blocks are kept:
+    all three 5-minute bars (block start, +5, +10) present and inside 09:15-15:15. Bars outside
+    that window (the closing auction from 15:15) never enter, and an incomplete block, or a
+    session that is absent, contributes no observation. Indexed by block open time.
+    """
+    per_block = 15 // bar_minutes
+    minute_of_day = df.index.hour * 60 + df.index.minute
+    offset = minute_of_day - SESSION_OPEN_MINUTE
+    inside = (offset >= 0) & (offset < 15 * BLOCKS_PER_SESSION)
+    d = df.loc[inside, ["Open", "High", "Low", "Close", "Volume"]]
+    start = d.index.floor("D") + pd.to_timedelta(
+        SESSION_OPEN_MINUTE + (offset[inside] // 15) * 15, unit="m"
+    )
+    g = d.groupby(start, sort=True)
+    out = g.agg(
+        Open=("Open", "first"),
+        High=("High", "max"),
+        Low=("Low", "min"),
+        Close=("Close", "last"),
+        Volume=("Volume", "sum"),
+    )
+    out = out[g.size() == per_block]
+    out.index.name = None
+    return out
+
+
+def completed_htf_position(
+    index: pd.DatetimeIndex,
+    htf_index: pd.DatetimeIndex,
+    htf_minutes: int = 15,
+    bar_minutes: int = 5,
+) -> np.ndarray:
+    """Position in `htf_index` of the latest completed higher-timeframe bar for each bar.
+
+    A bar opened at t closes at t + bar_minutes; a higher-timeframe bar opened at T completes
+    at T + htf_minutes. The result is the last T with T + htf_minutes <= t + bar_minutes, or -1
+    when none exists yet. Both indexes must be sorted and in the same timezone.
+    """
+    closes = (index + pd.Timedelta(minutes=bar_minutes)).asi8
+    htf_closes = (htf_index + pd.Timedelta(minutes=htf_minutes)).asi8
+    return np.searchsorted(htf_closes, closes, side="right") - 1
