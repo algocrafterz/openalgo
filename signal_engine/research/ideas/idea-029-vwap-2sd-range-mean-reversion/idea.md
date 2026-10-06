@@ -152,3 +152,7 @@ data:
   - The strategy and its data contract are unchanged.
 - 2026-10-06: the single baseline ran on the third attempt (run `2026-10-06-vwap-2sd-range-mean-reversion-v1`, trial 1): VALID, NO_EDGE, gross -4.18 bps, net -20.18 bps.
 - 2026-10-06: independent Opus review: trustworthy with caveats; the defects above are logged, none changes the sign. Rejected (no-gross-edge). v1 is not tuned or rerun.
+- 2026-10-07: generic fixes from the review landed for future runs (v1 is not rerun and its record is unchanged): float64 decisions with per-symbol streaming (`1890abb16`; a rerun changes 1 of 26,036 trades), the intraday price floor on the NSE raw close (`faf00cb02`), and the statutory broker-specific cost headline with cost scenarios (`531ae59ee`).
+- 2026-10-07: correction to review finding A2. Only 802 of the 3,139 PRICE_FLOOR exclusions were caused by back-adjustment (ADANIPOWER 733, SUZLON 40, INOXWIND 29). The other 2,337 (IDEA, most SUZLON, CGPOWER, MAHABANK) really traded below Rs 10 and stay excluded.
+- 2026-10-07: finding D5 confirmed. The run charged generic discount-broker brokerage; the deployed broker (Flattrade) charges none. Recomputed from the v1 trades (illustration, not a run): primary Flattrade 11.55 bps round trip, net -15.73 bps; generic broker 16.27 bps, net -20.45 bps; flat 32 bps, net -36.18 bps. Gross stays -4.18 bps, so the verdict is unchanged.
+
