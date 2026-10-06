@@ -102,6 +102,9 @@ def unify_symbol(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
     legacy_raw: snapshot bars; fetched_raw: `fetched_sessions` output."""
     cls = classes[classes.symbol == symbol]
     legacy = ic.clean(ic.with_clock(legacy_raw))[0] if len(legacy_raw) else legacy_raw
+    aligned = pd.DataFrame(columns=["session", "applied", "second_min", "second_max"])
+    if len(fetched_raw):
+        fetched_raw, aligned = ic.align_timestamps(fetched_raw)
     fetched = ic.clean(fetched_raw)[0] if len(fetched_raw) else fetched_raw
     prov = provenance_rows(symbol, legacy, fetched, classes, requests)
     replace = set(prov[prov.result.isin(["mismatch", "scaled"])].session)
@@ -130,6 +133,13 @@ def unify_symbol(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
     else:
         sessions = sessions.assign(status=None, origin=None, structure_ok=None,
                                    missing_minutes=np.nan)
+    done = aligned[aligned.applied.astype(bool)]
+    sessions["timestamp_aligned"] = (sessions.session.isin(set(done.session))
+                                     & sessions.origin.fillna("").str.startswith("recovered"))
+    basis = {d: f"vendor stamps {a}-{z} s past the previous minute; aligned to the minute start"
+             for d, a, z in zip(done.session, done.second_min, done.second_max, strict=True)}
+    sessions["timestamp_basis"] = sessions.session.map(basis).where(
+        sessions.timestamp_aligned, None)
     sessions.loc[sessions.cls == ip.OUT_OF_SCOPE_MUHURAT, "status"] = ip.OUT_OF_SCOPE_MUHURAT
     sessions.loc[sessions.status.isna(), "status"] = "missing"
     return bars, sessions, prov
@@ -174,11 +184,17 @@ def quality_table(sessions: pd.DataFrame, n: int) -> pd.DataFrame:
     s["final_defect"] = defect
     origin = s.origin.fillna("")
     legacy_defect = origin.eq("legacy") & s.defect_type.notna()
+    aligned = s.get("timestamp_aligned", pd.Series(False, index=s.index)).fillna(False)
     s["treatment"] = np.select(
-        [scope, s.status.eq("missing"), origin.str.startswith("recovered"),
-         legacy_defect, origin.eq("legacy") & s.contaminated.fillna(False).astype(bool)],
-        ["expected:out_of_scope", "excluded:missing_session", "recovered",
-         "unresolved:irrecoverable_at_source", "repaired:foreign_bar_removal"], "accepted")
+        [scope, s.status.eq("missing"), aligned.astype(bool) & s.price_valid,
+         origin.str.startswith("recovered"), legacy_defect,
+         origin.eq("legacy") & s.contaminated.fillna(False).astype(bool)],
+        ["expected:out_of_scope", "excluded:missing_session", ic.ALIGNED_TREATMENT,
+         "recovered", "unresolved:irrecoverable_at_source", "repaired:foreign_bar_removal"],
+        "accepted")
+    # An excluded session never reads "accepted": it carries its exclusion.
+    excluded = s.treatment.isin(["accepted", "recovered"]) & ~s.price_valid
+    s.loc[excluded, "treatment"] = "excluded:" + s.loc[excluded, "final_defect"].astype(str)
     return s
 
 

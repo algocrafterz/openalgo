@@ -208,6 +208,44 @@ def provenance_summary(prov: pd.DataFrame, sessions: pd.DataFrame) -> dict:
 
 # ---------------------------------------------------------------- report
 
+def repair_impact(build: Path, report_families: dict, requested: pd.DataFrame) -> dict | None:
+    """Before/after of the timestamp-alignment repair, against the report saved before it."""
+    pre_path = build / "report_pre_alignment.json"
+    if not pre_path.exists():
+        return None
+    pre = json.loads(pre_path.read_text())
+    upl = requested[requested.symbol.isin(ic.ALIGNMENT["symbols"])]
+    pre_valid = dict(pre["sessions"]["valid"])
+    return {
+        "overall_rate": {f: {"before": pre["field_families"][f]["overall"],
+                             "after": report_families[f]["overall"]} for f in FAMILIES},
+        "valid_sessions_all_symbols": {f: {"before": pre_valid[f],
+                                           "after": int(requested[f"{f}_valid"].sum())}
+                                       for f in FAMILIES},
+        "upl_valid_sessions_after": {f: int(upl[f"{f}_valid"].sum()) for f in FAMILIES},
+        "upl_requested": int(len(upl)),
+        "sessions_restored": int((requested.treatment == ic.ALIGNED_TREATMENT).sum()),
+        "aligned_but_failing": int((requested.timestamp_aligned.fillna(False).astype(bool)
+                                    & ~requested.price_valid).sum()),
+    }
+
+
+def cleanup_findings(build: Path) -> dict:
+    """What cleanup rule C1 actually removed from the legacy store, by symbol (correction of the
+    earlier reading that the off-minute bars were Flattrade contamination)."""
+    led = pd.read_parquet(build / "cleanup_ledger.parquet")
+    c1 = led[led.rule == "C1_off_minute"]
+    by_symbol = c1.symbol.value_counts()
+    return {"c1_off_minute_bars": int(len(c1)),
+            "c1_by_symbol_top": by_symbol.head(5).to_dict(),
+            "c1_share_upl": round(float(by_symbol.get("UPL", 0) / max(len(c1), 1)), 4),
+            "c2_pre_open_bars": int((led.rule == "C2_pre_open").sum()),
+            "reading": "C1 off-minute bars are predominantly UPL's own AngelOne bars stamped "
+                       "1-6 s before the minute (a source timestamp convention, repaired by "
+                       "timestamp_alignment), not Flattrade contamination. Genuine vendor mixing "
+                       "is the 09:14 pre-open bars (C2) and the negative volumes (C3)."}
+
+
 def _frame_json(df: pd.DataFrame) -> dict:
     return json.loads(df.to_json(orient="index"))
 
@@ -308,6 +346,11 @@ def build_report(build: Path, daily_version: str) -> dict:
             "open_field_outside_tolerance": int((~pub.open_ok.astype(bool)).sum()),
         },
         "missing_minute_policy": policy,
+        "missing_minute_note": "N is permissive because 2017-2020 minute data is sparse "
+                               "(P99 of missing minutes 212-254 in those years); every 5m bar "
+                               "carries n_minutes so a strategy contract can set its own minimum",
+        "timestamp_alignment": repair_impact(build, tables, req),
+        "cleanup_findings": cleanup_findings(build),
         "irrecoverability": irrec,
         "provenance": provenance,
         "recovery": {"requests_planned": int(plan["requests_total"]),
@@ -354,6 +397,10 @@ def to_markdown(r: dict) -> str:
               json.dumps(r["conversion"]["fallback_period"], indent=1), "```", "",
               "## Missing-minute policy", "",
               f"N = {r['missing_minute_policy']['N']} ({r['missing_minute_policy']['method']})",
+              "", "## UPL timestamp alignment: before and after", "", "```",
+              json.dumps(r["timestamp_alignment"], indent=1), "```", "",
+              "## Cleanup rule C1: what it removed", "", "```",
+              json.dumps(r["cleanup_findings"], indent=1), "```",
               "", "## Irrecoverability decisions", "", "```",
               json.dumps((r["irrecoverability"] or {}).get("cells"), indent=1), "```", "",
               "## Provenance", "", "```",

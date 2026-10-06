@@ -116,3 +116,23 @@ def test_quality_table_flags_each_field_family_and_treatment():
                                     ic.UNRESOLVED]
     assert q.treatment[2] == "unresolved:irrecoverable_at_source"
     assert q.treatment[0] == "accepted"
+
+
+def test_aligned_upl_session_is_recorded_as_repaired():
+    day = date(2019, 6, 3)
+    rows = []
+    for m in range(555, 930):
+        ts = int(datetime(day.year, day.month, day.day, (m - 1) // 60, (m - 1) % 60, 58,
+                          tzinfo=IST).timestamp())
+        rows.append({"symbol": "UPL", "timestamp": ts, "open": 100.0,
+                     "high": 110.0 if m == 600 else 100.0, "low": 90.0 if m == 660 else 100.0,
+                     "close": 100.0, "volume": 100})
+    fetched = ic.with_clock(pd.DataFrame(rows))
+    classes = _classes({day: ip.RECOVER_GAP}).assign(symbol="UPL")
+    ref = _ref(day).assign(symbol="UPL")
+    _, sess, _ = ib.unify_symbol("UPL", pd.DataFrame(columns=ib._BAR_COLS), classes, fetched,
+                                 _requests(), ref, T)
+    q = ib.quality_table(sess, 190)
+    row = q.iloc[0]
+    assert row.price_valid and row.timestamp_aligned
+    assert row.treatment == ic.ALIGNED_TREATMENT and "58-58" in row.timestamp_basis

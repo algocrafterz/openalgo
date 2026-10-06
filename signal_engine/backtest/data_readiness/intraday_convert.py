@@ -111,6 +111,49 @@ def with_clock(bars: pd.DataFrame) -> pd.DataFrame:
                        minute=ist.dt.hour * 60 + ist.dt.minute, second=ist.dt.second)
 
 
+ALIGNMENT = POLICY["timestamp_alignment"]
+ALIGNED_TREATMENT = "repaired:TIMESTAMP_ALIGNMENT"
+
+
+def align_timestamps(bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The fourth approved repair (policy `timestamp_alignment`), exactly as scoped.
+
+    A session of a listed symbol inside the listed period is aligned only when every bar is
+    1..max seconds before a whole minute and moving each stamp up to that minute gives one bar
+    per minute; then each timestamp moves up to the minute. OHLCV is untouched. Returns
+    (bars, one log row per in-scope session: applied, original seconds range, reason)."""
+    b = bars if "second" in bars else with_clock(bars)
+    first = pd.Timestamp(ALIGNMENT["first_session"])
+    last = pd.Timestamp(ALIGNMENT["last_session"])
+    scope = b.symbol.isin(ALIGNMENT["symbols"]) & b.session.between(first, last)
+    log_cols = ["symbol", "session", "n_bars", "second_min", "second_max", "applied", "reason"]
+    if not scope.any():
+        return b, pd.DataFrame(columns=log_cols)
+    lim = ALIGNMENT["max_seconds_before_minute"]
+    shift = (60 - b.second) % 60
+    rows, apply = [], pd.Series(False, index=b.index)
+    for (sym, day), g in b[scope].groupby(["symbol", "session"], sort=True):
+        s = shift[g.index]
+        aligned = g.timestamp + s
+        if (s == 0).all():
+            ok, why = False, "already on the minute"
+        elif not ((s >= 1) & (s <= lim)).all():
+            ok, why = False, f"not every bar 1-{lim} s before a minute"
+        elif aligned.nunique() != len(g):
+            ok, why = False, "alignment would put two bars in one minute"
+        else:
+            ok, why = True, "aligned"
+        if ok:
+            apply[g.index] = True
+        rows.append({"symbol": sym, "session": day, "n_bars": len(g),
+                     "second_min": int(g.second.min()), "second_max": int(g.second.max()),
+                     "applied": ok, "reason": why})
+    out = b.copy()
+    out.loc[apply, "timestamp"] = out.loc[apply, "timestamp"] + shift[apply]
+    out = with_clock(out.drop(columns=["session", "minute", "second"]))
+    return out, pd.DataFrame(rows, columns=log_cols)
+
+
 def clean(bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """C1 off-minute and C2 pre-09:15 bars are removed; C3 negative volume flags the session.
 

@@ -257,3 +257,53 @@ def test_constants_are_the_contract():
     assert (ic.VOL_LO, ic.VOL_HI, ic.OPEN_TOL) == (0.85, 1.02, 0.005)
     assert ic.FALLBACK_PAIRS == (("open", "close"), ("high", "open"), ("high", "close"),
                                  ("low", "open"), ("low", "close"))
+
+
+# ---------------------------------------------------------------- timestamp alignment (B7)
+
+UPL_DAY = date(2019, 6, 3)
+
+
+def _shifted(day, symbol="UPL", seconds=(58, 59, 56), n=375):
+    rows = []
+    for i, m in enumerate(range(555, 555 + n)):
+        sec = seconds[i % len(seconds)]
+        ts = _ts(day, m - 1, sec)            # stamped a few seconds before minute m
+        rows.append({"symbol": symbol, "timestamp": ts, "open": 100.0, "high": 100.0,
+                     "low": 100.0, "close": 100.0, "volume": 10})
+    return pd.DataFrame(rows)
+
+
+def test_alignment_moves_every_stamp_up_to_its_minute_and_keeps_ohlcv():
+    raw = _shifted(UPL_DAY)
+    out, log = ic.align_timestamps(raw)
+    assert log.applied.item() and log.reason.item() == "aligned"
+    assert (out.second == 0).all() and out.minute.min() == 555 and out.minute.max() == 929
+    pd.testing.assert_frame_equal(out[["open", "high", "low", "close", "volume"]].reset_index(
+        drop=True), raw[["open", "high", "low", "close", "volume"]].reset_index(drop=True))
+    assert ic.summarise(out, T).missing_minutes.item() == 0
+
+
+@pytest.mark.parametrize("raw, reason", [
+    (_shifted(UPL_DAY, seconds=(58, 0)), "not every bar 1-6 s before a minute"),
+    (_shifted(UPL_DAY, seconds=(50,)), "not every bar 1-6 s before a minute"),
+])
+def test_alignment_is_refused_unless_every_bar_matches(raw, reason):
+    out, log = ic.align_timestamps(raw)
+    assert not log.applied.item() and log.reason.item() == reason
+    assert out.timestamp.tolist() == raw.timestamp.tolist()
+
+
+def test_alignment_refuses_collisions():
+    raw = _shifted(UPL_DAY, n=3)
+    raw = pd.concat([raw, raw.iloc[[0]].assign(timestamp=raw.timestamp.iloc[0] + 1)])
+    out, log = ic.align_timestamps(raw)
+    assert not log.applied.item() and "two bars in one minute" in log.reason.item()
+
+
+@pytest.mark.parametrize("symbol, day", [("SBIN", UPL_DAY), ("UPL", date(2021, 3, 5)),
+                                         ("UPL", date(2016, 12, 30))])
+def test_alignment_never_applies_outside_its_scope(symbol, day):
+    raw = _shifted(day, symbol=symbol, n=5)
+    out, log = ic.align_timestamps(raw)
+    assert log.empty and out.timestamp.tolist() == raw.timestamp.tolist()

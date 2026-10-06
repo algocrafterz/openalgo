@@ -288,6 +288,22 @@ publish prices with `volume` invalid.
 | new 22 | `data_policy_version` recorded in the manifest and in every run that uses the version |
 | new 23 | the A4 irrecoverability decisions, with their samples, are in the report |
 
+### B7. UPL timestamp alignment (fourth repair, approved 2026-10-06)
+
+Measured on the 302,765 freshly fetched sessions: AngelOne stamps every UPL bar 1-6 seconds
+before its minute from 2017 to 2021-03-04 (1,034 sessions, 375 distinct bars per session, no
+collisions); no other symbol or period has off-minute stamps. This is a source timestamp
+convention (SOURCE_DEFINITION_DIFFERENCE), not foreign data. Repair `timestamp_alignment`
+(policy file): only UPL, only that period, only when every bar of the session is 1-6 s before a
+minute and alignment gives one bar per minute; each stamp moves up to the minute; OHLCV is
+unchanged; the landing files keep the original stamps. The session records the original basis
+and the treatment `repaired:TIMESTAMP_ALIGNMENT` only if it then passes every normal rule. It is
+not a general off-minute fix.
+
+Correction of section 4: the 395,315 bars that C1 removed from the legacy store were
+predominantly these UPL bars, not Flattrade contamination. The genuine vendor mixing is the 09:14
+pre-open bars (C2) and the negative volumes (C3).
+
 ### B6. The 3% yearly ceiling
 
 It stays, as an alert (A7), not a hard gate. A breach requires the written assessment of A7; it

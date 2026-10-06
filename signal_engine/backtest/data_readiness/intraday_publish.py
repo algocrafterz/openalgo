@@ -46,9 +46,9 @@ LIMITATIONS = ("legacy row-level provenance unavailable (sample-verified); divid
 QUALITY_COLS = ["symbol", "session", "cls", "origin", "price_status", "final_defect",
                 "treatment", "price_valid", "volume_valid", "final_bar_valid",
                 "final_bar_convention", "method", "k", "vol_c", "vol_ratio", "missing_minutes",
-                "open_ok", "contained"]
+                "open_ok", "contained", "timestamp_aligned", "timestamp_basis"]
 _TEXT_COLS = ("cls", "origin", "price_status", "final_defect", "treatment",
-              "final_bar_convention", "method")
+              "final_bar_convention", "method", "timestamp_basis")
 
 
 def _sha_bytes(blob: bytes) -> str:

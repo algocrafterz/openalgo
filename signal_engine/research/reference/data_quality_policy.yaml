@@ -17,6 +17,19 @@ repairs_allowed:
   - price_basis_conversion            # section 6: per-session factor to the canonical NSE basis
   - corporate_action_volume_scaling   # section 6.4: volume scaled by a documented factor
   - foreign_bar_removal               # section 4 C1/C2: bars identifiable as another vendor's
+  - timestamp_alignment               # Part B7: UPL only, exactly the scope below
+
+# Approved 2026-10-06 for one measured source-timestamp defect: AngelOne stamps every UPL bar
+# 1-6 seconds before its minute from 2017 to 2021-03-04 (1,034 sessions; no other symbol or
+# period in 302,765 fetched sessions). Deliberately narrow: it is not a general off-minute fix.
+# It applies only when EVERY bar of the session is 1..max_seconds_before_minute seconds before a
+# whole minute and moving each stamp up to that minute gives one bar per minute. Prices and
+# volume are never changed; the landing files keep the original stamps.
+timestamp_alignment:
+  symbols: [UPL]
+  first_session: 2017-01-01
+  last_session: 2021-03-04
+  max_seconds_before_minute: 6
 
 # Exclusion rates (excluded requested symbol-sessions / requested symbol-sessions), per field
 # family. Alerts require a written assessment answering the seven questions of A7 with a
