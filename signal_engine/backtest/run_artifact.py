@@ -41,7 +41,7 @@ from signal_engine.research.intake import profiles as profiles_mod
 from signal_engine.research.intake.versions import require_aware
 from signal_engine.timeutils import IST
 
-ENGINE_VERSION = "1.0"
+ENGINE_VERSION = "1.1"
 SCHEMA = 4
 #: Packages whose versions are pinned into the manifest (names as in uv.lock).
 ENVIRONMENT_PACKAGES = ("pandas", "numpy", "pyarrow", "duckdb", "pyyaml")

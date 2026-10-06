@@ -158,23 +158,26 @@ class Ctx:
     __slots__ = ("a", "index", "n", "symbol")
 
     def __init__(self, df, symbol: str = ""):
-        # float64 -> float32: every strategy's prepare() adds its own indicator
-        # columns (EMAs, ATR, RSI, ADX, VWAP, pivots, ...) on top of the 5 raw OHLCV
-        # ones, computed via pandas rolling/ewm which default to float64. A
-        # column-heavy strategy (e.g. ema9's ~26 added columns) can dwarf the raw
-        # price data several times over across a full-universe, multi-year panel -
-        # this is where that memory actually goes, not the original OHLCV. float32
-        # still carries far more precision than a NSE tick (paise), so it does not
-        # change which side of a comparison a signal lands on.
+        # Columns keep the dtype prepare() returned (float64 for OHLC and
+        # indicators). A float32 cast merges distinct values into ties (Low 95.2 vs
+        # VWAP 95.19999713 both become 95.19999694), flipping `low <= vwap` style
+        # checks, and the live pipeline is float64, so storage must match it.
         self.a = {}
         for c in df.columns:
             if c == "day":
                 continue
-            arr = df[c].to_numpy()
-            if arr.dtype == np.float64:
-                arr = arr.astype(np.float32)
-            self.a[c] = arr
-        self.a["day"] = df["day"].to_numpy() if "day" in df.columns else None
+            self.a[c] = df[c].to_numpy()
+        if "day" not in df.columns:
+            self.a["day"] = None
+        elif df["day"].dtype == object:
+            # Intern: all bars of a session share one date object. factorize() codes a
+            # missing day as -1, which would index the last session, so it stays None.
+            codes, uniq = df["day"].factorize()
+            arr = uniq.to_numpy(dtype=object)[codes]
+            arr[codes < 0] = None
+            self.a["day"] = arr
+        else:
+            self.a["day"] = df["day"].to_numpy()
         self.index = df.index
         self.n = len(df)
         self.symbol = symbol

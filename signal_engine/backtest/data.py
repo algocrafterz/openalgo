@@ -224,16 +224,12 @@ def historify_symbols(interval: str = "1m", db_path=None) -> list[str]:
 
 
 def _downcast(df: pd.DataFrame) -> pd.DataFrame:
-    """Shrink OHLCV to the smallest safe dtype.
+    """Shrink Volume to uint32; prices stay float64.
 
-    from_historify()/from_historify_daily() hold every requested symbol's frame in
-    memory for the life of the run, so this is a real, load-bearing reduction rather
-    than cosmetic: float64->float32 halves the four price columns, and volume never
-    approaches uint32's ~4.3B cap for a single NSE bar. No precision loss that matters
-    at paise tick sizes - this is one of the fixes for the full-universe OOM crash.
+    Volume never approaches uint32's ~4.3B cap for a single NSE bar. Open/High/Low/
+    Close are NOT cast: float32 merges distinct prices into ties and flips
+    comparisons against float64 indicators (see backtest.types.Ctx).
     """
-    for col in ("Open", "High", "Low", "Close"):
-        df[col] = df[col].astype("float32")
     df["Volume"] = df["Volume"].clip(lower=0).astype("uint32")
     return df
 

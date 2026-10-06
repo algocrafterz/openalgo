@@ -803,7 +803,9 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         None if prepare_panel is None else lambda fr: prepare_panel(fr, params, derive_calendar(fr))  # noqa: E731
     )
     engine_used = simulate_swing if kind == "swing" else simulate
-    bt = Backtest(strategy, engine_frames, run, engine=engine_used, release_raw=True)
+    bt = Backtest(
+        strategy, engine_frames, run, engine=engine_used, release_raw=True, single_pass=True
+    )
     days = [_iso(d) for d in bt.days]
     # The recorder serves this one headline run; no other call below receives one.
     recorder = LedgerRecorder()

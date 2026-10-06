@@ -16,8 +16,8 @@
    "trades": 49,
    "win_rate": 0.2041
   },
-  "series_sha": "3671989d961af48fd400f8bb09026bb686a79a4797a81851c7f5460eaccf8060",
-  "sha": "c51e5966edfc4c10340cc72231ebea1f4de3b0e6e90ce3c9033122fb401f3d99",
+  "series_sha": "5b57cd030a2650301707168ae65391fefde639e77a595d086832e64453dedc47",
+  "sha": "1754849097badfe14896a7709cb5d16edb606eaea6368db33c1843405067688c",
   "trades": 49
  },
  "gap_rsi": {
@@ -37,8 +37,8 @@
    "trades": 168,
    "win_rate": 0.2202
   },
-  "series_sha": "e97edb46fa860f0156be5a3adfc56a6c501353460f3ebc7be321417de2e0a70e",
-  "sha": "a8e7fa53b5b676c9e2ff78913d7838d22cd541ec05e6506af15e7f5d62c16343",
+  "series_sha": "50625c538664e5cd616913a0ace3695e931f30754c75d695910f1e7695ec155b",
+  "sha": "3f4989b2b9af2b3cf81f6e2c9cb0abaad7f2c5c5d3611b24115e17693426565d",
   "trades": 168
  },
  "ibs_meanrev": {
@@ -58,19 +58,19 @@
    "trades": 555,
    "win_rate": 0.5081
   },
-  "series_sha": "b7e8752526ec4d0d8878bd4c56b902d6e2470f690ed71a390683ab3af44e422a",
-  "sha": "5aeb2bd11c336827871f6cd4db30cb4458756b6c4018b2a881bfe072ba0b62fe",
+  "series_sha": "5a090f30b6e6ea21786c4c7f7dcfcd6c5a9554bfaece5891e6ee52f699591a62",
+  "sha": "a689b2411bf0f18dbb55cf48cde4678c1a04c5fc5c14f75ecb324200a54430de",
   "trades": 555
  },
  "liquidity_sweep": {
   "metrics": {
-   "breakeven_cost_bps": 205.7181,
+   "breakeven_cost_bps": 205.7178,
    "days": 2,
    "expectancy_r": 0.2538,
-   "gross_bps": 205.7181,
+   "gross_bps": 205.7178,
    "hurdle_t": 1.972,
    "max_dd_r": 1.3909,
-   "net_bps": 181.7181,
+   "net_bps": 181.7178,
    "payoff": 1.365,
    "profit_factor": 1.365,
    "total_cost_r": 0.4924,
@@ -78,18 +78,18 @@
    "win_rate": 0.5
   },
   "series_sha": "c16c73933d3c2afd7374b6264cdfa6b9e105e6554d79add9cfe870c412e9bf65",
-  "sha": "7aa81c916c3bebb4ddf3fd25197e64bd41a98fe096e51589dc3e000e993bd1ee",
+  "sha": "110b9c63260774c7b58776a7d11d57501b4acec715597480fe950b747f7f5848",
   "trades": 2
  },
  "phoenix": {
   "metrics": {
-   "breakeven_cost_bps": -82.0528,
+   "breakeven_cost_bps": -82.0525,
    "days": 3,
    "expectancy_r": -0.144,
-   "gross_bps": -82.0528,
+   "gross_bps": -82.0525,
    "hurdle_t": 1.972,
    "max_dd_r": 1.1667,
-   "net_bps": -106.0528,
+   "net_bps": -106.0525,
    "payoff": 0.315,
    "profit_factor": 0.63,
    "sharpe": -2.586,
@@ -99,7 +99,7 @@
    "win_rate": 0.6667
   },
   "series_sha": "951f878ed68979fc6bf325bfedafbefa3b6a913687a1d0f0bfdf8d4570ba702e",
-  "sha": "165c1d3007905874407c867e500640171efbe05748e25a7032c6532dc71db796",
+  "sha": "35eab5a2f0b72996ec20d195f5a1825bd16bc7e50e9f8f9da68a16729a7f9fff",
   "trades": 3
  },
  "value_zone": {
@@ -120,7 +120,7 @@
    "win_rate": 0.5833
   },
   "series_sha": "5aac0feef4b06373549d066c7f193fbe715a774caea0ce66d5e081d2cda61169",
-  "sha": "ef4ffb2579eb05bfb8034405e5c8bf55fc6f4052e63d06ec1cbe91b31fb1d9ed",
+  "sha": "52e66628ffb5934a0834ab701b94416bd0d675a640431055eb9d58272d956a7c",
   "trades": 36
  }
 }

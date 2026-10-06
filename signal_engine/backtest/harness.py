@@ -36,6 +36,7 @@ class Backtest:
         is_fraction: float = 1.0 - HOLDOUT_OOS_FRACTION,
         engine=simulate,
         release_raw: bool = False,
+        single_pass: bool = False,
     ):
         # `engine` swaps the simulator without touching the reporting. The intraday
         # `engine.simulate` forces an EOD exit, so a multi-day strategy passes
@@ -48,6 +49,12 @@ class Backtest:
         # e.g. the CLI's single-config report). Leave False for sweep()/ablation(),
         # which re-prepare each symbol under multiple param variants and need the raw
         # frame still there on a cache miss.
+        #
+        # `single_pass`: trades() may run once. Each symbol's Ctx is built, simulated and
+        # dropped together with its raw frame, so peak memory is one Ctx rather than the
+        # whole universe. Requires release_raw=True.
+        if single_pass and not release_raw:
+            raise ValueError("single_pass=True requires release_raw=True")
         self.strategy = strategy
         self.frames = frames
         self.engine = engine
@@ -55,6 +62,8 @@ class Backtest:
         self.days = sessions(frames)  # computed before any release, below
         self.cut = self.days[int(len(self.days) * is_fraction)]
         self.release_raw = release_raw
+        self.single_pass = single_pass
+        self._spent = False
         self._prep: dict = {}
 
     # ---- windows --------------------------------------------------------
@@ -84,6 +93,21 @@ class Backtest:
         keep = self._filter(window)
         out = []
         extra = {} if recorder is None else {"rec": recorder}
+        if self.single_pass:
+            if self._spent:
+                raise RuntimeError(
+                    "trades() already ran under single_pass=True and its frames were "
+                    "released; construct a new Backtest to run again"
+                )
+            self._spent = True
+            for sym in list(self.frames):
+                df = self.frames[sym]
+                ctx = Ctx(self.strategy.prepare_for(sym, df, p), symbol=sym)
+                self.frames[sym] = None
+                del df
+                out += [t for t in self.engine(ctx, self.strategy, p, run, **extra) if keep(t.day)]
+                del ctx
+            return out
         for sym, df in self.frames.items():
             key = (sym, self.strategy.prepare_key(p))
             if key not in self._prep:

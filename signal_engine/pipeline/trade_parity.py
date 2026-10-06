@@ -5,8 +5,8 @@ SimSink standing in for the broker; the engine side is backtest.engine.simulate 
 ExitPlan. Same strategy object and same bars, so a difference is a difference in the code AFTER
 the strategy: fills, stops, targets, the time exit and the per-day entry rules.
 
-Tolerance: the engine casts bars to float32 (backtest.types.Ctx), so prices agree to about 1e-5
-relative; 1e-4 x price is used, and r_gross to 2e-3.
+Tolerance: 1e-4 x price on prices and 2e-3 on r_gross. The engine keeps bars at float64
+(backtest.types.Ctx), as the live pipeline does.
 
 Known gate differences are reported, not hidden: the pipeline runs the validator's pre-trade
 checks (minimum reward:risk, blacklist, price band) that the engine does not model, so a trade

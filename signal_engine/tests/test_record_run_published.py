@@ -10,7 +10,7 @@ import duckdb
 import pytest
 import yaml
 
-from signal_engine.backtest import data
+from signal_engine.backtest import data, harness
 from signal_engine.backtest import record_run as rr
 from signal_engine.backtest.data_readiness import preflight as pf
 from signal_engine.backtest.data_readiness import snapshot
@@ -73,6 +73,20 @@ def test_execute_reads_only_the_published_version(published, no_landing_store):
                              dataset=_resolution(published))
     assert ex.data["source"].startswith("published:nse-daily-test-001")
     assert set(ex.symbols) <= set(SYMS) and ex.days
+
+
+def test_recorded_run_uses_single_pass(published, no_landing_store, monkeypatch):
+    seen = {}
+    real = harness.Backtest
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "Backtest", spy)
+    rr.execute_backtest("high_proximity", settings={}, run_truncation=False,
+                        dataset=_resolution(published))
+    assert seen["single_pass"] is True and seen["release_raw"] is True
 
 
 def test_excluded_symbols_are_never_loaded(published, no_landing_store):

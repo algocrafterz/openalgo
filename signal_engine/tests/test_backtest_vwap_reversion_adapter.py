@@ -27,7 +27,12 @@ from signal_engine.backtest.strategies.base import Strategy
 from signal_engine.backtest.strategies.vwap_reversion import VwapReversion, VwapReversionParams
 from signal_engine.backtest.truncation import truncation_check
 from signal_engine.backtest.types import Ctx, EntrySignal, RunConfig
-from signal_engine.strategy_core.vwap_reversion import INPUT_COLUMNS, build_inputs
+from signal_engine.strategy_core.vwap_reversion import (
+    INPUT_COLUMNS,
+    VwapReversionMachine,
+    bar_from_arrays,
+    build_inputs,
+)
 
 IST = "Asia/Kolkata"
 SPEC = (
@@ -470,7 +475,7 @@ class TestTargetBoundary:
 
     def test_recorded_targets_are_previous_bar_vwap(self, series):
         _, prepared, log, _, _ = series
-        vwap = prepared["vwap"].to_numpy(dtype="float32")
+        vwap = prepared["vwap"].to_numpy(dtype="float64")
         targets = [e for e in log if e[1] == "target"]
         assert targets
         assert all(v == float(vwap[j - 1]) for j, _, v in targets)
@@ -536,3 +541,37 @@ class TestTruncationCheck:
         res = truncation_check(s, P_FAST, frames, run_config(s), symbols=1)
         assert res.ok, res.mismatches
         assert res.compared_total > 0
+
+
+class TestFloat64Ties:
+    def test_vwap_tie_is_not_a_touch(self):
+        low, vwap = 95.2, 95.19999713410674
+        # float32 storage would have merged these two prices into a tie
+        assert np.float32(low) == np.float32(vwap)
+        assert low > vwap
+        n = 2
+        df = pd.DataFrame(
+            {
+                "Open": [100.0, 99.0],
+                "High": [103.0, 99.5],
+                "Low": [99.0, low],
+                "Close": [99.5, 99.0],
+                "vwap": [100.0, vwap],
+                "lower": [97.0, 97.0],
+                "upper": [102.0, 102.0],
+                "ema9": [100.0, 100.0],
+                "atr5": [1.0, 1.0],
+                "regime_ok": [True] * n,
+                "warm": [True] * n,
+                "confirmable": [True] * n,
+            }
+        )
+        df["day"] = pd.Series([pd.Timestamp("2026-03-02").date()] * n)
+        c = Ctx(df, "X")
+        assert bar_from_arrays(c.a, 1).low > bar_from_arrays(c.a, 1).vwap
+        m = VwapReversionMachine(P)
+        m.on_bar(bar_from_arrays(c.a, 0))
+        assert m.diagnostics()["setups_armed_short"] == 1
+        before = m.diagnostics()["setups_cancelled_vwap_touch"]
+        m.on_bar(bar_from_arrays(c.a, 1))
+        assert m.diagnostics()["setups_cancelled_vwap_touch"] == before
