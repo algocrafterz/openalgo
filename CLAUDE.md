@@ -73,16 +73,11 @@ Documentation: https://docs.openalgo.in
 
 ### AI Model Workflow
 
-**Use only the `opus` and `sonnet` model aliases. Opus decides and reviews. Sonnet executes.**
+For non-trivial work, load the `ai-model-workflow` skill (`.claude/skills/ai-model-workflow/SKILL.md`) before proceeding. It is the authoritative procedure for selecting `opus` versus `sonnet`, planning, implementation handoff, escalation, review, and user approval.
 
-- Is deciding WHAT to do substantially harder than implementing HOW? If no, use Sonnet directly. If yes, use Opus for design, Sonnet for implementation, and Opus for review when it is warranted.
-- Opus review is mandatory for trading or backtest logic, financial calculations, broker or order execution, market-data ingestion or transformation, migrations, security, architecture changes, and significant regression risk.
-- Scale the plan to the task. Do not write a plan file for a trivial change.
-- For a non-trivial task, state which workflow you use and each phase when it starts (`Reasoning phase: Opus`). If you skip Opus, briefly say why. State `Plan written to: docs/plans/<change>.md` when you write a plan file.
-- Do not start implementation before the user approves the plan when the change alters trading behavior, security, or architecture.
-- Do not pin model version IDs. Do not use Haiku or other models for this workflow. Pass `model` explicitly when you spawn a subagent.
+Use the workflow for changes involving trading or backtest logic, financial calculations, broker or order execution, market-data ingestion or transformation, migrations, security, architecture, or significant regression risk.
 
-Load the `ai-model-workflow` skill (`.claude/skills/ai-model-workflow/SKILL.md`) before a non-trivial task or any subagent spawn.
+Do not bypass the workflow because the implementation looks straightforward when the decision itself is high-risk or ambiguous.
 
 ### Tests
 

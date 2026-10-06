@@ -5,8 +5,10 @@ description: Choose which Claude model does which phase of a task (`opus` and `s
 
 # AI Model Workflow
 
-Opus is the decision and review model. Sonnet is the execution model.
-Do not optimize for model usage. Optimize for reasoning quality, speed, and confidence.
+Opus is the primary reasoning and review model for decisions that materially affect design,
+behavior, or risk. Sonnet is the default implementation model. Sonnet makes normal
+implementation decisions inside the approved design.
+Do not optimize for model usage. Optimize for reasoning quality, implementation speed, and confidence.
 
 ## Allowed models
 
@@ -14,6 +16,9 @@ Do not optimize for model usage. Optimize for reasoning quality, speed, and conf
 - Do not pin model version IDs.
 - Do not use Haiku or other models for this workflow.
 - Sonnet is the default. Pass `model` explicitly when you spawn a subagent.
+- If a phase needs Opus and the `opus` model is unavailable, do not silently substitute Sonnet.
+  For a non-risky task, ask the user whether to proceed with Sonnet.
+  For a mandatory-review or high-risk phase, stop and wait for Opus.
 
 ## Decision rule
 
@@ -47,7 +52,7 @@ Match the plan to the task.
 
 Write a plan file (`docs/plans/<change>.md`) only when the work crosses phases or sessions,
 or when the plan has durable value. Do not require one for a small task.
-For a small change, a plan in the subagent prompt is enough.
+For a small change, keep the plan in the implementation prompt. Do not create a plan file.
 For trading changes, state the old behavior and the new behavior.
 
 ## Phases
@@ -59,7 +64,7 @@ Record risks and edge cases. Label exploratory ideas so they do not become requi
 **Implementation (Sonnet).** Treat the plan as the contract. Make the smallest correct change.
 Keep existing behavior, APIs, and naming unless the plan changes them.
 Do not redesign. Run the relevant tests. Report what changed and what ran.
-If the plan conflicts with the code, or a significant issue appears, stop and escalate.
+If the plan conflicts with the code, or an escalation condition is met, stop and escalate.
 
 **Review (Opus).** Compare the diff to the plan. Check correctness, requirements coverage,
 edge cases, regression risk, test coverage, unintended changes, and scope.
@@ -81,14 +86,22 @@ Opus review is mandatory for:
 - Architecture changes
 - Changes with significant regression risk
 
+"Significant regression risk" means a change that can affect several independent flows,
+shared infrastructure, persistent data, production runtime behavior, or externally visible behavior.
+
 For other non-trivial work, Opus review is recommended, not mandatory.
-Skip it when it would cost more than the change. Do not force three phases on every change.
+Skip it when the change is low-risk and the review cost is disproportionate to the likely benefit.
+Do not force three phases on every change.
 
 ## Escalate to Opus
 
-Sonnet stops and escalates when the plan conflicts with the code, a requirement is ambiguous
-in a way that changes the design, a public API must change, the fix needs broad refactoring,
-or the scope has grown. Use this format:
+Sonnet must stop and escalate when implementation reveals a problem that changes the approved
+design, requirements, externally visible behavior, public API, data semantics, security
+properties, or architectural boundaries. This includes a plan that conflicts with the code,
+a fix that needs broad refactoring, and scope that has grown.
+
+Do not escalate for ordinary implementation details that can be resolved without changing
+those things. Use this format:
 
 ```text
 Problem discovered:
@@ -123,8 +136,11 @@ State each phase when it starts. Use the `Plan written to:` line only when a pla
 
 - A subagent does not see this conversation. Give it a self-contained prompt.
 - Pass the plan or the plan file path. Do not rely on chat history.
-- Do not start the Sonnet phase before the user approves the plan when the change
-  alters trading behavior, security, or architecture.
+- Do not start implementation before the user approves the plan when the change alters
+  trading behavior, financial calculations, security, architecture, or externally visible
+  execution semantics. Examples that need approval: a filter threshold, the stop-loss
+  calculation, fill semantics, position sizing, the backtest cost model.
+  Examples that do not: logging, refactoring inside one function, adding a test.
   Do not require approval for ordinary implementation work.
 - Send heavy backtest or sweep work to a subagent. Ask for a distilled conclusion, not raw output.
 - If the main session already runs on the model a phase needs, do that phase directly.
