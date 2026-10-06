@@ -1,15 +1,13 @@
 # Intraday 5m Dataset: Design and Acceptance (for IDEA-029)
 
-Status: APPROVED by the owner on 2026-10-05 (Option B), with the locked policies of sections 2 to
-11. Snapshot taken and recovery running. Parts A and B APPROVED by the owner on 2026-10-05 with
-amendments: MVP scope only; exactly three repairs; field families limited to price, volume and
-final_bar (indicator validity belongs to each strategy); the 30-session / 95% test and the 1%
-fallback reach are configurable policy assumptions; criteria 21-23 are metadata and
-reproducibility requirements, not extra quality gates. The policy is
-`signal_engine/research/reference/data_quality_policy.yaml` (sha256 = data_policy_version).
-Order: freeze policy, finish recovery, quality table, basic contract enforcement, build, measure,
-one strategy run, then decide on further machinery. Nothing is published until every item of
-section 12 holds.
+Status: PUBLISHED 2026-10-06 as `nse-intraday-5m-20261006-001` (owner approval of the final dry
+run, Option A for UPL). Root hash `321f8902f982008ecf0b93dc1f376dc4d0bc9db72cf7e86de12a554482422afa`,
+content hash `d93dd60a0046d2eb7cb8905adf00406bb55d27f026423d6b8a3ca3ecc517f96f`, data policy
+version `fa49f2851f24...`, READY_WITH_WARNINGS, 1,873 objects, 32,393,417 5m bars. `snapshot
+verify` passes; criterion 20 passes on the published version. The build report, assessments and
+criterion 20 record are version objects or sit in `db/staging/intraday/build-cc3ae2d3c1d4/`.
+Parts A and B were approved on 2026-10-05 with amendments (MVP scope; exactly the listed
+repairs; three field families; policy assumptions configurable; criteria 21-23 are metadata).
 
 The plan builds the first published intraday dataset, `nse-intraday-5m-YYYYMMDD-001`, from the
 existing 1m store plus a targeted AngelOne recovery. It reuses the daily architecture (staging,
@@ -303,6 +301,27 @@ not a general off-minute fix.
 Correction of section 4: the 395,315 bars that C1 removed from the legacy store were
 predominantly these UPL bars, not Flattrade contamination. The genuine vendor mixing is the 09:14
 pre-open bars (C2) and the negative volumes (C3).
+
+### B8. Findings recorded at publication (2026-10-06)
+
+- UPL timestamp alignment restored 74 sessions (all passed validation). The other 960 affected
+  UPL sessions have offsets of up to 59 s, outside the approved 1-6 s rule, and stay excluded;
+  UPL is outside the usable range of every field family (39.9% > 25%). Widening the rule to
+  1-59 s was rejected: the evidence shows a systematic shift but does not independently show
+  that a 45-59 s offset belongs to the next minute. Revisit only with independent evidence.
+- Before/after of the repair: price exclusion 1.943% -> 1.927%, volume 3.053% -> 3.036%,
+  final_bar 2.793% -> 2.776%.
+- Three exchange-abnormal days have no price-valid session for any symbol and are recorded as
+  excluded: 2017-07-10 (sessions partial or unconvertible), 2021-02-24 (bars outside the session
+  window), 2024-03-02 (about 10 bars per symbol outside the two DR windows of the template). The
+  intraday preflight now checks calendar coverage against the quality table (a day with every
+  session excluded is still covered) and that every published bar lies on a covered session.
+- The irrecoverability decisions were taken under policy version `71fc165d...`, before the
+  timestamp_alignment section was added; the irrecoverability settings are identical in both.
+- N = 190 missing minutes, from the locked method; 2017-2020 minute data is sparse. Each 5m bar
+  carries `n_minutes`; a strategy contract sets its own minimum completeness.
+- Line endings: `.gitattributes` forces LF for `signal_engine/research/reference/*.yaml`, so the
+  calendar, policy and template hashes do not depend on a checkout's `core.autocrlf`.
 
 ### B6. The 3% yearly ceiling
 

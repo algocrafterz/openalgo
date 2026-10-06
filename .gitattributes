@@ -1,2 +1,6 @@
 # Force Unix line endings for shell scripts (prevents CRLF issues in WSL)
 *.sh text eol=lf
+
+# Reference files whose sha256 is a recorded version (calendar_version, data_policy_version,
+# session template): their bytes must not depend on the checkout's line-ending settings.
+signal_engine/research/reference/*.yaml text eol=lf

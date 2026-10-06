@@ -91,3 +91,36 @@ def test_recorded_contracts_without_the_field_still_load():
     old["universe_symbols"] = tuple(old["universe_symbols"])
     old["notes"] = tuple(old["notes"])
     assert DataContract(**old).field_families is None
+
+
+def test_preflight_counts_a_day_with_no_valid_session_as_covered(monkeypatch):
+    """A day on which every symbol was excluded has no bars but is in the quality table."""
+    from signal_engine.backtest.data_readiness import state as st
+
+    days = [date(2024, 1, 2), date(2024, 1, 3)]
+    quality = pd.DataFrame({"symbol": "AAA", "session": pd.to_datetime(days), "cls": "legacy",
+                            "price_valid": [True, False], "volume_valid": [True, False],
+                            "final_bar_valid": [True, False]})
+    monkeypatch.setattr(ia, "load_quality", lambda m, root=None: quality)
+
+    class _Con:
+        def __enter__(self):
+            con = _con()
+            con.execute("CREATE OR REPLACE VIEW market_data AS SELECT * FROM bars "
+                        "WHERE timestamp < 1704220200")      # before 2024-01-03 00:00 IST
+            return con
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(ia.snapshot, "open_version", lambda *a, **k: _Con())
+    cal = SimpleNamespace(version="v", expected_sessions=lambda a, b: tuple(days))
+    contract = SimpleNamespace(field_families=None, universe_symbols=("AAA",),
+                               universe_name="u", universe_source="s", universe_version="x",
+                               history_sessions=1)
+    report = SimpleNamespace(dataset={}, state=None, reasons=None, created_ist="")
+    out = ia.run_preflight(report, manifest={"dataset_version": "v"}, contract=contract,
+                           calendar=cal, stop=days[-1], start=days[0], root=None, git_dir=None)
+    assert out.calendar_check["compatible"]
+    assert out.calendar_check["sessions_without_valid_bars"] == ["2024-01-03"]
+    assert out.state == st.READY_WITH_WARNINGS and out.universe["eligible"] == ["AAA"]

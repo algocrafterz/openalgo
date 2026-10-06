@@ -87,15 +87,23 @@ def run_preflight(report, *, manifest: dict, contract, calendar, stop: date, sta
     except snapshot.SnapshotError as exc:
         report.dataset["integrity_error"] = str(exc)
         return _finish(report, st.NOT_READY, ["dataset_integrity"])
+    # The version covers a session when its quality table has it (valid or recorded as
+    # excluded); a day on which every symbol was excluded has no bars but is still covered.
+    quality = load_quality(manifest, root)
+    covered = {d.date() for d in quality[~quality.cls.str.startswith("out_of_scope")].session
+               if start <= d.date() <= stop}
     out_of_scope = {date.fromisoformat(d) for d in manifest.get("out_of_scope_sessions") or []}
     expected = set(calendar.expected_sessions(start, stop)) - out_of_scope
+    compatible = covered == expected and have <= covered
     report.calendar_check = {"range": [str(start), str(stop)],
                              "current_version": calendar.version,
                              "out_of_scope_sessions": sorted(str(d) for d in out_of_scope),
-                             "compatible": have == expected,
-                             "dataset_only": sorted(str(d) for d in have - expected),
-                             "calendar_only": sorted(str(d) for d in expected - have)}
-    if have != expected:
+                             "compatible": compatible,
+                             "dataset_only": sorted(str(d) for d in covered - expected),
+                             "calendar_only": sorted(str(d) for d in expected - covered),
+                             "bars_outside_covered": sorted(str(d) for d in have - covered),
+                             "sessions_without_valid_bars": sorted(str(d) for d in covered - have)}
+    if not compatible:
         return _finish(report, st.NOT_READY, ["CAL-INCOMPATIBLE"])
     universe = list(contract.universe_symbols)
     requested = sorted(s for s in universe if s in symbols)
@@ -109,8 +117,8 @@ def run_preflight(report, *, manifest: dict, contract, calendar, stop: date, sta
     if not requested:
         return _finish(report, st.NOT_READY, ["no_requested_symbols"])
     families = required_families(contract)
-    avail = availability(load_quality(manifest, root), families,
-                         manifest.get("usable_range_removals") or [], start, stop)
+    avail = availability(quality, families, manifest.get("usable_range_removals") or [],
+                         start, stop)
     avail = avail[avail.symbol.isin(requested)]
     report.exclusions = [
         {"symbol": s, "class": "session", "sessions": int((~g.available).sum()),

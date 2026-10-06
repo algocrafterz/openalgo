@@ -1,0 +1,21 @@
+{
+  "cause": "first intraday 5m dataset (IDEA-029 data dependency)",
+  "content_hash": "d93dd60a0046d2eb7cb8905adf00406bb55d27f026423d6b8a3ca3ecc517f96f",
+  "coverage": {
+    "end": "2026-10-01",
+    "rows": 32393417,
+    "sessions_price_valid": 432773,
+    "sessions_requested": 441275,
+    "start": "2017-01-01",
+    "symbols": 213
+  },
+  "created_ist": "2026-10-06 10:27:11",
+  "data_policy_version": "fa49f2851f24afa4325cad337e09450d8b81c90225b0a91535fd208af1075ed8",
+  "dataset_version": "nse-intraday-5m-20261006-001",
+  "excluded_symbols": [],
+  "frequency": "5m",
+  "parent": null,
+  "readiness_state": "READY_WITH_WARNINGS",
+  "root_hash": "321f8902f982008ecf0b93dc1f376dc4d0bc9db72cf7e86de12a554482422afa",
+  "status": "published"
+}
