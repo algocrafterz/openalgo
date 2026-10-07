@@ -9,7 +9,7 @@ from datetime import datetime
 
 from loguru import logger
 
-from signal_engine import notifier, startup
+from signal_engine import freshness, notifier, startup
 from signal_engine.api_client import (
     MarginAPIError,
     cancel_order,
@@ -1737,6 +1737,18 @@ async def dispatch_signal(signal: Signal) -> None:
     Shared by handle_message (Telegram text) and the Python runner (real Signal objects),
     so both sources pass through exactly the same gates.
     """
+    # 1b. Freshness. Source-independent and ENTRY-only: a signal that has aged past
+    # stale_signal_seconds by the time it gets here - for any reason - must never open a
+    # position. EXITs are exempt: closing risk must always stay possible.
+    origin = freshness.current_origin()
+    if origin is not None and signal.direction != Direction.EXIT:
+        age = freshness.stale_age(origin, settings.stale_signal_seconds)
+        if age is not None:
+            reason = f"stale by {age:.0f}s (limit {settings.stale_signal_seconds}s)"
+            logger.warning(f"Refusing stale entry {signal.strategy} {signal.symbol}: {reason}")
+            await _decline(signal, stage="stale", reason=reason)
+            return
+
     # 2. Validate
     result = validate(signal)
     if result.status != ValidationStatus.VALID:

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timezone
 
 from loguru import logger
 
-from signal_engine import mode_guard, notifier
+from signal_engine import freshness, mode_guard, notifier
 from signal_engine.config import settings
 
 # Check the connection every 90s so a stale one is noticed (common in WSL2, where TCP
@@ -32,6 +32,11 @@ _FLOOD_WAIT_JITTER_SECONDS = 5
 # failure — the wait IS the remedy — so it must not consume the reconnect budget meant for
 # genuine failures. It still needs its own bound, or a permanent throttle loops forever.
 _MAX_CONSECUTIVE_FLOOD_WAITS = 5
+
+# Ceiling on the wait between reconnect attempts. The wait doubles from listener.base_backoff
+# but never exceeds this, so once the budget is spent the listener keeps probing about once a
+# minute instead of backing off to hours. The restored feed is picked up within one interval.
+_MAX_RECONNECT_BACKOFF_SECONDS = 60
 
 # Waits shorter than this are absorbed by Telethon itself rather than surfacing as an
 # exception. Default is 60s; raising it means only the genuinely long bans reach our loop.
@@ -108,11 +113,15 @@ def _channel_names(channels=None) -> dict:
     return names
 
 
+def _origin_time(msg) -> datetime | None:
+    """When Telegram says the message was sent (UTC), or None if it carries no date."""
+    date = getattr(msg, "date", None)
+    return date.replace(tzinfo=UTC) if date is not None else None
+
+
 def _is_stale(msg) -> float | None:
     """Age of a message in seconds if it is too old to act on, else None."""
-    msg_time = msg.date.replace(tzinfo=UTC)
-    age = (datetime.now(UTC) - msg_time).total_seconds()
-    return age if age > settings.stale_signal_seconds else None
+    return freshness.stale_age(_origin_time(msg), settings.stale_signal_seconds)
 
 
 def _record_phase_decline(text: str, source: str, reason: str) -> None:
@@ -184,7 +193,10 @@ def _make_handler(on_message, channel_names: dict):
 
         clean_text = " | ".join(line.strip() for line in msg.text.strip().splitlines() if line.strip())
         logger.info(f"[{source}] Signal received: {clean_text}")
-        await on_message(msg.text)
+        # The origin time rides along so dispatch_signal can re-check freshness itself: this
+        # check only covers the time up to here, not any wait between here and the order.
+        with freshness.origin_scope(_origin_time(msg)):
+            await on_message(msg.text)
 
     return handler
 
@@ -312,22 +324,36 @@ async def start_listener(
             logger.debug(f"Listener: client disconnect on shutdown failed: {e}")
 
     logger.critical(
-        "Telegram listener giving up "
-        f"(retries={retries}/{settings.listener_max_retries}, "
-        f"floods={floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}). No NEW signals will be received. "
+        "Telegram listener giving up: FLOOD_WAIT budget spent "
+        f"(floods={floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}, connection retries at exit={retries}). "
+        "Plain connection failures never end the listener; only a persistent throttle does. "
+        "No NEW signals will be received. "
         "The tracker and time exit keep running so open positions stay managed - see "
         "startup._serve_until_shutdown()."
     )
 
 
 async def _retry_until_exhausted(client, flood_error) -> tuple:
-    """Connect-and-serve until both budgets are spent. Returns (retries, floods) for the
-    give-up message, so the caller can report WHICH budget ran out."""
+    """Connect-and-serve until the FLOOD budget is spent. Returns (retries, floods) for the
+    give-up message.
+
+    A connection failure never ends the listener. The first `listener.max_retries` failures
+    are a blip; past that the feed is declared down (entries blocked, operator alerted once)
+    and the loop keeps probing at a capped interval until Telegram answers. Incident
+    2026-10-07: the old behaviour gave up after five retries (~3 minutes), halted the engine
+    for good, and no paper trade was taken all session although the network returned within
+    the hour. A flood wait is a different failure - an account-level throttle - and keeps its
+    own bounded budget so a permanent throttle still terminates.
+    """
     retries = 0
     floods = 0
-    while retries < settings.listener_max_retries and floods < _MAX_CONSECUTIVE_FLOOD_WAITS:
+    feed_down = False
+    while floods < _MAX_CONSECUTIVE_FLOOD_WAITS:
         try:
             await _connect(client)
+            if feed_down:
+                feed_down = False
+                await _announce_feed_restored()
             # Only a successful connect clears either counter.
             retries = 0
             floods = 0
@@ -336,18 +362,58 @@ async def _retry_until_exhausted(client, flood_error) -> tuple:
             floods += 1
             wait = _flood_wait_seconds(e)
             logger.warning(
-                f"Telegram FLOOD_WAIT: {e}. Honouring the stated wait — sleeping {wait:.0f}s "
+                f"Telegram FLOOD_WAIT: {e}. Honouring the stated wait - sleeping {wait:.0f}s "
                 f"(flood {floods}/{_MAX_CONSECUTIVE_FLOOD_WAITS}). This does not consume the "
                 "reconnect budget."
             )
             await asyncio.sleep(wait)
         except Exception as e:
             retries += 1
-            wait = settings.listener_base_backoff * (2 ** (retries - 1))
+            if retries >= settings.listener_max_retries and not feed_down:
+                feed_down = True
+                await _announce_feed_down(e, retries)
+            # The exponent is clamped before the cap so a long outage cannot build a huge int.
+            wait = min(
+                settings.listener_base_backoff * (2 ** min(retries - 1, 16)),
+                _MAX_RECONNECT_BACKOFF_SECONDS,
+            )
             logger.error(
                 f"Telegram disconnected: {e}. "
-                f"Retry {retries}/{settings.listener_max_retries} in {wait}s"
+                f"Retry {retries} (fast budget {settings.listener_max_retries}) in {wait}s"
             )
             await asyncio.sleep(wait)
 
     return retries, floods
+
+
+async def _announce_feed_down(error: Exception, retries: int) -> None:
+    """Block entries and alert once. The alert itself may not get out: Telegram is the
+    transport and it is the thing that is down, so the log line is the reliable record."""
+    reason = (
+        f"Telegram unreachable after {retries} reconnect attempts ({error}). NO NEW SIGNALS "
+        "are being received. New entries are blocked until the feed returns; the listener "
+        "keeps retrying and will resume by itself. Open positions keep their stop-loss, "
+        "no-progress gates and time exit."
+    )
+    mode_guard.halt_feed(reason)
+    try:
+        await asyncio.wait_for(notifier.notify_event("listener_down", f"FEED DOWN\n{reason}"), 5.0)
+    except Exception as e:  # noqa: BLE001 - the alert is best effort
+        logger.warning(f"Could not send feed-down alert: {e}")
+
+
+async def _announce_feed_restored() -> None:
+    """Lift the feed halt (never a mode-flip halt) and tell the operator."""
+    if not mode_guard.clear_feed_halt():
+        return
+    try:
+        await asyncio.wait_for(
+            notifier.notify_event(
+                "listener_restored",
+                "FEED RESTORED\nTelegram reconnected. New entries are enabled again. Signals "
+                "sent while the feed was down are not replayed.",
+            ),
+            5.0,
+        )
+    except Exception as e:  # noqa: BLE001 - the alert is best effort
+        logger.warning(f"Could not send feed-restored alert: {e}")

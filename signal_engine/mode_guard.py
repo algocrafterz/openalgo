@@ -49,13 +49,19 @@ _startup_phase: str | None = None
 #: than whatever re-tripped it on a later poll.
 _halted_reason: str = ""
 
+#: Recoverable counterpart of _halted_reason, set while the signal feed (Telegram) is down and
+#: cleared the moment it is back. Kept separate on purpose: a dead feed heals itself, a mode
+#: flip does not, and clearing one must never clear the other.
+_feed_down_reason: str = ""
+
 
 def reset() -> None:
     """Clear all state. Tests only — the engine never un-halts itself."""
-    global _startup_phase, _halted_reason
+    global _startup_phase, _halted_reason, _feed_down_reason
     _cache.update({"phase": "analyze", "checked_at": 0.0, "known": False})
     _startup_phase = None
     _halted_reason = ""
+    _feed_down_reason = ""
 
 
 def prime(phase: str) -> None:
@@ -136,9 +142,29 @@ def halt(reason: str) -> None:
     logger.critical(f"ENTRIES HALTED: {reason}")
 
 
+def halt_feed(reason: str) -> None:
+    """Block new entries while the signal feed is down. Unlike halt(), this is recoverable:
+    clear_feed_halt() lifts it when the feed returns. Idempotent; the first reason is kept."""
+    global _feed_down_reason
+    if _feed_down_reason:
+        return
+    _feed_down_reason = reason
+    logger.critical(f"ENTRIES HALTED (feed down, recoverable): {reason}")
+
+
+def clear_feed_halt() -> bool:
+    """Lift the feed-down halt. Returns True if one was set. Never touches the sticky halt()."""
+    global _feed_down_reason
+    if not _feed_down_reason:
+        return False
+    _feed_down_reason = ""
+    logger.warning("Signal feed restored - feed-down entry halt lifted")
+    return True
+
+
 def is_halted() -> bool:
-    return bool(_halted_reason)
+    return bool(_halted_reason or _feed_down_reason)
 
 
 def halt_reason() -> str:
-    return _halted_reason
+    return _halted_reason or _feed_down_reason

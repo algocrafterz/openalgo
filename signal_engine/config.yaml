@@ -716,8 +716,11 @@ broker_restrictions:
 
 # ── Listener ─────────────────────────────────────────────
 listener:
-  # [tune] Telegram reconnection settings. Increase max_retries for unreliable connections.
-  max_retries: 5                 # Max reconnection attempts before giving up
+  # [tune] Telegram reconnection settings. The listener never gives up on a connection failure:
+  # max_retries is the fast budget after which the feed is declared DOWN (entries blocked, alert
+  # sent) while it keeps retrying at a capped interval (listener._MAX_RECONNECT_BACKOFF_SECONDS)
+  # and resumes by itself. Only a persistent FLOOD_WAIT throttle ends the listener.
+  max_retries: 5                 # Failed attempts before the feed is declared down
   base_backoff: 2                # Base seconds for exponential backoff between retries
 
 # ── API ──────────────────────────────────────────────────

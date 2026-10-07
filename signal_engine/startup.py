@@ -887,7 +887,7 @@ async def _enter_degraded_mode() -> None:
     a fresh position would mean opening something it has no way to be told to close.
     """
     reason = (
-        "Telegram listener exhausted its reconnect budget - NO NEW SIGNALS will be received. "
+        "Telegram listener stopped (persistent FLOOD_WAIT throttle) - NO NEW SIGNALS will be received. "
         "Open positions keep their stop-loss, no-progress gates and time exit; new entries "
         "are blocked. Restart the stack to restore the feed."
     )

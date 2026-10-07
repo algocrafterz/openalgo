@@ -5666,3 +5666,75 @@ always expired by 08:50, so the daily login is a real one.
 **In plain terms:** every weekday at 08:50 the system now shuts down whatever was left running and
 starts a clean, freshly logged-in session. It does nothing extra overnight and does not watch what
 you do outside market hours.
+
+## Telegram Outage Halted The Engine For The Whole Session; Stale Windows Task Script (2026-10-07)
+
+**Symptom.** On 2026-10-07 no paper trade was taken by any strategy. Signals appeared in the Telegram
+channels but nothing reached OpenAlgo, and `trades.db` had zero rows for the day.
+
+**Root cause (outage).** From about 09:20 the host could not reach Telegram (`91.108.56.109:443`,
+Errno 113) while broker calls still worked. The listener spent its 5 reconnect retries in about 3
+minutes and gave up at 09:43. `startup._enter_degraded_mode` then set the sticky `mode_guard.halt`,
+which refuses every entry, and the engine logged "pipeline cycle skipped: engine halted" every 5
+minutes until the stack was stopped. The network came back long before anyone noticed, but nothing
+in the engine ever tried to reconnect. The design flaw was treating a transient external-feed
+failure as a permanent engine halt that only a restart could clear.
+
+**Decision.** A connection failure must heal itself. Only an independent safety halt (a mid-session
+mode flip, a persistent FLOOD_WAIT throttle) stays sticky. A signal that arrived during an outage must
+never be traded after recovery, and that rule must not depend on Telegram.
+
+**Change.**
+
+- `listener.py`: connection failures never end the listener. After the fast budget
+  (`listener.max_retries`, 5) the feed is declared down: new entries are blocked and one
+  `listener_down` alert is sent. The listener keeps retrying with a backoff capped at 60s
+  (`_MAX_RECONNECT_BACKOFF_SECONDS`). On the first successful connect the block is lifted and a
+  `listener_restored` alert is sent. A persistent FLOOD_WAIT throttle still ends the listener, as
+  before, and the client is still disconnected on every exit including cancellation.
+- `mode_guard.py`: a recoverable feed-down halt (`halt_feed`, `clear_feed_halt`) beside the sticky
+  `halt`. Recovery clears only the feed-down halt and never a mode-flip halt. Mode-flip detection
+  keeps working while the feed is down.
+- `freshness.py` (new) and `main.dispatch_signal`: the origin time of a signal (the Telegram message
+  date) travels in a context variable. `dispatch_signal`, the entry point shared by Telegram and the
+  Python runner, refuses any ENTRY older than `risk.stale_signal_seconds` and records a DECLINED row
+  with stage `stale`. EXITs are never refused for age, so closing a position stays possible. A source
+  with no origin time (the Python runner) is not judged and keeps its own bar-close check. The
+  listener still drops stale messages on arrival, so the two checks cover different failure modes.
+- No signal is queued or replayed. The listener never calls Telethon `catch_up`, and a test pins that.
+- `startup.py` and `config.yaml`: wording corrected, because only a FLOOD_WAIT throttle ends the
+  listener now. No config key was added.
+
+**Second cause found while restarting: stale Windows task script.** The Windows tasks run
+`C:\Users\Anand\Scripts\openalgoctl.ps1`, a separate copy dated 2026-05-04, not the repo file. It
+did not accept `dailystart` or `squareoff`, so PowerShell rejected the argument and the script exited
+with code 1 in under a second, before writing any log line. `openAlgoAutoStart` (confirmed at 23:11)
+and `openAlgoSquareOff` (14:55 on 2026-10-07, last result 1) both failed this way, which also meant the
+14:55 square-off failsafe was not running. The repo script was copied to the Windows path on
+2026-10-07 and `openAlgoAutoStart` then ran `DAILYSTART` cleanly. The Windows copy is not deployed
+automatically: whenever `openalgoctl.ps1` changes in the repo it must be copied to
+`C:\Users\Anand\Scripts`. `heartbeat_check.ps1` is still missing from that folder, so
+`openAlgoHeartbeatCheck` points at a file that does not exist.
+
+**Verification.** New tests: `test_listener_outage_recovery.py` (7), `test_mode_guard_feed_halt.py`
+(6), `test_signal_freshness.py` (13). The tests were written first and failed. Two older tests in
+`test_resource_release_paths.py` assumed ordinary connection failures end the listener; they were
+rewritten to keep their purpose (the client is always released) with scenarios that terminate, plus a
+new cancellation test. Full suite: 5775 passed, 1 skipped, 0 failed, 540s. Live: after the corrected
+script, `DAILYSTART` ran at 23:20:59, auto-login succeeded, the app answered HTTP 200 in analyze
+mode, and the engine connected to Telegram with all 5 analyze channels watched.
+
+**Not verified.** The recovery path against a real Telegram outage, and the first fresh signal after
+recovery, have not been exercised live. A harmless `cache_loaded` socket error appears on each
+auto-login start (symbols do load); it predates this change and was not touched.
+
+**Not changed.** BREAKOUT-PY does not need Telegram but is still blocked while the feed is down,
+because the feed-down halt is global. Whether it should keep trading is a trading-policy decision and
+is left open. The sticky mode-flip halt is unchanged.
+
+**In plain terms:** the system used to give up on Telegram after about three minutes and then refuse
+every trade until someone restarted it. It now blocks new trades while Telegram is unreachable, keeps
+trying every minute, and resumes by itself. Anything that arrived during the outage is thrown away,
+never traded late. Separately, the scheduled tasks were running an old copy of the start script that
+did not understand the new commands, so the morning start and the afternoon square-off had been
+failing quietly; the copy is now updated.

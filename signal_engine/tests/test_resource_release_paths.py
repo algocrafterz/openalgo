@@ -16,13 +16,36 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from signal_engine import listener, main
+from signal_engine import listener, main, mode_guard
+
+
+@pytest.fixture(autouse=True)
+def _clean_guard():
+    """The listener tests below drive more than listener.max_retries failures, which declares the
+    feed down (mode_guard.halt_feed). Without this reset the halt outlives the test and refuses
+    every entry in any test file that runs after this one."""
+    mode_guard.reset()
+    yield
+    mode_guard.reset()
 
 
 class _FloodWaitError(Exception):
     def __init__(self, seconds):
         self.seconds = seconds
         super().__init__(f"A wait of {seconds} seconds is required")
+
+
+def _fail_then_flood(failures: int):
+    """connect() side effect: `failures` ordinary errors, then floods until the budget ends."""
+    state = {"n": 0}
+
+    def _effect(*_a, **_k):
+        state["n"] += 1
+        if state["n"] <= failures:
+            raise RuntimeError("down")
+        raise _FloodWaitError(60)
+
+    return _effect
 
 
 class TestListenerReleasesItsClient:
@@ -39,15 +62,42 @@ class TestListenerReleasesItsClient:
         client.disconnect.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_giving_up_after_ordinary_failures_disconnects(self, monkeypatch):
+    async def test_exiting_after_ordinary_failures_then_flood_disconnects(self, monkeypatch):
+        """Plain connection failures no longer end the listener (see
+        test_listener_outage_recovery); it exits only when the flood budget is spent. The
+        client must still be released on that exit, after any number of ordinary failures."""
         monkeypatch.setattr(listener, "_flood_wait_error", lambda: _FloodWaitError)
         client = MagicMock()
         client.disconnect = AsyncMock()
         with patch.object(listener, "_build_client", return_value=client), \
-             patch.object(listener, "_connect", AsyncMock(side_effect=RuntimeError("nope"))), \
+             patch.object(listener, "_connect", AsyncMock(side_effect=_fail_then_flood(8))), \
              patch.object(listener.asyncio, "sleep", AsyncMock()), \
              patch.object(listener, "_serve", AsyncMock()):
             await listener.start_listener(AsyncMock())
+        client.disconnect.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cancelling_the_listener_during_an_outage_disconnects(self, monkeypatch):
+        """Shutdown while the feed is down is the exit path that matters now: the retry loop
+        has no natural end, so cancellation must still release the socket and session."""
+        monkeypatch.setattr(listener, "_flood_wait_error", lambda: _FloodWaitError)
+        real_sleep = asyncio.sleep
+        client = MagicMock()
+        client.disconnect = AsyncMock()
+
+        async def _yielding_sleep(_secs):
+            await real_sleep(0)
+
+        with patch.object(listener, "_build_client", return_value=client), \
+             patch.object(listener, "_connect", AsyncMock(side_effect=RuntimeError("down"))), \
+             patch.object(listener.asyncio, "sleep", _yielding_sleep), \
+             patch.object(listener, "_serve", AsyncMock()):
+            task = asyncio.create_task(listener.start_listener(AsyncMock()))
+            await real_sleep(0.05)
+            assert not task.done()  # still retrying, did not give up
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
         client.disconnect.assert_awaited()
 
     @pytest.mark.asyncio
@@ -57,7 +107,7 @@ class TestListenerReleasesItsClient:
         client = MagicMock()
         client.disconnect = AsyncMock(side_effect=RuntimeError("already gone"))
         with patch.object(listener, "_build_client", return_value=client), \
-             patch.object(listener, "_connect", AsyncMock(side_effect=RuntimeError("nope"))), \
+             patch.object(listener, "_connect", AsyncMock(side_effect=_fail_then_flood(3))), \
              patch.object(listener.asyncio, "sleep", AsyncMock()), \
              patch.object(listener, "_serve", AsyncMock()):
             await listener.start_listener(AsyncMock())
