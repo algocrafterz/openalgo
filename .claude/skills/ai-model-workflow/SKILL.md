@@ -12,12 +12,14 @@ Do not optimize for model usage. Optimize for reasoning quality, implementation 
 
 ## Allowed models
 
-- Use only the `opus` and `sonnet` model aliases.
+- Use only the `opus` and `sonnet` model aliases for this workflow.
 - Do not pin model version IDs.
-- Do not use Haiku or other models for this workflow.
-- Sonnet is the default. Pass `model` explicitly when you spawn a subagent.
-- If a phase needs Opus and the `opus` model is unavailable, do not silently substitute Sonnet.
-  For a non-risky task, ask the user whether to proceed with Sonnet.
+- Do not use Haiku or other lower-capability models for this workflow.
+- Sonnet is the default implementation model.
+- Pass `model` explicitly whenever spawning a subagent or ECC agent. Never rely on the
+  environment's default subagent model for this workflow.
+- If a phase needs Opus and the `opus` model is unavailable, do not silently substitute
+  Sonnet. For a non-risky task, ask the user whether to proceed with Sonnet.
   For a mandatory-review or high-risk phase, stop and wait for Opus.
 
 ## Decision rule
@@ -132,6 +134,21 @@ Review phase: Opus
 
 State each phase when it starts. Use the `Plan written to:` line only when a plan file is created.
 
+## Context and token efficiency
+
+Treat context and token usage as resources.
+
+- Do not read files, documentation, history, or tool output that is not relevant to the current decision or implementation.
+- Prefer targeted repository search and the smallest sufficient file/range over broad scans.
+- Reuse verified findings, plans, test results, and file references from earlier phases instead of rediscovering the same information.
+- A subagent must receive the smallest self-contained context needed to perform its task. Do not pass the full conversation or unrelated repository material.
+- Do not repeat research already completed by another phase unless verification is required or the earlier result is uncertain.
+- Do not create a separate agent/task when the current agent can complete the work directly without meaningful loss of quality.
+- Do not split work into subtasks merely to increase parallelism.
+- Prefer one focused investigation over several overlapping investigations.
+- Ask for distilled conclusions from research or heavy computation, not raw output.
+- When a task is complete, stop. Do not perform speculative cleanup, additional research, or unrelated improvements.
+
 ## Spawning subagents
 
 - A subagent does not see this conversation. Give it a self-contained prompt.
@@ -144,3 +161,122 @@ State each phase when it starts. Use the `Plan written to:` line only when a pla
   Do not require approval for ordinary implementation work.
 - Send heavy backtest or sweep work to a subagent. Ask for a distilled conclusion, not raw output.
 - If the main session already runs on the model a phase needs, do that phase directly.
+
+## ECC coordination
+
+ECC (`affaan-m/ECC`) is installed in this Claude Code environment and should be used
+as the available coordination/tooling layer for complex workflows.
+
+Before a substantial workflow:
+
+1. Inspect the installed ECC version and relevant available skills/agents.
+2. Check whether a newer ECC version provides a capability materially relevant to this task.
+3. If a relevant update is available, report it before relying on the new capability.
+4. Do not update ECC automatically during task implementation unless the user explicitly
+   authorizes the update.
+5. Do not install ECC again if it is already installed.
+
+Use the most appropriate ECC skill/agent when it materially improves:
+- research or repository exploration
+- planning
+- implementation
+- TDD/test-driven development
+- code review
+- security review
+- architecture review
+- multi-agent coordination
+- context/session handoff
+
+Do not invoke ECC skills merely for ceremony. Prefer the smallest ECC capability or workflow
+that provides a meaningful benefit.
+
+Do not let ECC override this skill's model-selection or approval rules.
+`ai-model-workflow` remains authoritative for:
+- Opus vs Sonnet selection
+- phase boundaries
+- implementation handoff
+- escalation
+- mandatory Opus review
+- user approval requirements
+
+When an ECC orchestration workflow overlaps with this workflow, compose them rather
+than running two competing pipelines. Avoid duplicate planning, implementation,
+testing, or review phases.
+
+Prefer individual ECC capabilities over a full ECC orchestration pipeline when
+`ai-model-workflow` already defines the required phases. Use an ECC `orch-*`
+workflow only when its additional coordination or gating provides a clear benefit.
+
+Before invoking an ECC skill, determine what phase it belongs to and which model should
+perform that phase. Pass the approved plan/context explicitly to the ECC agent or skill.
+
+If an ECC skill proposes a model or workflow that conflicts with this skill, follow
+`ai-model-workflow` and adapt the ECC workflow accordingly.
+
+Record significant ECC usage in the observable workflow status so the user can see
+how coordination was performed.
+
+### Context handoff
+
+When using ECC agents or subagents, prefer artifact-based handoff over conversational handoff.
+
+Pass:
+- task objective
+- relevant constraints
+- approved plan
+- relevant file paths
+- acceptance criteria
+
+Return:
+- conclusions
+- decisions
+- changed files
+- test results
+- unresolved issues
+- artifact paths
+
+Do not pass or return large raw outputs unless required for the next decision.
+
+### ECC selection rule
+
+Use ECC when it provides a concrete capability that materially improves the task
+or avoids duplicating workflow logic in this repository.
+
+Examples:
+
+| Need | Preferred approach |
+|---|---|
+| Repository research/exploration | Relevant ECC research/navigation skill |
+| TDD implementation | ECC TDD skill/agent + Sonnet implementation |
+| Security-sensitive change | ECC security workflow + mandatory Opus review |
+| Architecture/design | ECC architecture/planning capability + Opus |
+| Code review | ECC review capability + Opus |
+| Large multi-step workflow | Relevant ECC orchestration workflow |
+| Simple one-file change | Do not invoke ECC unnecessarily |
+| Trading/backtest behavior | Follow `ai-model-workflow`; use ECC capabilities where they improve research, testing, or review |
+
+### ECC and model workflow
+
+ECC coordinates capabilities; `ai-model-workflow` decides model responsibility.
+
+For example:
+
+    Opus
+      -> determine problem and architecture
+      -> create/approve plan
+
+    ECC
+      -> provide repository research / TDD / specialist / orchestration capability
+
+    Sonnet
+      -> implement approved plan
+      -> run tests
+
+    ECC
+      -> provide relevant verification/review tooling
+
+    Opus
+      -> perform independent review for mandatory-review changes
+
+Do not allow an ECC agent to silently turn a Sonnet implementation phase into an Opus phase,
+or vice versa. The selected model must remain explicit and observable.

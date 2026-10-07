@@ -79,6 +79,12 @@ Use the workflow for changes involving trading or backtest logic, financial calc
 
 Do not bypass the workflow because the implementation looks straightforward when the decision itself is high-risk or ambiguous.
 
+When ECC is installed, use relevant ECC skills, agents, or orchestration
+capabilities when they materially improve the workflow. Check ECC capabilities
+before substantial work, avoid duplicate pipelines, and do not let ECC override
+the model-selection, approval, escalation, or review rules defined by
+`ai-model-workflow`.
+
 ### Tests
 
 **Treat tests as verification, not as a substitute for the intended behavior.**
