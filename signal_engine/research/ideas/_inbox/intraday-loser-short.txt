@@ -1,0 +1,66 @@
+Intraday loser short (owner's approved hypothesis, candidate A, 2026-10-07). DRAFT: not frozen, not run.
+
+Hypothesis: on each session, short the 10 eligible F&O stocks with the lowest mean intraday
+return over the previous 60 eligible sessions, where a stock's intraday return
+r = close of the 14:45 bar / open of the 09:20 bar - 1. That basket earns a higher gross
+09:20-to-14:45 short return than (a) shorting random other eligible stocks on the same sessions
+and (b) the unconditional universe short, and it clears costs.
+
+Rationale: tug-of-war clientele (Lou, Polk, Skouras 2019; Heston, Korajczyk, Sadka 2010):
+retail/attention buying at or before the open, long-biased MIS books unwound through the day,
+institutions on the other side; the universe's strongly negative NSE intraday drift is this
+effect at market level; the question is whether it is concentrated in identifiable stocks.
+
+Proposed rules (one pre-specified parameter set, no grids):
+- Universe = published F&O universe per date.
+- Eligibility = at least 60 valid prior sessions, not a split/bonus session, the platform price floor.
+- Signal m60 = mean r over the previous 60 sessions (sd60 = its standard deviation).
+- Select the 10 lowest m60, ties alphabetical.
+- Entry short at the 09:20 bar open.
+- Exit at the standing time exit (close of the 14:45 bar, per the Flattrade profile).
+- Protective stop at entry x (1 + 1.5 x sd60).
+- Rs 1,00,000 fixed notional per position, at most 10 concurrent, one trade per symbol per day, no re-entry.
+- Dataset nse-intraday-5m-20261006-001; product MIS; cost primary = profile broker (Flattrade)
+  statutory per-trade model; costs: {reference_round_trip_bps: [32]} as a stress reference line.
+
+Falsification, decided now (any one kills it):
+- Cross-sectional same-session excess over random other eligible stocks (baseline_cross_sectional,
+  pending implementation) <= 0 or day-clustered excess t < 2.0. A pass from drift alone is recorded
+  as "drift harvesting, selection adds nothing", not an edge.
+- Net fails G1.2 (+0.05R) or net t < 2.5.
+- Net <= 0 at 2x slippage (G1.3).
+- OOS (from 2023-11-01, same convention as IDEA-029) net <= 0 or < 40% of IS.
+- Positive in fewer than 6 of 10 years 2017-2026 or worst year < -0.25R.
+- Top-10 symbols > 40% of net profit or < 50% of traded symbols net positive.
+
+Pre-declared diagnostics (report only): decile monotonicity of m60 vs next-day r; the mirror
+top-10 long leg; entry delayed one bar; the random-short baseline by year.
+
+Information boundary: m60 and sd60 from sessions up to the previous session's 14:45 bar; at 09:20
+only the eligibility check; no same-day information in the ranking.
+
+Owner additions (2026-10-07, via coordinator):
+1. Three hypotheses kept separate: H1 persistent intraday losers continue to lose intraday;
+   H0-drift any result is the unconditional NSE intraday short drift; H-sel selecting the worst
+   60-session performers adds value beyond that drift. Pre-declared outcome readings:
+   Outcome 1 no short drift (random same-session shorts not positive after cost);
+   Outcome 2 short drift exists but selection adds no value (random shorts positive, and
+   cross-sectional excess <= 0 or excess t < 2.0);
+   Outcome 3 selection adds statistically and economically meaningful value (excess t >= 2.0 and
+   an economically meaningful excess size; propose a concrete bps threshold). State the verdict
+   and the next action for each outcome.
+2. The comparison baseline is a recorded, reusable same-session random-stock short baseline: same
+   eligible universe, session, entry window, direction, exit rules (time exit and the same stop
+   rule), execution assumptions, holding constraints and cost model. Reference it as
+   baseline_cross_sectional, pending implementation, designed separately.
+3. Make explicit, with a reason: intraday performance (bars, prices, formula); 60 trading
+   sessions versus calendar days; session time window; eligibility using only information
+   available before selection; insufficient history; ties; exact selection timestamp and
+   information set (ranking fixed before the 09:20 entry, data only up to the previous session's
+   14:45 bar, no current-session data); whether selection and execution costs are applied
+   consistently; fewer than 10 eligible stocks; tiny cross-sectional dispersion of m60 (no new
+   filter unless economically justified; report dispersion as a diagnostic); the falsification
+   criteria.
+4. Explain why 60-session intraday losers should continue to lose (mechanism), and justify 60 and
+   10 as implementation parameters, not as optimal. No sweeps: one frozen specification, then one
+   baseline.

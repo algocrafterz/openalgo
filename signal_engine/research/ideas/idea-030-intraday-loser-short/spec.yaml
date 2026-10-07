@@ -1,0 +1,137 @@
+# IDEA-030 spec. UNFROZEN. Owner decisions D1 to D16 approved 2026-10-07 (see idea.md decision
+# log). Do not freeze until `baseline_cross_sectional` exists and passes its known-answer check.
+# No backtest and no outcome data were used to write this spec.
+#
+# Values marked "APPROVED - owner decision Dn" were the drafter's recommended defaults; the owner
+# approved each one as written on 2026-10-07.
+
+schema_version: 2
+name: Intraday loser short
+
+source:
+  kind: own_words
+  ref: _inbox/intraday-loser-short.txt
+
+profile: flattrade-nse-cash
+
+style: intraday
+direction: short_only
+timeframe: 5m
+product: MIS
+
+# There is no point-in-time F&O membership source in the repo (backtest/eligibility.py), so the
+# "published F&O universe per date" is today's F&O list applied to the past. APPROVED - owner
+# decision D13.
+universe:
+  type: current_fno
+  exchange: NSE
+  membership_basis: current
+  point_in_time: false
+  survivorship_bias: true
+
+# Data contract. APPROVED - owner decision D7. Volume is not read by the strategy, so only the
+# price family is required. The 09:15 bar is the engine's signal bar for the 09:20 fill, the
+# 09:20 to 14:45 bars carry the stop check and the 14:45 bar carries the exit and the end price
+# of r; no bar after 14:45 is read. A symbol-session that fails the contract is not traded and
+# contributes no observation to m60 or sd60. Nothing is filled, repaired or interpolated.
+data:
+  frequency: 5m
+  field_families: [price]
+  min_n_minutes: 1
+  complete_bins: {first: "09:15", last: "14:45"}
+
+entry:
+  - Bars are 5m, open-time stamped, IST; a bar is completed at its open time plus 5 minutes
+  - Intraday return of symbol s on session d is r(s,d) = Close of the 14:45 bar / Open of the 09:20 bar - 1, both bars from session d; both prices carry the same price factor, so back-adjustment does not change r
+  - A session d before the decision session counts as a valid prior session for s only when (1) the s-d session passes the data contract, (2) d is not an ex-date of a split, bonus or other corporate action that changes the price factor of s, and (3) s was eligible on d under the platform eligibility rules (listing age, traded, session volume above 1, NSE raw close at or above Rs 10); an invalid session contributes no observation and does not break the window (IDEA-029 decision 11 precedent). APPROVED - owner decision D6
+  - m60(s,D) is the arithmetic mean of r over the 60 most recent valid prior sessions of s strictly before session D; sd60(s,D) is the sample standard deviation (ddof 1) of the same 60 values; sessions are counted as official NSE trading sessions with a valid observation, never as calendar days
+  - Selection time - the ranking for session D is fixed from data up to and including the close of the 14:45 bar of the previous official session (14:50 IST on D-1); no bar of session D is read by the ranking, and the ranking is not revised during session D
+  - Pre-selection eligibility for session D uses only facts known before 09:15 IST on D - (1) s has at least 60 valid prior sessions, (2) D is not an ex-date of a split, bonus or other price-factor corporate action for s (ex-dates are announced before the session), (3) the NSE raw close of the last valid prior session of s is at or above Rs 10. A symbol with fewer than 60 valid prior sessions is not ranked. APPROVED - owner decision D10
+  - Rank the eligible symbols by m60 from lowest to highest; an exact tie in m60 is broken by symbol name in ascending A to Z order; select the first 10. When fewer than 10 symbols are eligible, select all of them; no other symbol is substituted and unused capital is not reallocated. APPROVED - owner decisions D9 and D11
+  - Execution-time exclusion - a selected symbol whose session D fails the data contract, or fails the platform same-day eligibility rules on D (NO_TRADE, ZERO_VOLUME, PRICE_FLOOR on the session close), is not traded; its slot stays empty, the 11th-ranked symbol is not substituted, and the exclusion is counted by reason and by year. APPROVED - owner decision D10
+  - Entry is a market short of each traded selected symbol at the open of the 09:20 bar of session D; in the engine the signal is taken at the close of the 09:15 bar and filled at the next bar open; the 09:20 open is the only fill time and a selected symbol that is not filled then is not entered later. APPROVED - owner decision D3
+  - Execution constraint, not a strategy filter - a selected symbol whose stop distance is below 0.5% of the stop reference price is not traded, because the live validator rejects it (risk.min_sl_pct 0.5%, IDEA-029 decision 5 precedent); the run counts these as STOP_TOO_TIGHT and the slot stays empty
+  - The cross-sectional dispersion of m60 changes nothing - there is no dispersion threshold and no filter on it; the dispersion is reported as a diagnostic only
+exit:
+  - Standing time exit at 14:45 from the deployment profile - an open position is bought back at the close of the 14:45 bar (14:50 IST), the same price that ends r, before the 15:00 MIS force-flat; no position is held overnight
+  - Stop exit as defined in stop - when a bar's high reaches the stop the position closes at the stop; when a bar opens at or above the stop it closes at that open (gap through stop)
+  - There is no other exit, no target and no trailing stop
+stop:
+  - Short stop = P_ref x (1 + 1.5 x sd60(s,D)), fixed when the order is placed and never trailed; P_ref is the close of the 09:15 bar of session D (the engine's signal price; the 09:20 open fill is the alternative). APPROVED - owner decisions D1 (multiple 1.5) and D2 (P_ref)
+take_profit: none
+holding_period: same_session
+
+# m60 and sd60 are cross-session statistics of r (defined in entry), computed in the panel step.
+# They are not listed as indicators: the schema's price-source list has no value for a
+# 09:20-open-to-14:45-close return, and an indicator period would resolve the engine's
+# warm-up in 5m bars, not sessions. Their window is parameters.lookback_sessions.
+indicators: none
+parameters:
+  lookback_sessions: 60
+  min_valid_prior_sessions: 60
+  basket_size: 10
+  stop_sd_multiple: 1.5
+  return_start_bar: "09:20"
+  return_end_bar: "14:45"
+  min_stop_pct: 0.5
+
+timing:
+  signal_evaluation: bar_close
+  order_submission: signal_close
+  fill_model: next_bar_open
+
+# APPROVED - owner decision D2.
+reference_prices: {stop: signal_close}
+
+order_types: {entry: market, stop: stop_market}
+
+# What a decision may read. Covered by regression tests when the adapter is written.
+information_boundary:
+  - The ranking for session D reads only bars of sessions before D, up to and including the 14:45 bar of the previous official session; no bar of session D is read by the ranking
+  - m60 and sd60 for session D use only valid prior sessions strictly before D
+  - Pre-selection eligibility for D reads only the prior-session history, the corporate-action ex-date calendar (announced before the session) and the NSE raw close of the last valid prior session
+  - Session D's data-contract result and its same-day platform eligibility (which read session D's bars, volume and close) may remove a selected symbol after ranking, but never add or substitute one
+  - The stop reference price (the close of the 09:15 bar of D) is known before the 09:20 fill and is used only for the stop level, never for selection
+  - A position's exit reads only the bar being evaluated (its open, high and close) and the fixed stop
+
+filters: none
+# The schema needs a range that starts before it ends; the only fill is the 09:20 open (entry).
+session_window:
+  entry: "09:20-09:25"
+
+re_entry:
+  allowed: false
+
+# risk_per_trade_pct is informational: every trade is a fixed Rs 1,00,000 notional and costs are
+# priced at that notional.
+sizing:
+  basis: fixed_notional
+  risk_per_trade_pct: 1.0
+  capital_per_trade: 100000
+
+# The basket is at most 10 by construction, so the cap never decides which signal trades.
+# APPROVED - owner decision D9 (and the G5.2 live-caps question in it).
+portfolio:
+  mode: multi_position
+  max_concurrent: 10
+  max_trades_per_day: 10
+  capital_per_position: 100000
+  max_exposure: 1000000
+  selection: rank_by_score
+  conflict: skip_if_symbol_open
+
+# Primary cost is the profile broker's (Flattrade) statutory per-trade MIS model at the fixed
+# notional plus the house slippage; 32 bps is a stress reference line only, not a gate.
+costs:
+  reference_round_trip_bps: [32]
+
+# chart_peeking true (approved) - owner decision D12: the short direction was chosen knowing the
+# universe's negative intraday drift on this same history.
+disclosure:
+  prior_variants: 0
+  chart_peeking: true
+  destination: python
+
+rationale: Tug-of-war clientele (Lou, Polk, Skouras 2019; Heston, Korajczyk, Sadka 2010) - attention and retail buying at or before the open, long-biased MIS books unwound through the day, institutions on the other side. If that clientele is persistent per stock, stocks with the worst recent open-to-afternoon returns keep losing intraday. The test separates three hypotheses - H1 persistent intraday losers continue to lose, H0-drift the result is only the unconditional NSE intraday short drift, H-sel loser selection adds value beyond that drift - by comparing the basket with baseline_cross_sectional (same-session random eligible-stock shorts with the same rules and costs; pending implementation). 60 sessions and 10 stocks are implementation choices, not optimised values; one frozen specification, one baseline run, no sweeps.
+
+kill_criterion: Any one of - (1) cross-sectional same-session excess over baseline_cross_sectional (pending implementation) is at or below 0 bps per trade, or its day-clustered t is below 2.0; (2) net fails G1.2 (+0.05R per trade) or the day-clustered net t is below 2.5; (3) net at or below 0 with slippage doubled (G1.3); (4) out-of-sample net (from 2023-11-01) at or below 0, or below 40% of in-sample; (5) net positive in fewer than 6 of the 10 calendar years 2017 to 2026, or the worst year below -0.25R; (6) the top 10 symbols carry more than 40% of net profit, or fewer than 50% of traded symbols are net positive. A pass of (2) to (6) with a fail of (1) is recorded as drift harvesting, selection adds nothing, not an edge.

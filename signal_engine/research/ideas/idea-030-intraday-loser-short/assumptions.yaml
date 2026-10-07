@@ -1,0 +1,648 @@
+next_id: 60
+open_questions:
+- Owner decisions D1 to D16 in idea.md are unresolved, and baseline_cross_sectional
+  is not implemented. Do not freeze until both are closed.
+blocked_reason: 'owner review pending: decisions D1 to D16 in idea.md are unresolved
+  and baseline_cross_sectional is not implemented; unblock only after both are closed'
+entries:
+- id: A-001
+  field: name
+  section: intent
+  value: Intraday loser short
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-002
+  field: source.kind
+  section: intent
+  value: own_words
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-003
+  field: source.ref
+  section: intent
+  value: _inbox/intraday-loser-short.txt
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-004
+  field: profile
+  section: intent
+  value: flattrade-nse-cash
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-005
+  field: style
+  section: intent
+  value: intraday
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-006
+  field: direction
+  section: intent
+  value: short_only
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-007
+  field: timeframe
+  section: intent
+  value: 5m
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-008
+  field: product
+  section: intent
+  value: MIS
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-009
+  field: entry
+  section: intent
+  value:
+  - Bars are 5m, open-time stamped, IST; a bar is completed at its open time plus
+    5 minutes
+  - Intraday return of symbol s on session d is r(s,d) = Close of the 14:45 bar /
+    Open of the 09:20 bar - 1, both bars from session d; both prices carry the same
+    price factor, so back-adjustment does not change r
+  - A session d before the decision session counts as a valid prior session for s
+    only when (1) the s-d session passes the data contract, (2) d is not an ex-date
+    of a split, bonus or other corporate action that changes the price factor of s,
+    and (3) s was eligible on d under the platform eligibility rules (listing age,
+    traded, session volume above 1, NSE raw close at or above Rs 10); an invalid session
+    contributes no observation and does not break the window (IDEA-029 decision 11
+    precedent). PROPOSED - owner decision D6
+  - m60(s,D) is the arithmetic mean of r over the 60 most recent valid prior sessions
+    of s strictly before session D; sd60(s,D) is the sample standard deviation (ddof
+    1) of the same 60 values; sessions are counted as official NSE trading sessions
+    with a valid observation, never as calendar days
+  - Selection time - the ranking for session D is fixed from data up to and including
+    the close of the 14:45 bar of the previous official session (14:50 IST on D-1);
+    no bar of session D is read by the ranking, and the ranking is not revised during
+    session D
+  - Pre-selection eligibility for session D uses only facts known before 09:15 IST
+    on D - (1) s has at least 60 valid prior sessions, (2) D is not an ex-date of
+    a split, bonus or other price-factor corporate action for s (ex-dates are announced
+    before the session), (3) the NSE raw close of the last valid prior session of
+    s is at or above Rs 10. A symbol with fewer than 60 valid prior sessions is not
+    ranked. PROPOSED - owner decision D10
+  - Rank the eligible symbols by m60 from lowest to highest; an exact tie in m60 is
+    broken by symbol name in ascending A to Z order; select the first 10. When fewer
+    than 10 symbols are eligible, select all of them; no other symbol is substituted
+    and unused capital is not reallocated. PROPOSED - owner decisions D9 and D11
+  - Execution-time exclusion - a selected symbol whose session D fails the data contract,
+    or fails the platform same-day eligibility rules on D (NO_TRADE, ZERO_VOLUME,
+    PRICE_FLOOR on the session close), is not traded; its slot stays empty, the 11th-ranked
+    symbol is not substituted, and the exclusion is counted by reason and by year.
+    PROPOSED - owner decision D10
+  - Entry is a market short of each traded selected symbol at the open of the 09:20
+    bar of session D; in the engine the signal is taken at the close of the 09:15
+    bar and filled at the next bar open; the 09:20 open is the only fill time and
+    a selected symbol that is not filled then is not entered later. PROPOSED - owner
+    decision D3
+  - Execution constraint, not a strategy filter - a selected symbol whose stop distance
+    is below 0.5% of the stop reference price is not traded, because the live validator
+    rejects it (risk.min_sl_pct 0.5%, IDEA-029 decision 5 precedent); the run counts
+    these as STOP_TOO_TIGHT and the slot stays empty
+  - The cross-sectional dispersion of m60 changes nothing - there is no dispersion
+    threshold and no filter on it; the dispersion is reported as a diagnostic only
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-010
+  field: exit
+  section: intent
+  value:
+  - Standing time exit at 14:45 from the deployment profile - an open position is
+    bought back at the close of the 14:45 bar (14:50 IST), the same price that ends
+    r, before the 15:00 MIS force-flat; no position is held overnight
+  - Stop exit as defined in stop - when a bar's high reaches the stop the position
+    closes at the stop; when a bar opens at or above the stop it closes at that open
+    (gap through stop)
+  - There is no other exit, no target and no trailing stop
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-011
+  field: stop
+  section: intent
+  value:
+  - Short stop = P_ref x (1 + 1.5 x sd60(s,D)), fixed when the order is placed and
+    never trailed; P_ref is the close of the 09:15 bar of session D (the engine's
+    signal price; the 09:20 open fill is the alternative). PROPOSED - owner decisions
+    D1 (multiple 1.5) and D2 (P_ref)
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-012
+  field: take_profit
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-013
+  field: holding_period
+  section: intent
+  value: same_session
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-014
+  field: indicators
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-015
+  field: parameters
+  section: intent
+  value:
+    lookback_sessions: 60
+    min_valid_prior_sessions: 60
+    basket_size: 10
+    stop_sd_multiple: 1.5
+    return_start_bar: 09:20
+    return_end_bar: '14:45'
+    min_stop_pct: 0.5
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-016
+  field: timing.signal_evaluation
+  section: intent
+  value: bar_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-017
+  field: timing.order_submission
+  section: intent
+  value: signal_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-018
+  field: timing.fill_model
+  section: intent
+  value: next_bar_open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-019
+  field: reference_prices
+  section: intent
+  value:
+    stop: signal_close
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-020
+  field: filters
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-021
+  field: session_window
+  section: intent
+  value:
+    entry: 09:20-09:25
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-022
+  field: re_entry.allowed
+  section: intent
+  value: false
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-023
+  field: sizing.risk_per_trade_pct
+  section: intent
+  value: 1.0
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-024
+  field: sizing.capital_per_trade
+  section: intent
+  value: 100000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-025
+  field: sizing.basis
+  section: intent
+  value: fixed_notional
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-026
+  field: data.frequency
+  section: intent
+  value: 5m
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-027
+  field: data.field_families
+  section: intent
+  value:
+  - price
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-028
+  field: data.min_n_minutes
+  section: intent
+  value: 1
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-029
+  field: data.complete_bins
+  section: intent
+  value:
+    first: 09:15
+    last: '14:45'
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-030
+  field: information_boundary
+  section: intent
+  value:
+  - The ranking for session D reads only bars of sessions before D, up to and including
+    the 14:45 bar of the previous official session; no bar of session D is read by
+    the ranking
+  - m60 and sd60 for session D use only valid prior sessions strictly before D
+  - Pre-selection eligibility for D reads only the prior-session history, the corporate-action
+    ex-date calendar (announced before the session) and the NSE raw close of the last
+    valid prior session
+  - Session D's data-contract result and its same-day platform eligibility (which
+    read session D's bars, volume and close) may remove a selected symbol after ranking,
+    but never add or substitute one
+  - The stop reference price (the close of the 09:15 bar of D) is known before the
+    09:20 fill and is used only for the stop level, never for selection
+  - A position's exit reads only the bar being evaluated (its open, high and close)
+    and the fixed stop
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-031
+  field: portfolio.mode
+  section: intent
+  value: multi_position
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-032
+  field: portfolio.max_concurrent
+  section: intent
+  value: 10
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-033
+  field: portfolio.max_trades_per_day
+  section: intent
+  value: 10
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-034
+  field: portfolio.capital_per_position
+  section: intent
+  value: 100000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-035
+  field: portfolio.max_exposure
+  section: intent
+  value: 1000000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-036
+  field: portfolio.selection
+  section: intent
+  value: rank_by_score
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-037
+  field: portfolio.conflict
+  section: intent
+  value: skip_if_symbol_open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-038
+  field: order_types
+  section: intent
+  value:
+    entry: market
+    stop: stop_market
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-039
+  field: costs.reference_round_trip_bps
+  section: intent
+  value:
+  - 32
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-040
+  field: disclosure.prior_variants
+  section: intent
+  value: 0
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-041
+  field: disclosure.chart_peeking
+  section: intent
+  value: true
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-042
+  field: disclosure.destination
+  section: intent
+  value: python
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-043
+  field: universe
+  section: intent
+  value:
+    type: current_fno
+    exchange: NSE
+    membership_basis: current
+    point_in_time: false
+    survivorship_bias: true
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-044
+  field: rationale
+  section: intent
+  value: Tug-of-war clientele (Lou, Polk, Skouras 2019; Heston, Korajczyk, Sadka 2010)
+    - attention and retail buying at or before the open, long-biased MIS books unwound
+    through the day, institutions on the other side. If that clientele is persistent
+    per stock, stocks with the worst recent open-to-afternoon returns keep losing
+    intraday. The test separates three hypotheses - H1 persistent intraday losers
+    continue to lose, H0-drift the result is only the unconditional NSE intraday short
+    drift, H-sel loser selection adds value beyond that drift - by comparing the basket
+    with baseline_cross_sectional (same-session random eligible-stock shorts with
+    the same rules and costs; pending implementation). 60 sessions and 10 stocks are
+    implementation choices, not optimised values; one frozen specification, one baseline
+    run, no sweeps.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-045
+  field: kill_criterion
+  section: intent
+  value: Any one of - (1) cross-sectional same-session excess over baseline_cross_sectional
+    (pending implementation) is at or below 0 bps per trade, or its day-clustered
+    t is below 2.0; (2) net fails G1.2 (+0.05R per trade) or the day-clustered net
+    t is below 2.5; (3) net at or below 0 with slippage doubled (G1.3); (4) out-of-sample
+    net (from 2023-11-01) at or below 0, or below 40% of in-sample; (5) net positive
+    in fewer than 6 of the 10 calendar years 2017 to 2026, or the worst year below
+    -0.25R; (6) the top 10 symbols carry more than 40% of net profit, or fewer than
+    50% of traded symbols are net positive. A pass of (2) to (6) with a fail of (1)
+    is recorded as drift harvesting, selection adds nothing, not an edge.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-046
+  field: execution.product
+  section: execution
+  value: MIS
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in the spec
+  user_confirmed: true
+- id: A-047
+  field: execution.bar_size
+  section: execution
+  value: 5m
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: same as the spec timeframe
+  user_confirmed: false
+- id: A-048
+  field: execution.warmup_bars
+  section: execution
+  value: 0
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: no indicator with a period
+  user_confirmed: false
+- id: A-049
+  field: execution.slippage_bps_per_side
+  section: execution
+  value: 4.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: house default for market orders
+  user_confirmed: false
+- id: A-050
+  field: execution.cost_bps_round_trip
+  section: execution
+  value: 16.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: intraday round-trip cost default
+  user_confirmed: false
+- id: A-051
+  field: execution.oos_fraction
+  section: execution
+  value: 0.3
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.1 holdout fraction
+  user_confirmed: false
+- id: A-052
+  field: execution.embargo_sessions
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.5 embargo after the cut
+  user_confirmed: false
+- id: A-053
+  field: execution.eligibility_min_prior_sessions
+  section: execution
+  value: 60
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: 'listing age: earlier traded sessions required before a symbol is eligible'
+  user_confirmed: false
+- id: A-054
+  field: execution.eligibility_min_volume
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: session volume must be above this to count as traded
+  user_confirmed: false
+- id: A-055
+  field: execution.eligibility_min_price
+  section: execution
+  value: 10.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: floor in rupees on the NSE raw (unadjusted) session close, excludes penny-priced
+    sessions
+  user_confirmed: false
+- id: A-056
+  field: profile.mis_squareoff_min
+  section: profile
+  value: 900
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-057
+  field: profile.squareoff_margin_min
+  section: profile
+  value: 5
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-058
+  field: profile.time_exit_min
+  section: profile
+  value: 885
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-059
+  field: profile.carry_forward
+  section: profile
+  value: false
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false

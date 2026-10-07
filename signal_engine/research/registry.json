@@ -1380,28 +1380,74 @@
       "summary": "In a range-bound regime (15m ADX and flat EMA20), fade a 5m excursion beyond the session VWAP 2SD band once price closes back inside the band and across EMA9; target VWAP, stop beyond the extreme.",
       "title": "VWAP 2SD range mean reversion",
       "verdict": "no-edge"
+    },
+    {
+      "classification": {
+        "direction": "short_only",
+        "market": "NSE/BSE cash equity",
+        "strategy_category": "Statistical / Quantitative",
+        "strategy_tags": [
+          "cross-sectional",
+          "ranked-portfolio",
+          "intraday-return-persistence",
+          "tug-of-war",
+          "short-only",
+          "intraday"
+        ],
+        "timeframe": "5m",
+        "trading_style": "intraday"
+      },
+      "folder": "idea-030-intraday-loser-short",
+      "horizon": "intraday",
+      "id": "IDEA-030",
+      "last_reviewed": "2026-10-07",
+      "research_state": "active",
+      "revisit_when": "After the owner resolves the open decisions D1 to D16 below and baseline_cross_sectional is implemented and validated. Then freeze v1 and run once.",
+      "runs": [],
+      "source": {
+        "author": "owner",
+        "captured": "2026-10-07",
+        "ref": "_inbox/intraday-loser-short.txt",
+        "type": "self"
+      },
+      "stage": "inbox",
+      "status": "inbox",
+      "strategy_category": "Statistical / Quantitative",
+      "strategy_tags": [
+        "cross-sectional",
+        "ranked-portfolio",
+        "intraday-return-persistence",
+        "tug-of-war",
+        "short-only",
+        "intraday"
+      ],
+      "summary": "Each session, short at the 09:20 open the 10 eligible F&O stocks with the lowest mean 09:20-open-to-14:45-close return over their previous 60 valid sessions; stop at 1.5 x that return's standard deviation above the reference price; exit at the close of the 14:45 bar.",
+      "title": "Intraday loser short",
+      "verdict": "none"
     }
   ],
   "summary": {
     "by_category": {
       "Mean Reversion": 1,
       "Momentum": 1,
-      "Statistical / Quantitative": 1
+      "Statistical / Quantitative": 2
     },
     "by_horizon": {
-      "intraday": 1,
+      "intraday": 2,
       "swing": 2
     },
     "by_status": {
+      "inbox": 1,
       "rejected": 3
     },
     "by_verdict": {
       "marginal": 1,
-      "no-edge": 2
+      "no-edge": 2,
+      "none": 1
     },
     "ideas_with_runs": 3,
-    "last_reviewed": "2026-10-06",
-    "total": 3,
+    "last_reviewed": "2026-10-07",
+    "total": 4,
     "total_runs": 5
   }
 }
