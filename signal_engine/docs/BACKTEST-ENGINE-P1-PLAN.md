@@ -9,7 +9,7 @@ so this plan does not track progress.
 Steps 4 to 6 (lineage ledgers, data and session layer, gate runner) are out of scope. Where
 steps 1 to 3 must leave room for them, the plan says so.
 
-Written 2026-10-02. The open questions were resolved the same day (see Decisions at the end). Nothing here is implemented yet.
+Written 2026-10-02. The open questions were resolved the same day (see Decisions at the end). Implemented 2026-10-02 (`27626054d`, `32eb6f00a`, `c7b348a51`); status lives in `BACKTEST-ENGINE-READINESS.md`.
 
 ## Starting point
 

@@ -18,6 +18,12 @@ backtest result is reproducible and comparable with every other.
 
 ## Lifecycle
 
+Note: new ideas use `stage` and `research_state`, not `status`. The table below is the older
+`status` vocabulary. The current lifecycle and the schema 3 run artifact are defined in
+`../docs/BACKTEST-LIFECYCLE-AND-RUN-SCHEMA.md`. Schema 4 adds the manifest keys listed in
+`SCHEMA4_KEYS` in `../backtest/manifest.py`. The schema v2 tables in this file stay valid for
+the `costs`, `baseline` and `position_caps` blocks.
+
 | Status | Meaning |
 | --- | --- |
 | inbox | Captured, rules not yet pinned to numbers, nothing tested |
@@ -30,6 +36,9 @@ backtest result is reproducible and comparable with every other.
 
 `verdict` is the evidence, separate from status: `none`, `edge`, `marginal`, `no-edge`,
 `inconclusive`. An idea can be `shelved` with verdict `marginal`.
+
+Recorded runs use schema 3 or 4 (`../docs/BACKTEST-LIFECYCLE-AND-RUN-SCHEMA.md`). A schema 4
+run reads one published dataset version and records the preflight result.
 
 ## Frontmatter classification
 
@@ -106,7 +115,30 @@ compare any two. Never edit or overwrite a run file. Write them with
 | `in_sample`, `out_of_sample` | Core metrics on each side of `split.oos_start` |
 | `series` | `equity_r` and `drawdown_r` as `[["YYYY-MM-DD", value]]`, and `monthly` rows `{month, n, total_r, net_r}` |
 | `position_caps` | `[{max_positions, trades, taken_pct, gross_bps, net_bps, t_stat?, sharpe?}]`: what an account with only N open positions would have kept, first come first served. Every run is scored at 3, 5 and 10 slots by default (`--caps`) |
-| `baseline` | Same-symbol random entry with the same holding period, direction and cost: `{method, gross_bps, net_bps, trade_net_bps, excess_net_bps, excess_t_stat?, trades, skipped}`. Computed for swing runs; intraday runs skip it (reloading the 5-minute bars costs minutes) |
+| `baseline` | Same-symbol random entry with the same holding period, direction and cost: `{method, gross_bps, net_bps, trade_net_bps, excess_net_bps, excess_t_stat?, trades, skipped}`. Computed for swing runs on all trades. Intraday runs compute it on a seeded sample of trades, loading only the symbols in that sample |
+
+### Costs and cost scenarios
+
+The `costs` block still carries `model` and `round_trip_bps`. The `cost_model` block records
+how a run was costed. The primary cost is the statutory per-trade model of the deployment
+profile's broker (Flattrade, zero brokerage; `profiles/flattrade-nse-cash.yaml`, fee table in
+`portfolio/broker_fees.py`). Each trade is priced at its own notional.
+`cost_model.scenarios` lists the scenarios reported side by side:
+
+| Scenario id | Meaning |
+| --- | --- |
+| `primary` | The profile broker's statutory model plus slippage. It drives the verdict and every gate |
+| `generic_discount_broker` | The same model with the portfolio default brokerage (0.03%, capped at Rs 20 per order), priced per trade |
+| `flat_<n>bps` | One reference line per level in the optional spec field `costs.reference_round_trip_bps` |
+| `legacy_flat` | The frozen `execution.cost_bps_round_trip` |
+
+Only `primary` is a gate input. The other scenarios are report-only. The scenario definitions
+and `scenarios_sha256` are recorded. The cost fingerprint covers only the primary model
+(settings, broker, rate table including the delivery DP charge, and the cost model version).
+
+Round trip at Rs 1,00,000 per trade, with 8 bps slippage (two legs): MIS Flattrade is 11.55 bps
+(3.55 statutory), MIS generic is 16.27 bps, CNC Flattrade is 32.61 bps (includes the DP charge)
+and CNC generic is 30.25 bps.
 
 Extra numeric `metrics`: `profit_factor`, `expectancy_r`, `payoff`, `hurdle_t` (the |t| a
 result must clear at `n_trials`), `max_dd_r`, `days`, `peak_concurrent` and

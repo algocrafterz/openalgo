@@ -1,3 +1,5 @@
+Status 2026-10-07: SUPERSEDED by the documents in `signal_engine/docs/` (start at `BACKTEST-ENGINE-READINESS.md`). Kept as history.
+
 Below is a cleaned-up and structured version of your backlog. I separated codebase understanding, backtest infrastructure, strategy qualification, strategy lifecycle, data/export, and research hygiene so these become distinct workstreams rather than one large list.
 AlgoTrade Backtest System — Development Backlog
 1. Codebase Understanding & Documentation

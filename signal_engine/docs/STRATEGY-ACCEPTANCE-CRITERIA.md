@@ -87,16 +87,32 @@ Verdicts are deterministic outcomes of the gate results, not judgements.
 
 | ID | Requirement | Threshold | Tier | Notes |
 |---|---|---|---|---|
-| G1.1 | Cost model | Statutory charges from `portfolio.costs.india_intraday` computed at the DEPLOYED notional, plus slippage (default 4 bps per side for market orders) | H | Table below |
+| G1.1 | Cost model | The deployment profile broker's statutory per-trade model (Flattrade, zero brokerage; `portfolio.costs` schedule with `portfolio/broker_fees.py`) computed at the DEPLOYED notional, plus slippage (default 4 bps per side for market orders). This primary scenario decides the gates. A generic discount-broker line and flat lines are comparison scenarios only | H | Table below |
 | G1.2 | Net expectancy at 1.0x cost | At least +0.05R per trade, HARD | H | R = the trade's own stop distance |
 | G1.3 | Slippage stress | Net expectancy above 0 with slippage doubled (8 bps per side), HARD. Statutory charges are exact, slippage is the uncertain part, so only slippage is stressed. Report total cost at 1.5x and 2.0x | P | Cost stress grid |
 | G1.4 | Gross edge vs cost | REPORT: gross expectancy relative to round-trip cost; at least 1.5x is comfortable | A/H (Chan) | Compare in bps |
 | G1.5 | Cost per trade in R | Median cost at most 0.40R, HARD; at most 0.30R is the target (REPORT) | H | Cost bps divided by stop bps |
 | G1.6 | Stop floor | REPORT: if a fixed floor sets most stops, show results at other floors (BREAKOUT: 0.30% of price on 4 of 6 width buckets) | H | Stop-width table |
 
-### Indian cost stack (current schedule in repo, matches Zerodha's published rates from 1 Oct 2024)
+### Indian cost stack
 
-Per order brokerage is 0.03% or Rs 20, whichever is lower. STT is 0.025% on the sell leg only.
+Status 2026-10-07: the primary cost is the deployment profile broker's model (Flattrade, zero
+brokerage), not the generic schedule below. A recorded run also reports the generic schedule
+(`generic_discount_broker`), optional flat lines and the frozen flat figure as comparison
+scenarios. They do not drive a gate.
+
+At Rs 1 lakh per trade with 8 bps assumed slippage (two legs):
+
+| Product | Broker model | Statutory round trip | Plus 8 bps assumed slippage |
+|---|---|---|---|
+| MIS | Flattrade (primary) | 3.55 bps | 11.55 bps |
+| MIS | Generic discount broker | 8.27 bps | 16.27 bps |
+| CNC (delivery, includes the Rs 20 DP charge) | Flattrade (primary) | 24.61 bps | 32.61 bps |
+| CNC (delivery; the default schedule has no DP charge) | Generic discount broker | 22.25 bps | 30.25 bps |
+
+The generic schedule in the repo matches Zerodha's published rates from 1 Oct 2024.
+
+For the generic schedule, per order brokerage is 0.03% or Rs 20, whichever is lower. STT is 0.025% on the sell leg only.
 NSE transaction charge is 0.00297% of turnover. SEBI fee is Rs 10 per crore. Stamp duty is
 0.003% on the buy leg. GST is 18% on brokerage, transaction charge and SEBI fee.
 
@@ -108,7 +124,7 @@ NSE transaction charge is 0.00297% of turnover. SEBI fee is Rs 10 per crore. Sta
 | Rs 3 lakh | 5.1 bps | 13.1 bps |
 
 Re-verify the schedule after every Union Budget and SEBI or exchange circular, and confirm your
-own broker's brokerage terms. The backtest default of 16 bps corresponds to Rs 1 lakh notional.
+own broker's brokerage terms. The generic 16 bps figure corresponds to Rs 1 lakh notional.
 
 ## G2. Statistical significance
 

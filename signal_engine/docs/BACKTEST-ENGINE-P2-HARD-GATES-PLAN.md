@@ -1,6 +1,6 @@
 # P2 plan: the two HARD gates G4.1 and G6.4
 
-Status: PLAN ONLY, awaiting owner review. No code is written until this is approved.
+Status: Approved 2026-10-04, not started (checked 2026-10-07). No code for this plan is written yet.
 Rule carried over: no gate is weakened or bypassed to make EDGE reachable. A gate with missing
 evidence stays `not_evaluated` (which holds the verdict at MARGINAL), never `pass`.
 
@@ -157,8 +157,9 @@ I will not make option 1 silently; please choose.
 1. G4.1 neighbour runs are NOT trials. They are recorded as diagnostic robustness runs inside the
    perturbation evidence, so they stay auditable. Adopting a neighbour's values is a normal new run.
 2. The engine models the executor's tick grid. Result-changing: new change class, new engine version,
-   and affected historical runs are rerun, never silently altered. (The registry currently holds no
-   recorded runs, so nothing needs rerunning today; the rule stands for any run recorded later.)
+   and affected historical runs are rerun, never silently altered. (Status 2026-10-07: the registry now
+   holds five recorded runs, three of them schema 4. A tick-grid engine change would require rerunning the
+   affected ones; the rule stands.)
 3. Perturbable parameters are declared explicitly per strategy (eligibility plus bounds or rules).
    Nothing is inferred from types. A strategy with no declaration gets `not_evaluated`.
 4. G4.1 ships as an explicit robustness stage that must be run (not on every normal backtest).

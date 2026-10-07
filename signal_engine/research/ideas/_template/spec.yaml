@@ -54,6 +54,33 @@ parameters:                   # every tunable value with the value used, or: non
 # (optional) What price stops, targets and sizing are measured from, only where ambiguous.
 # reference_prices: {stop: entry_fill}
 
+# (optional) Reference cost lines. The primary cost is the deployment profile broker's
+# statutory model; each level below adds a flat round-trip comparison line to the run record.
+# Report-only: these never drive the verdict or a gate. Each level is above 0 and at most 1000.
+# costs:
+#   reference_round_trip_bps: [32]
+
+# (optional) Explicit universe declaration. Each key takes the one value shown for its type
+# (the types are listed in research/intake/fields.py UNIVERSE_DECLARATIONS).
+# universe:
+#   type: current_fno
+#   exchange: NSE
+#   membership_basis: current
+#   point_in_time: false
+#   survivorship_bias: true
+
+# (optional, intraday only) Data contract. All four keys are required when the block is present.
+# frequency must equal timeframe. min_n_minutes is an integer from 1 to the bar length.
+# data:
+#   frequency: 5m
+#   field_families: [price, volume]
+#   min_n_minutes: 1
+#   complete_bins: {first: "09:15", last: "15:10"}   # both on the bar grid that starts at 09:15
+
+# (optional) What a decision may read: a list of plain statements, one per line.
+# information_boundary:
+#   - A decision at the close of bar k reads only bars with open time <= k
+
 filters: none                 # symbol or market filters, or the single word: none
 session_window: {entry: "09:20-14:30"}   # IST range, or the single word: none
 
@@ -63,6 +90,9 @@ re_entry:
 sizing:
   risk_per_trade_pct: 1.0     # percent of capital risked per trade
   capital_per_trade: 100000   # rupees deployed per trade (a different number from risk)
+  # A strategy with stop: none must also declare basis: fixed_notional. Without it the run is
+  # refused before execution, because a trade with no stop cannot be sized by risk.
+  # basis: fixed_notional
 
 portfolio:
   mode: single_position       # single_position | multi_position

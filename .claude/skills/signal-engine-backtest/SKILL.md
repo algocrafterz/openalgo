@@ -72,6 +72,12 @@ Supporting code: `data.py` (Historify loaders), `dataquality.py`, `backfill.py`,
 - **Config style:** fail-fast, no in-code defaults for `signal_engine/config.yaml`; uv only; tests first, 80 percent coverage; no icons or emojis anywhere; do not commit unless asked.
 - **A new strategy idea gets a folder in `research/ideas/` before any strategy code**, and after editing an idea run `uv run python -m signal_engine.research.build_registry`.
 
+## Recording notes
+
+- **Cost scenarios.** The primary scenario is the profile broker's statutory per-trade model (Flattrade, `research/profiles/flattrade-nse-cash.yaml`) and it decides the verdict and gates. `generic_discount_broker`, `flat_<n>bps` and `legacy_flat` are report-only. A spec may add flat lines with the optional field `costs.reference_round_trip_bps`.
+- **Daily ideas need a dataset version.** Pass `--dataset-version nse-daily-20261005-002` to `record_run` and preflight. The default is the newest published version, which is the intraday one, so a daily idea fails preflight as NOT_READY.
+- **No stop means a fixed notional.** A spec with `stop: none` must set `sizing.basis: fixed_notional` with `capital_per_trade` (or `portfolio.capital_per_position`). Otherwise the run is refused before execution.
+
 ## Commands
 
 ```

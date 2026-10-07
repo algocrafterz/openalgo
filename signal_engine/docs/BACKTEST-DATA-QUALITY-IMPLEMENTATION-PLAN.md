@@ -8,6 +8,12 @@ Requirements: [BACKTEST-DATA-QUALITY-AND-READINESS-REQUIREMENTS.md](BACKTEST-DAT
 (called "the requirements" below; section numbers like R10 refer to it).
 Evidence: a read-only inspection of the code and of `db/historify.duckdb` on 2026-10-04.
 
+Status 2026-10-07: Phases 1 to 4 and the first published daily versions are done; the intraday 5m
+dataset is published (`INTRADAY-5M-DATASET-PLAN.md`). Phases 5 to 7 are deferred. The IDEA-027 legacy
+rebuild (D18, section 3.3) and Phases 9 to 11 as written below are obsolete: the legacy ideas were
+deleted 2026-10-04 and IDEA-027 was rerun on a published version (`nse-daily-20261005-002`).
+Phase 8 (full test pass) is not marked here.
+
 This document is written for a later Claude session to execute phase by phase. Each phase lists its
 files, its tests (written first), its exit criteria, and the ECC agents and skills to use.
 
@@ -229,6 +235,8 @@ A **dataset version** is an immutable snapshot published from the landing store:
   operational concern for disaster recovery only.
 
 ### 3.3 Legacy runs (IDEA-027 v1 and v2): separate task after Phase 11 (D18)
+
+Obsolete (2026-10-07): legacy ideas were deleted 2026-10-04. D18 is not pursued.
 
 This is NOT a prerequisite for any phase in section 7. Attempt it only after the data system is
 complete and the clean IDEA-027 evaluation is done. If an exact rebuild is impossible, keep the
@@ -635,24 +643,27 @@ after the source investigation.
 
 1. Phase 1: audit. DONE.
 2. Phase 2a: NSE calendar. DONE (`nse_calendar.yaml`, `calendar.py`, audit wired, 98 tests).
-3. Phase 2b: NSE EOD ingestion. `data_readiness/nse_eod.py`: fetch by calendar session, landing zips
+3. Phase 2b: DONE (`data_readiness/nse_eod.py`). NSE EOD ingestion. `data_readiness/nse_eod.py`: fetch by calendar session, landing zips
    with sha256, staging table `nse_daily_raw(symbol, isin, series, session, open, high, low, close,
    last, prev_close, volume, turnover, trades, source_file, source_sha256)`. Range 2016-01-01 to
    today. Exit: every calendar session has a file; a missing file is a finding, never skipped.
-4. Phase 2c: corporate-action layer. `data_readiness/corporate_actions.py`: feed snapshot, parser,
+4. Phase 2c: DONE (`data_readiness/corporate_actions.py`, `research/reference/corporate_action_overrides.yaml`). Corporate-action layer. `data_readiness/corporate_actions.py`: feed snapshot, parser,
    factors, overrides, backward application. Tests on known events: RELIANCE 2024-10-28 (0.5), HAL
    2023-09-28 (0.5), BAJAJFINSV 2022-09-13 (split 5 to 1 with bonus 1:1 = 0.1), NMDC 2024-12-27 (1/3),
    a rights issue, and an unparseable subject that blocks.
-5. Phase 2d: the adjusted staging dataset and the audit (official calendar). Exit: no unexplained
+5. Phase 2d: DONE (`data_readiness/staging.py`, `audit.py`). The adjusted staging dataset and the audit (official calendar). Exit: no unexplained
    `ADJ-JUMP`; completeness findings explained; owner sign-off.
-6. Phase 3: snapshots (section 3), published from the NSE staging dataset, not the landing store.
-7. Phase 4: preflight, contract and trials (unchanged).
-8. Phase 5: the cron runs D26; a failed batch keeps the active version.
-9. Phases 6 to 8: API, GUI, full tests (unchanged).
-10. Phase 9: publish the first clean daily version. Phases 10 and 11: the IDEA-027 contract, then the rerun.
+6. Phase 3: DONE (`data_readiness/snapshot.py`). Snapshots (section 3), published from the NSE staging dataset, not the landing store.
+7. Phase 4: DONE (`data_readiness/{contract,preflight}.py`, schema 4). Preflight, contract and trials (unchanged).
+8. Phase 5: DEFERRED. The cron runs D26; a failed batch keeps the active version.
+9. Phases 6 and 7 (API, GUI): DEFERRED. Phase 8 (full tests): unchanged.
+10. Phase 9: DONE (`nse-daily-20261005-001`, then `-002`). Phases 10 and 11 (the IDEA-027 contract, then the rerun): SUPERSEDED; IDEA-027 was run on `nse-daily-20261005-002` with no separate legacy step.
 11. 1m track (D28) after Phase 9.
 
-#### Open question for the owner
+#### Open question for the owner (ANSWERED 2026-10-05)
+
+Answered: the demerger price factor is the official ex-date open divided by the official close
+before the ex-date (`corporate_actions.py`, `_demerger`). The text below is the original question.
 
 Demerger factor (10 events in the window: ABB 2019, GMRAIRPORT 2022, MOTHERSON 2022, NMDC 2022,
 RELIANCE 2023, ITC 2025, SIEMENS 2025, TMPV 2025, HINDUNILVR 2025, VEDL 2026). The feed gives no value
@@ -777,8 +788,10 @@ Goal: section 3. This covers AC-04, AC-05 and AC-06.
   - Acceptance: real IDEA-027 preflight READY_WITH_WARNINGS, defect exclusions exactly CGPOWER and
     FORCEMOT, no run, trials.yaml unchanged; `nse-daily-20261005-001` still verifies (2,007 objects).
 - OPEN: code review of the run-path changes (the review agent hit a usage limit); M&M and GVT&D are
-  in the F&O universe but not in the published version (publish a v002 that includes them); the
-  existing 500-session loader minimum excludes 10 symbols that IDEA-027 (252 sessions) could use.
+  in the F&O universe but not in the published version (publish a v002 that includes them) [RESOLVED:
+  `nse-daily-20261005-002` includes them]; the existing 500-session loader minimum excludes 10 symbols
+  that IDEA-027 (252 sessions) could use [RESOLVED: the loader minimum is now the contract history,
+  `contract.py`]. The code review of the run-path changes is not recorded as done.
 
 ### Phase 4: Pre-run readiness
 
@@ -918,12 +931,16 @@ Goal: R14. This covers AC-08 and AC-09 (frontend).
 
 ### Phase 9: Publish the first clean dataset version
 
+Obsolete as written (2026-10-07). The first clean versions are `nse-daily-20261005-001` and `-002`.
+
 1. `data-version publish --dry-run`. The owner reviews the health report: the status per dimension,
    the quarantined sessions, and the calendar classification.
 2. Publish `historify-YYYYMMDD-001` with status `published`.
 3. Run `data-version verify`.
 
 ### Phase 10: Validate the IDEA-027 data contract
+
+Obsolete (2026-10-07): superseded by the preflight in `record_run`.
 
 - `preflight idea-027-52-week-high-proximity --version historify-YYYYMMDD-001`, without running the backtest.
 - Expected warnings: survivorship, non-point-in-time membership, renames, split events, and
@@ -933,6 +950,8 @@ Goal: R14. This covers AC-08 and AC-09 (frontend).
 - If 2026-09-13 is still unclassified, preflight blocks (D10). Classify the date first.
 
 ### Phase 11: Rerun IDEA-027
+
+Obsolete (2026-10-07): IDEA-027 was run on `nse-daily-20261005-002`.
 
 Start this phase only after all of these hold:
 - the data system has passed its own audit and tests (Phase 8);

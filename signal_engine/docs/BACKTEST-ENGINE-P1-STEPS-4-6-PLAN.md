@@ -44,11 +44,11 @@ promotion NOT_READY while rows are unverified) can be lifted by review, not by e
    a test failure, not a silent bucket. **G0.5 (no silent exclusion) passes only when the ledgers reconcile
    exactly:** every signal is accepted or excluded, every order is filled or dropped with a code, every filled
    entry has a trade.
-5. **Cost decomposition is modelled, and says so.** Per trade, the components brokerage, STT, exchange, GST,
+5. **Cost decomposition is modelled, and says so.** (Status 2026-10-07: the flat headline is superseded. The primary cost is now the profile broker's statutory per-trade model, commit `531ae59ee`.) Per trade, the components brokerage, STT, exchange, GST,
    SEBI, stamp and slippage (bps of entry notional, at the deployed notional from `CostModel`) are columns on the
    trades table, and `modeled_cost_bps` is their sum. The headline `cost_bps` stays the engine's flat figure, so
    runs remain comparable with earlier results. A test pins that the components sum to `modeled_cost_bps`.
-6. **Calendar is derived from market data, and labelled so.** No official holiday source exists in the repo.
+6. **Calendar is derived from market data, and labelled so.** (Status 2026-10-07: superseded. Published-dataset runs use the official NSE calendar, commit `c7b4d5827`.) No official holiday source exists in the repo.
    `calendar_version = historify-derived-<sha8 of the sorted session dates>`, `calendar_source =
    "derived_from_market_data"`. A session counts as a trading day when at least 80% of symbols that have data
    that month traded it. Short or irregular sessions are flagged, not removed. An official calendar can replace
@@ -170,5 +170,5 @@ backtest tests unchanged.
    at `built` (survivorship reported on every run, never passed); (b) acquire historical NSE F&O lists (a data
    task) and add them as the membership source, after which G4.7 can be evaluated and the row verified. Steps
    4 to 6 proceed under (a).
-2. **Calendar source.** The derived calendar is a stand-in. An official NSE holiday and special-session list can
+2. **Calendar source.** (Superseded 2026-10-06: the official NSE calendar is in use, `c7b4d5827`.) The derived calendar is a stand-in. An official NSE holiday and special-session list can
    replace it later without a schema change.

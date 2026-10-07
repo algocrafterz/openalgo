@@ -128,6 +128,21 @@ Without this a backtest silently assumes unlimited capital.
 You state universe, broker, expected capital and expected notional per trade, and a custom
 slippage figure only if you have a reason.
 
+Notes on cost and data (status 2026-10-07):
+
+- Cost scenarios. The primary scenario is the deployment profile broker's statutory per-trade
+  model (Flattrade) plus slippage. The primary scenario decides the verdict and every gate. The
+  run record also reports `generic_discount_broker`, `flat_<n>bps` and `legacy_flat` as
+  comparison lines. See `README.md` in this folder.
+- Reference lines. A spec may declare the optional field `costs.reference_round_trip_bps`, a list
+  of flat round-trip levels in bps. Each level adds one `flat_<n>bps` line. It never drives a gate.
+- Daily dataset version. A daily (swing) idea must pass `--dataset-version nse-daily-20261005-002`
+  to `record_run` and to preflight. Without it the newest published version is used, which is now
+  the intraday one, and a daily idea then fails preflight as NOT_READY.
+- No stop. A strategy with `stop: none` must declare `sizing.basis: fixed_notional` with
+  `capital_per_trade` (or `portfolio.capital_per_position`). Otherwise the run is refused before
+  execution, because a trade with no stop cannot be sized for costing.
+
 ### A7. Session, product and deployment timing
 
 Four different things, never merged:

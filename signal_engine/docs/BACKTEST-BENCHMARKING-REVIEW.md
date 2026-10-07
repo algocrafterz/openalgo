@@ -74,6 +74,8 @@ and a concurrency check that already caught one false edge (IDEA-004).
 
 ## Implementation status (2026-10-01)
 
+Status 2026-10-07: the cost model, G0.4, G0.5 and G4.7 rows below are updated. Other rows are as of 2026-10-01.
+
 Each row of the two lists above, with what was built. Code paths are under `backtest/`.
 Nothing here regenerates a stored run record: records are immutable, so the new blocks
 appear only on runs made after this change.
@@ -82,13 +84,13 @@ appear only on runs made after this change.
 | --- | --- | --- | --- |
 | P1 one hold-out constant, embargo | Done | `types.HOLDOUT_OOS_FRACTION = 0.30` is read by `record_run`, `Backtest` (interactive default moved from 40 to 30 percent out of sample) and `PortfolioConfig` (60/40 to 70/30). `splits.purge_and_embargo` purges in-sample trades that exit after the cut and skips one session; `record_run.EMBARGO_SESSIONS = 1`; counts are written to `split`; gate G3.5 | The interactive `Backtest.confirm` windows still split by entry day with no embargo |
 | P1 G2.2 bar is the larger of criteria level and hurdle | Done | `evaluation._g22` passes only above `max(t_threshold, hurdle_t)` and cites both | The headline `hurdle_t` in the record is unchanged (1.97 at one trial) |
-| P1 cost model at deployed notional | Partial | `costs.CostModel`, `recost`, `cost_profile`: per-trade statutory schedule at risk-sized notional (capital, risk and MIS leverage from `config.yaml`) plus slippage; optional `cost_model` record block; gates G1.1 and G1.3 (slippage doubled, HARD) | The engines and the headline still charge the flat bps so records stay comparable; slippage is not scaled to liquidity or gap opens |
-| P1 intraday random-entry baseline | Done | `baseline.random_entry_baseline_intraday`: same symbol, hold in bars, direction and session; seeded sample of at most 2000 trades; only the sample's symbols are loaded; record says `sampled` and `population_trades` | Smoke-tested on six symbols; not yet run on a full-universe intraday record |
+| P1 cost model at deployed notional | Done 2026-10-07 | `costs.CostModel`, `recost`, `cost_profile`: per-trade statutory schedule at risk-sized notional (capital, risk and MIS leverage from `config.yaml`) plus slippage; optional `cost_model` record block; gates G1.1 and G1.3 (slippage doubled, HARD) | Update (`531ae59ee`): recorded runs use the deployment profile broker's statutory model as the primary headline, with `generic_discount_broker`, `flat_<n>bps` and `legacy_flat` scenarios reported beside it. Slippage is still not scaled to liquidity or gap opens |
+| P1 intraday random-entry baseline | Done | `baseline.random_entry_baseline_intraday`: same symbol, hold in bars, direction and session; seeded sample of at most 2000 trades; only the sample's symbols are loaded; record says `sampled` and `population_trades` | Smoke-tested on six symbols; not yet run on a full-universe intraday record Update 2026-10-07: the sample is drawn from the full-universe run's trades. |
 | P1 cost sensitivity from one trade set | Done | `metrics.with_flat_cost`; `Backtest.cost_sensitivity` simulates once and restates net per level (test proves equality with a re-simulation) | None |
 | P2 Newey-West t, DSR, MinTRL | Done | `stats.newey_west_t`, `deflated_sharpe`, `min_track_record_length`; gates G2.6 (report), G2.3 (pass at 0.90), G2.7 (report) | DSR assumes the trial Sharpe variance is the no-edge sampling variance, because only the trial count is recorded; say so when quoting it |
 | P2 parameter perturbation grid | Deferred | G4.1 stays not_evaluated | Needs a mode that keeps raw frames (`release_raw=False`) or a parameter-keyed prepare cache |
 | P2 direction, dispersion, yearly and regime tables | Done | G4.4 to G4.6, `regimes` block, X.2 (a calibrated heuristic, `REGIME-GATE-CALIBRATION.md`) | None |
-| P2 coverage, named exclusions, survivorship per run | Deferred | G0.4, G0.5, G4.7 stay not_evaluated | Needs the data layer to return what it dropped |
+| P2 coverage, named exclusions, survivorship per run | Done | Evaluators exist for G0.4, G0.5 and G4.7 in `evaluation.py` (`_g04`, `_g05`, `_g47`); exclusions are ledgered per run. G4.7 reports the survivorship limit and never passes | Historical F&O membership source (see `BACKTEST-ENGINE-READINESS.md`) |
 | P3 walk-forward | Done | `stats.walk_forward`, gate G3.3: at least 4 windows of 6 months, 60 percent positive; parameters held fixed | Rolling stability only, not a re-fit per window |
 | P3 PBO / CSCV | Partial | `stats.pbo_cscv` is implemented and tested | G2.4 needs P&L for every variant on a common grid; stays not_evaluated |
 | P3 symbol hold-out (G3.4) | Done | `evaluation.symbol_half` splits symbols by a SHA-1 hash, stable across runs; both halves must be net positive and the weaker at least 40 percent of the stronger; needs 10 symbols and 100 trades per half | Parameters are fixed in a record, so this tests generalisation across names, not a re-fit |

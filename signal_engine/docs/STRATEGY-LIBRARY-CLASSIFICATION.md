@@ -1,5 +1,8 @@
 # Strategy Library Classification (backlog item 8.1)
 
+Status 2026-10-07: HISTORICAL. The legacy ideas this document classifies were deleted on
+2026-10-04. Use `research/REGISTRY.md` for the current ideas.
+
 Date: 2026-09-30. Sources: `research/REGISTRY.md` (25 ideas), `research/ideas/*/idea.md`,
 `research/ideas/_inbox/` raw text, run records, `strategy_library/`. Nothing has been
 deleted. Revised 2026-09-30 after reading the full inbox source text and run records: the

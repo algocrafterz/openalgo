@@ -6,6 +6,11 @@ same strategy code.
 
 ## 1. Where things stand today
 
+Status 2026-10-07: the bullets below describe 2026-09-30. Since then the runner in `pipeline/`
+runs BREAKOUT-PY paper-only (`paper_only: true`, dispatched into analyze mode only) beside the Pine
+BREAKOUT. Each strategy has a `signal_source` of `pine` or `python` in `config.yaml` (commit
+`330564cbf`). The G7 gates (G7.1 to G7.5) still have no evaluator in `backtest/evaluation.py`.
+
 - **The live trigger is still the Pine alert.** TradingView runs `breakout.pine`, its alert goes to
   Telegram, `signal_engine` reads it, and the risk checks, executor and OpenAlgo take it from there.
 - **The Python port feeds backtests only.** `features/` and `strategy_core/` (inputs, BREAKOUT key-level
