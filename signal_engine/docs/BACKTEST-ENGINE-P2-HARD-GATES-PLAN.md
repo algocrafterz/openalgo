@@ -1,6 +1,6 @@
 # P2 plan: the two HARD gates G4.1 and G6.4
 
-Status (2026-10-08): G6.4 part A and the engine tick-grid change are built and recorded on IDEA-029 v3; G6.4 part B (the broker attestation) and G4.1 are not started.
+Status (2026-10-09): G6.4 part A and the engine tick-grid change are built and recorded on IDEA-029 v3; G6.4 part B (the broker attestation) is not started. G4.1 (parameter perturbation) is built as `backtest/perturbation.py` with the evaluator `_g41`, and a real-data diagnostic of all 24 IDEA-029 neighbours has run (see the readiness ledger). A run whose base net R per trade is not positive fails G4.1 without running variants.
 G6.4 stays a hard FAIL on v3 because 2 of 26,144 stops are off the exact grid (known limitation of `safe_tick`, see below).
 
 Built 2026-10-08: `backtest/tickgrid.py` (stop snapping and part A evidence), `_g64` in `evaluation.py`, `RunConfig.tick_grid`,
