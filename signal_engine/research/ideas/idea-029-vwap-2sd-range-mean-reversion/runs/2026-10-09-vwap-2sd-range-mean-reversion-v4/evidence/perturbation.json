@@ -1,0 +1,39 @@
+{
+  "base": {
+    "net_bps": -15.721145782875755,
+    "net_r": -0.22413376569170396,
+    "oos_net_r": -0.2047783797465068,
+    "oos_trades": 7065,
+    "params_fingerprint": "dc3adbab184040a240ebc8c02287a5a7958ea69bb385d118b3f25a908713acbc",
+    "trades": 26144
+  },
+  "diagnostic_not_trials": true,
+  "metric": "mean net R per trade at 1.0x cost (statutory model); net bps is secondary",
+  "neighbours": [],
+  "reason": "the base net R per trade is -0.2241, not positive; variants not run",
+  "rules": {
+    "min_retention": 0.4,
+    "min_trades": 30,
+    "min_usable_neighbours": 4,
+    "multipliers": [
+      0.8,
+      1.2
+    ],
+    "positive_share": "7/10"
+  },
+  "shared": {
+    "dataset_version": "nse-intraday-5m-20261006-001",
+    "engine_version": "1.2",
+    "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+    "run_config_sha256": "339a5d9b7db1d9c053701dba1dabefb470647c7f4f6d6f18548867b235caf544",
+    "tick_grid": "safe_tick"
+  },
+  "skipped": [
+    {
+      "parameter": "warmup_15m_bars",
+      "reason": "structural: warm-up length of the 15-minute indicators; it moves the data window, not the rule"
+    }
+  ],
+  "state": "base_not_positive",
+  "version": 1
+}
