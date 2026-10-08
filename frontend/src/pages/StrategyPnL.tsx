@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/table'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
-import { applyLivePrices, legPriceKey, openLegItems } from '@/lib/strategyPnlLive'
+import { applyLivePrices, legPriceKey, openLegItems, visibleLegs } from '@/lib/strategyPnlLive'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -58,50 +58,74 @@ function LegsTable({
   legs: StrategyLeg[]
   formatCurrency: (v: number) => string
 }) {
+  const [showFlat, setShowFlat] = useState(false)
   if (legs.length === 0) {
     return <p className="text-sm text-muted-foreground py-3">No legs recorded for this strategy.</p>
   }
+  const shown = visibleLegs(legs, showFlat)
+  const hiddenCount = legs.length - shown.length
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Symbol</TableHead>
-          <TableHead>Exchange</TableHead>
-          <TableHead>Product</TableHead>
-          <TableHead className="text-right">Qty</TableHead>
-          <TableHead className="text-right">Avg Price</TableHead>
-          <TableHead className="text-right">LTP</TableHead>
-          <TableHead className="text-right">Today Realized</TableHead>
-          <TableHead className="text-right">Unrealized</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {legs.map((leg) => (
-          <TableRow key={`${leg.symbol}-${leg.exchange}-${leg.product}`}>
-            <TableCell className="font-medium">{leg.symbol}</TableCell>
-            <TableCell>
-              <Badge variant="outline">{leg.exchange}</Badge>
-            </TableCell>
-            <TableCell>
-              <Badge variant="secondary">{leg.product}</Badge>
-            </TableCell>
-            <TableCell className="text-right font-mono">{leg.quantity}</TableCell>
-            <TableCell className="text-right font-mono">
-              {formatCurrency(leg.average_price)}
-            </TableCell>
-            <TableCell className="text-right font-mono">
-              {leg.ltp === null ? '-' : formatCurrency(leg.ltp)}
-            </TableCell>
-            <TableCell className="text-right">
-              <PnlText value={leg.today_realized} formatted={formatCurrency(leg.today_realized)} />
-            </TableCell>
-            <TableCell className="text-right">
-              <PnlText value={leg.unrealized} formatted={formatCurrency(leg.unrealized)} />
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <>
+      {(hiddenCount > 0 || showFlat) && (
+        <div className="flex items-center justify-between pb-2 text-xs text-muted-foreground">
+          <span>
+            {showFlat
+              ? `Showing all ${legs.length} legs`
+              : `${hiddenCount} flat leg(s) with no P&L today hidden`}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setShowFlat((v) => !v)}>
+            {showFlat ? 'Hide flat legs' : 'Show flat legs'}
+          </Button>
+        </div>
+      )}
+      {shown.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-3">No open or active legs today.</p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Symbol</TableHead>
+              <TableHead>Exchange</TableHead>
+              <TableHead>Product</TableHead>
+              <TableHead className="text-right">Qty</TableHead>
+              <TableHead className="text-right">Avg Price</TableHead>
+              <TableHead className="text-right">LTP</TableHead>
+              <TableHead className="text-right">Today Realized</TableHead>
+              <TableHead className="text-right">Unrealized</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {shown.map((leg) => (
+              <TableRow key={`${leg.symbol}-${leg.exchange}-${leg.product}`}>
+                <TableCell className="font-medium">{leg.symbol}</TableCell>
+                <TableCell>
+                  <Badge variant="outline">{leg.exchange}</Badge>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="secondary">{leg.product}</Badge>
+                </TableCell>
+                <TableCell className="text-right font-mono">{leg.quantity}</TableCell>
+                <TableCell className="text-right font-mono">
+                  {formatCurrency(leg.average_price)}
+                </TableCell>
+                <TableCell className="text-right font-mono">
+                  {leg.ltp === null ? '-' : formatCurrency(leg.ltp)}
+                </TableCell>
+                <TableCell className="text-right">
+                  <PnlText
+                    value={leg.today_realized}
+                    formatted={formatCurrency(leg.today_realized)}
+                  />
+                </TableCell>
+                <TableCell className="text-right">
+                  <PnlText value={leg.unrealized} formatted={formatCurrency(leg.unrealized)} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </>
   )
 }
 

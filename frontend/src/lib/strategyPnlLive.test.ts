@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StrategyLeg, StrategyPnl } from '@/api/strategyPnl'
-import { applyLivePrices, legPriceKey, openLegItems } from './strategyPnlLive'
+import { applyLivePrices, legPriceKey, openLegItems, visibleLegs } from './strategyPnlLive'
 
 function leg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
   return {
@@ -100,5 +100,26 @@ describe('applyLivePrices', () => {
 
     expect(original.legs[0].unrealized).toBe(0)
     expect(original.total).toBe(50)
+  })
+})
+
+describe('visibleLegs', () => {
+  const open = leg({ symbol: 'OPEN', quantity: 5 })
+  const closedToday = leg({ symbol: 'DONE', quantity: 0, today_realized: -12.5 })
+  const flatIdle = leg({ symbol: 'OLD', quantity: 0, today_realized: 0, ltp: null })
+
+  it('hides flat legs with no realized P&L today by default', () => {
+    expect(visibleLegs([open, closedToday, flatIdle], false)).toEqual([open, closedToday])
+  })
+
+  it('keeps every leg, in order, when flat legs are requested', () => {
+    expect(visibleLegs([open, closedToday, flatIdle], true)).toEqual([open, closedToday, flatIdle])
+  })
+
+  it('keeps a short leg and does not mutate its input', () => {
+    const short = leg({ symbol: 'SHORT', quantity: -3 })
+    const input = [flatIdle, short]
+    expect(visibleLegs(input, false)).toEqual([short])
+    expect(input).toEqual([flatIdle, short])
   })
 })

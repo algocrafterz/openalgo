@@ -1,4 +1,4 @@
-import type { StrategyPnl } from '@/api/strategyPnl'
+import type { StrategyLeg, StrategyPnl } from '@/api/strategyPnl'
 import type { PriceableItem } from '@/hooks/useLivePrice'
 
 /** Key matching useLivePrice's `${exchange}:${symbol}` price lookups. */
@@ -28,6 +28,17 @@ export function openLegItems(strategies: StrategyPnl[]): PriceableItem[] {
     }
   }
   return [...seen.values()]
+}
+
+/**
+ * Legs worth showing on the page. The strategy book never prunes a leg that
+ * has gone flat, so a leg that is flat and booked nothing today is history
+ * (quantity 0, average 0.00, no LTP, 0.00 P&L). Hidden by default; the order
+ * is untouched. Display only - the API payload is not altered.
+ */
+export function visibleLegs(legs: StrategyLeg[], showFlat: boolean): StrategyLeg[] {
+  if (showFlat) return legs
+  return legs.filter((leg) => leg.quantity !== 0 || leg.today_realized !== 0)
 }
 
 /**

@@ -406,6 +406,23 @@ next to the title.
   `frontend/src/lib/strategyPnlLive.test.ts`. Edited:
   `frontend/src/pages/StrategyPnL.tsx`.
 
+## Flat legs hidden by default (added 2026-10-08)
+
+The strategy book never prunes a leg that has gone flat, so each strategy
+accumulated rows with quantity 0, average 0.00, no LTP and 0.00 P&L (the "ghost
+entries"). The page now hides a leg when its quantity is 0 and it booked
+nothing today (`today_realized` is 0).
+
+- Display only. The `/api/strategy-pnl` payload and the strategy book are not
+  changed.
+- Each strategy shows a "N flat leg(s) with no P&L today hidden" line with a
+  "Show flat legs" / "Hide flat legs" toggle.
+- Helper: `visibleLegs()` in `frontend/src/lib/strategyPnlLive.ts`, covered by
+  `strategyPnlLive.test.ts` and `StrategyPnL.test.tsx`.
+- `frontend/dist/` must be rebuilt (`cd frontend && npm run build`) for the
+  change to reach the served page. A browser tab that was already open needs a
+  hard reload.
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump
