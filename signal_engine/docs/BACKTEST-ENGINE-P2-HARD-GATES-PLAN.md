@@ -1,6 +1,22 @@
 # P2 plan: the two HARD gates G4.1 and G6.4
 
-Status: Approved 2026-10-04, not started (checked 2026-10-07). No code for this plan is written yet.
+Status (2026-10-08): G6.4 part A and the engine tick-grid change are built and recorded on IDEA-029 v3; G6.4 part B (the broker attestation) and G4.1 are not started.
+G6.4 stays a hard FAIL on v3 because 2 of 26,144 stops are off the exact grid (known limitation of `safe_tick`, see below).
+
+Built 2026-10-08: `backtest/tickgrid.py` (stop snapping and part A evidence), `_g64` in `evaluation.py`, `RunConfig.tick_grid`,
+profile key `price_grid: safe_tick`, ENGINE_VERSION 1.2. The tier is taken from the previous month's close restated for corporate
+actions into the trade session's price units. Only the initial stop is checked; targets and entries are market orders.
+
+Known limitation (live-execution design, not an evaluator defect): `safe_tick` uses the tier of `price x TIER_DRIFT` (1.5), so it is
+valid only while the stock has not fallen more than one third below the previous month's close. RBLBANK 2020-03-25 (stop 155.51) and
+2020-03-27 (stop 165.34): previous close 290.9, exact tick 0.05, a fall of 46.5%, `safe_tick` 0.01, so the stops are 0.2 tick off the
+exact grid. Changing `TIER_DRIFT` needs a separate live-order change and review. The gate is not weakened for it.
+
+Part B requirement still open: an append-only `broker-tick-checks.yaml` per deployment profile with one accepted real broker order per
+price tier (below Rs 250, Rs 250 to 1,000, above Rs 1,000): date, tier, symbol, order price, trigger price, broker order id, accepted
+yes or no, who recorded it. Until all three are recorded and accepted, a clean part A is `not_evaluated`, never `pass`; a rejected
+order is `fail`. The attestation is external evidence the backtest cannot compute. PRD 2026-09-30 records the same owed check:
+only analyze mode has been exercised.
 Rule carried over: no gate is weakened or bypassed to make EDGE reachable. A gate with missing
 evidence stays `not_evaluated` (which holds the verdict at MARGINAL), never `pass`.
 
