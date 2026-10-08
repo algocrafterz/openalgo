@@ -894,9 +894,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     month_closes = None
     grid_mode = getattr(run, "tick_grid", tickgrid.NONE)  # a swing run has no stop orders
     if kind != "swing":
-        month_closes = tickgrid.raw_month_end_closes(
-            tickgrid.session_raw_closes(layer.frames, price_factors)
-        )
+        month_closes = tickgrid.month_end_closes(tickgrid.session_closes(layer.frames))
         if grid_mode == tickgrid.SAFE_TICK:
             layer = dataclasses.replace(
                 layer,

@@ -72,7 +72,7 @@ class TestGridCheck:
         assert tickgrid.previous_month_key("2026-03") == "2026-02"
 
     def test_month_end_close_is_the_last_session_of_each_month(self):
-        got = tickgrid.raw_month_end_closes(
+        got = tickgrid.month_end_closes(
             {"A": {date(2026, 1, 5): 10.0, date(2026, 1, 30): 12.0, date(2026, 2, 2): 99.0}}
         )
         assert got == {"A": {"2026-01": 12.0, "2026-02": 99.0}}
@@ -118,6 +118,21 @@ class TestEvidence:
         # previous close 100 -> tier 0.01, so 99.37 is on the grid even though safe_tick(99) is 0.01
         ev = tickgrid.tick_grid_evidence([_T("B", date(2026, 2, 3), 99.37)], self.CLOSES)
         assert ev["off_grid"] == 0
+
+    def test_a_split_month_takes_its_tier_from_the_restated_previous_close(self):
+        # 5:1 split in February. January closed at adjusted 300 (raw 1500, factor 0.2); February
+        # sessions have factor 1. The exchange restates the base price, so the tier is that of
+        # 300 (tick 0.05), not that of the raw 1500 (tick 0.10): 286.25 is on grid.
+        closes = {"A": {"2026-01": 300.0}}
+        factors = {"A": {date(2026, 2, 3): 1.0}}
+        ev = tickgrid.tick_grid_evidence([_T("A", date(2026, 2, 3), 286.25)], closes, factors)
+        assert ev["off_grid"] == 0 and ev["tick_basis"] == {"exact": 1}
+        # the same stop judged against the raw pre-split close would wrongly be off grid
+        raw_based = {"A": {"2026-01": 1500.0}}
+        assert (
+            tickgrid.tick_grid_evidence([_T("A", date(2026, 2, 3), 286.25)], raw_based)["off_grid"]
+            == 1
+        )
 
     def test_the_price_factor_moves_the_check_to_raw_prices(self):
         # adjusted 1040.05 with factor 0.5 is raw 2080.10, on tick 0.10
@@ -191,9 +206,9 @@ class TestPriceFactorColumns:
         with pytest.raises(ValueError, match="price_factor"):
             tickgrid.attach_price_factors(self._frames(), {"A": {}})
 
-    def test_raw_close_is_last_close_over_factor(self):
-        got = tickgrid.session_raw_closes(self._frames(), {"A": {date(2026, 2, 3): 0.5}})
-        assert got == {"A": {date(2026, 2, 3): 200.0}}
+    def test_session_close_is_the_last_bar_close_in_adjusted_prices(self):
+        got = tickgrid.session_closes(self._frames())
+        assert got == {"A": {date(2026, 2, 3): 100.0}}
 
     def test_safe_tick_matches_the_instrument_helper(self):
         assert safe_tick(1980.0) == 0.1

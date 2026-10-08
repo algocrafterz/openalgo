@@ -46,7 +46,8 @@ WORST_LIMIT = 10
 
 RULE = (
     "every stop trigger is a multiple of the exact tick tier of its month, taken from the previous "
-    "month's last NSE raw close (safe_tick of the stop where that month is not in the data)"
+    "month's last close restated for corporate actions into the trade session's price units "
+    "(safe_tick of the stop where that month is not in the data)"
 )
 
 NOT_COVERED = (
@@ -88,15 +89,15 @@ def previous_month_key(key: str) -> str:
     return f"{year - 1}-12" if month == 1 else f"{year}-{month - 1:02d}"
 
 
-def raw_month_end_closes(
-    session_closes: Mapping[str, Mapping[date, float]],
+def month_end_closes(
+    closes: Mapping[str, Mapping[date, float]],
 ) -> dict[str, dict[str, float]]:
-    """Per symbol, 'YYYY-MM' -> the NSE raw close of that month's last session.
+    """Per symbol, 'YYYY-MM' -> the close of that month's last session.
 
-    `session_closes` maps symbol -> {session date: raw close of the session}.
+    `closes` maps symbol -> {session date: close} (`session_closes`: adjusted prices).
     """
     out: dict[str, dict[str, float]] = {}
-    for symbol, sessions in session_closes.items():
+    for symbol, sessions in closes.items():
         last: dict[str, tuple[date, float]] = {}
         for day, close in sessions.items():
             key = month_key(day)
@@ -117,7 +118,7 @@ def tick_grid_evidence(
 
     Args:
         trades: Engine trades; a trade with a NaN stop has no resting order and is not counted.
-        month_closes: `raw_month_end_closes` output.
+        month_closes: `month_end_closes` output, in adjusted prices.
         price_factors: symbol -> session date -> price factor; missing means raw prices (1.0).
         engine_mode: The `RunConfig.tick_grid` the trades were produced under.
     """
@@ -134,7 +135,8 @@ def tick_grid_evidence(
         raw = sl / factor
         prev = month_closes.get(t.symbol, {}).get(previous_month_key(month_key(t.day)))
         if prev is not None and prev > 0:
-            tick, source = tick_for_price(prev), "exact"
+            # the previous month's close restated into this session's price units
+            tick, source = tick_for_price(prev / factor), "exact"
         else:
             tick, source = safe_tick(raw), "fallback_safe_tick"
         ok = on_grid(raw, tick)
@@ -220,7 +222,8 @@ def attach_price_factors(
                 "be snapped on raw prices"
             )
         if in_place:
-            df["price_factor"] = factor
+            with pd.option_context("mode.chained_assignment", None):
+                df["price_factor"] = factor
             out[symbol] = df
         else:
             out[symbol] = df.assign(price_factor=factor)
@@ -244,22 +247,19 @@ def carry_price_factor(prepared: pd.DataFrame, factor: pd.Series | None) -> pd.D
     return prepared.assign(price_factor=carried)
 
 
-def session_raw_closes(
-    frames: Mapping[str, pd.DataFrame],
-    price_factors: Mapping[str, Mapping[date, float]],
-) -> dict[str, dict[date, float]]:
-    """Per symbol and session, the NSE raw close: last bar close / the session's price factor."""
+def session_closes(frames: Mapping[str, pd.DataFrame]) -> dict[str, dict[date, float]]:
+    """Per symbol and session, the last bar's close in the frame's own (adjusted) prices.
+
+    Kept adjusted on purpose: the exchange sets a month's tier from the previous month's close
+    restated for corporate actions, and `tick_grid_evidence` restates it into the trade
+    session's units by dividing by that session's price factor. The raw close of a pre-split
+    month would put a post-split stock in the wrong tier.
+    """
     out: dict[str, dict[date, float]] = {}
     for symbol, df in frames.items():
         if not len(df):
             out[symbol] = {}
             continue
-        sessions, factor = _session_factors(df, price_factors.get(symbol, {}))
-        last = pd.DataFrame({"s": sessions, "c": df["Close"].to_numpy(), "f": factor}).groupby(
-            "s", sort=True
-        )[["c", "f"]].last()
-        raw = last["c"] / last["f"]
-        out[symbol] = {
-            d: float(v) for d, v in zip(last.index, raw, strict=True) if np.isfinite(v) and v > 0
-        }
+        last = pd.Series(df["Close"].to_numpy(), index=df.index.date).groupby(level=0).last()
+        out[symbol] = {d: float(v) for d, v in last.items() if np.isfinite(v) and v > 0}
     return out
