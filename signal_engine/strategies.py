@@ -52,6 +52,10 @@ BREAKOUT = "BREAKOUT"
 # mix with Pine's. Paper only: the runner refuses to dispatch it outside OpenAlgo's ANALYZE mode.
 BREAKOUT_PY = "BREAKOUT-PY"
 
+# EMA/VWAP/ATR early displacement with a trailing stop and no take-profit, run by the Python
+# runner (strategy_core.ema_vwap_early). Paper only, like BREAKOUT-PY.
+EVWAP_EARLY_PY = "EVWAP-EARLY-PY"
+
 # WATCHLIST outcome of the BreakingTrade scanner: entered at the scan-hit price with no
 # confirming close (trigger.plan_trade_watchlist), against BREAKINGTRADE's confirmed entry.
 # Its own tag, channel and risk slots so paper P&L can compare the two entry philosophies.
@@ -84,6 +88,11 @@ REGISTRY: dict[str, StrategyMeta] = {
         "Python runner BREAKOUT, paper only (ANALYZE mode). No channel of its own: lifecycle "
         "messages go to the admin notify channel, and it is listed in the consolidated day "
         "summary. tradeable=False keeps it out of the live-mode worst-case sizing floor.",
+    ),
+    EVWAP_EARLY_PY: StrategyMeta(
+        EVWAP_EARLY_PY, None, False,
+        "Python runner EMA/VWAP early displacement, trailing stop, no TP. Paper only (ANALYZE "
+        "mode); lifecycle messages go to the admin notify channel, like BREAKOUT-PY.",
     ),
     BREAKINGTRADE: StrategyMeta(BREAKINGTRADE, "intraday-breakingtrade", True),
     BREAKINGTRADE_WATCHLIST: StrategyMeta(

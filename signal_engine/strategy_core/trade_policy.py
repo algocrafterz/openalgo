@@ -154,7 +154,8 @@ def bad_fill(
     last case; 0 or less disables it.
     """
     slip = entry_slippage_r(direction, signal_ref, sl, fill)
-    if fill and direction * (fill - tp1) >= 0:
+    # tp1 <= 0 (or NaN) is "no take-profit": there is no target to overshoot.
+    if fill and tp1 and tp1 > 0 and direction * (fill - tp1) >= 0:
         return BadFill(True, TP_OVERSHOT, slip)
     if fill and sl and direction * (fill - sl) <= 0:
         return BadFill(True, STOP_BREACHED, slip)

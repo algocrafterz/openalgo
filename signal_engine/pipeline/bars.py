@@ -198,3 +198,59 @@ async def fetch_current(
             break
         await clock.sleep_until(nxt)
     return got, pending
+
+
+class SharedBarSource:
+    """One fetch per symbol and bar for every runner session that shares this source.
+
+    Each strategy session runs its own cycle at the same bar close. Without sharing, two
+    strategies on the same universe double the history calls to a broker endpoint that is already
+    near its limit. The first session to ask for a symbol fetches it; a session asking again
+    while the cached frame already holds the latest bar that can have closed by `now` gets the
+    cached frame, truncated to `now`. A lock serialises fetch rounds so two sessions never request
+    the same symbol at once. One frame per (symbol, interval) is kept, for the current day only.
+    """
+
+    def __init__(self, inner: BarSource) -> None:
+        self._inner = inner
+        self._lock = asyncio.Lock()
+        self._day: dt.date | None = None
+        self._frames: dict[tuple[str, int], pd.DataFrame] = {}
+
+    @staticmethod
+    def _last_closed_open(now: pd.Timestamp, interval_min: int) -> pd.Timestamp:
+        step = pd.Timedelta(minutes=interval_min)
+        return now.floor(f"{interval_min}min") - step
+
+    def _fresh(self, symbol: str, interval_min: int, now: pd.Timestamp) -> pd.DataFrame | None:
+        df = self._frames.get((symbol, interval_min))
+        if df is None or df.empty:
+            return None
+        if df.index[-1] < self._last_closed_open(now, interval_min):
+            return None
+        return closed_only(df, now, interval_min)
+
+    async def fetch(
+        self, symbols: list[str], interval_min: int, day: dt.date, now: pd.Timestamp
+    ) -> dict[str, pd.DataFrame]:
+        async with self._lock:
+            if self._day != day:
+                self._day, self._frames = day, {}
+            out: dict[str, pd.DataFrame] = {}
+            todo = []
+            for s in symbols:
+                cached = self._fresh(s, interval_min, now)
+                if cached is None:
+                    todo.append(s)
+                else:
+                    out[s] = cached
+            missing: list[str] = []
+            if todo:
+                try:
+                    got = await self._inner.fetch(todo, interval_min, day, now)
+                except MissingBarsError as exc:
+                    got, missing = exc.frames, exc.missing
+                for s, df in got.items():
+                    self._frames[(s, interval_min)] = df
+                    out[s] = df
+            return _finish(symbols, out, missing)

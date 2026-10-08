@@ -45,6 +45,10 @@ def _register():
         EmaVwapAtrDisplacement,
         EmaVwapAtrDisplacementParams,
     )
+    from signal_engine.backtest.strategies.ema_vwap_early import (
+        EarlyDisplacementParams,
+        EmaVwapEarly,
+    )
     from signal_engine.backtest.strategies.gap_rsi import GapRsi, GapRsiParams
     from signal_engine.backtest.strategies.high_proximity import HighProximity, HighProximityParams
     from signal_engine.backtest.strategies.ib_extension import IbExtension, IbExtParams
@@ -77,6 +81,7 @@ def _register():
         EmaVwapAtrDisplacementParams,
         "intraday",
     )
+    REGISTRY["ema_vwap_early"] = (EmaVwapEarly, EarlyDisplacementParams, "intraday")
     REGISTRY["gap_rsi"] = (GapRsi, GapRsiParams, "swing")
     REGISTRY["high_proximity"] = (HighProximity, HighProximityParams, "swing")
     REGISTRY["ib_extension"] = (IbExtension, IbExtParams, "intraday")

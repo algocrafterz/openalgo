@@ -36,8 +36,11 @@ def sig_id(symbol: str, bar_time: pd.Timestamp, strategy: str = PINE_TAG) -> str
 def fire_to_signal(
     fire: Fire, product: str, exchange: str = "NSE", strategy: str = "BREAKOUT"
 ) -> Signal:
-    if not fire.targets:
+    no_target = fire.context.get("take_profit") == "none"
+    if not fire.targets and not no_target:
         raise ValueError(f"{fire.symbol}: fire has no targets")
+    if fire.targets and no_target:
+        raise ValueError(f"{fire.symbol}: fire says take_profit none but carries targets")
     t = _ist(fire.bar_time)
     context = {
         k: v for k, v in fire.context.items() if not (isinstance(v, float) and math.isnan(v))
@@ -49,7 +52,7 @@ def fire_to_signal(
         symbol=fire.symbol,
         entry=fire.entry_ref,
         sl=fire.sl,
-        tp=fire.targets[0],
+        tp=0.0 if no_target else fire.targets[0],  # 0 = no take-profit
         exchange=exchange,
         product=product,
         time=f"{t:%H:%M}",

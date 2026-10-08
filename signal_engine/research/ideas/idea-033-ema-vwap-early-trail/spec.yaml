@@ -1,0 +1,65 @@
+schema_version: 2
+name: EMA-VWAP early displacement with trailing stop
+source:
+  kind: own_words
+  ref: _inbox/ema-vwap-atr-early-displacement.txt   # chart study: strategy_library/lipiscripts/intraday/ema-vwap-atr-early-displacement-v2.lipi
+profile: flattrade-nse-cash
+style: intraday
+direction: both
+timeframe: 5m
+product: MIS
+entry:
+  - "Long: previous displacement <= -0.50 and current displacement > -0.50, where displacement = (EMA9(close) - session VWAP(hlc3)) / ATR14; short is the mirror through +0.50"
+  - "Displacement ROC (current - previous) points the trade's way; close is on the trade's side of EMA20"
+  - "Signal bar opens 09:20-14:10; the order fills at the next candle open"
+exit:
+  - "Trailing stop, activated when displacement crosses 0 the trade's way: the closer of best price -/+ 1.0 x ATR14 and latest confirmed swing -/+ 0.10 x ATR14; tightens to 0.75 ATR after 2 falling displacement bars and 0.50 ATR after displacement re-crosses 0; never loosens"
+  - "Exit at the next candle open when a closed bar touched the stop in force or closed beyond the new stop"
+  - "Time exit at 14:45"
+stop:
+  - "Latest confirmed same-session swing low (high for shorts), 2 bars each side, minus (plus) 0.10 x ATR14; fallback the lowest low (highest high) of the preceding 6 completed same-session bars excluding the signal bar, same buffer"
+take_profit: none
+holding_period: same_session
+indicators:
+  - {name: EMA, period: 9, source: close}
+  - {name: EMA, period: 20, source: close}
+  - {name: VWAP, anchor: session, source: hlc3}
+  - {name: ATR, period: 14}
+parameters:
+  early_threshold: 0.50
+  ema_fast: 9
+  ema_slow: 20
+  atr_len: 14
+  max_entry_displacement: 1.5
+  chop_lookback: 5
+  chop_max_sign_changes: 1
+  chop_min_mean_abs_disp: 0.50
+  swing_left: 2
+  swing_right: 2
+  stop_buffer_atr: 0.10
+  stop_fallback_lookback: 6
+  trailing_atr_multiple: 1.0
+  trailing_buffer_atr: 0.10
+  contraction_bars: 2
+  contraction_atr_multiple: 0.75
+  failure_atr_multiple: 0.50
+filters: none
+session_window: {entry: "09:20-14:15"}
+re_entry:
+  allowed: true
+  max_per_symbol_day: 50
+sizing:
+  risk_per_trade_pct: 1.0
+  capital_per_trade: 100000
+portfolio:
+  mode: multi_position
+  max_concurrent: 40          # one per symbol on the shared 40 universe (paper: analyze limits are loose)
+  max_trades_per_day: 100
+  capital_per_position: 100000
+  max_exposure: 4000000
+  selection: chronological
+  conflict: skip_if_symbol_open
+disclosure:
+  prior_variants: 1
+  chart_peeking: true
+  destination: python

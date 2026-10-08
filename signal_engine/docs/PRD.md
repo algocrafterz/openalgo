@@ -5622,6 +5622,37 @@ trade counters, tracker position, trades.db rows and P&L. Exits are owned by the
 - No caps changed: analyze mode is already unlimited per strategy. BREAKOUT-PY has no Telegram channel of its own
   (admin channel and the consolidated day summary only). Details: `docs/PYTHON-RUNNER-SPEC.md`.
 
+## Python Signal Runner: EVWAP-EARLY-PY Paper Trading (2026-10-08)
+
+A second Python runner strategy, `EVWAP-EARLY-PY` (IDEA-033): EMA/VWAP/ATR early displacement entry, trailing stop,
+no take-profit. Paper only (ANALYZE mode), same 40-symbol universe as BREAKOUT-PY. Rules: `strategy_core/ema_vwap_early.py`;
+assumptions: `strategy_library/intraday/ema-vwap-early/STRATEGY-LOG.md`. A behaviour check of the discretionary method,
+not a validated edge (IDEA-032 measured the same entry with a zero-cross exit at -13.9 bps net).
+
+- **New exit owner `strategy` with exit plan `trailing_stop`** (config requires both together). `pipeline/trail_driver.py`
+  replays the trailing stop from the fill bar at each 5m close and sends one full EXIT (`tp_level TRAILING_STOP`) through
+  main's existing exit path. The broker SL-M stays at the initial swing stop; it is never moved. The tracker's
+  no-progress, loss-cut and profit-lock rules skip the strategy, as for Ladder-owned exits. The 14:45 time exit applies.
+- **No TP (`take_profit: none`).** Signals of an exit plan without targets (`config.NO_TARGET_EXIT_PLANS`, today
+  `trailing_stop`) carry `tp = 0`, meaning none. The validator accepts 0 only for such a strategy and rejects any other
+  value for it; the bad-fill guard skips the TP-overshoot case when there is no target; entry notifications omit TP and
+  R:R. Invariant: no execution path may read a target for this strategy.
+- **Shared bar fetch.** `pipeline/bars.SharedBarSource` wraps the history source: runner sessions on the same symbols fetch
+  each bar once between them, so the second strategy adds no history calls.
+- **Per-strategy universe.** `runner.strategies.<tag>.universe` (optional list) overrides `runner.universe` for that
+  strategy only.
+- Only spec-bound tags (`BREAKOUT-PY`) are checked against the frozen BREAKOUT specification at start-up.
+- Backtest adapter `ema_vwap_early` (baselines A crossover, B early, C early+momentum, D early+momentum+EMA20 in
+  `BASELINES`); trailing exits fill at the next open, matching paper.
+- **Per-trade diagnostics, every close path** (trailing, initial broker stop, time exit, other):
+  `logs/evwap-early-py_diagnostics_<day>.jsonl`, with entry context, stop basis (SWING or FALLBACK_EXTREME), swing
+  age, MFE/MAE before and after the crossover, the bar-by-bar path and the displacement path into the signal.
+  Report: `uv run python -m signal_engine.analysis.evwap_early_report --day YYYY-MM-DD` (joins trades.db P&L on
+  sig_id via `db.fetch_strategy_closes`).
+- **OpenAlgo UI:** the paper trades appear under EVWAP-EARLY-PY in Order Book / Trade Book, `/strategy-pnl` and
+  `/strategy-pnl/daily`, keyed on the order strategy tag. No UI or core change.
+- **Frozen 2026-10-09 for an observation run:** no parameter change from early paper P&L.
+
 ## Backtest Evaluation: Symbol Hold-Out, Regime Activation, Evolution Verdict (2026-10-01)
 
 - G3.4 symbol hold-out: trades are split by a hash of the symbol; both halves must be net positive. Report-grade evidence that the edge is not a few names.

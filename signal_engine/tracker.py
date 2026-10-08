@@ -82,13 +82,15 @@ def _break_even_base(pos) -> float:
 
 
 def _ladder_owns_exits(_settings, strategy: str) -> bool:
-    """True when the runner's Ladder is this strategy's only exit rule.
+    """True when the runner (the shared Ladder or the strategy's trailing driver) owns the exits.
 
     The backtest never models no-progress, loss-cut or profit-lock, so a strategy whose exits
-    are owned by the shared Ladder must not have the tracker add exits the backtest never scored.
+    are owned by the runner must not have the tracker add exits the backtest never scored.
     """
+    from signal_engine.config import RUNNER_EXIT_OWNERS
+
     entry = _settings.runner.strategies.get(strategy.upper())
-    return entry is not None and entry.exit_owner == "ladder"
+    return entry is not None and entry.exit_owner in RUNNER_EXIT_OWNERS
 
 
 def _profit_lock_price(pos, ltp: float, base_entry: float, lock_ratio: float) -> float:

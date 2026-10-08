@@ -2,7 +2,7 @@
 
 import time
 
-from signal_engine.config import settings
+from signal_engine.config import has_no_take_profit, settings
 from signal_engine.models import Direction, Signal, ValidationResult, ValidationStatus
 
 # In-memory duplicate tracker: (strategy, symbol, direction, tp_level or entry) -> timestamp
@@ -77,6 +77,14 @@ def _check_prices_positive(signal: Signal):
         return ValidationResult(status=ValidationStatus.INVALID, reason="Entry must be positive")
     if signal.sl <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="SL must be positive")
+    if has_no_take_profit(signal.strategy):
+        # take_profit: none. 0 is the only valid value, so a target can never sneak in.
+        if signal.tp != 0:
+            return ValidationResult(
+                status=ValidationStatus.INVALID,
+                reason=f"{signal.strategy} has no take-profit; TP must be 0 (none), got {signal.tp}",
+            )
+        return None
     if signal.tp <= 0:
         return ValidationResult(status=ValidationStatus.INVALID, reason="TP must be positive")
     return None
@@ -92,6 +100,8 @@ def _check_price_ordering(signal: Signal):
         return ValidationResult(
             status=ValidationStatus.INVALID, reason="SHORT: SL must be above entry"
         )
+    if has_no_take_profit(signal.strategy):
+        return None  # no target to order against entry
     if signal.direction == Direction.LONG and signal.tp <= signal.entry:
         return ValidationResult(
             status=ValidationStatus.INVALID, reason="LONG: TP must be above entry"
@@ -108,6 +118,8 @@ def _check_reward_risk(signal: Signal):
 
     Rounded to 2dp to avoid floating-point edge cases like 0.54/0.54 = 0.9999.
     """
+    if has_no_take_profit(signal.strategy):
+        return None  # no target, so no reward:risk; the exit is the trailing stop
     risk = abs(signal.entry - signal.sl)
     if risk <= 0:
         return None

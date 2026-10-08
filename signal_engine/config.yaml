@@ -597,6 +597,25 @@ runner:
       max_entries_per_direction_per_day: 2   # required. BREAKOUT spec v1.0 item 15: at most 2 filled
                                  # entries per symbol and direction per day (LONG, exit, LONG is the
                                  # second). null = no cap. Enforced in main._handle_entry.
+    # 2026-10-09: EMA/VWAP/ATR early displacement, PAPER ONLY. Enters when (EMA9 - VWAP) / ATR14
+    # crosses back through -0.50 (long) / +0.50 (short), before the EMA/VWAP crossover. No
+    # take-profit: the broker SL-M holds the initial swing stop, and pipeline.trail_driver trails
+    # the stop at each 5m close and sends a market exit when a bar touches it. Rules and defaults
+    # are strategy_core/ema_vwap_early.py; assumptions are in
+    # strategy_library/intraday/ema-vwap-early/STRATEGY-LOG.md. Purpose of the paper run: check the
+    # implementation behaves like the discretionary .lipi method. It is NOT a validated edge
+    # (IDEA-032 measured the same entry with a zero-cross exit at -13.9 bps net).
+    EVWAP-EARLY-PY:
+      signal_source: python
+      exit_plan: trailing_stop   # no targets; requires exit_owner strategy
+      exit_owner: strategy       # the strategy's trailing driver owns exits; the tracker adds no
+                                 # no-progress / loss-cut / profit-lock exits. Time exit still applies.
+      paper_only: true
+      supersedes_pine_tag: null  # no Pine counterpart
+      paper_limits: mode         # loose analyze limits: the paper run should see every signal
+      max_entries_per_direction_per_day: null   # the .lipi has no re-entry limit
+      # Optional per-strategy universe. Absent = runner.universe above (shared 40, bars fetched
+      # once for both strategies). Add a list here to widen or narrow this strategy alone.
 
 # ── No-progress Detection ────────────────────────────────
 # [tune] Move SL to break-even (or exit at market) when a trade hasn't progressed toward TP1.
@@ -942,6 +961,15 @@ strategy_profiles:
     # tp_levels absent: the runner's ExitDriver sends the exit fraction in each EXIT signal.
     #
     # Same key-level stops as BREAKOUT (same core), so the same 0.20% floor, for the same reason.
+    min_sl_pct: 0.002
+  EVWAP-EARLY-PY:
+    product: MIS
+    # No take-profit. Its signals carry tp 0, meaning "none" (exit_plan trailing_stop); the validator
+    # rejects any other tp for this strategy, and no path reads a target. The trail driver sends one
+    # full EXIT (tp_level TRAILING_STOP); the 14:45 time exit closes anything still open.
+    #
+    # Stops sit 0.10 ATR beyond the latest 5m swing, as tight as the key-level stops of BREAKOUT,
+    # so the same 0.20% floor rather than the ORB-calibrated 0.50% global.
     min_sl_pct: 0.002
   EMA9VWAP:
     product: MIS

@@ -93,9 +93,14 @@ class TelegramChannel:
 
 
 VALID_SIGNAL_SOURCES = ("pine", "python")
-VALID_EXIT_PLANS = ("tp1_only", "ladder_30_35_35")
+VALID_EXIT_PLANS = ("tp1_only", "ladder_30_35_35", "trailing_stop")
 VALID_PAPER_LIMITS = ("mode", "live")
-VALID_EXIT_OWNERS = ("tracker", "ladder")
+VALID_EXIT_OWNERS = ("tracker", "ladder", "strategy")
+#: Exit owners under which the runner, not the tracker, manages the open position's exits.
+RUNNER_EXIT_OWNERS = ("ladder", "strategy")
+#: Exit plans with NO take-profit. A signal of such a strategy carries tp = 0, meaning "none";
+#: the validator rejects any other tp for it, and no execution path may read a target from it.
+NO_TARGET_EXIT_PLANS = ("trailing_stop",)
 UNIVERSE_ALL = "fno_all"
 
 
@@ -106,7 +111,8 @@ class RunnerStrategy:
     signal_source: str  # "pine" (TradingView alerts) or "python" (the pipeline runner)
     exit_plan: str
     #: Who manages exits for open positions: "tracker" (no-progress, profit-lock, structural
-    #: runner stop) or "ladder" (the runner's shared exits.Ladder is the only stop rule).
+    #: runner stop), "ladder" (the runner's shared exits.Ladder is the only stop rule) or
+    #: "strategy" (the strategy's own trailing-stop driver, pipeline.trail_driver; no target).
     exit_owner: str = "tracker"
     #: True = the runner may only dispatch this strategy into OpenAlgo's ANALYZE mode (enforced
     #: per signal in pipeline.sink.DispatchSink and at start-up). config.yaml must state it for
@@ -125,6 +131,8 @@ class RunnerStrategy:
     #: the sole execution source for the symbols it covers (BREAKOUT spec v1.0 item 17). The Pine alert is
     #: still recorded as a declined row for the parity comparison. None = nothing superseded.
     supersedes_pine_tag: str | None = None
+    #: This strategy's own symbol list. None = the runner-wide `runner.universe`.
+    universe: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -792,9 +800,20 @@ def _runner_strategies(raw) -> dict:
             raise ConfigError(f"{name}.supersedes_pine_tag must be a strategy tag or null, got {superseded!r}")
         if superseded is not None and str(superseded).upper() == str(tag).upper():
             raise ConfigError(f"{name}.supersedes_pine_tag cannot be its own tag")
+        if (plan == "trailing_stop") != (owner == "strategy"):
+            raise ConfigError(
+                f"{name}: exit_plan trailing_stop and exit_owner strategy go together "
+                f"(got exit_plan {plan}, exit_owner {owner})"
+            )
+        universe = body.get("universe")
+        if universe is not None:
+            universe = _runner_universe(universe)
+            if not isinstance(universe, tuple):
+                raise ConfigError(f"{name}.universe must be a list of symbols or absent")
         out[str(tag).upper()] = RunnerStrategy(
             source, plan, owner, paper_only, cap, limits,
             None if superseded is None else superseded.strip().upper(),
+            universe,
         )
     return out
 
@@ -877,3 +896,9 @@ def _build_settings() -> Settings:
 
 
 settings = _build_settings()
+
+
+def has_no_take_profit(strategy: str) -> bool:
+    """True when this strategy's runner exit plan has no take-profit (its signals carry tp = 0)."""
+    entry = settings.runner.strategies.get((strategy or "").strip().upper())
+    return entry is not None and entry.exit_plan in NO_TARGET_EXIT_PLANS

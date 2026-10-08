@@ -815,6 +815,39 @@ def fetch_entry_fill_directions(strategy: str, symbol: str, day: str | None = No
     return [1 if str(r[0]).upper() == "LONG" else -1 for r in rows]
 
 
+def fetch_strategy_closes(strategy: str, trade_mode: str, day: str) -> dict[str, dict]:
+    """sig_id -> {pnl, exit_fill, exit_types} for one strategy's closing EXIT rows on a day.
+
+    Read-only, for per-trade research reports that join on the lineage key. Partial-leg rows are
+    skipped: a closing row's pnl already contains its legs (see fetch_day_trades). Rows without a
+    sig_id cannot be joined and are skipped.
+    """
+    conn = _get_connection()
+    rows = conn.execute(
+        """
+        SELECT sig_id, fill_price, context FROM trades
+        WHERE upper(strategy) = upper(?) AND direction = 'EXIT' AND status = 'SUCCESS'
+          AND trade_mode = ? AND date(executed_at) = ? AND sig_id IS NOT NULL AND sig_id != ''
+        ORDER BY id
+        """,
+        (strategy, trade_mode, day),
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for sig_id, fill, context in rows:
+        try:
+            payload = json.loads(context) if context else {}
+        except (TypeError, ValueError):
+            payload = {}
+        if payload.get("partial"):
+            continue
+        out[sig_id] = {
+            "pnl": float(payload.get("pnl", payload.get("realized_pnl", 0.0)) or 0.0),
+            "exit_fill": fill,
+            "exit_types": list(payload.get("exit_types") or []),
+        }
+    return out
+
+
 def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
     """Look up the most recent SUCCESS entry trade for symbol+strategy on today (IST).
 

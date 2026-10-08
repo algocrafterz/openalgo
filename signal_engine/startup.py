@@ -700,9 +700,15 @@ async def _check_runner_against_spec() -> bool:
     A value held in both places (time exit, per-direction cap, exit plan, exit owner, paper limits) is a
     rule that can drift, so a difference is a start-up failure, never a warning.
     """
+    from signal_engine.pipeline.service import SPEC_BOUND_TAGS
     from signal_engine.strategy_core import strategy_spec
 
-    tags = [t for t, e in settings.runner.strategies.items() if e.signal_source == "python"]
+    # Only the strategies built from the frozen BREAKOUT spec are checked against it.
+    tags = [
+        t
+        for t, e in settings.runner.strategies.items()
+        if e.signal_source == "python" and t in SPEC_BOUND_TAGS
+    ]
     if not tags:
         return True
     try:

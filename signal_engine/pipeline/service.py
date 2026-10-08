@@ -22,7 +22,12 @@ from loguru import logger
 
 from signal_engine.config import RunnerSettings
 from signal_engine.pipeline import pretrade, single_source
-from signal_engine.pipeline.bars import BarSource, MissingBarsError, OpenAlgoHistorySource
+from signal_engine.pipeline.bars import (
+    BarSource,
+    MissingBarsError,
+    OpenAlgoHistorySource,
+    SharedBarSource,
+)
 from signal_engine.pipeline.clock import Clock, WallClock
 from signal_engine.pipeline.context import HistorifyLoader, RollingContext
 from signal_engine.pipeline.cycle import shared_executor, shutdown_executor
@@ -31,7 +36,10 @@ from signal_engine.pipeline.runner import Runner
 from signal_engine.pipeline.sink import DispatchSink, ExecutionSink, RecordingSink
 from signal_engine.pipeline.state import RunnerStateStore
 from signal_engine.pipeline.strategies.breakout import BreakoutStrategy
+from signal_engine.pipeline.strategies.ema_vwap_early import TAG as EVWAP_EARLY_TAG
+from signal_engine.pipeline.strategies.ema_vwap_early import EarlyDisplacementStrategy
 from signal_engine.pipeline.strategy import Strategy
+from signal_engine.pipeline.trail_driver import TrailExitDriver
 from signal_engine.strategy_core import strategy_spec
 from signal_engine.strategy_core.breakout import BreakoutParams
 from signal_engine.timeutils import IST
@@ -50,10 +58,17 @@ def _spec_strategy(tag: str) -> Strategy:
 #: Strategy tags the pipeline can run. A configured tag not listed here refuses to start.
 #: BREAKOUT-PY is the same strategy core under its own tag: a second book (capital, slots, P&L)
 #: for paper-trading the Python signals beside the Pine BREAKOUT.
+#: EVWAP-EARLY-PY is the EMA/VWAP/ATR early-displacement strategy with a trailing stop and no
+#: take-profit (strategy_core.ema_vwap_early); its exits are owned by pipeline.trail_driver.
 STRATEGY_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "BREAKOUT": BreakoutStrategy,
     "BREAKOUT-PY": lambda: _spec_strategy("BREAKOUT-PY"),
+    EVWAP_EARLY_TAG: EarlyDisplacementStrategy,
 }
+
+#: Tags whose rules come from the frozen BREAKOUT specification; start-up checks only these
+#: against it (strategy_spec.check_runner).
+SPEC_BOUND_TAGS = frozenset({"BREAKOUT-PY"})
 
 SAFETY_BARS = 2
 _LOOKBACK_WEEKDAYS = 5
@@ -70,6 +85,12 @@ def resolve_symbols(cfg: RunnerSettings, historify_symbols: Callable[[], list[st
     if not symbols:
         raise RunnerStartError("runner.universe is fno_all but Historify lists no symbols")
     return symbols
+
+
+def strategy_symbols(cfg: RunnerSettings, tag: str, runner_symbols: list[str]) -> list[str]:
+    """The strategy's own universe when config.yaml gives one, else the runner-wide list."""
+    own = cfg.strategies[tag].universe
+    return list(own) if own is not None else list(runner_symbols)
 
 
 def manage_until_min(hour: int, minute: int) -> int:
@@ -90,9 +111,29 @@ def build_sink(
     return DispatchSink(dispatch, paper_only=entry.paper_only)
 
 
-def build_exits(cfg: RunnerSettings, tag: str, positions, broker_qty) -> ExitDriver | None:
+def build_exits(
+    cfg: RunnerSettings,
+    tag: str,
+    positions,
+    broker_qty,
+    strategy: Strategy | None = None,
+    context: RollingContext | None = None,
+    manage_until_min: int | None = None,
+) -> ExitDriver | TrailExitDriver | None:
     entry = cfg.strategies[tag]
-    if entry.signal_source != "python" or entry.exit_owner != "ladder":
+    if entry.signal_source != "python":
+        return None
+    if entry.exit_owner == "strategy":
+        if strategy is None or context is None:
+            raise RunnerStartError(f"{tag}: exit_owner strategy needs the strategy and its context")
+        return TrailExitDriver(
+            strategy=strategy,
+            context=context,
+            positions=positions,
+            interval_min=cfg.bar_interval_minutes,
+            manage_until_min=manage_until_min,
+        )
+    if entry.exit_owner != "ladder":
         return None
     return ExitDriver(
         strategy=tag,
@@ -234,8 +275,12 @@ async def start(
         )
         return None
     clock = clock or WallClock()
-    source = source or OpenAlgoHistorySource(
-        timeout_s=cfg.history_timeout_seconds, max_concurrent=cfg.max_concurrent_requests
+    # One shared source: sessions on the same symbols fetch each bar once between them.
+    source = SharedBarSource(
+        source
+        or OpenAlgoHistorySource(
+            timeout_s=cfg.history_timeout_seconds, max_concurrent=cfg.max_concurrent_requests
+        )
     )
     if historify_symbols is None:
         from signal_engine.backtest import data
@@ -336,21 +381,24 @@ def _session_factory(
 ):
     def make(day: dt.date) -> Runner:
         strategy = STRATEGY_FACTORIES[tag]()
+        context = RollingContext(strategy, loader)
         return Runner(
             clock=clock,
             source=source,
             sink=build_sink(cfg, tag, dispatch),
             strategy=strategy,
-            context=RollingContext(strategy, loader),
+            context=context,
             state=state,
             cfg=cfg,
-            symbols=list(symbols),
+            symbols=strategy_symbols(cfg, tag, symbols),
             mode=trade_mode,
             product=product,
             stale_limit_s=stale_limit_s,
             halted=halted,
             price_band=pretrade.price_band(tag),
-            exits=build_exits(cfg, tag, tracker, exit_qty),
+            exits=build_exits(
+                cfg, tag, tracker, exit_qty, strategy, context, manage_until_min(*time_exit)
+            ),
             manage_until_min=manage_until_min(*time_exit),
         )
 

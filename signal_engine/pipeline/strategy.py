@@ -22,7 +22,7 @@ class Fire:
     direction: int  # 1 long, -1 short
     entry_ref: float  # the signal bar's close
     sl: float
-    targets: tuple[float, ...]  # first entry is the primary target (TP1)
+    targets: tuple[float, ...]  # first entry is the primary target (TP1); empty only with context take_profit "none"
     tag: str  # setup code, e.g. "PDH-RT"
     context: dict = field(default_factory=dict)
 

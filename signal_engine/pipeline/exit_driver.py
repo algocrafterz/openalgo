@@ -112,9 +112,19 @@ class ExitDriver:
             state.ladder.close_all(price, "TIME")
 
     async def on_bar(
-        self, symbol: str, bar_open: pd.Timestamp, o: float, h: float, low: float, c: float | None = None
+        self,
+        symbol: str,
+        bar_open: pd.Timestamp,
+        o: float,
+        h: float,
+        low: float,
+        c: float | None = None,
+        frame: pd.DataFrame | None = None,
     ) -> list[Signal]:
-        """Step the symbol's Ladder with one CLOSED bar; return the EXIT signals it produced."""
+        """Step the symbol's Ladder with one CLOSED bar; return the EXIT signals it produced.
+
+        `frame` (today's closed bars) is accepted for the shared driver interface and not read.
+        """
         pos = self._positions.find_position(symbol, self.strategy)
         if pos is None:
             self._state.pop(symbol, None)

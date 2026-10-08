@@ -1397,7 +1397,8 @@ def _log_entry_sizing(
         if risk_per_share > max_sl_dist:
             effective_sl = max_sl_dist
     adjusted_rps = effective_sl * (1 + settings.slippage_factor)
-    reward_per_share = abs(signal.tp - signal.entry)
+    # tp 0 = no take-profit (trailing-stop strategies): no reward figure to report
+    reward_per_share = abs(signal.tp - signal.entry) if signal.tp > 0 else 0.0
     rr = reward_per_share / risk_per_share if risk_per_share > 0 else 0
     pos_value = quantity * signal.entry
     risk_total = quantity * risk_per_share
@@ -1593,8 +1594,8 @@ async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
             strategy=signal.strategy,
             signal_price=signal.entry,
             sl=signal.sl,
-            tp=signal.tp,
-            rr=rr,
+            tp=signal.tp if signal.tp > 0 else None,  # 0 = no take-profit, not shown
+            rr=rr if signal.tp > 0 else None,
             slot_context=slot_context,
         )
     else:
@@ -1645,7 +1646,7 @@ async def _establish_position(signal, order, quantity: int, trade_result) -> boo
         signal.entry,
         strategy=signal.strategy,
         sl=signal.sl,
-        tp=signal.tp,
+        tp=signal.tp if signal.tp > 0 else None,  # 0 = no take-profit, not shown
     )
 
     tracker.register(
