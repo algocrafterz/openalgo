@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as _st
 
-from signal_engine.backtest import splits, stats
+from signal_engine.backtest import splits, stats, tickgrid
 from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.backtest.metrics import hurdle_t
 from signal_engine.research.build_registry import EVALUATION_STATUSES as STATUSES
@@ -211,6 +211,7 @@ class _Inputs:
     membership: dict[str, Any] | None = None
     trials: dict[str, Any] | None = None
     truncation: Any = None
+    tick_grid: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1391,6 +1392,48 @@ def _g62(x: _Inputs) -> _Result:
     )
 
 
+_G64_THRESHOLD = (
+    "every modelled stop trigger on the exchange tick grid (part A), and one accepted real "
+    "broker order per price tier (part B)"
+)
+
+
+def _g64(x: _Inputs) -> _Result:
+    """Part A only: part B is a recorded broker attestation that does not exist yet, so a clean
+    part A is not_evaluated with the owed check named, never pass."""
+    if x.tick_grid is None:
+        return "not_evaluated", None, _G64_THRESHOLD, "no tick-grid check was run for this run"
+    ev = x.tick_grid
+    problems = tickgrid.validate_evidence(ev)
+    if problems:
+        return "fail", None, _G64_THRESHOLD, "the tick-grid evidence is malformed: " + "; ".join(problems)
+    checked, off = int(ev["stops_checked"]), int(ev["off_grid"])
+    if off:
+        tiers = ", ".join(
+            f"tick {k}: {v.get('off_grid', 0)} of {v.get('checked', 0)}"
+            for k, v in (ev.get("by_tier") or {}).items()
+            if v.get("off_grid")
+        )
+        worst = (ev.get("worst") or [{}])[0]
+        return (
+            "fail",
+            off,
+            _G64_THRESHOLD,
+            f"{off} of {checked} stop triggers are off the exchange tick grid ({tiers}); worst: "
+            f"{worst.get('symbol')} {worst.get('day')} stop {worst.get('raw_stop')} on tick "
+            f"{worst.get('tick')}. Engine tick_grid is {ev.get('engine_tick_grid')!r}.",
+        )
+    if checked == 0:
+        return "not_evaluated", None, _G64_THRESHOLD, "the run placed no stop orders to check"
+    return (
+        "not_evaluated",
+        checked,
+        _G64_THRESHOLD,
+        f"part A clean: all {checked} stop triggers are on the exchange tick grid. Part B is owed: "
+        "one accepted real broker order per price tier has not been recorded.",
+    )
+
+
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G0.2": _g02,
     "G0.3": _g03,
@@ -1422,6 +1465,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G5.2": _g52,
     "G6.1": _g61,
     "G6.2": _g62,
+    "G6.4": _g64,
     "G6.5": _g65,
     "G6.9": _g69,
     "X.1": _params_count,
@@ -1464,6 +1508,7 @@ def evaluate(
     membership: dict[str, Any] | None = None,
     trials: dict[str, Any] | None = None,
     truncation: Any = None,
+    tick_grid: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1478,7 +1523,8 @@ def evaluate(
     `calendar` (the derived session calendar) and `membership` (source, survivorship flag,
     eligibility policy) feed G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2, each not_evaluated without
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
-    `TruncationResult` or its dict) feeds G0.2, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
+    G6.4 part A, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1504,6 +1550,7 @@ def evaluate(
         membership=membership,
         trials=trials,
         truncation=truncation,
+        tick_grid=tick_grid,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

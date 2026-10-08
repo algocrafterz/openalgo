@@ -236,7 +236,7 @@ class TestExecuteBacktestEnd:
 
         idx = pd.date_range("2026-01-05 09:15", periods=3, freq="5min", tz="Asia/Kolkata")
         res = frames_resolution(
-            intraday={"AAA": pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=idx)})
+            intraday={"AAA": pd.DataFrame({"Close": [1.0, 2.0, 3.0]}, index=idx)})
 
         import signal_engine.backtest.harness as harness
 

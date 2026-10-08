@@ -748,6 +748,9 @@ def prepare_run_artifact(
         files[f"evidence/{name}.parquet"] = _encode(
             frame_parquet_bytes(ledgers[name], LEDGER_SCHEMAS[name])
         )
+    tick_grid = getattr(execution, "tick_grid", None)
+    if tick_grid is not None:
+        files["evidence/tick_grid.json"] = _encode(_json_safe(tick_grid))
     data_report = getattr(execution, "data_report", None)
     if data_report is not None:
         files["data_quality.json"] = _encode(_json_safe(data_report))

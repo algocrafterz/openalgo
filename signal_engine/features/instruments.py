@@ -7,6 +7,7 @@ LookupError instead of silently substituting a default that would shift every pr
 
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
 from functools import lru_cache
@@ -78,3 +79,25 @@ def safe_tick(price: float) -> float:
     at most a few paise of precision.
     """
     return tick_for_price(price * TIER_DRIFT)
+
+
+#: Float noise allowance when dividing a price by its tick (2079.7 / 0.1 is 20796.999999999996).
+_TICK_EPS = 1e-9
+
+
+def round_to_safe_tick(price: float, direction: str = "nearest") -> float:
+    """Round a price onto the `safe_tick` grid; direction is 'nearest', 'down' or 'up'.
+
+    The pure form of `executor.round_to_tick` (same grid, same epsilon, same rounding), so the
+    backtest can model the stop trigger the executor sends without importing the live order
+    code. A parity test keeps the two identical.
+    """
+    tick = safe_tick(price)
+    steps = price / tick
+    if direction == "down":
+        n = math.floor(steps + _TICK_EPS)
+    elif direction == "up":
+        n = math.ceil(steps - _TICK_EPS)
+    else:
+        n = math.floor(steps + 0.5 + _TICK_EPS)
+    return round(n * tick, 2)

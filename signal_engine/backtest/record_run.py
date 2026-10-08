@@ -51,7 +51,7 @@ import yaml
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import manifest as manifest_mod
-from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics
+from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics, tickgrid
 from signal_engine.backtest.baseline import (
     INTRADAY_MAX_TRADES,
     random_entry_baseline,
@@ -193,6 +193,8 @@ class Execution:
     membership: dict[str, Any] | None = None
     #: Look-ahead check result (`TruncationResult.to_dict()`), or None when it was not run.
     truncation: dict[str, Any] | None = None
+    #: Part A of gate G6.4 (`tickgrid.tick_grid_evidence`), or None when the run has no intraday stops.
+    tick_grid: dict[str, Any] | None = None
     #: Bars read by n_minutes (overall and by year), or None when the bars carry no n_minutes.
     n_minutes_distribution: dict[str, Any] | None = None
     #: The strategy's own `diagnostics()` counters after the headline run, or None without any.
@@ -885,6 +887,14 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         out_of_scope=[date.fromisoformat(d)
                       for d in dataset.manifest.get("out_of_scope_sessions") or []],
     )
+    # Raw month-end closes fix each month's exact tick tier; read before the engine frames are
+    # released. The engine snaps stops on RAW prices, so each bar carries its session's factor.
+    month_closes = None
+    grid_mode = getattr(run, "tick_grid", tickgrid.NONE)  # a swing run has no stop orders
+    if kind != "swing":
+        month_closes = tickgrid.raw_month_end_closes(
+            tickgrid.session_raw_closes(layer.frames, price_factors)
+        )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
     # Load-time rejection (plan section 8): a data defect that affects validity, or a calendar
     # that differs from the official one, stops the run before the engine. No run, no trial.
@@ -937,6 +947,11 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         trades, cost_model, run.cost_bps, cfg.get("reference_round_trip_bps", ())
     )
     cost_components = decompose_trades(trades, cost_model)
+    tick_grid = None
+    if month_closes is not None:
+        tick_grid = tickgrid.tick_grid_evidence(
+            trades, month_closes, price_factors, engine_mode=grid_mode
+        )
     baseline = None
     if kind != "swing":
         # Intraday: score a seeded sample of trades, loading only the symbols that sample
@@ -1005,6 +1020,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         data_report=layer.data_report,
         membership=layer.membership,
         truncation=truncation,
+        tick_grid=tick_grid,
         n_minutes_distribution=n_minutes,
         strategy_diagnostics=diagnostics,
     )
@@ -1385,6 +1401,7 @@ def record_idea(
         n_trials=n_trials,
         trials=trials_block,
         truncation=execution.truncation,
+        tick_grid=execution.tick_grid,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
