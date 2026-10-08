@@ -1,0 +1,553 @@
+indicator("EMA-VWAP ATR Early Entry + Reversal v2-claude", "EMA-VWAP ATR Early Rev v2", false)
+
+emaLength = input.int(9, "EMA Length", minval=1)
+atrLength = input.int(14, "ATR Length", minval=1)
+earlyThreshold = input.float(0.5, "Early Entry Threshold", minval=0.1, maxval=2.0)
+watchDistance = input.float(0.15, "Watch Distance", minval=0.05, maxval=0.4)
+
+reversalThreshold = input.float(0.5, "Reversal Threshold", minval=0.1, maxval=1.0)
+reversalMove = input.float(0.05, "Reversal Move", minval=0.01, maxval=0.3)
+
+showWatch = input.bool(true, "Show Watch")
+showEarly = input.bool(true, "Show Early")
+showReversal = input.bool(true, "Show Reversal")
+showCrossover = input.bool(true, "Show Crossover")
+
+rejectDepth = input.float(0.75, "Rejection Prior Depth", minval=0.25, maxval=5.0)
+nearZone = input.float(0.25, "Rejection Near-VWAP Zone", minval=0.05, maxval=0.5)
+rejectMove = input.float(0.10, "Rejection Pullback", minval=0.02, maxval=0.5)
+showRejection = input.bool(true, "Show VWAP Rejection")
+showRejectionDiag = input.bool(false, "Show Rejection Diagnostics")
+
+emaValue = talib.ema(close, emaLength)
+ema20Value = talib.ema(close, 20)
+vwapValue = talib.vwap(hlc3)
+atrValue = talib.atr(atrLength)
+
+displacement = (emaValue - vwapValue) / atrValue
+
+longTrigger = -earlyThreshold
+shortTrigger = earlyThreshold
+
+longWatchLevel = longTrigger + watchDistance
+shortWatchLevel = shortTrigger - watchDistance
+
+// =====================================================
+// ORIGINAL EARLY ENTRY LOGIC
+// DO NOT CHANGE
+// =====================================================
+
+earlyLong = displacement > longTrigger and displacement[1] <= longTrigger
+earlyShort = displacement < shortTrigger and displacement[1] >= shortTrigger
+
+// =====================================================
+// ORIGINAL WATCH LOGIC
+// DO NOT CHANGE
+// =====================================================
+
+watchLong = displacement >= longWatchLevel and displacement < 0 and displacement[1] < longWatchLevel
+watchShort = displacement <= shortWatchLevel and displacement > 0 and displacement[1] > shortWatchLevel
+
+// =====================================================
+// ORIGINAL CROSSOVER LOGIC
+// DO NOT CHANGE
+// =====================================================
+
+bullishCross = displacement > 0 and displacement[1] <= 0
+bearishCross = displacement < 0 and displacement[1] >= 0
+
+// =====================================================
+// REVERSAL LOGIC
+//
+// This is COMPLETELY INDEPENDENT of earlyLong/earlyShort.
+//
+// GREEN DIAMOND = bullish reversal / expected price UP
+// RED DIAMOND = bearish reversal / expected price DOWN
+//
+// A reversal requires:
+// 1. Meaningful prior displacement
+// 2. Two-bar turn in displacement
+// 3. Price moving in reversal direction
+// 4. Reversal still occurs before zero crossover
+// =====================================================
+
+// Bullish reversal:
+// Previous bearish displacement reached -0.50 ATR.
+// Displacement turns upward.
+// Price starts moving upward.
+// Still below zero.
+
+bullishReversalRaw = displacement[2] <= -reversalThreshold and displacement[1] > displacement[2] and displacement > displacement[1] and displacement - displacement[1] >= reversalMove and close > close[1] and displacement < 0
+
+// Bearish reversal:
+// Previous bullish displacement reached +0.50 ATR.
+// Displacement turns downward.
+// Price starts moving downward.
+// Still above zero.
+
+bearishReversalRaw = displacement[2] >= reversalThreshold and displacement[1] < displacement[2] and displacement < displacement[1] and displacement[1] - displacement >= reversalMove and close < close[1] and displacement > 0
+
+// =====================================================
+// REVERSAL STATE (v2: re-arm per side)
+//
+// This state only prevents repeated diamonds.
+// It DOES NOT affect + signals.
+//
+// Each side has its own lock. After a bullish diamond,
+// the next bullish diamond is allowed once displacement
+// makes a NEW bearish excursion: it first rises above
+// -reversalThreshold, then falls back to
+// -reversalThreshold or below. An opposite diamond is
+// no longer required. Bearish is the mirror.
+//
+// RevArmed 1 = a diamond of that side may fire
+// RevLeft  1 = displacement has left the excursion
+//              zone since that side last fired
+// =====================================================
+
+static int bullRevArmed = 1
+static int bullRevLeft = 0
+static int bearRevArmed = 1
+static int bearRevLeft = 0
+
+bullishReversal = bullishReversalRaw and bullRevArmed == 1
+bearishReversal = bearishReversalRaw and bearRevArmed == 1
+
+if bullishReversal {
+    bullRevArmed := 0
+    bullRevLeft := 0
+}
+
+if bearishReversal {
+    bearRevArmed := 0
+    bearRevLeft := 0
+}
+
+if bullRevArmed == 0 and displacement > -reversalThreshold {
+    bullRevLeft := 1
+}
+
+if bullRevArmed == 0 and bullRevLeft == 1 and displacement <= -reversalThreshold {
+    bullRevArmed := 1
+}
+
+if bearRevArmed == 0 and displacement < reversalThreshold {
+    bearRevLeft := 1
+}
+
+if bearRevArmed == 0 and bearRevLeft == 1 and displacement >= reversalThreshold {
+    bearRevArmed := 1
+}
+
+// =====================================================
+// VWAP REJECTION LOGIC (NEW IN v2)
+//
+// Captures the case the v1 signals miss: the EMA comes
+// back close to VWAP, does NOT cross it, and turns away.
+// Example: TCS 5m, 08-Oct-2026 ~10:20. Displacement rose
+// from -4 to about 0, then rolled over and price fell.
+//
+// ORANGE TRIANGLE DOWN = BEARISH REJECTION
+//   EMA failed to reclaim VWAP from below. Price DOWN.
+// BLUE TRIANGLE UP = BULLISH REJECTION
+//   EMA held above VWAP from above. Price UP.
+//
+// Bearish rejection requires:
+// 1. This leg went at least rejectDepth below zero
+// 2. Displacement then came back inside the near-VWAP
+//    zone (-nearZone .. 0) and made a peak there
+// 3. Displacement has pulled back rejectMove from that
+//    peak and is still falling
+// 4. Price is falling (close < close[1])
+// 5. Displacement is still at or below 0
+// Any VWAP cross (displacement above 0) cancels the
+// setup. Bullish: zone 0 .. +nearZone, stays at or
+// above 0, cancelled by displacement below 0.
+// One signal per approach. A new deep leg below
+// -rejectDepth re-arms it. Bullish is the mirror.
+//
+// Independent of all v1 signals.
+// =====================================================
+
+newDay = na(dayofmonth[1]) or dayofmonth != dayofmonth[1]
+
+static float bearLegLow = 0.0
+static float bearZonePeak = -99.0
+static int bearRejDone = 0
+
+static float bullLegHigh = 0.0
+static float bullZoneLow = 99.0
+static int bullRejDone = 0
+
+// VWAP restarts each session, so the legs restart too.
+if newDay {
+    bearLegLow := 0.0
+    bearZonePeak := -99.0
+    bearRejDone := 0
+    bullLegHigh := 0.0
+    bullZoneLow := 99.0
+    bullRejDone := 0
+}
+
+// Bearish setup cancelled by any cross above VWAP.
+if displacement > 0 {
+    bearLegLow := 0.0
+    bearZonePeak := -99.0
+    bearRejDone := 0
+}
+
+// Bullish setup cancelled by any cross below VWAP.
+if displacement < 0 {
+    bullLegHigh := 0.0
+    bullZoneLow := 99.0
+    bullRejDone := 0
+}
+
+// =====================================================
+// REJECTION DIAGNOSTICS STATE
+//
+// Signal-time values are frozen on the rejection bar.
+// Forward values update on each LATER bar of the same
+// session (ATR unit = ATR at the signal bar):
+//   MFE / MAE      best / worst move from the signal
+//                  close in the rejection direction
+//   bars to ...    bars after the signal bar
+//   cross dir      first zero cross after the signal:
+//                  +1 up, -1 down, 0 none yet
+//   outcome        +1 SUCCESS: displacement reaches
+//                  -depth (bear) / +depth (bull) first
+//                  -1 FAILED: crosses zero against the
+//                  rejection first; 0 not resolved
+// A later rejection of the same side replaces the
+// tracker. Tracking stops at the next session.
+// The rejection marker itself is never changed.
+// =====================================================
+
+static int bearTrack = 0
+static int bearBars = 0
+static float bearEntry = 0.0
+static float bearAtr = 0.0
+static float bearMfe = 0.0
+static float bearMae = 0.0
+static int bearMfeBars = 0
+static int bearMaeBars = 0
+static int bearCrossDir = 0
+static int bearCrossBars = 0
+static int bearOutcome = 0
+static int bearOutcomeBars = 0
+
+static int bullTrack = 0
+static int bullBars = 0
+static float bullEntry = 0.0
+static float bullAtr = 0.0
+static float bullMfe = 0.0
+static float bullMae = 0.0
+static int bullMfeBars = 0
+static int bullMaeBars = 0
+static int bullCrossDir = 0
+static int bullCrossBars = 0
+static int bullOutcome = 0
+static int bullOutcomeBars = 0
+
+if newDay {
+    bearTrack := 0
+    bullTrack := 0
+}
+
+crossUpNow = displacement > 0 and displacement[1] <= 0
+crossDownNow = displacement < 0 and displacement[1] >= 0
+
+// Bearish tracker: one flat if per update (no nesting).
+if bearTrack == 1 {
+    bearBars := bearBars + 1
+}
+
+bearFavNow = bearAtr > 0 ? (bearEntry - low) / bearAtr : 0.0
+bearAdvNow = bearAtr > 0 ? (high - bearEntry) / bearAtr : 0.0
+
+if bearTrack == 1 and bearFavNow > bearMfe {
+    bearMfe := bearFavNow
+    bearMfeBars := bearBars
+}
+
+if bearTrack == 1 and bearAdvNow > bearMae {
+    bearMae := bearAdvNow
+    bearMaeBars := bearBars
+}
+
+if bearTrack == 1 and bearCrossDir == 0 and crossUpNow {
+    bearCrossDir := 1
+    bearCrossBars := bearBars
+}
+
+if bearTrack == 1 and bearCrossDir == 0 and crossDownNow {
+    bearCrossDir := -1
+    bearCrossBars := bearBars
+}
+
+if bearTrack == 1 and bearOutcome == 0 and displacement <= -rejectDepth {
+    bearOutcome := 1
+    bearOutcomeBars := bearBars
+}
+
+if bearTrack == 1 and bearOutcome == 0 and crossUpNow {
+    bearOutcome := -1
+    bearOutcomeBars := bearBars
+}
+
+// Bullish tracker: the mirror.
+if bullTrack == 1 {
+    bullBars := bullBars + 1
+}
+
+bullFavNow = bullAtr > 0 ? (high - bullEntry) / bullAtr : 0.0
+bullAdvNow = bullAtr > 0 ? (bullEntry - low) / bullAtr : 0.0
+
+if bullTrack == 1 and bullFavNow > bullMfe {
+    bullMfe := bullFavNow
+    bullMfeBars := bullBars
+}
+
+if bullTrack == 1 and bullAdvNow > bullMae {
+    bullMae := bullAdvNow
+    bullMaeBars := bullBars
+}
+
+if bullTrack == 1 and bullCrossDir == 0 and crossUpNow {
+    bullCrossDir := 1
+    bullCrossBars := bullBars
+}
+
+if bullTrack == 1 and bullCrossDir == 0 and crossDownNow {
+    bullCrossDir := -1
+    bullCrossBars := bullBars
+}
+
+if bullTrack == 1 and bullOutcome == 0 and displacement >= rejectDepth {
+    bullOutcome := 1
+    bullOutcomeBars := bullBars
+}
+
+if bullTrack == 1 and bullOutcome == 0 and crossDownNow {
+    bullOutcome := -1
+    bullOutcomeBars := bullBars
+}
+
+if displacement <= 0 and displacement < bearLegLow {
+    bearLegLow := displacement
+}
+
+if displacement >= 0 and displacement > bullLegHigh {
+    bullLegHigh := displacement
+}
+
+// One-sided zones: a value past 0 is a VWAP cross, never a peak.
+inBearZone = displacement >= -nearZone and displacement <= 0
+inBullZone = displacement >= 0 and displacement <= nearZone
+
+if inBearZone and displacement > bearZonePeak {
+    bearZonePeak := displacement
+}
+
+if inBullZone and displacement < bullZoneLow {
+    bullZoneLow := displacement
+}
+
+bearishRejection = bearRejDone == 0 and bearLegLow <= -rejectDepth and bearZonePeak >= -nearZone and displacement <= bearZonePeak - rejectMove and displacement < displacement[1] and close < close[1] and displacement <= 0
+
+bullishRejection = bullRejDone == 0 and bullLegHigh >= rejectDepth and bullZoneLow <= nearZone and displacement >= bullZoneLow + rejectMove and displacement > displacement[1] and close > close[1] and displacement >= 0
+
+// Signal-time diagnostics, read before the re-arm block below
+// can reset the zone peak / trough.
+absDisp = displacement >= 0 ? displacement : -displacement
+bearDiagPrior = bearLegLow
+bearDiagZone = bearZonePeak
+bearDiagPullback = bearZonePeak - displacement
+bullDiagPrior = bullLegHigh
+bullDiagZone = bullZoneLow
+bullDiagPullback = displacement - bullZoneLow
+priceVwapAtr = (close - vwapValue) / atrValue
+priceEma20Atr = (close - ema20Value) / atrValue
+
+if bearishRejection {
+    bearRejDone := 1
+    bearTrack := 1
+    bearBars := 0
+    bearEntry := close
+    bearAtr := atrValue
+    bearMfe := -99.0
+    bearMae := -99.0
+    bearMfeBars := 0
+    bearMaeBars := 0
+    bearCrossDir := 0
+    bearCrossBars := 0
+    bearOutcome := 0
+    bearOutcomeBars := 0
+}
+
+if bullishRejection {
+    bullRejDone := 1
+    bullTrack := 1
+    bullBars := 0
+    bullEntry := close
+    bullAtr := atrValue
+    bullMfe := -99.0
+    bullMae := -99.0
+    bullMfeBars := 0
+    bullMaeBars := 0
+    bullCrossDir := 0
+    bullCrossBars := 0
+    bullOutcome := 0
+    bullOutcomeBars := 0
+}
+
+// A fresh deep leg away from VWAP re-arms the setup.
+if displacement < -rejectDepth {
+    bearZonePeak := -99.0
+    bearRejDone := 0
+}
+
+if displacement > rejectDepth {
+    bullZoneLow := 99.0
+    bullRejDone := 0
+}
+
+// =====================================================
+// DISPLACEMENT
+// =====================================================
+
+plot(displacement, "EMA-VWAP / ATR", displacement >= 0 ? color.green : color.red, 2)
+
+// =====================================================
+// REFERENCE LEVELS
+// =====================================================
+
+hline(0, "EMA/VWAP CROSSOVER", color=color.gray)
+hline(longTrigger, "LONG EARLY -0.5", color=color.silver)
+hline(shortTrigger, "SHORT EARLY +0.5", color=color.silver)
+hline(1.0, "+1.0 ATR", color=color.silver)
+hline(-1.0, "-1.0 ATR", color=color.silver)
+
+// =====================================================
+// ORIGINAL EARLY ENTRY MARKERS
+//
+// THESE ARE EXACTLY THE ORIGINAL SIGNALS.
+//
+// GREEN + = EARLY LONG
+// RED + = EARLY SHORT
+// =====================================================
+
+plot(showEarly and earlyLong ? 1.20 : na, "EARLY LONG", color.green, 5, plotStyle.cross)
+plot(showEarly and earlyShort ? 1.20 : na, "EARLY SHORT", color.red, 5, plotStyle.cross)
+
+// =====================================================
+// ORIGINAL WATCH MARKERS
+// =====================================================
+
+plot(showWatch and watchLong ? 0.75 : na, "WATCH LONG", color.green, 4, plotStyle.scatter)
+plot(showWatch and watchShort ? 0.75 : na, "WATCH SHORT", color.red, 4, plotStyle.scatter)
+
+// =====================================================
+// REVERSAL MARKERS
+//
+// GREEN DIAMOND = BULLISH REVERSAL / PRICE UP
+// RED DIAMOND = BEARISH REVERSAL / PRICE DOWN
+// =====================================================
+
+plotshape(showReversal and bullishReversal, "BULLISH REVERSAL", shape.diamond, location.top, color.green, 0, "", color.green, size.large)
+
+plotshape(showReversal and bearishReversal, "BEARISH REVERSAL", shape.diamond, location.top, color.red, 0, "", color.red, size.large)
+
+// =====================================================
+// VWAP REJECTION MARKERS (NEW IN v2)
+//
+// ORANGE TRIANGLE DOWN = BEARISH REJECTION / PRICE DOWN
+// BLUE TRIANGLE UP = BULLISH REJECTION / PRICE UP
+// =====================================================
+
+plotshape(showRejection and bearishRejection, "BEARISH VWAP REJECTION", shape.triangledown, location.top, color.orange, 0, "", color.orange, size.large)
+
+plotshape(showRejection and bullishRejection, "BULLISH VWAP REJECTION", shape.triangleup, location.top, color.blue, 0, "", color.blue, size.large)
+
+// =====================================================
+// REJECTION DIAGNOSTICS (NEW IN v2, default OFF)
+//
+// Read the values in the data window by hovering a bar.
+// Signal-time values appear on the rejection bar only.
+// Forward values appear on each later bar of the session
+// and are running values: the last bar of the session
+// holds the final result. Turning this on rescales the
+// pane, because bar counts are plotted with ATR values.
+// Signal price = the close of the rejection bar.
+// =====================================================
+
+bearDiagOn = showRejectionDiag and bearishRejection
+bullDiagOn = showRejectionDiag and bullishRejection
+bearFwdOn = showRejectionDiag and bearTrack == 1 and bearBars > 0
+bullFwdOn = showRejectionDiag and bullTrack == 1 and bullBars > 0
+
+plot(bearDiagOn ? bearDiagPrior : na, "BEAR REJ PRIOR EXTREME", color.orange, 1, plotStyle.cross)
+plot(bearDiagOn ? bearDiagZone : na, "BEAR REJ ZONE PEAK", color.orange, 1, plotStyle.cross)
+plot(bearDiagOn ? absDisp : na, "BEAR REJ DIST FROM ZERO", color.orange, 1, plotStyle.cross)
+plot(bearDiagOn ? bearDiagPullback : na, "BEAR REJ PULLBACK", color.orange, 1, plotStyle.cross)
+plot(bearDiagOn ? priceVwapAtr : na, "BEAR REJ PRICE-VWAP ATR", color.orange, 1, plotStyle.cross)
+plot(bearDiagOn ? priceEma20Atr : na, "BEAR REJ PRICE-EMA20 ATR", color.orange, 1, plotStyle.cross)
+
+plot(bearFwdOn ? bearBars * 1.0 : na, "BEAR REJ FORWARD BARS", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn ? bearMfe : na, "BEAR REJ MFE ATR", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn ? bearMae : na, "BEAR REJ MAE ATR", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn ? bearMfeBars * 1.0 : na, "BEAR REJ BARS TO MFE", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn ? bearMaeBars * 1.0 : na, "BEAR REJ BARS TO MAE", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn ? bearCrossDir * 1.0 : na, "BEAR REJ CROSS DIR", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn and bearCrossDir != 0 ? bearCrossBars * 1.0 : na, "BEAR REJ BARS TO CROSS", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn ? bearOutcome * 1.0 : na, "BEAR REJ OUTCOME", color.orange, 1, plotStyle.scatter)
+plot(bearFwdOn and bearOutcome != 0 ? bearOutcomeBars * 1.0 : na, "BEAR REJ BARS TO OUTCOME", color.orange, 1, plotStyle.scatter)
+
+plot(bullDiagOn ? bullDiagPrior : na, "BULL REJ PRIOR EXTREME", color.blue, 1, plotStyle.cross)
+plot(bullDiagOn ? bullDiagZone : na, "BULL REJ ZONE TROUGH", color.blue, 1, plotStyle.cross)
+plot(bullDiagOn ? absDisp : na, "BULL REJ DIST FROM ZERO", color.blue, 1, plotStyle.cross)
+plot(bullDiagOn ? bullDiagPullback : na, "BULL REJ PULLBACK", color.blue, 1, plotStyle.cross)
+plot(bullDiagOn ? priceVwapAtr : na, "BULL REJ PRICE-VWAP ATR", color.blue, 1, plotStyle.cross)
+plot(bullDiagOn ? priceEma20Atr : na, "BULL REJ PRICE-EMA20 ATR", color.blue, 1, plotStyle.cross)
+
+plot(bullFwdOn ? bullBars * 1.0 : na, "BULL REJ FORWARD BARS", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn ? bullMfe : na, "BULL REJ MFE ATR", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn ? bullMae : na, "BULL REJ MAE ATR", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn ? bullMfeBars * 1.0 : na, "BULL REJ BARS TO MFE", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn ? bullMaeBars * 1.0 : na, "BULL REJ BARS TO MAE", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn ? bullCrossDir * 1.0 : na, "BULL REJ CROSS DIR", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn and bullCrossDir != 0 ? bullCrossBars * 1.0 : na, "BULL REJ BARS TO CROSS", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn ? bullOutcome * 1.0 : na, "BULL REJ OUTCOME", color.blue, 1, plotStyle.scatter)
+plot(bullFwdOn and bullOutcome != 0 ? bullOutcomeBars * 1.0 : na, "BULL REJ BARS TO OUTCOME", color.blue, 1, plotStyle.scatter)
+
+// =====================================================
+// ORIGINAL CROSSOVER MARKERS
+// =====================================================
+
+plot(showCrossover and bullishCross ? 0.25 : na, "BULLISH CROSS", color.green, 5, plotStyle.triangular)
+
+plot(showCrossover and bearishCross ? 0.25 : na, "BEARISH CROSS", color.red, 5, plotStyle.triangular)
+
+// =====================================================
+// ALERTS
+// =====================================================
+
+alertcondition(earlyLong, "EMA-VWAP EARLY LONG", "EMA-VWAP ATR displacement crossed upward through the early LONG threshold")
+
+alertcondition(earlyShort, "EMA-VWAP EARLY SHORT", "EMA-VWAP ATR displacement crossed downward through the early SHORT threshold")
+
+alertcondition(watchLong, "EMA-VWAP WATCH LONG", "EMA-VWAP ATR displacement is approaching the LONG early-entry threshold")
+
+alertcondition(watchShort, "EMA-VWAP WATCH SHORT", "EMA-VWAP ATR displacement is approaching the SHORT early-entry threshold")
+
+alertcondition(bullishReversal, "EMA-VWAP BULLISH REVERSAL", "EMA-VWAP bullish reversal - expected price direction UP")
+
+alertcondition(bearishReversal, "EMA-VWAP BEARISH REVERSAL", "EMA-VWAP bearish reversal - expected price direction DOWN")
+
+alertcondition(bearishRejection, "VWAP_REJECTION_BEARISH", "VWAP_REJECTION_BEARISH: EMA approached VWAP from below and turned down without crossing - expected price direction DOWN")
+
+alertcondition(bullishRejection, "VWAP_REJECTION_BULLISH", "VWAP_REJECTION_BULLISH: EMA approached VWAP from above and turned up without crossing - expected price direction UP")
+
+alertcondition(bullishCross, "EMA-VWAP BULLISH CROSS", "EMA-VWAP ATR displacement crossed above zero")
+
+alertcondition(bearishCross, "EMA-VWAP BEARISH CROSS", "EMA-VWAP ATR displacement crossed below zero")
