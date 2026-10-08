@@ -1,0 +1,14 @@
+{
+  "branch_label": null,
+  "direction": "both",
+  "name": "VWAP 2SD range mean reversion",
+  "params_fingerprint": "dc3adbab184040a240ebc8c02287a5a7958ea69bb385d118b3f25a908713acbc",
+  "parent_version": null,
+  "product": "MIS",
+  "rules_fingerprint": "79ed754335a42549327ac67bcb90d773e92cad8c1a96ec3bbcf8057deddd0e59",
+  "strategy_fingerprint": "cf6e69f240b4aa47948e22f93679c9b31725dcd0a6048e9bfc97cfe965ffc684",
+  "strategy_id": "IDEA-029",
+  "style": "intraday",
+  "timeframe": "5m",
+  "version": "v1"
+}

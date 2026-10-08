@@ -1,0 +1,59 @@
+{
+  "by_tier": {
+    "0.01": {
+      "checked": 7745
+    },
+    "0.05": {
+      "checked": 9546,
+      "off_grid": 2
+    },
+    "0.1": {
+      "checked": 7448
+    },
+    "0.5": {
+      "checked": 774
+    },
+    "1": {
+      "checked": 356
+    },
+    "5": {
+      "checked": 275
+    }
+  },
+  "engine_tick_grid": "safe_tick",
+  "not_covered": [
+    "stops moved by a ladder exit plan are not snapped or checked",
+    "trailed stops are snapped by the engine but only the initial stop of each trade is checked",
+    "targets are market exits in production and are not orders",
+    "broker acceptance (part B) is recorded separately and is not computed"
+  ],
+  "off_grid": 2,
+  "on_grid": 26142,
+  "rule": "every stop trigger is a multiple of the exact tick tier of its month, taken from the previous month's last close restated for corporate actions into the trade session's price units (safe_tick of the stop where that month is not in the data)",
+  "stops_checked": 26144,
+  "tick_basis": {
+    "exact": 25990,
+    "fallback_safe_tick": 154
+  },
+  "version": 1,
+  "worst": [
+    {
+      "day": "2020-03-25",
+      "direction": -1,
+      "raw_stop": 155.51,
+      "symbol": "RBLBANK",
+      "tick": 0.05,
+      "tick_source": "exact",
+      "ticks_off": 0.2
+    },
+    {
+      "day": "2020-03-27",
+      "direction": 1,
+      "raw_stop": 165.34,
+      "symbol": "RBLBANK",
+      "tick": 0.05,
+      "tick_source": "exact",
+      "ticks_off": 0.2
+    }
+  ]
+}
