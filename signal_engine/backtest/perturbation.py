@@ -34,6 +34,7 @@ from typing import Any
 
 import numpy as np
 
+from signal_engine.backtest import tickgrid
 from signal_engine.backtest.costs import recost
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.types import Ctx
@@ -333,7 +334,10 @@ def _key(nb: Neighbour) -> str:
 
 def _run_symbol(strategy: Any, params: Any, symbol: str, frame: Any, run: Any) -> list:
     own = copy.deepcopy(strategy)
-    prepared = own.prepare_for(symbol, frame.copy(), params)
+    # `prepare` keeps only OHLCV, so the price factor the tick snap needs is carried across it,
+    # exactly as the harness does for the headline run.
+    factor = frame["price_factor"] if "price_factor" in frame.columns else None
+    prepared = tickgrid.carry_price_factor(own.prepare_for(symbol, frame.copy(), params), factor)
     return simulate(Ctx(prepared, symbol=symbol), own, params, run)
 
 

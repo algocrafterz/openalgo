@@ -453,3 +453,51 @@ class TestGate:
     def test_the_gate_is_registered_and_hard(self):
         assert "G4.1" in evaluation._EVALUATORS
         assert next(g for g in evaluation._GATES if g[0] == "G4.1")[3] is True
+
+
+class TestReplayMatchesTheHeadlineOnAdjustedFrames:
+    """Found on real data: the replay dropped the price factor, so its stops snapped on the wrong
+    prices and 1,258 of 26,144 trades differed from the headline run."""
+
+    FACTOR = 0.9871  # an adjusted price level, off every tick multiple
+
+    def _setup(self):
+        out = {}
+        for sym, df in _frames().items():
+            f = df.copy()
+            # every third session dips through the 1% stop, so some trades exit at the stop
+            for n, day in enumerate(sorted(set(f.index.date))):
+                if n % 3 == 0:
+                    idx = f.index[f.index.date == day][10]
+                    f.loc[idx, "Low"] = 100.0 * 0.98
+            for col in ("Open", "High", "Low", "Close"):
+                f[col] = f[col] * self.FACTOR
+            f["price_factor"] = self.FACTOR
+            out[sym] = f
+        return out
+
+    def test_the_replay_trades_equal_the_harness_headline_trade_for_trade(self):
+        from signal_engine.backtest.harness import Backtest
+
+        frames = self._setup()
+        run = _run().with_(tick_grid="safe_tick")
+        bt = Backtest(_Long(), {k: v.copy() for k, v in frames.items()}, run,
+                      release_raw=True, single_pass=True)  # fmt: skip
+        headline = {(t.symbol, str(t.entry_time)): t for t in bt.trades(_P())}
+        replay = {}
+        for sym, df in frames.items():
+            for t in perturbation._run_symbol(_Long(), _P(), sym, df, run):
+                replay[(t.symbol, str(t.entry_time))] = t
+        assert set(headline) == set(replay) and headline
+        stopped = [k for k in headline if headline[k].reason == "SL"]
+        assert stopped, "the setup must include stop exits"
+        for k, h in headline.items():
+            assert (replay[k].sl, replay[k].exit, replay[k].reason) == (h.sl, h.exit, h.reason)
+
+    def test_without_the_carry_the_snap_would_use_the_wrong_prices(self):
+        frames = self._setup()
+        run = _run().with_(tick_grid="safe_tick")
+        with_factor = perturbation._run_symbol(_Long(), _P(), "S0", frames["S0"], run)
+        plain = frames["S0"].drop(columns="price_factor")
+        no_factor = perturbation._run_symbol(_Long(), _P(), "S0", plain, run)
+        assert {round(t.sl, 6) for t in with_factor} != {round(t.sl, 6) for t in no_factor}
