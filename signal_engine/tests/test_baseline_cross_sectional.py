@@ -408,3 +408,70 @@ class TestPanelStrategies:
         trades = _strategy_trades(_Short(picked), frames, _run(), make_model())
         with pytest.raises(xs.SelectionNullContractError, match="null_entry hook contract"):
             _block(_NeedsRank(picked), frames, trades=trades)
+
+
+class TestReplayReproducesTheTrade:
+    """A replay on the symbol the strategy picked must be the strategy's own trade."""
+
+    #: Lineage ids are set only when a ledger recorder is attached, so they are not compared.
+    SKIP = {"signal_id", "order_id", "entry_fill_id", "exit_fill_id", "position_id"}
+
+    def _same(self, replay, trade):
+        from dataclasses import fields
+
+        for f in fields(trade):
+            if f.name in self.SKIP:
+                continue
+            a, b = getattr(replay, f.name), getattr(trade, f.name)
+            if isinstance(a, float) and isinstance(b, float) and np.isnan(a) and np.isnan(b):
+                continue
+            assert a == b, f"{f.name}: replay {a!r} != trade {b!r}"
+
+    @pytest.mark.parametrize("strategy_class", [_Short, _AtrShort])
+    def test_every_field_matches_on_the_picked_symbol(self, strategy_class):
+        days = _sessions(6)
+        # day 1 time-exits, day 2 spikes through the stop, day 3 drifts against the short
+        frame = _frame(
+            days,
+            lambda d: {days[3]: 25.0}.get(d, -20.0),
+            spikes={days[2]: 30},
+            wick=0.001,
+        )
+        strat = strategy_class(["A"])
+        run, model = _run(), make_model()
+        trades = _strategy_trades(strat, {"A": frame}, run, model)
+        assert {t.reason for t in trades} >= {"TIME_EXIT"}
+        assert any(t.reason in ("SL", "SL_GAP") for t in trades)
+        prepared = strat.prepare_for("A", frame.copy(), None)
+        for trade in trades:
+            key = xs.trade_key(trade)
+            wanted = {key[0]: [(0, key[1], key[2])]}
+            filled, skipped, attempts = xs.replay_symbol(strat, "A", prepared, wanted, None, run)
+            assert attempts == 1 and not skipped
+            # the strategy's trades are on the statutory basis, so the replay is costed the same
+            (replay,) = costs.recost([filled[0][1]], model)
+            self._same(replay, trade)
+
+    def test_recosted_replay_equals_the_recosted_trade(self):
+        days = _sessions(4)
+        frame = _frame(days, lambda d: -20.0, spikes={days[1]: 30})
+        strat = _Short(["A"])
+        run, model = _run(), make_model()
+        trades = _strategy_trades(strat, {"A": frame}, run, model)
+        prepared = strat.prepare_for("A", frame.copy(), None)
+        for trade in trades:
+            key = xs.trade_key(trade)
+            filled, _, _ = xs.replay_symbol(
+                strat, "A", prepared, {key[0]: [(0, key[1], key[2])]}, None, run
+            )
+            (replay,) = costs.recost([filled[0][1]], model)
+            assert replay.gross_bps == pytest.approx(trade.gross_bps)
+            assert replay.net_bps == pytest.approx(trade.net_bps)
+
+    def test_single_pick_market_has_zero_excess_on_its_own_pool(self):
+        # a one-symbol pool is the strategy's own trade, so excess must be exactly zero
+        days = _sessions(8)
+        frame = _frame(days, lambda d: -20.0, spikes={days[2]: 30})
+        out = _block(_Short(["A"]), {"A": frame})
+        assert out["excess_net_bps"] == pytest.approx(0.0, abs=1e-9)
+        assert out["excess_gross_bps"] == pytest.approx(0.0, abs=1e-9)
