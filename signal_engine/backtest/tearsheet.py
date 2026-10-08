@@ -345,6 +345,7 @@ def build_run_record(
     oos_start: str | None = None,
     position_caps: Sequence[int] = (),
     baseline: dict[str, Any] | None = None,
+    baseline_cross_sectional: dict[str, Any] | None = None,
     validation: Sequence[str] = (),
     notes: str = "",
     horizon: str = "intraday",
@@ -507,6 +508,8 @@ def build_run_record(
         record["trials"] = dict(trials)
     if baseline is not None:
         record["baseline"] = dict(baseline)
+    if baseline_cross_sectional is not None:
+        record["baseline_cross_sectional"] = dict(baseline_cross_sectional)
     if validation:
         record["validation"] = list(validation)
     if notes:

@@ -58,6 +58,7 @@ from signal_engine.backtest.baseline import (
     random_entry_baseline_intraday,
     sample_trades,
 )
+from signal_engine.backtest.baseline_cross_sectional import cross_sectional_baseline
 from signal_engine.backtest.costs import (
     COST_MODEL_VERSION,
     MODEL_NAME,
@@ -170,6 +171,8 @@ class Execution:
     costs: dict[str, Any]
     days: list[str]
     baseline: dict[str, Any] | None = None
+    #: Cross-sectional selection baseline (`baseline_cross_sectional`), or None. Report only.
+    baseline_cross_sectional: dict[str, Any] | None = None
     cost_model: CostModel | None = None
     symbols: list[str] = field(default_factory=list)
     #: Lineage ledgers of the headline run (signals, orders, fills, exclusions), or None.
@@ -957,6 +960,21 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
             _baseline_frames(source.daily(dataset.eligible, until, min_sessions), layer,
                              int(run.warmup_bars)),
         )
+    cross_sectional = None
+    # Panel strategies are included: the replays use the per-symbol prepare_for, never
+    # prepare_panel (the `null_entry` hook contract).
+    if kind != "swing" and getattr(strategy, "supports_selection_null", False):
+        cross_sectional = cross_sectional_baseline(
+            trades,
+            lambda chunk: _baseline_frames(
+                source.intraday(chunk, "5m", until), layer, int(run.warmup_bars)
+            ),
+            strategy,
+            params,
+            run,
+            cost_model,
+            symbols=loaded_symbols,
+        )
     return Execution(
         trades=trades,
         params={
@@ -975,6 +993,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         costs=costs,
         days=days,
         baseline=baseline,
+        baseline_cross_sectional=cross_sectional,
         cost_model=cost_model,
         symbols=loaded_symbols,
         ledgers=ledgers,
@@ -1369,6 +1388,7 @@ def record_idea(
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
+        baseline_cross_sectional=execution.baseline_cross_sectional,
         validation=validation,
         horizon=execution.params.get("engine", "intraday"),
         regime_days=regime_days,

@@ -90,10 +90,10 @@ Findings carried forward from implementation (raised, not designed around):
 
 | Capability | Status | Code | Tests | Verified |
 | --- | --- | --- | --- | --- |
-| MAE and MFE per trade | not started | | | |
+| MAE and MFE per trade | not started (2026-10-08: only a standalone exploratory diagnostic exists, from IDEA-032. It measures every executable signal of an early-displacement strategy, not the recorded trades, and is not called by `record_run`, the run record, the evaluation or the Backtests page. The engine `Trade` carries no excursion fields.) | `backtest/mfe_mae.py`, `backtest/mfe_mae_report.py` (diagnostic only) | `tests/test_mfe_mae.py` | |
 | Exposure and turnover | not started | | | |
 | Regime by strategy table (baseline trend/range, high/low volatility; optional India VIX, sector, index trend) | not started | | | |
-| Market benchmark; controlled random-entry null with opportunity-set preservation | not started | | | |
+| Market benchmark; controlled random-entry null with opportunity-set preservation | built (cross-sectional selection null for intraday runs only: engine replay of the strategy's stop and target rules on every symbol eligible in the same session, per-replay statutory cost, report only, opt-in through `Strategy.null_entry`; swing runs and the market benchmark are not started; 2026-10-08: no real strategy implements `null_entry` yet, so no recorded run has produced the block and it is checked on synthetic data only) | `backtest/baseline_cross_sectional.py`, `backtest/strategies/base.py` | `tests/test_baseline_cross_sectional.py`, `tests/test_record_run.py` | |
 | Structured failure diagnosis; research states | built (next action and failure diagnosis from the gate table; research states in the lifecycle; verify the diagnosis wording before marking verified) | `backtest/next_action.py`, `research/intake/lifecycle.py` | | |
 | Parameter neighbourhood; cost stress; symbol and year contribution | not started | | | |
 | Monte Carlo with stored ruin definition | not started | | | |

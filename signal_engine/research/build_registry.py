@@ -143,6 +143,24 @@ def _is_num(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float))
 
 
+#: Figures of a `baseline_cross_sectional` block that are numeric when present.
+_XS_OPTIONAL_NUMBERS = (
+    "strategy_gross_bps",
+    "null_gross_bps",
+    "null_gross_t_stat",
+    "excess_gross_bps",
+    "excess_t_stat",
+    "pool_median_symbols",
+    "sessions",
+    "sessions_population",
+    "trades",
+    "population_trades",
+    "skipped",
+    "replays",
+    "replays_filled",
+)
+
+
 def _valid_position_cap(row: Any) -> bool:
     slots = row.get("max_positions") if isinstance(row, dict) else None
     return (
@@ -325,6 +343,22 @@ def _validate_run_v2(run: dict[str, Any]) -> list[str]:
             problems.append(
                 "'baseline' must be an object with numeric gross_bps, net_bps and "
                 "excess_net_bps (optional numeric excess_t_stat, string method)"
+            )
+    if "baseline_cross_sectional" in run:
+        xs = run["baseline_cross_sectional"]
+        if not (
+            isinstance(xs, dict)
+            and all(
+                _is_num(xs.get(k)) for k in ("strategy_net_bps", "null_net_bps", "excess_net_bps")
+            )
+            and all(k not in xs or _is_num(xs[k]) for k in _XS_OPTIONAL_NUMBERS)
+            and ("method" not in xs or isinstance(xs["method"], str))
+            and ("replay_skips" not in xs or isinstance(xs["replay_skips"], dict))
+        ):
+            problems.append(
+                "'baseline_cross_sectional' must be an object with numeric strategy_net_bps, "
+                "null_net_bps and excess_net_bps (other figures numeric when present, "
+                "string method, object replay_skips)"
             )
     if "position_caps" in run:
         caps = run["position_caps"]

@@ -116,6 +116,15 @@ compare any two. Never edit or overwrite a run file. Write them with
 | `series` | `equity_r` and `drawdown_r` as `[["YYYY-MM-DD", value]]`, and `monthly` rows `{month, n, total_r, net_r}` |
 | `position_caps` | `[{max_positions, trades, taken_pct, gross_bps, net_bps, t_stat?, sharpe?}]`: what an account with only N open positions would have kept, first come first served. Every run is scored at 3, 5 and 10 slots by default (`--caps`) |
 | `baseline` | Same-symbol random entry with the same holding period, direction and cost: `{method, gross_bps, net_bps, trade_net_bps, excess_net_bps, excess_t_stat?, trades, skipped}`. Computed for swing runs on all trades. Intraday runs compute it on a seeded sample of trades, loading only the symbols in that sample |
+| `baseline_cross_sectional` | Intraday only, present when the strategy implements `null_entry` (`supports_selection_null`). Separates stock selection from the unconditional drift: for each session the strategy trades, the real engine replays the strategy's own stop, target and exit rules on every symbol with bars that session, at the same signal bar and direction, each costed on the statutory model: `{method, seed, null_pool, sessions, sessions_population, sampled, trades, population_trades, skipped, replays, replays_filled, replay_skips, pool_median_symbols, strategy_gross_bps, strategy_net_bps, null_gross_bps, null_net_bps, null_gross_t_stat, excess_gross_bps, excess_net_bps, excess_t_stat}`. The excess is the strategy trade minus the mean of its key's replays; `excess_t_stat` clusters by session. Whole sessions are sampled (seed 0) above 500,000 estimated replays. Report only: no gate, no spec field |
+
+How to read `baseline_cross_sectional` (the code applies no thresholds):
+
+| Case | Pattern | Reading |
+| --- | --- | --- |
+| 1 | `null_gross_bps` near 0 and `abs(null_gross_t_stat)` small | No unconditional drift in the strategy direction; any strategy result is not drift |
+| 2 | `null_gross_bps` > 0 in the strategy direction with a large `null_gross_t_stat`, `excess_net_bps` near 0 and `abs(excess_t_stat)` small | Drift but no selection value: the names earn what any eligible name earns |
+| 3 | `excess_net_bps` > 0 with a large `excess_t_stat` | Selection adds value beyond the drift |
 
 ### Costs and cost scenarios
 

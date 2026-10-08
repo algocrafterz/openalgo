@@ -562,3 +562,71 @@ class TestPrimaryCostModel:
             "swing", {"stop": "none", "capital_per_position": 100000}
         )
         assert model.fixed_notional == 100000.0
+
+
+class TestCrossSectionalBlockInRecord:
+    BLOCK = {
+        "method": "engine replay",
+        "sessions": 40,
+        "sessions_population": 40,
+        "sampled": False,
+        "trades": 40,
+        "replays": 800,
+        "replays_filled": 790,
+        "replay_skips": {"STOP_TOO_TIGHT": 10},
+        "strategy_net_bps": 12.0,
+        "null_net_bps": 8.0,
+        "excess_net_bps": 4.0,
+        "excess_t_stat": 1.2,
+    }
+
+    def _record(self, root, **changes):
+        from dataclasses import replace
+
+        execution = replace(_execution(), **changes)
+        path = rr.record_idea(
+            root,
+            "IDEA-009",
+            execute=lambda key: execution,
+            run_date="2026-09-30",
+            supported=SUPPORTED,
+        )
+        return json.loads(path.read_text())
+
+    def test_block_lands_in_the_record_and_validates(self, root):
+        rec = self._record(root, baseline_cross_sectional=self.BLOCK)
+        assert rec["baseline_cross_sectional"] == self.BLOCK
+        assert br._validate_run(rec) == []
+
+    def test_no_hook_no_block(self, root):
+        assert "baseline_cross_sectional" not in self._record(root)
+
+    def test_old_record_without_block_loads(self, root):
+        rec = self._record(root)
+        assert br._validate_run(rec) == []
+
+    def test_block_does_not_change_fingerprints_or_evaluation_rows(self, tmp_path):
+        records = []
+        for name, changes in (("a", {}), ("b", {"baseline_cross_sectional": self.BLOCK})):
+            folder = tmp_path / name
+            _make_idea(folder, "009", "orb", "backtest/strategies/orb.py")
+            records.append(self._record(folder, **changes))
+        plain, with_block = records
+        assert with_block["baseline_cross_sectional"] == self.BLOCK
+        # Only the block (and the manifest hash that covers the artifact files) may differ.
+        drop = {"baseline_cross_sectional", "manifest_sha256"}
+        assert {k: v for k, v in plain.items() if k not in drop} == {
+            k: v for k, v in with_block.items() if k not in drop
+        }
+
+    def test_registry_rejects_malformed_block(self, root):
+        rec = self._record(root, baseline_cross_sectional=self.BLOCK)
+        for bad in (
+            "text",
+            {**self.BLOCK, "excess_net_bps": "4"},
+            {**self.BLOCK, "replay_skips": [1]},
+            {k: v for k, v in self.BLOCK.items() if k != "null_net_bps"},
+            {**self.BLOCK, "excess_t_stat": True},
+        ):
+            problems = br._validate_run({**rec, "baseline_cross_sectional": bad})
+            assert any("baseline_cross_sectional" in p for p in problems), bad

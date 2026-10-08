@@ -67,6 +67,7 @@ _REPORT_BLOCKS = (
     "costs",
     "split",
     "baseline",
+    "baseline_cross_sectional",
     "cost_sensitivity",
     "trials",
     "exit_views",

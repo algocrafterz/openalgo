@@ -35,6 +35,10 @@ class Strategy(ABC):
     #: position instead of using the fixed signal target, and a bar that opens beyond that
     #: level fills at its open. False (every strategy before IDEA-029) leaves the engine as is.
     dynamic_target: bool = False
+    #: True: the strategy implements `null_entry`, so the cross-sectional selection baseline
+    #: (`backtest.baseline_cross_sectional`) can replay its stop and target rules on every
+    #: eligible symbol of a session. Opt-in; False records no such block.
+    supports_selection_null: bool = False
 
     # ---- required -------------------------------------------------------
 
@@ -59,6 +63,20 @@ class Strategy(ABC):
         Bar i is CLOSED. Never read c[...][i + 1]. The engine has already checked the
         session window, the per-day trade cap and the direction permissions.
         """
+
+    def null_entry(self, c: Ctx, i: int, p, direction: int) -> EntrySignal | None:
+        """The signal this strategy's own stop and target rules would place at closed bar i on
+        ANY symbol, ignoring the selection test (the rule that picks which names trade).
+
+        Used only by the cross-sectional selection baseline, which replays the strategy's
+        exit logic on every eligible symbol of a session. Compute the stop and target from
+        that symbol's own indicators. Return None when the symbol is outside the strategy's
+        opportunity set (for example no gap in the direction the strategy trades).
+
+        Contract: the strategy's per-symbol `prepare_for` must not need panel rank columns,
+        because the baseline prepares one symbol at a time. Set `supports_selection_null`.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement null_entry")
 
     def prepare_key(self, p) -> tuple:
         """Cache key for prepare(). Override to list ONLY the fields prepare() reads.
