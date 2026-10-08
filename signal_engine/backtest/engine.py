@@ -28,6 +28,14 @@ from signal_engine.backtest.ledgers import N_CODES as _N_CODES
 from signal_engine.backtest.strategies.base import Strategy
 from signal_engine.backtest.types import Ctx, Position, RunConfig, Trade
 from signal_engine.strategy_core.exits import Ladder
+from signal_engine.strategy_core.trade_policy import (
+    DIRECTION_DISABLED,
+    TradePolicy,
+    bad_fill,
+    direction_verdict,
+    time_exit_verdict,
+    trades_capped,
+)
 
 # Reason codes as small ints for the hot loop; a skip is packed as (bar index << 6) | code.
 _K_MAX_TRADES = CODE_INDEX["MAX_TRADES_DAY"]
@@ -68,8 +76,8 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
     b_ord = b.orders.append if rec is not None else None
     b_fill = b.fills.append if rec is not None else None
     b_stamp = b._pending.append if rec is not None else None
-    trades_today = 0
-    long_taken = short_taken = False
+    trades_today = long_fills = short_fills = 0
+    policy = TradePolicy.from_run(run)
 
     if run.custom_exit_fill not in ("bar_close", "next_open"):
         raise ValueError(f"custom_exit_fill must be bar_close or next_open, got {run.custom_exit_fill!r}")
@@ -161,7 +169,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
 
     for i in range(n):
         if new_sess[i]:
-            trades_today, long_taken, short_taken = 0, False, False
+            trades_today = long_fills = short_fills = 0
             if rec is not None and pending is not None:
                 b_ord((pend_i, pending[0].direction, -1, _K_DROP_SESSION))
             pending = None
@@ -230,10 +238,16 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                     (fill <= sig.sl) if sig.direction == 1 else (fill >= sig.sl)
                 )
                 if sig.direction == 1:
-                    long_taken = True
+                    long_fills += 1
                 else:
-                    short_taken = True
-                if entered_through_stop:
+                    short_fills += 1
+                if sig.sl is not None and run.max_entry_slippage_r > 0 and bad_fill(
+                    sig.direction, float(sig_px), float(sig.sl), float(sig.tp), fill,
+                    run.max_entry_slippage_r,
+                ).violated:
+                    # spec item 18: closed at the fill-bar open, zero gross R, the entry is used
+                    close_out("BAD_FILL_CLOSE", fill, i)
+                elif entered_through_stop:
                     close_out("SL_GAP_ENTRY", fill, i)
             elif rec is not None:
                 b_ord((pend_i, sig.direction, -1, _K_DROP_POS))
@@ -244,9 +258,16 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             # this bar's stop, target and clock checks.
             reason, pending_exit = pending_exit, ""
             close_out(reason, float(o[i]), i, at_open=True)
+        if pos is not None and run.time_exit_at_open:
+            # spec item 19: the clock closes the position at the open, before this bar's stop and target
+            verdict = time_exit_verdict(int(mins[i]), time_exit_min, run.mis_squareoff_min)
+            if verdict == "TIME_EXIT":
+                close_out("TIME_EXIT", float(o[i]), i)
+            elif verdict:
+                close_out("DATA_GAP", float(close[i - 1]) if i > 0 else float(o[i]), i)
         if pos is not None and pos.ladder is not None:
             # Shared exit model (strategy_core.exits): partial targets and stop moves.
-            pos.ladder.step(o[i], h[i], low[i])
+            pos.ladder.step(o[i], h[i], low[i], close[i])
             if rec is not None:
                 log_legs(i)
             if pos.ladder.done:
@@ -257,7 +278,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                 if mins[i] >= time_exit_min:
                     reason = "TIME_EXIT"
                 elif i + 1 >= n or days[i + 1] != days[i]:
-                    reason = "EOD"
+                    reason = "DATA_GAP" if run.time_exit_at_open else "EOD"
                 else:
                     reason = strategy.custom_exit(c, i, p, pos) or ""
                     if reason and exit_next_open:
@@ -290,7 +311,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                 if mins[i] >= time_exit_min:
                     reason = "TIME_EXIT"
                 elif i + 1 >= n or days[i + 1] != days[i]:
-                    reason = "EOD"
+                    reason = "DATA_GAP" if run.time_exit_at_open else "EOD"
                 else:
                     reason = strategy.custom_exit(c, i, p, pos) or ""
                     if reason and exit_next_open:
@@ -318,7 +339,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             if rec is not None:
                 skip(i, _K_NO_NEXT)
             continue  # nothing left to fill into
-        if trades_today >= run.max_trades_per_day:
+        if trades_capped(policy, trades_today):
             if rec is not None:
                 skip(i, _K_MAX_TRADES)
             continue
@@ -335,13 +356,10 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             continue
 
         for d in (1, -1):
-            if d == 1 and (not run.allow_longs or (run.one_trade_per_direction and long_taken)):
+            verdict = direction_verdict(policy, d, long_fills, short_fills)
+            if verdict:
                 if rec is not None:
-                    skip(i, (_K_DIR_OFF if not run.allow_longs else _K_DIR_TAKEN))
-                continue
-            if d == -1 and (not run.allow_shorts or (run.one_trade_per_direction and short_taken)):
-                if rec is not None:
-                    skip(i, (_K_DIR_OFF if not run.allow_shorts else _K_DIR_TAKEN))
+                    skip(i, (_K_DIR_OFF if verdict == DIRECTION_DISABLED else _K_DIR_TAKEN))
                 continue
             sig = strategy.entry(c, i, p, d)
             if sig is None:

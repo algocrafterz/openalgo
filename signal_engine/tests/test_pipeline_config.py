@@ -79,6 +79,73 @@ class TestLoad:
         with pytest.raises(ConfigError, match="exit_owner"):
             load(tmp_path, monkeypatch, mut)
 
+    def test_entry_cap_is_required(self, tmp_path, monkeypatch):
+        with pytest.raises(ConfigError, match="max_entries_per_direction_per_day"):
+            load(
+                tmp_path,
+                monkeypatch,
+                lambda c: c["strategies"]["BREAKOUT"].pop("max_entries_per_direction_per_day"),
+            )
+
+    @pytest.mark.parametrize("bad", [0, -1, 1.5, "2", True])
+    def test_entry_cap_must_be_a_whole_number_of_at_least_one_or_null(self, tmp_path, monkeypatch, bad):
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["max_entries_per_direction_per_day"] = bad
+
+        with pytest.raises(ConfigError, match="max_entries_per_direction_per_day"):
+            load(tmp_path, monkeypatch, mut)
+
+    def test_entry_cap_is_loaded_and_null_means_no_cap(self, tmp_path, monkeypatch):
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["max_entries_per_direction_per_day"] = 2
+
+        assert load(tmp_path, monkeypatch, mut).runner.strategies["BREAKOUT"].max_entries_per_direction_per_day == 2
+        assert load(tmp_path, monkeypatch).runner.strategies["BREAKOUT"].max_entries_per_direction_per_day is None
+
+    def test_paper_limits_is_required(self, tmp_path, monkeypatch):
+        with pytest.raises(ConfigError, match="paper_limits"):
+            load(tmp_path, monkeypatch, lambda c: c["strategies"]["BREAKOUT"].pop("paper_limits"))
+
+    def test_paper_limits_must_be_mode_or_live(self, tmp_path, monkeypatch):
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["paper_limits"] = "pooled"
+
+        with pytest.raises(ConfigError, match="paper_limits"):
+            load(tmp_path, monkeypatch, mut)
+
+    def test_paper_limits_is_loaded(self, tmp_path, monkeypatch):
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["paper_limits"] = "live"
+
+        assert load(tmp_path, monkeypatch, mut).runner.strategies["BREAKOUT"].paper_limits == "live"
+
+    def test_supersedes_pine_tag_is_required(self, tmp_path, monkeypatch):
+        with pytest.raises(ConfigError, match="supersedes_pine_tag"):
+            load(tmp_path, monkeypatch, lambda c: c["strategies"]["BREAKOUT"].pop("supersedes_pine_tag"))
+
+    @pytest.mark.parametrize("bad", ["", "  ", 3, "BREAKOUT"])
+    def test_supersedes_pine_tag_must_be_another_tag_or_null(self, tmp_path, monkeypatch, bad):
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["supersedes_pine_tag"] = bad
+
+        with pytest.raises(ConfigError, match="supersedes_pine_tag"):
+            load(tmp_path, monkeypatch, mut)
+
+    def test_supersedes_pine_tag_is_loaded_upper_case(self, tmp_path, monkeypatch):
+        def mut(c):
+            c["strategies"]["BREAKOUT"]["supersedes_pine_tag"] = "orb"
+
+        assert load(tmp_path, monkeypatch, mut).runner.strategies["BREAKOUT"].supersedes_pine_tag == "ORB"
+
+    def test_shipped_breakout_py_supersedes_pine_breakout(self):
+        assert settings.runner.strategies["BREAKOUT-PY"].supersedes_pine_tag == "BREAKOUT"
+
+    def test_shipped_breakout_py_uses_the_live_limits_in_paper(self):
+        assert settings.runner.strategies["BREAKOUT-PY"].paper_limits == "live"
+
+    def test_shipped_breakout_py_cap_is_two(self):
+        assert settings.runner.strategies["BREAKOUT-PY"].max_entries_per_direction_per_day == 2
+
     def test_explicit_universe_list(self, tmp_path, monkeypatch):
         r = load(tmp_path, monkeypatch, lambda c: c.update(universe=["TCS", "INFY"])).runner
         assert r.universe == ("TCS", "INFY")

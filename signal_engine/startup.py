@@ -691,6 +691,37 @@ async def runner_config_ok() -> bool:
         await notifier.notify_startup_result(all_passed=False, summary=f"Runner config: {exc}")
         return False
     single_source.log_active_sources(settings.runner)
+    return await _check_runner_against_spec()
+
+
+async def _check_runner_against_spec() -> bool:
+    """Refuse to start when config.yaml disagrees with the frozen BREAKOUT specification.
+
+    A value held in both places (time exit, per-direction cap, exit plan, exit owner, paper limits) is a
+    rule that can drift, so a difference is a start-up failure, never a warning.
+    """
+    from signal_engine.strategy_core import strategy_spec
+
+    tags = [t for t, e in settings.runner.strategies.items() if e.signal_source == "python"]
+    if not tags:
+        return True
+    try:
+        spec = strategy_spec.load_spec()
+    except strategy_spec.SpecError as exc:
+        logger.critical(f"Strategy specification unreadable, refusing to start: {exc}")
+        await notifier.notify_startup_result(all_passed=False, summary=f"Strategy spec: {exc}")
+        return False
+    time_exit = (settings.time_exit_hour, settings.time_exit_minute)
+    problems = [
+        p
+        for tag in tags
+        for p in strategy_spec.check_runner(spec, tag, settings.runner.strategies[tag], time_exit)
+    ]
+    if problems:
+        summary = f"config differs from {spec.id} {spec.version}: " + "; ".join(problems)
+        logger.critical(f"Refusing to start: {summary}")
+        await notifier.notify_startup_result(all_passed=False, summary=summary)
+        return False
     return True
 
 

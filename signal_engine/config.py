@@ -94,6 +94,7 @@ class TelegramChannel:
 
 VALID_SIGNAL_SOURCES = ("pine", "python")
 VALID_EXIT_PLANS = ("tp1_only", "ladder_30_35_35")
+VALID_PAPER_LIMITS = ("mode", "live")
 VALID_EXIT_OWNERS = ("tracker", "ladder")
 UNIVERSE_ALL = "fno_all"
 
@@ -112,6 +113,18 @@ class RunnerStrategy:
     #: every strategy; this default only serves code that builds a RunnerStrategy directly, and
     #: it is the safe direction.
     paper_only: bool = True
+    #: Trade policy (strategy_core.trade_policy): the most entries per symbol and direction in one
+    #: trading day, counted on filled entries. None = no cap. config.yaml must state it for every
+    #: strategy; the default only serves code that builds a RunnerStrategy directly.
+    max_entries_per_direction_per_day: int | None = None
+    #: Where this strategy's paper (ANALYZE) trading limits come from. "mode": the analyze profile
+    #: (loose by design). "live": the live profile's numbers, applied to this strategy's OWN book
+    #: (BREAKOUT spec v1.0 item 16). config.yaml must state it; the default only serves direct callers.
+    paper_limits: str = "mode"
+    #: A Pine strategy tag whose ENTRY alerts are not traded while this Python strategy runs, so Python is
+    #: the sole execution source for the symbols it covers (BREAKOUT spec v1.0 item 17). The Pine alert is
+    #: still recorded as a declined row for the parity comparison. None = nothing superseded.
+    supersedes_pine_tag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -747,6 +760,12 @@ def _runner_strategies(raw) -> dict:
         plan = _require_key(body, name, "exit_plan")
         owner = _require_key(body, name, "exit_owner")
         paper_only = _require_key(body, name, "paper_only")
+        cap = _require_key(body, name, "max_entries_per_direction_per_day")
+        if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+            raise ConfigError(
+                f"{name}.max_entries_per_direction_per_day must be a whole number of at least 1 "
+                f"or null (no cap), got {cap!r}"
+            )
         if not isinstance(paper_only, bool):
             raise ConfigError(f"{name}.paper_only must be true or false, got {paper_only!r}")
         if source not in VALID_SIGNAL_SOURCES:
@@ -762,7 +781,21 @@ def _runner_strategies(raw) -> dict:
             raise ConfigError(
                 f"Invalid {name}.exit_owner '{owner}'. Must be one of: {', '.join(VALID_EXIT_OWNERS)}"
             )
-        out[str(tag).upper()] = RunnerStrategy(source, plan, owner, paper_only)
+        limits = _require_key(body, name, "paper_limits")
+        if limits not in VALID_PAPER_LIMITS:
+            raise ConfigError(
+                f"Invalid {name}.paper_limits '{limits}'. "
+                f"Must be one of: {', '.join(VALID_PAPER_LIMITS)}"
+            )
+        superseded = _require_key(body, name, "supersedes_pine_tag")
+        if superseded is not None and (not isinstance(superseded, str) or not superseded.strip()):
+            raise ConfigError(f"{name}.supersedes_pine_tag must be a strategy tag or null, got {superseded!r}")
+        if superseded is not None and str(superseded).upper() == str(tag).upper():
+            raise ConfigError(f"{name}.supersedes_pine_tag cannot be its own tag")
+        out[str(tag).upper()] = RunnerStrategy(
+            source, plan, owner, paper_only, cap, limits,
+            None if superseded is None else superseded.strip().upper(),
+        )
     return out
 
 

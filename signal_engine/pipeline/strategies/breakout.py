@@ -53,10 +53,14 @@ class BreakoutStrategy:
         warmup_sessions: int = DEFAULT_WARMUP_SESSIONS,
         inputs_builder: Callable[..., pd.DataFrame] | None = None,
         name: str = "BREAKOUT",
+        spec_stamp: dict[str, str] | None = None,
     ) -> None:
         #: The strategy tag the Fires are sent under. The rules are identical for every tag;
         #: a second tag exists only to keep a second book (capital, slots, P&L) apart.
         self.name = name
+        #: strategy_id, strategy_version and strategy_fingerprint of the frozen specification, carried
+        #: in every signal's context and so into the ledger entry row (spec item 0.1 rule 4).
+        self.spec_stamp = dict(spec_stamp or {})
         self.params = params or BreakoutParams()
         self._tick = tick_source
         self._build_inputs = inputs_builder or build_breakout_inputs
@@ -69,18 +73,24 @@ class BreakoutStrategy:
         rows = compute_signals(inputs, replace(self.params, tick=tick))
         levels = inputs.loc[rows.index, list(_LEVEL_KEYS)]
         return [
-            self._fire(symbol, bar_time, row, levels.iloc[i])
+            self._fire(symbol, bar_time, row, levels.iloc[i], self.spec_stamp)
             for i, (bar_time, row) in enumerate(rows.iterrows())
         ]
 
     @staticmethod
-    def _fire(symbol: str, bar_time: pd.Timestamp, row: pd.Series, bar: pd.Series) -> Fire:
-        context: dict = {}
+    def _fire(
+        symbol: str, bar_time: pd.Timestamp, row: pd.Series, bar: pd.Series, stamp: dict | None = None
+    ) -> Fire:
+        context: dict = dict(stamp or {})
         for key in _ROW_KEYS:
             v = _clean(row[key])
             if v is not None:
                 context[key] = v
         for key in ("tp2", "tp3"):
+            context[key] = float(row[key])
+        # day type and the initial-balance extension that drove the counter-bias veto (spec item 6)
+        context["day_type"] = str(row["day_type"])
+        for key in ("ext_up", "ext_dn"):
             context[key] = float(row[key])
         for col, key in _LEVEL_KEYS.items():
             v = _clean(bar[col])

@@ -166,6 +166,9 @@ class TestPipelineFlow:
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.can_trade_symbol.return_value = True
             mock_risk.can_trade_sector.return_value = True
@@ -198,6 +201,9 @@ class TestPipelineFlow:
             patch("signal_engine.main.notifier", new_callable=AsyncMock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.can_trade_symbol.return_value = True
             mock_risk.can_trade_sector.return_value = True
@@ -281,6 +287,9 @@ class TestCncBracketSkip:
             patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
             mock_risk.effective_max_open_positions_for.return_value = 3
@@ -327,6 +336,9 @@ class TestCncBracketSkip:
             patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
             mock_risk.effective_max_open_positions_for.return_value = 3
@@ -372,6 +384,9 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
             mock_risk.effective_max_open_positions_for.return_value = 3
@@ -412,6 +427,9 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
             mock_risk.effective_max_open_positions_for.return_value = 3
@@ -452,6 +470,9 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.tracker", new_callable=tracker_mock),
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 200_000.0
             mock_risk.calculate_quantity.return_value = 50
@@ -494,6 +515,9 @@ class TestBracketOrderFlow:
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.settings") as mock_settings,
         ):
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            # (the policy has its own tests in test_entry_trade_policy.py)
+            mock_settings.runner.strategies = {}
             mock_risk.check_exposure.return_value = True
             mock_risk.max_open_positions = 3
             mock_risk.effective_max_open_positions_for.return_value = 3
@@ -574,6 +598,8 @@ class TestFillOvershotTP:
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 15_000.0
             mock_risk.calculate_quantity.return_value = 22
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            mock_settings.runner.strategies = {}
             mock_settings.bracket_enabled = True
             mock_settings.bracket_cnc_sl_enabled = False
             mock_settings.risk_per_trade = 0.015
@@ -628,6 +654,8 @@ class TestFillOvershotTP:
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 15_000.0
             mock_risk.calculate_quantity.return_value = 23
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            mock_settings.runner.strategies = {}
             mock_settings.bracket_enabled = True
             mock_settings.bracket_cnc_sl_enabled = False
             mock_settings.risk_per_trade = 0.015
@@ -675,6 +703,8 @@ class TestFillOvershotTP:
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 15_000.0
             mock_risk.calculate_quantity.return_value = 22
+            # the entry policy reads the runner strategy table; none listed = no policy here
+            mock_settings.runner.strategies = {}
             mock_settings.bracket_enabled = True
             mock_settings.bracket_cnc_sl_enabled = False
             mock_settings.risk_per_trade = 0.015

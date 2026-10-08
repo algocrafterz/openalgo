@@ -123,7 +123,7 @@ class TestExits:
             safety_bars=2,
         )
         bar = pd.Timestamp("2026-09-30 10:00", tz=IST)
-        signals = await driver.on_bar("RELIANCE", bar, 2501.0, 2511.0, 2500.0)
+        signals = await driver.on_bar("RELIANCE", bar, 2501.0, 2511.0, 2500.0, 2505.5)
         assert [s.tp_level for s in signals] == ["TP1"]
         assert signals[0].strategy == PY
         ladder_sl = signals[0].context["ladder_sl"]
@@ -155,7 +155,7 @@ class TestExits:
             safety_bars=2,
         )
         bar = pd.Timestamp("2026-09-30 10:00", tz=IST)
-        (exit_signal,) = await driver.on_bar("RELIANCE", bar, 2501.0, 2511.0, 2500.0)
+        (exit_signal,) = await driver.on_bar("RELIANCE", bar, 2501.0, 2511.0, 2500.0, 2505.5)
         h = harness(
             tracker=tracker,
             settings=_settings_stub(strategy_profiles=_profiles()),

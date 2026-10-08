@@ -1,0 +1,121 @@
+# IDEA-031 spec (intake schema v2) for BREAKOUT v1.0, frozen 2026-10-08.
+# The full authority is signal_engine/strategy_library/intraday/orb/BREAKOUT-SPEC.md. The machine
+# block read by the code is strategy.yaml beside this file. This file carries the same rules in the
+# intake schema. A difference between the two is a defect to fix, never a reason to change a rule.
+# Not in v1.0: gap filter (known Pine defect, spec item 8), NR filter, afternoon window.
+
+schema_version: 2
+name: BREAKOUT key-level breakout and retest
+
+source:
+  kind: own_words
+  ref: _inbox/breakout-key-level.txt
+
+profile: flattrade-nse-cash
+
+style: intraday
+direction: both
+timeframe: 5m
+product: MIS
+
+universe:
+  type: current_fno
+  exchange: NSE
+  membership_basis: current
+  point_in_time: false
+  survivorship_bias: true
+
+data:
+  frequency: 5m
+  field_families: [price, volume]
+  min_n_minutes: 1
+  complete_bins: {first: "09:15", last: "15:10"}
+
+entry:
+  - Bars are 5m, open-time stamped, IST, from broker data. The signal is evaluated at the close of a bar and the order fills at the open of the next bar
+  - Key levels are the previous-session value area high (PVAH) and low (PVAL), the previous-day high (PDH) and low (PDL), and the first-hour initial-balance high (IBH) and low (IBL, bars opening 09:15 to 10:15, valid after 10:15); value areas use 70 percent of the previous session volume profile built from 1-minute bars before 15:15
+  - A break is a closed bar whose close crosses a level (close above and previous close at or below for highs, mirrored for lows); a retest is a break within the last 6 bars of the same session including the current bar, with the bar low at or below the level plus 0.25 x ATR(14), the close beyond the level, and a candle location value of at least 0.50 (long) or at most 0.50 (short)
+  - Setup resolution order VAH-RT, VAL-RT, PDH-RT, PDL-RT, IBH-RT, IBL-RT, VAL-REJ, VAH-REJ, PDH-BRK, PDL-BRK, IBH-BRK, IBL-BRK; value-area acceptance setups are off; the first setup that holds sets the direction and the level
+  - All break stamps are cleared at the first bar of each IST session, so a break in one session never gives a retest in the next
+  - Score at least 7 from setup type, retest, relative volume, EMA9 slope, VWAP side and higher-timeframe close (15 minute close, anchored 09:15); RVOL minimum 1.2 against a 14-session same-slot baseline
+  - Gates - headroom of at least 1.5R to the ADR(14) projection, target distance at most 2.0R, chase distance from the level at most 1.0 ATR, session volume at least 0.8 of the slot baseline; a missing value passes
+  - Day-type counter-bias veto - a setup against the day type is vetoed (trend-extension 100 percent and two-sided 15 percent of the initial-balance range)
+  - Entry window - the signal bar opens in [09:45, 11:45); no afternoon window
+  - Cooldown - more than 3 bars since the previous candidate that passed all entry conditions on the symbol
+  - Shared trade policy - one open position per symbol, no pyramiding, no simultaneous long and short, re-entry in a direction only after flat, at most 2 accepted entries per symbol per direction per day, risk limits applied per strategy book
+exit:
+  - Stop exit and TP1 as defined under stop and take_profit; plan tp1_only, the whole position exits at TP1 or the stop, no stop move
+  - A bar that opens beyond the stop exits at that open (SL_GAP); a bar whose range reaches the stop exits at the stop; the stop is checked before the target on the same bar
+  - TP1 touched by a bar's range exits at the close of that bar (only if the stop did not trigger on that bar)
+  - Time exit at the 14:45 bar open (bars 14:40 and earlier managed normally; the 14:45 bar is not evaluated for stop or target); if no bar at or after 14:45 exists before 15:00 the close is flagged DATA_GAP and is not a normal time-exit observation
+  - Adverse-fill close - when the entry fill is worse than the signal price by more than 0.5R, or past the target, the position is closed at the fill-bar open with zero gross R and its real cost; the entry still counts as used
+stop:
+  - Stop = min(level - 0.35 x ATR, signal_close - max(0.5 x ATR, 0.003 x signal_close)) for long, mirrored for short; R is the distance from the signal close to the stop; the stop is fixed at the signal and never re-derived from the fill
+take_profit:
+  - TP1 = signal close plus direction x max(distance to the nearest registry level beyond the signal close padded 0.15 x ATR short of it, R), or 1.5R if no level; TP2 and TP3 are logged and not traded
+holding_period: same_session
+
+indicators:
+  - {name: ATR, period: 14}
+  - {name: EMA, period: 9, source: close}
+  - {name: VWAP, anchor: session}
+parameters:
+  retest_max_bars: 6
+  cooldown_bars: 3
+  score_threshold: 7
+  conf_atr_mult: 0.25
+  sl_buffer_mult: 0.35
+  sl_min_atr_mult: 0.5
+  sl_min_pct: 0.003
+  t1_pad_mult: 0.15
+  rvol_min: 1.2
+  min_session_vf: 0.8
+  min_headroom_r: 1.5
+  max_tp_r: 2.0
+  max_chase_atr: 1.0
+  max_entry_slippage_r: 0.5
+  max_entries_per_direction_per_symbol_per_day: 2
+  time_exit: "14:45"
+
+timing:
+  signal_evaluation: bar_close
+  order_submission: signal_close
+  fill_model: next_bar_open
+
+reference_prices: {stop: signal_close}
+
+order_types: {entry: market, stop: stop_market}
+
+information_boundary:
+  - A decision at the close of bar k reads only bars with open time at or before k and previous-session data
+  - Previous-session levels read only sessions before the current one; the break stamps read only bars of the current session
+  - The first-hour initial-balance levels are used only after 10:15
+  - The day-type classification at bar k reads only bars of the session up to k
+
+filters: none
+session_window:
+  entry: "09:45-11:45"
+
+re_entry:
+  allowed: true
+  max_per_symbol_day: 2
+
+sizing:
+  risk_per_trade_pct: 1.0
+  capital_per_trade: 100000
+
+portfolio:
+  mode: single_position
+  scope: per_symbol
+
+costs:
+  reference_round_trip_bps: [16]
+
+disclosure:
+  prior_variants: 17
+  chart_peeking: true
+  destination: python
+
+rationale: Price tends to break from previous-session value, previous-day and first-hour levels, return to test the broken level, and continue when volume and day type support it. The retest of a broken level is the entry, with a structural stop beyond the level and a target at the next registered level.
+
+kill_criterion: Any one of - net expectancy on the economic view below +0.05R per trade at the primary broker cost (G1.2); net at or below 0 with slippage doubled (G1.3); out-of-sample net at or below 0; net positive in fewer than 6 of the 10 calendar years; the first v1.0 run has gross expectancy at or below 0 (the 2026-09-30 shared-core baseline had gross about 0 and net -0.48R, so a v1.0 run without a material gross improvement is NO_EDGE).

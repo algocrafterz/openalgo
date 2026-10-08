@@ -586,6 +586,17 @@ runner:
       paper_only: true           # required. true = dispatched only into OpenAlgo ANALYZE mode; refused
                                  # (logged critical) in live mode, per signal. A python strategy must
                                  # be paper_only until it passes STRATEGY-ACCEPTANCE-CRITERIA.md
+      supersedes_pine_tag: BREAKOUT   # required (null = none). While the runner is enabled, ENTRY alerts of
+                                 # this Pine tag for the symbols this strategy covers are not traded: the
+                                 # Python strategy is the sole execution source (spec v1.0 item 17), and the
+                                 # Pine alert is kept as a declined row for the parity comparison. EXIT
+                                 # alerts are never suppressed.
+      paper_limits: live         # required. mode = the mode_profiles.analyze limits (loose); live = the
+                                 # mode_profiles.live numbers applied to THIS strategy's own paper book
+                                 # (per strategy, not pooled: BREAKOUT spec v1.0 item 16).
+      max_entries_per_direction_per_day: 2   # required. BREAKOUT spec v1.0 item 15: at most 2 filled
+                                 # entries per symbol and direction per day (LONG, exit, LONG is the
+                                 # second). null = no cap. Enforced in main._handle_entry.
 
 # ── No-progress Detection ────────────────────────────────
 # [tune] Move SL to break-even (or exit at market) when a trade hasn't progressed toward TP1.

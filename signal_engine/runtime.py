@@ -74,6 +74,25 @@ def _worst_case_live_sl_pct() -> float:
     return min(floors) if floors else settings.min_sl_pct
 
 
+def _paper_strategy_limits(trade_mode: str) -> dict[str, dict]:
+    """Live-profile limit numbers for each runner strategy that asks for them in paper.
+
+    BREAKOUT spec v1.0 item 16: paper applies the live limits to the strategy's own book. Only
+    ANALYZE has per-strategy counters, so any other mode gets no overrides.
+    """
+    if trade_mode != "analyze":
+        return {}
+    live = settings.mode_profiles.get("live")
+    if not live:
+        return {}
+    wanted = {
+        tag: {name: live[name] for name in RiskEngine.LIMIT_NAMES if name in live}
+        for tag, entry in settings.runner.strategies.items()
+        if entry.paper_limits == "live"
+    }
+    return {tag: limits for tag, limits in wanted.items() if limits}
+
+
 def build_risk_engine(store, trade_mode: str = "live") -> RiskEngine:
     """Build a RiskEngine wired to the current configuration.
 
@@ -82,6 +101,7 @@ def build_risk_engine(store, trade_mode: str = "live") -> RiskEngine:
         trade_mode: "live" or "analyze" — isolates counters between the two.
     """
     return RiskEngine(
+        strategy_limits=_paper_strategy_limits(trade_mode),
         risk_per_trade=settings.risk_per_trade,
         sizing_mode=settings.sizing_mode,
         pct_of_capital=settings.pct_of_capital,

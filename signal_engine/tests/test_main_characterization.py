@@ -55,6 +55,8 @@ def _settings_stub(**overrides):
         "allow_off_hours_testing": False,
         "entry_timeout_recovery_attempts": 1,
         "entry_timeout_recovery_delay_seconds": 0,
+        # main._entry_rejected_by_trade_policy reads the runner strategy table; none = no policy
+        "runner": SimpleNamespace(strategies={}),
     }
     base.update(overrides)
     return SimpleNamespace(**base)

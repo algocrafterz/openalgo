@@ -1424,30 +1424,124 @@
       "summary": "Each session, short at the 09:20 open the 10 eligible F&O stocks with the lowest mean 09:20-open-to-14:45-close return over their previous 60 valid sessions; stop at 1.5 x that return's standard deviation above the reference price; exit at the close of the 14:45 bar.",
       "title": "Intraday loser short",
       "verdict": "none"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/orb/BREAKOUT-SPEC.md",
+      "backtest_module": "backtest/strategies/breakout.py",
+      "classification": {
+        "direction": "both",
+        "market": "NSE/BSE cash equity",
+        "strategy_category": "Breakout",
+        "strategy_tags": [
+          "key-level",
+          "retest",
+          "value-area",
+          "initial-balance",
+          "intraday"
+        ],
+        "timeframe": "5m",
+        "trading_style": "intraday"
+      },
+      "folder": "idea-031-breakout-key-level",
+      "horizon": "intraday",
+      "id": "IDEA-031",
+      "last_reviewed": "2026-10-08",
+      "research_state": "needs_more_evidence",
+      "revisit_when": "After the shared trade-policy steps S1 to S10 are implemented and tested, so that the first recorded v1.0 run describes the frozen specification. Then record one v1.0 run.",
+      "runs": [],
+      "source": {
+        "author": "owner",
+        "captured": "2026-10-08",
+        "ref": "_inbox/breakout-key-level.txt",
+        "type": "self"
+      },
+      "stage": "backtest",
+      "status": "evaluating",
+      "strategy_category": "Breakout",
+      "strategy_tags": [
+        "key-level",
+        "retest",
+        "value-area",
+        "initial-balance",
+        "intraday"
+      ],
+      "summary": "Intraday long and short entries on the retest of a broken previous-session value area, previous-day or first-hour level, 09:45 to 11:45 signal bars, structural stop, target at the next registered level (TP1 only), time exit at the 14:45 open.",
+      "title": "BREAKOUT key-level breakout and retest",
+      "verdict": "none"
+    },
+    {
+      "classification": {
+        "direction": "both",
+        "market": "NSE/BSE cash equity",
+        "strategy_category": "Other",
+        "strategy_tags": [
+          "ema",
+          "vwap",
+          "atr",
+          "early-entry",
+          "displacement",
+          "intraday",
+          "long-short"
+        ],
+        "timeframe": "5m",
+        "trading_style": "intraday"
+      },
+      "folder": "idea-032-ema-vwap-atr-early-displacement",
+      "horizon": "intraday",
+      "id": "IDEA-032",
+      "last_reviewed": "2026-10-08",
+      "research_state": "evidence_against_edge",
+      "result": "Not supported. Benchmark A is -2.3 bps gross and -13.9 bps net per trade over 498,811 trades, negative in every split, and the signal selects no continuation beyond the state placebo.",
+      "revisit_when": "Only with a materially different signal definition, not a threshold, timeframe, stop or target change of this one. Read evidence/phase12-evidence.md first and acknowledge it in the new idea.",
+      "runs": [],
+      "source": {
+        "author": "owner",
+        "captured": "2026-10-08",
+        "ref": "_inbox/ema-vwap-atr-early-displacement.txt",
+        "type": "self"
+      },
+      "stage": "inbox",
+      "status": "inbox",
+      "strategy_category": "Other",
+      "strategy_tags": [
+        "ema",
+        "vwap",
+        "atr",
+        "early-entry",
+        "displacement",
+        "intraday",
+        "long-short"
+      ],
+      "summary": "On 5m NSE bars, enter long when (EMA9 - session VWAP) / ATR14 crosses up through -0.50 and short when it crosses down through +0.50, ahead of the EMA9/VWAP crossover, and exit when displacement reaches zero (the crossover itself).",
+      "title": "EMA-VWAP ATR early displacement",
+      "verdict": "none"
     }
   ],
   "summary": {
     "by_category": {
+      "Breakout": 1,
       "Mean Reversion": 1,
       "Momentum": 1,
+      "Other": 1,
       "Statistical / Quantitative": 2
     },
     "by_horizon": {
-      "intraday": 2,
+      "intraday": 4,
       "swing": 2
     },
     "by_status": {
-      "inbox": 1,
+      "evaluating": 1,
+      "inbox": 2,
       "rejected": 3
     },
     "by_verdict": {
       "marginal": 1,
       "no-edge": 2,
-      "none": 1
+      "none": 3
     },
     "ideas_with_runs": 3,
-    "last_reviewed": "2026-10-07",
-    "total": 4,
+    "last_reviewed": "2026-10-08",
+    "total": 6,
     "total_runs": 5
   }
 }

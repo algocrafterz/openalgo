@@ -15,10 +15,13 @@ Plan semantics (`ExitPlan`):
                             from entry (the live Pine/main.py runner-stop rule)
   same_bar_stop  False (default): a raised stop applies from the NEXT bar. True: the bar that
                 filled the target may also take the raised stop - the pessimistic read.
+  tp_fill     "target" (default): a touched target fills at the target price. "bar_close": it
+              fills at the CLOSE of the bar that touched it (BREAKOUT spec v1.0 item 12; live
+              sends a market exit after that bar closes).
 
 Bar conventions match the shared engine: the stop is checked BEFORE targets (a bar spanning
 both takes the stop), a bar opening beyond the stop fills at the open, and target fills are at
-the target price. Anchors (entry for breakeven / buffer distances) are the ACTUAL fill.
+the target price, or the bar close under `tp_fill="bar_close"`. Anchors (entry for breakeven / buffer distances) are the ACTUAL fill.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 STOP_RULES = ("none", "breakeven", "tp_buffer")
+TP_FILLS = ("target", "bar_close")
 _EPS = 1e-9
 
 
@@ -35,6 +39,7 @@ class ExitPlan:
     stop_rule: str = "none"
     buffer_r: float = 0.3
     same_bar_stop: bool = False
+    tp_fill: str = "target"
 
     def __post_init__(self) -> None:
         if (
@@ -47,6 +52,13 @@ class ExitPlan:
             )
         if self.stop_rule not in STOP_RULES:
             raise ValueError(f"stop_rule must be one of {STOP_RULES}, got {self.stop_rule!r}")
+        if self.tp_fill not in TP_FILLS:
+            raise ValueError(f"tp_fill must be one of {TP_FILLS}, got {self.tp_fill!r}")
+
+
+#: The BREAKOUT v1.0 exit plan (spec item 12): the whole position at TP1, filled at the close of the
+#: bar that touches it, no stop move. One definition for the backtest adapter and the runner.
+TP1_ONLY = ExitPlan((1.0,), "none", tp_fill="bar_close")
 
 
 @dataclass(frozen=True)
@@ -94,8 +106,10 @@ class Ladder:
             dist = abs(target - self.entry)
             self._tighter(target - self.direction * self.plan.buffer_r * dist)
 
-    def step(self, o: float, h: float, low: float) -> None:
-        """Advance one CLOSED bar (open, high, low)."""
+    def step(self, o: float, h: float, low: float, c: float | None = None) -> None:
+        """Advance one CLOSED bar (open, high, low, close). The close is required for tp_fill=bar_close."""
+        if self.plan.tp_fill == "bar_close" and c is None:
+            raise ValueError("tp_fill=bar_close needs the bar close")
         if self.done:
             return
         d = self.direction
@@ -112,7 +126,8 @@ class Ladder:
                 break
             frac = min(self.plan.fractions[self._next], self.remaining)
             if frac > _EPS:
-                self.fills.append(Fill(target, frac, f"TP{self._next + 1}"))
+                price = target if self.plan.tp_fill == "target" else float(c)
+                self.fills.append(Fill(price, frac, f"TP{self._next + 1}"))
                 self.remaining -= frac
             self._after_target(target)
             self._next += 1

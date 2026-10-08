@@ -32,14 +32,27 @@ from signal_engine.pipeline.sink import DispatchSink, ExecutionSink, RecordingSi
 from signal_engine.pipeline.state import RunnerStateStore
 from signal_engine.pipeline.strategies.breakout import BreakoutStrategy
 from signal_engine.pipeline.strategy import Strategy
+from signal_engine.strategy_core import strategy_spec
+from signal_engine.strategy_core.breakout import BreakoutParams
 from signal_engine.timeutils import IST
+
+
+def _spec_strategy(tag: str) -> Strategy:
+    """BREAKOUT under `tag`, its params and version stamp read from the frozen specification."""
+    spec = strategy_spec.load_spec()
+    logger.info(
+        f"{tag}: strategy {spec.id} {spec.version} fingerprint {spec.fingerprint[:12]} "
+        f"({strategy_spec.SPEC_PATH.name})"
+    )
+    return BreakoutStrategy(BreakoutParams.from_spec(spec.core), name=tag, spec_stamp=spec.stamp())
+
 
 #: Strategy tags the pipeline can run. A configured tag not listed here refuses to start.
 #: BREAKOUT-PY is the same strategy core under its own tag: a second book (capital, slots, P&L)
 #: for paper-trading the Python signals beside the Pine BREAKOUT.
 STRATEGY_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "BREAKOUT": BreakoutStrategy,
-    "BREAKOUT-PY": lambda: BreakoutStrategy(name="BREAKOUT-PY"),
+    "BREAKOUT-PY": lambda: _spec_strategy("BREAKOUT-PY"),
 }
 
 SAFETY_BARS = 2

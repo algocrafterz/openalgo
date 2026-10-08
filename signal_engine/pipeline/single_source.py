@@ -33,6 +33,24 @@ def should_drop_alert(cfg: RunnerSettings, strategy: str) -> bool:
     return _source(cfg, strategy) == "python"
 
 
+def pine_superseded(cfg: RunnerSettings, strategy: str, symbol: str) -> bool:
+    """True when a Python strategy has taken over this Pine tag's ENTRIES for this symbol.
+
+    BREAKOUT spec v1.0 item 17: during parity Python is the sole execution source on its universe, so a
+    Pine entry for a covered symbol would be a duplicate paper trade and would contaminate the comparison.
+    Only while the runner is enabled; with it off nothing generates the Python signals and Pine must go on.
+    """
+    if not cfg.enabled:
+        return False
+    tag = strategy.upper()
+    for entry in cfg.strategies.values():
+        if entry.signal_source != "python" or entry.supersedes_pine_tag != tag:
+            continue
+        if not isinstance(cfg.universe, tuple) or symbol.upper() in {s.upper() for s in cfg.universe}:
+            return True  # "fno_all" covers every F&O symbol a Pine alert can name
+    return False
+
+
 def record_drop(strategy: str) -> int:
     key = strategy.upper()
     _dropped[key] += 1

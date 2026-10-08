@@ -26,7 +26,9 @@ from signal_engine.api_client import (
 from signal_engine.config import settings
 from signal_engine.db import (
     EXIT_ENTRY_REJECTED_SLIPPAGE,
+    EXIT_ENTRY_REJECTED_STOP_BREACHED,
     EXIT_ENTRY_REJECTED_TP_OVERSHOT,
+    fetch_entry_fill_directions,
     fetch_last_entry_trade,
     fetch_order_ids_today,
     save,
@@ -47,6 +49,7 @@ from signal_engine.parser import parse
 from signal_engine.pipeline import single_source
 from signal_engine.risk_store import RISK_DB_PATH, RiskStore
 from signal_engine.runtime import build_risk_engine
+from signal_engine.strategy_core import trade_policy
 from signal_engine.timeutils import IST
 from signal_engine.tracker import PositionTracker, TrackedPosition, _compute_r, leg_pnl
 from signal_engine.validator import validate
@@ -1120,6 +1123,8 @@ async def _handle_entry(signal) -> None:
         return
     if await _entry_rejected_by_symbol_rules(signal):
         return
+    if await _entry_rejected_by_trade_policy(signal):
+        return
     if not await _entry_passes_risk_gates(signal):
         return
 
@@ -1209,6 +1214,47 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
         return True
 
     return False
+
+
+async def _entry_rejected_by_trade_policy(signal) -> bool:
+    """True if the strategy's trade policy (spec item 15) declines this entry.
+
+    Applies to a strategy listed in `runner.strategies` that states an entry cap; a Pine strategy
+    that is not listed there is untouched. The counters count FILLED entries and are rebuilt from the
+    ledger and the tracker on every call, so a restart cannot reset them and no second copy of the
+    state exists. An unreadable ledger declines the entry (a new entry is never taken on a count
+    that could not be checked).
+    """
+    entry = settings.runner.strategies.get(signal.strategy.upper())
+    if entry is None or entry.max_entries_per_direction_per_day is None:
+        return False
+    policy = trade_policy.TradePolicy(
+        max_entries_per_direction_per_day=entry.max_entries_per_direction_per_day
+    )
+    today = datetime.now(IST).date()
+    try:
+        fills = fetch_entry_fill_directions(signal.strategy, signal.symbol)
+    except Exception:
+        logger.exception(f"trade policy: cannot read today's entries for {signal.strategy} {signal.symbol}")
+        await _decline(signal, stage="trade_policy", reason="today's entries could not be read")
+        return True
+    held = tracker.find_position(signal.symbol, signal.strategy)
+    open_direction = 0 if held is None else (1 if held.direction == Direction.LONG else -1)
+    state = trade_policy.rebuild(today, fills, open_direction)
+    direction = 1 if signal.direction == Direction.LONG else -1
+    verdict = trade_policy.can_arm(policy, state, direction)
+    if not verdict:
+        return False
+    reason = (
+        f"{verdict}: {signal.direction.value} {signal.symbol} filled "
+        f"{state.long_fills if direction == 1 else state.short_fills} of "
+        f"{entry.max_entries_per_direction_per_day} today"
+        if verdict == trade_policy.DIRECTION_ALREADY_TAKEN
+        else f"{verdict}: {signal.symbol} already has a position"
+    )
+    logger.warning(f"Trade policy declined {signal.strategy} entry: {reason}")
+    await _decline(signal, stage="trade_policy", reason=reason)
+    return True
 
 
 async def _entry_passes_risk_gates(signal) -> bool:
@@ -1675,12 +1721,8 @@ def entry_slippage_r(signal, entry_fill_price) -> float:
     Positive means the fill was worse than the signal price (paid up on a long, sold lower on
     a short); negative means it was better. 0.0 when the fill or the risk distance is unknown.
     """
-    risk = abs(signal.entry - signal.sl)
-    if not entry_fill_price or risk <= 0:
-        return 0.0
-    if signal.direction == Direction.LONG:
-        return (entry_fill_price - signal.entry) / risk
-    return (signal.entry - entry_fill_price) / risk
+    direction = 1 if signal.direction == Direction.LONG else -1
+    return trade_policy.entry_slippage_r(direction, signal.entry, signal.sl, entry_fill_price)
 
 
 @dataclass(frozen=True)
@@ -1718,20 +1760,28 @@ async def _auto_close_on_bad_fill(
     the position open, the stop that was cancelled to make room for the close is restored and
     the position stays tracked (closed=False).
     """
-    fill_overshot_tp = entry_fill_price and (
-        (signal.direction == Direction.LONG and entry_fill_price >= signal.tp)
-        or (signal.direction == Direction.SHORT and entry_fill_price <= signal.tp)
+    verdict = trade_policy.bad_fill(
+        1 if signal.direction == Direction.LONG else -1,
+        signal.entry,
+        signal.sl,
+        signal.tp,
+        entry_fill_price,
+        settings.max_entry_slippage_r,
     )
-    slippage_r = entry_slippage_r(signal, entry_fill_price)
-    slippage_excessive = (
-        settings.max_entry_slippage_r > 0 and slippage_r > settings.max_entry_slippage_r
-    )
-    if not (fill_overshot_tp or slippage_excessive):
+    if not verdict.violated:
         return None
+    fill_overshot_tp = verdict.kind == trade_policy.TP_OVERSHOT
+    slippage_r = verdict.slippage_r
 
     if fill_overshot_tp:
         exit_type = EXIT_ENTRY_REJECTED_TP_OVERSHOT
         reason = f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} - auto-closed"
+    elif verdict.kind == trade_policy.STOP_BREACHED:
+        exit_type = EXIT_ENTRY_REJECTED_STOP_BREACHED
+        reason = (
+            f"fill {entry_fill_price:.2f} is at or beyond the stop {signal.sl:.2f} "
+            "(gap through the stop) - auto-closed"
+        )
     else:
         exit_type = EXIT_ENTRY_REJECTED_SLIPPAGE
         reason = (
@@ -1894,6 +1944,20 @@ async def handle_message(text: str) -> None:
         logger.warning(
             f"Dropped Pine alert for {signal.strategy} {signal.direction.value} "
             f"{signal.symbol}: signal_source is python ({dropped} dropped so far)"
+        )
+        return
+
+    # Parity guard: while a Python strategy supersedes this Pine tag on the symbol, a Pine ENTRY would be a
+    # duplicate paper trade. The alert is kept as a declined row for the comparison; EXITs always pass.
+    if signal.direction != Direction.EXIT and single_source.pine_superseded(
+        settings.runner, signal.strategy, signal.symbol
+    ):
+        logger.warning(
+            f"Pine entry not traded for {signal.strategy} {signal.direction.value} {signal.symbol}: "
+            "the Python strategy is the sole execution source"
+        )
+        await _decline(
+            signal, stage="superseded", reason="the Python strategy is the sole execution source on this symbol"
         )
         return
 

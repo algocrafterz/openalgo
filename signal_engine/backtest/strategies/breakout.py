@@ -32,6 +32,7 @@ from signal_engine.backtest.types import Ctx, EntrySignal
 from signal_engine.features.instruments import tick_size
 from signal_engine.pipeline.strategies.breakout import BreakoutStrategy
 from signal_engine.strategy_core.breakout import BreakoutParams
+from signal_engine.strategy_core.exits import TP1_ONLY
 from signal_engine.strategy_core.inputs import build_breakout_inputs
 
 __all__ = ["Breakout", "BreakoutParams"]
@@ -57,7 +58,17 @@ class Breakout(Strategy):
     pine = "signal_engine/strategy_library/intraday/orb/breakout.pine"
     #: The core enforces its own entry window (09:45 - 11:45), so the engine's generic
     #: opening skip and 11:00 cutoff must not cut it a second time.
-    run_overrides = {"skip_open_minutes": 0, "entry_cutoff_min": 15 * 60 + 30}
+    #: Spec v1.0 item 15: at most 2 filled entries per symbol and direction per day, so at most 4
+    #: a day; a re-entry only after the position is flat (the engine arms only when flat).
+    run_overrides = {
+        "skip_open_minutes": 0,
+        "entry_cutoff_min": 15 * 60 + 30,
+        "max_entries_per_direction": 2,
+        "max_trades_per_day": 4,
+        "max_entry_slippage_r": 0.5,  # spec item 18 bad-fill model
+        "exit_plan": TP1_ONLY,  # spec item 12: tp1_only, TP1 filled at the touching bar close
+        "time_exit_at_open": True,  # spec item 19: 14:45 bar open, DATA_GAP when no bar exists
+    }
 
     def __init__(
         self,

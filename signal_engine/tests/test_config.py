@@ -26,7 +26,7 @@ RUNNER_CFG = {
     "max_concurrent_requests": 8,
     "warmup_sessions": 20,
     "universe": "fno_all",
-    "strategies": {"BREAKOUT": {"signal_source": "pine", "exit_plan": "tp1_only", "exit_owner": "tracker", "paper_only": True}},
+    "strategies": {"BREAKOUT": {"signal_source": "pine", "exit_plan": "tp1_only", "exit_owner": "tracker", "paper_only": True, "max_entries_per_direction_per_day": None, "paper_limits": "mode", "supersedes_pine_tag": None}},
 }
 
 class TestConfigFileMissing:

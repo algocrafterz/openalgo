@@ -138,6 +138,13 @@ class TestClockInteraction:
         assert t.reason == "ZERO"
         assert t.exit == df["Open"].iloc[4]
 
+    def test_custom_exit_keeps_its_name_when_the_clock_exit_shares_the_open(self):
+        # custom signal at 14:40 close and the clock exit at the 14:45 open: both fill at that
+        # open. The custom exit was ordered first, so it keeps the name.
+        df, (t,) = run(CLOSES, LATE, exit_bar=3, time_exit_at_open=True)
+        assert t.reason == "ZERO"
+        assert t.exit == df["Open"].iloc[4]
+
 
 class TestSymmetryAndLookahead:
     def test_long_and_short_are_mirror_images(self):

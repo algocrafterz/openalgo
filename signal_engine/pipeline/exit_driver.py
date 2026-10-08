@@ -24,13 +24,13 @@ import pandas as pd
 from loguru import logger
 
 from signal_engine.models import Direction, Signal
-from signal_engine.strategy_core.exits import ExitPlan, Ladder
+from signal_engine.strategy_core.exits import TP1_ONLY, ExitPlan, Ladder
 from signal_engine.timeutils import IST
 
 _EPS = 1e-9
 
 PLANS: dict[str, ExitPlan] = {
-    "tp1_only": ExitPlan((1.0,), "none"),
+    "tp1_only": TP1_ONLY,  # spec v1.0 item 12
     "ladder_30_35_35": ExitPlan((0.30, 0.35, 0.35), "tp_buffer", buffer_r=0.3),
 }
 
@@ -112,7 +112,7 @@ class ExitDriver:
             state.ladder.close_all(price, "TIME")
 
     async def on_bar(
-        self, symbol: str, bar_open: pd.Timestamp, o: float, h: float, low: float
+        self, symbol: str, bar_open: pd.Timestamp, o: float, h: float, low: float, c: float | None = None
     ) -> list[Signal]:
         """Step the symbol's Ladder with one CLOSED bar; return the EXIT signals it produced."""
         pos = self._positions.find_position(symbol, self.strategy)
@@ -129,7 +129,7 @@ class ExitDriver:
             return []
         if state.ladder.done:
             return await self._after_done(symbol, pos, state)
-        return self._step(symbol, pos, state, o, h, low)
+        return self._step(symbol, pos, state, o, h, low, c)
 
     # ---- internals ---------------------------------------------------------------------------
 
@@ -175,11 +175,11 @@ class ExitDriver:
         direction = 1 if pos.direction == Direction.LONG else -1
         return Ladder(direction, fill, float(pos.sl), tuple(usable), self.plan)
 
-    def _step(self, symbol: str, pos, state: _State, o: float, h: float, low: float):
+    def _step(self, symbol: str, pos, state: _State, o: float, h: float, low: float, c: float | None):
         ladder = state.ladder
         seen = len(ladder.fills)
         rem_before = ladder.remaining
-        ladder.step(o, h, low)
+        ladder.step(o, h, low, c)
         out: list[Signal] = []
         for fill in ladder.fills[seen:]:
             if fill.reason.startswith("TP"):

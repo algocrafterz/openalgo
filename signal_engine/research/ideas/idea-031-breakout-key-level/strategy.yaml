@@ -1,0 +1,74 @@
+# BREAKOUT v1.0 machine-readable strategy block (spec item 0.3), frozen 2026-10-08.
+# Lives beside spec.yaml because intake/spec.py rejects unknown top-level keys in spec.yaml.
+# Read by the core, backtest adapter, runner, SimSink and the live gate (step S10).
+strategy:
+  id: BREAKOUT
+  version: v1.0
+  bar: 5m
+  core:                                  # -> BreakoutParams
+    va_triggers: true
+    va_acceptance: false
+    pd_triggers: true
+    ib_triggers: true
+    retest_max_bars: 6
+    retest_includes_break_bar: true      # v1.0 quirk, frozen (item 5)
+    break_stamp_carries_across_sessions: false  # reset at the first bar of each IST session (5.1); owner decision 2026-10-08
+    cooldown_bars: 3
+    score_threshold: 7
+    conf_atr_mult: 0.25
+    sl_buffer_mult: 0.35
+    sl_min_atr_mult: 0.5
+    sl_min_pct: 0.003
+    t1_pad_mult: 0.15
+    clv_long_min: 0.50
+    clv_short_max: 0.50
+    rvol_min: 1.2
+    rvol_strong: 1.8
+    min_session_vf: 0.8
+    break_min_rvol: 1.5
+    acc_min_rvol: 1.5
+    max_chase_atr: 1.0
+    min_headroom_r: 1.5
+    max_tp_r: 2.0
+    require_htf_close: true
+    htf_minutes: 15
+    entry_window: ["09:45", "11:45"]     # signal-bar open, half-open
+    afternoon_window: null               # off in v1.0 (owner decision 2026-10-08)
+    counter_bias_veto: {enabled: true, trend_ext_pct: 100, two_sided_ext_pct: 15}
+    gap_filter: null                     # excluded from v1.0 (item 8); known Pine defect
+    nr_filter: null                      # dropped (item 9)
+  inputs:                                # -> build_breakout_inputs
+    atr_len: 14
+    ema_len: 9
+    ib_minutes: 60
+    orb_minutes: 15
+    adr_days: 14
+    volume_days: 14
+    va_pct: 70.0
+    rows_per_tick: 5
+    continuous_only: true
+  policy:                                # -> strategy_core.trade_policy (proposed)
+    max_entries_per_direction_per_symbol_per_day: 2   # counted on accepted, filled entries (item 15)
+    max_concurrent_positions_per_symbol: 1
+    limits_scope: per_strategy_book         # item 16
+    reentry_requires_flat: true
+    reversal_requires_flat: true
+    allow_longs: true
+    allow_shorts: true
+    max_entry_slippage_r: 0.5
+    close_on_tp_overshoot: true
+    bad_fill_consumes_entry: true
+    time_exit: "14:45"
+    product: MIS
+  exits:
+    plan: tp1_only
+    exit_owner: ladder
+    stop_before_target_same_bar: true
+    tp_fill: touching_bar_close
+    time_exit_fill: bar_open
+  universe:
+    research: current_fno_all
+    deployment: {list_id: breakout-deploy, version: <owner supplies>}
+  evaluation:
+    economic_view: all_realized_events
+    strategy_view: decided_exits_only

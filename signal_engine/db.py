@@ -378,6 +378,7 @@ EXIT_BAD_FILL_CLOSE = "BAD_FILL_CLOSE"
 NOT_DECIDED_EXIT_TYPES = frozenset({"TIME", EXIT_BAD_FILL_CLOSE})
 EXIT_ENTRY_REJECTED_SLIPPAGE = "ENTRY_REJECTED_SLIPPAGE"
 EXIT_ENTRY_REJECTED_TP_OVERSHOT = "ENTRY_REJECTED_TP_OVERSHOT"
+EXIT_ENTRY_REJECTED_STOP_BREACHED = "ENTRY_REJECTED_STOP_BREACHED"
 
 
 def save_execution_exit(
@@ -787,6 +788,31 @@ def fetch_order_ids_today(symbol: str) -> set[str]:
     except Exception:
         logger.exception(f"fetch_order_ids_today failed for {symbol}")
         return set()
+
+
+def fetch_entry_fill_directions(strategy: str, symbol: str, day: str | None = None) -> list[int]:
+    """+1 (LONG) or -1 (SHORT) for every FILLED entry of one strategy and symbol on a day.
+
+    Source of the trade-policy counters (strategy_core.trade_policy): the daily per-direction cap
+    counts entries that actually filled, in the ledger of the current trade mode. A declined,
+    rejected or unfilled signal has no fill price and is not counted. A bad-fill entry that was
+    closed at once has a filled entry row and counts as used. Raises on a database error: the
+    caller decides what an unreadable ledger means for a new entry.
+    """
+    day = day or datetime.now(IST).strftime("%Y-%m-%d")
+    conn = _get_connection()
+    rows = conn.execute(
+        """
+        SELECT direction FROM trades
+        WHERE upper(symbol) = upper(?) AND upper(strategy) = upper(?)
+          AND status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
+          AND fill_price IS NOT NULL AND fill_price > 0
+          AND trade_mode = ? AND date(executed_at) = ?
+        ORDER BY id
+        """,
+        (symbol, strategy, _TRADE_MODE, day),
+    ).fetchall()
+    return [1 if str(r[0]).upper() == "LONG" else -1 for r in rows]
 
 
 def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:

@@ -41,6 +41,10 @@ Verdicts are deterministic outcomes of the gate results, not judgements.
 
 **Trial.** An evaluated change to any material research dimension: strategy logic, parameter set, universe, selection or ranking rule, execution assumption, portfolio rule, or regime filter. Not a trial: logging, UI or artifact-format changes, documentation-only changes, and a bug fix that restores the originally intended behavior (the fix is recorded in the strategy log with the run it affects). The trial count used for the G2 hurdles is the count of trials under this definition.
 
+**Economic view.** All realized trades and events, including `BAD_FILL_CLOSE`, `TIME_EXIT` and other execution-protection closes: total and net P&L, net expectancy per trade, drawdown. It decides the economic gates (G1). No realized loss leaves it. Approved 2026-10-08.
+
+**Strategy view.** Decided strategy exits only (`SL`, `SL_GAP`, `TP`), with `BAD_FILL_CLOSE`, `TIME_EXIT` and other protection events listed separately with their counts and P&L. It diagnoses whether the logic has an edge (win rate, average R of decided trades, setup breakdown) and is reported beside the economic view. It never passes G1. Approved 2026-10-08.
+
 **Ruin (G5.1).** A Monte Carlo path is ruined if its equity falls to or below 75% of starting capital, i.e. a drawdown of 25%, the same limit G5.1 uses for the 95th percentile drawdown. Proposed 2026-10-02 [H]; change it here, deliberately, and every Monte Carlo result must record the definition it used.
 
 ## Market facts verified on 2026-09-30
@@ -88,7 +92,7 @@ Verdicts are deterministic outcomes of the gate results, not judgements.
 | ID | Requirement | Threshold | Tier | Notes |
 |---|---|---|---|---|
 | G1.1 | Cost model | The deployment profile broker's statutory per-trade model (Flattrade, zero brokerage; `portfolio.costs` schedule with `portfolio/broker_fees.py`) computed at the DEPLOYED notional, plus slippage (default 4 bps per side for market orders). This primary scenario decides the gates. A generic discount-broker line and flat lines are comparison scenarios only | H | Table below |
-| G1.2 | Net expectancy at 1.0x cost | At least +0.05R per trade, HARD | H | R = the trade's own stop distance |
+| G1.2 | Net expectancy at 1.0x cost | At least +0.05R per trade, HARD, on the ECONOMIC view: all realized trades and events, including bad-fill closes (`BAD_FILL_CLOSE`) and time exits (`TIME_EXIT`). The strategy view (decided exits only, protection events listed separately) is REPORTED beside it for diagnosis and never passes this gate | H | R = the trade's own stop distance; a bad-fill close has zero gross R and its realized cost |
 | G1.3 | Slippage stress | Net expectancy above 0 with slippage doubled (8 bps per side), HARD. Statutory charges are exact, slippage is the uncertain part, so only slippage is stressed. Report total cost at 1.5x and 2.0x | P | Cost stress grid |
 | G1.4 | Gross edge vs cost | REPORT: gross expectancy relative to round-trip cost; at least 1.5x is comfortable | A/H (Chan) | Compare in bps |
 | G1.5 | Cost per trade in R | Median cost at most 0.40R, HARD; at most 0.30R is the target (REPORT) | H | Cost bps divided by stop bps |

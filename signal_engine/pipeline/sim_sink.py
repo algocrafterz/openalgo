@@ -26,6 +26,15 @@ from loguru import logger
 
 from signal_engine.backtest.types import RunConfig, Trade
 from signal_engine.models import Direction, Signal
+from signal_engine.strategy_core.trade_policy import (
+    MAX_TRADES_DAY,
+    TradePolicy,
+    bad_fill,
+    blocked_by_position,
+    direction_verdict,
+    time_exit_verdict,
+    trades_capped,
+)
 from signal_engine.tracker import TrackedPosition
 
 _EPS = 1e-9
@@ -40,6 +49,23 @@ class SimRules:
     allow_shorts: bool
     time_exit_min: int  # bar-open minutes after midnight at or after which the position closes
     cost_bps: float
+    max_entries_per_direction: int | None = None  # spec item 15; overrides one_trade_per_direction
+    max_entry_slippage_r: float = 0.0  # spec item 18; above 0 the bad-fill model is on
+    time_exit_at_open: bool = False  # spec item 19
+    squareoff_min: int = 900  # broker MIS square-off, bar-open minutes; at or after it a time exit is DATA_GAP
+
+    @property
+    def policy(self) -> TradePolicy:
+        return TradePolicy(
+            max_entries_per_direction_per_day=(
+                self.max_entries_per_direction
+                if self.max_entries_per_direction is not None
+                else (1 if self.one_trade_per_direction else None)
+            ),
+            max_trades_per_day=self.max_trades_per_day,
+            allow_longs=self.allow_longs,
+            allow_shorts=self.allow_shorts,
+        )
 
     @classmethod
     def from_run_config(cls, run: RunConfig, bar_min: int) -> SimRules:
@@ -51,6 +77,10 @@ class SimRules:
             allow_shorts=run.allow_shorts,
             time_exit_min=min(run.time_exit_min, cap),
             cost_bps=run.cost_bps,
+            max_entries_per_direction=run.max_entries_per_direction,
+            max_entry_slippage_r=run.max_entry_slippage_r,
+            time_exit_at_open=run.time_exit_at_open,
+            squareoff_min=run.mis_squareoff_min,
         )
 
 
@@ -74,8 +104,14 @@ class _Open:
 class _Day:
     day: dt.date | None = None
     trades: int = 0
-    long_taken: bool = False
-    short_taken: bool = False
+    long_fills: int = 0
+    short_fills: int = 0
+
+
+_REJECT_TEXT = {
+    "POSITION_OPEN": "a position or order is already open",
+    MAX_TRADES_DAY: "trades per day cap reached",
+}
 
 
 def _tighter(direction: int, current: float, candidate: float) -> float:
@@ -110,6 +146,7 @@ class SimSink:
 
     async def on_bar(self, symbol, bar_open, o, h, low, c) -> None:
         self._roll_day(symbol, bar_open)
+        previous = self._last_bar.get(symbol)
         self._last_bar[symbol] = (bar_open, c)
         pending = self._pending.pop(symbol, None)
         if pending is not None:
@@ -117,6 +154,17 @@ class SimSink:
         pos = self._open.get(symbol)
         if pos is None:
             return
+        if self.rules.time_exit_at_open:
+            # spec item 19: the clock closes the position at the open, before this bar's stop and target
+            verdict = time_exit_verdict(
+                bar_open.hour * 60 + bar_open.minute, self.rules.time_exit_min, self.rules.squareoff_min
+            )
+            if verdict == "TIME_EXIT":
+                self._close(symbol, o, "TIME_EXIT", bar_open)
+                return
+            if verdict:
+                self._close(symbol, previous[1] if previous else o, verdict, bar_open)
+                return
         gapped = o <= pos.sl if pos.direction == 1 else o >= pos.sl
         hit = low <= pos.sl if pos.direction == 1 else h >= pos.sl
         if gapped:
@@ -127,6 +175,8 @@ class SimSink:
     async def after_bar(self, symbol, bar_open, o, h, low, c) -> None:
         if symbol not in self._open:
             return
+        if self.rules.time_exit_at_open:
+            return  # closed at the open in on_bar
         if bar_open.hour * 60 + bar_open.minute >= self.rules.time_exit_min:
             self._close(symbol, c, "TIME_EXIT", bar_open)
 
@@ -137,7 +187,8 @@ class SimSink:
         """End of replay: close whatever is still open at its last close."""
         for symbol in list(self._open):
             bar_open, close = self._last_bar[symbol]
-            self._close(symbol, close, "EOD", bar_open)
+            # a position that outlives the replay saw no time-exit bar (spec item 19: DATA_GAP)
+            self._close(symbol, close, "DATA_GAP" if self.rules.time_exit_at_open else "EOD", bar_open)
 
     # ---- entries -----------------------------------------------------------------------------
 
@@ -153,21 +204,13 @@ class SimSink:
         symbol = signal.symbol
         state = self._days.setdefault(symbol, _Day())
         d = 1 if signal.direction == Direction.LONG else -1
-        why = None
-        if symbol in self._open or symbol in self._pending:
-            why = "a position or order is already open"
-        elif state.trades >= self.rules.max_trades_per_day:
-            why = "trades per day cap reached"
-        elif d == 1 and (
-            not self.rules.allow_longs or (self.rules.one_trade_per_direction and state.long_taken)
-        ):
-            why = "long not allowed"
-        elif d == -1 and (
-            not self.rules.allow_shorts
-            or (self.rules.one_trade_per_direction and state.short_taken)
-        ):
-            why = "short not allowed"
-        if why:
+        verdict = (
+            blocked_by_position(symbol in self._open, symbol in self._pending)
+            or trades_capped(self.rules.policy, state.trades)
+            or direction_verdict(self.rules.policy, d, state.long_fills, state.short_fills)
+        )
+        if verdict:
+            why = _REJECT_TEXT.get(verdict, "long not allowed" if d == 1 else "short not allowed")
             logger.info(f"sim reject {symbol} {signal.direction.value}: {why}")
             return
         self._pending[symbol] = signal
@@ -177,9 +220,9 @@ class SimSink:
         state = self._days[symbol]
         state.trades += 1
         if d == 1:
-            state.long_taken = True
+            state.long_fills += 1
         else:
-            state.short_taken = True
+            state.short_fills += 1
         tracked = TrackedPosition(
             symbol=symbol,
             strategy=signal.strategy,
@@ -210,7 +253,11 @@ class SimSink:
         )
         self._open[symbol] = pos
         through = price <= signal.sl if d == 1 else price >= signal.sl
-        if through:
+        if self.rules.max_entry_slippage_r > 0 and bad_fill(
+            d, signal.entry, signal.sl, signal.tp, price, self.rules.max_entry_slippage_r
+        ).violated:
+            self._close(symbol, price, "BAD_FILL_CLOSE", bar_open)  # spec item 18
+        elif through:
             self._close(symbol, price, "SL_GAP_ENTRY", bar_open)
 
     # ---- exits -------------------------------------------------------------------------------

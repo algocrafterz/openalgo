@@ -39,6 +39,7 @@ import pandas as pd
 
 from signal_engine.backtest.concurrency import apply_position_cap, concurrency_profile
 from signal_engine.backtest.costs import MODEL_NAME, CostModel, cost_profile
+from signal_engine.backtest.exit_views import exit_views, split_data_gap
 from signal_engine.backtest.metrics import clustered_t, hurdle_t
 from signal_engine.backtest.regime import regime_block
 from signal_engine.backtest.splits import purge_and_embargo
@@ -400,7 +401,9 @@ def build_run_record(
     caps = sorted(set(position_caps))
     if any(isinstance(c, bool) or not isinstance(c, int) or c < 1 for c in caps):
         raise ValueError(f"max_positions must be an integer >= 1, got {list(position_caps)!r}")
-    trades = list(trades)
+    # DATA_GAP closes (spec item 19) are an exception, not normal evidence: they leave every metric and
+    # gate, and are reported by exit_views with each date and symbol.
+    trades, data_gap = split_data_gap(list(trades))
 
     no_r = r_undefined(trades)
     if no_r:
@@ -443,6 +446,8 @@ def build_run_record(
             "monthly": _monthly(trades),
         },
     }
+    if (trades or data_gap) and not no_r:
+        record["exit_views"] = exit_views(trades, data_gap)
     if oos_start is not None:
         in_sample, out_of_sample = _split(trades, oos_start)
         record["split"] = {"type": "oos", "oos_start": oos_start}

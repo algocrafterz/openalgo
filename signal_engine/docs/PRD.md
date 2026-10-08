@@ -5785,3 +5785,33 @@ trying every minute, and resumes by itself. Anything that arrived during the out
 never traded late. Separately, the scheduled tasks were running an old copy of the start script that
 did not understand the new commands, so the morning start and the afternoon square-off had been
 failing quietly; the copy is now updated.
+
+## BREAKOUT v1.0 Frozen; One Trade Policy For Every Mode (2026-10-08)
+
+**Why.** The BREAKOUT backtest, the paper runner and the live path each carried their own copy of the
+re-entry, bad-fill, exit and limit rules, and they disagreed (the paper path took INFY long three times
+on 2026-10-01; the backtest allowed one trade per direction). The rules are now one document and one
+module.
+
+**What exists.**
+- `strategy_library/intraday/orb/BREAKOUT-SPEC.md` (v1.0, frozen 2026-10-08) is the authority.
+  `research/ideas/idea-031-breakout-key-level/strategy.yaml` is its machine form, read by
+  `strategy_core/strategy_spec.py`. Start-up refuses a config that disagrees with it.
+- `strategy_core/trade_policy.py` holds the per-direction entry cap (2), the bad-fill condition and the
+  time-exit verdict. The backtest engine, `SimSink` and `main._handle_entry` call it.
+- The core computes the day type and the counter-bias veto itself and clears break stamps at each
+  session start. `tp1_only` fills at the close of the touching bar. The time exit is the 14:45 bar open;
+  a session with no such bar is a `DATA_GAP`, listed and never counted as evidence.
+- Paper applies the live loss, trade and position limits to BREAKOUT-PY's own book
+  (`runner.strategies.BREAKOUT-PY.paper_limits: live`). Pine BREAKOUT entries on the Python universe are
+  recorded as declined rows (`supersedes_pine_tag`); exits are never suppressed.
+- Run records carry `exit_views` (economic and strategy views). `pipeline/parity_ledger.py` adds up
+  Pine versus Python sessions with the migration gate (95 percent observed, 90 percent Wilson lower
+  bound, 20 sessions, 200 signals).
+
+**Not changed.** No row of the ledger was rewritten and no historical P&L was backfilled. The Pine gap
+filter never ran (dead code), so v1.0 is not a test of it. A gap through the stop is its own
+bad-fill kind (`ENTRY_REJECTED_STOP_BREACHED`, class `BAD_FILL_CLOSE`) in every mode. Nothing is committed.
+
+**In plain terms:** the strategy now has one rulebook and every mode reads it. The paper trader can no
+longer take a symbol three times in a day, and its limits match live.

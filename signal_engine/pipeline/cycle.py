@@ -249,7 +249,7 @@ async def _manage_open_position(symbol, df, bar_open, deps: CycleDeps, report: C
     o, h, low, c = (float(row[k]) for k in ("Open", "High", "Low", "Close"))
     await deps.sink.on_bar(symbol, bar_open, o, h, low, c)
     if deps.exits is not None:
-        for exit_signal in await deps.exits.on_bar(symbol, bar_open, o, h, low):
+        for exit_signal in await deps.exits.on_bar(symbol, bar_open, o, h, low, c):
             try:
                 await deps.sink.submit(exit_signal)
             except Exception:  # noqa: BLE001 - a sink failure is reported, never swallowed

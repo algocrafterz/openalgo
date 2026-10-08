@@ -131,6 +131,7 @@ class RiskEngine:
         mis_margin_pct: float = 0.0,
         margin_reserve_buffer: float = 0.0,
         worst_case_sl_pct: float = 0.0,
+        strategy_limits: dict[str, dict] | None = None,
     ):
         self.risk_per_trade = risk_per_trade
         self.use_day_start_capital = use_day_start_capital
@@ -142,6 +143,12 @@ class RiskEngine:
         self.monthly_loss_limit = monthly_loss_limit
         self.max_open_positions = max_open_positions
         self.max_trades_per_day = max_trades_per_day
+        # Per-strategy limit overrides for a strategy's OWN book (BREAKOUT spec v1.0 item 16: paper
+        # applies the live numbers per strategy). Used only where counters are per strategy (ANALYZE);
+        # a pooled live bucket always uses the profile numbers above.
+        self._strategy_limits = {
+            (tag or "").strip().upper(): dict(limits) for tag, limits in (strategy_limits or {}).items()
+        }
         self.min_entry_price = min_entry_price
         self.max_entry_price = max_entry_price
         self.slippage_factor = slippage_factor
@@ -272,14 +279,15 @@ class RiskEngine:
         logger.info("--- Risk State (restored from DB) ---")
         if not self._by_strategy:
             logger.info(f"No strategy has traded yet today ({self._trade_mode} mode).")
-        effective_max = self._effective_max_open_positions(capital)
-        open_cap = effective_max if effective_max > 0 else "unlimited"
-        trades_cap = self.max_trades_per_day if self.max_trades_per_day > 0 else "unlimited"
         for key in sorted(self._by_strategy):
             state = self._by_strategy[key]
-            daily_limit = self.daily_loss_limit * capital
-            weekly_limit = self.weekly_loss_limit * capital
-            monthly_limit = self.monthly_loss_limit * capital
+            effective_max = self._effective_max_open_positions(capital, key)
+            open_cap = effective_max if effective_max > 0 else "unlimited"
+            max_trades = self._limit(key, "max_trades_per_day")
+            trades_cap = max_trades if max_trades > 0 else "unlimited"
+            daily_limit = self._limit(key, "daily_loss_limit") * capital
+            weekly_limit = self._limit(key, "weekly_loss_limit") * capital
+            monthly_limit = self._limit(key, "monthly_loss_limit") * capital
             if state.day_start_capital > 0:
                 logger.info(
                     f"[{key}] Day-start capital: {state.day_start_capital:,.2f} INR "
@@ -381,14 +389,32 @@ class RiskEngine:
         """
         return state.last_known_capital or state.day_start_capital
 
-    def _effective_max_open_positions(self, capital: float) -> int:
+    #: Limit names a per-strategy override may carry (RiskEngine's strategy_limits).
+    LIMIT_NAMES = (
+        "daily_loss_limit",
+        "weekly_loss_limit",
+        "monthly_loss_limit",
+        "max_open_positions",
+        "max_trades_per_day",
+    )
+
+    def _limit(self, strategy: str | None, name: str):
+        """The limit `name` for this strategy's book: its override in ANALYZE, else the profile value."""
+        if strategy is not None and self.isolates_per_strategy:
+            override = self._strategy_limits.get(self._concentration_key(strategy))
+            if override is not None and name in override:
+                return override[name]
+        return getattr(self, name)
+
+    def _effective_max_open_positions(self, capital: float, strategy: str | None = None) -> int:
         """Resolve max_open_positions, computing it fresh from live capital when the
         config value is the -1 "dynamic" sentinel. 0 keeps its existing meaning
         (unlimited, used by ANALYZE); any other positive value is used as-is, unchanged
         from before this existed.
         """
-        if self.max_open_positions != -1:
-            return self.max_open_positions
+        configured = self._limit(strategy, "max_open_positions")
+        if configured != -1:
+            return configured
         return self._dynamic_max_open_positions(capital)
 
     def _dynamic_max_open_positions(self, capital: float) -> int:
@@ -433,7 +459,7 @@ class RiskEngine:
         test) should display instead of the raw (possibly -1 sentinel) config value.
         """
         state = self._state(strategy)
-        return self._effective_max_open_positions(self._limit_capital(state))
+        return self._effective_max_open_positions(self._limit_capital(state), strategy)
 
     def update_unrealised(self, loss: float, strategy: str) -> None:
         """Update mark-to-market unrealised loss for this strategy (replace, not accumulate)."""
@@ -603,27 +629,28 @@ class RiskEngine:
             # DAILY is gross (losing trades only) — a loss-streak gate. WEEKLY and MONTHLY
             # are NET drawdown. See _StrategyState's field comments.
             combined_daily = state.daily_realised_loss + state.unrealised_loss
-            if combined_daily >= capital * self.daily_loss_limit:
+            if combined_daily >= capital * self._limit(strategy, "daily_loss_limit"):
                 logger.warning(f"[{strategy}] Daily loss limit breached")
                 return False
 
-            if -state.weekly_net_pnl >= capital * self.weekly_loss_limit:
+            if -state.weekly_net_pnl >= capital * self._limit(strategy, "weekly_loss_limit"):
                 logger.warning(f"[{strategy}] Weekly loss limit breached")
                 return False
 
-            if -state.monthly_net_pnl >= capital * self.monthly_loss_limit:
+            if -state.monthly_net_pnl >= capital * self._limit(strategy, "monthly_loss_limit"):
                 logger.warning(f"[{strategy}] Monthly loss limit breached")
                 return False
 
         # 0 = unlimited, matching the same convention already used by
         # max_positions_per_symbol/sector, min_capital_for_entry and test_qty_cap.
         # -1 = dynamic, computed fresh from `capital` above — see _dynamic_max_open_positions.
-        effective_max = self._effective_max_open_positions(capital)
+        effective_max = self._effective_max_open_positions(capital, strategy)
         if effective_max > 0 and state.open_positions >= effective_max:
             logger.warning(f"[{strategy}] Max open positions reached")
             return False
 
-        if self.max_trades_per_day > 0 and state.trades_today >= self.max_trades_per_day:
+        trades_cap = self._limit(strategy, "max_trades_per_day")
+        if trades_cap > 0 and state.trades_today >= trades_cap:
             logger.warning(f"[{strategy}] Max trades per day reached")
             return False
 
@@ -635,29 +662,33 @@ class RiskEngine:
         capital = self._limit_capital(state)
         if capital > 0:
             combined_daily = state.daily_realised_loss + state.unrealised_loss
-            if combined_daily >= capital * self.daily_loss_limit:
-                return f"Daily loss limit hit ({combined_daily:,.0f} >= {capital * self.daily_loss_limit:,.0f})"
-            if -state.weekly_net_pnl >= capital * self.weekly_loss_limit:
+            daily = capital * self._limit(strategy, "daily_loss_limit")
+            weekly = capital * self._limit(strategy, "weekly_loss_limit")
+            monthly = capital * self._limit(strategy, "monthly_loss_limit")
+            if combined_daily >= daily:
+                return f"Daily loss limit hit ({combined_daily:,.0f} >= {daily:,.0f})"
+            if -state.weekly_net_pnl >= weekly:
                 return (
                     f"Weekly net drawdown limit hit ({-state.weekly_net_pnl:,.0f} >= "
-                    f"{capital * self.weekly_loss_limit:,.0f})"
+                    f"{weekly:,.0f})"
                 )
-            if -state.monthly_net_pnl >= capital * self.monthly_loss_limit:
+            if -state.monthly_net_pnl >= monthly:
                 return (
                     f"Monthly net drawdown limit hit ({-state.monthly_net_pnl:,.0f} >= "
-                    f"{capital * self.monthly_loss_limit:,.0f})"
+                    f"{monthly:,.0f})"
                 )
-        effective_max = self._effective_max_open_positions(capital)
+        effective_max = self._effective_max_open_positions(capital, strategy)
         if effective_max > 0 and state.open_positions >= effective_max:
             return f"Max positions ({state.open_positions}/{effective_max})"
-        if self.max_trades_per_day > 0 and state.trades_today >= self.max_trades_per_day:
-            return f"Max trades/day ({state.trades_today}/{self.max_trades_per_day})"
+        trades_cap = self._limit(strategy, "max_trades_per_day")
+        if trades_cap > 0 and state.trades_today >= trades_cap:
+            return f"Max trades/day ({state.trades_today}/{trades_cap})"
         return "Unknown"
 
     def capacity_status(self, strategy: str) -> str:
         """Return a formatted capacity summary string for this strategy."""
         state = self._state(strategy)
-        effective_max = self._effective_max_open_positions(self._limit_capital(state))
+        effective_max = self._effective_max_open_positions(self._limit_capital(state), strategy)
         cap = effective_max if effective_max > 0 else "unlimited"
         return f"{state.open_positions}/{cap} positions open"
 

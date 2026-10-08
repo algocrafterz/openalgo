@@ -17,7 +17,6 @@ Input frame (5-minute bars, IST index; one row per bar, every column causal):
     pvah, ppoc, pval        previous-session value area
     adr                     14-day average daily range, previous days only
     day_high, day_low       running session high / low including the current bar
-    bias_ok  (optional)     counter-bias veto result, default True (day-type engine deferred)
     tradeable (optional)    caller's slot availability, default True
 
 Output: one row per fired setup, indexed by the signal bar. Fill happens on the NEXT bar;
@@ -25,15 +24,21 @@ Output: one row per fired setup, indexed by the signal bar. Fill happens on the 
 
 Deliberately reproduced Pine behaviour: klTrackBreaks stamps the break bar BEFORE
 klResolveSetup runs, so the break bar itself can satisfy the retest branch, which outranks
--BRK. Break stamps also persist across sessions, as the Pine's `var` state does.
+-BRK. Break stamps are cleared at the first bar of each session (spec v1.0 item 5.1, owner
+decision 2026-10-08; Pine's `var` state carries them, and `break_stamp_carries_across_sessions=True`
+restores that). A carried stamp could pair a break of session D with the rolled levels of D+1, and
+it never changed a v1.0 entry: 99,116 backtest trades, zero changed (checked 2026-10-08).
 
-Deferred (documented, not silently dropped): the day-type / counter-bias engine (`bias_ok`
-is an input), the afternoon entry window (off by default in the Pine), the gap and NR
+Day type and the counter-bias veto are computed here from the initial balance (spec v1.0 items 6
+and 7); there is no `bias_ok` input any more.
+
+Deferred (documented, not silently dropped): the afternoon entry window (off by default in the Pine), the gap and NR
 entry filters, and the TP ladder / runner management (this module stops at the targets).
 """
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -61,6 +66,12 @@ _SETUP_ORDER = (
     ("IBL-BRK", -1, "ib_low"),
 )
 _REGISTRY = ("ppoc", "pvah", "pval", "pdh", "pdl", "ib_high", "ib_low", "orb_high", "orb_low")
+
+
+#: klExecMap: the stop is never nearer than this many ATR or this fraction of the signal close
+#: (spec item 11, `sl_min_atr_mult` and `sl_min_pct`). Fixed here; the spec loader checks them.
+SL_MIN_ATR_MULT = 0.5
+SL_MIN_PCT = 0.003
 
 
 @dataclass(frozen=True)
@@ -91,6 +102,67 @@ class BreakoutParams:
     require_htf_close: bool = True  # klRequireHTFClose
     min_entry_min: int = 9 * 60 + 45  # minEntryHour:Minute
     entry_cutoff_min: int = 11 * 60 + 45  # entryCutoffHour:Minute
+    #: Spec v1.0 item 5.1: False clears every break stamp at the first bar of each session.
+    break_stamp_carries_across_sessions: bool = False
+    #: Spec v1.0 item 7: veto a setup that runs against a trend or double-distribution day.
+    counter_bias_veto: bool = True
+    trend_ext_pct: float = 100.0  # extension past the initial balance that makes a trend-type day
+    two_sided_ext_pct: float = 15.0  # extension both ways that makes a day two-sided (never vetoed)
+
+    @classmethod
+    def from_spec(cls, core: dict) -> BreakoutParams:
+        """The params of the frozen specification's `core` block (spec item 0.3).
+
+        Every key must be consumed: a key this class cannot honour raises instead of being ignored, so a
+        spec edit can never silently change nothing.
+        """
+        fields = {f.name for f in dataclasses.fields(cls)} - {"tick"}
+        kwargs: dict = {}
+        for key, value in core.items():
+            if key in fields:
+                kwargs[key] = value
+            elif key not in _SPEC_HANDLED:
+                raise ValueError(f"spec core key {key!r} is not a BreakoutParams field")
+        if core.get("retest_includes_break_bar") is not True:
+            raise ValueError("v1.0 freezes retest_includes_break_bar: true (the corrected rule is v1.1)")
+        for key in ("afternoon_window", "gap_filter", "nr_filter"):
+            if core.get(key) is not None:
+                raise ValueError(f"spec core {key} is not part of v1.0 and the core cannot honour it")
+        if core.get("sl_min_atr_mult", SL_MIN_ATR_MULT) != SL_MIN_ATR_MULT or (
+            core.get("sl_min_pct", SL_MIN_PCT) != SL_MIN_PCT
+        ):
+            raise ValueError("spec sl_min_atr_mult and sl_min_pct differ from the core's fixed stop floor")
+        window = core.get("entry_window")
+        if window:
+            kwargs["min_entry_min"] = _hhmm_to_min(window[0])
+            kwargs["entry_cutoff_min"] = _hhmm_to_min(window[1])
+        veto = core.get("counter_bias_veto")
+        if veto:
+            kwargs["counter_bias_veto"] = bool(veto["enabled"])
+            kwargs["trend_ext_pct"] = float(veto["trend_ext_pct"])
+            kwargs["two_sided_ext_pct"] = float(veto["two_sided_ext_pct"])
+        return cls(**kwargs)
+
+
+#: Spec core keys that `from_spec` handles itself rather than copying into a field.
+_SPEC_HANDLED = frozenset(
+    {
+        "retest_includes_break_bar",
+        "entry_window",
+        "afternoon_window",
+        "counter_bias_veto",
+        "gap_filter",
+        "nr_filter",
+        "sl_min_atr_mult",
+        "sl_min_pct",
+        "htf_minutes",  # an input of build_breakout_inputs; a test compares it with the spec
+    }
+)
+
+
+def _hhmm_to_min(value: str) -> int:
+    hour, minute = value.split(":")
+    return int(hour) * 60 + int(minute)
 
 
 def _col(df: pd.DataFrame, name: str) -> np.ndarray:
@@ -104,9 +176,82 @@ def _shift(a: np.ndarray) -> np.ndarray:
     return out
 
 
-def _break_bars(event: np.ndarray, idx: np.ndarray) -> np.ndarray:
-    """Bar index of the latest break at or before each bar (-1 if none)."""
-    return np.maximum.accumulate(np.where(event, idx, -1))
+def _break_bars(event: np.ndarray, idx: np.ndarray, session_start: np.ndarray | None = None) -> np.ndarray:
+    """Bar index of the latest break at or before each bar (-1 if none).
+
+    With `session_start` (the bar index of each bar's session start) a break from an earlier session
+    is forgotten: the stamp is valid only inside the session that made it.
+    """
+    stamp = np.maximum.accumulate(np.where(event, idx, -1))
+    if session_start is None:
+        return stamp
+    return np.where(stamp >= session_start, stamp, -1)
+
+
+_NARROW_IB_ADR_PCT = 35.0
+_WIDE_IB_ADR_PCT = 60.0
+_NORMAL_VARIATION_EXT_PCT = 50.0
+_NON_TREND_EXT_PCT = 10.0
+TREND_DAY_TYPES = ("Trend", "Double Distribution")
+
+
+def _day_type(df: pd.DataFrame, p: BreakoutParams) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Day type, ext_up and ext_dn for every bar (spec v1.0 item 6, port of breakout.pine 2468-2485).
+
+    Causal: each bar sees only the session's bars up to and including itself. Before `ib_done`, or
+    when the initial balance has no range, the type is "-" and both extensions are 0. The running
+    maxima start at 0 and reset at each session start.
+    """
+    hi, lo = _col(df, "High"), _col(df, "Low")
+    ibh, ibl, adr = _col(df, "ib_high"), _col(df, "ib_low"), _col(df, "adr")
+    done = df["ib_done"].to_numpy(dtype=bool)
+    ib_range = ibh - ibl
+    valid = done & np.isfinite(ib_range) & (ib_range > 0)
+    safe = np.where(valid, ib_range, 1.0)
+    up = np.where(valid, np.maximum((hi - ibh) / safe * 100.0, 0.0), 0.0)
+    dn = np.where(valid, np.maximum((ibl - lo) / safe * 100.0, 0.0), 0.0)
+    session = np.asarray(df.index.date)
+    ext_up = pd.Series(up).groupby(session).cummax().to_numpy()
+    ext_dn = pd.Series(dn).groupby(session).cummax().to_numpy()
+
+    mx = np.maximum(ext_up, ext_dn)
+    two_sided = (ext_up > p.two_sided_ext_pct) & (ext_dn > p.two_sided_ext_pct)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ib_adr = np.where(np.isfinite(adr) & (adr > 0), safe / np.where(adr > 0, adr, 1.0) * 100.0, np.nan)
+    narrow = ib_adr < _NARROW_IB_ADR_PCT  # a missing adr makes narrow and wide false
+    wide = ib_adr > _WIDE_IB_ADR_PCT
+    label = np.select(
+        [
+            ~valid,
+            two_sided,
+            (mx > p.trend_ext_pct) & narrow,
+            mx > p.trend_ext_pct,
+            mx > _NORMAL_VARIATION_EXT_PCT,
+            (mx < _NON_TREND_EXT_PCT) & narrow,
+            mx < _NON_TREND_EXT_PCT,
+            wide,
+        ],
+        ["-", "Neutral", "Trend", "Double Distribution", "Normal Variation", "Non-Trend", "Normal", "Normal"],
+        default="Normal Variation",
+    )
+    return label.astype(object), ext_up, ext_dn
+
+
+def _counter_bias_ok(label: np.ndarray, ext_up: np.ndarray, ext_dn: np.ndarray, d: np.ndarray) -> np.ndarray:
+    """True where the setup passes the veto (spec item 7). A tie in extension counts as short bias."""
+    trend_day = np.isin(label, TREND_DAY_TYPES)
+    bias_long = ext_up > ext_dn
+    return ~(trend_day & ((d == 1) != bias_long))
+
+
+def _session_start(df: pd.DataFrame) -> np.ndarray:
+    """Bar index of the first bar of each bar's session (the frame is a run of whole sessions)."""
+    n = len(df)
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    day = np.asarray(df.index.date)
+    first = np.r_[True, day[1:] != day[:-1]]
+    return np.maximum.accumulate(np.where(first, np.arange(n), 0))
 
 
 def _resolve_setups(df: pd.DataFrame, p: BreakoutParams):
@@ -134,8 +279,9 @@ def _resolve_setups(df: pd.DataFrame, p: BreakoutParams):
         "ib_low": (close < lv["ib_low"]) & (prev >= lv["ib_low"]),
     }
     near = {}
+    start = None if p.break_stamp_carries_across_sessions else _session_start(df)
     for k, ev in broke.items():
-        bb = _break_bars(ev, idx)
+        bb = _break_bars(ev, idx, start)
         near[k] = (bb >= 0) & (idx - bb <= p.retest_max_bars)
 
     va, pd_ = p.va_triggers, p.pd_triggers
@@ -242,7 +388,7 @@ def _compute(df: pd.DataFrame, p: BreakoutParams) -> pd.DataFrame:
     )
 
     # klExecMap: stop beyond the level, never nearer than 0.5 ATR / 0.3% from entry
-    min_dist = np.maximum(atr * 0.5, close * 0.003)
+    min_dist = np.maximum(atr * SL_MIN_ATR_MULT, close * SL_MIN_PCT)
     raw_sl = lvl - d * atr * p.sl_buffer_mult
     sl = np.where(
         d == 1, np.minimum(raw_sl, close - min_dist), np.maximum(raw_sl, close + min_dist)
@@ -287,8 +433,12 @@ def _compute(df: pd.DataFrame, p: BreakoutParams) -> pd.DataFrame:
         | ((d == 1) & (htf > lvl))
         | ((d == -1) & (htf < lvl))
     )
+    day_label, ext_up, ext_dn = _day_type(df, p)
+    day_label, ext_up, ext_dn = day_label[sel], ext_up[sel], ext_dn[sel]
     bias_ok = (
-        df["bias_ok"].to_numpy(dtype=bool)[sel] if "bias_ok" in df else np.ones(sel.size, bool)
+        _counter_bias_ok(day_label, ext_up, ext_dn, d)
+        if p.counter_bias_veto
+        else np.ones(sel.size, bool)
     )
     tradeable = (
         df["tradeable"].to_numpy(dtype=bool)[sel] if "tradeable" in df else np.ones(sel.size, bool)
@@ -336,6 +486,9 @@ def _compute(df: pd.DataFrame, p: BreakoutParams) -> pd.DataFrame:
             "headroom": headroom[chosen],
             "tp_r": tp_r[chosen],
             "atr": atr_raw[chosen],
+            "day_type": day_label[chosen],
+            "ext_up": ext_up[chosen],
+            "ext_dn": ext_dn[chosen],
         },
         index=df.index[sel[chosen]],
     )

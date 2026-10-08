@@ -88,7 +88,7 @@ class TestP3OnSyntheticBars:
 
     def _compare(self, env, plan, **run_kw):
         f5, f1, days, strategy, adapter = env
-        run = RunConfig().with_(**adapter.run_overrides, **run_kw)
+        run = RunConfig().with_(**{**adapter.run_overrides, **run_kw})
         eng = tp.engine_trades(adapter, LOOSE, list(f5), f5, days, run, plan)
         rep = tp.replay_trades(strategy, days, list(f5), f5, f1, run, plan)
         assert len(eng) > 0, "synthetic data produced no engine trades; parity would be vacuous"

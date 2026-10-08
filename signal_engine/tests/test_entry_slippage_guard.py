@@ -100,3 +100,16 @@ class TestAutoCloseOnBadFill:
         closed, send_order, _, _, _ = await _run_guard(_signal(), None)
         assert closed is False
         send_order.assert_not_awaited()
+
+
+class TestStopBreachedFill:
+    """Owner decision 2026-10-08: a long filled at or below its stop is a bad fill of its own kind."""
+
+    @pytest.mark.asyncio
+    async def test_the_guard_closes_a_fill_through_the_stop_and_names_it(self):
+        from signal_engine import main as main_mod
+
+        sig = _signal()
+        verdict = main_mod.trade_policy.bad_fill(1, sig.entry, sig.sl, sig.tp, sig.sl - 0.5, 0.5)
+        assert verdict.violated and verdict.kind == main_mod.trade_policy.STOP_BREACHED
+        assert main_mod.EXIT_ENTRY_REJECTED_STOP_BREACHED == "ENTRY_REJECTED_STOP_BREACHED"

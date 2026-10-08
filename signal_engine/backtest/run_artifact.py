@@ -69,6 +69,7 @@ _REPORT_BLOCKS = (
     "baseline",
     "cost_sensitivity",
     "trials",
+    "exit_views",
 )
 
 

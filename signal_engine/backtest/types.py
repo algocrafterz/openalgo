@@ -21,6 +21,19 @@ class RunConfig:
     time_exit_min: int = 14 * 60 + 45  # 14:45 IST, must match config.yaml time_exit
     max_trades_per_day: int = 2
     one_trade_per_direction: bool = True
+    #: Most filled entries per direction per day (spec item 15). None keeps the older rule
+    #: (`one_trade_per_direction`). When set it takes precedence over that flag.
+    max_entries_per_direction: int | None = None
+    #: Bad-fill model (spec item 18). Above 0 the engine judges every entry fill with
+    #: `trade_policy.bad_fill`: a fill worse than the signal by more than this many R, or at or past
+    #: TP1, is closed at the fill-bar open (zero gross R, the entry still counts as used) and named
+    #: BAD_FILL_CLOSE. 0 keeps the older behaviour (a fill through the stop is SL_GAP_ENTRY).
+    max_entry_slippage_r: float = 0.0
+    #: Time exit at the OPEN of the first bar at or after `time_exit_min` (spec item 19), judged by
+    #: `trade_policy.time_exit_verdict`; the position is not evaluated for stop or target on that bar. A
+    #: session with no bar in the window closes as DATA_GAP, never as TIME_EXIT. False keeps the older
+    #: rule (the exit at that bar's close, after its stop and target checks, named TIME_EXIT or EOD).
+    time_exit_at_open: bool = False
     #: Where a strategy's `custom_exit` fills. "bar_close" (the older rule) closes at the signal bar's
     #: close. "next_open" judges the exit on the completed bar and fills it at the NEXT bar's open,
     #: the same signal-at-close, fill-at-next-open timing entries use. The clock exits (TIME_EXIT,
