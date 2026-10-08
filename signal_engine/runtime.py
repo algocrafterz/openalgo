@@ -49,6 +49,13 @@ def apply_trade_mode(engine: RiskEngine, trade_mode: str) -> None:
             setattr(engine, name, value)
             changed.append(f"{name}={value}")
 
+    # The engine was built in "live" mode, so it holds no per-strategy overrides (spec v1.0 item 16); load
+    # the ones this mode asks for now that the mode is known.
+    engine._strategy_limits = {
+        (tag or "").strip().upper(): dict(limits)
+        for tag, limits in _paper_strategy_limits(trade_mode).items()
+    }
+
     if engine._trade_mode != trade_mode:
         engine._trade_mode = trade_mode
         # Counters were loaded against the previous mode's row; reload against this one.
