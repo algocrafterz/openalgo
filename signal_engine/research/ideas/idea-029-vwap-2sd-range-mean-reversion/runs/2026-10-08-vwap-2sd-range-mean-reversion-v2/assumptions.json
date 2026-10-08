@@ -1,0 +1,696 @@
+{
+  "entries": [
+    {
+      "confidence": "high",
+      "field": "name",
+      "id": "A-001",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "VWAP 2SD range mean reversion"
+    },
+    {
+      "confidence": "high",
+      "field": "source.kind",
+      "id": "A-002",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "own_words"
+    },
+    {
+      "confidence": "high",
+      "field": "source.ref",
+      "id": "A-003",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "_inbox/vwap-2sd-range-mean-reversion.txt"
+    },
+    {
+      "confidence": "high",
+      "field": "profile",
+      "id": "A-004",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "flattrade-nse-cash"
+    },
+    {
+      "confidence": "high",
+      "field": "style",
+      "id": "A-005",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "intraday"
+    },
+    {
+      "confidence": "high",
+      "field": "direction",
+      "id": "A-006",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "both"
+    },
+    {
+      "confidence": "high",
+      "field": "timeframe",
+      "id": "A-007",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "5m"
+    },
+    {
+      "confidence": "high",
+      "field": "product",
+      "id": "A-008",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "MIS"
+    },
+    {
+      "confidence": "high",
+      "field": "entry",
+      "id": "A-009",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Bars are 5m, open-time stamped, IST; a bar is completed at its open time plus 5 minutes and every rule below reads completed bars only",
+        "Session VWAP and SD reset each session and accumulate from the 09:15 bar; typical price tp = (High + Low + Close) / 3; VWAP = sum(volume x tp) / sum(volume); SD = sqrt(max(sum(volume x tp^2) / sum(volume) - VWAP^2, 0)); bands are VWAP +/- 2.0 x SD; every value is as of the close of the bar it belongs to, including that bar",
+        "EMA9 of close and Wilder ATR14 on 5m bars run continuously across eligible sessions; an excluded session contributes no observation and does not reset them",
+        "The 15m series is built from the 5m bars of each eligible session in fixed blocks of three starting at 09:15 (09:15, 09:30, ..., 15:00), so a session has 24 15m bars; a 15m bar is completed at its open time plus 15 minutes; ADX14, EMA20 and Wilder ATR14 on 15m run continuously across eligible sessions with no reset",
+        "Regime is valid when, on the latest completed 15m bar whose close is at or before the decision bar's close, ADX14 <= 22 and abs(EMA20[t] - EMA20[t-4]) <= 0.25 x ATR14_15m[t], where t-4 is four completed 15m bars earlier",
+        "Warm-up - a symbol generates no signal until at least 100 completed 15m bars from eligible sessions exist for it, counted from its first eligible observation in the dataset",
+        "Long arming - a completed 5m bar e arms a long setup when Low[e] <= lower band[e] and (VWAP[e] - Low[e]) / ATR14_5m[e] >= 0.75; the extreme is Low[e]",
+        "While armed, each later completed bar k is evaluated in this order - (1) if Low[k] < extreme, bar k replaces the setup when it passes the same band and 0.75 ATR displacement test (the extreme becomes Low[k], the arm window restarts from k), else the setup is cancelled; (2) if High[k] >= VWAP[k] the setup is cancelled; (3) if Close[k] > EMA9[k] and Close[k] > lower band[k], bar k is a would-be confirmation; it confirms when the symbol is warmed up and the regime is valid at k, else the setup is cancelled and not carried to a later bar",
+        "A setup stays armed for at most 6 completed bars after the extreme bar (arm_bars 6) and is cancelled at the entry cutoff; the extreme bar itself cannot confirm",
+        "Entry is a market order at the open of the bar after the confirmation bar; the trade is skipped, not entered and exited, when that open is at or above the target or at or below the stop for a long",
+        "Short is the mirror image - High[e] >= upper band[e] and (High[e] - VWAP[e]) / ATR14_5m[e] >= 0.75, a higher high replaces or cancels the setup, Low[k] <= VWAP[k] cancels it, confirmation is Close[k] < EMA9[k] and Close[k] < upper band[k] with a valid regime",
+        "Execution constraint, not a strategy filter - a confirmation whose stop is closer than 0.5% of the confirmation bar's close is not traded, because the live validator rejects it (risk.min_sl_pct, no per-strategy override); the run counts these as STOP_TOO_TIGHT",
+        "The first possible confirmation bar is the 09:15 bar, completed at 09:20, so the first entry fill is at the 09:20 open; the last entry fill is at the 14:15 open",
+        "A confirmation consumes only the setup that confirmed, also when the 2-trade cap blocks it; an opposite-side setup keeps its own state until it expires, is cancelled or confirms; when an entry fills, any remaining setup is cancelled, because its extreme is not after the exit bar",
+        "One position per symbol at a time; a setup cannot form while a position is open; a re-entry needs a new extreme bar formed after the bar on which the previous trade exited; at most 2 trades per symbol per session, and the run reports how often that cap blocks a confirmation"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "exit",
+      "id": "A-010",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Target is the live session VWAP, worked as a limit order - on each bar j in the trade, the target is VWAP as of the close of bar j-1; a long exits when High[j] >= that target, a short when Low[j] <= it, filled at the target, or at Open[j] when the bar opens already beyond the target",
+        "When one bar reaches both the stop and the target, the stop is assumed to fill first",
+        "Standing time exit at 14:45 from the deployment profile, before the 15:00 MIS square-off; no position is held overnight"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "stop",
+      "id": "A-011",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Long stop = extreme - 0.20 x ATR14_5m, short stop = extreme + 0.20 x ATR14_5m, where the extreme is the setup's latest extreme and ATR14_5m is the value at that extreme bar's close (a deeper extreme that replaces the setup restates both); the stop is fixed at entry and never trailed"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "take_profit",
+      "id": "A-012",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Session VWAP, recomputed each bar as stated in exit; there is no fixed price target and no partial exit"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "holding_period",
+      "id": "A-013",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Intraday only; every position is closed by 14:45 on the session it opened"
+    },
+    {
+      "confidence": "high",
+      "field": "indicators",
+      "id": "A-014",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        {
+          "anchor": "session",
+          "name": "VWAP",
+          "source": "hlc3"
+        },
+        {
+          "anchor": "session",
+          "name": "VWAP_SD",
+          "source": "hlc3"
+        },
+        {
+          "name": "EMA",
+          "period": 9,
+          "source": "close"
+        },
+        {
+          "name": "ATR",
+          "period": 14,
+          "source": "close"
+        },
+        {
+          "name": "EMA_15M",
+          "period": 20,
+          "source": "close"
+        },
+        {
+          "name": "ATR_15M",
+          "period": 14,
+          "source": "close"
+        },
+        {
+          "name": "ADX_15M",
+          "period": 14,
+          "source": "close"
+        }
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "parameters",
+      "id": "A-015",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "adx_max": 22.0,
+        "adx_period_15m": 14,
+        "arm_bars": 6,
+        "atr_period_15m": 14,
+        "atr_period_5m": 14,
+        "ema_entry_period_5m": 9,
+        "ema_regime_lookback_bars": 4,
+        "ema_regime_max_change_atr": 0.25,
+        "ema_regime_period_15m": 20,
+        "min_vwap_distance_atr": 0.75,
+        "stop_buffer_atr": 0.2,
+        "vwap_sd": 2.0,
+        "warmup_15m_bars": 100
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "timing.signal_evaluation",
+      "id": "A-016",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "bar_close"
+    },
+    {
+      "confidence": "high",
+      "field": "timing.order_submission",
+      "id": "A-017",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "signal_close"
+    },
+    {
+      "confidence": "high",
+      "field": "timing.fill_model",
+      "id": "A-018",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "next_bar_open"
+    },
+    {
+      "confidence": "high",
+      "field": "filters",
+      "id": "A-019",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "session_window",
+      "id": "A-020",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "entry": "09:20-14:15"
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.allowed",
+      "id": "A-021",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": true
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.max_per_symbol_day",
+      "id": "A-022",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 2
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.trigger",
+      "id": "A-023",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "same_signal"
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.risk_per_trade_pct",
+      "id": "A-024",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 1.0
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.capital_per_trade",
+      "id": "A-025",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 100000
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.basis",
+      "id": "A-026",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "fixed_notional"
+    },
+    {
+      "confidence": "high",
+      "field": "data.frequency",
+      "id": "A-027",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "5m"
+    },
+    {
+      "confidence": "high",
+      "field": "data.field_families",
+      "id": "A-028",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "price",
+        "volume"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "data.min_n_minutes",
+      "id": "A-029",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "data.complete_bins",
+      "id": "A-030",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "first": "09:15",
+        "last": "15:10"
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "information_boundary",
+      "id": "A-031",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "A decision at the close of 5m bar k reads only bars with open time <= k",
+        "VWAP, VWAP SD and the bands at bar k include bar k and no later bar",
+        "EMA9 and ATR14 on 5m at bar k include bar k and no later bar",
+        "A 15m bar, and EMA20, ATR14 and ADX14 on it, is used only after all three of its 5m bars are completed",
+        "The target used on bar j is VWAP as of the close of bar j-1, never bar j",
+        "The stop is fixed from the extreme bar's low or high and its ATR14_5m, both known at the extreme bar's close",
+        "The skip rule at entry reads only the entry bar's open, which is known when the order would fill"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.mode",
+      "id": "A-032",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "single_position"
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.scope",
+      "id": "A-033",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "per_symbol"
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.prior_variants",
+      "id": "A-034",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 0
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.chart_peeking",
+      "id": "A-035",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": false
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.destination",
+      "id": "A-036",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "python"
+    },
+    {
+      "confidence": "high",
+      "field": "universe",
+      "id": "A-037",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "exchange": "NSE",
+        "membership_basis": "current",
+        "point_in_time": false,
+        "survivorship_bias": true,
+        "type": "current_fno"
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "rationale",
+      "id": "A-038",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Tests whether a large excursion beyond the session VWAP 2SD band in a range-bound 15m regime reverts toward VWAP after the extreme is rejected. All twelve open draft decisions were resolved in the 2026-10-06 review before this freeze. Costs are the platform per-trade India MIS model at the fixed notional; the draft's 32 bps round trip is reported only as a secondary reference line."
+    },
+    {
+      "confidence": "high",
+      "field": "kill_criterion",
+      "id": "A-039",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Net expectancy per trade is zero or negative after modelled costs."
+    },
+    {
+      "confidence": "high",
+      "field": "execution.product",
+      "id": "A-040",
+      "materiality": "medium",
+      "reason": "stated in the spec",
+      "section": "execution",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "MIS"
+    },
+    {
+      "confidence": "high",
+      "field": "execution.bar_size",
+      "id": "A-041",
+      "materiality": "medium",
+      "reason": "same as the spec timeframe",
+      "section": "execution",
+      "source": "derived",
+      "user_confirmed": false,
+      "value": "5m"
+    },
+    {
+      "confidence": "high",
+      "field": "execution.warmup_bars",
+      "id": "A-042",
+      "materiality": "medium",
+      "reason": "longest indicator period: EMA_15M(20)",
+      "section": "execution",
+      "source": "derived",
+      "user_confirmed": false,
+      "value": 20
+    },
+    {
+      "confidence": "high",
+      "field": "execution.slippage_bps_per_side",
+      "id": "A-043",
+      "materiality": "medium",
+      "reason": "house default for market orders",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 4.0
+    },
+    {
+      "confidence": "high",
+      "field": "execution.cost_bps_round_trip",
+      "id": "A-044",
+      "materiality": "medium",
+      "reason": "intraday round-trip cost default",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 16.0
+    },
+    {
+      "confidence": "high",
+      "field": "execution.oos_fraction",
+      "id": "A-045",
+      "materiality": "low",
+      "reason": "G3.1 holdout fraction",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 0.3
+    },
+    {
+      "confidence": "high",
+      "field": "execution.embargo_sessions",
+      "id": "A-046",
+      "materiality": "low",
+      "reason": "G3.5 embargo after the cut",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_prior_sessions",
+      "id": "A-047",
+      "materiality": "medium",
+      "reason": "listing age: earlier traded sessions required before a symbol is eligible",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 60
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_volume",
+      "id": "A-048",
+      "materiality": "medium",
+      "reason": "session volume must be above this to count as traded",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_price",
+      "id": "A-049",
+      "materiality": "medium",
+      "reason": "floor in rupees on the NSE raw (unadjusted) session close, excludes penny-priced sessions",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 10.0
+    },
+    {
+      "confidence": "high",
+      "field": "profile.mis_squareoff_min",
+      "id": "A-050",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": 900
+    },
+    {
+      "confidence": "high",
+      "field": "profile.squareoff_margin_min",
+      "id": "A-051",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": 5
+    },
+    {
+      "confidence": "high",
+      "field": "profile.time_exit_min",
+      "id": "A-052",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": 885
+    },
+    {
+      "confidence": "high",
+      "field": "profile.tick_grid",
+      "id": "A-054",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": "safe_tick"
+    },
+    {
+      "confidence": "high",
+      "field": "profile.carry_forward",
+      "id": "A-053",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": false
+    }
+  ],
+  "next_id": 55,
+  "sealed_ist": "2026-10-08T18:47:28.384801+05:30"
+}

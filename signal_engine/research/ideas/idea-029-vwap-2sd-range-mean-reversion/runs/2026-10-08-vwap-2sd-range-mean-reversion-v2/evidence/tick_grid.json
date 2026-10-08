@@ -1,0 +1,135 @@
+{
+  "by_tier": {
+    "0.01": {
+      "checked": 7725
+    },
+    "0.05": {
+      "checked": 9542,
+      "off_grid": 7
+    },
+    "0.1": {
+      "checked": 7452,
+      "off_grid": 5
+    },
+    "0.5": {
+      "checked": 782,
+      "off_grid": 6
+    },
+    "1": {
+      "checked": 367,
+      "off_grid": 10
+    },
+    "5": {
+      "checked": 276,
+      "off_grid": 1
+    }
+  },
+  "engine_tick_grid": "safe_tick",
+  "not_covered": [
+    "stops moved by a ladder exit plan are not snapped or checked",
+    "trailed stops are snapped by the engine but only the initial stop of each trade is checked",
+    "targets are market exits in production and are not orders",
+    "broker acceptance (part B) is recorded separately and is not computed"
+  ],
+  "off_grid": 29,
+  "on_grid": 26115,
+  "rule": "every stop trigger is a multiple of the exact tick tier of its month, taken from the previous month's last NSE raw close (safe_tick of the stop where that month is not in the data)",
+  "stops_checked": 26144,
+  "tick_basis": {
+    "exact": 25990,
+    "fallback_safe_tick": 154
+  },
+  "version": 1,
+  "worst": [
+    {
+      "day": "2020-09-30",
+      "direction": 1,
+      "raw_stop": 286.25,
+      "symbol": "LAURUSLABS",
+      "tick": 0.1,
+      "tick_source": "exact",
+      "ticks_off": 0.5
+    },
+    {
+      "day": "2020-09-30",
+      "direction": 1,
+      "raw_stop": 285.85,
+      "symbol": "LAURUSLABS",
+      "tick": 0.1,
+      "tick_source": "exact",
+      "ticks_off": 0.5
+    },
+    {
+      "day": "2025-01-22",
+      "direction": 1,
+      "raw_stop": 513.65,
+      "symbol": "SHRIRAMFIN",
+      "tick": 0.1,
+      "tick_source": "exact",
+      "ticks_off": 0.5
+    },
+    {
+      "day": "2021-10-21",
+      "direction": 1,
+      "raw_stop": 2197.5,
+      "symbol": "SRF",
+      "tick": 1.0,
+      "tick_source": "exact",
+      "ticks_off": 0.5
+    },
+    {
+      "day": "2022-09-29",
+      "direction": 1,
+      "raw_stop": 1649.4,
+      "symbol": "BAJAJFINSV",
+      "tick": 1.0,
+      "tick_source": "exact",
+      "ticks_off": 0.4
+    },
+    {
+      "day": "2022-09-30",
+      "direction": -1,
+      "raw_stop": 1661.4,
+      "symbol": "BAJAJFINSV",
+      "tick": 1.0,
+      "tick_source": "exact",
+      "ticks_off": 0.4
+    },
+    {
+      "day": "2022-09-20",
+      "direction": 1,
+      "raw_stop": 110.62,
+      "symbol": "BEL",
+      "tick": 0.05,
+      "tick_source": "exact",
+      "ticks_off": 0.4
+    },
+    {
+      "day": "2024-05-28",
+      "direction": 1,
+      "raw_stop": 117.02,
+      "symbol": "CANBK",
+      "tick": 0.05,
+      "tick_source": "exact",
+      "ticks_off": 0.4
+    },
+    {
+      "day": "2019-07-29",
+      "direction": -1,
+      "raw_stop": 133.23,
+      "symbol": "GAIL",
+      "tick": 0.05,
+      "tick_source": "exact",
+      "ticks_off": 0.4
+    },
+    {
+      "day": "2025-05-20",
+      "direction": 1,
+      "raw_stop": 1461.2,
+      "symbol": "NAUKRI",
+      "tick": 0.5,
+      "tick_source": "exact",
+      "ticks_off": 0.4
+    }
+  ]
+}
