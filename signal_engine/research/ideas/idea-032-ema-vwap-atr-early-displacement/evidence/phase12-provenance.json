@@ -1,0 +1,92 @@
+{
+  "dataset_version": "nse-intraday-5m-20261006-001",
+  "content_hash": "d93dd60a0046d2eb7cb8905adf00406bb55d27f026423d6b8a3ca3ecc517f96f",
+  "root_hash": "321f8902f982008ecf0b93dc1f376dc4d0bc9db72cf7e86de12a554482422afa",
+  "readiness_state": "READY_WITH_WARNINGS",
+  "price_basis": "canonical NSE: each session converted from the vendor basis to NSE raw prices by a per-session factor, then back-adjusted with the factors of the daily version",
+  "manifest_coverage": {
+    "end": "2026-10-01",
+    "rows": 32393417,
+    "sessions_price_valid": 432773,
+    "sessions_requested": 441275,
+    "start": "2017-01-01",
+    "symbols": 213
+  },
+  "complete_bins": [
+    "09:15",
+    "15:10"
+  ],
+  "universe": "nse_fno_current",
+  "strategy_universe": 211,
+  "preflight_counts": {
+    "strategy_universe": 211,
+    "requested": 210,
+    "eligible": 203,
+    "sessions_in_range": 2408,
+    "symbol_sessions": 434051,
+    "symbol_sessions_available": 400452
+  },
+  "eligible_symbols": 203,
+  "preflight_excluded_symbols": [],
+  "symbol_sessions_field_valid": 410956,
+  "symbol_sessions_dropped_by_complete_bins": 10504,
+  "drop_reasons": {
+    "DATA-MISSING-BIN": 10504,
+    "price_invalid": 4522,
+    "volume_invalid": 2043
+  },
+  "symbols_loaded": 203,
+  "eligibility_dropped_symbol_sessions": 6657,
+  "data_report_validity": {
+    "affects_validity": false
+  },
+  "profile_fields": {
+    "mis_squareoff_min": 900,
+    "squareoff_margin_min": 5,
+    "time_exit_min": 885
+  },
+  "survivorship": "current F&O list applied to the past (disclosed)",
+  "cut_date": "2023-11-01",
+  "days": [
+    "2017-01-02",
+    "2026-10-01",
+    2400
+  ],
+  "run_config": {
+    "skip_open_minutes": 0,
+    "entry_cutoff_min": 885,
+    "time_exit_min": 885,
+    "max_trades_per_day": 2,
+    "one_trade_per_direction": true,
+    "max_entries_per_direction": null,
+    "max_entry_slippage_r": 0.0,
+    "time_exit_at_open": false,
+    "custom_exit_fill": "next_open",
+    "allow_longs": true,
+    "allow_shorts": true,
+    "cost_bps": 16.0,
+    "min_sl_pct": 0.002,
+    "mis_squareoff_min": 900,
+    "squareoff_margin_min": 5,
+    "warmup_bars": 100,
+    "skip_fill_beyond_levels": false
+  },
+  "window": {
+    "entry_cutoff_min": 885,
+    "time_exit_min": 885,
+    "mis_squareoff_min": 900,
+    "squareoff_margin_min": 5,
+    "effective_time_exit_min": 885,
+    "warmup_bars": 100,
+    "timezone": "IST"
+  },
+  "cost": {
+    "model": "statutory Flattrade MIS + 4 bps/side house slippage",
+    "fixed_notional": 100000.0,
+    "round_trip_bps_by_direction": {
+      "1": 11.54812,
+      "-1": 11.54812
+    }
+  },
+  "placebo_zone_signals_without_candidate": 9797
+}

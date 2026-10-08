@@ -1,0 +1,479 @@
+next_id: 49
+open_questions: []
+blocked_reason: null
+entries:
+- id: A-001
+  field: name
+  section: intent
+  value: EMA-VWAP ATR early displacement
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-002
+  field: source.kind
+  section: intent
+  value: own_words
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-003
+  field: source.ref
+  section: intent
+  value: _inbox/ema-vwap-atr-early-displacement.txt
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-004
+  field: profile
+  section: intent
+  value: flattrade-nse-cash
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-005
+  field: style
+  section: intent
+  value: intraday
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-006
+  field: direction
+  section: intent
+  value: both
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-007
+  field: timeframe
+  section: intent
+  value: 5m
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-008
+  field: product
+  section: intent
+  value: MIS
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-009
+  field: entry
+  section: intent
+  value:
+  - displacement = (EMA9 of close - session VWAP of hlc3) / ATR14, computed on every
+    completed 5m bar
+  - Long when displacement on the previous bar <= -0.50 and displacement on the current
+    bar > -0.50
+  - Short when displacement on the previous bar >= 0.50 and displacement on the current
+    bar < 0.50
+  - The signal is evaluated at the bar close and the order fills at the next candle
+    open
+  - Displacement crossing zero is not an entry condition and the WATCH levels at -0.35
+    and 0.35 never generate a trade
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-010
+  field: exit
+  section: intent
+  value:
+  - Long exits when displacement on the current bar >= 0 (the EMA9 has reached or
+    crossed above VWAP); filled at the next candle open
+  - Short exits when displacement on the current bar <= 0; filled at the next candle
+    open
+  - Standing profile time exit applies to any position still open, and no position
+    is held overnight
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-011
+  field: stop
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-012
+  field: take_profit
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-013
+  field: holding_period
+  section: intent
+  value: same_session
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-014
+  field: indicators
+  section: intent
+  value:
+  - name: EMA
+    period: 9
+    source: close
+  - name: VWAP
+    source: hlc3
+    anchor: session
+  - name: ATR
+    period: 14
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-015
+  field: parameters
+  section: intent
+  value:
+    ema_length: 9
+    atr_length: 14
+    early_long_threshold: -0.5
+    early_short_threshold: 0.5
+    exit_threshold: 0.0
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-016
+  field: timing.signal_evaluation
+  section: intent
+  value: bar_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-017
+  field: timing.order_submission
+  section: intent
+  value: signal_close
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-018
+  field: timing.fill_model
+  section: intent
+  value: next_bar_open
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-019
+  field: filters
+  section: intent
+  value: none
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-020
+  field: session_window
+  section: intent
+  value:
+    entry: 09:20-14:30
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-021
+  field: re_entry.allowed
+  section: intent
+  value: false
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-022
+  field: sizing.risk_per_trade_pct
+  section: intent
+  value: 1.0
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-023
+  field: sizing.capital_per_trade
+  section: intent
+  value: 100000
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-024
+  field: sizing.basis
+  section: intent
+  value: fixed_notional
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-025
+  field: information_boundary
+  section: intent
+  value:
+  - A decision at the close of bar k reads only bars with open time <= k of the same
+    and earlier sessions
+  - VWAP uses only the bars of the current session up to and including bar k
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-026
+  field: portfolio.mode
+  section: intent
+  value: single_position
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-027
+  field: portfolio.scope
+  section: intent
+  value: per_symbol
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-028
+  field: costs.reference_round_trip_bps
+  section: intent
+  value:
+  - 32
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-029
+  field: disclosure.prior_variants
+  section: intent
+  value: 1
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-030
+  field: disclosure.chart_peeking
+  section: intent
+  value: true
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-031
+  field: disclosure.destination
+  section: intent
+  value: python
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-032
+  field: universe
+  section: intent
+  value:
+    type: current_fno
+    exchange: NSE
+    membership_basis: current
+    point_in_time: false
+    survivorship_bias: true
+  source: user
+  confidence: high
+  materiality: high
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-033
+  field: rationale
+  section: intent
+  value: The EMA9/VWAP gap may begin closing before the cross, so entering at 0.5
+    ATR before zero could give a better entry location than waiting for the cross.
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-034
+  field: kill_criterion
+  section: intent
+  value: Net result at or below zero after costs, or in-sample edge that does not
+    hold out of sample (the prior plain-cross and anticipation tests both failed this
+    way).
+  source: user
+  confidence: high
+  materiality: low
+  reason: stated in spec.yaml
+  user_confirmed: true
+- id: A-035
+  field: execution.product
+  section: execution
+  value: MIS
+  source: user
+  confidence: high
+  materiality: medium
+  reason: stated in the spec
+  user_confirmed: true
+- id: A-036
+  field: execution.bar_size
+  section: execution
+  value: 5m
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: same as the spec timeframe
+  user_confirmed: false
+- id: A-037
+  field: execution.warmup_bars
+  section: execution
+  value: 14
+  source: derived
+  confidence: high
+  materiality: medium
+  reason: 'longest indicator period: ATR(14)'
+  user_confirmed: false
+- id: A-038
+  field: execution.slippage_bps_per_side
+  section: execution
+  value: 4.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: house default for market orders
+  user_confirmed: false
+- id: A-039
+  field: execution.cost_bps_round_trip
+  section: execution
+  value: 16.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: intraday round-trip cost default
+  user_confirmed: false
+- id: A-040
+  field: execution.oos_fraction
+  section: execution
+  value: 0.3
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.1 holdout fraction
+  user_confirmed: false
+- id: A-041
+  field: execution.embargo_sessions
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: low
+  reason: G3.5 embargo after the cut
+  user_confirmed: false
+- id: A-042
+  field: execution.eligibility_min_prior_sessions
+  section: execution
+  value: 60
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: 'listing age: earlier traded sessions required before a symbol is eligible'
+  user_confirmed: false
+- id: A-043
+  field: execution.eligibility_min_volume
+  section: execution
+  value: 1
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: session volume must be above this to count as traded
+  user_confirmed: false
+- id: A-044
+  field: execution.eligibility_min_price
+  section: execution
+  value: 10.0
+  source: platform_default
+  confidence: high
+  materiality: medium
+  reason: floor in rupees on the NSE raw (unadjusted) session close, excludes penny-priced
+    sessions
+  user_confirmed: false
+- id: A-045
+  field: profile.mis_squareoff_min
+  section: profile
+  value: 900
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-046
+  field: profile.squareoff_margin_min
+  section: profile
+  value: 5
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-047
+  field: profile.time_exit_min
+  section: profile
+  value: 885
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false
+- id: A-048
+  field: profile.carry_forward
+  section: profile
+  value: false
+  source: broker_config
+  confidence: high
+  materiality: medium
+  reason: profile flattrade-nse-cash MIS
+  user_confirmed: false

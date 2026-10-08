@@ -1,0 +1,15 @@
+Owner idea (captured 2026-10-08, own words, via drafting discussion):
+
+EMA-VWAP ATR Early Displacement. Enter before the EMA9/VWAP crossover by measuring EMA9 minus
+VWAP displacement relative to ATR14. The zero crossover is confirmation/reference, not the entry.
+
+displacement = (EMA9(close) - VWAP(hlc3)) / ATR14
+
+Long: previous displacement <= -0.50 and current displacement > -0.50
+Short: previous displacement >= +0.50 and current displacement < +0.50
+Zero displacement is the actual EMA9/VWAP crossover and is NOT an entry condition.
+WATCH levels -0.35/+0.35 are visual/alert aids only and must not generate trades.
+No ADX, DI, EMA slope, VWAP slope or other momentum filter in the baseline.
+5-minute NSE equity is the baseline. 3-minute and 1-minute are separate future variants.
+First benchmark: exit at the zero crossover, no stop, no take profit, fixed notional sizing.
+Later experiment B: ATR stop/target, opposite signal or time exit, optimised separately.

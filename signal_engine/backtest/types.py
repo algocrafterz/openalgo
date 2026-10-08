@@ -21,6 +21,11 @@ class RunConfig:
     time_exit_min: int = 14 * 60 + 45  # 14:45 IST, must match config.yaml time_exit
     max_trades_per_day: int = 2
     one_trade_per_direction: bool = True
+    #: Where a strategy's `custom_exit` fills. "bar_close" (the older rule) closes at the signal bar's
+    #: close. "next_open" judges the exit on the completed bar and fills it at the NEXT bar's open,
+    #: the same signal-at-close, fill-at-next-open timing entries use. The clock exits (TIME_EXIT,
+    #: EOD) are unchanged in both modes.
+    custom_exit_fill: str = "bar_close"
     allow_longs: bool = True
     allow_shorts: bool = True
 

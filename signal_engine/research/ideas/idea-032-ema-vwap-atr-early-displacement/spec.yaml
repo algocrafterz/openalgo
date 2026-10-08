@@ -1,0 +1,89 @@
+# IDEA-032 spec, schema v2. UNFROZEN: do not freeze until the MFE/MAE and exit research in idea.md is done.
+# Owner answers to D1 to D6 are in the idea.md decision log. No backtest or outcome data was used to write this spec.
+# Benchmark A only: entry at +/-0.50 ATR displacement, exit at the EMA9/VWAP crossover.
+
+schema_version: 2
+name: EMA-VWAP ATR early displacement
+
+source:
+  kind: own_words
+  ref: _inbox/ema-vwap-atr-early-displacement.txt
+
+profile: flattrade-nse-cash
+
+style: intraday
+direction: both
+timeframe: 5m
+product: MIS
+
+entry:
+  - displacement = (EMA9 of close - session VWAP of hlc3) / ATR14, computed on every completed 5m bar
+  - Long when displacement on the previous bar <= -0.50 and displacement on the current bar > -0.50
+  - Short when displacement on the previous bar >= 0.50 and displacement on the current bar < 0.50
+  - The signal is evaluated at the bar close and the order fills at the next candle open
+  - Displacement crossing zero is not an entry condition and the WATCH levels at -0.35 and 0.35 never generate a trade
+exit:
+  - Long exits when displacement on the current bar >= 0 (the EMA9 has reached or crossed above VWAP); filled at the next candle open
+  - Short exits when displacement on the current bar <= 0; filled at the next candle open
+  - Standing profile time exit applies to any position still open, and no position is held overnight
+stop: none
+take_profit: none
+holding_period: same_session
+
+indicators:
+  - {name: EMA, period: 9, source: close}
+  - {name: VWAP, source: hlc3, anchor: session}
+  - {name: ATR, period: 14}
+parameters:
+  ema_length: 9
+  atr_length: 14
+  early_long_threshold: -0.50
+  early_short_threshold: 0.50
+  exit_threshold: 0.0
+
+timing:
+  signal_evaluation: bar_close
+  order_submission: signal_close
+  fill_model: next_bar_open
+
+# DRAFT D1: today's F&O list applied to the past, as in the other ideas.
+universe:
+  type: current_fno
+  exchange: NSE
+  membership_basis: current
+  point_in_time: false
+  survivorship_bias: true
+
+information_boundary:
+  - A decision at the close of bar k reads only bars with open time <= k of the same and earlier sessions
+  - VWAP uses only the bars of the current session up to and including bar k
+
+filters: none
+# Fill times (bar opens), end inclusive: the 14:45 open is the last fill. The profile standing time
+# exit is that same 14:45 bar, so a fill there exits at that bar's close. No cutoff beyond the profile.
+session_window: {entry: "09:20-14:45"}
+
+re_entry:
+  allowed: false
+
+# stop is none, so sizing must be fixed notional.
+sizing:
+  basis: fixed_notional
+  risk_per_trade_pct: 1.0
+  capital_per_trade: 100000
+
+portfolio:
+  mode: single_position
+  scope: per_symbol
+
+costs:
+  reference_round_trip_bps: [32]
+
+disclosure:
+  prior_variants: 1
+  chart_peeking: true
+  destination: python
+
+rationale: The EMA9/VWAP gap may begin closing before the cross, so entering at 0.5 ATR before zero could give a better entry location than waiting for the cross.
+
+kill_criterion: Net result at or below zero after costs, or in-sample edge that does not hold out of sample (the prior plain-cross and anticipation tests both failed this way).

@@ -71,6 +71,11 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
     trades_today = 0
     long_taken = short_taken = False
 
+    if run.custom_exit_fill not in ("bar_close", "next_open"):
+        raise ValueError(f"custom_exit_fill must be bar_close or next_open, got {run.custom_exit_fill!r}")
+    exit_next_open = run.custom_exit_fill == "next_open"
+    pending_exit = ""  # custom exit judged on the previous closed bar, fills at this bar's open
+
     strategy.reset_symbol(p)
     cost_frac = run.cost_bps / 100.0 / 100.0  # bps -> fraction of notional
     warmup = run.warmup_bars
@@ -95,7 +100,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             b_fill((cur_sig, pos.direction, 1, i, fills[k].price, fills[k].reason, k + 1))
         legs_logged = len(fills)
 
-    def close_out(reason: str, price: float, i: int) -> None:
+    def close_out(reason: str, price: float, i: int, at_open: bool = False) -> None:
         nonlocal pos
         legs = 1
         exit_px, exit_reason = price, reason
@@ -117,7 +122,15 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                 log_legs(i)
         else:
             move = (price - pos.entry) if pos.direction == 1 else (pos.entry - price)
-        r_gross = move / pos.risk
+        if np.isnan(pos.risk):
+            # No stop: R has no denominator. The result is carried as a return on the entry price.
+            gross_ret = move / pos.entry
+            returns = {"gross_ret": gross_ret, "net_ret": gross_ret - cost_frac}
+            r_gross = r_net = float("nan")
+        else:
+            r_gross = move / pos.risk
+            r_net = r_gross - cost_frac * pos.entry / pos.risk
+            returns = {}
         trade = Trade(
             symbol=c.symbol,
             day=days[i],
@@ -133,8 +146,10 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             exit=float(price),
             reason=reason,
             r_gross=r_gross,
-            r_net=r_gross - cost_frac * pos.entry / pos.risk,
+            r_net=r_net,
             legs=legs,
+            exit_at_open=at_open,
+            **returns,
         )
         if rec is not None:
             if pos.ladder is None:
@@ -160,6 +175,7 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             if (
                 pos is None
                 and skip_fill
+                and sig.sl is not None
                 and (
                     (fill >= sig.tp or fill <= sig.sl)
                     if sig.direction == 1
@@ -176,14 +192,14 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                     direction=sig.direction,
                     entry=fill,
                     signal_price=float(sig_px),
-                    sl=float(sig.sl),
-                    sl_eff=float(sig.sl),
+                    sl=float("nan") if sig.sl is None else float(sig.sl),
+                    sl_eff=float("nan") if sig.sl is None else float(sig.sl),
                     tp=float(sig.tp),
                     # Risk is measured from the SIGNAL price, not the fill,
                     # because that is what the live engine sizes on - the
                     # alert carries the signal bar's close. The fill's drift
                     # away from it is a real cost and stays in the result.
-                    risk=abs(float(sig_px) - float(sig.sl)),
+                    risk=float("nan") if sig.sl is None else abs(float(sig_px) - float(sig.sl)),
                     tag=sig.tag,
                     entry_bar=i,
                     targets=tuple(sig.meta.get("targets", ())),
@@ -210,7 +226,9 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                 # the market. Modelling that as a skipped trade would flatter the
                 # backtest, so the fill happens and is closed flat below - but it is
                 # tagged so the count is visible rather than buried inside SL_GAP.
-                entered_through_stop = (fill <= sig.sl) if sig.direction == 1 else (fill >= sig.sl)
+                entered_through_stop = sig.sl is not None and (
+                    (fill <= sig.sl) if sig.direction == 1 else (fill >= sig.sl)
+                )
                 if sig.direction == 1:
                     long_taken = True
                 else:
@@ -221,6 +239,11 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                 b_ord((pend_i, sig.direction, -1, _K_DROP_POS))
 
         # 2. manage an open position on this bar
+        if pos is not None and pending_exit:
+            # The order was placed at the previous close, so it fills at this open, ahead of
+            # this bar's stop, target and clock checks.
+            reason, pending_exit = pending_exit, ""
+            close_out(reason, float(o[i]), i, at_open=True)
         if pos is not None and pos.ladder is not None:
             # Shared exit model (strategy_core.exits): partial targets and stop moves.
             pos.ladder.step(o[i], h[i], low[i])
@@ -237,6 +260,8 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                     reason = "EOD"
                 else:
                     reason = strategy.custom_exit(c, i, p, pos) or ""
+                    if reason and exit_next_open:
+                        pending_exit, reason = reason, ""
                 if reason:
                     close_out(reason, close[i], i)
         elif pos is not None:
@@ -268,6 +293,8 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                     reason = "EOD"
                 else:
                     reason = strategy.custom_exit(c, i, p, pos) or ""
+                    if reason and exit_next_open:
+                        pending_exit, reason = reason, ""
                 if reason:
                     close_out(reason, close[i], i)
 
@@ -319,6 +346,14 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             sig = strategy.entry(c, i, p, d)
             if sig is None:
                 continue
+            if sig.sl is None:
+                # No stop: nothing to validate, and no risk distance is invented.
+                if rec is not None:
+                    b_sig((i, d, sig.tag, close[i], float("nan"), sig.tp, float("nan"), -1))
+                    pend_i = i
+                pending = (sig, close[i])
+                strategy.on_entry(c, i, p, sig)
+                break
             risk = abs(close[i] - sig.sl)
             if risk <= 0 or np.isnan(risk):
                 if rec is not None:
