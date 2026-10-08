@@ -630,3 +630,64 @@ class TestCrossSectionalBlockInRecord:
         ):
             problems = br._validate_run({**rec, "baseline_cross_sectional": bad})
             assert any("baseline_cross_sectional" in p for p in problems), bad
+
+
+class TestPerturbationInRecord:
+    EVIDENCE = {
+        "version": 1,
+        "state": "complete",
+        "reason": "",
+        "base": {"trades": 500, "net_r": 0.5, "net_bps": 20.0},
+        "neighbours": [
+            {"parameter": f"p{i}", "multiplier": 0.8, "value": i, "base_value": 9, "trades": 100,
+             "net_r": 0.4, "net_bps": 15.0, "params_fingerprint": "x"}
+            for i in range(6)
+        ],
+        "diagnostic_not_trials": True,
+    }  # fmt: skip
+
+    def _record(self, root, **changes):
+        from dataclasses import replace
+
+        execution = replace(_execution(), **changes)
+        path = rr.record_idea(
+            root,
+            "IDEA-009",
+            execute=lambda key: execution,
+            run_date="2026-09-30",
+            supported=SUPPORTED,
+        )
+        return path, json.loads(path.read_text())
+
+    @staticmethod
+    def _row(record):
+        return next(
+            r
+            for d in record["evaluation"]["dimensions"]
+            for r in d["rows"]
+            if r["gate"] == "G4.1"
+        )
+
+    def test_evidence_is_sealed_in_the_run_folder_and_scored(self, root):
+        path, rec = self._record(root, perturbation=self.EVIDENCE)
+        folder = path.parent / rec["artifact_dir"].rstrip("/")
+        assert json.loads((folder / "evidence" / "perturbation.json").read_text()) == self.EVIDENCE
+        manifest = json.loads((folder / "manifest.json").read_text())
+        assert "evidence/perturbation.json" in manifest["artifacts"]
+        assert self._row(rec)["status"] == "pass"
+
+    def test_a_run_without_the_stage_has_no_file_and_the_gate_is_not_evaluated(self, root):
+        path, rec = self._record(root)
+        folder = path.parent / rec["artifact_dir"].rstrip("/")
+        assert not (folder / "evidence" / "perturbation.json").exists()
+        assert self._row(rec)["status"] == "not_evaluated"
+
+    def test_the_stage_adds_no_trial(self, root):
+        _, plain = self._record(root)
+        assert plain["n_trials"] == 1
+
+    def test_an_unsupported_strategy_kind_records_a_not_run_state(self):
+        ev = rr._perturbation_stage(
+            supported=False, meta=None, trades=[object()] * 3, days=[], strategy=None
+        )
+        assert ev["state"] == "unsupported" and ev["base"]["trades"] == 3

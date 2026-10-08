@@ -26,6 +26,7 @@ import pandas as pd
 
 from signal_engine.backtest import indicators as ind
 from signal_engine.backtest.strategies.base import Strategy
+from signal_engine.backtest.perturbation import structural, tunable
 from signal_engine.backtest.types import Ctx, EntrySignal, Position
 from signal_engine.strategy_core.vwap_reversion import (
     INPUT_COLUMNS,
@@ -68,6 +69,27 @@ class VwapReversion(Strategy):
         # override, and this strategy has none. A signal live would reject is not traded here
         # either; the engine counts it as STOP_TOO_TIGHT.
         "min_sl_pct": LIVE_MIN_SL_PCT,
+    }
+
+    #: G4.1 declaration (owner-approved 2026-10-08): every parameter, with inclusive bounds. The
+    #: bounds are validity limits, not search ranges; at the frozen values no +-20% neighbour
+    #: reaches one. The warm-up length moves the data window, not the rule, so it is structural.
+    param_meta = {
+        "vwap_sd": tunable("float", 1.0, 3.5),
+        "atr_period_5m": tunable("int", 5, 50),
+        "min_vwap_distance_atr": tunable("float", 0.25, 3.0),
+        "stop_buffer_atr": tunable("float", 0.05, 1.0),
+        "adx_period_15m": tunable("int", 5, 30),
+        "adx_max": tunable("float", 10.0, 40.0),
+        "ema_regime_period_15m": tunable("int", 8, 60),
+        "ema_regime_lookback_bars": tunable("int", 1, 12),
+        "ema_regime_max_change_atr": tunable("float", 0.05, 1.0),
+        "atr_period_15m": tunable("int", 5, 30),
+        "ema_entry_period_5m": tunable("int", 3, 30),
+        "arm_bars": tunable("int", 2, 18),
+        "warmup_15m_bars": structural(
+            "warm-up length of the 15-minute indicators; it moves the data window, not the rule"
+        ),
     }
 
     def __init__(self) -> None:

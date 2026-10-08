@@ -358,6 +358,7 @@ def build_run_record(
     trials: dict[str, Any] | None = None,
     truncation: dict[str, Any] | None = None,
     tick_grid: dict[str, Any] | None = None,
+    perturbation: dict[str, Any] | None = None,
     ledger_problems: Sequence[str] = (),
     data_quality: dict[str, Any] | None = None,
     calendar: Any = None,
@@ -505,6 +506,7 @@ def build_run_record(
         trials=trials,
         truncation=truncation,
         tick_grid=tick_grid,
+        perturbation=perturbation,
     )
     if trials is not None:
         record["trials"] = dict(trials)

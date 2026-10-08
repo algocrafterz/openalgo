@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as _st
 
-from signal_engine.backtest import splits, stats, tickgrid
+from signal_engine.backtest import perturbation, splits, stats, tickgrid
 from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.backtest.metrics import hurdle_t
 from signal_engine.research.build_registry import EVALUATION_STATUSES as STATUSES
@@ -212,6 +212,7 @@ class _Inputs:
     trials: dict[str, Any] | None = None
     truncation: Any = None
     tick_grid: dict[str, Any] | None = None
+    perturbation: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1434,6 +1435,58 @@ def _g64(x: _Inputs) -> _Result:
     )
 
 
+_G41_THRESHOLD = (
+    "at least 7 in 10 of the +-20% one-at-a-time neighbours net positive, and none keeping less "
+    "than 40% of the base net R per trade"
+)
+
+
+def _g41(x: _Inputs) -> _Result:
+    """Reads the sealed perturbation evidence and recomputes the verdict from its rows."""
+    ev = x.perturbation
+    if ev is None:
+        return "not_evaluated", None, _G41_THRESHOLD, "the perturbation stage was not run for this run"
+    problems = perturbation.validate_evidence(ev)
+    if problems:
+        return "fail", None, _G41_THRESHOLD, "the perturbation evidence is malformed: " + "; ".join(problems)
+    state = ev["state"]
+    if state == perturbation.BASE_NOT_POSITIVE:
+        return "fail", ev["base"].get("net_r"), _G41_THRESHOLD, str(ev.get("reason"))
+    if state != perturbation.COMPLETE:
+        return "not_evaluated", None, _G41_THRESHOLD, f"{state}: {ev.get('reason')}"
+    base = float(ev["base"]["net_r"])
+    rows = ev["neighbours"]
+    usable = [r for r in rows if r["trades"] >= perturbation.MIN_TRADES and r.get("net_r") is not None]
+    if len(usable) < perturbation.MIN_USABLE_NEIGHBOURS:
+        return (
+            "not_evaluated",
+            len(usable),
+            _G41_THRESHOLD,
+            f"only {len(usable)} of {len(rows)} neighbours have {perturbation.MIN_TRADES} or more "
+            f"trades; {perturbation.MIN_USABLE_NEIGHBOURS} usable neighbours are needed",
+        )
+    positive = sum(1 for r in usable if r["net_r"] > 0)
+    floor = perturbation.MIN_RETENTION * base
+    weak = [r for r in rows if r not in usable or r["net_r"] < floor - 1e-12]
+    n = len(rows)
+    share_ok = positive * perturbation.POSITIVE_SHARE_DEN >= perturbation.POSITIVE_SHARE_NUM * n
+    value = round(positive / n, 4)
+    ratios = sorted(r["net_r"] / base for r in usable)
+    mid = len(ratios) // 2
+    median = ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+    peak = median <= 1 / perturbation.PEAK_RATIO
+    worst = min(rows, key=lambda r: -1e9 if r not in usable else r["net_r"])
+    note = (
+        f"{positive} of {n} neighbours net positive; {len(weak)} keep under "
+        f"{int(perturbation.MIN_RETENTION * 100)}% of the base net R ({base:.4f}); worst "
+        f"{worst['parameter']} x{worst['multiplier']} = {worst['value']} "
+        f"({'unusable' if worst not in usable else format(worst['net_r'], '.4f')}); "
+        f"median neighbour/base {median:.2f}{'; the base looks like a peak' if peak else ''}"
+    )
+    status = "pass" if share_ok and not weak else "fail"
+    return status, value, _G41_THRESHOLD, note
+
+
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G0.2": _g02,
     "G0.3": _g03,
@@ -1458,6 +1511,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G3.3": _g33,
     "G3.4": _g34,
     "G3.5": _g35,
+    "G4.1": _g41,
     "G4.4": _g44,
     "G4.5": _g45,
     "G4.6": _g46,
@@ -1509,6 +1563,7 @@ def evaluate(
     trials: dict[str, Any] | None = None,
     truncation: Any = None,
     tick_grid: dict[str, Any] | None = None,
+    perturbation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1524,7 +1579,8 @@ def evaluate(
     eligibility policy) feed G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2, each not_evaluated without
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
-    G6.4 part A, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    G6.4 part A and `perturbation` (`perturbation.run_variants`) feeds G4.1, each not_evaluated
+    without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1551,6 +1607,7 @@ def evaluate(
         trials=trials,
         truncation=truncation,
         tick_grid=tick_grid,
+        perturbation=perturbation,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

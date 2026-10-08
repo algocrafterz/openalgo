@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import functools
+import hashlib
 import inspect
 import json
 import math
@@ -51,6 +52,7 @@ import yaml
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import manifest as manifest_mod
+from signal_engine.backtest import perturbation as perturbation_mod
 from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics, tickgrid
 from signal_engine.backtest.baseline import (
     INTRADAY_MAX_TRADES,
@@ -195,6 +197,8 @@ class Execution:
     truncation: dict[str, Any] | None = None
     #: Part A of gate G6.4 (`tickgrid.tick_grid_evidence`), or None when the run has no intraday stops.
     tick_grid: dict[str, Any] | None = None
+    #: G4.1 evidence (`perturbation.run_variants`), or None when the stage was not run.
+    perturbation: dict[str, Any] | None = None
     #: Bars read by n_minutes (overall and by year), or None when the bars carry no n_minutes.
     n_minutes_distribution: dict[str, Any] | None = None
     #: The strategy's own `diagnostics()` counters after the headline run, or None without any.
@@ -752,6 +756,7 @@ def execute_backtest(
     end: str | None = None,
     run_truncation: bool = True,
     dataset: preflight_mod.Resolution | None = None,
+    run_perturbation: bool = False,
 ) -> Execution:
     """Run strategy `key` on the eligible symbols of one published dataset version.
 
@@ -777,6 +782,10 @@ def execute_backtest(
     harness releases the raw ones) and, after the headline run, re-runs them on truncated data
     (`truncation.truncation_check`); the result is `Execution.truncation`. False skips it and
     leaves `Execution.truncation` None, which the validity block records as a check not run.
+
+    `run_perturbation` runs the G4.1 stage after the headline run (`perturbation.run_variants`): a
+    long, opt-in stage whose evidence is `Execution.perturbation`. False leaves it None, and the
+    gate stays not_evaluated.
     """
     if dataset is None:
         raise PublishedDataRequired(
@@ -786,7 +795,7 @@ def execute_backtest(
     cli._register()
     try:
         with dataset.open() as source:
-            return _execute_on(source, dataset, key, settings, end, run_truncation)
+            return _execute_on(source, dataset, key, settings, end, run_truncation, run_perturbation)
     except (preflight_mod.DataUnavailable, snapshot.SnapshotError,
             data_mod.NoPublishedData) as exc:
         raise LoadRejected(str(exc), {"version": dataset.version_id}) from exc
@@ -831,7 +840,9 @@ def intraday_session_shape() -> Callable[[date], int]:
     return lambda day: intraday_5m.expected_bins(day, templates)
 
 
-def _execute_on(source, dataset, key, settings, end, run_truncation) -> Execution:
+def _execute_on(
+    source, dataset, key, settings, end, run_truncation, run_perturbation=False
+) -> Execution:
     """`execute_backtest` reading bars only from `source` (the resolution's data source)."""
     cfg = dict(settings or {})
     until = _end_of_session(end)
@@ -958,6 +969,31 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     )
     cost_components = decompose_trades(trades, cost_model)
     tick_grid = None
+    perturbation_evidence = None
+    if run_perturbation:
+        perturbation_evidence = _perturbation_stage(
+            strategy=strategy,
+            params=params,
+            meta=getattr(strategy, "param_meta", None),
+            supported=kind != "swing" and prepare_panel is None,
+            load_frames=lambda chunk: _with_price_factors(
+                _baseline_frames(source.intraday(chunk, "5m", until), layer, 0), run, price_factors
+            ),
+            symbols=loaded_symbols,
+            run=run,
+            cost_model=cost_model,
+            trades=trades,
+            days=days,
+            shared={
+                "dataset_version": dataset.version_id,
+                "engine_version": run_artifact.ENGINE_VERSION,
+                "tick_grid": grid_mode,
+                "run_config_sha256": hashlib.sha256(
+                    json.dumps(jsonable(run), sort_keys=True).encode()
+                ).hexdigest(),
+                "rate_table_sha256": costs.get("rate_table_sha256"),
+            },
+        )
     if month_closes is not None:
         tick_grid = tickgrid.tick_grid_evidence(
             trades, month_closes, price_factors, engine_mode=grid_mode
@@ -1033,6 +1069,7 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         membership=layer.membership,
         truncation=truncation,
         tick_grid=tick_grid,
+        perturbation=perturbation_evidence,
         n_minutes_distribution=n_minutes,
         strategy_diagnostics=diagnostics,
     )
@@ -1050,6 +1087,26 @@ def _baseline_frames(
         frames = {s: df.iloc[warmup:] for s, df in frames.items()}
         frames = {s: df for s, df in frames.items() if len(df)}
     return frames
+
+
+def _perturbation_stage(*, supported, meta, trades, days, **kw) -> dict[str, Any]:
+    """G4.1 evidence for a run, or a not-run state naming why the stage cannot apply."""
+    if not supported:
+        return {
+            "version": perturbation_mod.EVIDENCE_VERSION,
+            "state": "unsupported",
+            "reason": "the perturbation stage covers per-symbol intraday strategies only",
+            "base": {"trades": len(trades)},
+            "neighbours": [],
+            "skipped": [],
+            "diagnostic_not_trials": True,
+        }
+    return perturbation_mod.run_variants(
+        meta=meta,
+        headline_trades=trades,
+        oos_start=default_oos_start(days, trades),
+        **kw,
+    )
 
 
 def _with_price_factors(
@@ -1184,6 +1241,7 @@ def _execute_frozen(
     end: str | None = None,
     run_truncation: bool = True,
     dataset: preflight_mod.Resolution | None = None,
+    run_perturbation: bool = False,
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
     them, then verify the cost."""
@@ -1211,6 +1269,10 @@ def _execute_frozen(
         kwargs["run_truncation"] = run_truncation
     if "dataset" in accepted:
         kwargs["dataset"] = dataset
+    if run_perturbation:
+        if "run_perturbation" not in accepted:
+            raise ValueError("this execute callable does not support the perturbation stage")
+        kwargs["run_perturbation"] = True
     execution = execute(key, **kwargs)
     if execution.costs.get("model") != STATUTORY_MODEL:
         raise ValueError(
@@ -1264,6 +1326,7 @@ def record_idea(
     run_truncation: bool = True,
     dataset_version: str | None = None,
     require_ready: bool = False,
+    run_perturbation: bool = False,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
@@ -1342,6 +1405,7 @@ def record_idea(
         raise PublishedDataRequired(f"{idea_id}: no published dataset version was resolved")
     try:
         execution = _execute_frozen(execute, key, frozen, end=end, run_truncation=run_truncation,
+                                    run_perturbation=run_perturbation,
                                     dataset=resolution)
     except LoadRejected as exc:
         report = dataclasses.replace(resolution.report, stage="load",
@@ -1424,6 +1488,7 @@ def record_idea(
         trials=trials_block,
         truncation=execution.truncation,
         tick_grid=execution.tick_grid,
+        perturbation=execution.perturbation,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
@@ -1637,6 +1702,11 @@ def main(
         action="store_true",
         help="skip the look-ahead (truncation) check; validity then lists it as not run",
     )
+    parser.add_argument(
+        "--perturbation",
+        action="store_true",
+        help="run the G4.1 parameter perturbation stage (long; without it G4.1 is not evaluated)",
+    )
     parser.add_argument("--oos-start", help="YYYY-MM-DD; default splits the last 30 percent")
     parser.add_argument(
         "--caps",
@@ -1716,6 +1786,7 @@ def main(
                 "external_trials": args.external_trials,
                 "external_reason": args.reason,
                 "run_truncation": not args.no_truncation,
+                "run_perturbation": args.perturbation,
                 "oos_start": args.oos_start,
                 "position_caps": position_caps,
                 "validation": args.validation,
