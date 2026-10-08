@@ -14,6 +14,13 @@ portfolio turnover and benchmark helpers and a random-entry baseline exist in so
 must be verified before being relied on. Status values: not started, in progress, built,
 verified. Update the row, code location, test and date when status changes.
 
+Definition of verified (owner decision 2026-10-08): implemented, acceptance tests pass, the applicable
+cross-cutting requirement (see "Tests the P0/P1 work must include") is explicitly mapped, and the capability
+is demonstrated on at least one real recorded run where such a run is applicable. Where a real run is not
+meaningful or possible, the row states the alternative verification evidence. A row whose implementation
+carries a stated limitation against its own wording (for example universe membership that is not
+point-in-time) is not marked verified while the limitation stands.
+
 Build plan for the first three P1 steps (spec schema, assumption ledger, run manifest):
 `BACKTEST-ENGINE-P1-PLAN.md`. Backtests page requirements and their plan:
 `BACKTESTS-UI-TECHNICAL-REQUIREMENTS.md`, `BACKTESTS-UI-PLAN.md`. Canonical lifecycle and
