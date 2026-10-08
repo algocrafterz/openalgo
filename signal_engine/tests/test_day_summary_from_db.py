@@ -104,6 +104,186 @@ class TestFetchDayTrades:
         assert rows[0]["total_pnl"] == pytest.approx(1382.40)
 
 
+def _partial_leg(symbol, strategy, qty, pnl, *, marked=True, sig_id=None):
+    """A TP partial leg as main._book_exit_result writes it: the generic save(), with the leg's
+    own pnl in the context (since 2026-09-22) and, now, an explicit partial marker."""
+    context = {"pnl": pnl, "exit_types": ["TP1"]}
+    if marked:
+        context["partial"] = True
+    db.save(
+        Signal(strategy=strategy, direction=Direction.EXIT, symbol=symbol, entry=0.0, sl=0.0,
+               tp=0.0, raw_message="x", context=context, sig_id=sig_id),
+        Order(symbol=symbol, exchange="NSE", action=Action.SELL, quantity=qty, price=0.0,
+              order_type="MARKET", product="MIS", strategy_tag=strategy),
+        TradeResult(status=OrderStatus.SUCCESS, order_id=f"LEG-{symbol}-{qty}", message="success"),
+    )
+
+
+class TestPartialLegsAreNotDoubleCounted:
+    """2026-10-06: the day's engine P&L ran 1,164.3 above the broker fills. The final EXIT row's
+    pnl is CUMULATIVE (book_close: pos.realized_pnl + pnl_delta, so it already contains every
+    partial leg), and since 2026-09-22 each partial leg's own row carries its pnl too. Reading
+    both counted the leg twice and counted the leg as a trade."""
+
+    def test_reliance_orb_2026_10_06_counts_once(self):
+        _entry("RELIANCE", "ORB", 1203.7, 1187.98, 1215.0, 57)
+        _partial_leg("RELIANCE", "ORB", 28, 375.20)  # TP1 leg, +375.20
+        _exit("RELIANCE", "ORB", 1203.7, 1187.98, 29, 1210.1, 560.80, ["TP1"])  # cumulative
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1
+        assert sum(r["total_pnl"] for r in rows) == pytest.approx(560.80)
+
+    def test_a_partial_row_without_the_marker_is_still_recognised(self):
+        """Rows written between 2026-09-22 and this fix carry pnl but no marker; their message
+        is the generic save()'s 'success', which no final-close writer uses."""
+        _entry("RELIANCE", "ORB", 1203.7, 1187.98, 1215.0, 57)
+        _partial_leg("RELIANCE", "ORB", 28, 375.20, marked=False)
+        _exit("RELIANCE", "ORB", 1203.7, 1187.98, 29, 1210.1, 560.80, ["TP1"])
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(560.80)
+
+    def test_a_reconciled_close_is_never_mistaken_for_a_partial_leg(self):
+        _entry("SBIN", "ORB", 800.0, 796.0, 810.0, 10)
+        db.save_reconciled_exit(
+            strategy="ORB", symbol="SBIN", entry=800.0, sl=796.0, tp=0.0, quantity=10,
+            pnl=-40.0, fill_price=796.0, note="closed before restart", sig_id=None,
+        )
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(-40.0)
+
+    def test_two_strategies_each_close_a_partial_position_on_the_same_symbol(self):
+        """UJJIVANSFB: WATCHLIST 363.32 -> 597.72 and BREAKINGTRADE 332.76 -> 535.80."""
+        for strategy, qty, leg, final in (
+            ("BREAKINGTRADE-WATCHLIST", 293, 363.32, 597.72),
+            ("BREAKINGTRADE", 282, 332.76, 535.80),
+        ):
+            _entry("UJJIVANSFB", strategy, 66.45, 67.0, 65.0, 586)
+            _partial_leg("UJJIVANSFB", strategy, qty, leg)
+            _exit("UJJIVANSFB", strategy, 66.45, 67.0, qty, 65.65, final, ["TP1"])
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 2
+        assert sum(r["total_pnl"] for r in rows) == pytest.approx(597.72 + 535.80)
+
+
+def _final(symbol, strategy, qty, pnl, types, *, includes=None, sig_id=None):
+    db.save_tracker_exit(
+        strategy=strategy, symbol=symbol, entry=100.0, sl=99.0, tp=0.0, quantity=qty,
+        exit_price=101.0, pnl=pnl, exit_types=types, sig_id=sig_id, includes_leg_pnl=includes,
+    )
+
+
+class TestALegIsOnlySkippedWhenAFinalRowContainsIt:
+    """Reviewed against the real 2026-09-30/10-01 rows: skipping every partial leg dropped real
+    money wherever the final row did NOT contain the leg."""
+
+    def test_a_leg_whose_runner_was_closed_by_the_time_exit_still_counts(self):
+        """PRESTIGE 2026-09-30: TP1 +422.10, then time_exit_all, which writes no EXIT row."""
+        _entry("PRESTIGE", "BREAKINGTRADE-WATCHLIST", 100.0, 99.0, 102.0, 100)
+        _partial_leg("PRESTIGE", "BREAKINGTRADE-WATCHLIST", 50, 422.10)
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1
+        assert rows[0]["total_pnl"] == pytest.approx(422.10)
+        assert rows[0]["exit_types"] == ["TP1"]
+
+    def test_a_leg_with_no_entry_row_still_counts(self):
+        """TCS 2026-10-01: a leg of -243.60 with neither an entry row nor a final row."""
+        _partial_leg("TCS", "BREAKOUT", 40, -243.60)
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(-243.60)
+
+    def test_the_sbin_race_final_booked_before_the_leg_row_counts_both(self):
+        """SBIN 2026-09-30: the tracker poll booked the SL close (+328.50) BEFORE the TP1 leg
+        (+139.50) finished, so the final row has the LOWER id and does not contain the leg."""
+        _entry("SBIN", "BREAKOUT", 100.0, 99.0, 102.0, 100)
+        _final("SBIN", "BREAKOUT", 50, 328.50, ["SL"], includes=0.0)
+        _partial_leg("SBIN", "BREAKOUT", 50, 139.50)
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1
+        assert rows[0]["total_pnl"] == pytest.approx(468.0)
+
+    def test_the_same_race_without_the_marker_is_read_from_the_exit_labels(self):
+        _entry("SBIN", "BREAKOUT", 100.0, 99.0, 102.0, 100)
+        _final("SBIN", "BREAKOUT", 50, 328.50, ["SL"])  # legacy row: no includes_leg_pnl
+        _partial_leg("SBIN", "BREAKOUT", 50, 139.50)  # TP1 leg, final is labelled SL only
+        rows = db.fetch_day_trades("analyze")
+        assert rows[0]["total_pnl"] == pytest.approx(468.0)
+
+    def test_a_restart_between_tp1_and_the_close_counts_the_leg_once(self):
+        """The recovered position restarts with realized_pnl 0, so its final row records
+        includes_leg_pnl=0 and holds only the last leg."""
+        _entry("RELIANCE", "BREAKOUT", 100.0, 99.0, 102.0, 100)
+        _partial_leg("RELIANCE", "BREAKOUT", 50, 375.20)
+        _final("RELIANCE", "BREAKOUT", 50, 185.60, ["TP1"], includes=0.0)
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(560.80)
+
+    def test_a_final_row_that_records_it_includes_the_leg_is_not_added_to(self):
+        _entry("RELIANCE", "ORB", 100.0, 99.0, 102.0, 100)
+        _partial_leg("RELIANCE", "ORB", 50, 375.20)
+        _final("RELIANCE", "ORB", 50, 560.80, ["TP1"], includes=375.20)
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(560.80)
+
+    def test_two_legs_and_a_final_that_contains_both(self):
+        _entry("ICICIBANK", "BREAKOUT", 100.0, 99.0, 102.0, 100)
+        _partial_leg("ICICIBANK", "BREAKOUT", 30, 724.40)
+        _partial_leg("ICICIBANK", "BREAKOUT", 30, 276.50)
+        _final("ICICIBANK", "BREAKOUT", 40, 1280.90, ["TP1", "TP2"])  # legacy, both labels
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(1280.90)
+
+    def test_a_reconciled_close_is_taken_to_contain_every_leg(self):
+        """The broker's realised figure for the position is the whole position."""
+        _entry("SBIN", "ORB", 100.0, 99.0, 102.0, 100)
+        _partial_leg("SBIN", "ORB", 50, 100.0)
+        db.save_reconciled_exit(
+            strategy="ORB", symbol="SBIN", entry=100.0, sl=99.0, tp=0.0, quantity=50,
+            pnl=180.0, fill_price=101.0, note="closed before restart", sig_id=None,
+        )
+        rows = db.fetch_day_trades("analyze")
+        assert len(rows) == 1 and rows[0]["total_pnl"] == pytest.approx(180.0)
+
+
+class TestExitsPairWithTheirOwnEntry:
+    """fetch_day_trades keyed entries by (symbol, strategy) with the latest winning, so with a
+    re-entry every exit took the LAST entry's stop and size. sig_id is the lineage key; with no
+    sig_id the nearest PRECEDING entry is the pairing."""
+
+    def _entry_with(self, symbol, strategy, sl, qty, sig_id):
+        db.save(
+            Signal(strategy=strategy, direction=Direction.LONG, symbol=symbol, entry=100.0,
+                   sl=sl, tp=102.0, raw_message="x", sig_id=sig_id),
+            Order(symbol=symbol, exchange="NSE", action=Action.BUY, quantity=qty, price=0.0,
+                  order_type="MARKET", product="MIS", strategy_tag=strategy),
+            TradeResult(status=OrderStatus.SUCCESS, order_id=f"E-{sig_id}"),
+        )
+
+    def _exit_with(self, symbol, strategy, sig_id, pnl):
+        db.save_tracker_exit(
+            strategy=strategy, symbol=symbol, entry=100.0, sl=0.0, tp=0.0, quantity=1,
+            exit_price=101.0, pnl=pnl, exit_types=["TP1"], sig_id=sig_id,
+        )
+
+    def test_reentry_pairs_each_exit_by_sig_id(self):
+        self._entry_with("ICICIBANK", "BREAKOUT-PY", 99.0, 10, "BREAKOUT-PY-ICICIBANK-1000")
+        self._entry_with("ICICIBANK", "BREAKOUT-PY", 98.0, 20, "BREAKOUT-PY-ICICIBANK-1025")
+        # the FIRST trade closes after the second was entered
+        self._exit_with("ICICIBANK", "BREAKOUT-PY", "BREAKOUT-PY-ICICIBANK-1000", 10.0)
+        self._exit_with("ICICIBANK", "BREAKOUT-PY", "BREAKOUT-PY-ICICIBANK-1025", 20.0)
+        rows = {r["total_pnl"]: r for r in db.fetch_day_trades("analyze")}
+        assert (rows[10.0]["sl"], rows[10.0]["quantity"]) == (99.0, 10)
+        assert (rows[20.0]["sl"], rows[20.0]["quantity"]) == (98.0, 20)
+
+    def test_without_sig_id_the_nearest_preceding_entry_is_used(self):
+        self._entry_with("SBIN", "ORB", 99.0, 10, None)
+        self._exit_with("SBIN", "ORB", None, 10.0)
+        self._entry_with("SBIN", "ORB", 98.0, 20, None)
+        self._exit_with("SBIN", "ORB", None, 20.0)
+        rows = {r["total_pnl"]: r for r in db.fetch_day_trades("analyze")}
+        assert (rows[10.0]["sl"], rows[10.0]["quantity"]) == (99.0, 10)
+        assert (rows[20.0]["sl"], rows[20.0]["quantity"]) == (98.0, 20)
+
+
 class TestSummaryReadsTheDatabase:
     def _tracker(self):
         from signal_engine.tracker import PositionTracker

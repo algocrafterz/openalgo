@@ -398,7 +398,10 @@ class TestShadowReportWithThePythonTag:
         bar = pd.Timestamp("2026-09-30 10:00", tz=IST)
         ours = ShadowEvent(DAY, PY, "TCS", bar, "signal", "LONG", f"{PY}-TCS-20260930-1000")
         pine = PineSignal("TCS-20260930-1000", "TCS", "LONG", bar, "SUCCESS", "")
-        rep = compare([ours], [pine], universe={"TCS"}, last_bars={}, runner_strategy=PY)
+        rep = compare(
+            [ours], [pine], universe={"TCS"}, last_bars={}, runner_strategy=PY,
+            pine_bar_offset=pd.Timedelta(0),  # this test is about the prefix, not the bar stamp
+        )
         assert len(rep.matched) == 1
         assert rep.runner_only == [] and rep.pine_only == []
 
@@ -409,5 +412,8 @@ class TestShadowReportWithThePythonTag:
         bar = pd.Timestamp("2026-09-30 10:00", tz=IST)
         ours = ShadowEvent(DAY, PY, "TCS", bar, "signal", "LONG", f"{PY}-TCS-20260930-1000")
         pine = PineSignal("TCS-20260930-1000", "TCS", "LONG", bar, "SUCCESS", "")
-        rep = compare([ours], [pine], universe={"TCS"}, last_bars={})
+        rep = compare(
+            [ours], [pine], universe={"TCS"}, last_bars={},
+            pine_bar_offset=pd.Timedelta(0),  # this test is about the prefix, not the bar stamp
+        )
         assert len(rep.matched) == 0 and len(rep.runner_only) == 1

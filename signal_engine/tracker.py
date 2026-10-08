@@ -16,8 +16,10 @@ from signal_engine.api_client import (
     fetch_open_position,
     fetch_order_fill_price,
     fetch_order_status,
+    fetch_orderbook,
     fetch_positionbook,
     fetch_realised_pnl,
+    find_recent_complete_order_id,
 )
 from signal_engine.executor import build_exit_order, place_sl_order, send_order
 from signal_engine.models import Direction, OrderStatus
@@ -481,6 +483,50 @@ class PositionTracker:
         # here corrupted the audit trail for every multi-leg position: the ledger's
         # order_id-keyed reconciliation could never find the real closing broker fill, and
         # always saw a phantom "trades the engine never sent" of the true size (2026-09-21).
+        self._save_close_row(
+            pos,
+            exit_price=exit_price,
+            total_pnl=total_pnl,
+            exit_types=exit_types,
+            order_id=pos.sl_order_id,
+        )
+        self.record_exit(
+            pnl=pnl_delta,
+            is_partial=False,
+            total_pnl=total_pnl,
+            new_realised_pnl=new_realised_pnl,
+        )
+        # The close is already in the ledger and the counters. A failing notification must not
+        # raise from here: the caller would treat the close as unbooked, release the position and
+        # let the poll book the same close again (I2).
+        try:
+            await notifier.notify_position_closed(
+                pos.symbol,
+                total_pnl,
+                strategy=pos.strategy,
+                exit_price=exit_price,
+                direction=pos.direction.value,
+                r_multiple=record.r_multiple,
+                entry_price=base_price,
+                hold_minutes=hold_minutes,
+                exit_types=exit_types,
+                day_context=self.day_context_line(max_trades),
+            )
+        except Exception:
+            logger.exception(f"Close notification failed for {pos.symbol}; the close stays booked")
+        return record
+
+    @staticmethod
+    def _save_close_row(
+        pos, *, exit_price, total_pnl: float, exit_types: list, order_id: str,
+        extra_context: "dict | None" = None,
+    ) -> None:
+        """The one place a position's closing EXIT row is written (book_close, time exit).
+
+        includes_leg_pnl records how much of total_pnl the position had already realised from
+        partial legs when it closed, so db.fetch_day_trades() can tell a cumulative close from
+        one that does not contain its legs. quantity is the REMAINING size at close.
+        """
         db.save_tracker_exit(
             strategy=pos.strategy,
             symbol=pos.symbol,
@@ -491,28 +537,11 @@ class PositionTracker:
             exit_price=exit_price,
             pnl=total_pnl,
             exit_types=exit_types,
-            order_id=pos.sl_order_id,
+            order_id=order_id,
             sig_id=pos.sig_id,
+            includes_leg_pnl=pos.realized_pnl,
+            extra_context=extra_context,
         )
-        self.record_exit(
-            pnl=pnl_delta,
-            is_partial=False,
-            total_pnl=total_pnl,
-            new_realised_pnl=new_realised_pnl,
-        )
-        await notifier.notify_position_closed(
-            pos.symbol,
-            total_pnl,
-            strategy=pos.strategy,
-            exit_price=exit_price,
-            direction=pos.direction.value,
-            r_multiple=record.r_multiple,
-            entry_price=base_price,
-            hold_minutes=hold_minutes,
-            exit_types=exit_types,
-            day_context=self.day_context_line(max_trades),
-        )
-        return record
 
     async def send_day_summary(self) -> None:
         """Send day summary to notify channel. No-op if already sent today with nothing new
@@ -609,6 +638,7 @@ class PositionTracker:
                     "losses": self._day_losses,
                     "net_pnl": self._day_pnl,
                     "time_exits": self._day_time_exits,
+                    "execution_exits": 0,
                 },
             )
             return (*memory, True) if want_degraded else memory
@@ -630,13 +660,19 @@ class PositionTracker:
         records = _dedupe_breakingtrade_overlap(records)
         # Same classification the day counters use: a TIME exit is a trade but not a decided
         # win or loss - the clock closed it, not the strategy's own rule.
-        decided = [r for r in records if "TIME" not in (r.exit_types or [])]
+        # The same holds for a BAD_FILL_CLOSE: the execution guard closed it, which says
+        # nothing about the entry rule. Both still count in trades and in net P&L, because
+        # the money is real; only the win rate, a statement about the strategy, leaves them out.
+        decided = [r for r in records if not (set(r.exit_types or []) & db.NOT_DECIDED_EXIT_TYPES)]
         counts = {
             "trades": len(records),
             "wins": sum(1 for r in decided if r.total_pnl >= 0),
             "losses": sum(1 for r in decided if r.total_pnl < 0),
             "net_pnl": sum(r.total_pnl for r in records),
             "time_exits": sum(1 for r in records if "TIME" in (r.exit_types or [])),
+            "execution_exits": sum(
+                1 for r in records if db.EXIT_BAD_FILL_CLOSE in (r.exit_types or [])
+            ),
         }
         return (records, counts, False) if want_degraded else (records, counts)
 
@@ -808,6 +844,13 @@ class PositionTracker:
         """
         from signal_engine.config import settings as _settings
 
+        # The square-off closes positions at the broker; if the poll saw them at qty 0 it would
+        # book the same close the time exit is about to book (four real days: IOC 09-24,
+        # HINDPETRO 09-29, NAUKRI 09-30, TCS 10-01), and with a ledger row per time exit that
+        # is the same loss written, and taken on the risk counters, twice.
+        if self._time_exit_active:
+            return
+
         book = await fetch_positionbook()
         if book is None:
             await self._note_positionbook_failure()
@@ -827,7 +870,7 @@ class PositionTracker:
                     closed_keys.append(key)
 
         for key in closed_keys:
-            del self._positions[key]
+            self._positions.pop(key, None)  # another path may already have unregistered it
 
         await self._maybe_send_day_summary(closed_keys)
         await self._retry_missing_sl(book_data, _settings)
@@ -924,13 +967,31 @@ class PositionTracker:
         if self._position_too_young(key, age, _settings):
             return False
 
-        verdict = await self._verify_unconfirmed_fill(key, pos, age, _settings)
-        if verdict == _FILL_ORPHANED:
-            return True
-        if verdict == _FILL_WAIT:
+        # One close, one booking (I2). An exit handler (a signal exit, an SL-hit reconcile or a
+        # no-progress exit) that already owns this position will book its close, and its own
+        # booking awaits leave the position registered at qty 0 for a moment. Booking it here too
+        # wrote the same close twice (KOTAKBANK 2026-10-05: rows TP1 and SL, +1,915.95 twice, two
+        # record_close calls). The check and the set are one synchronous step and come before the
+        # fill verification, so no handler can slip in during its awaits. Marking the position
+        # also makes a late signal exit stand down instead of selling a position that is flat.
+        if pos.exit_pending:
             return False
-
-        return await self._book_broker_close(key, pos, age, _settings, entry)
+        pos.exit_pending = True
+        closed = False
+        try:
+            verdict = await self._verify_unconfirmed_fill(key, pos, age, _settings)
+            if verdict == _FILL_ORPHANED:
+                closed = True
+            elif verdict != _FILL_WAIT:
+                closed = await self._book_broker_close(key, pos, age, _settings, entry)
+            return closed
+        finally:
+            if closed:
+                # Remove it now, not after the whole poll loop: a time exit or a signal exit
+                # starting in between must not find a booked position still registered.
+                self._positions.pop(key, None)
+            else:
+                pos.exit_pending = False
 
     def _position_too_young(self, key: str, age: timedelta, _settings) -> bool:
         """Guard 1 — a freshly registered position showing qty=0 is usually positionbook lag.
@@ -1252,6 +1313,10 @@ class PositionTracker:
                 continue
             if _ladder_owns_exits(_settings, pos.strategy):
                 continue
+            # The loop snapshot can outlive the position: a signal exit may own it, or may
+            # already have booked and removed it, since an earlier iteration awaited.
+            if pos.exit_pending or self._positions.get(self._key(pos.symbol, pos.strategy)) is not pos:
+                continue
 
             fired = self._evaluate_no_progress(pos, now, gates, book_data, _settings)
             if fired is None:
@@ -1354,6 +1419,21 @@ class PositionTracker:
         """Cancel the SL, then either market-exit or move the stop to break-even."""
         age, ltp, progress, progress_base, fired_threshold, fired_label = fired
 
+        # Claim the position before the first await (the caller checked exit_pending in the same
+        # synchronous run), so a signal exit cannot place a second order on it while the stop is
+        # cancelled and the market exit sent. Released below unless this action closed it.
+        pos.exit_pending = True
+        try:
+            await self._no_progress_action_claimed(pos, now, age, ltp, progress, progress_base,
+                                                   fired_threshold, fired_label, _settings)
+        finally:
+            if self._positions.get(self._key(pos.symbol, pos.strategy)) is pos:
+                pos.exit_pending = False
+
+    async def _no_progress_action_claimed(
+        self, pos, now, age, ltp, progress, progress_base, fired_threshold, fired_label, _settings
+    ) -> None:
+        """The body of _apply_no_progress_action, run while the position is claimed."""
         base_entry = _break_even_base(pos)
         be_price = _profit_lock_price(pos, ltp, base_entry, _settings.no_progress_profit_lock_ratio)
         use_market_exit = self._should_market_exit(now, age, progress, _settings)
@@ -1558,9 +1638,18 @@ class PositionTracker:
             self._reset_day_counters()
             return
 
-        await self._square_off_strategies({pos.strategy for pos in mis_positions.values()})
-        await self._verify_positions_closed(mis_positions)
-        await self._book_time_exit_trades(mis_positions, _settings)
+        # Whole seconds: broker order timestamps carry no sub-second part, so keeping one here
+        # would make an order stamped in the same second look older than the square-off.
+        started = datetime.now(IST).replace(microsecond=0)
+        # Held from the first cancel to the last booking, so neither the poll nor a TP/EXIT
+        # signal can book or act on a position the square-off is closing.
+        self._time_exit_active = True
+        try:
+            await self._square_off_strategies({pos.strategy for pos in mis_positions.values()})
+            still_open = await self._verify_positions_closed(mis_positions)
+            await self._book_time_exit_trades(mis_positions, _settings, started, still_open)
+        finally:
+            self._time_exit_active = False
 
         # Send day summary after MIS positions are closed (deduped — may have already fired)
         await self.send_day_summary()
@@ -1568,21 +1657,20 @@ class PositionTracker:
 
     async def _square_off_strategies(self, strategies: set[str]) -> None:
         """Cancel pending orders then close all positions, per strategy."""
-        self._time_exit_active = True
-        try:
-            for strategy in strategies:
-                # Cancel all pending orders first (SL-M + TP LIMIT legs)
-                logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
-                await cancel_all_orders(strategy)
+        for strategy in strategies:
+            # Cancel all pending orders first (SL-M + TP LIMIT legs)
+            logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
+            await cancel_all_orders(strategy)
 
-                # Close all open positions
-                logger.info(f"Time exit: closing all positions for strategy={strategy}")
-                await close_all_positions(strategy)
-        finally:
-            self._time_exit_active = False
+            # Close all open positions
+            logger.info(f"Time exit: closing all positions for strategy={strategy}")
+            await close_all_positions(strategy)
 
-    async def _verify_positions_closed(self, mis_positions: dict) -> None:
-        """Confirm the broker actually closed everything; retry cancel+close if not."""
+    async def _verify_positions_closed(self, mis_positions: dict) -> set:
+        """Confirm the broker actually closed everything; retry cancel+close if not.
+
+        Returns the keys of positions the broker still holds after the last attempt.
+        """
         _MAX_CLOSE_ATTEMPTS = 3
         _VERIFY_WAIT = 3  # seconds per attempt
         pending = list(mis_positions.items())  # [(key, pos), ...]
@@ -1602,7 +1690,7 @@ class PositionTracker:
                     f"Time exit: {len(mis_positions)} position(s) confirmed closed at broker "
                     f"(attempt {attempt})"
                 )
-                return
+                return set()
 
             pending = still_open
             logger.warning(
@@ -1625,8 +1713,11 @@ class PositionTracker:
             f"TIME EXIT FAILED: {symbols_str} not closed after {_MAX_CLOSE_ATTEMPTS} attempts. "
             f"Close manually before 15:20!"
         )
+        return {k for k, _ in pending}
 
-    async def _book_time_exit_trades(self, mis_positions: dict, _settings) -> None:
+    async def _book_time_exit_trades(
+        self, mis_positions: dict, _settings, started: datetime, still_open: set = frozenset()
+    ) -> None:
         """Distribute the time-exit P&L across MIS positions and clear them."""
         current_realised = await fetch_realised_pnl()
         time_exit_pnl = current_realised - self._last_realised_pnl
@@ -1646,10 +1737,22 @@ class PositionTracker:
         )  # priced legs are only the closing leg; realised partials are added in booking
         shared = leftover / len(unpriced) if unpriced else 0.0
 
+        book = await fetch_orderbook() or []
+        used_order_ids: set[str] = set()
+
         # Clear only MIS positions and update risk engine
         for key, pos in mis_positions.items():
             with logger.contextualize(symbol=pos.symbol):
-                await self._book_one_time_exit(key, pos, priced.get(key, shared), _settings)
+                if self._positions.get(key) is not pos or pos.exit_pending:
+                    # Already booked, or being booked right now, by another path (the poll or a
+                    # signal exit): booking it here too would write the same close twice.
+                    logger.info(f"Time exit: {key} is booked or being booked elsewhere - skipping")
+                    continue
+                await self._book_one_time_exit(
+                    key, pos, priced.get(key, shared), _settings,
+                    book=book, started=started, confirmed_closed=key not in still_open,
+                    used_order_ids=used_order_ids,
+                )
 
     async def _time_exit_leg_pnls(self, mis_positions: dict) -> dict:
         """Closing-leg P&L per tracked key from the position book's closing prices."""
@@ -1666,10 +1769,46 @@ class PositionTracker:
             out[key] = leg_pnl(pos.direction, base, entry.ltp, pos.quantity)
         return out
 
-    async def _book_one_time_exit(self, key: str, pos, per_pos_pnl: float, _settings) -> None:
-        """Record one force-closed MIS position and drop it from the tracker."""
+    async def _time_exit_order(
+        self, book: list, pos, started: datetime, used_order_ids: set
+    ) -> tuple[str, "float | None"]:
+        """The order that closed `pos` at the square-off and its fill, from the orderbook.
+
+        The square-off goes through the strategy-level close API, which returns no per-position
+        order id, so the closing order is found the way a timed-out exit is: the complete order
+        on this symbol, opposite action and remaining quantity placed since the square-off began.
+        """
+        action = "SELL" if pos.direction == Direction.LONG else "BUY"
+        order_id = find_recent_complete_order_id(
+            book, pos.symbol, action, pos.quantity, started, frozenset(used_order_ids)
+        )
+        if not order_id:
+            return "", None
+        used_order_ids.add(order_id)
+        return order_id, await fetch_order_fill_price(order_id, pos.strategy) or None
+
+    async def _book_one_time_exit(
+        self, key: str, pos, per_pos_pnl: float, _settings, *,
+        book: list = (), started: "datetime | None" = None, confirmed_closed: bool = True,
+        used_order_ids: "set | None" = None,
+    ) -> None:
+        """Record one force-closed MIS position and drop it from the tracker.
+
+        The closing EXIT row goes through the same writer as every other full close, with the
+        TIME exit type and the order lineage the orderbook gives. No row is written for a
+        position the broker still holds: a row would claim a close that did not happen.
+        """
         base_price = _break_even_base(pos)
+        order_id, exit_fill = (
+            await self._time_exit_order(
+                list(book), pos, started, used_order_ids if used_order_ids is not None else set()
+            )
+            if confirmed_closed and started is not None else ("", None)
+        )
+        if exit_fill and base_price > 0:
+            per_pos_pnl = leg_pnl(pos.direction, base_price, exit_fill, pos.quantity)
         total_pnl = pos.realized_pnl + per_pos_pnl
+        exit_types = pos.exit_types[:] + ["TIME"]
         r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
         hold_min = int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
         self._completed_trades.append(
@@ -1678,13 +1817,31 @@ class PositionTracker:
                 direction=pos.direction.value,
                 strategy=pos.strategy,
                 entry_price=base_price,
-                exit_price=None,
+                exit_price=exit_fill,
                 original_qty=pos.original_quantity or pos.quantity,
                 total_pnl=total_pnl,
                 r_multiple=r,
-                exit_types=pos.exit_types[:] + ["TIME"],
+                exit_types=exit_types,
             )
         )
+        if confirmed_closed:
+            self._save_close_row(
+                pos,
+                exit_price=exit_fill,
+                total_pnl=total_pnl,
+                exit_types=exit_types,
+                order_id=order_id,
+                extra_context={
+                    "exit_class": "TIME_EXIT",
+                    "entry_order_id": pos.entry_order_id,
+                    "exit_order_id": order_id,
+                    "exit_fill": exit_fill,
+                },
+            )
+        else:
+            logger.error(
+                f"Time exit: {pos.symbol} is still open at the broker - no closing row written"
+            )
         self._risk_engine.record_close(pnl=total_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1

@@ -56,6 +56,34 @@ class TestAggregateStrategyStats:
         assert stats["wins"] == 1
         assert stats["losses"] == 0
 
+    def test_a_bad_fill_close_is_a_trade_but_not_a_decided_loss(self):
+        """The execution guard closed it, which says nothing about the entry rule. The
+        headline summary (tracker._day_from_db) already leaves it out of wins and losses; the
+        per-strategy rows must agree with it."""
+        records = [
+            _rec("BREAKOUT-PY", total_pnl=-93.0, exit_types=["BAD_FILL_CLOSE"]),
+            _rec("BREAKOUT-PY", total_pnl=40.0),
+        ]
+        stats = notifier._aggregate_strategy_stats(records)
+        assert stats == {"trades": 2, "wins": 1, "losses": 0, "time_exits": 0}
+
+
+class TestAverageROnlyCountsDecidedTrades:
+    """Avg R ranks the strategies, so it must not be moved by events that are not evidence about
+    the entry logic. The money still counts in net P&L."""
+
+    def test_time_and_bad_fill_rows_do_not_move_average_r(self):
+        records = [
+            _rec("X", r_multiple=1.0),
+            _rec("X", r_multiple=-2.0, exit_types=["TIME"]),
+            _rec("X", r_multiple=-3.0, exit_types=["BAD_FILL_CLOSE"]),
+        ]
+        assert notifier._average_r(records) == pytest.approx(1.0)
+
+    def test_only_execution_events_leaves_no_average_r(self):
+        records = [_rec("X", r_multiple=-3.0, exit_types=["BAD_FILL_CLOSE"])]
+        assert notifier._average_r(records) is None
+
 
 class TestBestWorstLine:
     def test_reports_best_and_worst_by_r_multiple(self):

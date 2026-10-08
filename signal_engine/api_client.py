@@ -12,11 +12,13 @@ Every call goes through one of two transports:
 """
 
 import asyncio
+from datetime import datetime
 
 import httpx
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine.timeutils import IST
 
 
 class MarginAPIError(Exception):
@@ -289,6 +291,49 @@ async def fetch_orderbook():
 
     logger.error(f"Failed to fetch orderbook after {max_retries} attempts")
     return None
+
+
+def find_recent_complete_order_id(
+    book: list, symbol: str, action: str, quantity: int, since: datetime,
+    exclude: frozenset = frozenset(),
+) -> str:
+    """Id of the first COMPLETE order on `symbol` with this action and quantity placed at or
+    after `since`, or "" when there is none.
+
+    A filled MARKET order shows "complete" immediately, so recency is the only way to avoid
+    adopting an unrelated earlier fill of the same symbol, action and size. `since` should
+    carry no sub-second part: broker timestamps are whole seconds, so a fill stamped in the
+    same second as the send would otherwise read as older and be skipped. An unparseable
+    timestamp does not discard a match. Ids in `exclude` are skipped, so two positions with the
+    same symbol, side and size cannot both adopt one order.
+    """
+    for o in book:
+        if not isinstance(o, dict):
+            continue
+        if str(o.get("symbol", "")).upper() != symbol.upper():
+            continue
+        if str(o.get("action", "")).upper() != action:
+            continue
+        try:
+            if int(o.get("quantity", 0)) != quantity:
+                continue
+        except (TypeError, ValueError):
+            continue
+        status = str(o.get("order_status") or o.get("status") or "").lower()
+        if status != "complete":
+            continue
+        ts_raw = o.get("timestamp") or o.get("order_timestamp")
+        if ts_raw:
+            try:
+                ts = datetime.strptime(str(ts_raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+                if ts < since:
+                    continue
+            except ValueError:
+                pass  # unparseable timestamp - fall through rather than discard a real match
+        order_id = str(o.get("orderid") or o.get("order_id") or "")
+        if order_id and order_id not in exclude:
+            return order_id
+    return ""
 
 
 async def close_all_positions(strategy: str) -> bool:

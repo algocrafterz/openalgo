@@ -439,10 +439,17 @@ class TestExitOrderPlacement:
         assert tracker.find_position("RELIANCE", "ORB") is None
 
     @pytest.mark.asyncio
-    async def test_exit_exhausts_retries_and_broker_flat_cleans_up_silently(self):
-        """All retries failed but broker qty is 0 -> SL fired; clean up, don't alarm."""
+    async def test_exit_exhausts_retries_and_broker_flat_leaves_the_close_for_the_poll(self):
+        """All retries failed but broker qty is 0 -> the stop fired; don't alarm.
+
+        The handler no longer unregisters the position and records a close of 0.0: that dropped
+        a real loss from the ledger and from the daily-loss counter (invariant I4). It releases
+        the position and leaves it registered, so the tracker poll books the stop hit with the
+        stop's own fill and P&L. See test_close_single_booking.py for the booking itself.
+        """
         tracker = _real_tracker()
-        tracker.register(_position())
+        pos = _position()
+        tracker.register(pos)
         h = harness(
             tracker=tracker,
             settings=_settings_stub(bracket_tp_exit_retries=2, bracket_retry_delay=0.0),
@@ -452,8 +459,9 @@ class TestExitOrderPlacement:
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
             h.notifier.notify_exit_failed.assert_not_awaited()
-            h.risk.record_close.assert_called_once_with(pnl=0.0, strategy="ORB", symbol="RELIANCE")
-        assert tracker.find_position("RELIANCE", "ORB") is None
+            h.risk.record_close.assert_not_called()  # no 0.0 close; the poll books the real one
+        assert tracker.find_position("RELIANCE", "ORB") is pos  # still tracked
+        assert pos.exit_pending is False  # released, so the poll can book it
 
     @pytest.mark.asyncio
     async def test_exit_failure_with_open_position_alerts_and_allows_retry(self):

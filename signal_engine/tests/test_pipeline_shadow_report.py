@@ -74,9 +74,62 @@ class TestLoadPine:
 
 class TestCompare:
     def pine(self, symbol, at, direction="LONG", status="SUCCESS"):
+        """A Pine row for a setup the runner arms on bar `at`; Pine stamps the fill bar, 5 min on."""
+        stamp = t(at) + pd.Timedelta(minutes=5)
         return sr.PineSignal(
-            f"{symbol}-20260930-{at.replace(':', '')}", symbol, direction, t(at), status, ""
+            f"{symbol}-20260930-{stamp:%H%M}", symbol, direction, stamp, status, ""
         )
+
+    def test_pine_fill_bar_stamp_matches_the_runner_arming_bar_by_default(self, store):
+        sig(store, "PFC", "10:15")
+        pine = sr.PineSignal("PFC-20260930-1020", "PFC", "LONG", t("10:20"), "SUCCESS", "")
+        rep = sr.compare(
+            store.shadow_events(DAY, "BREAKOUT"), [pine],
+            universe={"PFC"}, last_bars={"PFC": t("11:00")},
+        )
+        assert [m.sig_id for m in rep.matched] == ["PFC-20260930-1015"]
+        assert rep.runner_only == [] and rep.pine_only == []
+
+    def test_a_zero_offset_reproduces_the_old_exact_key(self, store):
+        sig(store, "PFC", "10:15")
+        pine = sr.PineSignal("PFC-20260930-1015", "PFC", "LONG", t("10:15"), "SUCCESS", "")
+        rep = sr.compare(
+            store.shadow_events(DAY, "BREAKOUT"), [pine],
+            universe={"PFC"}, last_bars={"PFC": t("11:00")}, pine_bar_offset=pd.Timedelta(0),
+        )
+        assert len(rep.matched) == 1
+
+    def test_any_other_offset_is_a_divergence_not_a_match(self, store):
+        sig(store, "SBIN", "10:15")
+        pine = sr.PineSignal("SBIN-20260930-1010", "SBIN", "LONG", t("10:10"), "SUCCESS", "")
+        rep = sr.compare(
+            store.shadow_events(DAY, "BREAKOUT"), [pine],
+            universe={"SBIN"}, last_bars={"SBIN": t("11:00")},
+        )
+        assert rep.matched == []
+        assert [e.sig_id for e in rep.runner_only] == ["SBIN-20260930-1015"]
+        assert [p.symbol for p, _ in rep.pine_only] == ["SBIN"]
+
+    def test_raw_exact_matches_count_the_as_stamped_key_and_survive_normalising(self, store):
+        sig(store, "TCS", "10:00")
+        sig(store, "PFC", "10:15")
+        same_stamp = sr.PineSignal("TCS-20260930-1000", "TCS", "LONG", t("10:00"), "SUCCESS", "")
+        fill_stamp = sr.PineSignal("PFC-20260930-1020", "PFC", "LONG", t("10:20"), "SUCCESS", "")
+        rep = sr.compare(
+            store.shadow_events(DAY, "BREAKOUT"), [same_stamp, fill_stamp],
+            universe={"TCS", "PFC"}, last_bars={"TCS": t("11:00"), "PFC": t("11:00")},
+        )
+        assert rep.raw_exact_matches == 1
+        assert [m.sig_id for m in rep.matched] == ["PFC-20260930-1015"]
+
+    def test_pine_only_reason_looks_up_the_arming_bar(self, store):
+        store.record_shadow(DAY, "BREAKOUT", "SBIN", t("10:05"), "skip", reason="price above 5000")
+        pine = sr.PineSignal("SBIN-20260930-1010", "SBIN", "LONG", t("10:10"), "SUCCESS", "")
+        rep = sr.compare(
+            store.shadow_events(DAY, "BREAKOUT"), [pine],
+            universe={"SBIN"}, last_bars={"SBIN": t("11:00")},
+        )
+        assert "price above 5000" in rep.pine_only[0][1]
 
     def test_match_runner_only_and_pine_only(self, store):
         sig(store, "TCS", "09:55")
@@ -153,7 +206,7 @@ class TestFormatAndMain:
         with RunnerStateStore(state_path, trades_lookup=lambda s: False) as st:
             sig(st, "TCS", "09:55")
         db = str(tmp_path / "trades.db")
-        make_trades_db(db, [("BREAKOUT", "LONG", "TCS", "SUCCESS", "ok", "TCS-20260930-0955")])
+        make_trades_db(db, [("BREAKOUT", "LONG", "TCS", "SUCCESS", "ok", "TCS-20260930-1000")])
         rc = sr.main(
             ["--day", "2026-09-30", "--state-db", state_path, "--trades-db", db,
              "--symbols", "TCS"]

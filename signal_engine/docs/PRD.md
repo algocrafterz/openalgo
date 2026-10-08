@@ -216,6 +216,53 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-10-07)
+
+Ledger and accounting work, accepted 2026-10-07 and not yet committed. The rules these changes
+keep are in `ACCOUNTING-INVARIANTS.md`. The historical P&L defect found on the way is recorded
+separately in `ACCOUNTING-DEFECT-2026-09-ESTIMATED-EXIT-PNL.md` and is not part of these changes.
+
+- **Pine versus Python comparison.** `pipeline/shadow_report.py` now shifts Pine rows back one
+  5-minute bar before matching, because Pine stamps its `sig_id` with the fill bar and the
+  runner stamps the arming bar. The raw unshifted match count is still reported.
+- **B1, exit order id.** A signal-driven full exit now records its own exit order id, not the
+  id of the stop that was cancelled to make room for it.
+- **B2, partial legs.** `db.fetch_day_trades` no longer counts a partial leg twice or as its
+  own trade, and no longer drops one. A position's trade is its closing row plus any leg P&L
+  the closing row does not contain. New closing rows record `includes_leg_pnl`. A position
+  with legs and no closing row is one trade made of its legs. Exits pair with entries by
+  `sig_id`, else the nearest preceding entry.
+- **B3, bad-fill closes.** A bad entry fill that the execution guard closes writes an entry
+  row and an exit row of type `BAD_FILL_CLOSE` (cause in `context.reason`). The real loss
+  reaches `risk_engine.record_close` and the daily loss limit. A failed close restores the
+  stop, keeps the position tracked and writes no row.
+- **Time-exit rows.** `time_exit_all` writes one closing row per position the broker
+  confirmed closed, through the same writer `book_close` uses, with order lineage from the
+  orderbook. The tracker poll stands down for the whole time exit, and the time exit skips a
+  position another path already booked.
+- **One close, one booking (I2).** BREAKOUT-PY KOTAKBANK on 2026-10-05 was booked twice: the
+  signal-driven TP1 exit at 11:15:11 and the tracker poll one second later as a stop hit
+  (rows 948 and 949, +1,915.95 twice, a second `record_close`, day counters 22 to 23). The
+  signal exit unregistered only after its booking awaits, and the poll never read
+  `pos.exit_pending`. Now a signal exit, the poll's close booking and the no-progress action each
+  claim the position in the same synchronous step as their check, stand down if it is claimed,
+  and release it unless they closed it. A crashed or cancelled exit handler releases it. The
+  poll removes a booked position at once, the time exit skips a position another path owns, and
+  a failing close notification cannot unwind a booked close. A failed exit with a flat broker
+  no longer unregisters the position and records 0.0: the poll books the stop hit with its real
+  P&L. Replaying the 5 Oct interleaving in `test_close_single_booking.py` gives one row, one
+  `record_close` and one broker order. Rows 948 and 949 are unchanged.
+- **Money versus evidence.** Every day-trade row carries `exit_class`. `TIME_EXIT` and
+  `BAD_FILL_CLOSE` count in trades and net P&L and stay out of win rate and average R, in the
+  headline summary and the per-strategy lines (`db.NOT_DECIDED_EXIT_TYPES`).
+- **Test running.** Two tiers: targeted files while developing, the full suite for commit and
+  CI. The full suite runs through `scripts/run_full_tests.sh`, which holds a machine-wide
+  lock. A project hook denies a direct full-suite pytest command. See `CLAUDE.md`.
+
+Not changed: strategy entry and exit rules, sizing, and the validator. The full suite last ran
+at 5,751 passed, 1 failed, 1 skipped. The failure is in another session's unfinished
+freshness work.
+
 ## Recent Changes (2026-09-30)
 
 **BREAKOUT ported to Python on one shared code path (features, strategy core, exit ladder). The
@@ -5651,7 +5698,7 @@ every weekday starts from a clean slate, whatever was left running.
   sentinel and the shutdown notification. With no argument it behaves as before (`scheduled`).
 - `createTaskOpenAlgoScheduler.ps1` registers AutoStart with `dailystart`. An already registered
   task keeps calling `run` until the script is re-run.
-- Unchanged: the 5-minute watchdog (`start`), manual `start` and `run`, the 15:30/16:00 stop, and the
+- Unchanged: the 5-minute watchdog (`start`), manual `start` and `run`, the 16:00 stop (openAlgoAutoStop), and the
   15-minute broker-session healthcheck. Nothing new runs outside 08:50 on weekdays.
 
 **Verification.** Both PowerShell files parse; `bash -n` passes; `tests/test_openalgoctl.sh` passes

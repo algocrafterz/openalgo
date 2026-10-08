@@ -398,6 +398,53 @@ class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
         assert pos.sl_order_id == "MARKET-EXIT-9"
 
 
+class TestSignalDrivenExitRecordsItsOwnOrderId:
+    """2026-10-06 ETERNAL (BREAKOUT-PY): the TP1 exit SELL was order 26100631709843, but the
+    EXIT row in trades.db carried 26100659417290, the stop-loss that had just been CANCELLED.
+    _cancel_sl_before_exit() leaves pos.sl_order_id set, and book_close() writes that field as
+    the closing order. The no-progress path sets it to its own exit order first; the
+    signal-driven full exit did not, so the ledger could never match the broker's fill.
+    """
+
+    @staticmethod
+    def _eternal():
+        pos = _pos("ETERNAL", qty=668, fill=324.70)
+        pos.strategy = "BREAKOUT-PY"
+        pos.sl_order_id = "26100659417290"  # the stop that was cancelled before the exit
+        return pos
+
+    @staticmethod
+    async def _run_exit(pos, *, exit_qty, is_full_exit):
+        from signal_engine import main
+        from signal_engine.models import OrderStatus, TradeResult
+
+        tracker = PositionTracker(MagicMock())
+        tracker.register(pos)
+        signal = MagicMock(symbol=pos.symbol, strategy=pos.strategy, tp=326.64)
+        exit_result = TradeResult(status=OrderStatus.SUCCESS, order_id="26100631709843")
+        with patch("signal_engine.main.tracker", tracker), \
+             patch("signal_engine.main.risk_engine", MagicMock()), \
+             patch("signal_engine.main._book_realised_pnl_delta",
+                   AsyncMock(return_value=(0.0, 0.0))), \
+             patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=326.45)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
+             patch.object(tracker, "maybe_send_day_summary", AsyncMock()), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await main._book_exit_result(signal, pos, "TP1", exit_qty, is_full_exit, exit_result)
+        return save
+
+    @pytest.mark.asyncio
+    async def test_full_exit_row_carries_the_exit_order_not_the_cancelled_stop(self):
+        save = await self._run_exit(self._eternal(), exit_qty=668, is_full_exit=True)
+        assert save.call_args.kwargs["order_id"] == "26100631709843"
+
+    @pytest.mark.asyncio
+    async def test_invalid_partial_converted_to_a_full_close_carries_the_exit_order(self):
+        save = await self._run_exit(self._eternal(), exit_qty=668, is_full_exit=False)
+        assert save.call_args.kwargs["order_id"] == "26100631709843"
+
+
 class TestNoProgressExitBooksItsOwnFill:
     """2026-09-22: _no_progress_market_exit() placed its own exit order, then discarded that
     order's confirmed fill and left booking to the NEXT check_positions() poll, which derives

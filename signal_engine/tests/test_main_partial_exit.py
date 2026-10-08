@@ -249,7 +249,7 @@ class TestPartialExitFlow:
 
             mock_save.assert_called_once()
             saved_signal, _saved_order, saved_result = mock_save.call_args.args
-            assert saved_signal.context == {"pnl": 500.0, "exit_types": ["TP1"]}
+            assert saved_signal.context == {"pnl": 500.0, "exit_types": ["TP1"], "partial": True}
             assert saved_result.fill_price == 1027.5
 
 

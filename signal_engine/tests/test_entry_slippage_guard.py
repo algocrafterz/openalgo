@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from signal_engine.main import _auto_close_on_bad_fill, entry_slippage_r
-from signal_engine.models import Direction, Signal
+from signal_engine.models import Direction, OrderStatus, Signal, TradeResult
 
 
 def _signal(direction=Direction.LONG, entry=2085.9, sl=2079.74, tp=2092.06) -> Signal:
@@ -51,7 +51,7 @@ class TestEntrySlippageR:
 
 async def _run_guard(signal, fill, max_slip_r=0.5):
     settings = SimpleNamespace(exchange="NSE", product="MIS", max_entry_slippage_r=max_slip_r)
-    send_order = AsyncMock()
+    send_order = AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
     cancel = AsyncMock()
     notifier = MagicMock()
     notifier.notify_order_rejected = AsyncMock()
@@ -62,8 +62,11 @@ async def _run_guard(signal, fill, max_slip_r=0.5):
         patch("signal_engine.main.cancel_order", cancel),
         patch("signal_engine.main.notifier", notifier),
         patch("signal_engine.main.risk_engine", risk),
+        patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=None)),
+        patch("signal_engine.main._book_realised_pnl_delta", AsyncMock(return_value=(0.0, 0.0))),
     ):
-        closed = await _auto_close_on_bad_fill(signal, 147, fill, "SL1")
+        outcome = await _auto_close_on_bad_fill(signal, 147, fill, "SL1")
+    closed = outcome is not None and outcome.closed
     return closed, send_order, cancel, notifier, risk
 
 

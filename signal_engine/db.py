@@ -309,7 +309,9 @@ def sig_id_exists(sig_id: str) -> bool:
 
 def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp: float,
                       quantity: int, exit_price: "float | None", pnl: float,
-                      exit_types: list, order_id: str = "", sig_id: "str | None" = None) -> None:
+                      exit_types: list, order_id: str = "", sig_id: "str | None" = None,
+                      includes_leg_pnl: "float | None" = None,
+                      extra_context: "dict | None" = None) -> None:
     """Write the EXIT row for a close the TRACKER detected (broker SL-M fill, no-progress
     market exit, time exit).
 
@@ -327,10 +329,23 @@ def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp
     reconciliation can pair this close back to its entry. Left None only for entries that
     never carried one (Python-sourced strategies) — see tracker.py's TrackedPosition.sig_id
     docstring for the 2026-09-17 incident this closes.
+
+    includes_leg_pnl: how much of `pnl` is partial-leg P&L the position had already realised
+    (TrackedPosition.realized_pnl at close). fetch_day_trades() uses it to decide whether a
+    partial leg's own row is already inside this row or still has to be added: a close booked
+    before a leg finished, or by a restarted engine that lost the position's history, includes
+    less than the legs' rows hold.
+
+    extra_context: further keys for the row's context, for closes that carry lineage the plain
+    tracker close does not (the time exit's exit_class, entry and exit order ids and fill).
     """
     try:
         conn = _get_connection()
         now = datetime.now(IST).replace(tzinfo=None).isoformat()
+        context = {"pnl": pnl, "exit_types": list(exit_types or [])}
+        if includes_leg_pnl is not None:
+            context["includes_leg_pnl"] = includes_leg_pnl
+        context.update(extra_context or {})
         conn.execute(
             _INSERT,
             (
@@ -340,13 +355,92 @@ def save_tracker_exit(*, strategy: str, symbol: str, entry: float, sl: float, tp
                 f"P&L {pnl:+,.2f}",
                 "", now, now,
                 f"tracker close: {'+'.join(exit_types) if exit_types else 'UNKNOWN'}",
-                json.dumps({"pnl": pnl, "exit_types": list(exit_types or [])}),
+                json.dumps(context),
                 exit_price, sig_id or None, _TRADE_MODE,
             ),
         )
         conn.commit()
     except Exception as e:
         logger.error(f"Failed to save tracker exit for {symbol}: {e}")
+
+
+#: The classification of an entry the execution guard closed at once
+#: (main._auto_close_on_bad_fill), and the two causes kept in the row's context["reason"].
+#: These are real round trips with a real P&L, but they are NOT the strategy's own exits, so
+#: the row's exit type is BAD_FILL_CLOSE and it carries an `execution_exit` flag. Consumers
+#: that measure money count them; consumers that measure strategy quality can split them out.
+EXIT_BAD_FILL_CLOSE = "BAD_FILL_CLOSE"
+
+#: Exit types that are a trade and real money but NOT a decided win or loss: the clock (TIME) or
+#: the execution guard (BAD_FILL_CLOSE) closed the position, which is no evidence about the entry
+#: rule. Win rate and average R leave them out; trade counts and net P&L keep them. One set, so
+#: the headline summary and the per-strategy lines cannot disagree.
+NOT_DECIDED_EXIT_TYPES = frozenset({"TIME", EXIT_BAD_FILL_CLOSE})
+EXIT_ENTRY_REJECTED_SLIPPAGE = "ENTRY_REJECTED_SLIPPAGE"
+EXIT_ENTRY_REJECTED_TP_OVERSHOT = "ENTRY_REJECTED_TP_OVERSHOT"
+
+
+def save_execution_exit(
+    *,
+    strategy: str,
+    symbol: str,
+    signal_entry: float,
+    sl: float,
+    tp: float,
+    quantity: int,
+    entry_order_id: str,
+    exit_order_id: str,
+    entry_fill: "float | None",
+    exit_fill: "float | None",
+    pnl: float,
+    exit_type: str,
+    reason: str,
+    slippage_r: float,
+    slippage_rs: float,
+    sig_id: "str | None" = None,
+) -> None:
+    """Write the EXIT row for an entry the execution guard closed immediately.
+
+    Before this the round trip left no row at all (the entry save was skipped and the close
+    order's result was dropped), so the broker's two fills reached the EOD ledger as "no
+    matching engine order" and the realised loss was in no report. The context keeps the
+    whole lineage: the signal price, the actual fill, why it was closed, the realised P&L,
+    the slippage in R and in rupees, and both order ids. Never raises: the position IS
+    closed at the broker and a bookkeeping failure must not undo that.
+    """
+    try:
+        conn = _get_connection()
+        now = datetime.now(IST).replace(tzinfo=None).isoformat()
+        conn.execute(
+            _INSERT,
+            (
+                strategy, Direction.EXIT.value, symbol, signal_entry, sl, tp, quantity,
+                exit_order_id or "-EXECUTION-", "SUCCESS",
+                f"Closed by execution guard ({EXIT_BAD_FILL_CLOSE}, {exit_type}): "
+                f"P&L {pnl:+,.2f} - {reason}",
+                "", now, now,
+                f"execution guard: {EXIT_BAD_FILL_CLOSE} {exit_type}",
+                json.dumps({
+                    "pnl": pnl,
+                    "exit_types": [EXIT_BAD_FILL_CLOSE],
+                    "exit_class": EXIT_BAD_FILL_CLOSE,
+                    "execution_exit": True,
+                    "reason": exit_type,  # the cause; the ledger reads this as a short label
+                    "detail": reason,
+                    "signal_entry": signal_entry,
+                    "entry_fill": entry_fill,
+                    "exit_fill": exit_fill,
+                    "slippage_r": slippage_r,
+                    "slippage_rs": slippage_rs,
+                    "entry_order_id": entry_order_id,
+                    "exit_order_id": exit_order_id,
+                }),
+                exit_fill, sig_id or None, _TRADE_MODE,
+            ),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save execution exit for {symbol}: {e}")
 
 
 def fetch_all_open_positions() -> list:
@@ -455,12 +549,192 @@ def save_reconciled_exit(
         logger.error(f"Failed to save reconciled exit for {symbol}: {e}")
 
 
+#: The message the generic save() stores for an order result. Partial-exit rows written before
+#: the explicit "partial" marker existed (2026-09-22 onward) carry a pnl but no marker; this
+#: message is what tells them apart, since every final-close writer (save_tracker_exit,
+#: save_reconciled_exit, the startup backfill) writes its own message.
+_GENERIC_SAVE_MESSAGE = "success"
+
+
+def _is_partial_leg(payload: dict, message: "str | None") -> bool:
+    """True for an EXIT row that is one leg of a position, not its closing row."""
+    if payload.get("partial") is True:
+        return True
+    return (message or "") == _GENERIC_SAVE_MESSAGE and not payload.get("reconciled")
+
+
+def _is_reconciled_close(payload: dict, message: "str | None") -> bool:
+    """A close booked from the broker's own figure after a restart (reconcile or backfill)."""
+    return payload.get("reconciled") is True or (message or "").startswith(
+        ("Backfilled", "Reconciled")
+    )
+
+
+def _leg_pnl_inside_final(final: dict, legs: list[dict]) -> float:
+    """How much of the legs' P&L the position's closing row already contains.
+
+    A closing row's pnl is cumulative only to the extent the position still knew its earlier
+    legs when it closed. Newer rows say so exactly (includes_leg_pnl, written by book_close).
+    For older rows the evidence is in the row: a close labelled with the leg's own exit type
+    ("TP1") was booked after that leg; one labelled only "SL" may have been booked first (SBIN
+    2026-09-30, final row id below its own leg's). A broker-reconciled close is the whole
+    position by construction.
+    """
+    marker = final["payload"].get("includes_leg_pnl")
+    if marker is not None:
+        return float(marker)
+    if _is_reconciled_close(final["payload"], final["message"]):
+        return sum(leg["pnl"] for leg in legs)
+    labels = set(final["payload"].get("exit_types") or [])
+    return sum(leg["pnl"] for leg in legs if leg["label"] in labels)
+
+
+def _exit_types_of(payload: dict) -> list:
+    return list(payload.get("exit_types") or (["RECONCILED"] if payload.get("reconciled") else []))
+
+
+def _load_day_entries(conn, trade_mode: str, day: str) -> tuple[dict, dict, dict]:
+    """The day's entry rows, indexed three ways: by id, by (strategy, sig_id), by (symbol, strategy).
+
+    One query for the lot, not a sub-query per exit row: this runs on every close notification
+    and the table never shrinks.
+    """
+    by_id: dict[int, tuple] = {}
+    ids_by_sig: dict[tuple[str, str], int] = {}
+    ids_by_key: dict[tuple[str, str], list[int]] = {}
+    for entry_id, sym, strat, e_price, e_sl, e_qty, e_sig in conn.execute(
+        """
+        SELECT id, upper(symbol), upper(strategy), entry, sl, quantity, sig_id FROM trades
+        WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
+          AND trade_mode = ? AND date(executed_at) = ?
+        ORDER BY id
+        """,
+        (trade_mode, day),
+    ):
+        by_id[entry_id] = (e_price, e_sl, e_qty)
+        if e_sig:
+            ids_by_sig[(strat, e_sig)] = entry_id
+        ids_by_key.setdefault((sym, strat), []).append(entry_id)
+    return by_id, ids_by_sig, ids_by_key
+
+
+def _resolve_entry_id(exit_id, strategy, symbol, sig_id, ids_by_sig, ids_by_key):
+    """The entry an exit belongs to: by sig_id, else the nearest PRECEDING entry, else None."""
+    key = (strategy.upper(), sig_id)
+    if sig_id and key in ids_by_sig:
+        return ids_by_sig[key]
+    for candidate in reversed(ids_by_key.get((symbol.upper(), strategy.upper()), [])):
+        if candidate < exit_id:
+            return candidate
+    return None
+
+
+def _group_exits_by_position(exit_rows, ids_by_sig, ids_by_key) -> dict[tuple, dict]:
+    """Group the day's EXIT rows into positions: {(strategy, symbol, entry_id): legs and finals}."""
+    positions: dict[tuple, dict] = {}
+    for exit_id, strategy, symbol, entry, sl, qty, fill, context, message, sig_id in exit_rows:
+        try:
+            payload = json.loads(context) if context else {}
+        except (TypeError, ValueError):
+            payload = {}
+        if "pnl" not in payload and "realized_pnl" not in payload:
+            continue
+        types = payload.get("exit_types") or []
+        # Tolerant of both historical shapes: rows written before the two writers were
+        # unified carry "realized_pnl" instead of "pnl".
+        row = {
+            "id": exit_id, "strategy": strategy, "symbol": symbol, "entry": entry, "sl": sl,
+            "qty": qty, "fill": fill, "message": message, "payload": payload,
+            "pnl": float(payload.get("pnl", payload.get("realized_pnl", 0.0)) or 0.0),
+            "label": types[0] if types else None,
+        }
+        anchor = _resolve_entry_id(exit_id, strategy, symbol, sig_id, ids_by_sig, ids_by_key)
+        group = positions.setdefault(
+            (strategy.upper(), symbol.upper(), anchor), {"legs": [], "finals": []}
+        )
+        group["legs" if _is_partial_leg(payload, message) else "finals"].append(row)
+    return positions
+
+
+def _exit_class(payload: dict, types: list) -> str:
+    """What kind of close a row is, kept apart from what it earned.
+
+    Money (total_pnl) always counts. The class says whether the close is evidence about the
+    strategy's own entry and exit rules (STRATEGY_EXIT) or an event the clock (TIME_EXIT), the
+    execution guard (BAD_FILL_CLOSE) or a restart (RECONCILED) caused.
+    """
+    explicit = payload.get("exit_class")
+    if explicit:
+        return explicit
+    if payload.get("execution_exit") is True:
+        return EXIT_BAD_FILL_CLOSE
+    if "TIME" in types:
+        return "TIME_EXIT"
+    if payload.get("reconciled") is True:
+        return "RECONCILED"
+    return "STRATEGY_EXIT"
+
+
+def pnl_by_exit_class(trades: list) -> dict:
+    """Net P&L per exit class, so strategy P&L and execution P&L can be read separately."""
+    out: dict[str, float] = {}
+    for trade in trades:
+        out[trade["exit_class"]] = out.get(trade["exit_class"], 0.0) + trade["total_pnl"]
+    return out
+
+
+def _trade_row(row: dict, entry_row, total: float, types: list, fill) -> dict:
+    return {
+        "strategy": row["strategy"],
+        "symbol": row["symbol"],
+        "entry": entry_row[0] if entry_row else row["entry"],
+        "sl": entry_row[1] if entry_row else row["sl"],
+        "quantity": (entry_row[2] if entry_row else None) or row["qty"],
+        "exit_price": fill,
+        "total_pnl": total,
+        "exit_types": list(types),
+        "execution_exit": row["payload"].get("execution_exit") is True,
+        "exit_class": _exit_class(row["payload"], list(types)),
+    }
+
+
+def _position_trades(group: dict, entry_row) -> list[tuple[int, dict]]:
+    """The closed trades of one position, each with the row id it sorts by.
+
+    Earlier closing rows (a double-booked close) stand as they are; the last closing row also
+    takes whatever leg P&L it does not already contain. No closing row at all (a runner closed
+    by the time exit) makes one trade out of the legs.
+    """
+    legs, finals = group["legs"], group["finals"]
+    trades = [
+        (f["id"], _trade_row(f, entry_row, f["pnl"], _exit_types_of(f["payload"]), f["fill"]))
+        for f in finals[:-1]
+    ]
+    if finals:
+        last = finals[-1]
+        uncounted = sum(leg["pnl"] for leg in legs) - _leg_pnl_inside_final(last, legs)
+        total = last["pnl"] + uncounted
+        trades.append(
+            (last["id"], _trade_row(last, entry_row, total, _exit_types_of(last["payload"]), last["fill"]))
+        )
+    elif legs:
+        labels = [leg["label"] for leg in legs if leg["label"]]
+        total = sum(leg["pnl"] for leg in legs)
+        trades.append((legs[-1]["id"], _trade_row(legs[0], entry_row, total, labels, legs[-1]["fill"])))
+    return trades
+
+
 def fetch_day_trades(trade_mode: str, day: str = None) -> list:
     """Every CLOSED trade for one mode and day, as the EOD summary's source of truth.
 
-    Pairs each EXIT row with its own entry row (latest entry for that symbol+strategy on the
-    day) so the stop is available and an R-multiple can be computed. DECLINED and REJECTED
-    rows are excluded: they are signals that never became trades.
+    Each position is the group of EXIT rows that share one entry row: the entry is found by
+    sig_id (the lineage key, correct under re-entry), else the nearest PRECEDING entry for the
+    same symbol and strategy. A position's trade is its closing row plus whatever leg P&L that
+    closing row does not already contain (see _leg_pnl_inside_final), so a partial leg is
+    neither counted twice (2026-10-06: engine P&L 1,164.3 over the broker fills) nor dropped
+    (a runner closed by the time exit writes no closing row at all; PRESTIGE and ONGC
+    2026-09-30). A position with legs and no closing row is one trade made of its legs.
+    DECLINED and REJECTED rows are excluded: they are signals that never became trades.
 
     The day summary used to be built from PositionTracker's in-memory counters, which
     __init__ sets to zero - so a restart silently reset the day. On 2026-09-11 the engine
@@ -471,9 +745,9 @@ def fetch_day_trades(trade_mode: str, day: str = None) -> list:
     """
     day = day or datetime.now(IST).strftime("%Y-%m-%d")
     conn = _get_connection()
-    exits = conn.execute(
+    exit_rows = conn.execute(
         """
-        SELECT strategy, symbol, entry, sl, quantity, fill_price, context, executed_at
+        SELECT id, strategy, symbol, entry, sl, quantity, fill_price, context, message, sig_id
         FROM trades
         WHERE status = 'SUCCESS' AND direction = 'EXIT'
           AND trade_mode = ? AND date(executed_at) = ?
@@ -481,59 +755,14 @@ def fetch_day_trades(trade_mode: str, day: str = None) -> list:
         """,
         (trade_mode, day),
     ).fetchall()
-
-    # One query for the day's entries, keyed for lookup - not a sub-query per exit row. At
-    # four trades a day the difference is nothing; this runs on every close notification and
-    # the table never shrinks.
-    entries = {}
-    for row in conn.execute(
-        """
-        SELECT upper(symbol), upper(strategy), entry, sl, quantity FROM trades
-        WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
-          AND trade_mode = ? AND date(executed_at) = ?
-        ORDER BY id
-        """,
-        (trade_mode, day),
-    ):
-        entries[(row[0], row[1])] = row[2:]  # later entry wins, matching ORDER BY id DESC
-
-    trades = []
-    for strategy, symbol, entry, sl, qty, exit_price, context, _at in exits:
-        try:
-            payload = json.loads(context) if context else {}
-        except (TypeError, ValueError):
-            payload = {}
-        # A partial exit leg (TP1, TP1.5, ...) writes its own EXIT row via the generic
-        # save() at the point the order is placed, carrying the raw signal's context - which
-        # never has a "pnl"/"realized_pnl" key, since the leg's economics aren't computed
-        # there. Only the row for the position's FINAL close (book_close() -> save_tracker_
-        # exit()) carries one. Silently defaulting the missing key to 0.0 used to make every
-        # partial leg count as its own "trade" here, at 0 P&L - inflating "Trades: N" and,
-        # since 0.0 >= 0 reads as a win, the win rate too (2026-09-21: reported Trades: 8,
-        # Win Rate: 88% for what was actually 5 closed positions, 4 of them winners). The
-        # partial leg's own P&L is not lost - it is already folded into the final row's
-        # cumulative pnl by book_close()'s `total_pnl = pos.realized_pnl + pnl_delta`.
-        if "pnl" not in payload and "realized_pnl" not in payload:
-            continue
-        entry_row = entries.get((symbol.upper(), strategy.upper()))
-        base_entry = entry_row[0] if entry_row else entry
-        base_sl = entry_row[1] if entry_row else sl
-        base_qty = entry_row[2] if entry_row else qty
-        # Tolerant of both historical shapes: rows written before the two writers were
-        # unified carry "realized_pnl" instead of "pnl".
-        pnl = payload.get("pnl", payload.get("realized_pnl", 0.0))
-        exit_types = payload.get("exit_types") or (["RECONCILED"] if payload.get("reconciled") else [])
-        trades.append({
-            "strategy": strategy,
-            "symbol": symbol,
-            "entry": base_entry,
-            "sl": base_sl,
-            "quantity": base_qty or qty,
-            "exit_price": exit_price,
-            "total_pnl": float(pnl or 0.0),
-            "exit_types": list(exit_types),
-        })
-    return trades
+    entries_by_id, ids_by_sig, ids_by_key = _load_day_entries(conn, trade_mode, day)
+    positions = _group_exits_by_position(exit_rows, ids_by_sig, ids_by_key)
+    ordered = [
+        pair
+        for (_s, _y, anchor), group in positions.items()
+        for pair in _position_trades(group, entries_by_id.get(anchor))
+    ]
+    return [trade for _order, trade in sorted(ordered, key=lambda pair: pair[0])]
 
 
 def fetch_order_ids_today(symbol: str) -> set[str]:

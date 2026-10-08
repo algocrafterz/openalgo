@@ -793,7 +793,7 @@ def _aggregate_strategy_stats(records) -> dict:
     trade but excluded from wins/losses (it was force-closed by the clock, not decided by the
     strategy's own exit rule)."""
     time_exits = sum(1 for r in records if "TIME" in (r.exit_types or []))
-    decided = [r for r in records if "TIME" not in (r.exit_types or [])]
+    decided = [r for r in records if not _is_not_decided(r)]
     wins = sum(1 for r in decided if r.total_pnl >= 0)
     losses = sum(1 for r in decided if r.total_pnl < 0)
     return {"trades": len(records), "wins": wins, "losses": losses, "time_exits": time_exits}
@@ -961,11 +961,25 @@ def _day_summary_header(
     return header
 
 
+def _is_not_decided(record) -> bool:
+    """True for a close the clock or the execution guard caused (db.NOT_DECIDED_EXIT_TYPES)."""
+    from signal_engine.db import NOT_DECIDED_EXIT_TYPES
+
+    return bool(set(getattr(record, "exit_types", None) or []) & NOT_DECIDED_EXIT_TYPES)
+
+
 def _average_r(trade_records) -> float | None:
-    """Mean R-multiple across trades that have one, or None."""
+    """Mean R-multiple across the DECIDED trades that have one, or None.
+
+    Avg R is the ranking key, so it leaves out a TIME or BAD_FILL_CLOSE close: those are real
+    money and stay in net P&L, but they say nothing about the entry rule.
+    """
     if not trade_records:
         return None
-    r_values = [r.r_multiple for r in trade_records if r.r_multiple is not None]
+    r_values = [
+        r.r_multiple for r in trade_records
+        if r.r_multiple is not None and not _is_not_decided(r)
+    ]
     return sum(r_values) / len(r_values) if r_values else None
 
 

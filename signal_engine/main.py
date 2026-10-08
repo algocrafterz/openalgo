@@ -5,6 +5,7 @@ import math
 import os
 import sqlite3
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 
 from loguru import logger
@@ -23,7 +24,15 @@ from signal_engine.api_client import (
     fetch_trading_mode,
 )
 from signal_engine.config import settings
-from signal_engine.db import fetch_last_entry_trade, fetch_order_ids_today, save, save_declined
+from signal_engine.db import (
+    EXIT_ENTRY_REJECTED_SLIPPAGE,
+    EXIT_ENTRY_REJECTED_TP_OVERSHOT,
+    fetch_last_entry_trade,
+    fetch_order_ids_today,
+    save,
+    save_declined,
+    save_execution_exit,
+)
 from signal_engine.executor import (
     build_exit_order,
     build_order,
@@ -278,7 +287,21 @@ async def _handle_exit(signal) -> None:
     # so without locking both handlers find the same position and place duplicate orders.
     # The lock ensures the second handler sees the already-closed/reduced position.
     async with _get_exit_lock(signal.symbol, signal.strategy):
-        await _handle_exit_locked(signal)
+        try:
+            await _handle_exit_locked(signal)
+        except BaseException:
+            # exit_pending makes the tracker poll skip this position. A handler that dies while
+            # holding it (an error, or a cancelled task) must not leave it owned, or a real
+            # stop-hit close would never be booked and the risk slot never released.
+            _release_exit_ownership(signal)
+            raise
+
+
+def _release_exit_ownership(signal) -> None:
+    """Clear exit_pending on a position this handler failed to finish closing."""
+    pos = tracker.find_position(signal.symbol, signal.strategy)
+    if pos is not None:
+        pos.exit_pending = False
 
 
 async def _handle_exit_locked(signal) -> None:
@@ -535,7 +558,7 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
     non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
     """
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
-    attempt_started = datetime.now(IST)
+    attempt_started = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
         trade_result = await send_order(exit_order)
         if trade_result.status == OrderStatus.SUCCESS:
@@ -573,45 +596,22 @@ async def _find_recent_market_exit_fill(order, since: datetime) -> TradeResult |
     the exit (see the TIMEOUT branch above for why this matters).
 
     Matches on symbol + action + quantity among COMPLETE orders timestamped at or
-    after `since` (when this exit attempt sequence started). Unlike a resting
-    SL-M order, a filled MARKET order shows "complete" immediately, so recency is
-    the only way to avoid matching an unrelated earlier fill of the same
-    symbol/qty/action.
+    after `since` (when this exit attempt sequence started); see
+    api_client.find_recent_complete_order_id for why recency is the only safe filter.
     """
-    from signal_engine.api_client import fetch_orderbook
+    from signal_engine.api_client import fetch_orderbook, find_recent_complete_order_id
 
     book = await fetch_orderbook()
     if not book:
         return None
-    for o in book:
-        if not isinstance(o, dict):
-            continue
-        if str(o.get("symbol", "")).upper() != order.symbol.upper():
-            continue
-        if str(o.get("action", "")).upper() != order.action.value:
-            continue
-        try:
-            if int(o.get("quantity", 0)) != order.quantity:
-                continue
-        except (TypeError, ValueError):
-            continue
-        status = str(o.get("order_status") or o.get("status") or "").lower()
-        if status != "complete":
-            continue
-        ts_raw = o.get("timestamp") or o.get("order_timestamp")
-        if ts_raw:
-            try:
-                ts = datetime.strptime(str(ts_raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
-                if ts < since:
-                    continue
-            except ValueError:
-                pass  # unparseable timestamp - fall through rather than discard a real match
-        order_id = str(o.get("orderid") or o.get("order_id") or "")
-        if order_id:
-            return TradeResult(
-                order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
-            )
-    return None
+    order_id = find_recent_complete_order_id(
+        book, order.symbol, order.action.value, order.quantity, since
+    )
+    if not order_id:
+        return None
+    return TradeResult(
+        order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
+    )
 
 
 async def _book_realised_pnl_delta() -> tuple[float, float]:
@@ -669,6 +669,13 @@ async def _book_exit_result(
             f"booking the broker realised delta {pnl_delta:,.2f} instead (may include other closes)"
         )
 
+    if is_full_exit or pos.quantity - exit_qty <= 0:
+        # book_close() files pos.sl_order_id as the order that closed the position. The stop was
+        # cancelled by _cancel_sl_before_exit() but its id is still there, so without this the
+        # EXIT row carries the dead stop's id and the ledger cannot match the real exit fill
+        # (ETERNAL 2026-10-06). Same hand-off the no-progress exit does for its own order.
+        pos.sl_order_id = trade_result.order_id
+
     if is_full_exit:
         # book_close advances the day counters and the realised-P&L snapshot.
         await _finalize_full_exit(
@@ -723,7 +730,9 @@ async def _book_exit_result(
     # exactly the gap the day's reconciliation check flagged. Mirrors what book_close()
     # already attaches for a full exit (exit_price=approx_exit_price, pnl=total_pnl).
     trade_result.fill_price = approx_exit_price
-    signal.context = {"pnl": pnl_delta, "exit_types": [tp_level or "TP"]}
+    # "partial" tells db.fetch_day_trades() this row is one leg: the final close's pnl is
+    # cumulative and already contains it, so the row must not be counted again.
+    signal.context = {"pnl": pnl_delta, "exit_types": [tp_level or "TP"], "partial": True}
     return True
 
 
@@ -1056,12 +1065,27 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
         pos.product,
     )
     if broker_qty == 0:
-        logger.info(
-            f"EXIT failed but broker position is already 0 for {pos.symbol} "
-            "— SL likely fired. Cleaning up tracker."
-        )
-        tracker.unregister(pos.symbol, pos.strategy)
-        risk_engine.record_close(pnl=0.0, strategy=pos.strategy, symbol=pos.symbol)
+        # The stop most likely fired while the exit was being retried. Do not unregister and do
+        # not record a close of 0.0 here: that dropped a real loss from the ledger and from the
+        # daily-loss counter. The poll books it with the stop's own fill and P&L (I4), as it
+        # does for any stop hit; the position is released for it and left registered.
+        pos.exit_pending = False
+        if tracker.find_position(pos.symbol, pos.strategy) is pos:
+            logger.info(
+                f"EXIT failed but broker position is already 0 for {pos.symbol} "
+                "— SL likely fired. Leaving the close for the tracker poll to book."
+            )
+        else:
+            # A position rebuilt from the broker after a restart is never registered, so the poll
+            # cannot see it and nothing else would free its slot in the persisted risk store.
+            # Release the slot as before. The loss is not booked: there is no stop fill to price
+            # it from, and a portfolio-delta estimate is the defect recorded in
+            # ACCOUNTING-DEFECT-2026-09-ESTIMATED-EXIT-PNL.md.
+            logger.warning(
+                f"EXIT failed and the broker is flat for {pos.symbol}, but the position is not "
+                "tracked (rebuilt after a restart): releasing its risk slot with no P&L booked"
+            )
+            risk_engine.record_close(pnl=0.0, strategy=pos.strategy, symbol=pos.symbol)
     else:
         # Position still open (broker_qty > 0 for LONG, < 0 for SHORT, -1 for API error).
         # Clear exit_pending so the next TP/EXIT signal can retry.
@@ -1125,7 +1149,7 @@ async def _handle_entry(signal) -> None:
     await _notify_entry_outcome(signal, trade_result, rr)
 
     if trade_result.status == OrderStatus.SUCCESS:
-        if not await _establish_position(signal, quantity, trade_result):
+        if not await _establish_position(signal, order, quantity, trade_result):
             return
 
     save(signal, order, trade_result)
@@ -1536,11 +1560,14 @@ async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
         )
 
 
-async def _establish_position(signal, quantity: int, trade_result) -> bool:
+async def _establish_position(signal, order, quantity: int, trade_result) -> bool:
     """Record the trade, protect it with an SL, and register it for tracking.
 
-    Returns False when the fill overshot TP and the position was auto-closed — the
-    caller must then skip the DB save.
+    Returns False when the execution guard closed the position (a bad fill). The entry row
+    and the guard's exit row are then already saved here, entry first so the entry never reads
+    as an open position, and the caller must skip its own save. If the guard's close order
+    failed and the position is still open, the stop is restored and this carries on as a
+    normal tracked entry.
     """
     risk_engine.record_trade(strategy=signal.strategy, symbol=signal.symbol)
     logger.info(f"Capacity: {risk_engine.capacity_status(signal.strategy)}")
@@ -1552,8 +1579,15 @@ async def _establish_position(signal, quantity: int, trade_result) -> bool:
     # captured here is gone for good and slippage becomes unmeasurable after the fact.
     trade_result.fill_price = entry_fill_price
 
-    if await _auto_close_on_bad_fill(signal, quantity, entry_fill_price, sl_order_id):
+    guard = await _auto_close_on_bad_fill(
+        signal, quantity, entry_fill_price, sl_order_id, trade_result.order_id
+    )
+    if guard is not None and guard.closed:
+        save(signal, order, trade_result)
+        _save_bad_fill_exit(signal, quantity, trade_result.order_id, entry_fill_price, guard)
         return False
+    if guard is not None:
+        sl_order_id = guard.replacement_sl_order_id
 
     # Always notify LIVE so trader knows position is active and SL is protecting it.
     # fill_price=0 triggers "fill pending" wording in the message.
@@ -1649,10 +1683,29 @@ def entry_slippage_r(signal, entry_fill_price) -> float:
     return (signal.entry - entry_fill_price) / risk
 
 
+@dataclass(frozen=True)
+class BadFillClose:
+    """What the execution guard did about a bad entry fill.
+
+    closed is False when the close order did not go through and the position is still open at
+    the broker; replacement_sl_order_id is then the stop that was restored so the caller can
+    carry on tracking it as a normal protected entry.
+    """
+
+    closed: bool
+    exit_type: str
+    reason: str
+    slippage_r: float
+    close_order_id: str = ""
+    exit_fill_price: float | None = None
+    pnl: float = 0.0
+    replacement_sl_order_id: str = ""
+
+
 async def _auto_close_on_bad_fill(
-    signal, quantity: int, entry_fill_price, sl_order_id: str
-) -> bool:
-    """Close immediately if the fill is unusable. True if the position was closed.
+    signal, quantity: int, entry_fill_price, sl_order_id: str, entry_order_id: str = ""
+) -> BadFillClose | None:
+    """Close immediately if the fill is unusable. None when the fill is acceptable.
 
     Two cases: the fill landed past TP (negative reward, disproportionately wide SL), or
     adverse slippage exceeded max_entry_slippage_r. The second matters because TP, the runner
@@ -1660,6 +1713,10 @@ async def _auto_close_on_bad_fill(
     filled 0.83R above the signal, so the "TP1 hit" partial exit sold below cost and the
     runner stop (2090.21) sat under the real entry (2091.00). max_entry_slippage_r = 0 disables
     the slippage case.
+
+    The close order's result is checked: if it did not go through and the broker still shows
+    the position open, the stop that was cancelled to make room for the close is restored and
+    the position stays tracked (closed=False).
     """
     fill_overshot_tp = entry_fill_price and (
         (signal.direction == Direction.LONG and entry_fill_price >= signal.tp)
@@ -1670,11 +1727,13 @@ async def _auto_close_on_bad_fill(
         settings.max_entry_slippage_r > 0 and slippage_r > settings.max_entry_slippage_r
     )
     if not (fill_overshot_tp or slippage_excessive):
-        return False
+        return None
 
     if fill_overshot_tp:
+        exit_type = EXIT_ENTRY_REJECTED_TP_OVERSHOT
         reason = f"fill {entry_fill_price:.2f} overshot TP {signal.tp:.2f} - auto-closed"
     else:
+        exit_type = EXIT_ENTRY_REJECTED_SLIPPAGE
         reason = (
             f"fill {entry_fill_price:.2f} slipped {slippage_r:.2f}R from signal "
             f"{signal.entry:.2f} (max {settings.max_entry_slippage_r:.2f}R) - auto-closed"
@@ -1682,8 +1741,7 @@ async def _auto_close_on_bad_fill(
     logger.error(
         f"Bad entry fill for {signal.symbol}: {reason} direction={signal.direction.value}"
     )
-    if sl_order_id:
-        await cancel_order(sl_order_id, signal.strategy)
+    sl_cancelled = await cancel_order(sl_order_id, signal.strategy) if sl_order_id else True
     close_order = build_exit_order(
         symbol=signal.symbol,
         exchange=signal.exchange or settings.exchange,
@@ -1692,14 +1750,129 @@ async def _auto_close_on_bad_fill(
         strategy_tag=signal.strategy,
         direction=signal.direction,
     )
-    await send_order(close_order)
-    risk_engine.record_close(0.0, strategy=signal.strategy, symbol=signal.symbol)
+    # Broker order timestamps are whole seconds; keeping microseconds here would make a close
+    # stamped in the same second as the send look older than it and be skipped.
+    close_started = datetime.now(IST).replace(microsecond=0)
+    close_result = await send_order(close_order)
+    if close_result.status == OrderStatus.TIMEOUT:
+        # A close the broker accepted may not have filled yet when the position is read back,
+        # which would read as "still open". The orderbook shows it, and gives the ledger the
+        # real order id.
+        close_result = await _find_recent_market_exit_fill(close_order, close_started) or close_result
+    if close_result.status != OrderStatus.SUCCESS and await _position_still_open(signal, close_order):
+        return await _restore_protection_after_failed_close(
+            signal, quantity, entry_order_id, close_result, exit_type, reason, slippage_r,
+            sl_order_id, sl_cancelled,
+        )
+
+    exit_fill, pnl = await _bad_fill_close_pnl(signal, quantity, entry_fill_price, close_result)
+    risk_engine.record_close(pnl, strategy=signal.strategy, symbol=signal.symbol)
     await notifier.notify_order_rejected(
         signal.symbol,
         reason,
         strategy=signal.strategy,
     )
-    return True
+    return BadFillClose(
+        closed=True,
+        exit_type=exit_type,
+        reason=reason,
+        slippage_r=slippage_r,
+        close_order_id=close_result.order_id,
+        exit_fill_price=exit_fill,
+        pnl=pnl,
+    )
+
+
+async def _position_still_open(signal, close_order) -> bool:
+    """True unless the broker confirms this strategy is flat on the symbol.
+
+    A close that timed out may still have filled. None (broker unreachable) counts as open:
+    the safe assumption is that the position needs protection and tracking.
+    """
+    broker_qty = await tracker.fetch_own_position(
+        signal.symbol, signal.strategy, close_order.exchange, close_order.product
+    )
+    return broker_qty != 0
+
+
+async def _bad_fill_close_pnl(
+    signal, quantity: int, entry_fill_price, close_result
+) -> tuple[float | None, float]:
+    """(exit fill, realised P&L) for a bad-fill close, from the two confirmed fills.
+
+    Falls back to the broker's realised delta, as the signal-driven exit does, when the close
+    order's own fill cannot be read; that figure can include other closes.
+    """
+    exit_fill = None
+    if close_result.order_id:
+        exit_fill = await fetch_order_fill_price(close_result.order_id, signal.strategy)
+    if exit_fill and entry_fill_price:
+        return exit_fill, leg_pnl(signal.direction, entry_fill_price, exit_fill, quantity)
+    pnl_delta, _ = await _book_realised_pnl_delta()
+    logger.warning(
+        f"Bad-fill close fill unavailable for {signal.symbol}: booking the broker realised "
+        f"delta {pnl_delta:,.2f} instead (may include other closes)"
+    )
+    return None, pnl_delta
+
+
+async def _restore_protection_after_failed_close(
+    signal, quantity: int, entry_order_id: str, close_result, exit_type: str, reason: str,
+    slippage_r: float, sl_order_id: str, sl_cancelled: bool,
+) -> BadFillClose:
+    """The guard's close order failed and the position is open: put the stop back and alert.
+
+    The stop was cancelled to make room for the close, so without this the position would sit
+    at the broker unprotected. Restoring it hands the position back to the normal tracked
+    path. Only called when the broker shows the position open, never after a close that went
+    through, where a restored stop would open a new short. If the stop's cancel itself failed
+    the original is still live, and a second full-size stop would leave two that could both
+    trigger, so the original is kept instead.
+    """
+    logger.critical(
+        f"Bad-fill close FAILED for {signal.symbol} ({close_result.status.value}: "
+        f"{close_result.message}); position still open - keeping it tracked and protected"
+    )
+    if sl_cancelled:
+        sl_order_id = await _place_entry_bracket(signal, quantity, entry_order_id)
+    attempted = reason.replace("auto-closed", "auto-close attempted")
+    await notifier.notify_exit_failed(
+        signal.symbol, f"{attempted}; close order failed: {close_result.message}",
+        strategy=signal.strategy,
+    )
+    return BadFillClose(
+        closed=False,
+        exit_type=exit_type,
+        reason=reason,
+        slippage_r=slippage_r,
+        replacement_sl_order_id=sl_order_id,
+    )
+
+
+def _save_bad_fill_exit(signal, quantity: int, entry_order_id: str, entry_fill, outcome) -> None:
+    """File the guard's close in trades.db as its own exit type (the entry row is saved first)."""
+    adverse_per_share = (
+        (entry_fill - signal.entry) if signal.direction == Direction.LONG
+        else (signal.entry - entry_fill)
+    ) if entry_fill else 0.0
+    save_execution_exit(
+        strategy=signal.strategy,
+        symbol=signal.symbol,
+        signal_entry=signal.entry,
+        sl=signal.sl,
+        tp=signal.tp,
+        quantity=quantity,
+        entry_order_id=entry_order_id,
+        exit_order_id=outcome.close_order_id,
+        entry_fill=entry_fill,
+        exit_fill=outcome.exit_fill_price,
+        pnl=outcome.pnl,
+        exit_type=outcome.exit_type,
+        reason=outcome.reason,
+        slippage_r=outcome.slippage_r,
+        slippage_rs=adverse_per_share * quantity,
+        sig_id=signal.sig_id,
+    )
 
 
 async def handle_message(text: str) -> None:

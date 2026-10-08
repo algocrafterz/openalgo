@@ -97,6 +97,24 @@ the model-selection, approval, escalation, or review rules defined by
 - When a test conflicts with the intended behavior, identify the conflict explicitly.
 - Add or update tests when the change introduces or changes observable behavior.
 
+**Run tests in two tiers.** The goal is fast development feedback and a trustworthy full suite.
+
+- **Development:** run only the affected test files, narrowest first
+  (`PYTHONPATH=. uv run pytest <files> -q -p no:cacheprovider`).
+- **Commit and CI:** run the full suite through `signal_engine/scripts/run_full_tests.sh`.
+  Do not call `pytest signal_engine/tests` directly.
+- **One full-suite run at a time per machine, enforced.** Overlapping full runs slow each other
+  and make tests flaky (a full run took 10.5 minutes alone and 15 minutes under load). The
+  wrapper holds a machine-wide lock: it refuses with exit 75 if another run holds it. Use
+  `--wait` to queue behind a running one and `--status` to see who holds the lock. A project
+  hook (`.claude/hooks/block_direct_full_suite.sh`, registered in `.claude/settings.json`)
+  denies a direct full-suite pytest command. Targeted files and `--collect-only` stay allowed.
+  The settings file is gitignored, so the hook binds sessions on this machine only.
+- Concurrent sessions use targeted tests only. Do not coordinate sessions with `git stash`,
+  `reset`, `checkout`, or any command that rewrites the working tree. Do not stop another
+  session's processes by pattern (`pkill -f pytest`); stop only a process you started, by PID.
+- Adopt `pytest-xdist` only after serial and xdist runs give identical complete results.
+
 ### Verification
 
 **Do not claim success without evidence.**
