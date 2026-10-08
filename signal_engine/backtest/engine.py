@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from signal_engine.backtest import tickgrid
 from signal_engine.backtest.ledgers import _COUNT_BITS, CODE_INDEX
 from signal_engine.backtest.ledgers import N_CODES as _N_CODES
 from signal_engine.backtest.strategies.base import Strategy
@@ -90,6 +91,14 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
     # Both opt-in; with the defaults neither changes a single comparison below.
     dyn_target = bool(getattr(strategy, "dynamic_target", False))
     skip_fill = run.skip_fill_beyond_levels
+    if run.tick_grid not in tickgrid.MODES:
+        raise ValueError(f"tick_grid must be one of {', '.join(tickgrid.MODES)}, got {run.tick_grid!r}")
+    snap_ticks = run.tick_grid == tickgrid.SAFE_TICK
+    pf_col = c.a.get("price_factor") if snap_ticks else None
+
+    def snapped(stop: float, direction: int, i: int) -> float:
+        # The trigger the executor sends: rounded on RAW prices, toward the market.
+        return tickgrid.snap_stop(stop, direction, 1.0 if pf_col is None else float(pf_col[i]))
 
     # Broker MIS square-off guard: the exit bar must CLOSE margin minutes before the broker's
     # auto square-off, so the latest allowed exit-bar stamp is square-off - margin - bar length.
@@ -196,12 +205,15 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                     b_ord((pend_i, sig.direction, -1, _K_SKIP_FILL))
                 strategy.on_fill_skipped(c, i, p, sig)
             elif pos is None:
+                stop_px = float("nan")
+                if sig.sl is not None:
+                    stop_px = snapped(float(sig.sl), sig.direction, i) if snap_ticks else float(sig.sl)
                 pos = Position(
                     direction=sig.direction,
                     entry=fill,
                     signal_price=float(sig_px),
-                    sl=float("nan") if sig.sl is None else float(sig.sl),
-                    sl_eff=float("nan") if sig.sl is None else float(sig.sl),
+                    sl=float("nan") if sig.sl is None else stop_px,
+                    sl_eff=float("nan") if sig.sl is None else stop_px,
                     tp=float(sig.tp),
                     # Risk is measured from the SIGNAL price, not the fill,
                     # because that is what the live engine sizes on - the
@@ -289,6 +301,8 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             d = pos.direction
             new_stop = strategy.trail(c, i, p, pos)
             if new_stop is not None and not np.isnan(new_stop):
+                if snap_ticks:
+                    new_stop = snapped(float(new_stop), d, i)
                 # ratchet only - a trail must never loosen
                 pos.sl_eff = max(pos.sl_eff, new_stop) if d == 1 else min(pos.sl_eff, new_stop)
 

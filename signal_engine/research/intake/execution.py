@@ -35,6 +35,7 @@ _RUN_CONFIG_FIELDS = {
     "profile.mis_squareoff_min": "mis_squareoff_min",
     "profile.squareoff_margin_min": "squareoff_margin_min",
     "profile.time_exit_min": "time_exit_min",
+    "profile.tick_grid": "tick_grid",
 }
 
 #: Per-date eligibility defaults (backtest/eligibility.py): listing age in sessions, session

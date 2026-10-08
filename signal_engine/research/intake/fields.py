@@ -151,6 +151,7 @@ FIELDS: tuple[FieldDef, ...] = (
     _f("profile.mis_squareoff_min", PROFILE, DEFAULTABLE, MEDIUM),
     _f("profile.squareoff_margin_min", PROFILE, DEFAULTABLE, MEDIUM),
     _f("profile.time_exit_min", PROFILE, DEFAULTABLE, MEDIUM),
+    _f("profile.tick_grid", PROFILE, DEFAULTABLE, MEDIUM),
     _f("profile.carry_forward", PROFILE, DEFAULTABLE, MEDIUM),
 )
 

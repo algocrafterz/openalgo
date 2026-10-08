@@ -66,6 +66,7 @@ class TestRunConfigMapping:
             "mis_squareoff_min": 900,
             "squareoff_margin_min": 5,
             "time_exit_min": 885,
+            "tick_grid": "safe_tick",
         }
 
     def test_mapped_fields_match_the_engine_defaults(self):

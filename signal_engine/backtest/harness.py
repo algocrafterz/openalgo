@@ -19,7 +19,7 @@ from dataclasses import replace
 
 import pandas as pd
 
-from signal_engine.backtest import metrics
+from signal_engine.backtest import metrics, tickgrid
 from signal_engine.backtest.data import sessions
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION, Ctx, RunConfig
@@ -85,6 +85,12 @@ class Backtest:
 
     # ---- execution ------------------------------------------------------
 
+    def _ctx(self, sym, df, p) -> Ctx:
+        """The prepared symbol, with the frame's `price_factor` carried through `prepare`."""
+        factor = df["price_factor"] if "price_factor" in df.columns else None
+        prepared = self.strategy.prepare_for(sym, df, p)
+        return Ctx(tickgrid.carry_price_factor(prepared, factor), symbol=sym)
+
     def trades(self, p, window: str = "all", run: RunConfig | None = None, recorder=None):
         """Simulate every symbol. `recorder` (a `ledgers.LedgerRecorder`) is handed to the engine
         only when given, so engines that take no `rec` keep working. Only the single recorded run
@@ -102,7 +108,7 @@ class Backtest:
             self._spent = True
             for sym in list(self.frames):
                 df = self.frames[sym]
-                ctx = Ctx(self.strategy.prepare_for(sym, df, p), symbol=sym)
+                ctx = self._ctx(sym, df, p)
                 self.frames[sym] = None
                 del df
                 out += [t for t in self.engine(ctx, self.strategy, p, run, **extra) if keep(t.day)]
@@ -119,7 +125,7 @@ class Backtest:
                         f"cached prepare() exists for this parameter set; construct "
                         f"Backtest with release_raw=False to vary strategy params"
                     )
-                self._prep[key] = Ctx(self.strategy.prepare_for(sym, df, p), symbol=sym)
+                self._prep[key] = self._ctx(sym, df, p)
                 if self.release_raw:
                     self.frames[sym] = None
             out += [

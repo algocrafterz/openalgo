@@ -38,6 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from signal_engine.backtest import tickgrid
 from signal_engine.backtest.baseline import _as_ns, _put
 from signal_engine.backtest.costs import recost
 from signal_engine.backtest.engine import simulate
@@ -265,8 +266,11 @@ def cross_sectional_baseline(
     for chunk in _chunks(symbols, chunk_size):
         frames = dict(load_frames(chunk))
         for symbol in sorted(frames):
+            factor = frames[symbol]["price_factor"] if "price_factor" in frames[symbol] else None
             try:
-                prepared = inner.prepare_for(symbol, frames[symbol], params)
+                prepared = tickgrid.carry_price_factor(
+                    inner.prepare_for(symbol, frames[symbol], params), factor
+                )
             except KeyError as exc:
                 raise SelectionNullContractError(
                     f"{type(strategy).__name__}.prepare_for({symbol}) failed on missing column "

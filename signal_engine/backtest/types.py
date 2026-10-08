@@ -81,6 +81,13 @@ class RunConfig:
     #: legacy behaviour (a fill through the stop is taken and closed as SL_GAP_ENTRY).
     skip_fill_beyond_levels: bool = False
 
+    #: Stop-trigger price grid. "none" (the default, and every run recorded before engine 1.2)
+    #: uses the signal's stop as is. "safe_tick" models the executor: the stop is rounded onto the
+    #: `safe_tick` grid toward the market when the position opens and each time a trail moves it
+    #: (`backtest.tickgrid`). Risk, the validator's `min_sl_pct` and skip-at-fill still read the
+    #: signal's own stop, as the live sizing and validator do.
+    tick_grid: str = "none"
+
     def with_(self, **kw) -> RunConfig:
         return replace(self, **kw)
 

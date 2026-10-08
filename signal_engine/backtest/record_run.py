@@ -539,6 +539,8 @@ def _apply_profile_settings(run: Any, cfg: Mapping[str, Any]) -> Any:
             changes[name] = int(cfg[name])
     if "time_exit_min" in cfg:
         changes["time_exit_min"] = min(int(run.time_exit_min), int(cfg["time_exit_min"]))
+    if "tick_grid" in cfg:
+        changes["tick_grid"] = str(cfg["tick_grid"])
     return run.with_(**changes) if changes else run
 
 
@@ -895,6 +897,11 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         month_closes = tickgrid.raw_month_end_closes(
             tickgrid.session_raw_closes(layer.frames, price_factors)
         )
+        if grid_mode == tickgrid.SAFE_TICK:
+            layer = dataclasses.replace(
+                layer,
+                frames=tickgrid.attach_price_factors(layer.frames, price_factors, in_place=True),
+            )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
     # Load-time rejection (plan section 8): a data defect that affects validity, or a calendar
     # that differs from the official one, stops the run before the engine. No run, no trial.
@@ -911,6 +918,11 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
         if prepare_panel is None
         else prepare_panel(layer.frames, params, layer.calendar)
     )
+    if grid_mode == tickgrid.SAFE_TICK and any(
+        "price_factor" not in f.columns for f in engine_frames.values()
+    ):
+        # A panel strategy that rebuilds its frames would silently put adjusted prices on the grid.
+        raise ValueError("prepare_panel dropped the price_factor column the tick snap needs")
     if not run_truncation:
         kept = {}
     elif prepare_panel is None:
@@ -981,8 +993,10 @@ def _execute_on(source, dataset, key, settings, end, run_truncation) -> Executio
     if kind != "swing" and getattr(strategy, "supports_selection_null", False):
         cross_sectional = cross_sectional_baseline(
             trades,
-            lambda chunk: _baseline_frames(
-                source.intraday(chunk, "5m", until), layer, int(run.warmup_bars)
+            lambda chunk: _with_price_factors(
+                _baseline_frames(source.intraday(chunk, "5m", until), layer, int(run.warmup_bars)),
+                run,
+                price_factors,
             ),
             strategy,
             params,
@@ -1040,6 +1054,15 @@ def _baseline_frames(
     return frames
 
 
+def _with_price_factors(
+    frames: dict[str, pd.DataFrame], run: Any, price_factors: Any
+) -> dict[str, pd.DataFrame]:
+    """Replay frames on the same footing as the run's: the engine snaps stops on raw prices."""
+    if getattr(run, "tick_grid", tickgrid.NONE) != tickgrid.SAFE_TICK:
+        return frames
+    return tickgrid.attach_price_factors(frames, price_factors)
+
+
 def _verdict_data_quality(report: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """The three keys the verdict reads from a full data-quality report."""
     if report is None:
@@ -1092,6 +1115,7 @@ _SETTINGS_FIELDS = {
     "mis_squareoff_min": "profile.mis_squareoff_min",
     "squareoff_margin_min": "profile.squareoff_margin_min",
     "time_exit_min": "profile.time_exit_min",
+    "tick_grid": "profile.tick_grid",
     "slippage_bps_per_side": "execution.slippage_bps_per_side",
     "warmup_bars": "execution.warmup_bars",
     "eligibility_min_prior_sessions": "execution.eligibility_min_prior_sessions",

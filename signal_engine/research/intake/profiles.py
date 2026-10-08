@@ -28,7 +28,9 @@ _MIS_TIMES = (
     ("standing_time_exit", "standing_time_exit_min"),
     ("latest_exit_bar_close", "latest_exit_bar_close_min"),
 )
-_MIS_KEYS = tuple(k for k, _ in _MIS_TIMES) + ("exit_convention",)
+_MIS_KEYS = tuple(k for k, _ in _MIS_TIMES) + ("exit_convention", "price_grid")
+#: Optional MIS rule: how the executor rounds stop triggers (`backtest.tickgrid.MODES`).
+_PRICE_GRIDS = ("none", "safe_tick")
 _CNC_KEYS = ("carry_forward",)
 PRODUCTS = ("MIS", "CNC")
 
@@ -46,6 +48,8 @@ class ProductRules:
     latest_exit_bar_close_min: int | None = None
     carry_forward: bool = False
     exit_convention: str | None = None
+    #: Stop-trigger rounding the live executor applies; None when the profile does not declare it.
+    price_grid: str | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -86,18 +90,21 @@ class Profile:
             f"time exit {cutoff // 60:02d}:{cutoff % 60:02d}"
         )
 
-    def run_config_fields(self, product: str) -> dict[str, int]:
+    def run_config_fields(self, product: str) -> dict[str, Any]:
         """RunConfig fields this profile fixes for a product. CNC fixes none."""
         if product not in self.products:
             raise ProfileError(f"profile '{self.name}' does not support product {product}")
         rules = self.products[product]
         if rules.force_flat_min is None:
             return {}
-        return {
+        fixed: dict[str, Any] = {
             "mis_squareoff_min": rules.force_flat_min,
             "squareoff_margin_min": rules.force_flat_min - rules.latest_exit_bar_close_min,
             "time_exit_min": rules.standing_time_exit_min,
         }
+        if rules.price_grid is not None:
+            fixed["tick_grid"] = rules.price_grid
+        return fixed
 
 
 def _minutes(value: Any, label: str, problems: list[str]) -> int | None:
@@ -132,9 +139,12 @@ def _parse_mis(block: Mapping[str, Any], problems: list[str]) -> ProductRules | 
             "MIS: cutoffs out of order, need standing_time_exit < latest_exit_bar_close "
             "<= force_flat"
         )
+    grid = block.get("price_grid")
+    if grid is not None and grid not in _PRICE_GRIDS:
+        problems.append(f"MIS: price_grid must be one of {', '.join(_PRICE_GRIDS)}, got {grid!r}")
     if None in (flat, standing, latest) or not isinstance(convention, str):
         return None
-    return ProductRules(flat, standing, latest, False, convention.strip())
+    return ProductRules(flat, standing, latest, False, convention.strip(), grid)
 
 
 def _parse_cnc(block: Mapping[str, Any], problems: list[str]) -> ProductRules | None:

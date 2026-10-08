@@ -507,6 +507,7 @@ class TestSettings:
             "mis_squareoff_min": 900,
             "squareoff_margin_min": 5,
             "time_exit_min": 885,
+            "tick_grid": "safe_tick",
             "slippage_bps_per_side": 4.0,
             "warmup_bars": 20,
             "eligibility_min_prior_sessions": 60,

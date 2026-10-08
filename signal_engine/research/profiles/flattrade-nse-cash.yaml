@@ -13,6 +13,10 @@ products:
     standing_time_exit: "14:45"
     latest_exit_bar_close: "14:55"
     exit_convention: engine_exit_before_force_flat
+    # The executor rounds every stop trigger onto the safe_tick grid, toward the market, because
+    # the exact tier (the previous month's last close) is unknown at order time
+    # (executor.round_to_tick, features/instruments.safe_tick). The backtest models the same.
+    price_grid: safe_tick
   CNC:
     # Delivery: overnight holding allowed, no intraday force-flat and no MIS cutoff.
     carry_forward: true
