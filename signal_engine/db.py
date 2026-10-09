@@ -816,7 +816,7 @@ def fetch_entry_fill_directions(strategy: str, symbol: str, day: str | None = No
 
 
 def fetch_strategy_closes(strategy: str, trade_mode: str, day: str) -> dict[str, dict]:
-    """sig_id -> {pnl, exit_fill, exit_types} for one strategy's closing EXIT rows on a day.
+    """sig_id -> {pnl, exit_fill, exit_types, quantity, closed_at} for one strategy's closing EXIT rows.
 
     Read-only, for per-trade research reports that join on the lineage key. Partial-leg rows are
     skipped: a closing row's pnl already contains its legs (see fetch_day_trades). Rows without a
@@ -825,7 +825,7 @@ def fetch_strategy_closes(strategy: str, trade_mode: str, day: str) -> dict[str,
     conn = _get_connection()
     rows = conn.execute(
         """
-        SELECT sig_id, fill_price, context FROM trades
+        SELECT sig_id, fill_price, context, quantity, executed_at FROM trades
         WHERE upper(strategy) = upper(?) AND direction = 'EXIT' AND status = 'SUCCESS'
           AND trade_mode = ? AND date(executed_at) = ? AND sig_id IS NOT NULL AND sig_id != ''
         ORDER BY id
@@ -833,7 +833,7 @@ def fetch_strategy_closes(strategy: str, trade_mode: str, day: str) -> dict[str,
         (strategy, trade_mode, day),
     ).fetchall()
     out: dict[str, dict] = {}
-    for sig_id, fill, context in rows:
+    for sig_id, fill, context, quantity, executed_at in rows:
         try:
             payload = json.loads(context) if context else {}
         except (TypeError, ValueError):
@@ -844,6 +844,8 @@ def fetch_strategy_closes(strategy: str, trade_mode: str, day: str) -> dict[str,
             "pnl": float(payload.get("pnl", payload.get("realized_pnl", 0.0)) or 0.0),
             "exit_fill": fill,
             "exit_types": list(payload.get("exit_types") or []),
+            "quantity": quantity,
+            "closed_at": executed_at,
         }
     return out
 

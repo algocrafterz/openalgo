@@ -39,6 +39,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from signal_engine.pipeline.trail_driver import DEFAULT_DIAGNOSTICS_DIR
@@ -65,9 +66,21 @@ def attach_pnl(df: pd.DataFrame, closes: dict[str, dict]) -> pd.DataFrame:
     out["exit_price"] = (
         out["sig_id"].map(lambda s: closes.get(s, {}).get("exit_fill")).astype(float)
     )
+    qty = out["sig_id"].map(lambda s: closes.get(s, {}).get("quantity")).astype(float)
     sign = out["direction"].map({"LONG": 1, "SHORT": -1})
     risk = (out["fill_price"] - out["initial_stop"]).abs()
-    out["realized_r"] = sign * (out["exit_price"] - out["fill_price"]) / risk
+    from_fill = sign * (out["exit_price"] - out["fill_price"]) / risk
+    # A close row without a fill (seen on a tracker time exit) still has its booked P&L.
+    from_pnl = out["pnl"] / (qty * risk)
+    out["realized_r"] = from_fill.fillna(from_pnl)
+    # the close as trades.db booked it, to cross-check the driver's own exit reason
+    out["db_exit_type"] = out["sig_id"].map(
+        lambda s: (closes.get(s, {}).get("exit_types") or [None])[-1]
+    )
+    out["closed_at"] = out["sig_id"].map(lambda s: closes.get(s, {}).get("closed_at"))
+    out["r_source"] = np.where(
+        from_fill.notna(), "fill", np.where(from_pnl.notna(), "pnl", "missing")
+    )
     # entry -> crossover vs crossover -> best excursion (R from the fill)
     adv = pd.to_numeric(out["entry_advantage_vs_cross_r"], errors="coerce")
     mfe_post = pd.to_numeric(out["mfe_post_cross_r"], errors="coerce")
@@ -80,6 +93,72 @@ def attach_pnl(df: pd.DataFrame, closes: dict[str, dict]) -> pd.DataFrame:
         (out["exit_reason"] == "TRAILING_STOP") & (pd.to_numeric(out["mfe_r"], errors="coerce") > 0)
     )
     return out
+
+
+#: driver exit reason -> the trades.db exit labels that agree with it
+_AGREEING_DB_EXITS = {
+    "TRAILING_STOP": {"TRAILING_STOP"},
+    "INITIAL_STOP": {"SL", "INITIAL_STOP_SAFETY"},
+    "INITIAL_STOP_SAFETY": {"INITIAL_STOP_SAFETY"},
+    "FORCE_EXIT": {"TIME", "TIME_EXIT"},
+}
+
+
+#: trades.db close label -> how a touched initial stop was executed
+_STOP_EXECUTION = {
+    "SL": "broker_executed",
+    "INITIAL_STOP_SAFETY": "safety_market_close",
+    "TIME": "missed_until_time_exit",
+    "TIME_EXIT": "missed_until_time_exit",
+}
+
+
+def stop_execution(df: pd.DataFrame) -> pd.DataFrame:
+    """Execution reliability of touched initial stops, kept apart from strategy performance.
+
+    The touch is a bar fact (the 5m bar reached the stop, `stop_touch_bar`); the execution is how
+    trades.db booked the close: broker_executed (the SL-M filled), safety_market_close (the runner
+    closed it after the stop did not execute), missed_until_time_exit, or other.
+    """
+    touch = df["stop_touch_bar"] if "stop_touch_bar" in df else pd.Series(None, index=df.index)
+    # records written before the field existed (2026-10-09): the touch is the decided bar
+    older = df["exit_reason"].eq("INITIAL_STOP") & touch.isna()
+    touch = touch.where(~older, df.get("exit_decided_bar"))
+    t = df.assign(stop_touch_bar=touch)
+    t = t[t["stop_touch_bar"].notna()].copy()
+    if t.empty:
+        return pd.DataFrame()
+    t["stop_execution"] = t["db_exit_type"].map(_STOP_EXECUTION).fillna("other")
+    touch_open = pd.to_datetime(t["stop_touch_bar"], utc=True)
+    closed = pd.to_datetime(t["closed_at"], utc=False, errors="coerce")
+    if closed.dt.tz is None:
+        closed = closed.dt.tz_localize("Asia/Kolkata")
+    t["minutes_from_touch_bar_open"] = (
+        closed.dt.tz_convert("UTC") - touch_open
+    ).dt.total_seconds() / 60
+    return (
+        t.groupby("stop_execution")
+        .agg(
+            trades=("sig_id", "count"),
+            median_minutes_to_booked=("minutes_from_touch_bar_open", "median"),
+            max_minutes_to_booked=("minutes_from_touch_bar_open", "max"),
+            realized_r=("realized_r", "sum"),
+        )
+        .round(2)
+    )
+
+
+def exit_mismatches(df: pd.DataFrame) -> pd.DataFrame:
+    """Trades whose driver exit reason disagrees with how trades.db booked the close (for example an
+    initial stop the sandbox did not execute, later closed by the time exit)."""
+    if "db_exit_type" not in df:
+        return df.iloc[0:0]
+    ok = [
+        db in _AGREEING_DB_EXITS.get(reason, {db})
+        for reason, db in zip(df["exit_reason"], df["db_exit_type"], strict=True)
+    ]
+    cols = ["symbol", "sig_id", "exit_reason", "db_exit_type", "exit_decided_bar", "realized_r"]
+    return df.loc[[not x for x in ok], [c for c in cols if c in df]]
 
 
 def _num(s) -> pd.Series:
@@ -112,6 +191,8 @@ def summarise(df: pd.DataFrame) -> dict:
         "trades": len(df),
         "exit_reasons": reasons.value_counts().to_dict(),
         "trades_without_pnl": int(df["pnl"].isna().sum()),
+        "exit_reason_mismatches": len(exit_mismatches(df)),
+        "r_source": df["r_source"].value_counts().to_dict() if "r_source" in df else {},
         "realized_r_sum": round(float(df["realized_r"].sum()), 2),
         "pnl_sum": round(float(df["pnl"].sum()), 2),
         # A. does the early entry work?
@@ -228,23 +309,23 @@ def slippage(df: pd.DataFrame) -> pd.DataFrame:
     exit_ = sign * (
         pd.to_numeric(df.get("exit_price_reference"), errors="coerce") - df["exit_price"]
     )
-    rows = {
-        "ENTRY": {
-            "n": int(entry.notna().sum()),
-            "median_inr": _median(entry),
-            "median_atr": _median(entry / atr),
-            "median_r": _median(entry / risk),
+
+    def stats(e: pd.Series, a: pd.Series, r: pd.Series) -> dict:
+        return {
+            "n": int(e.notna().sum()),
+            "worse": int((e > 0).sum()),
+            "better": int((e < 0).sum()),
+            "median_inr": _median(e),
+            "mean_inr": _mean(e),
+            "median_atr": _median(e / a),
+            "median_r": _median(e / r),
+            "mean_r": _mean(e / r),
         }
-    }
+
+    rows = {"ENTRY": stats(entry, atr, risk)}
     for reason in sorted(df["exit_reason"].dropna().unique()):
         m = df["exit_reason"] == reason
-        e = exit_[m]
-        rows[f"EXIT {reason}"] = {
-            "n": int(e.notna().sum()),
-            "median_inr": _median(e),
-            "median_atr": _median(e / atr[m]),
-            "median_r": _median(e / risk[m]),
-        }
+        rows[f"EXIT {reason}"] = stats(exit_[m], atr[m], risk[m])
     return pd.DataFrame(rows)
 
 
@@ -268,6 +349,15 @@ def main(argv: list[str] | None = None) -> int:
     with pd.option_context("display.width", 160, "display.max_rows", 200):
         print("\nby symbol\n", by(df, "symbol"))
         print("\nby entry half-hour\n", by(df, "entry_half_hour"))
+        bad = exit_mismatches(df)
+        if len(bad):
+            print("\nEXIT REASON MISMATCHES (driver vs trades.db) - investigate\n", bad)
+        se = stop_execution(df)
+        if len(se):
+            print(
+                "\ninitial-stop touches by how they were executed (bar touch vs trades.db close)\n",
+                se,
+            )
         print("\nMFE / MAE by time since entry (R)\n", excursion_by_time(df))
         print("\nslippage (positive = worse than reference)\n", slippage(df))
         print("\nby exit reason\n", by(df, "exit_reason"))

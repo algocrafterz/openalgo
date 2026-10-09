@@ -607,3 +607,140 @@ class TestFallbackStop:
         assert s.loc["median_r", "ENTRY"] == pytest.approx(0.25)
         assert s.loc["median_inr", "EXIT TRAILING_STOP"] == pytest.approx(0.2)  # sold 0.2 below the stop
 
+
+
+class TestMissedInitialStop:
+    """The paper sandbox can miss a short spike to the SL-M; the driver must not hold the trade blind,
+    and must never send a duplicate close."""
+
+    @staticmethod
+    def _sl_trade():
+        df = random_bars(sessions=14, seed=11)
+        trade = next(t for t in _trades(df) if t.reason == "SL")
+        fill_bar = pd.Timestamp(trade.entry_time)
+        fire = all_fires(df)[fill_bar - pd.Timedelta(minutes=5)]
+        return df, fire, fill_bar
+
+    def _run(self, broker_answers, close_on_send=True, max_bars=None):
+        """broker_qty answers are magnitudes as service.make_broker_qty returns them (-1 unknown).
+        Step bar by bar. A send closes the position (main booked it) unless close_on_send is
+        False (main aborted). Returns (touch bar, [(bar, signal)], broker calls, driver)."""
+        df, fire, fill_bar = self._sl_trade()
+        positions = FakePositions()
+        answers = list(broker_answers)
+        calls = []
+
+        async def broker_qty(pos):
+            calls.append(pos.symbol)
+            return answers.pop(0) if answers else 436
+
+        driver = TrailExitDriver(strategy=EarlyDisplacementStrategy(), context=WholeFrameContext(),
+                                 positions=positions, interval_min=5, manage_until_min=14 * 60 + 45,
+                                 diagnostics_dir=None, broker_qty=broker_qty)
+        positions.by_symbol["SYN"] = pos_for(fire, float(df.loc[fill_bar, "Open"]),
+                                             fill_bar + pd.Timedelta(seconds=5))
+        touch, sent = None, []
+        bars = df.index[(df.index >= fill_bar) & (df.index.date == fill_bar.date())]
+        for i, b in enumerate(bars):
+            if b.hour * 60 + b.minute >= 14 * 60 + 45 or (max_bars and i >= max_bars):
+                break
+            r = df.loc[b]
+            hit = r.Low <= fire.sl if fire.direction == 1 else r.High >= fire.sl
+            if hit and touch is None:
+                touch = b
+            out = asyncio.run(driver.on_bar("SYN", b, r.Open, r.High, r.Low, r.Close, frame=df[df.index <= b]))
+            sent += [(b, o) for o in out]
+            if out and close_on_send:
+                positions.by_symbol.pop("SYN")
+            if "SYN" not in positions.by_symbol and not driver.holds("SYN"):
+                break
+        return touch, sent, calls, driver
+
+    def test_check_fires_ten_minutes_after_the_touch_bar_closes(self):
+        touch, sent, calls, driver = self._run([436])
+        assert touch is not None and len(sent) == 1 and len(calls) == 1
+        bar, sig = sent[0]
+        # the cycle for `bar` runs when it closes: touch bar close + 10 minutes on the 5m timeframe
+        assert (bar + pd.Timedelta(minutes=5)) - (touch + pd.Timedelta(minutes=5)) == pd.Timedelta(minutes=10)
+        assert sig.tp_level == "INITIAL_STOP_SAFETY" and sig.exit_qty_pct == 1.0 and sig.tp == 0.0
+
+    def test_record_is_written_at_the_close_and_keeps_touch_and_execution_apart(self):
+        touch, _, _, driver = self._run([436])
+        assert len(driver.records) == 1
+        rec = driver.records[0]
+        assert rec["exit_reason"] == core.INITIAL_STOP  # the strategy event
+        assert rec["stop_touch_bar"] == str(touch)  # the bar fact
+        assert rec["safety_attempts"] == 1 and rec["safety_broker_answers"] == [436]
+
+    def test_broker_flat_reconciles_as_a_stop_hit(self):
+        _, sent, _, driver = self._run([0])
+        assert [s.tp_level for _, s in sent] == ["SL"]
+        assert driver.records[0]["exit_reason"] == core.INITIAL_STOP
+
+    def test_unknown_broker_position_sends_nothing_and_waits_a_bar(self):
+        touch, sent, calls, _ = self._run([-1, 436])
+        assert len(calls) == 2 and len(sent) == 1
+        assert sent[0][0] == touch + pd.Timedelta(minutes=15)
+
+    def test_main_abort_is_retried_once_per_bar_and_capped(self):
+        from signal_engine.pipeline.trail_driver import MAX_SAFETY_ATTEMPTS
+
+        touch, sent, calls, _ = self._run([436] * 10, close_on_send=False)
+        bars = [b for b, _ in sent]
+        assert len(sent) == MAX_SAFETY_ATTEMPTS  # never more, whatever main does
+        assert len(set(bars)) == len(bars)  # at most one send per bar
+        assert bars[0] == touch + pd.Timedelta(minutes=10)
+        assert len(calls) == MAX_SAFETY_ATTEMPTS  # no broker query once capped
+
+
+    def test_realized_r_falls_back_to_booked_pnl_without_an_exit_fill(self):
+        from signal_engine.analysis import evwap_early_report as rep
+
+        df = pd.DataFrame([{"symbol": "PFC", "sig_id": "p", "direction": "SHORT", "fill_price": 326.2,
+                            "initial_stop": 328.2, "entry_advantage_vs_cross_r": None,
+                            "mfe_post_cross_r": 0.0, "mae_r": 1.0, "mfe_r": 0.0, "exit_reason": "FORCE_EXIT"}])
+        out = rep.attach_pnl(df, {"p": {"pnl": -1417.0, "exit_fill": None, "quantity": 436}})
+        assert out["r_source"].iloc[0] == "pnl"
+        assert out["realized_r"].iloc[0] == pytest.approx(-1417.0 / (436 * 2.0))
+
+    def test_exit_reason_mismatch_is_flagged(self):
+        from signal_engine.analysis import evwap_early_report as rep
+
+        base = {"direction": "SHORT", "fill_price": 326.2, "initial_stop": 328.2,
+                "entry_advantage_vs_cross_r": None, "mfe_post_cross_r": 0.0, "mae_r": 1.0, "mfe_r": 0.0,
+                "exit_decided_bar": "x"}
+        df = pd.DataFrame([{**base, "symbol": "PFC", "sig_id": "p", "exit_reason": "INITIAL_STOP"},
+                           {**base, "symbol": "MCX", "sig_id": "m", "exit_reason": "INITIAL_STOP"}])
+        closes = {"p": {"pnl": -1417.0, "exit_fill": None, "quantity": 436, "exit_types": ["TIME"]},
+                  "m": {"pnl": -861.3, "exit_fill": 3318.0, "quantity": 100, "exit_types": ["SL"]}}
+        bad = rep.exit_mismatches(rep.attach_pnl(df, closes))
+        assert bad["symbol"].tolist() == ["PFC"]
+
+
+    def test_stop_execution_separates_touch_from_execution(self):
+        from signal_engine.analysis import evwap_early_report as rep
+
+        base = {"direction": "SHORT", "fill_price": 326.2, "initial_stop": 328.2,
+                "entry_advantage_vs_cross_r": None, "mfe_post_cross_r": 0.0, "mae_r": 1.0, "mfe_r": 0.0,
+                "exit_reason": "INITIAL_STOP"}
+        df = pd.DataFrame([
+            {**base, "symbol": "A", "sig_id": "a", "stop_touch_bar": "2026-10-12 11:15:00+05:30",
+             "exit_decided_bar": "2026-10-12 11:15:00+05:30"},
+            {**base, "symbol": "B", "sig_id": "b", "stop_touch_bar": "2026-10-12 11:15:00+05:30",
+             "exit_decided_bar": "2026-10-12 11:15:00+05:30"},
+            {**base, "symbol": "C", "sig_id": "c", "exit_reason": "TRAILING_STOP", "stop_touch_bar": None,
+             "exit_decided_bar": "2026-10-12 12:00:00+05:30"},
+        ])
+        closes = {
+            "a": {"pnl": -900.0, "exit_fill": 328.3, "quantity": 436, "exit_types": ["SL"],
+                  "closed_at": "2026-10-12T11:18:00"},
+            "b": {"pnl": -1000.0, "exit_fill": 328.6, "quantity": 436, "exit_types": ["INITIAL_STOP_SAFETY"],
+                  "closed_at": "2026-10-12T11:30:05"},
+            "c": {"pnl": 100.0, "exit_fill": 326.0, "quantity": 436, "exit_types": ["TRAILING_STOP"],
+                  "closed_at": "2026-10-12T12:05:00"},
+        }
+        se = rep.stop_execution(rep.attach_pnl(df, closes))
+        assert set(se.index) == {"broker_executed", "safety_market_close"}  # trailing exit not a touch
+        assert se.loc["broker_executed", "median_minutes_to_booked"] == pytest.approx(3.0)
+        assert se.loc["safety_market_close", "median_minutes_to_booked"] == pytest.approx(15.08, abs=0.01)
+        assert rep.exit_mismatches(rep.attach_pnl(df, closes)).empty  # a safety close agrees with INITIAL_STOP

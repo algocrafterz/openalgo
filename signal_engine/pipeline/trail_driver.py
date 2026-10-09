@@ -44,10 +44,19 @@ from signal_engine.strategy_core.ema_vwap_early import (
     TrailState,
     replay_trail,
 )
+from signal_engine.strategy_core.trade_policy import MISSED_STOP_SAFETY
 from signal_engine.timeutils import IST
 
 DEFAULT_DIAGNOSTICS_DIR = Path(__file__).resolve().parents[1] / "logs"
 CLOSED_ELSEWHERE = "CLOSED_ELSEWHERE"
+#: The initial stop was touched but the position is still open SAFETY_BARS bars later (the paper
+#: sandbox triggers SL-M from polled prices and can miss a short spike to the stop): closed at market.
+INITIAL_STOP_SAFETY = MISSED_STOP_SAFETY
+#: Bars after an initial-stop touch before the broker is asked what is open (as pipeline.service).
+SAFETY_BARS = 2
+#: Safety sends per position. main aborts a send whose SL cancel failed (the stop may be live), so a
+#: later bar retries; after this many the 14:45 time exit (cancel all, then close) is the backstop.
+MAX_SAFETY_ATTEMPTS = 3
 #: entry-context keys copied into each trade record
 _ENTRY_KEYS = (
     "signal_reason",
@@ -158,8 +167,22 @@ class TrailExitDriver:
         interval_min: int,
         manage_until_min: int | None = None,
         diagnostics_dir: Path | None = DEFAULT_DIAGNOSTICS_DIR,
+        broker_qty=None,
+        safety_bars: int = SAFETY_BARS,
     ) -> None:
+        #: async (pos) -> open quantity at the broker (0 flat, -1 unknown); None disables the
+        #: missed-initial-stop safety check
+        self._broker_qty = broker_qty
+        self._safety_bars = safety_bars
         self.strategy = strategy.name
+        logger.info(
+            f"{self.strategy} exits: trailing-stop driver, missed-stop safety "
+            + (
+                f"ON (broker check {safety_bars} bars after a stop touch, max {MAX_SAFETY_ATTEMPTS} attempts)"
+                if broker_qty is not None
+                else "OFF (no broker check)"
+            )
+        )
         self._strategy = strategy
         self._context = context
         self._positions = positions
@@ -171,6 +194,8 @@ class TrailExitDriver:
         self._sent: set[tuple] = set()  # positions whose exit was sent
         self._recorded: set[tuple] = set()  # positions whose diagnostics record is written
         self._open: dict[str, _Open] = {}
+        #: position key -> missed-stop safety state: attempts, last send bar, last broker answer
+        self._safety: dict[tuple, dict] = {}
         self.unmanaged: set[str] = set()
         #: every record written this session, newest last (also on disk)
         self.records: list[dict] = []
@@ -216,7 +241,7 @@ class TrailExitDriver:
                 f"{symbol}: trail driver got no bars for {bar_open:%H:%M}; stop not evaluated"
             )
             return []
-        return self._decide(symbol, pos, held, bar_open, frame)
+        return await self._decide(symbol, pos, held, bar_open, frame)
 
     # ---- internals ---------------------------------------------------------------------------
 
@@ -265,16 +290,17 @@ class TrailExitDriver:
             self.unmanaged.add(symbol)
             return None, None, inputs
 
-    def _decide(self, symbol, pos, held: _Open, bar_open, frame) -> list[Signal]:
+    async def _decide(self, symbol, pos, held: _Open, bar_open, frame) -> list[Signal]:
         state, exit_bar, inputs = self._replay(symbol, held, bar_open, frame)
         if state is None:
             return []
         self._log_stop(symbol, held.key, state)
         if exit_bar is not None and state.exit is not None:
             if state.exit.reason == INITIAL_STOP:
-                # the broker SL-M owns it; the tracker books the close
-                self._record(symbol, held, state, INITIAL_STOP, exit_bar, inputs)
-                return []
+                # The broker SL-M owns it and the tracker books the close (the record is written
+                # then, by _closed). If the position is still here SAFETY_BARS bars later, the stop
+                # did not execute: ask the broker, then reconcile or close at market.
+                return await self._missed_stop(symbol, pos, held, state, exit_bar, bar_open, inputs)
             if exit_bar != bar_open:
                 logger.warning(
                     f"{symbol}: trailing exit was decided on the {exit_bar:%H:%M} bar but is sent at "
@@ -286,6 +312,57 @@ class TrailExitDriver:
         if self._last_managed(bar_open):
             self._record(symbol, held, state, FORCE_EXIT, bar_open, inputs)
         return []
+
+    async def _missed_stop(
+        self, symbol, pos, held, state, touch_bar, bar_open, inputs
+    ) -> list[Signal]:
+        """The bar data touched the initial stop but the tracker still holds the position.
+
+        Waits SAFETY_BARS bars (the broker stop normally fills within seconds), then asks the broker:
+        flat -> reconcile as the stop hit; still held -> close at market; unknown -> wait a bar. At
+        most one send per bar and MAX_SAFETY_ATTEMPTS per position. The diagnostics record is
+        written when the position actually closes (_closed), so the touch (bar data) and the
+        execution (trades.db) stay separate facts.
+        """
+        bars_since = int((bar_open - touch_bar) / self._interval)
+        safety = self._safety.setdefault(
+            held.key, {"touch": touch_bar, "attempts": 0, "answers": []}
+        )
+        if self._broker_qty is None or bars_since < self._safety_bars:
+            if self._last_managed(bar_open):
+                # still open on the last bar before the time exit: the tracker closes it at 14:45
+                self._record(symbol, held, state, FORCE_EXIT, bar_open, inputs)
+            return []
+        if safety["attempts"] >= MAX_SAFETY_ATTEMPTS:
+            if safety["attempts"] == MAX_SAFETY_ATTEMPTS:
+                safety["attempts"] += 1  # log once
+                logger.critical(
+                    f"{symbol}: initial stop touched at {touch_bar:%H:%M}, position still open after "
+                    f"{MAX_SAFETY_ATTEMPTS} safety attempts; left to the time exit"
+                )
+            if self._last_managed(bar_open):
+                self._record(symbol, held, state, FORCE_EXIT, bar_open, inputs)
+            return []
+        qty = await self._broker_qty(pos)
+        safety["answers"].append(qty)
+        if qty < 0:
+            logger.warning(
+                f"{symbol}: initial stop touched at {touch_bar:%H:%M}, broker position unknown; "
+                "no order, retry next bar"
+            )
+            return []
+        safety["attempts"] += 1
+        safety["last_sent"] = bar_open
+        if qty == 0:
+            logger.warning(
+                f"{symbol}: initial stop touched at {touch_bar:%H:%M} and broker is flat; reconciling tracker"
+            )
+            return [self._signal(pos, state, touch_bar, tp_level="SL")]
+        logger.warning(
+            f"{symbol}: initial stop {held.stop:.2f} touched at {touch_bar:%H:%M} but the broker still "
+            f"holds {qty} after {bars_since} bars (stop not executed); closing at market"
+        )
+        return [self._signal(pos, state, bar_open, tp_level=INITIAL_STOP_SAFETY)]
 
     def _last_managed(self, bar_open: pd.Timestamp) -> bool:
         if self._manage_until is None:
@@ -307,6 +384,7 @@ class TrailExitDriver:
         self._last_stop.pop(held.key, None)
         self._sent.discard(held.key)
         self._recorded.discard(held.key)
+        self._safety.pop(held.key, None)
 
     def _record(
         self, symbol: str, held: _Open, state: TrailState, reason: str, bar, inputs: pd.DataFrame
@@ -348,6 +426,15 @@ class TrailExitDriver:
             ),
             "exit_decided_bar": str(bar),
             "minutes_in_trade": state.bars * int(self._interval.total_seconds() // 60),
+            # the bar data touched the initial stop (a simulator/bar fact, not an execution); how the
+            # stop was executed is the close row in trades.db (report: stop_execution)
+            "stop_touch_bar": (
+                state.path[-1]["time"]
+                if state.exit is not None and state.exit.reason == INITIAL_STOP and state.path
+                else None
+            ),
+            "safety_attempts": self._safety.get(held.key, {}).get("attempts", 0),
+            "safety_broker_answers": self._safety.get(held.key, {}).get("answers", []),
             **{k: ctx[k] for k in _ENTRY_KEYS if k in ctx},
             **state.snapshot(),
             "path": _path(state, inputs),
@@ -375,11 +462,13 @@ class TrailExitDriver:
                 f"state {state.state}, activated {state.activated})"
             )
 
-    def _signal(self, pos, state: TrailState, bar: pd.Timestamp) -> Signal:
+    def _signal(
+        self, pos, state: TrailState, bar: pd.Timestamp, tp_level: str | None = None
+    ) -> Signal:
         ex = state.exit
         context = {
             "source": "trail_driver",
-            "exit_reason": ex.reason,
+            "exit_reason": tp_level or ex.reason,
             "exit_trigger": ex.trigger,
             "exit_stop": float(ex.stop),
             "exit_decided_bar": str(bar),
@@ -395,7 +484,7 @@ class TrailExitDriver:
             exchange=pos.exchange,
             product=pos.product,
             sig_id=getattr(pos, "sig_id", None) or None,
-            tp_level=ex.reason,
+            tp_level=tp_level or ex.reason,
             exit_qty_pct=1.0,
             context=context,
         )

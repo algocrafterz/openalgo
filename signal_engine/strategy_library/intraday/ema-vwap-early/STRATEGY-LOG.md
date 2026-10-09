@@ -4,6 +4,46 @@ EMA/VWAP/ATR early displacement, trailing stop, no take-profit. Python runner, p
 Idea record: `research/ideas/idea-033-ema-vwap-early-trail/idea.md`. Rules:
 `strategy_core/ema_vwap_early.py` (one code path for backtest, paper and live).
 
+### 2026-10-09 15:30 - First paper session checked; missed-stop safety net added
+
+- **What changed:** One technical fix, no rule change. On PFC the price reached the starting stop but
+  the sandbox did not execute the broker stop order, so the position stayed open until the 14:45 time
+  exit and lost about 1.5R instead of 1R. The engine now checks two bars after a stop touch: if the
+  position is still open it closes it at market (or, if the broker is already flat, books the stop).
+- **Entry:** Not affected.
+- **Exit (SL):** Affected only when the broker stop failed to fill: the trade is now closed about 10
+  minutes after the touch instead of being held to 14:45. A stop that fills normally is unchanged.
+- **Exit (TP):** Not affected. There is still no profit target.
+- **Consideration:** The paper sandbox triggers stop orders from sampled prices, so a brief spike to the
+  stop can slip past it; a real exchange stop would have filled. The other 7 stopped trades filled within
+  about 3 minutes. Nothing was tuned from the day's result.
+
+Session facts (behaviour, not a verdict): 45 signals, 37 traded (8 declined by risk gates, 1 skipped
+for a stop under 0.20%). Every entry happened before the crossover, every trigger was a real +/-0.50
+crossing with EMA20 aligned, the trailing stop never loosened and only trailed after the crossover.
+70% of trades reached the crossover; median entry advantage 0.17R; exits 26 trailing, 8 initial
+stop, 3 time; median initial stop 2.0 ATR; 35 SWING / 2 FALLBACK_EXTREME. Realized -1.42R
+(-Rs 1,843) before charges. Order latency after the bar close: median 11 s, max 40 s; BREAKOUT-PY
+latency unchanged.
+
+NOTE: `pipeline/trail_driver.py` `_missed_stop`: after an INITIAL_STOP touch with the position still
+tracked SAFETY_BARS (2) bars later, it asks the broker (`service.make_broker_qty`): flat -> EXIT
+tp_level "SL" (main reconciles), still held -> full market EXIT tp_level INITIAL_STOP_SAFETY, unknown
+-> no order, retry next bar. Same rule as the Ladder ExitDriver. On the 5m timeframe the check runs in
+the cycle of the bar that closes 10 minutes after the touch bar closed (bars are counted by time, so
+a skipped cycle does not stretch it). At most one send per bar and MAX_SAFETY_ATTEMPTS (3) per
+position. No duplicate close: `main._handle_exit_locked` cancels the SL-M first and, for this label
+only, if the cancel fails it re-checks the broker: flat -> book the stop hit (no order); held or
+unknown -> abort, the runner retries next bar; the 14:45 time exit (cancel all, then close) is the
+backstop. Every other exit label keeps its existing behaviour. The diagnostics record is written when
+the position actually closes: `exit_reason` INITIAL_STOP is the strategy event, `stop_touch_bar` the
+bar fact, and the execution comes from trades.db (`report.stop_execution`: broker_executed,
+safety_market_close, missed_until_time_exit) with minutes from the touch bar to the booked close.
+Today: 7 broker_executed (median 3.2 min), 1 missed_until_time_exit (PFC, 210 min). Report fixes: realized R falls back to booked P&L / (qty x risk) when the
+close row has no fill (PFC's time-exit row), `r_source` says which; slippage shows mean and
+worse/better counts; `exit_mismatches` flags any trade whose driver exit reason disagrees with
+trades.db (PFC: INITIAL_STOP vs TIME).
+
 ### 2026-10-09 00:30 - Frozen for the first observation run
 
 - **What changed:** Nothing in the trading rules. The strategy is frozen as it stands for the first

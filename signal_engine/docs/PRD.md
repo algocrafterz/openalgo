@@ -5652,6 +5652,11 @@ not a validated edge (IDEA-032 measured the same entry with a zero-cross exit at
 - **OpenAlgo UI:** the paper trades appear under EVWAP-EARLY-PY in Order Book / Trade Book, `/strategy-pnl` and
   `/strategy-pnl/daily`, keyed on the order strategy tag. No UI or core change.
 - **Frozen 2026-10-09 for an observation run:** no parameter change from early paper P&L.
+- **2026-10-09 missed-stop safety net:** the paper sandbox did not execute PFC's SL-M after the bar reached it; the
+  trail driver now re-checks 2 bars after an initial-stop touch (broker flat -> reconcile SL, still held -> market exit
+  `INITIAL_STOP_SAFETY`, unknown -> no order), at most once per bar and 3 times per position. For that label only,
+  main never sends the close if the SL cancel failed (broker flat -> book the stop; else abort and retry). The report
+  separates the bar touch from the broker execution (`stop_execution`) and cross-checks exit reasons against trades.db.
 
 ## Backtest Evaluation: Symbol Hold-Out, Regime Activation, Evolution Verdict (2026-10-01)
 

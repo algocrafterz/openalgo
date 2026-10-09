@@ -132,6 +132,7 @@ def build_exits(
             positions=positions,
             interval_min=cfg.bar_interval_minutes,
             manage_until_min=manage_until_min,
+            broker_qty=broker_qty,
         )
     if entry.exit_owner != "ladder":
         return None

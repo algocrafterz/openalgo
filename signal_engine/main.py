@@ -341,7 +341,10 @@ async def _handle_exit_locked(signal) -> None:
         f"full_exit={is_full_exit}"
     )
 
-    await _cancel_sl_before_exit(pos)
+    sl_cancelled = await _cancel_sl_before_exit(pos)
+    if tp_level == trade_policy.MISSED_STOP_SAFETY and not sl_cancelled:
+        await _resolve_failed_missed_stop_cancel(signal, pos)
+        return
 
     exit_order, trade_result = await _place_exit_order(pos, exit_qty)
 
@@ -526,19 +529,41 @@ async def _reconcile_sl_hit(signal, pos) -> None:
     await tracker.maybe_send_day_summary()
 
 
-async def _cancel_sl_before_exit(pos) -> None:
-    """ALWAYS cancel SL before placing an exit order.
+async def _cancel_sl_before_exit(pos) -> bool:
+    """ALWAYS cancel SL before placing an exit order. True when no stop is left working.
 
     Indian brokers treat any SELL while SL SELL is active as a new SHORT position
     (FUND LIMIT INSUFFICIENT). SL must be cancelled first, even for partial exits.
     """
     if not pos.sl_order_id:
-        return
+        return True
     success = await cancel_order(pos.sl_order_id, pos.strategy)
     if success:
         logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
     else:
         logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
+    return bool(success)
+
+
+async def _resolve_failed_missed_stop_cancel(signal, pos) -> None:
+    """For a missed-stop safety exit whose SL cancel failed: never send a second close.
+
+    The cancel can fail because the stop has just filled. Broker flat: book it as the stop hit.
+    Otherwise (still held, or unknown) abort this exit; the runner retries on the next bar.
+    Only the MISSED_STOP_SAFETY label takes this path, so every other exit is unchanged.
+    """
+    own = await tracker.fetch_own_position(
+        pos.symbol, pos.strategy, pos.exchange or settings.exchange, pos.product or settings.product
+    )
+    if own == 0:
+        logger.warning(f"EXIT: {pos.symbol} stop already executed at the broker; reconciling, no order sent")
+        await _reconcile_sl_hit(signal, pos)
+        return
+    logger.warning(
+        f"EXIT: {pos.symbol} missed-stop close aborted: SL cancel failed and broker position is "
+        f"{own}; not sending a second close while the stop may be live (runner retries next bar)"
+    )
+    pos.exit_pending = False
 
 
 async def _place_exit_order(pos, exit_qty: int):

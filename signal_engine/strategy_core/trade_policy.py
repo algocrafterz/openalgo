@@ -166,6 +166,9 @@ def bad_fill(
 
 TIME_EXIT = "TIME_EXIT"
 DATA_GAP = "DATA_GAP"
+#: Exit label of the runner's market close of a position whose initial stop was touched but not
+#: executed (pipeline.trail_driver). main refuses to send it while the stop may still be live.
+MISSED_STOP_SAFETY = "INITIAL_STOP_SAFETY"
 
 # Exit classes (BREAKOUT spec item 20, `docs/ACCOUNTING-INVARIANTS.md` I3). One mapping from an exit
 # reason to the class that decides which view a trade belongs to.
