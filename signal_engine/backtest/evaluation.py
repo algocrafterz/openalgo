@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as _st
 
+from signal_engine.backtest import live_caps as live_caps_mod
 from signal_engine.backtest import perturbation, splits, stats, tickgrid
 from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.backtest.metrics import hurdle_t
@@ -213,6 +214,7 @@ class _Inputs:
     truncation: Any = None
     tick_grid: dict[str, Any] | None = None
     perturbation: dict[str, Any] | None = None
+    live_caps: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -698,26 +700,66 @@ def _g46(x: _Inputs) -> _Result:
 
 
 def _g52(x: _Inputs) -> _Result:
-    """Not evaluated until a capped run exists. The generic slot sweep below filters the recorded
-    trades first come first served and applies none of the live limits (daily, weekly and
-    monthly loss, trades per day, price band). It also cannot say what a freed symbol would have
-    traded next, because the engine skips signal evaluation while a position is open and the
-    record keeps only per-bar counts of those skips. It is shown for information and never
-    stands in for the gate, so it must not read as a non-blocking report."""
-    threshold = "run with the live position and loss caps"
-    if not x.position_caps:
-        return "not_evaluated", None, threshold, "no position-cap run recorded"
-    rows = sorted(x.position_caps, key=lambda r: r["max_positions"])
-    text = "; ".join(f"{r['max_positions']} slots: net {r['net_bps']:+.2f} bps" for r in rows)
-    return (
-        "not_evaluated",
-        None,
-        threshold,
-        "the live caps were not applied: only a generic first-come-first-served slot sweep of "
-        f"the recorded trades exists ({text}), which applies no loss limit, trade-count limit "
-        "or price band and cannot show what a freed symbol would have traded next. "
-        "Information only, not evidence for this gate",
+    """Reads the sealed live-caps evidence: the strategy run again with the configured live
+    limits applied as signals arrive (`live_caps.run_stage`). It passes only when that stage
+    completed, reproduced the headline run with every limit off, recorded its assumptions and
+    limitations, and the primary capped trade list meets the G1.2 expectancy and the G2.1 trade
+    count. Anything else leaves it not evaluated, which blocks EDGE. The generic slot sweep of the
+    recorded trades applies no live limit and cannot show what a freed symbol would have traded
+    next, so it is shown for information only and never stands in for the gate."""
+    threshold = (
+        f"the live caps applied while the strategy runs; capped net expectancy >= {MIN_NET_R:+.2f}R "
+        f"per trade and >= {MIN_TRADES} trades (the G1.2 and G2.1 bars)"
     )
+    ev = x.live_caps
+    if ev is None:
+        note = "no run with the live caps was recorded"
+        if x.position_caps:
+            rows = sorted(x.position_caps, key=lambda r: r["max_positions"])
+            text = "; ".join(f"{r['max_positions']} slots: net {r['net_bps']:+.2f} bps" for r in rows)
+            note += (
+                f"; only a generic first-come-first-served slot sweep of the recorded trades "
+                f"exists ({text}), which applies no live limit. Information only, not evidence "
+                "for this gate"
+            )
+        return "not_evaluated", None, threshold, note
+    problems = live_caps_mod.validate_evidence(ev)
+    if problems:
+        return "not_evaluated", None, threshold, "the live-caps evidence is unusable: " + "; ".join(problems)
+    if ev.get("state") != live_caps_mod.COMPLETE:
+        return (
+            "not_evaluated",
+            None,
+            threshold,
+            f"the live-caps stage did not complete ({ev.get('state')}): {ev.get('reason', 'no reason recorded')}",
+        )
+    primary = next(p for p in ev["passes"] if p.get("primary"))
+    n, mean = primary["trades"], primary.get("net_r")
+    if mean is None:
+        return "not_evaluated", None, threshold, "the primary capped pass has no trades to score"
+    status = "pass" if n >= MIN_TRADES and round(float(mean), 6) >= MIN_NET_R else "fail"
+    veto = primary.get("vetoes", {})
+    others = "; ".join(
+        f"{p['max_open_positions']} slots: {p['trades']} trades, net {p['net_r']:+.3f}R"
+        for p in ev["passes"]
+        if not p.get("primary") and p.get("net_r") is not None
+    )
+    evidence = (
+        f"with {primary['max_open_positions']} open position allowed: {n} of "
+        f"{ev['headline']['trades']} trades, net {mean:+.3f}R per trade (headline "
+        f"{ev['headline']['net_r']:+.3f}R); vetoed by band {veto.get('band', 0)}, daily "
+        f"{veto.get('daily', 0)}, weekly {veto.get('weekly', 0)}, monthly {veto.get('monthly', 0)}, "
+        f"slots {veto.get('slots', 0)}, trades per day {veto.get('trades_day', 0)}"
+    )
+    if others:
+        evidence += f". Sensitivities, not decisive: {others}"
+    evidence += (
+        ". The run with every limit off reproduced the headline run. This simulates the "
+        "configured limits and is not proof of live feasibility; approximations: pooled "
+        "limits given the whole allowance, unrealised loss marked at 5-minute closes, "
+        "nominal risk per trade"
+    )
+    return status, _num(float(mean)), threshold, evidence
 
 
 def _g69(x: _Inputs) -> _Result:
@@ -1609,6 +1651,7 @@ def evaluate(
     truncation: Any = None,
     tick_grid: dict[str, Any] | None = None,
     perturbation: dict[str, Any] | None = None,
+    live_caps: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1624,8 +1667,8 @@ def evaluate(
     eligibility policy) feed G0.3, G0.4, G0.6, G0.8, G4.7 and G6.2, each not_evaluated without
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
-    G6.4 part A and `perturbation` (`perturbation.run_variants`) feeds G4.1, each not_evaluated
-    without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
+    (`live_caps.run_stage`) feeds G5.2, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1653,6 +1696,7 @@ def evaluate(
         truncation=truncation,
         tick_grid=tick_grid,
         perturbation=perturbation,
+        live_caps=live_caps,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

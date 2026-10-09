@@ -754,6 +754,9 @@ def prepare_run_artifact(
     perturbation = getattr(execution, "perturbation", None)
     if perturbation is not None:
         files["evidence/perturbation.json"] = _encode(_json_safe(perturbation))
+    live_caps = getattr(execution, "live_caps", None)
+    if live_caps is not None:
+        files["evidence/live_caps.json"] = _encode(_json_safe(live_caps))
     data_report = getattr(execution, "data_report", None)
     if data_report is not None:
         files["data_quality.json"] = _encode(_json_safe(data_report))

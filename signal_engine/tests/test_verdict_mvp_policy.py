@@ -245,7 +245,7 @@ class TestG52IsNotASilentReport:
     def test_a_flattering_slot_sweep_does_not_evaluate_the_gate(self):
         row = _row(_evaluate(_noisy_book(), position_caps=self.CAPS), "G5.2")
         assert row["status"] == "not_evaluated" and row["value"] is None
-        assert "were not applied" in row["evidence"] and "not evidence for this gate" in row["evidence"]
+        assert "no run with the live caps" in row["evidence"] and "not evidence for this gate" in row["evidence"]
 
     def test_the_sweep_is_still_shown_for_information(self):
         row = _row(_evaluate(_noisy_book(), position_caps=self.CAPS), "G5.2")
@@ -253,7 +253,7 @@ class TestG52IsNotASilentReport:
 
     def test_without_any_cap_run_it_is_not_evaluated_too(self):
         row = _row(_evaluate(_noisy_book()), "G5.2")
-        assert row["status"] == "not_evaluated" and "no position-cap run" in row["evidence"]
+        assert row["status"] == "not_evaluated" and "no run with the live caps" in row["evidence"]
 
     def test_it_blocks_edge_through_the_required_gate_rule(self):
         assert "G5.2" in REQUIRED

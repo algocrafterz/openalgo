@@ -7,6 +7,7 @@ validates against the registry schema, and one failing idea cannot stop the othe
 
 import json
 from datetime import date
+from types import SimpleNamespace
 from pathlib import Path
 
 import pandas as pd
@@ -691,3 +692,65 @@ class TestPerturbationInRecord:
             supported=False, meta=None, trades=[object()] * 3, days=[], strategy=None
         )
         assert ev["state"] == "unsupported" and ev["base"]["trades"] == 3
+
+
+class TestLiveCapsInRecord:
+    @staticmethod
+    def _evidence(net_r=0.2, trades=500):
+        def row(slots, primary):
+            return {"max_open_positions": slots, "primary": primary, "trades": trades,
+                    "net_r": net_r, "net_bps": 20.0, "win_rate": 0.5, "peak_open_positions": slots,
+                    "vetoes": {"band": 1, "daily": 0, "weekly": 0, "monthly": 0, "slots": 2,
+                               "trades_day": 0}, "trade_sha256": "x"}
+        return {
+            "version": 1, "state": "complete", "diagnostic_not_trials": True,
+            "headline": {"trades": 900, "net_r": 0.3, "net_bps": 25.0},
+            "base_check": {"trades": 900, "net_r": 0.3, "net_bps": 25.0, "trade_sha256": "y"},
+            "passes": [row(1, True), row(2, False), row(3, False)],
+            "assumptions": ["a"], "limitations": ["l"],
+        }  # fmt: skip
+
+    def _record(self, root, **changes):
+        from dataclasses import replace
+
+        execution = replace(_execution(), **changes)
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: execution,
+                              run_date="2026-09-30", supported=SUPPORTED)
+        return path, json.loads(path.read_text())
+
+    @staticmethod
+    def _row(record):
+        return next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G5.2")
+
+    def test_evidence_is_sealed_in_the_run_folder_and_scored(self, root):
+        ev = self._evidence()
+        path, rec = self._record(root, live_caps=ev)
+        folder = path.parent / rec["artifact_dir"].rstrip("/")
+        assert json.loads((folder / "evidence" / "live_caps.json").read_text()) == ev
+        manifest = json.loads((folder / "manifest.json").read_text())
+        assert "evidence/live_caps.json" in manifest["artifacts"]
+        row = self._row(rec)
+        assert row["status"] == "pass" and row["value"] == 0.2
+
+    def test_a_capped_book_below_the_expectancy_bar_fails_the_gate(self, root):
+        _, rec = self._record(root, live_caps=self._evidence(net_r=0.01))
+        assert self._row(rec)["status"] == "fail"
+
+    def test_a_run_without_the_stage_has_no_file_and_the_gate_is_not_evaluated(self, root):
+        path, rec = self._record(root)
+        folder = path.parent / rec["artifact_dir"].rstrip("/")
+        assert not (folder / "evidence" / "live_caps.json").exists()
+        assert self._row(rec)["status"] == "not_evaluated"
+
+    def test_the_stage_adds_no_trial(self, root):
+        _, rec = self._record(root, live_caps=self._evidence())
+        assert rec["n_trials"] == 1
+
+    def test_an_unsupported_strategy_kind_records_a_not_run_state(self):
+        ev = rr._live_caps_stage(supported=False, trades=[], days=[])
+        assert ev["state"] == "unsupported" and ev["diagnostic_not_trials"] is True
+
+    def test_an_execute_callable_without_the_option_is_refused_not_ignored(self):
+        with pytest.raises(ValueError, match="live-caps"):
+            rr._execute_frozen(lambda key: None, "k", SimpleNamespace(resolved={}, intent={}, profile={}),
+                               run_live_caps=True)

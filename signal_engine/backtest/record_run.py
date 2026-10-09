@@ -51,6 +51,7 @@ import yaml
 
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
+from signal_engine.backtest import live_caps as live_caps_mod
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import perturbation as perturbation_mod
 from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics, tickgrid
@@ -199,6 +200,8 @@ class Execution:
     tick_grid: dict[str, Any] | None = None
     #: G4.1 evidence (`perturbation.run_variants`), or None when the stage was not run.
     perturbation: dict[str, Any] | None = None
+    #: G5.2 evidence (`live_caps.run_stage`), or None when the stage was not run.
+    live_caps: dict[str, Any] | None = None
     #: Bars read by n_minutes (overall and by year), or None when the bars carry no n_minutes.
     n_minutes_distribution: dict[str, Any] | None = None
     #: The strategy's own `diagnostics()` counters after the headline run, or None without any.
@@ -757,6 +760,7 @@ def execute_backtest(
     run_truncation: bool = True,
     dataset: preflight_mod.Resolution | None = None,
     run_perturbation: bool = False,
+    run_live_caps: bool = False,
 ) -> Execution:
     """Run strategy `key` on the eligible symbols of one published dataset version.
 
@@ -786,6 +790,11 @@ def execute_backtest(
     `run_perturbation` runs the G4.1 stage after the headline run (`perturbation.run_variants`): a
     long, opt-in stage whose evidence is `Execution.perturbation`. False leaves it None, and the
     gate stays not_evaluated.
+
+    `run_live_caps` runs the G5.2 stage after the headline run (`live_caps.run_stage`): the strategy
+    again, with the configured live entry limits applied as signals arrive. It is long and needs
+    about 8 GB of memory, so it is opt-in; its evidence is `Execution.live_caps`. False leaves it
+    None, and the gate stays not_evaluated.
     """
     if dataset is None:
         raise PublishedDataRequired(
@@ -795,7 +804,9 @@ def execute_backtest(
     cli._register()
     try:
         with dataset.open() as source:
-            return _execute_on(source, dataset, key, settings, end, run_truncation, run_perturbation)
+            return _execute_on(
+                source, dataset, key, settings, end, run_truncation, run_perturbation, run_live_caps
+            )
     except (preflight_mod.DataUnavailable, snapshot.SnapshotError,
             data_mod.NoPublishedData) as exc:
         raise LoadRejected(str(exc), {"version": dataset.version_id}) from exc
@@ -841,7 +852,7 @@ def intraday_session_shape() -> Callable[[date], int]:
 
 
 def _execute_on(
-    source, dataset, key, settings, end, run_truncation, run_perturbation=False
+    source, dataset, key, settings, end, run_truncation, run_perturbation=False, run_live_caps=False
 ) -> Execution:
     """`execute_backtest` reading bars only from `source` (the resolution's data source)."""
     cfg = dict(settings or {})
@@ -994,6 +1005,21 @@ def _execute_on(
                 "rate_table_sha256": costs.get("rate_table_sha256"),
             },
         )
+    live_caps_evidence = None
+    if run_live_caps:
+        live_caps_evidence = _live_caps_stage(
+            strategy=strategy,
+            params=params,
+            supported=kind != "swing" and prepare_panel is None,
+            load_frames=lambda chunk: _with_price_factors(
+                _baseline_frames(source.intraday(chunk, "5m", until), layer, 0), run, price_factors
+            ),
+            symbols=loaded_symbols,
+            run=run,
+            cost_model=cost_model,
+            trades=trades,
+            days=days,
+        )
     if month_closes is not None:
         tick_grid = tickgrid.tick_grid_evidence(
             trades, month_closes, price_factors, engine_mode=grid_mode
@@ -1070,6 +1096,7 @@ def _execute_on(
         truncation=truncation,
         tick_grid=tick_grid,
         perturbation=perturbation_evidence,
+        live_caps=live_caps_evidence,
         n_minutes_distribution=n_minutes,
         strategy_diagnostics=diagnostics,
     )
@@ -1104,6 +1131,25 @@ def _perturbation_stage(*, supported, meta, trades, days, **kw) -> dict[str, Any
     return perturbation_mod.run_variants(
         meta=meta,
         headline_trades=trades,
+        oos_start=default_oos_start(days, trades),
+        **kw,
+    )
+
+
+def _live_caps_stage(*, supported, trades, days, **kw) -> dict[str, Any]:
+    """G5.2 evidence for a run, or a not-run state naming why the stage cannot apply."""
+    if not supported:
+        return {
+            "version": live_caps_mod.VERSION,
+            "state": live_caps_mod.UNSUPPORTED,
+            "reason": "the live-caps stage covers per-symbol intraday strategies with stops only",
+            "diagnostic_not_trials": True,
+        }
+    caps, source = live_caps_mod.live_caps_from_config()
+    return live_caps_mod.run_stage(
+        headline_trades=trades,
+        caps=caps,
+        caps_source=source,
         oos_start=default_oos_start(days, trades),
         **kw,
     )
@@ -1242,6 +1288,7 @@ def _execute_frozen(
     run_truncation: bool = True,
     dataset: preflight_mod.Resolution | None = None,
     run_perturbation: bool = False,
+    run_live_caps: bool = False,
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
     them, then verify the cost."""
@@ -1273,6 +1320,10 @@ def _execute_frozen(
         if "run_perturbation" not in accepted:
             raise ValueError("this execute callable does not support the perturbation stage")
         kwargs["run_perturbation"] = True
+    if run_live_caps:
+        if "run_live_caps" not in accepted:
+            raise ValueError("this execute callable does not support the live-caps stage")
+        kwargs["run_live_caps"] = True
     execution = execute(key, **kwargs)
     if execution.costs.get("model") != STATUTORY_MODEL:
         raise ValueError(
@@ -1327,6 +1378,7 @@ def record_idea(
     dataset_version: str | None = None,
     require_ready: bool = False,
     run_perturbation: bool = False,
+    run_live_caps: bool = False,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
@@ -1406,6 +1458,7 @@ def record_idea(
     try:
         execution = _execute_frozen(execute, key, frozen, end=end, run_truncation=run_truncation,
                                     run_perturbation=run_perturbation,
+                                    run_live_caps=run_live_caps,
                                     dataset=resolution)
     except LoadRejected as exc:
         report = dataclasses.replace(resolution.report, stage="load",
@@ -1489,6 +1542,7 @@ def record_idea(
         truncation=execution.truncation,
         tick_grid=execution.tick_grid,
         perturbation=execution.perturbation,
+        live_caps=execution.live_caps,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
@@ -1707,6 +1761,12 @@ def main(
         action="store_true",
         help="run the G4.1 parameter perturbation stage (long; without it G4.1 is not evaluated)",
     )
+    parser.add_argument(
+        "--live-caps",
+        action="store_true",
+        help="run the G5.2 stage: the strategy again with the live entry limits applied "
+        "(long, about 8 GB of memory; without it G5.2 is not evaluated)",
+    )
     parser.add_argument("--oos-start", help="YYYY-MM-DD; default splits the last 30 percent")
     parser.add_argument(
         "--caps",
@@ -1787,6 +1847,7 @@ def main(
                 "external_reason": args.reason,
                 "run_truncation": not args.no_truncation,
                 "run_perturbation": args.perturbation,
+                "run_live_caps": args.live_caps,
                 "oos_start": args.oos_start,
                 "position_caps": position_caps,
                 "validation": args.validation,
