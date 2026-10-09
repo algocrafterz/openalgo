@@ -21,7 +21,11 @@ The three places a backtest usually cheats, and what this does instead:
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from dataclasses import dataclass
+
 import numpy as np
+import pandas as pd
 
 from signal_engine.backtest import tickgrid
 from signal_engine.backtest.ledgers import _COUNT_BITS, CODE_INDEX
@@ -55,9 +59,47 @@ _K_WARMUP = CODE_INDEX["WARMUP"]
 _K_SKIP_FILL = CODE_INDEX["ENTRY_SKIPPED_BEYOND_LEVEL"]
 
 
+@dataclass(frozen=True)
+class EntryRequest:
+    """A validated entry signal waiting for a portfolio decision (gated runs only).
+
+    `trades` is the simulation's own list, shared by reference: when a request is open the
+    symbol is flat, so every trade in it is complete."""
+
+    symbol: str
+    bar: int
+    entry_time: pd.Timestamp
+    direction: int
+    price: float
+    stop: float | None
+    risk: float
+    trades: list[Trade]
+
+
 def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Trade]:
     """Run one symbol. `rec` is an optional `ledgers.LedgerRecorder`; with None the run is
     exactly the unrecorded simulation and no recording code executes."""
+    steps = simulate_steps(c, strategy, p, run, rec)
+    try:
+        next(steps)
+    except StopIteration as done:
+        return done.value
+    raise RuntimeError("an ungated simulation asked for an entry decision")  # pragma: no cover
+
+
+def simulate_steps(
+    c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None, gated: bool = False
+) -> Generator[EntryRequest, bool, list[Trade]]:
+    """`simulate` as a generator, for a portfolio that decides entries across symbols.
+
+    With `gated` False it never yields and returns the trades, exactly like `simulate`. With
+    `gated` True it yields an `EntryRequest` at the point where a validated signal would become
+    a pending order and expects `send(True)` to take the entry or `send(False)` to veto it. A
+    veto is handled like any other rejected signal (`STOP_TOO_TIGHT`): no order, no `on_entry`,
+    and the symbol keeps evaluating later bars by the strategy's normal rules. A gated run
+    cannot also record ledgers, because a vetoed signal has no ledger code."""
+    if gated and rec is not None:
+        raise ValueError("a gated run cannot record ledgers")
     o, h, low, close = c["Open"], c["High"], c["Low"], c["Close"]
     mins, from_open = c["mins"], c["from_open"]
     days, new_sess = c["day"], c["new_session"]
@@ -380,6 +422,12 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
                 continue
             if sig.sl is None:
                 # No stop: nothing to validate, and no risk distance is invented.
+                if gated and not (
+                    yield EntryRequest(
+                        c.symbol, i, times[i + 1], d, float(close[i]), None, float("nan"), trades
+                    )
+                ):
+                    continue
                 if rec is not None:
                     b_sig((i, d, sig.tag, close[i], float("nan"), sig.tp, float("nan"), -1))
                     pend_i = i
@@ -400,6 +448,12 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
             if risk / close[i] < run.min_sl_pct:
                 if rec is not None:
                     b_sig((i, d, sig.tag, close[i], sig.sl, sig.tp, risk, _K_TIGHT))
+                continue
+            if gated and not (
+                yield EntryRequest(
+                    c.symbol, i, times[i + 1], d, float(close[i]), float(sig.sl), float(risk), trades
+                )
+            ):
                 continue
             if rec is not None:
                 b_sig((i, d, sig.tag, close[i], sig.sl, sig.tp, risk, -1))
