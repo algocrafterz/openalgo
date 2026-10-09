@@ -21,7 +21,10 @@ square-off times against NSE and broker pages, and this repo's own cost schedule
 - HARD = must pass. REPORT = must be computed and explained in the run record; a poor value is a
   finding to discuss, not an automatic rejection.
 - Every backtest, ablation and parameter variant tried counts as a trial (see G2.5).
-- Stage assignment: a gate belongs to the stage of its number (G0 to G6 backtest, G7 and G8 paper, G9 live). The one exception, approved 2026-10-09: G6.6 (SEBI retail algo framework) is checked at the paper stage because it concerns operational authorization, not the validity of a backtest. The verdict states that it was not run. No other gate is deferred, and G4.8 stays in the backtest stage until it is built.
+- Stage assignment: a gate belongs to the stage of its number (G0 to G6 backtest, G7 and G8 paper, G9 live). Two exceptions, both approved on 2026-10-09 and both implemented as `STAGE_OVERRIDES` in `backtest/promotion.py`:
+  - G6.6 (SEBI retail algo framework) is checked at the paper stage because it concerns operational authorization, not the validity of a backtest.
+  - G4.8 (event days) is checked at the paper stage because it needs an event calendar (results dates, monthly expiry, index rebalance, budget and election days) that is not held. It is not irrelevant to trading risk: until it is evaluated, how much of a result depends on event days is unknown.
+  A gate moved this way is never a hard gate and never a G0 to G3 gate. It stays NOT_RUN in the run record, blocks promotion to the paper stage until it is evaluated, and the backtest verdict lists it as 'required before the paper stage, does not decide this verdict'. No other gate is deferred.
 - Governing rules already in force: one shared code path for backtest, walk-forward, paper and
   live; broker data only; all timestamps IST; no silent exclusions (each skipped symbol or day
   is named in the log).

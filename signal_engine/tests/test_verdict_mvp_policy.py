@@ -5,8 +5,9 @@ backtest verdict'). Three guarantees are tested against the real gate registry:
 
   1. EDGE needs every required backtest gate to have valid evidence. Any one of them failed or
      not evaluated keeps the verdict below EDGE.
-  2. The only gate checked at a later stage is G6.6, it is never a hard gate or a G0 to G3 gate,
-     and the verdict and the promotion block both disclose it.
+  2. The only gates checked at a later stage are G4.8 and G6.6 (owner decisions of 2026-10-09),
+     they are never hard gates or G0 to G3 gates, and the verdict and the promotion block both
+     disclose them.
   3. G2.4 is not applicable only for exactly one trial in a ledger that G2.5 confirms.
 """
 
@@ -34,8 +35,7 @@ V4 = Path(__file__).resolve().parents[1] / (
 #: verdict at MARGINAL). This list shrinks as each evaluator is built; it must never grow, and
 #: a gate must not leave it without a real evaluator and a test.
 UNEVALUATED_REQUIRED = {
-    "G0.1", "G0.7", "G4.2", "G4.3", "G4.8", "G5.1", "G5.3", "G5.4", "G5.5", "G6.3", "G6.7",
-    "G6.8",
+    "G0.1", "G0.7", "G4.2", "G4.3", "G5.1", "G5.3", "G5.4", "G5.5", "G6.3", "G6.7", "G6.8",
 }
 
 
@@ -77,8 +77,8 @@ HARD = {g for g, _d, _t, hard, _w in ev._GATES if hard}
 
 
 class TestStageOverrides:
-    def test_g66_is_the_only_exception_and_has_a_rationale(self):
-        assert set(pr.STAGE_OVERRIDES) == {"G6.6"}
+    def test_g48_and_g66_are_the_only_exceptions_and_have_rationales(self):
+        assert set(pr.STAGE_OVERRIDES) == {"G4.8", "G6.6"}
         for gate, (stage, why) in pr.STAGE_OVERRIDES.items():
             assert stage in pr.STAGES and stage != "backtest"
             assert why.strip(), f"{gate} has no rationale"
@@ -90,8 +90,11 @@ class TestStageOverrides:
             assert gate not in HARD
             assert pr.gate_number(gate) >= 4
 
-    def test_g48_stays_in_the_backtest_stage_until_the_criteria_say_otherwise(self):
-        assert pr.stage_of("G4.8") == "backtest" and "G4.8" not in pr.STAGE_OVERRIDES
+    def test_g48_is_checked_at_the_paper_stage_and_its_rationale_does_not_call_it_irrelevant(self):
+        assert pr.stage_of("G4.8") == "paper" and "G4.8" not in REQUIRED
+        why = pr.STAGE_OVERRIDES["G4.8"][1]
+        assert "has not been performed" in why and "unknown" in why
+        assert "irrelevant" not in why and "not needed" not in why
 
     def test_every_other_gate_keeps_the_stage_of_its_number(self):
         for gate, *_ in ev._GATES:
@@ -133,10 +136,6 @@ class TestEdgeNeedsEveryRequiredGate:
         evaluation = _evaluation("pass", G2_4="not_applicable", G4_6="report")
         assert _derive(evaluation)["run_verdict"] == vd.EDGE
 
-    def test_g48_not_evaluated_blocks_edge(self):
-        result = _derive(_evaluation("pass", G4_8="not_evaluated"))
-        assert result["run_verdict"] == vd.MARGINAL and result["primary_failed_gate"] == "G4.8"
-
     def test_unverified_engine_capabilities_also_hold_the_verdict(self):
         result = _derive(_evaluation("pass"), readiness_missing=["Spec schema split"])
         assert result["run_verdict"] == vd.MARGINAL
@@ -154,6 +153,27 @@ class TestPaperStageRequirementsStayVisible:
         text = " ".join(r["text"] for r in result["reasons"])
         assert "G6.6" in [r["gate"] for r in result["reasons"]]
         assert "before the paper stage" in text and "does not decide this verdict" in text
+
+    def test_g48_not_run_does_not_decide_the_verdict_but_is_disclosed(self):
+        result = _derive(_evaluation("pass", G4_8="not_evaluated"))
+        assert result["run_verdict"] == vd.EDGE
+        text = " ".join(r["text"] for r in result["reasons"])
+        assert "G4.8" in [r["gate"] for r in result["reasons"]]
+        assert "before the paper stage" in text and "event-day analysis has not been performed" in text
+
+    def test_g48_not_run_blocks_paper_promotion_and_is_never_shown_as_passed(self):
+        evaluation = _evaluation("pass", G4_8="not_evaluated")
+        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True)
+        paper = out["stages"]["paper"]
+        assert out["stages"]["backtest"]["decision"] == pr.READY
+        assert paper["decision"] == pr.NOT_READY and "gate G4.8 has not been run" in paper["reasons"]
+        assert {g["gate"]: g["status"] for g in paper["gates"]}["G4.8"] == "NOT_RUN"
+
+    def test_g48_evaluated_clears_the_paper_block(self):
+        evaluation = _evaluation("pass", G4_8="report")
+        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True)
+        assert "gate G4.8 has not been run" not in out["stages"]["paper"]["reasons"]
+        assert not [r for r in _derive(evaluation)["reasons"] if r["gate"] == "G4.8"]
 
     def test_g66_passing_adds_no_disclosure(self):
         assert _derive(_evaluation("pass"))["reasons"] == []

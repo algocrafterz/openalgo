@@ -139,8 +139,8 @@ Approved by the owner on 2026-10-09. The verdict reads the backtest stage only: 
 | G6.7 Charges current | Required | The cost schedule's recorded `verified_on` must be within the last quarter of the run date | S3 |
 | G6.8 Closing auction | Required | From the recorded exit plan | S3 |
 | G0.1, G0.7 | Required | An append-only attestation naming the gate, exact commit, covered paths, evidence and the coverage figures (80% on `features/` and `strategy_core/`). It is valid only if its commit is an ancestor of the run's commit and nothing under the named paths changed since. Missing, stale or invalid evidence blocks EDGE | S6 |
-| G4.8 Event days | Required, not yet built | The criteria give no permission to defer it, so it stays in the backtest stage and blocks EDGE until built. It needs a results-date calendar the repository does not hold. Owner decision pending: amend the criteria to move it to the paper stage, or build the calendar | Open |
-| G6.6 SEBI retail algo framework | Paper stage (exception) | Operational authorization, not backtest validity. The verdict discloses that it was not run | Done (S1) |
+| G4.8 Event days | Paper stage (exception) | The owner amended the criteria on 2026-10-09 to permit this because it needs an event calendar (results dates, expiry, index rebalance, budget and election days) that is not held. It stays NOT_RUN and blocks paper promotion until evaluated, the verdict discloses that event-day analysis has not been performed, and the result's dependence on event days is unknown until then | Done |
+| G6.6 SEBI retail algo framework | Paper stage (exception) | Operational authorization, not backtest validity. The verdict discloses that it was not run | Done |
 | G7.x, G8.x | Paper stage | By gate number | Unchanged |
 | G9.x | Live stage | By gate number | Unchanged |
 

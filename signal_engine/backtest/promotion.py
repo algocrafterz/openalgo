@@ -33,6 +33,12 @@ DIAGNOSTIC_GATES: tuple[str, ...] = ("G2.7",)
 #: enforces that), so a check that could invalidate backtest results cannot be moved out of the
 #: verdict. A moved gate still blocks promotion at its stage and is disclosed in the verdict.
 STAGE_OVERRIDES: dict[str, tuple[str, str]] = {
+    "G4.8": (
+        "paper",
+        "event-day analysis has not been performed: it needs an event calendar (results dates, "
+        "monthly expiry, index rebalance, budget and election days) that is not held, so how "
+        "much of the result depends on event days is unknown until it is evaluated",
+    ),
     "G6.6": (
         "paper",
         "operational authorization (broker-registered API, static IP, 2FA, order tagging), "
