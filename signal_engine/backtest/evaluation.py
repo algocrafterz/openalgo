@@ -454,6 +454,41 @@ def _g25(x: _Inputs) -> _Result:
     )
 
 
+_G24_THRESHOLD = "PBO (CSCV) at most 0.30 across the variants tried"
+
+
+def _g24(x: _Inputs) -> _Result:
+    """PBO ranks several tried variants on a common grid. With exactly one trial, confirmed by a
+    trial ledger that G2.5 passes, there is nothing to rank, so the gate is not applicable. An
+    unconfirmed ledger or two or more trials keep it open, which blocks EDGE, until PBO is
+    computed from the daily P&L of each tried variant."""
+    status, _value, _threshold, evidence = _g25(x)
+    if status != "pass":
+        return (
+            "not_evaluated",
+            None,
+            _G24_THRESHOLD,
+            f"the trial ledger is not confirmed (G2.5 {status}: {evidence}), "
+            "so the number of variants tried is unknown",
+        )
+    if x.n_trials == 1:
+        return (
+            "not_applicable",
+            None,
+            _G24_THRESHOLD,
+            "one trial in a ledger that G2.5 confirms: PBO ranks several tried variants and "
+            "there is nothing to rank; the selection risk is carried by the G2.5 count and "
+            "the G2.2 hurdle",
+        )
+    return (
+        "not_evaluated",
+        None,
+        _G24_THRESHOLD,
+        f"{x.n_trials} trials were tried; PBO needs the daily P&L of each variant on a common "
+        "grid and is not computed yet (stats.pbo_cscv exists)",
+    )
+
+
 _G02_THRESHOLD = "a run on data cut at earlier sessions reproduces every earlier signal and trade"
 
 
@@ -1503,6 +1538,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G2.1": _g21,
     "G2.2": _g22,
     "G2.3": _g23,
+    "G2.4": _g24,
     "G2.5": _g25,
     "G2.6": _g26,
     "G2.7": _g27,

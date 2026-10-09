@@ -7,9 +7,9 @@ from typing import Any
 
 from signal_engine.backtest.promotion import (
     DIAGNOSTIC_GATES,
-    STAGE_GATES,
+    STAGE_OVERRIDES,
     evaluation_rows,
-    gate_number,
+    stage_of,
     status_label,
 )
 
@@ -116,7 +116,7 @@ def _derive(
     open_gates = [
         r
         for r in rows
-        if (gate_number(str(r["gate"])) in STAGE_GATES["backtest"])
+        if stage_of(str(r["gate"])) == "backtest"
         and r.get("status") not in _NOT_REQUIRED
         and str(r["gate"]) not in DIAGNOSTIC_GATES
         and r.get("status") in ("fail", "not_evaluated")
@@ -167,6 +167,28 @@ def _diagnostics(evaluation: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     return found
 
 
+def _stage_exceptions(evaluation: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Disclose gates checked at a later stage that have not been run, so a verdict never reads
+    as full validation. They never change the verdict; promotion to their stage stays blocked."""
+    rows = {str(r["gate"]): r for r in evaluation_rows(evaluation)}
+    found = []
+    for gate, (stage, why) in STAGE_OVERRIDES.items():
+        row = rows.get(gate)
+        if row is not None and row.get("status") in ("fail", "not_evaluated"):
+            label = status_label(str(row["status"]))
+            verb = "failed" if label == "FAIL" else "was not run"
+            title = row.get("title") or gate
+            found.append(
+                _reason(
+                    f"Required before the {stage} stage, does not decide this verdict: "
+                    f"{title} ({gate}) {verb}; {why}.",
+                    gate,
+                    label,
+                )
+            )
+    return found
+
+
 def derive(
     evaluation: Mapping[str, Any] | None,
     *,
@@ -193,5 +215,6 @@ def derive(
         data_quality.get("status") == "WARNING" and data_quality.get("affects_validity")
     )
     if performance_evaluated:
-        result = {**result, "reasons": [*result["reasons"], *_diagnostics(evaluation)]}
+        extra = [*_diagnostics(evaluation), *_stage_exceptions(evaluation)]
+        result = {**result, "reasons": [*result["reasons"], *extra]}
     return result

@@ -27,6 +27,18 @@ _NOT_REQUIRED = frozenset({"NOT_APPLICABLE", "REPORT"})
 #: Rows the acceptance criteria label REPORT: shown, never required for promotion or the verdict.
 #: G2.7 (track length against the Minimum Track Record Length) is the only one today.
 DIAGNOSTIC_GATES: tuple[str, ...] = ("G2.7",)
+#: Gates assigned to a stage other than the stage of their number, each with its rationale.
+#: Owner decision of 2026-10-09, recorded in STRATEGY-ACCEPTANCE-CRITERIA.md. A gate may be
+#: listed here only if it is not HARD and sits at G4 or above (tests/test_verdict_mvp_policy.py
+#: enforces that), so a check that could invalidate backtest results cannot be moved out of the
+#: verdict. A moved gate still blocks promotion at its stage and is disclosed in the verdict.
+STAGE_OVERRIDES: dict[str, tuple[str, str]] = {
+    "G6.6": (
+        "paper",
+        "operational authorization (broker-registered API, static IP, 2FA, order tagging), "
+        "not the validity of a backtest",
+    ),
+}
 _GATE_RE = re.compile(r"^G(\d+)\.(\d+)$")
 
 
@@ -58,6 +70,9 @@ def evaluation_rows(evaluation: Mapping[str, Any] | None) -> list[dict[str, Any]
 
 
 def stage_of(gate: str) -> str | None:
+    """The stage a gate is checked at: its override if listed, else the stage of its number."""
+    if gate in STAGE_OVERRIDES:
+        return STAGE_OVERRIDES[gate][0]
     n = gate_number(gate)
     if n is None:
         return None

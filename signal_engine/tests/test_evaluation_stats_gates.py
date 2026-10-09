@@ -127,8 +127,14 @@ class TestSharpeGates:
         row = _row(_evaluate(_noisy_book(n=600)), "G2.3")
         assert "assum" in row["evidence"].lower()
 
-    def test_g24_stays_not_evaluated_and_says_why(self):
+    def test_g24_without_a_confirmed_ledger_stays_not_evaluated_and_says_why(self):
         row = _row(_evaluate(_noisy_book()), "G2.4")
+        assert row["status"] == "not_evaluated"
+        assert "ledger is not confirmed" in row["evidence"]
+
+    def test_g24_with_several_confirmed_trials_stays_not_evaluated_and_says_why(self):
+        ledger = {"source": "trials.yaml", "total": 3, "material": 3, "external": 0}
+        row = _row(_evaluate(_noisy_book(), n_trials=3, trials=ledger), "G2.4")
         assert row["status"] == "not_evaluated" and "grid" in row["evidence"]
 
     def test_g26_reports_the_newey_west_t(self):
