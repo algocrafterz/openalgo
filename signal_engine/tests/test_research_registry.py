@@ -443,7 +443,11 @@ def test_old_flat_basis_record_still_loads():
     assert br._validate_run(record, runs) == []
     loaded, problems = br.load_runs(runs.parent)
     assert problems == []
-    assert [br.cost_basis(r) for r in loaded] == ["flat-round-trip-bps"]
+    # IDEA-029 also holds statutory-basis runs (v2 onwards); the v1 flat record must still read
+    # as flat beside them.
+    bases = {r["run_id"]: br.cost_basis(r) for r in loaded}
+    assert bases["2026-10-06-vwap-2sd-range-mean-reversion-v1"] == "flat-round-trip-bps"
+    assert set(bases.values()) <= {"flat-round-trip-bps", "statutory-per-trade"}
 
 
 def test_all_committed_records_load_unchanged():
@@ -452,7 +456,12 @@ def test_all_committed_records_load_unchanged():
     for folder in folders:
         runs, problems = br.load_runs(folder)
         assert problems == [], folder.name
-        assert all(br.cost_basis(r) == "flat-round-trip-bps" for r in runs), folder.name
+        for r in runs:
+            # a record that declares the flat model reads as flat; any other basis is statutory
+            declared_flat = (r.get("costs") or {}).get("model") == "flat-round-trip-bps"
+            want = "flat-round-trip-bps" if declared_flat else br.cost_basis(r)
+            assert br.cost_basis(r) == want, (folder.name, r.get("run_id"))
+            assert br.cost_basis(r) in {"flat-round-trip-bps", "statutory-per-trade"}
 
 
 def test_cost_basis_reads_unrecognised_or_missing_model_as_flat():
