@@ -698,16 +698,25 @@ def _g46(x: _Inputs) -> _Result:
 
 
 def _g52(x: _Inputs) -> _Result:
+    """Not evaluated until a capped run exists. The generic slot sweep below filters the recorded
+    trades first come first served and applies none of the live limits (daily, weekly and
+    monthly loss, trades per day, price band). It also cannot say what a freed symbol would have
+    traded next, because the engine skips signal evaluation while a position is open and the
+    record keeps only per-bar counts of those skips. It is shown for information and never
+    stands in for the gate, so it must not read as a non-blocking report."""
     threshold = "run with the live position and loss caps"
     if not x.position_caps:
         return "not_evaluated", None, threshold, "no position-cap run recorded"
     rows = sorted(x.position_caps, key=lambda r: r["max_positions"])
     text = "; ".join(f"{r['max_positions']} slots: net {r['net_bps']:+.2f} bps" for r in rows)
     return (
-        "report",
-        _num(rows[0]["net_bps"]),
+        "not_evaluated",
+        None,
         threshold,
-        f"{text}. The live max_open_positions is set in config.yaml and may not be among these",
+        "the live caps were not applied: only a generic first-come-first-served slot sweep of "
+        f"the recorded trades exists ({text}), which applies no loss limit, trade-count limit "
+        "or price band and cannot show what a freed symbol would have traded next. "
+        "Information only, not evidence for this gate",
     )
 
 

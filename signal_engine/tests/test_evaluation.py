@@ -286,13 +286,15 @@ class TestHorizon:
 
 
 class TestCapsAndComplexity:
-    def test_g52_reports_each_cap(self):
+    def test_g52_shows_each_cap_but_stays_not_evaluated(self):
+        # A generic slot sweep applies none of the live limits, so it must not read as a
+        # non-blocking report (owner decision 2026-10-09).
         caps = [
             {"max_positions": 3, "trades": 100, "gross_bps": 10.0, "net_bps": 2.0},
             {"max_positions": 5, "trades": 150, "gross_bps": 9.0, "net_bps": -1.0},
         ]
         row = _row(_evaluate(_book(), position_caps=caps), "G5.2")
-        assert row["status"] == "report"
+        assert row["status"] == "not_evaluated"
         assert "3 slots" in row["evidence"] and "5 slots" in row["evidence"]
 
     def test_g52_without_caps_is_not_evaluated(self):

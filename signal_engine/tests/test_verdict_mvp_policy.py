@@ -234,6 +234,33 @@ class TestG24Policy:
         assert open_["run_verdict"] == vd.MARGINAL and open_["primary_failed_gate"] == "G2.4"
 
 
+class TestG52IsNotASilentReport:
+    """G5.2 asks for a run with the live caps. A generic slot sweep is not that run."""
+
+    CAPS = [
+        {"max_positions": 1, "trades": 900, "gross_bps": 60.0, "net_bps": 48.0},
+        {"max_positions": 3, "trades": 1500, "gross_bps": 55.0, "net_bps": 40.0},
+    ]
+
+    def test_a_flattering_slot_sweep_does_not_evaluate_the_gate(self):
+        row = _row(_evaluate(_noisy_book(), position_caps=self.CAPS), "G5.2")
+        assert row["status"] == "not_evaluated" and row["value"] is None
+        assert "were not applied" in row["evidence"] and "not evidence for this gate" in row["evidence"]
+
+    def test_the_sweep_is_still_shown_for_information(self):
+        row = _row(_evaluate(_noisy_book(), position_caps=self.CAPS), "G5.2")
+        assert "1 slots: net +48.00 bps" in row["evidence"]
+
+    def test_without_any_cap_run_it_is_not_evaluated_too(self):
+        row = _row(_evaluate(_noisy_book()), "G5.2")
+        assert row["status"] == "not_evaluated" and "no position-cap run" in row["evidence"]
+
+    def test_it_blocks_edge_through_the_required_gate_rule(self):
+        assert "G5.2" in REQUIRED
+        result = _derive(_evaluation("pass", G5_2="not_evaluated"))
+        assert result["run_verdict"] == vd.MARGINAL and result["primary_failed_gate"] == "G5.2"
+
+
 class TestEdgeIsHonestToday:
     def test_the_required_gates_without_an_evaluator_are_the_known_ones(self):
         missing = {g for g in REQUIRED if g not in set(ev._EVALUATORS)}
