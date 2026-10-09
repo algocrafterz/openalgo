@@ -155,6 +155,10 @@ class TestTimeExitVerification:
             patch("signal_engine.tracker.close_all_positions", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_open_position", mock_open_pos),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            # readable order book with nothing working: isolates the close-failure alert from the
+            # order-cancel confirmation (covered in test_time_exit_cancel_failure.py) and from a
+            # live HTTP call to a local server
+            patch("signal_engine.tracker.fetch_orderbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.notifier") as mock_notifier,
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):

@@ -256,6 +256,10 @@ def _mark_summary_sent(trade_count: int) -> None:
         logger.warning(f"Could not record day-summary marker: {e}")
 
 
+#: Order statuses that mean the order can still execute (as executor._find_resting_sl_order).
+_WORKING_ORDER_STATUSES = ("trigger pending", "open", "pending")
+
+
 class PositionTracker:
     """Monitors open positions by polling OpenAlgo API.
 
@@ -1647,8 +1651,11 @@ class PositionTracker:
         # signal can book or act on a position the square-off is closing.
         self._time_exit_active = True
         try:
-            await self._square_off_strategies({pos.strategy for pos in mis_positions.values()})
+            uncancelled = await self._square_off_strategies(
+                {pos.strategy for pos in mis_positions.values()}
+            )
             still_open = await self._verify_positions_closed(mis_positions)
+            await self._confirm_orders_cancelled(mis_positions, uncancelled)
             await self._book_time_exit_trades(mis_positions, _settings, started, still_open)
         finally:
             self._time_exit_active = False
@@ -1657,16 +1664,104 @@ class PositionTracker:
         await self.send_day_summary()
         self._reset_day_counters()
 
-    async def _square_off_strategies(self, strategies: set[str]) -> None:
-        """Cancel pending orders then close all positions, per strategy."""
+    async def _square_off_strategies(self, strategies: set[str]) -> set[str]:
+        """Cancel pending orders then close all positions, per strategy.
+
+        Returns the strategies whose cancel could not be confirmed. The close is position-based
+        (it reads each live net quantity), so it never over-closes; a stop left WORKING after the
+        flatten could later open a reversed position, which _confirm_orders_cancelled prevents.
+        """
+        uncancelled: set[str] = set()
         for strategy in strategies:
-            # Cancel all pending orders first (SL-M + TP LIMIT legs)
+            # Cancel all pending orders first (SL-M + TP LIMIT legs); one retry before the close
             logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
-            await cancel_all_orders(strategy)
+            if not await cancel_all_orders(strategy):
+                logger.warning(f"Time exit: cancel failed for strategy={strategy}, retrying once")
+                if not await cancel_all_orders(strategy):
+                    uncancelled.add(strategy)
 
             # Close all open positions
             logger.info(f"Time exit: closing all positions for strategy={strategy}")
             await close_all_positions(strategy)
+        return uncancelled
+
+    @staticmethod
+    def _working_orders(book, strategies: set[str], symbols: set[str]) -> list[dict]:
+        """Orders still working at the broker for the squared-off strategies.
+
+        Matches the order's strategy tag; a row without one counts when it is an MIS order on a
+        squared-off symbol (a stop we cannot attribute is treated as ours, the safe direction).
+        """
+        working = []
+        for o in book or []:
+            if not isinstance(o, dict):
+                continue
+            status = str(o.get("order_status") or o.get("status") or "").lower()
+            if status not in _WORKING_ORDER_STATUSES:
+                continue
+            tag = str(o.get("strategy") or "").strip().upper()
+            if tag:
+                if tag in {s.upper() for s in strategies}:
+                    working.append(o)
+            elif str(o.get("product", "")).upper() == "MIS" and str(o.get("symbol", "")).upper() in {
+                s.upper() for s in symbols
+            }:
+                working.append(o)
+        return working
+
+    async def _confirm_orders_cancelled(self, mis_positions: dict, uncancelled: set[str]) -> None:
+        """After the flatten, confirm from the broker's ORDER BOOK that no order of the squared-off
+        strategies is still working; a cancel API "success" is not taken as proof.
+
+        A working order (or an unreadable order book) is re-cancelled up to _CANCEL_RETRIES times.
+        If that cannot be confirmed, a critical log and a Telegram alert go out, whether or not the
+        positions are flat: a stop left working on a flat position can later open a reversed one.
+        Cancels only: this never places an order.
+        """
+        _CANCEL_RETRIES = 3
+        _CANCEL_WAIT = 2  # seconds
+        strategies = {pos.strategy for pos in mis_positions.values()}
+        symbols = {pos.symbol for pos in mis_positions.values()}
+        if uncancelled:
+            logger.warning(f"Time exit: cancel not acknowledged for {', '.join(sorted(uncancelled))}")
+        working: list[dict] = []
+        book = None
+        for attempt in range(_CANCEL_RETRIES + 1):
+            book = await fetch_orderbook()
+            working = self._working_orders(book, strategies, symbols)
+            if book is not None and not working:
+                if attempt or uncancelled:
+                    logger.info("Time exit: no working orders left for the squared-off strategies")
+                return
+            if attempt == _CANCEL_RETRIES:
+                break
+            retry = {str(o.get("strategy") or "").strip() for o in working} & strategies or strategies
+            logger.warning(
+                "Time exit: "
+                + ("order book unreadable" if book is None else f"{len(working)} order(s) still working")
+                + f", re-cancelling ({attempt + 1}/{_CANCEL_RETRIES}) for {', '.join(sorted(retry))}"
+            )
+            for strategy in retry:
+                await cancel_all_orders(strategy)
+            await asyncio.sleep(_CANCEL_WAIT)
+
+        if book is None:
+            detail = "the order book could not be read to confirm the cancel"
+        else:
+            detail = "still working: " + ", ".join(
+                f"{o.get('symbol')} {o.get('action')} {o.get('pricetype') or o.get('price_type') or ''} "
+                f"id={o.get('orderid') or o.get('order_id')}".strip()
+                for o in working
+            )
+        logger.critical(
+            f"Time exit: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
+            f"({detail}); a stop order may still be working and could open a new position"
+        )
+        await notifier.notify(
+            f"TIME EXIT: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
+            f"({detail}). A stop order may still be working and could open a new position - "
+            "check the order book now."
+        )
 
     async def _verify_positions_closed(self, mis_positions: dict) -> set:
         """Confirm the broker actually closed everything; retry cancel+close if not.
