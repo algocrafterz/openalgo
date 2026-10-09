@@ -33,6 +33,7 @@ import math
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 import numpy as np
@@ -200,6 +201,8 @@ class _Inputs:
     params: dict[str, Any] | None
     regimes: dict[str, Any] | None = None
     cost_profile: dict[str, Any] | None = None
+    #: The run's date (ISO), used to age the fee schedule (G6.7).
+    run_date: str | None = None
     #: The record's `costs.model`: `statutory-per-trade` when the trades carry the statutory net,
     #: `flat-round-trip-bps` for the older flat basis, None when not stated.
     cost_basis: str | None = None
@@ -1004,6 +1007,9 @@ GAP_REASONS = ("SL_GAP", "SL_GAP_ENTRY")
 #: historical bands, so the tightest fixed band any listed security can have and the F&O dynamic
 #: range (about 10%, which flexes) stand in for them.
 CIRCUIT_BANDS_PCT = (2.0, 10.0)
+#: G6.7: the longest age of the fee schedule's `verified_on` at the run date, in days, inclusive.
+#: The acceptance criteria state the same number; a test keeps the two aligned.
+CHARGES_MAX_AGE_DAYS = 92
 _NOT_EVALUATED_NO_LEDGERS = "no lineage ledgers recorded for this run"
 
 
@@ -1251,6 +1257,43 @@ def _g63(x: _Inputs) -> _Result:
         f"{float(levels.max()):.2f}%. This is a bound, not a check against the actual daily bands "
         "(not held), and the signal price stands in for the previous close",
     )
+
+
+def _g67(x: _Inputs) -> _Result:
+    threshold = (
+        f"fee schedule verified within the {CHARGES_MAX_AGE_DAYS} days up to and including the "
+        "run date"
+    )
+    broker = (x.cost_profile or {}).get("broker")
+    if not isinstance(broker, dict):
+        return "not_evaluated", None, threshold, "no cost model with a broker fee schedule recorded"
+    if not x.run_date:
+        return "not_evaluated", None, threshold, "no run date supplied"
+    try:
+        run_day = date.fromisoformat(str(x.run_date)[:10])
+        verified = date.fromisoformat(str(broker.get("verified_on"))[:10])
+    except ValueError:
+        return "not_evaluated", None, threshold, "the run date or the schedule's verified_on is not a date"
+    key, source = broker.get("key", "unknown"), broker.get("source", "no source recorded")
+    if broker.get("assumed"):
+        return (
+            "fail", None, threshold,
+            f"broker {key} has no verified fee schedule; the portfolio default was assumed",
+        )  # fmt: skip
+    age = (run_day - verified).days
+    if age < 0:
+        return (
+            "not_evaluated", float(age), threshold,
+            f"the schedule was verified on {verified}, after the run date {run_day}",
+        )  # fmt: skip
+    note = (
+        f"broker {key}, verified {verified} ({age} days before the run date {run_day}), "
+        f"source {source}. The date is the one recorded with the schedule; it is not "
+        "re-checked against the broker here"
+    )
+    if age > CHARGES_MAX_AGE_DAYS:
+        return "fail", float(age), threshold, "stale: " + note
+    return "pass", float(age), threshold, note
 
 
 def stop_width_table(signals: pd.DataFrame) -> list[dict[str, Any]]:
@@ -1648,6 +1691,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G6.2": _g62,
     "G6.3": _g63,
     "G6.4": _g64,
+    "G6.7": _g67,
     "G6.5": _g65,
     "G6.9": _g69,
     "X.1": _params_count,
@@ -1693,6 +1737,7 @@ def evaluate(
     tick_grid: dict[str, Any] | None = None,
     perturbation: dict[str, Any] | None = None,
     live_caps: dict[str, Any] | None = None,
+    run_date: str | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1709,7 +1754,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1738,6 +1783,7 @@ def evaluate(
         tick_grid=tick_grid,
         perturbation=perturbation,
         live_caps=live_caps,
+        run_date=run_date,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

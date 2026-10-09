@@ -509,6 +509,7 @@ def build_run_record(
         tick_grid=tick_grid,
         perturbation=perturbation,
         live_caps=live_caps,
+        run_date=run_date,
     )
     if trials is not None:
         record["trials"] = dict(trials)
