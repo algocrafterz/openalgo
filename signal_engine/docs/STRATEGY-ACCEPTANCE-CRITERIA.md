@@ -21,6 +21,7 @@ square-off times against NSE and broker pages, and this repo's own cost schedule
 - HARD = must pass. REPORT = must be computed and explained in the run record; a poor value is a
   finding to discuss, not an automatic rejection.
 - Every backtest, ablation and parameter variant tried counts as a trial (see G2.5).
+- Stage assignment: a gate belongs to the stage of its number (G0 to G6 backtest, G7 and G8 paper, G9 live). The one exception, approved 2026-10-09: G6.6 (SEBI retail algo framework) is checked at the paper stage because it concerns operational authorization, not the validity of a backtest. The verdict states that it was not run. No other gate is deferred, and G4.8 stays in the backtest stage until it is built.
 - Governing rules already in force: one shared code path for backtest, walk-forward, paper and
   live; broker data only; all timestamps IST; no silent exclusions (each skipped symbol or day
   is named in the log).
