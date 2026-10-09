@@ -1000,6 +1000,10 @@ FLOOR_DOMINANCE = 0.5
 MARKET_OPEN_MIN = 9 * 60 + 15
 MARKET_CLOSE_MIN = 15 * 60 + 30
 GAP_REASONS = ("SL_GAP", "SL_GAP_ENTRY")
+#: G6.3 bounds on the daily price band, as a share of the previous close. The repository holds no
+#: historical bands, so the tightest fixed band any listed security can have and the F&O dynamic
+#: range (about 10%, which flexes) stand in for them.
+CIRCUIT_BANDS_PCT = (2.0, 10.0)
 _NOT_EVALUATED_NO_LEDGERS = "no lineage ledgers recorded for this run"
 
 
@@ -1210,6 +1214,42 @@ def _g65(x: _Inputs) -> _Result:
         threshold,
         f"{head}; mean loss beyond the stop {float(beyond.mean()):.3f}R. The live stop type "
         "(SL-M versus SL) is not tested here",
+    )
+
+
+def _g63(x: _Inputs) -> _Result:
+    threshold = (
+        "report: entries whose stop or target lies beyond the day's price band; "
+        f"bounds {CIRCUIT_BANDS_PCT[0]:.0f}% (tightest fixed band) and "
+        f"{CIRCUIT_BANDS_PCT[1]:.0f}% (F&O dynamic range)"
+    )
+    if not x.trades:
+        return "not_evaluated", None, threshold, "no trades"
+    rows = []
+    for t in x.trades:
+        ref = float(t.signal_price)
+        if not (math.isfinite(ref) and ref > 0):
+            continue
+        sl, tp = float(t.sl), float(t.tp)
+        stop = abs(ref - sl) / ref * 100.0 if math.isfinite(sl) and sl > 0 else math.nan
+        target = abs(tp - ref) / ref * 100.0 if math.isfinite(tp) and tp > 0 else math.nan
+        far = [v for v in (stop, target) if math.isfinite(v)]
+        rows.append(max(far) if far else math.nan)
+    levels = np.array(rows, dtype=float)
+    levels = levels[np.isfinite(levels)]
+    if len(levels) == 0:
+        return "not_evaluated", None, threshold, "no trade carries a stop or target level"
+    lo, hi = CIRCUIT_BANDS_PCT
+    n_lo, n_hi = int((levels > lo).sum()), int((levels > hi).sum())
+    n = len(levels)
+    return (
+        "report",
+        _num(n_lo / n),
+        threshold,
+        f"{n_lo} of {n} entries ({n_lo / n:.1%}) have a stop or target beyond {lo:.0f}% of the "
+        f"signal price and {n_hi} ({n_hi / n:.1%}) beyond {hi:.0f}%; the furthest level is "
+        f"{float(levels.max()):.2f}%. This is a bound, not a check against the actual daily bands "
+        "(not held), and the signal price stands in for the previous close",
     )
 
 
@@ -1606,6 +1646,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G5.2": _g52,
     "G6.1": _g61,
     "G6.2": _g62,
+    "G6.3": _g63,
     "G6.4": _g64,
     "G6.5": _g65,
     "G6.9": _g69,
