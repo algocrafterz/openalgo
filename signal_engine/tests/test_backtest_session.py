@@ -175,6 +175,16 @@ class TestSessionModel:
         assert "NSE" in m["exchange"] and "09:15-15:30" in m["exchange"]
         assert "derived" in m["exchange"]
 
+    def test_the_calendar_label_follows_the_calendar_source(self):
+        official = session.Calendar((), (), session.OFFICIAL_SOURCE, "nse-official-b1")
+        derived = self._cal()
+        other = session.Calendar((), (), "some_other_source", "v")
+        kw = dict(profile_rules=PROFILE.products["MIS"], product="MIS", strategy_window="09:20-14:45")
+        assert "official NSE calendar" in session.session_model(official, **kw)["exchange"]
+        assert "derived" not in session.session_model(official, **kw)["exchange"]
+        assert "(derived calendar)" in session.session_model(derived, **kw)["exchange"]
+        assert "some_other_source calendar" in session.session_model(other, **kw)["exchange"]
+
     def test_cnc_has_no_cutoffs(self):
         m = session.session_model(
             self._cal(),

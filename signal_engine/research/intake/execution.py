@@ -11,6 +11,8 @@ not redefined here. The only inputs an author can change are the overrides in
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,17 +123,40 @@ def validate_overrides(overrides: Mapping[str, Any]) -> dict[str, tuple[Any, str
     return accepted
 
 
+_TIMEFRAME_SUFFIX = re.compile(r"_(\d+)([MH])$", re.IGNORECASE)
+_BASE_BAR = re.compile(r"^(\d+)([mh])$")
+
+
+def _minutes(count: str, unit: str) -> int:
+    return int(count) * (60 if unit.upper() == "H" else 1)
+
+
 def _warmup(spec: Mapping[str, Any]) -> tuple[int, str]:
+    """The longest indicator span in base bars.
+
+    An indicator named with a `_<n>M` or `_<n>H` suffix (EMA_15M) runs on bars of that length, so
+    its period is converted to base bars: 20 fifteen-minute bars are 60 five-minute bars. A name
+    with no suffix, or a spec whose timeframe is not a minute or hour bar, counts its period as
+    given.
+    """
+    base = _BASE_BAR.match(spec.get("timeframe")) if isinstance(spec.get("timeframe"), str) else None
+    base_minutes = _minutes(base.group(1), base.group(2)) if base else None
     best: tuple[int, str] | None = None
     indicators = spec.get("indicators")
     for entry in indicators if isinstance(indicators, list) else []:
         period = entry.get("period") if isinstance(entry, Mapping) else None
-        if (
-            isinstance(period, int)
-            and not isinstance(period, bool)
-            and (best is None or period > best[0])
-        ):
-            best = (period, f"longest indicator period: {entry.get('name')}({period})")
+        if not isinstance(period, int) or isinstance(period, bool):
+            continue
+        name = str(entry.get("name"))
+        suffix = _TIMEFRAME_SUFFIX.search(name)
+        if suffix and base_minutes:
+            tf = _minutes(suffix.group(1), suffix.group(2))
+            bars = max(1, math.ceil(period * tf / base_minutes))
+            reason = f"longest indicator span: {name}({period}) = {bars} {spec['timeframe']} bars"
+        else:
+            bars, reason = period, f"longest indicator period: {name}({period})"
+        if best is None or bars > best[0]:
+            best = (bars, reason)
     return best if best else (0, "no indicator with a period")
 
 

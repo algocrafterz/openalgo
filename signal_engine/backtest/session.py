@@ -168,6 +168,15 @@ def _hhmm(minutes: int | None) -> str | None:
     return None if minutes is None else f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _calendar_label(calendar: Calendar) -> str:
+    """How the session block names the calendar the run actually used."""
+    if calendar.source == OFFICIAL_SOURCE:
+        return "official NSE calendar"
+    if calendar.source == SOURCE:
+        return "derived calendar"
+    return f"{calendar.source} calendar"
+
+
 def session_model(
     calendar: Calendar,
     *,
@@ -182,7 +191,7 @@ def session_model(
         cutoff = _hhmm(profile_rules.latest_exit_bar_close_min)
         force_flat = _hhmm(profile_rules.force_flat_min)
     return {
-        "exchange": f"{exchange} cash 09:15-15:30 (derived calendar)",
+        "exchange": f"{exchange} cash 09:15-15:30 ({_calendar_label(calendar)})",
         "strategy_window": strategy_window,
         "broker_cutoff": cutoff,
         "force_flat": force_flat,

@@ -142,9 +142,9 @@ def test_real_doc_works_from_other_cwd(tmp_path, monkeypatch):
     assert len(p1) >= 13
     assert all(r.status in {"not started", "in progress", "built", "verified"} for r in rows)
     miss = missing_p1()
-    assert (
-        "Run manifest and run folder layout; immutable artifacts retained and addressable" in miss
-    )
+    # Point-in-time universe membership stays unverified until a historical F&O membership source
+    # exists (owner decision 2026-10-10), so the real document always has at least this row missing.
+    assert "Point-in-time universe membership and per-date eligibility" in miss
     verified = {r.capability for r in p1 if r.status == "verified"}
     assert not verified & set(miss)
     assert isinstance(readiness.DEFAULT_PATH, Path)

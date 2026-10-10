@@ -53,6 +53,50 @@ class TestPlatformDefaults:
         assert _resolve(spec).get("execution.warmup_bars").value == 0
         assert _resolve(make_spec(indicators="none")).get("execution.warmup_bars").value == 0
 
+    def test_a_higher_timeframe_indicator_counts_in_base_bars(self):
+        spec = make_spec(timeframe="5m", indicators=[{"name": "EMA_15M", "period": 20, "source": "close"}])
+        v = _resolve(spec).get("execution.warmup_bars")
+        assert v.value == 60 and v.source == "derived"  # 20 fifteen-minute bars are 60 five-minute bars
+        assert "EMA_15M(20)" in v.reason and "60 5m bars" in v.reason
+
+    def test_the_longest_span_wins_across_timeframes(self):
+        spec = make_spec(timeframe="5m", indicators=[
+            {"name": "EMA", "period": 50, "source": "close"},
+            {"name": "ATR_15M", "period": 14, "source": "close"},      # 42 base bars
+            {"name": "EMA_1H", "period": 10, "source": "close"},       # 120 base bars
+            {"name": "ADX_15M", "period": 14, "source": "close"}])  # fmt: skip
+        assert _resolve(spec).get("execution.warmup_bars").value == 120
+        spec2 = make_spec(timeframe="5m", indicators=[
+            {"name": "EMA", "period": 50, "source": "close"}, {"name": "ATR_15M", "period": 14, "source": "close"}])  # fmt: skip
+        assert _resolve(spec2).get("execution.warmup_bars").value == 50  # 42 < 50
+
+    def test_an_indicator_on_the_base_timeframe_or_without_a_suffix_is_unchanged(self):
+        same = make_spec(timeframe="15m", indicators=[{"name": "EMA_15M", "period": 20, "source": "close"}])
+        assert _resolve(same).get("execution.warmup_bars").value == 20
+        plain = make_spec(indicators=[{"name": "EMA", "period": 20, "source": "close"}])
+        assert _resolve(plain).get("execution.warmup_bars").value == 20
+
+    def test_a_partial_base_bar_rounds_up(self):
+        spec = make_spec(timeframe="15m", indicators=[{"name": "EMA_20M", "period": 10, "source": "close"}])
+        assert _resolve(spec).get("execution.warmup_bars").value == 14  # ceil(10 x 20 / 15)
+
+    def test_a_daily_spec_ignores_a_suffix_it_cannot_scale(self):
+        spec = make_spec(product="CNC", **{**SWING, "indicators": [{"name": "EMA_15M", "period": 20, "source": "close"}]})
+        assert _resolve(spec).get("execution.warmup_bars").value == 20
+
+    def test_idea_029_resolves_sixty_bars_and_the_recorded_v4_value_is_not_rewritten(self):
+        import json
+        from pathlib import Path
+
+        import yaml
+
+        root = Path(execution.__file__).resolve().parents[2] / "research" / "ideas" / "idea-029-vwap-2sd-range-mean-reversion"
+        spec = yaml.safe_load((root / "spec.yaml").read_text())
+        v = _resolve(spec).get("execution.warmup_bars")
+        assert v.value == 60 and "60 5m bars" in v.reason
+        recorded = json.loads((root / "runs" / "2026-10-09-vwap-2sd-range-mean-reversion-v4" / "execution" / "config.json").read_text())
+        assert recorded["resolved"]["execution.warmup_bars"]["value"] == 20  # immutable evidence
+
     def test_product_is_derived_from_style_when_absent(self):
         v = _resolve(make_spec(product=None)).get("execution.product")
         assert v.value == "MIS" and v.source == "derived"
