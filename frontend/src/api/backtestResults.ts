@@ -217,11 +217,20 @@ export interface StrategySpec {
   max_holding_period?: string | string[]
   filters?: string | string[]
   session_filters?: string | string[]
-  indicators?: string | string[]
+  indicators?: unknown
   parameters?: Record<string, unknown>
   cost_assumptions?: string | string[]
   constraints?: string | string[]
   rationale?: string | string[]
+  // Current frozen-spec schema (spec v2). The legacy names above are still accepted.
+  style?: string
+  stop?: unknown
+  sizing?: unknown
+  holding_period?: unknown
+  re_entry?: unknown
+  timing?: unknown
+  session_window?: unknown
+  [key: string]: unknown
 }
 
 // ---- Run decision, scope and reproducibility (build order 5) -------------------------------

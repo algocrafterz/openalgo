@@ -3,35 +3,61 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ShortHash } from './ShortHash'
 
-type Field = { key: keyof StrategySpec; label: string }
+/** A label and the spec keys that can hold it: the current schema key first, legacy keys after. */
+type Field = { keys: string[]; label: string }
 
 const RULES: Field[] = [
-  { key: 'entry', label: 'Entry' },
-  { key: 'exit', label: 'Exit' },
-  { key: 'stop_loss', label: 'Stop loss' },
-  { key: 'take_profit', label: 'Take profit' },
-  { key: 'position_sizing', label: 'Position sizing' },
-  { key: 'max_holding_period', label: 'Maximum holding period' },
-  { key: 'filters', label: 'Filters' },
-  { key: 'session_filters', label: 'Session filters' },
+  { keys: ['entry'], label: 'Entry' },
+  { keys: ['exit'], label: 'Exit' },
+  { keys: ['stop', 'stop_loss'], label: 'Stop loss' },
+  { keys: ['take_profit'], label: 'Take profit' },
+  { keys: ['sizing', 'position_sizing'], label: 'Position sizing' },
+  { keys: ['holding_period', 'max_holding_period'], label: 'Holding period' },
+  { keys: ['re_entry'], label: 'Re-entry' },
+  { keys: ['timing'], label: 'Timing' },
+  { keys: ['filters'], label: 'Filters' },
+  { keys: ['session_window', 'session_filters'], label: 'Session' },
 ]
 
 const CONTEXT: Field[] = [
-  { key: 'market', label: 'Market' },
-  { key: 'timeframe', label: 'Timeframe' },
-  { key: 'trading_style', label: 'Style' },
-  { key: 'direction', label: 'Direction' },
-  { key: 'cost_assumptions', label: 'Cost assumptions' },
-  { key: 'constraints', label: 'Constraints' },
+  { keys: ['market'], label: 'Market' },
+  { keys: ['timeframe'], label: 'Timeframe' },
+  { keys: ['style', 'trading_style'], label: 'Style' },
+  { keys: ['direction'], label: 'Direction' },
+  { keys: ['cost_assumptions'], label: 'Cost assumptions' },
+  { keys: ['constraints'], label: 'Constraints' },
 ]
+
+function scalar(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
+/** One readable line for a value: text as is, a structured object as `name (key value, ...)`. */
+function describe(value: unknown): string {
+  if (value === null || typeof value !== 'object') return String(value)
+  if (Array.isArray(value)) return value.map(describe).join(', ')
+  const entries = Object.entries(value as Record<string, unknown>)
+  const name = entries.find(([k]) => k === 'name')
+  const rest = entries
+    .filter(([k]) => k !== 'name')
+    .map(([k, v]) => `${k.replace(/_/g, ' ')} ${typeof v === 'object' ? describe(v) : scalar(v)}`)
+  if (name) return rest.length ? `${String(name[1])} (${rest.join(', ')})` : String(name[1])
+  return rest.join(', ')
+}
 
 function asList(value: unknown): string[] {
   if (value === undefined || value === null) return []
-  return (Array.isArray(value) ? value : [value]).map(String)
+  return (Array.isArray(value) ? value : [value]).map(describe).filter((line) => line !== '')
+}
+
+function pick(spec: StrategySpec, keys: string[]): unknown {
+  const record = spec as Record<string, unknown>
+  const key = keys.find((k) => record[k] !== undefined && record[k] !== null)
+  return key === undefined ? undefined : record[key]
 }
 
 function FieldView({ spec, field }: { spec: StrategySpec; field: Field }) {
-  const items = asList(spec[field.key])
+  const items = asList(pick(spec, field.keys))
   if (items.length === 0) return null
   return (
     <div>
@@ -139,14 +165,14 @@ export function StrategyDefinition({
         )}
         <dl className="grid gap-3 md:grid-cols-3">
           {CONTEXT.map((f) => (
-            <FieldView key={f.key} spec={spec} field={f} />
+            <FieldView key={f.keys[0]} spec={spec} field={f} />
           ))}
         </dl>
         <section data-testid="spec-rules" className="space-y-2">
           <h4 className="text-sm font-medium">Rules</h4>
           <dl className="grid gap-3 md:grid-cols-2">
             {RULES.map((f) => (
-              <FieldView key={f.key} spec={spec} field={f} />
+              <FieldView key={f.keys[0]} spec={spec} field={f} />
             ))}
           </dl>
           {indicators.length > 0 && (
