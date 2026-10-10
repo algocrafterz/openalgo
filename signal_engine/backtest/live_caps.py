@@ -58,6 +58,7 @@ import pandas as pd
 import yaml
 
 from signal_engine.backtest import tickgrid
+from signal_engine.backtest.cost_contribution import seal
 from signal_engine.backtest.costs import recost
 from signal_engine.backtest.engine import EntryRequest, simulate_steps
 from signal_engine.backtest.perturbation import _same_result, trade_metrics
@@ -319,6 +320,44 @@ def trade_hash(trades: Sequence[Any]) -> str:
     return hashlib.sha256("\n".join(rows).encode()).hexdigest()
 
 
+def peak_margin(
+    trades: Sequence[Any], cost_model: Any | None, bar_minutes: int = BAR_MINUTES
+) -> dict[str, Any] | None:
+    """Worst simultaneous MIS margin of a trade list, as a share of capital (G5.5).
+
+    A position's margin is its order notional over the MIS leverage, in units of capital:
+    `cost_model.notional / (capital x leverage)`, which does not depend on the capital level
+    because sizing is linear in it. A position holds its margin from its entry fill through the
+    end of its exit bar (the same hold the slot count uses); at equal times exits release before
+    entries take. None without a cost model.
+    """
+    if cost_model is None:
+        return None
+    bar_ns = bar_minutes * 60 * 10**9
+    scale = float(cost_model.capital) * float(cost_model.leverage)
+    events: list[tuple[int, int, float]] = []
+    for t in trades:
+        m = float(cost_model.notional(t)) / scale
+        events.append((pd.Timestamp(t.entry_time).value, 1, m))
+        events.append((pd.Timestamp(t.exit_time).value + bar_ns, 0, m))
+    events.sort()
+    level, count, peak, peak_n, peak_at = 0.0, 0, 0.0, 0, None
+    for ns, is_entry, m in events:
+        if is_entry:
+            level, count = level + m, count + 1
+            if level > peak + 1e-12:
+                peak, peak_n, peak_at = level, count, ns
+        else:
+            level, count = level - m, count - 1
+    return {
+        "peak_fraction": float(peak),
+        "positions_at_peak": int(peak_n),
+        "peak_time": None if peak_at is None else pd.Timestamp(peak_at, tz="UTC").tz_convert("Asia/Kolkata").isoformat(),
+        "leverage": float(cost_model.leverage),
+        "trades": len(trades),
+    }
+
+
 def run_capped(
     contexts: Mapping[str, tuple[Any, Ctx]],
     params: Any,
@@ -420,7 +459,32 @@ def build_contexts(
     return out
 
 
-def run_stage(
+def _finite_or_none(value: Any) -> Any:
+    """Strict-JSON form: a non-finite float becomes None, as it will in the written file."""
+    if isinstance(value, Mapping):
+        return {k: _finite_or_none(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_or_none(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def seal_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """The evidence in strict-JSON form with a content hash over everything else.
+
+    Non-finite numbers become None before hashing, so the hash is the same for the object in
+    memory and for the file written from it; an edit to either is detectable."""
+    body = _finite_or_none({k: v for k, v in evidence.items() if k != "content_sha256"})
+    return {**body, "content_sha256": seal(body)}
+
+
+def run_stage(**kw: Any) -> dict[str, Any]:
+    """Run the base check and one capped pass per slot count; return the sealed evidence."""
+    return seal_evidence(_run_stage(**kw))
+
+
+def _run_stage(
     *,
     strategy: Any,
     params: Any,
@@ -447,12 +511,19 @@ def run_stage(
         "limitations": list(LIMITATIONS),
     }
     try:
-        head = trade_metrics(list(headline_trades), oos_start)
+        head = {
+            **trade_metrics(list(headline_trades), oos_start),
+            "trade_sha256": trade_hash(headline_trades),
+        }
         evidence["headline"] = head
         contexts = build_contexts(strategy, params, load_frames, symbols, chunk_size)
         guard = run_capped(contexts, params, run, unlimited(caps.risk_fraction), cost_model)
         guard_m = _metrics(guard.trades, cost_model, oos_start)
-        evidence["base_check"] = {**guard_m, "trade_sha256": trade_hash(guard.trades)}
+        evidence["base_check"] = {
+            **guard_m,
+            "trade_sha256": trade_hash(guard.trades),
+            "margin": peak_margin(guard.trades, cost_model),
+        }
         if not _same_result(guard_m, head):
             evidence.update(
                 state=BASE_REPLAY_MISMATCH,
@@ -472,6 +543,7 @@ def run_stage(
                     "vetoes": {rule: int(res.vetoes.get(rule, 0)) for rule in RULES},
                     "peak_open_positions": res.peak_open,
                     "trade_sha256": trade_hash(res.trades),
+                    "margin": peak_margin(res.trades, cost_model),
                 }
             )
         evidence.update(state=COMPLETE, passes=passes)
@@ -490,6 +562,14 @@ def validate_evidence(evidence: Any) -> list[str]:
     problems = []
     if evidence.get("state") not in STATES:
         problems.append(f"state must be one of {', '.join(STATES)}")
+    if "content_sha256" in evidence:
+        body = {k: v for k, v in evidence.items() if k != "content_sha256"}
+        try:
+            matches = evidence["content_sha256"] == seal(body)
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            problems.append("content_sha256 does not match the payload")
     if evidence.get("state") == COMPLETE:
         passes = evidence.get("passes")
         if not isinstance(passes, list) or not passes:

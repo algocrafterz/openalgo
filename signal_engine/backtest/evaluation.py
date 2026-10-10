@@ -1025,6 +1025,8 @@ MC_METHODS = ("day", "trade")
 #: G5.3: the criteria's cap on risk per trade (a share of capital) and on the share of Kelly used.
 SIZING_MAX_RISK = 0.01
 SIZING_MAX_KELLY_SHARE = 0.5
+#: G5.5: the criteria's cap on the worst simultaneous MIS margin, as a share of capital.
+MARGIN_MAX_SHARE = 0.90
 #: G5.4: at least this share of the entry orders must have a measurable volume history.
 CAPACITY_MIN_MEASURED_SHARE = 0.95
 #: G6.8: the closing auction session starts at 15:15 IST, in minutes after midnight. No SL or SL-M
@@ -1449,6 +1451,83 @@ def _g53(x: _Inputs) -> _Result:
         "no portfolio cap, margin or capacity is applied"
     )
     return ("fail" if over_risk or over_kelly else "pass"), (None if share is None else _num(share)), threshold, text
+
+
+def trade_metrics_for(trades: Sequence[Any]) -> dict[str, Any]:
+    """Trade count and mean net R, the figures the live-caps evidence states for the headline."""
+    return perturbation.trade_metrics(trades)
+
+
+def _g55(x: _Inputs) -> _Result:
+    threshold = f"worst-case simultaneous MIS margin at most {MARGIN_MAX_SHARE:.0%} of capital"
+    ev = x.live_caps
+    if ev is None:
+        return (
+            "not_evaluated", None, threshold,
+            "the margin comes from the capped replay and no run with the live caps was recorded (opt-in --live-caps)",
+        )  # fmt: skip
+    problems = live_caps_mod.validate_evidence(ev)
+    if problems:
+        return "not_evaluated", None, threshold, "the live-caps evidence is unusable: " + "; ".join(problems)
+    if ev.get("state") != live_caps_mod.COMPLETE:
+        return (
+            "not_evaluated", None, threshold,
+            f"the live-caps stage did not complete ({ev.get('state')}): {ev.get('reason', 'no reason recorded')}",
+        )  # fmt: skip
+    if "content_sha256" not in ev or "trade_sha256" not in (ev.get("headline") or {}):
+        return (
+            "not_evaluated", None, threshold,
+            "the live-caps evidence is not sealed and bound to the run's trade list (recorded "
+            "before that existed); rerun with --live-caps",
+        )  # fmt: skip
+    head = ev["headline"]
+    mine = trade_metrics_for(x.trades)
+    if (
+        head.get("trade_sha256") != live_caps_mod.trade_hash(x.trades)
+        or head.get("trades") != mine["trades"]
+        or not (
+            isinstance(head.get("net_r"), (int, float))
+            and mine["net_r"] is not None
+            and abs(head["net_r"] - mine["net_r"]) <= 1e-9
+        )
+    ):
+        return "not_evaluated", None, threshold, "the live-caps evidence was computed from a different run"
+    passes = [p for p in ev["passes"] if isinstance(p, dict)]
+    rows = {p["max_open_positions"]: (p.get("margin") or {}) for p in passes}
+    primary = next(p for p in passes if p.get("primary"))
+    margin = primary.get("margin")
+    if not isinstance(margin, dict) or not isinstance(margin.get("peak_fraction"), (int, float)):
+        return (
+            "not_evaluated", None, threshold,
+            "the live-caps evidence carries no margin figures (recorded before they existed); "
+            "rerun with --live-caps",
+        )  # fmt: skip
+    if margin.get("trades") != primary.get("trades"):
+        return (
+            "not_evaluated", None, threshold,
+            "the primary pass's margin was not computed from its own trade list",
+        )  # fmt: skip
+    peak = float(margin["peak_fraction"])
+    over = peak > MARGIN_MAX_SHARE + 1e-12
+    where = f", {margin['positions_at_peak']} position(s) open at {margin['peak_time']}" if margin.get("peak_time") else ""
+    others = "; ".join(
+        f"{slots} slots: {m['peak_fraction']:.1%}" + (" (OVER the limit)" if m["peak_fraction"] > MARGIN_MAX_SHARE + 1e-12 else "")
+        for slots, m in sorted(rows.items())
+        if slots != primary["max_open_positions"] and isinstance(m.get("peak_fraction"), (int, float))
+    )
+    unc = (ev.get("base_check") or {}).get("margin") or {}
+    text = (
+        f"with {primary['max_open_positions']} open position allowed the worst simultaneous margin is "
+        f"{peak:.1%} of capital{where}"
+        + (f". Sensitivities, not decisive: {others}" if others else "")
+        + (f". The uncapped book would peak at {unc['peak_fraction']:.0%} with {unc['positions_at_peak']} "
+           "positions open (information only: the live caps do not allow it)" if unc.get("peak_fraction") is not None else "")
+        + f". Margin is order notional over the cost model's {margin.get('leverage', 0):g}x MIS leverage at the "
+        "nominal risk per trade, held from entry through the exit bar; it is not the broker's margin "
+        "figure, the live qty scaling to available margin is not modelled, and the configured limits "
+        "are simulated, not proof of live feasibility"
+    )
+    return ("fail" if over else "pass"), _num(peak, 6), threshold, text
 
 
 def _g54(x: _Inputs) -> _Result:
@@ -2085,6 +2164,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G5.1": _g51,
     "G5.3": _g53,
     "G5.4": _g54,
+    "G5.5": _g55,
     "G5.2": _g52,
     "G6.1": _g61,
     "G6.2": _g62,

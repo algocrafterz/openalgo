@@ -404,6 +404,23 @@ class TestStageAndEvidence:
         assert any("pooled" in x for x in ev["limitations"])
         assert any("unrealised" in x for x in ev["limitations"])
 
+    def test_every_pass_and_the_base_check_carry_the_peak_margin_when_a_cost_model_is_given(self):
+        from signal_engine.tests.cost_fixtures import make_model
+
+        from signal_engine.backtest.costs import recost
+
+        model = make_model()
+        frames = self._frames()
+        head = recost(simulate(Ctx(frames["A"], "A"), Fire({2, 3}), None, RUN)
+                      + simulate(Ctx(frames["B"], "B"), Fire({2, 3}), None, RUN), model)
+        ev = self._stage(cost_model=model, headline=head)
+        assert ev["state"] == lc.COMPLETE
+        margins = [p["margin"]["peak_fraction"] for p in ev["passes"]]
+        assert all(m > 0 for m in margins) and margins == sorted(margins)  # more slots, no less margin
+        assert ev["base_check"]["margin"]["peak_fraction"] >= margins[-1]
+        assert ev["passes"][0]["margin"]["positions_at_peak"] == 1  # the primary holds one position
+        assert self._stage()["passes"][0]["margin"] is None  # no cost model, no margin
+
     def test_every_pass_is_reproducible_from_the_same_inputs(self):
         a, b = self._stage(), self._stage()
         assert [p["trade_sha256"] for p in a["passes"]] == [p["trade_sha256"] for p in b["passes"]]
