@@ -825,3 +825,51 @@ class TestLatencyInRecord:
         frozen = SimpleNamespace(resolved={}, intent={}, profile={})
         with pytest.raises(ValueError, match="latency"):
             rr._execute_frozen(lambda key: None, "k", frozen, run_latency=True)
+
+
+class TestCapacityInRecord:
+    @staticmethod
+    def _evidence(execution):
+        from signal_engine.backtest.live_caps import trade_hash
+
+        n = len(execution.trades)
+        return {"version": 1, "state": "complete", "reason": "", "cap": 0.1, "history_sessions": 20,
+                "min_history": 10, "diagnostic_not_trials": True, "assumptions": ["a"],
+                "limitations": ["l"], "shared": {"bar_size": "5m"}, "trades": n,
+                "trade_sha256": trade_hash(execution.trades), "capital": 100000.0,
+                "measured": n, "unmeasured": 0, "over_cap": 0, "no_data_for_symbol": 0,
+                "share_over": {"0.01": 0, "0.05": 0, "0.1": 0}, "infinite_participation": 0,
+                "max_participation": 0.001, "participation": {"p50": 0.0005, "p95": 0.0009, "p99": 0.001},
+                "capital_ceiling": 1e7, "worst_orders": []}  # fmt: skip
+
+    def _row(self, record):
+        return next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G5.4")
+
+    def test_the_evidence_is_sealed_in_the_run_folder_and_scored(self, root):
+        from dataclasses import replace
+
+        execution = _execution(n=240)
+        execution = replace(execution, capacity=self._evidence(execution))
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: execution,
+                              run_date="2026-09-30", supported=SUPPORTED)
+        record = json.loads(path.read_text())
+        folder = path.parent / record["artifact_dir"].rstrip("/")
+        assert (folder / "evidence" / "capacity.json").exists()
+        manifest = json.loads((folder / "manifest.json").read_text())
+        assert "evidence/capacity.json" in manifest["artifacts"]
+        assert self._row(record)["status"] == "pass"
+
+    def test_a_run_without_the_stage_leaves_it_not_evaluated_and_writes_no_file(self, root):
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),
+                              run_date="2026-09-30", supported=SUPPORTED)
+        record = json.loads(path.read_text())
+        folder = path.parent / record["artifact_dir"].rstrip("/")
+        assert not (folder / "evidence" / "capacity.json").exists()
+        assert self._row(record)["status"] == "not_evaluated"
+
+    def test_an_execute_callable_without_the_option_is_refused_not_silently_skipped(self):
+        from types import SimpleNamespace
+
+        frozen = SimpleNamespace(resolved={}, intent={}, profile={})
+        with pytest.raises(ValueError, match="capacity"):
+            rr._execute_frozen(lambda key: None, "k", frozen, run_capacity=True)

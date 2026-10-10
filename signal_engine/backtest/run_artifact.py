@@ -763,6 +763,9 @@ def prepare_run_artifact(
     latency = getattr(execution, "latency", None)
     if latency is not None:
         files["evidence/latency.json"] = _encode(_json_safe(latency))
+    capacity = getattr(execution, "capacity", None)
+    if capacity is not None:
+        files["evidence/capacity.json"] = _encode(_json_safe(capacity))
     data_report = getattr(execution, "data_report", None)
     if data_report is not None:
         files["data_quality.json"] = _encode(_json_safe(data_report))

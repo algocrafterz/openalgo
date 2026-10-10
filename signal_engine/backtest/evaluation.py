@@ -41,6 +41,7 @@ import pandas as pd
 from scipy import optimize as _st_opt
 from scipy import stats as _st
 
+from signal_engine.backtest import capacity as capacity_mod
 from signal_engine.backtest import latency as latency_mod
 from signal_engine.backtest import live_caps as live_caps_mod
 from signal_engine.backtest import monte_carlo as mc_mod
@@ -223,6 +224,7 @@ class _Inputs:
     live_caps: dict[str, Any] | None = None
     monte_carlo: dict[str, Any] | None = None
     latency: dict[str, Any] | None = None
+    capacity: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1023,6 +1025,8 @@ MC_METHODS = ("day", "trade")
 #: G5.3: the criteria's cap on risk per trade (a share of capital) and on the share of Kelly used.
 SIZING_MAX_RISK = 0.01
 SIZING_MAX_KELLY_SHARE = 0.5
+#: G5.4: at least this share of the entry orders must have a measurable volume history.
+CAPACITY_MIN_MEASURED_SHARE = 0.95
 #: G6.8: the closing auction session starts at 15:15 IST, in minutes after midnight. No SL or SL-M
 #: order exists in it, so a position still open then has no resting stop.
 AUCTION_START_MIN = 15 * 60 + 15
@@ -1445,6 +1449,67 @@ def _g53(x: _Inputs) -> _Result:
         "no portfolio cap, margin or capacity is applied"
     )
     return ("fail" if over_risk or over_kelly else "pass"), (None if share is None else _num(share)), threshold, text
+
+
+def _g54(x: _Inputs) -> _Result:
+    threshold = (
+        f"every entry order at most {capacity_mod.CAP:.0%} of the median 5-minute volume at its "
+        "entry time"
+    )
+    evidence = x.capacity
+    if evidence is None:
+        return "not_evaluated", None, threshold, "no capacity stage was run for this run (opt-in)"
+    problems = capacity_mod.validate_evidence(evidence)
+    if problems:
+        return "not_evaluated", None, threshold, "the capacity evidence is invalid: " + "; ".join(problems)
+    if evidence["state"] != capacity_mod.COMPLETE:
+        return (
+            "not_evaluated", None, threshold,
+            f"the capacity stage did not complete ({evidence['state']}): {evidence.get('reason', '')}",
+        )  # fmt: skip
+    if evidence["trades"] != len(x.trades) or evidence["trade_sha256"] != live_caps_mod.trade_hash(x.trades):
+        return "not_evaluated", None, threshold, "the capacity evidence was computed from a different trade list"
+    if evidence["cap"] != capacity_mod.CAP:
+        return (
+            "not_evaluated", None, threshold,
+            f"the evidence tests a {evidence['cap']:.0%} cap, the criterion is {capacity_mod.CAP:.0%}",
+        )  # fmt: skip
+    total, measured = evidence["trades"], evidence["measured"]
+    if measured < MIN_TRADES or measured < CAPACITY_MIN_MEASURED_SHARE * total:
+        return (
+            "not_evaluated", None, threshold,
+            f"only {measured} of {total} entry orders have a volume history (needs at least "
+            f"{MIN_TRADES} and {CAPACITY_MIN_MEASURED_SHARE:.0%}); unmeasured orders are never "
+            "read as within the cap",
+        )  # fmt: skip
+    over = evidence["over_cap"]
+    peak = evidence.get("max_participation")
+    ceiling = evidence.get("capital_ceiling")
+    parts = [
+        f"{over} of {measured} measured entry orders exceed {capacity_mod.CAP:.0%} of the median "
+        f"5-minute volume at entry",
+        "the largest order has no measurable volume (median zero)" if peak is None
+        else f"the largest is {peak:.2%}",
+    ]
+    q = evidence.get("participation") or {}
+    if q:
+        parts.append(f"median {q.get('p50', 0):.3%}, 95th percentile {q.get('p95', 0):.3%}")
+    at_q = evidence.get("capital_at_percentile") or {}
+    if ceiling is not None:
+        text_q = "".join(f", {k} order {v:,.0f}" for k, v in at_q.items())
+        parts.append(
+            f"capital at which the largest order reaches the cap: {ceiling:,.0f} (run at "
+            f"{evidence['capital']:,.0f}); at the median, 95th and 99th percentile orders"
+            f"{text_q or ' (not reported)'}; linear sizing under the cost model"
+        )
+    parts.append(f"{evidence['unmeasured']} orders unmeasured")
+    text = (
+        "; ".join(parts)
+        + ". Participation of one entry order against the median same-time bar of the previous "
+        f"{capacity_mod.HISTORY_SESSIONS} sessions: not market impact, other orders in the same bar "
+        "and portfolio caps are not applied, and a pass does not prove an order would fill"
+    )
+    return ("fail" if over else "pass"), (None if peak is None else _num(peak, 6)), threshold, text
 
 
 def _g51(x: _Inputs) -> _Result:
@@ -2019,6 +2084,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G4.7": _g47,
     "G5.1": _g51,
     "G5.3": _g53,
+    "G5.4": _g54,
     "G5.2": _g52,
     "G6.1": _g61,
     "G6.2": _g62,
@@ -2074,6 +2140,7 @@ def evaluate(
     run_date: str | None = None,
     monte_carlo: dict[str, Any] | None = None,
     latency: dict[str, Any] | None = None,
+    capacity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -2090,7 +2157,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -2122,6 +2189,7 @@ def evaluate(
         run_date=run_date,
         monte_carlo=monte_carlo,
         latency=latency,
+        capacity=capacity,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:
