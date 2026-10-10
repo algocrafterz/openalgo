@@ -206,3 +206,21 @@ class TestGate:
         assert "G0.1" in ev._EVALUATORS
         result = _derive(_evaluation("pass", G0_1="not_evaluated"))
         assert result["run_verdict"] == vd.MARGINAL and result["primary_failed_gate"] == "G0.1"
+
+
+class TestCommittedLedger:
+    LEDGER = Path(__file__).resolve().parents[1] / "attestations" / "ledger.ndjson"
+
+    def test_the_committed_ledger_is_a_sound_chain(self):
+        records = at.load(self.LEDGER)
+        assert records and at.chain_problems(records) == []
+
+    def test_the_first_attestation_names_what_it_covers_and_what_it_does_not(self):
+        first = at.load(self.LEDGER)[0]
+        assert first["gate"] == "G0.1" and first["id"] == "G0.1-001"
+        assert set(first["strategies"]) == {"VwapReversion", "Breakout", "EmaVwapEarly"}
+        assert "signal_engine/strategy_core" in first["covered_paths"]
+        ev_ = first["evidence"]
+        assert ev_["known_gaps"] and ev_["not_covered"] and "owner" in first["reviewer"]
+        assert all("0 failed" in c["result"] for c in ev_["checks"])
+        assert "no paper or live adapter" in ev_["modes"]["VwapReversion"]

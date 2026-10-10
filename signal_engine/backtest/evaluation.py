@@ -1474,7 +1474,7 @@ def _g01(x: _Inputs) -> _Result:
         return (
             "not_evaluated", None, threshold,
             f"no valid attestation ({att.get('status')}){which}: {why}. G0.1 needs a code review "
-            "that a program cannot supply; see attestations/ledger.jsonl",
+            "that a program cannot supply; see attestations/ledger.ndjson",
         )  # fmt: skip
     rec = att["record"]
     modes = rec.get("modes")

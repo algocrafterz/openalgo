@@ -3,7 +3,7 @@
 A gate such as G0.1 (same logic in every mode) rests on a code review plus automated evidence at
 one commit. An attestation records that review so a run can rely on it only while it still holds:
 
-  RECORD.   One JSON line in `attestations/ledger.jsonl`: gate, exact commit, covered paths, the
+  RECORD.   One JSON line in `attestations/ledger.ndjson` (newline-delimited JSON; the `.jsonl` extension is gitignored here): gate, exact commit, covered paths, the
             strategy classes it covers, the evidence (checks run, results, notes), the reviewer
             and date. Each line carries `prev_sha256` (the previous line's hash) and its own
             `content_sha256`, so the ledger is an append-only chain: an edit, a deletion or a
@@ -30,7 +30,7 @@ from signal_engine.backtest.cost_contribution import seal
 
 SCHEMA = "attestation/1"
 GENESIS = "0" * 64
-LEDGER_NAME = Path("attestations") / "ledger.jsonl"
+LEDGER_NAME = Path("attestations") / "ledger.ndjson"
 REQUIRED = (
     "schema", "id", "gate", "commit", "covered_paths", "strategies", "evidence", "reviewer",
     "date", "prev_sha256", "content_sha256",
