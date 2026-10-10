@@ -38,6 +38,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy import optimize as _st_opt
 from scipy import stats as _st
 
 from signal_engine.backtest import latency as latency_mod
@@ -1019,6 +1020,9 @@ MC_MAX_P95_DRAWDOWN = 0.25
 MC_MAX_RUIN = 0.05
 MC_MIN_PATHS = 5000
 MC_METHODS = ("day", "trade")
+#: G5.3: the criteria's cap on risk per trade (a share of capital) and on the share of Kelly used.
+SIZING_MAX_RISK = 0.01
+SIZING_MAX_KELLY_SHARE = 0.5
 #: G6.8: the closing auction session starts at 15:15 IST, in minutes after midnight. No SL or SL-M
 #: order exists in it, so a position still open then has no resting stop.
 AUCTION_START_MIN = 15 * 60 + 15
@@ -1354,6 +1358,93 @@ def _g42(x: _Inputs) -> _Result:
         "the criteria specify, not a measured latency; per-symbol intraday strategies only"
     )
     return "report", _num(late_r), threshold, text
+
+
+def kelly_fraction(r: Sequence[float]) -> float:
+    """The log-optimal share of capital to risk per unit of R, from observed R multiples.
+
+    Maximises mean(log(1 + f r)) over f in [0, f_max), where f_max keeps every observed loss
+    short of ruin. Zero when the mean R is not positive: no positive bet has a positive edge.
+    Raises ValueError for no data, a non-finite R, or a positive mean with no losing outcome
+    (the optimum is then unbounded, so no estimate is honest).
+    """
+    r = np.asarray(r, dtype=float)
+    if len(r) == 0 or not np.isfinite(r).all():
+        raise ValueError("Kelly needs finite R multiples")
+    if r.mean() <= 0:
+        return 0.0
+    worst = float(-r.min())
+    if worst <= 0:
+        raise ValueError("Kelly is unbounded when no outcome is a loss")
+    upper = min(1.0, 1.0 / worst) * (1.0 - 1e-9)
+    result = _st_opt.minimize_scalar(
+        lambda f: -float(np.mean(np.log1p(f * r))),
+        bounds=(0.0, upper),
+        method="bounded",
+        options={"xatol": 1e-10},
+    )
+    return float(result.x)
+
+
+def _g53(x: _Inputs) -> _Result:
+    threshold = (
+        f"risk per trade at most {SIZING_MAX_RISK:.0%} of capital and never above "
+        f"{SIZING_MAX_KELLY_SHARE:.0%} of the estimated Kelly fraction"
+    )
+    risk = (x.cost_profile or {}).get("risk_per_trade")
+    if risk is None or not isinstance(risk, (int, float)) or isinstance(risk, bool):
+        return "not_evaluated", None, threshold, "the run records no risk per trade"
+    risk = float(risk)
+    if not 0 < risk < 1:
+        return "not_evaluated", None, threshold, f"the recorded risk per trade {risk} is not a share of capital"
+    if len(x.trades) < MIN_TRADES:
+        return (
+            "not_evaluated", None, threshold,
+            f"{len(x.trades)} trades are too few to estimate Kelly (at least {MIN_TRADES})",
+        )  # fmt: skip
+    try:
+        r = np.array([t.r_net for t in x.trades], dtype=float)
+    except (TypeError, ValueError):
+        return "not_evaluated", None, threshold, "the trades' R multiples are unreadable"
+    if not np.isfinite(r).all():
+        return (
+            "not_evaluated", None, threshold,
+            "some trades have no defined R, so Kelly cannot be estimated from the whole book",
+        )  # fmt: skip
+    try:
+        sessions = mc_mod.Sessions(mc_mod.frame_from_trades(x.trades))
+        k_trade, k_day = kelly_fraction(r), kelly_fraction(sessions.day_r)
+    except (ValueError, TypeError) as exc:  # MonteCarloError is a ValueError
+        note = (
+            " This is intentional: a book with a positive mean and no losing trade has no "
+            "finite Kelly estimate, and the gate does not read that as a pass"
+            if "unbounded" in str(exc)
+            else ""
+        )
+        return "not_evaluated", None, threshold, f"Kelly cannot be estimated: {exc}.{note}"
+    kelly = min(k_trade, k_day)
+    limit = SIZING_MAX_KELLY_SHARE * kelly
+    over_risk = risk > SIZING_MAX_RISK + 1e-12
+    over_kelly = risk > limit + 1e-12
+    share = risk / kelly if kelly > 0 else None
+    parts = [
+        f"risk per trade {risk:.2%} of capital against the {SIZING_MAX_RISK:.0%} cap"
+        + (" (over)" if over_risk else ""),
+        f"estimated Kelly {k_trade:.2%} per trade and {k_day:.2%} per session, the smaller "
+        f"({kelly:.2%}) used; {SIZING_MAX_KELLY_SHARE:.0%} of it is {limit:.2%}"
+        + (": the book has no positive edge to size" if kelly <= 0 else "")
+        + (f"; risk uses {share:.0%} of Kelly" if share is not None else "")
+        + (" (over)" if over_kelly else ""),
+    ]
+    text = (
+        "; ".join(parts)
+        + f". Kelly is a point estimate from {len(r)} recorded trades over {sessions.n_days} "
+        "sessions (log-optimal on net R, grouped by IST entry date, uncapped trade list), so it "
+        "is only as reliable as that sample. This is not proof that live sizing is safe: the risk "
+        "is the nominal fraction the cost model sizes on, not a re-derivation of live sizing, and "
+        "no portfolio cap, margin or capacity is applied"
+    )
+    return ("fail" if over_risk or over_kelly else "pass"), (None if share is None else _num(share)), threshold, text
 
 
 def _g51(x: _Inputs) -> _Result:
@@ -1927,6 +2018,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G4.6": _g46,
     "G4.7": _g47,
     "G5.1": _g51,
+    "G5.3": _g53,
     "G5.2": _g52,
     "G6.1": _g61,
     "G6.2": _g62,

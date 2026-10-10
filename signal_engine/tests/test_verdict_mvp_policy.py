@@ -35,7 +35,7 @@ V4 = Path(__file__).resolve().parents[1] / (
 #: verdict at MARGINAL). This list shrinks as each evaluator is built; it must never grow, and
 #: a gate must not leave it without a real evaluator and a test.
 UNEVALUATED_REQUIRED = {
-    "G0.1", "G0.7", "G5.3", "G5.4", "G5.5",
+    "G0.1", "G0.7", "G5.4", "G5.5",
 }
 
 
