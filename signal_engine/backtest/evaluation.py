@@ -1010,6 +1010,9 @@ CIRCUIT_BANDS_PCT = (2.0, 10.0)
 #: G6.7: the longest age of the fee schedule's `verified_on` at the run date, in days, inclusive.
 #: The acceptance criteria state the same number; a test keeps the two aligned.
 CHARGES_MAX_AGE_DAYS = 92
+#: G6.8: the closing auction session starts at 15:15 IST, in minutes after midnight. No SL or SL-M
+#: order exists in it, so a position still open then has no resting stop.
+AUCTION_START_MIN = 15 * 60 + 15
 _NOT_EVALUATED_NO_LEDGERS = "no lineage ledgers recorded for this run"
 
 
@@ -1294,6 +1297,50 @@ def _g67(x: _Inputs) -> _Result:
     if age > CHARGES_MAX_AGE_DAYS:
         return "fail", float(age), threshold, "stale: " + note
     return "pass", float(age), threshold, note
+
+
+def _g68(x: _Inputs) -> _Result:
+    # Bar convention (engine.py, `close_out`): a trade's `exit_time` is the stamp of the exit bar,
+    # and bars are stamped at their open. An exit at the open (`exit_at_open`) fills at that stamp.
+    # Any other exit (stop, target, clock, custom) fills somewhere inside the bar, so the bar's
+    # close, stamp plus its length, is the latest the position can be open. The auction starts at
+    # 15:15, so a bar closing at 15:15 or earlier is flat in time: a 5-minute bar stamped 15:10
+    # closes 15:15 and passes, one stamped 15:15 closes 15:20 and fails. Off the bar grid the same
+    # arithmetic gives 15:10 passing and 15:11 failing. The clock exit that fills at the open
+    # (`time_exit_at_open`) does not set `exit_at_open`, so it is bounded by its bar close here,
+    # which can only be more conservative.
+    threshold = (
+        f"flat before the closing auction ({_hhmm(AUCTION_START_MIN)} IST): every exit completes "
+        "by then and the standing time exit sits before it"
+    )
+    s = x.session or {}
+    bar = s.get("bar_minutes")
+    if bar is None:
+        return "not_evaluated", None, threshold, "the session (bar size, exit plan) is not recorded"
+    exits = [t for t in x.trades if t.exit_time is not None]
+    if not exits:
+        return "not_evaluated", None, threshold, "no exit times"
+    spans = {str(k): int(v) for k, v in (s.get("bar_minutes_by_symbol") or {}).items()}
+    latest, late = 0, 0
+    for t in exits:
+        stamp = pd.Timestamp(t.exit_time)
+        span = 0 if getattr(t, "exit_at_open", False) else spans.get(str(t.symbol), int(bar))
+        done = stamp.hour * 60 + stamp.minute + span
+        latest = max(latest, done)
+        late += done > AUCTION_START_MIN
+    squareoff, margin = s.get("mis_squareoff_min"), s.get("squareoff_margin_min")
+    plan = None if squareoff is None or margin is None else int(squareoff) - int(margin)
+    plan_text = (
+        "the standing time exit is not recorded"
+        if plan is None
+        else f"the standing time exit is {_hhmm(plan)}"
+    )
+    head = f"latest exit completes {_hhmm(latest)}; {plan_text}"
+    if late:
+        return "fail", late, threshold, f"{late} of {len(exits)} trades still open at the auction; {head}"
+    if plan is not None and plan >= AUCTION_START_MIN:
+        return "fail", _hhmm(plan), threshold, f"the standing time exit lies in the auction; {head}"
+    return "pass", _hhmm(latest), threshold, f"no trade is open at the auction; {head}"
 
 
 def stop_width_table(signals: pd.DataFrame) -> list[dict[str, Any]]:
@@ -1692,6 +1739,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G6.3": _g63,
     "G6.4": _g64,
     "G6.7": _g67,
+    "G6.8": _g68,
     "G6.5": _g65,
     "G6.9": _g69,
     "X.1": _params_count,

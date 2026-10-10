@@ -474,7 +474,7 @@ class TestLineageWalk:
 class TestNewGatesNeedLedgers:
     def test_without_ledgers_the_four_gates_stay_not_evaluated(self, run_data):
         profile = evaluate(run_data[0])
-        for gate in ("G0.5", "G6.1", "G6.5", "G1.6"):
+        for gate in ("G0.5", "G6.1", "G6.5", "G1.6", "G6.8"):
             assert row(profile, gate)["status"] == "not_evaluated"
 
     def test_evaluate_accepts_ledgers_and_session(self, run_data):
@@ -484,6 +484,7 @@ class TestNewGatesNeedLedgers:
         assert row(profile, "G6.1")["status"] == "pass"
         assert row(profile, "G6.5")["status"] == "report"
         assert row(profile, "G1.6")["status"] == "report"
+        assert row(profile, "G6.8")["status"] == "pass"
 
     def test_ledgers_given_does_not_change_other_rows(self, run_data):
         trades, _, frames, _ = run_data
@@ -491,7 +492,7 @@ class TestNewGatesNeedLedgers:
         full = evaluate(trades, ledgers=frames, session=SESSION)
         for d_plain, d_full in zip(plain["dimensions"], full["dimensions"], strict=True):
             for a, b in zip(d_plain["rows"], d_full["rows"], strict=True):
-                if a["gate"] not in {"G0.5", "G6.1", "G6.5", "G1.6"}:
+                if a["gate"] not in {"G0.5", "G6.1", "G6.5", "G1.6", "G6.8"}:
                     assert a == b
 
     def test_build_run_record_threads_ledgers_and_session(self, run_data):
@@ -912,7 +913,7 @@ class TestRecordRunPassesSession:
     def test_run_without_ledgers_has_the_gates_not_evaluated(self, root):
         path = raw._record(root, execute=lambda key: base._execution())
         profile = report_of(raw._folder(path))["evaluation"]
-        for gate in ("G0.5", "G6.1", "G6.5", "G1.6"):
+        for gate in ("G0.5", "G6.1", "G6.5", "G1.6", "G6.8"):
             assert row(profile, gate)["status"] == "not_evaluated"
 
 
