@@ -41,6 +41,7 @@ import pandas as pd
 from scipy import stats as _st
 
 from signal_engine.backtest import live_caps as live_caps_mod
+from signal_engine.backtest import monte_carlo as mc_mod
 from signal_engine.backtest import perturbation, splits, stats, tickgrid
 from signal_engine.backtest.costs import MODEL_NAME
 from signal_engine.backtest.metrics import hurdle_t
@@ -218,6 +219,7 @@ class _Inputs:
     tick_grid: dict[str, Any] | None = None
     perturbation: dict[str, Any] | None = None
     live_caps: dict[str, Any] | None = None
+    monte_carlo: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1010,6 +1012,11 @@ CIRCUIT_BANDS_PCT = (2.0, 10.0)
 #: G6.7: the longest age of the fee schedule's `verified_on` at the run date, in days, inclusive.
 #: The acceptance criteria state the same number; a test keeps the two aligned.
 CHARGES_MAX_AGE_DAYS = 92
+#: G5.1: the criteria's thresholds and the smallest number of bootstrap paths per method.
+MC_MAX_P95_DRAWDOWN = 0.25
+MC_MAX_RUIN = 0.05
+MC_MIN_PATHS = 5000
+MC_METHODS = ("day", "trade")
 #: G6.8: the closing auction session starts at 15:15 IST, in minutes after midnight. No SL or SL-M
 #: order exists in it, so a position still open then has no resting stop.
 AUCTION_START_MIN = 15 * 60 + 15
@@ -1297,6 +1304,76 @@ def _g67(x: _Inputs) -> _Result:
     if age > CHARGES_MAX_AGE_DAYS:
         return "fail", float(age), threshold, "stale: " + note
     return "pass", float(age), threshold, note
+
+
+def _g51(x: _Inputs) -> _Result:
+    threshold = (
+        f"at least {MC_MIN_PATHS:,} bootstrap paths, day-block and trade-level, at the deployed "
+        f"risk per trade: 95th percentile max drawdown at most {MC_MAX_P95_DRAWDOWN:.0%} of "
+        f"capital and probability of ruin below {MC_MAX_RUIN:.0%}"
+    )
+    evidence = x.monte_carlo
+    if evidence is None:
+        return "not_evaluated", None, threshold, "no Monte Carlo stage was run for this run (opt-in)"
+    if not isinstance(evidence, dict):
+        return "not_evaluated", None, threshold, "the Monte Carlo evidence is not a record"
+    if evidence.get("state") == "error":
+        return "not_evaluated", None, threshold, f"the Monte Carlo stage could not run: {evidence.get('reason')}"
+    problems = mc_mod.validate_evidence(evidence)
+    if problems:
+        return "not_evaluated", None, threshold, "the Monte Carlo evidence is invalid: " + "; ".join(problems)
+    source, report = evidence.get("source") or {}, evidence.get("report") or {}
+    if source.get("kind") != "recorded-run-trades":
+        return "not_evaluated", None, threshold, "the Monte Carlo evidence is not from this run's trades"
+    if source.get("trade_fingerprint") != mc_mod.trade_fingerprint(x.trades):
+        return "not_evaluated", None, threshold, "the Monte Carlo evidence was computed from a different trade list"
+    recorded = (x.cost_profile or {}).get("risk_per_trade")
+    deployed = source.get("deployed_f")
+    if recorded is None or deployed is None or abs(float(recorded) - float(deployed)) > 1e-12:
+        return (
+            "not_evaluated", None, threshold,
+            f"the evidence is at risk per trade {deployed}, the run records {recorded}",
+        )  # fmt: skip
+    params = report.get("parameters") or {}
+    if params.get("theta") != mc_mod.THETA:
+        return (
+            "not_evaluated", None, threshold,
+            f"the evidence defines ruin at theta {params.get('theta')}, the criterion's definition "
+            f"is {mc_mod.THETA}",
+        )  # fmt: skip
+    if int(params.get("trades_excluded_undefined_r", 0)) > 0:
+        return (
+            "not_evaluated", None, threshold,
+            f"{params['trades_excluded_undefined_r']} trades have no defined R, so the "
+            "simulation covers only part of the trade list",
+        )  # fmt: skip
+    key = f"{float(deployed):g}"
+    parts, failed, worst_dd = [], [], 0.0
+    for name in MC_METHODS:
+        method = (report.get("methods") or {}).get(name)
+        row = ((method or {}).get("c2_account") or {}).get(key)
+        if method is None or row is None or int(method.get("paths", 0)) < MC_MIN_PATHS:
+            return (
+                "not_evaluated", None, threshold,
+                f"the {name} method is missing or has fewer than {MC_MIN_PATHS:,} paths",
+            )  # fmt: skip
+        try:
+            dd, ruin = float(row["max_drawdown_fraction"]["p95"]), float(row["p_ruin"]["p"])
+        except (KeyError, TypeError, ValueError):
+            return "not_evaluated", None, threshold, f"the {name} method's figures are missing or unreadable"
+        parts.append(f"{name}: p95 max drawdown {dd:.1%}, ruin {ruin:.2%} over {method['paths']:,} paths")
+        worst_dd = max(worst_dd, dd)
+        if dd > MC_MAX_P95_DRAWDOWN or ruin >= MC_MAX_RUIN:
+            failed.append(name)
+    theta = params.get("theta")
+    text = (
+        f"{'; '.join(parts)}; ruin means equity at or below {1 - float(theta):.0%} of the start "
+        f"({int(params.get('sessions', 0))} sessions, {int(params.get('trades', 0))} trades, "
+        f"risk {float(deployed):.2%} per trade, seed {params.get('seed')}). Conditional on the "
+        "resampling model and on the trades as recorded, with no portfolio cap applied (it says "
+        "nothing about G5.2); not a live-account ruin probability"
+    )
+    return ("fail" if failed else "pass"), _num(worst_dd), threshold, text
 
 
 def _ladder_reading(plan: Any) -> str:
@@ -1798,6 +1875,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G4.5": _g45,
     "G4.6": _g46,
     "G4.7": _g47,
+    "G5.1": _g51,
     "G5.2": _g52,
     "G6.1": _g61,
     "G6.2": _g62,
@@ -1851,6 +1929,7 @@ def evaluate(
     perturbation: dict[str, Any] | None = None,
     live_caps: dict[str, Any] | None = None,
     run_date: str | None = None,
+    monte_carlo: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1867,7 +1946,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1897,6 +1976,7 @@ def evaluate(
         perturbation=perturbation,
         live_caps=live_caps,
         run_date=run_date,
+        monte_carlo=monte_carlo,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

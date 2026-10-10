@@ -173,7 +173,7 @@ own broker's brokerage terms. The generic 16 bps figure corresponds to Rs 1 lakh
 
 | ID | Requirement | Threshold | Tier |
 |---|---|---|---|
-| G5.1 | Monte Carlo | At least 5,000 bootstrap paths, both trade-level and day-block; 95th percentile max drawdown at most 25% of capital; probability of ruin below 5% at the deployed risk per trade | P (under 15% manageable, over 25% hard; ruin under 5%) |
+| G5.1 | Monte Carlo | At least 5,000 bootstrap paths, both trade-level and day-block; 95th percentile max drawdown at most 25% of capital; probability of ruin below 5% at the deployed risk per trade. Ruin means equity at or below 75% of the start. The bootstrap uses the recorded trade list without portfolio caps and does not establish G5.2 portfolio-cap behaviour | P (under 15% manageable, over 25% hard; ruin under 5%) |
 | G5.2 | Live caps applied | Backtest run with the live `max_open_positions`, `max_trades_per_day`, daily, weekly and monthly loss limits and the entry price band | H (EMA-20 was disqualified by a concurrency artifact) |
 | G5.3 | Sizing | Risk per trade at most 1% of capital; never above 50% of estimated Kelly | P |
 | G5.4 | Capacity | Order size at most 10% of the median 5-minute volume at entry time | P (participation caps of 1% to 10%) |

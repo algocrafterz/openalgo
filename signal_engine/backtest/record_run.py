@@ -52,6 +52,7 @@ import yaml
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import live_caps as live_caps_mod
+from signal_engine.backtest import monte_carlo as monte_carlo_mod
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import perturbation as perturbation_mod
 from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics, tickgrid
@@ -202,6 +203,8 @@ class Execution:
     perturbation: dict[str, Any] | None = None
     #: G5.2 evidence (`live_caps.run_stage`), or None when the stage was not run.
     live_caps: dict[str, Any] | None = None
+    #: G5.1 evidence (`monte_carlo.attached_evidence`), or None when the stage was not run.
+    monte_carlo: dict[str, Any] | None = None
     #: Bars read by n_minutes (overall and by year), or None when the bars carry no n_minutes.
     n_minutes_distribution: dict[str, Any] | None = None
     #: The strategy's own `diagnostics()` counters after the headline run, or None without any.
@@ -1289,6 +1292,7 @@ def _execute_frozen(
     dataset: preflight_mod.Resolution | None = None,
     run_perturbation: bool = False,
     run_live_caps: bool = False,
+    run_monte_carlo: bool = False,
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
     them, then verify the cost."""
@@ -1337,7 +1341,25 @@ def _execute_frozen(
             "execution did not use the frozen configuration: flat_round_trip_bps "
             f"{actual!r} != frozen {expected!r}"
         )
+    if run_monte_carlo:
+        execution = dataclasses.replace(execution, monte_carlo=_monte_carlo_stage(execution))
     return execution
+
+
+def _monte_carlo_stage(execution: Execution) -> dict[str, Any]:
+    """G5.1 evidence from the run's own trades at its recorded risk per trade (nothing re-run).
+
+    A trade list the simulation cannot use (no defined R) gives an error stub, which the gate
+    reads as not evaluated with the reason.
+    """
+    if execution.cost_model is None:
+        raise ValueError("the Monte Carlo stage needs the run's cost model for its risk per trade")
+    try:
+        return monte_carlo_mod.attached_evidence(
+            execution.trades, execution.cost_model.risk_per_trade
+        )
+    except monte_carlo_mod.MonteCarloError as exc:
+        return {"schema": monte_carlo_mod.SCHEMA, "state": "error", "reason": str(exc)}
 
 
 def _check_external(count: int, reason: str | None) -> None:
@@ -1379,6 +1401,7 @@ def record_idea(
     require_ready: bool = False,
     run_perturbation: bool = False,
     run_live_caps: bool = False,
+    run_monte_carlo: bool = False,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
@@ -1459,6 +1482,7 @@ def record_idea(
         execution = _execute_frozen(execute, key, frozen, end=end, run_truncation=run_truncation,
                                     run_perturbation=run_perturbation,
                                     run_live_caps=run_live_caps,
+                                    run_monte_carlo=run_monte_carlo,
                                     dataset=resolution)
     except LoadRejected as exc:
         report = dataclasses.replace(resolution.report, stage="load",
@@ -1543,6 +1567,7 @@ def record_idea(
         tick_grid=execution.tick_grid,
         perturbation=execution.perturbation,
         live_caps=execution.live_caps,
+        monte_carlo=execution.monte_carlo,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
@@ -1767,6 +1792,12 @@ def main(
         help="run the G5.2 stage: the strategy again with the live entry limits applied "
         "(long, about 8 GB of memory; without it G5.2 is not evaluated)",
     )
+    parser.add_argument(
+        "--monte-carlo",
+        action="store_true",
+        help="run the G5.1 stage: day-block and trade-level bootstrap of this run's own trades "
+        "(about a minute; without it G5.1 is not evaluated)",
+    )
     parser.add_argument("--oos-start", help="YYYY-MM-DD; default splits the last 30 percent")
     parser.add_argument(
         "--caps",
@@ -1848,6 +1879,7 @@ def main(
                 "run_truncation": not args.no_truncation,
                 "run_perturbation": args.perturbation,
                 "run_live_caps": args.live_caps,
+                "run_monte_carlo": args.monte_carlo,
                 "oos_start": args.oos_start,
                 "position_caps": position_caps,
                 "validation": args.validation,

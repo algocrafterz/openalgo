@@ -757,6 +757,9 @@ def prepare_run_artifact(
     live_caps = getattr(execution, "live_caps", None)
     if live_caps is not None:
         files["evidence/live_caps.json"] = _encode(_json_safe(live_caps))
+    monte_carlo = getattr(execution, "monte_carlo", None)
+    if monte_carlo is not None:
+        files["evidence/monte_carlo.json"] = _encode(_json_safe(monte_carlo))
     data_report = getattr(execution, "data_report", None)
     if data_report is not None:
         files["data_quality.json"] = _encode(_json_safe(data_report))

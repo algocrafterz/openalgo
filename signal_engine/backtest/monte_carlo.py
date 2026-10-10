@@ -28,7 +28,9 @@ Design (owner-approved 2026-10-09):
   NOT FACTS.  Results are conditional on the resampling model, f, theta and the compounding
               rule. They are not live-account ruin probabilities and say nothing about G5.2.
               A fixed seed and many paths remove sampling noise, not model uncertainty.
-  GATING.     The 25% drawdown and 5% ruin figures of G5.1 are shown as reference only.
+  GATING.     Standalone, the 25% drawdown and 5% ruin figures of G5.1 are shown as reference only.
+              `attached_evidence` (opt-in `--monte-carlo` recording) binds the same report to one
+              run's trades and risk per trade, and the G5.1 evaluator scores it.
 """
 
 from __future__ import annotations
@@ -187,7 +189,10 @@ def _prob(flags: np.ndarray) -> dict[str, Any]:
 
 
 def run_method(
-    chunks: Iterator[np.ndarray], fractions: Sequence[float], theta: float
+    chunks: Iterator[np.ndarray],
+    fractions: Sequence[float],
+    theta: float,
+    deployed: float = DEPLOYED_F,
 ) -> dict[str, Any]:
     add_final, add_dd, worst = [], [], []
     eq: dict[float, dict[str, list]] = {f: {"final": [], "max_dd": [], "ruin": []} for f in fractions}
@@ -217,7 +222,7 @@ def run_method(
         ruin = np.concatenate(eq[f]["ruin"])
         out["c2_account"][f"{f:g}"] = {
             "risk_fraction": f,
-            "deployed_reference": bool(abs(f - DEPLOYED_F) < 1e-12),
+            "deployed_reference": bool(abs(f - deployed) < 1e-12),
             "final_equity_multiple": _summary(fin),
             "max_drawdown_fraction": _summary(dd),
             "p_final_below_start": _prob(fin < 1.0),
@@ -316,7 +321,9 @@ def build_report(
     n_paths: int = N_PATHS,
     fractions: Sequence[float] = RISK_FRACTIONS,
     theta: float = THETA,
+    deployed_f: float = DEPLOYED_F,
 ) -> dict[str, Any]:
+    fractions = sorted({*fractions, deployed_f})
     s = Sessions(trades)
     plan = (
         ["day", "trade", *[f"block_{n}" for n in BLOCK_LENGTHS], "recent_day"]
@@ -325,23 +332,25 @@ def build_report(
     streams = dict(zip(plan, np.random.SeedSequence(seed).spawn(len(plan))))
     rng = {k: np.random.default_rng(v) for k, v in streams.items()}
     results: dict[str, Any] = {
-        "day": run_method(day_paths(rng["day"], s, n_paths), fractions, theta),
-        "trade": run_method(trade_paths(rng["trade"], s, n_paths), fractions, theta),
+        "day": run_method(day_paths(rng["day"], s, n_paths), fractions, theta, deployed_f),
+        "trade": run_method(trade_paths(rng["trade"], s, n_paths), fractions, theta, deployed_f),
     }
     for length in BLOCK_LENGTHS:
         key = f"block_{length}"
-        results[key] = run_method(block_paths(rng[key], s, n_paths, length), fractions, theta)
+        results[key] = run_method(
+            block_paths(rng[key], s, n_paths, length), fractions, theta, deployed_f
+        )
     recent = s.year >= RECENT_FROM
     if recent.sum() >= 3:
         results["recent_day"] = run_method(
-            day_paths(rng["recent_day"], s, n_paths, recent), fractions, theta
+            day_paths(rng["recent_day"], s, n_paths, recent), fractions, theta, deployed_f
         )
         results["recent_day"]["sessions"] = int(recent.sum())
         results["recent_day"]["from_year"] = RECENT_FROM
     for m in COST_MULTIPLIERS:
         key = f"day_cost_{m:g}x"
         sm = Sessions(trades, cost_multiplier=m)
-        results[key] = run_method(day_paths(rng[key], sm, n_paths), fractions, theta)
+        results[key] = run_method(day_paths(rng[key], sm, n_paths), fractions, theta, deployed_f)
     return {
         "parameters": {
             "seed": seed,
@@ -354,7 +363,7 @@ def build_report(
             "trades_excluded_undefined_r": s.excluded_undefined_r,
             "theta": theta,
             "risk_fractions": list(fractions),
-            "deployed_reference_fraction": DEPLOYED_F,
+            "deployed_reference_fraction": deployed_f,
             "block_lengths": list(BLOCK_LENGTHS),
             "cost_multipliers": [1.0, *COST_MULTIPLIERS],
             "recent_from_year": RECENT_FROM,
@@ -394,6 +403,49 @@ def validate_evidence(evidence: dict[str, Any]) -> list[str]:
     if "ruin" not in evidence.get("report", {}).get("definitions", {}):
         problems.append("the ruin definition is not recorded")
     return problems
+
+
+def trade_fingerprint(trades: Sequence[Any]) -> str:
+    """Order-independent fingerprint of the columns the simulation reads, from engine trades."""
+
+    def num(v: Any) -> str:
+        return f"{round(float(v), 10)}" if np.isfinite(v) else "nan"
+
+    rows = sorted(
+        f"{t.symbol}|{pd.Timestamp(t.entry_time).value}|{pd.Timestamp(t.exit_time).value}|"
+        f"{num(t.r_gross)}|{num(t.r_net)}"
+        for t in trades
+    )
+    return hashlib.sha256("\n".join(rows).encode()).hexdigest()
+
+
+def frame_from_trades(trades: Sequence[Any]) -> pd.DataFrame:
+    """The simulation's input table, built from engine trades (R is NaN for a trade with no stop)."""
+    return pd.DataFrame(
+        {
+            "symbol": [t.symbol for t in trades],
+            "side": ["long" if t.direction == 1 else "short" for t in trades],
+            "entry_time": [pd.Timestamp(t.entry_time) for t in trades],
+            "exit_time": [pd.Timestamp(t.exit_time) for t in trades],
+            "gross_r": [float(t.r_gross) for t in trades],
+            "net_r": [float(t.r_net) for t in trades],
+        }
+    )
+
+
+def attached_evidence(trades: Sequence[Any], deployed_f: float, **kw: Any) -> dict[str, Any]:
+    """Evidence for a recording: the run's own trades, bound to them by a fingerprint.
+
+    `deployed_f` is the run's recorded risk per trade. Nothing is re-simulated. The record names
+    the exact trade list it was computed from, so it cannot be attached to another one.
+    """
+    source = {
+        "kind": "recorded-run-trades",
+        "trades": len(trades),
+        "trade_fingerprint": trade_fingerprint(trades),
+        "deployed_f": float(deployed_f),
+    }
+    return build_evidence(frame_from_trades(trades), source, deployed_f=float(deployed_f), **kw)
 
 
 def evidence_for_run(run_dir: str | Path, **kw: Any) -> dict[str, Any]:

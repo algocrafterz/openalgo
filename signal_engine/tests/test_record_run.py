@@ -754,3 +754,29 @@ class TestLiveCapsInRecord:
         with pytest.raises(ValueError, match="live-caps"):
             rr._execute_frozen(lambda key: None, "k", SimpleNamespace(resolved={}, intent={}, profile={}),
                                run_live_caps=True)
+
+
+class TestMonteCarloInRecord:
+    def test_the_recorded_run_carries_the_evidence_file_and_scores_the_gate(self, root):
+        from dataclasses import replace
+
+        execution = _execution()
+        execution = replace(execution, monte_carlo=rr._monte_carlo_stage(execution))
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: execution,
+                              run_date="2026-09-30", supported=SUPPORTED)
+        record = json.loads(path.read_text())
+        folder = path.parent / record["artifact_dir"].rstrip("/")
+        assert (folder / "evidence" / "monte_carlo.json").exists()
+        manifest = json.loads((folder / "manifest.json").read_text())
+        assert "evidence/monte_carlo.json" in manifest["artifacts"]
+        row = next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G5.1")
+        assert row["status"] in ("pass", "fail")  # evaluated, bound to this run's trades
+
+    def test_a_run_without_the_stage_leaves_it_not_evaluated_and_writes_no_file(self, root):
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),
+                              run_date="2026-09-30", supported=SUPPORTED)
+        record = json.loads(path.read_text())
+        folder = path.parent / record["artifact_dir"].rstrip("/")
+        assert not (folder / "evidence" / "monte_carlo.json").exists()
+        row = next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G5.1")
+        assert row["status"] == "not_evaluated"
