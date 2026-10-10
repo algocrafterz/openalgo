@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy import stats as _st
 
 #: NSE sessions in a year, for annualising.
 TRADING_DAYS = 252
@@ -80,6 +79,9 @@ def hurdle_t(n_trials: int, alpha: float = 0.05, dof: int = 200) -> float:
     """
     n_trials = max(1, int(n_trials))
     per = 1.0 - (1.0 - alpha) ** (1.0 / n_trials)
+    # Imported here so that importing this module (costs and the registry reach it) stays light.
+    from scipy import stats as _st
+
     return float(abs(_st.t.ppf(per / 2.0, dof)))
 
 
