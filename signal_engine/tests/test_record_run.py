@@ -873,3 +873,32 @@ class TestCapacityInRecord:
         frozen = SimpleNamespace(resolved={}, intent={}, profile={})
         with pytest.raises(ValueError, match="capacity"):
             rr._execute_frozen(lambda key: None, "k", frozen, run_capacity=True)
+
+
+class TestAttestationInRecord:
+    VALID = {"gate": "G0.1", "status": "valid", "reasons": [],
+             "record": {"id": "G0.1-001", "commit": "a" * 40, "reviewer": "rev", "date": "2026-10-10",
+                        "covered_paths": ["signal_engine/strategy_core"], "checks": 7, "modes": None}}  # fmt: skip
+
+    @staticmethod
+    def _row(path):
+        record = json.loads(path.read_text())
+        return next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G0.1")
+
+    def test_a_recorded_run_looks_the_attestation_up_through_the_hook(self, root):
+        seen = {}
+
+        def lookup(**kw):
+            seen.update(kw)
+            return self.VALID
+
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),
+                              run_date="2026-09-30", supported=SUPPORTED, attestation_fn=lookup)
+        assert self._row(path)["status"] == "pass"
+        assert set(seen) == {"root", "strategy_class", "run_commit", "dirty_paths"}
+
+    def test_without_a_ledger_the_default_lookup_leaves_it_not_evaluated(self, root):
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),
+                              run_date="2026-09-30", supported=SUPPORTED)
+        row = self._row(path)
+        assert row["status"] == "not_evaluated" and "no attestation" in row["evidence"].lower()

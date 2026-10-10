@@ -225,6 +225,7 @@ class _Inputs:
     monte_carlo: dict[str, Any] | None = None
     latency: dict[str, Any] | None = None
     capacity: dict[str, Any] | None = None
+    attestation: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1458,6 +1459,38 @@ def trade_metrics_for(trades: Sequence[Any]) -> dict[str, Any]:
     return perturbation.trade_metrics(trades)
 
 
+def _g01(x: _Inputs) -> _Result:
+    threshold = (
+        "an attestation of the code review and adapter checks, at a commit that is an ancestor of "
+        "the run's, with nothing under its covered paths changed since"
+    )
+    att = x.attestation
+    if att is None:
+        return "not_evaluated", None, threshold, "no attestation lookup was made for this run"
+    if att.get("status") != "valid":
+        why = "; ".join(att.get("reasons") or ["no reason recorded"])
+        rec = att.get("record") or {}
+        which = f" (latest record {rec['id']})" if rec.get("id") else ""
+        return (
+            "not_evaluated", None, threshold,
+            f"no valid attestation ({att.get('status')}){which}: {why}. G0.1 needs a code review "
+            "that a program cannot supply; see attestations/ledger.jsonl",
+        )  # fmt: skip
+    rec = att["record"]
+    modes = rec.get("modes")
+    mode_text = (
+        f" Modes with an adapter for this strategy: {modes}." if modes else ""
+    )
+    text = (
+        f"attestation {rec['id']} by {rec['reviewer']} on {rec['date']}, at commit "
+        f"{rec['commit'][:9]}, an ancestor of this run's commit; {rec['checks']} recorded checks; "
+        f"nothing under {', '.join(rec['covered_paths'])} has changed since.{mode_text} A review "
+        "and automated checks at that commit, not a proof; the record lists what was and was not "
+        "covered"
+    )
+    return "pass", rec["id"], threshold, text
+
+
 def _g55(x: _Inputs) -> _Result:
     threshold = f"worst-case simultaneous MIS margin at most {MARGIN_MAX_SHARE:.0%} of capital"
     ev = x.live_caps
@@ -2130,6 +2163,7 @@ def _g41(x: _Inputs) -> _Result:
 
 
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
+    "G0.1": _g01,
     "G0.2": _g02,
     "G0.3": _g03,
     "G0.4": _g04,
@@ -2221,6 +2255,7 @@ def evaluate(
     monte_carlo: dict[str, Any] | None = None,
     latency: dict[str, Any] | None = None,
     capacity: dict[str, Any] | None = None,
+    attestation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -2237,7 +2272,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, `attestation` (`attestations.verify`) feeds G0.1, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -2270,6 +2305,7 @@ def evaluate(
         monte_carlo=monte_carlo,
         latency=latency,
         capacity=capacity,
+        attestation=attestation,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

@@ -51,6 +51,7 @@ import yaml
 
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
+from signal_engine.backtest import attestations as attestations_mod
 from signal_engine.backtest import capacity as capacity_mod
 from signal_engine.backtest import latency as latency_mod
 from signal_engine.backtest import live_caps as live_caps_mod
@@ -1470,6 +1471,7 @@ def record_idea(
     version_label: str | None = None,
     allow_dirty: bool = False,
     git_state_fn: Callable[[Path], dict[str, Any]] | None = None,
+    attestation_fn: Callable[..., dict[str, Any]] | None = None,
     dataset_fingerprint_fn: Callable[[Sequence[str], str, str], str] | None = None,
     readiness_missing_fn: Callable[[], list[str]] | None = None,
     now: datetime | None = None,
@@ -1633,6 +1635,14 @@ def record_idea(
         + ("" if trial_counted else
            " This run is INVALID_DATA: it has no verdict and was NOT registered as a trial.")
     )
+    # G0.1: a code review a program cannot supply. The run relies on an attestation only while its
+    # commit is an ancestor of this run's and nothing under its covered paths has changed.
+    attestation = (attestation_fn or attestations_mod.verify_for_run)(
+        root=root,
+        strategy_class=execution.params.get("strategy_class"),
+        run_commit=git.get("code_commit"),
+        dirty_paths=git.get("dirty_paths", []),
+    )
     record = build_run_record(
         execution.trades,
         run_id=run_id,
@@ -1653,6 +1663,7 @@ def record_idea(
         monte_carlo=execution.monte_carlo,
         latency=execution.latency,
         capacity=execution.capacity,
+        attestation=attestation,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
