@@ -659,7 +659,6 @@ STILL_NOT_EVALUATED = frozenset(
         "G0.1",
         "G0.7",
         "G4.2",
-        "G4.3",
         "G4.8",
         "G5.1",
         "G5.3",

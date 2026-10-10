@@ -1299,6 +1299,70 @@ def _g67(x: _Inputs) -> _Result:
     return "pass", float(age), threshold, note
 
 
+def _ladder_reading(plan: Any) -> str:
+    """How an exit plan reads a bar that touches a target and then the stop it raised.
+
+    `none`: no plan, or a plan that never moves the stop, applies the raised stop the same bar, or
+    leaves nothing open after its first target, so no such bar is read in the plan's favour.
+    `optimistic`: the plan raises the stop after a target but applies it from the next bar
+    (`strategy_core.exits`, `same_bar_stop` false), reading that bar as not stopped.
+    `unreadable`: a plan this check cannot interpret; it is never taken as safe.
+    """
+    if plan is None:
+        return "none"
+    if not isinstance(plan, dict) or "fractions" not in plan or "stop_rule" not in plan:
+        return "unreadable"
+    try:
+        fractions = [float(f) for f in plan["fractions"]]
+    except (TypeError, ValueError):
+        return "unreadable"
+    stop_moves = plan["stop_rule"] != "none"
+    position_remains = len(fractions) > 1 or (bool(fractions) and fractions[0] < 1.0 - 1e-9)
+    if stop_moves and position_remains and not plan.get("same_bar_stop", False):
+        return "optimistic"
+    return "none"
+
+
+def _g43(x: _Inputs) -> _Result:
+    threshold = (
+        "report: stop-first against the pessimistic same-bar reading of exits; flag if the sign "
+        "flips"
+    )
+    params = x.params or {}
+    engine, run = params.get("engine"), params.get("run")
+    if engine not in ("intraday", "swing") or not isinstance(run, dict):
+        return "not_evaluated", None, threshold, "the engine and its exit rules are not recorded"
+    plan = run.get("exit_plan")
+    reading = _ladder_reading(plan)
+    invariant = (
+        f"The {engine} engine takes the stop before the target when one bar spans both, and "
+        "fills a bar that opens beyond the stop at the open (STOP FIRST, pinned by engine tests)"
+    )
+    if reading == "unreadable":
+        return (
+            "not_evaluated", None, threshold,
+            f"{invariant}. The recorded exit plan cannot be read, so its stop handling after a "
+            "target is unverified",
+        )  # fmt: skip
+    if reading == "optimistic":
+        return (
+            "not_evaluated", None, threshold,
+            f"{invariant}, and that holds for the original stop. It does not cover this plan: it "
+            f"moves the stop after a target ({plan.get('stop_rule')}) and applies it from the "
+            "next bar (same_bar_stop false), so a bar that touches a target and then the raised "
+            "stop is read as not stopped, the optimistic reading. That behaviour is unverified: "
+            "no pessimistic rerun exists and no sign comparison was made. Set same_bar_stop "
+            "true to take the pessimistic reading",
+        )  # fmt: skip
+    return (
+        "report", "stop_first", threshold,
+        f"{invariant}. That is the pessimistic same-bar reading, so for this run the two "
+        "readings are the same rule, the result is identical and the sign cannot flip. By "
+        "construction, not by a second run. It covers the original stop and target only; a plan "
+        "that raises the stop from the next bar is outside it and is not evaluated",
+    )  # fmt: skip
+
+
 def _g68(x: _Inputs) -> _Result:
     # Bar convention (engine.py, `close_out`): a trade's `exit_time` is the stamp of the exit bar,
     # and bars are stamped at their open. An exit at the open (`exit_at_open`) fills at that stamp.
@@ -1729,6 +1793,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G3.4": _g34,
     "G3.5": _g35,
     "G4.1": _g41,
+    "G4.3": _g43,
     "G4.4": _g44,
     "G4.5": _g45,
     "G4.6": _g46,
