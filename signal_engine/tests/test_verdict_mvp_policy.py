@@ -34,9 +34,7 @@ V4 = Path(__file__).resolve().parents[1] / (
 #: Required backtest gates that still have no evaluator (they read as not evaluated and hold the
 #: verdict at MARGINAL). This list shrinks as each evaluator is built; it must never grow, and
 #: a gate must not leave it without a real evaluator and a test.
-UNEVALUATED_REQUIRED = {
-    "G0.7",
-}
+UNEVALUATED_REQUIRED: set[str] = set()
 
 
 def _evaluation(default: str = "pass", **overrides: str) -> dict[str, Any]:

@@ -37,6 +37,8 @@ REQUIRED = (
 )  # fmt: skip
 
 VALID, MISSING, STALE, INVALID = "valid", "missing", "stale", "invalid"
+#: A record listing this among its strategies covers every strategy (a gate about shared code).
+WHOLE_REPO = "*"
 
 
 class AttestationError(ValueError):
@@ -195,7 +197,9 @@ def verify(
     problems = chain_problems(records)
     if problems:
         return {**out, "status": INVALID, "reasons": ["the ledger chain is broken: " + "; ".join(problems)]}
-    mine = [r for r in records if r["gate"] == gate and strategy in r["strategies"]]
+    mine = [
+        r for r in records if r["gate"] == gate and (strategy in r["strategies"] or WHOLE_REPO in r["strategies"])
+    ]
     if not mine:
         return {**out, "reasons": [f"no {gate} attestation covers strategy {strategy!r}"]}
     if not run_commit or run_commit == "unknown":
@@ -203,7 +207,11 @@ def verify(
     last: dict[str, Any] | None = None
     for record in reversed(mine):
         result = _check(record, run_commit, Path(root), dirty_paths)
-        summary = {**_summary(record), "modes": ((record.get("evidence") or {}).get("modes") or {}).get(strategy)}
+        summary = {
+            **_summary(record),
+            "modes": ((record.get("evidence") or {}).get("modes") or {}).get(strategy),
+            "evidence": record.get("evidence"),
+        }
         if result["status"] == VALID:
             return {**out, **result, "record": summary}
         last = {**out, **result, "record": summary}

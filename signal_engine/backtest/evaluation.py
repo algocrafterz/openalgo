@@ -226,6 +226,7 @@ class _Inputs:
     latency: dict[str, Any] | None = None
     capacity: dict[str, Any] | None = None
     attestation: dict[str, Any] | None = None
+    attestation_g07: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1026,6 +1027,9 @@ MC_METHODS = ("day", "trade")
 #: G5.3: the criteria's cap on risk per trade (a share of capital) and on the share of Kelly used.
 SIZING_MAX_RISK = 0.01
 SIZING_MAX_KELLY_SHARE = 0.5
+#: G0.7: the criteria's coverage floor, in percent, and the packages it applies to.
+COVERAGE_MIN_PERCENT = 80
+COVERAGE_PACKAGES = ("features", "strategy_core")
 #: G5.5: the criteria's cap on the worst simultaneous MIS margin, as a share of capital.
 MARGIN_MAX_SHARE = 0.90
 #: G5.4: at least this share of the entry orders must have a measurable volume history.
@@ -1489,6 +1493,51 @@ def _g01(x: _Inputs) -> _Result:
         "covered"
     )
     return "pass", rec["id"], threshold, text
+
+
+def _g07(x: _Inputs) -> _Result:
+    threshold = (
+        f"an attestation with at least {COVERAGE_MIN_PERCENT}% statement coverage on "
+        f"{' and '.join(COVERAGE_PACKAGES)}, at a commit that is an ancestor of the run's, with "
+        "nothing under its covered paths changed since; tests written before code"
+    )
+    att = x.attestation_g07
+    if att is None:
+        return "not_evaluated", None, threshold, "no attestation lookup was made for this run"
+    if att.get("status") != "valid":
+        why = "; ".join(att.get("reasons") or ["no reason recorded"])
+        rec = att.get("record") or {}
+        which = f" (latest record {rec['id']})" if rec.get("id") else ""
+        return (
+            "not_evaluated", None, threshold,
+            f"no valid attestation ({att.get('status')}){which}: {why}. G0.7 needs recorded coverage "
+            "figures; see attestations/ledger.ndjson",
+        )  # fmt: skip
+    rec = att["record"]
+    cov = ((rec.get("evidence") or {}).get("coverage") or {}).get("packages") or {}
+    figures, below = [], []
+    for pkg in COVERAGE_PACKAGES:
+        row = cov.get(pkg)
+        try:
+            covered, total = int(row["covered"]), int(row["statements"])
+        except (TypeError, KeyError, ValueError):
+            return "not_evaluated", None, threshold, f"the attestation records no coverage figures for {pkg}"
+        if total <= 0 or not 0 <= covered <= total:
+            return "not_evaluated", None, threshold, f"the coverage figures for {pkg} are not usable"
+        pct = 100.0 * covered / total
+        figures.append(f"{pkg} {pct:.1f}% ({covered} of {total} statements)")
+        if covered * 100 < COVERAGE_MIN_PERCENT * total:
+            below.append(pkg)
+    proc = (rec.get("evidence") or {}).get("process_rule") or {}
+    text = (
+        f"{'; '.join(figures)}; floor {COVERAGE_MIN_PERCENT}%. Attestation {rec['id']} by "
+        f"{rec['reviewer']} on {rec['date']} at commit {rec['commit'][:9]}, an ancestor of this run's "
+        f"commit; nothing under {len(rec['covered_paths'])} covered paths has changed since. Coverage "
+        "is from the recorded tests only; "
+        + (proc.get("status") or "tests-before-code is not mechanically verified")
+    )
+    worst = min(100.0 * int(cov[p]["covered"]) / int(cov[p]["statements"]) for p in COVERAGE_PACKAGES)
+    return ("fail" if below else "pass"), _num(worst, 2), threshold, text
 
 
 def _g55(x: _Inputs) -> _Result:
@@ -2165,6 +2214,7 @@ def _g41(x: _Inputs) -> _Result:
 _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G0.1": _g01,
     "G0.2": _g02,
+    "G0.7": _g07,
     "G0.3": _g03,
     "G0.4": _g04,
     "G0.5": _g05,
@@ -2256,6 +2306,7 @@ def evaluate(
     latency: dict[str, Any] | None = None,
     capacity: dict[str, Any] | None = None,
     attestation: dict[str, Any] | None = None,
+    attestation_g07: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -2272,7 +2323,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, `attestation` (`attestations.verify`) feeds G0.1, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, `attestation` (`attestations.verify`) feeds G0.1, `attestation_g07` feeds G0.7, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -2306,6 +2357,7 @@ def evaluate(
         latency=latency,
         capacity=capacity,
         attestation=attestation,
+        attestation_g07=attestation_g07,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

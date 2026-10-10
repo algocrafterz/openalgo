@@ -886,16 +886,18 @@ class TestAttestationInRecord:
         return next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G0.1")
 
     def test_a_recorded_run_looks_the_attestation_up_through_the_hook(self, root):
-        seen = {}
+        calls = []
 
         def lookup(**kw):
-            seen.update(kw)
+            calls.append(kw)
             return self.VALID
 
         path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),
                               run_date="2026-09-30", supported=SUPPORTED, attestation_fn=lookup)
         assert self._row(path)["status"] == "pass"
-        assert set(seen) == {"root", "strategy_class", "run_commit", "dirty_paths"}
+        # one lookup per attested gate: G0.1 (default gate) and G0.7
+        assert [c.get("gate", "G0.1") for c in calls] == ["G0.1", "G0.7"]
+        assert all({"root", "strategy_class", "run_commit", "dirty_paths"} <= set(c) for c in calls)
 
     def test_without_a_ledger_the_default_lookup_leaves_it_not_evaluated(self, root):
         path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),

@@ -1643,6 +1643,13 @@ def record_idea(
         run_commit=git.get("code_commit"),
         dirty_paths=git.get("dirty_paths", []),
     )
+    attestation_g07 = (attestation_fn or attestations_mod.verify_for_run)(
+        root=root,
+        strategy_class=execution.params.get("strategy_class"),
+        run_commit=git.get("code_commit"),
+        dirty_paths=git.get("dirty_paths", []),
+        gate="G0.7",
+    )
     record = build_run_record(
         execution.trades,
         run_id=run_id,
@@ -1664,6 +1671,7 @@ def record_idea(
         latency=execution.latency,
         capacity=execution.capacity,
         attestation=attestation,
+        attestation_g07=attestation_g07,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
