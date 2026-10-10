@@ -760,6 +760,9 @@ def prepare_run_artifact(
     monte_carlo = getattr(execution, "monte_carlo", None)
     if monte_carlo is not None:
         files["evidence/monte_carlo.json"] = _encode(_json_safe(monte_carlo))
+    latency = getattr(execution, "latency", None)
+    if latency is not None:
+        files["evidence/latency.json"] = _encode(_json_safe(latency))
     data_report = getattr(execution, "data_report", None)
     if data_report is not None:
         files["data_quality.json"] = _encode(_json_safe(data_report))

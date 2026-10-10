@@ -51,6 +51,7 @@ import yaml
 
 from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import ledgers as ledgers_mod
+from signal_engine.backtest import latency as latency_mod
 from signal_engine.backtest import live_caps as live_caps_mod
 from signal_engine.backtest import monte_carlo as monte_carlo_mod
 from signal_engine.backtest import manifest as manifest_mod
@@ -203,6 +204,8 @@ class Execution:
     perturbation: dict[str, Any] | None = None
     #: G5.2 evidence (`live_caps.run_stage`), or None when the stage was not run.
     live_caps: dict[str, Any] | None = None
+    #: G4.2 evidence (`latency.run_stage`), or None when the stage was not run.
+    latency: dict[str, Any] | None = None
     #: G5.1 evidence (`monte_carlo.attached_evidence`), or None when the stage was not run.
     monte_carlo: dict[str, Any] | None = None
     #: Bars read by n_minutes (overall and by year), or None when the bars carry no n_minutes.
@@ -764,6 +767,7 @@ def execute_backtest(
     dataset: preflight_mod.Resolution | None = None,
     run_perturbation: bool = False,
     run_live_caps: bool = False,
+    run_latency: bool = False,
 ) -> Execution:
     """Run strategy `key` on the eligible symbols of one published dataset version.
 
@@ -808,7 +812,8 @@ def execute_backtest(
     try:
         with dataset.open() as source:
             return _execute_on(
-                source, dataset, key, settings, end, run_truncation, run_perturbation, run_live_caps
+                source, dataset, key, settings, end, run_truncation, run_perturbation, run_live_caps,
+                run_latency,
             )
     except (preflight_mod.DataUnavailable, snapshot.SnapshotError,
             data_mod.NoPublishedData) as exc:
@@ -855,7 +860,8 @@ def intraday_session_shape() -> Callable[[date], int]:
 
 
 def _execute_on(
-    source, dataset, key, settings, end, run_truncation, run_perturbation=False, run_live_caps=False
+    source, dataset, key, settings, end, run_truncation, run_perturbation=False, run_live_caps=False,
+    run_latency=False,
 ) -> Execution:
     """`execute_backtest` reading bars only from `source` (the resolution's data source)."""
     cfg = dict(settings or {})
@@ -1008,6 +1014,21 @@ def _execute_on(
                 "rate_table_sha256": costs.get("rate_table_sha256"),
             },
         )
+    latency_evidence = None
+    if run_latency:
+        latency_evidence = _latency_stage(
+            strategy=strategy,
+            params=params,
+            supported=kind != "swing" and prepare_panel is None,
+            load_frames=lambda chunk: _with_price_factors(
+                _baseline_frames(source.intraday(chunk, "5m", until), layer, 0), run, price_factors
+            ),
+            symbols=loaded_symbols,
+            run=run,
+            cost_model=cost_model,
+            trades=trades,
+            days=days,
+        )
     live_caps_evidence = None
     if run_live_caps:
         live_caps_evidence = _live_caps_stage(
@@ -1100,6 +1121,7 @@ def _execute_on(
         tick_grid=tick_grid,
         perturbation=perturbation_evidence,
         live_caps=live_caps_evidence,
+        latency=latency_evidence,
         n_minutes_distribution=n_minutes,
         strategy_diagnostics=diagnostics,
     )
@@ -1135,6 +1157,25 @@ def _perturbation_stage(*, supported, meta, trades, days, **kw) -> dict[str, Any
         meta=meta,
         headline_trades=trades,
         oos_start=default_oos_start(days, trades),
+        **kw,
+    )
+
+
+def _latency_stage(*, supported, trades, days, **kw) -> dict[str, Any]:
+    """G4.2 evidence for a run, or a not-run state naming why the stage cannot apply."""
+    if not supported:
+        return {
+            "version": latency_mod.VERSION,
+            "state": latency_mod.UNSUPPORTED,
+            "reason": "the latency stage covers per-symbol intraday strategies only",
+            "delay_bars": latency_mod.DELAY_BARS,
+            "base": {"trades": len(trades)},
+            "diagnostic_not_trials": True,
+        }
+    return latency_mod.run_stage(
+        headline_trades=trades,
+        oos_start=default_oos_start(days, trades),
+        shared={"bar_size": "5m"},
         **kw,
     )
 
@@ -1293,6 +1334,7 @@ def _execute_frozen(
     run_perturbation: bool = False,
     run_live_caps: bool = False,
     run_monte_carlo: bool = False,
+    run_latency: bool = False,
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
     them, then verify the cost."""
@@ -1328,6 +1370,10 @@ def _execute_frozen(
         if "run_live_caps" not in accepted:
             raise ValueError("this execute callable does not support the live-caps stage")
         kwargs["run_live_caps"] = True
+    if run_latency:
+        if "run_latency" not in accepted:
+            raise ValueError("this execute callable does not support the latency stage")
+        kwargs["run_latency"] = True
     execution = execute(key, **kwargs)
     if execution.costs.get("model") != STATUTORY_MODEL:
         raise ValueError(
@@ -1402,6 +1448,7 @@ def record_idea(
     run_perturbation: bool = False,
     run_live_caps: bool = False,
     run_monte_carlo: bool = False,
+    run_latency: bool = False,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
@@ -1483,6 +1530,7 @@ def record_idea(
                                     run_perturbation=run_perturbation,
                                     run_live_caps=run_live_caps,
                                     run_monte_carlo=run_monte_carlo,
+                                    run_latency=run_latency,
                                     dataset=resolution)
     except LoadRejected as exc:
         report = dataclasses.replace(resolution.report, stage="load",
@@ -1568,6 +1616,7 @@ def record_idea(
         perturbation=execution.perturbation,
         live_caps=execution.live_caps,
         monte_carlo=execution.monte_carlo,
+        latency=execution.latency,
         oos_start=oos_start or default_oos_start(execution.days, execution.trades),
         position_caps=position_caps,
         baseline=execution.baseline,
@@ -1793,6 +1842,12 @@ def main(
         "(long, about 8 GB of memory; without it G5.2 is not evaluated)",
     )
     parser.add_argument(
+        "--latency",
+        action="store_true",
+        help="run the G4.2 stage: the strategy again with every entry one 5-minute bar later "
+        "(long; without it G4.2 is not evaluated)",
+    )
+    parser.add_argument(
         "--monte-carlo",
         action="store_true",
         help="run the G5.1 stage: day-block and trade-level bootstrap of this run's own trades "
@@ -1880,6 +1935,7 @@ def main(
                 "run_perturbation": args.perturbation,
                 "run_live_caps": args.live_caps,
                 "run_monte_carlo": args.monte_carlo,
+                "run_latency": args.latency,
                 "oos_start": args.oos_start,
                 "position_caps": position_caps,
                 "validation": args.validation,

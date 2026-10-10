@@ -780,3 +780,48 @@ class TestMonteCarloInRecord:
         assert not (folder / "evidence" / "monte_carlo.json").exists()
         row = next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G5.1")
         assert row["status"] == "not_evaluated"
+
+
+class TestLatencyInRecord:
+    @staticmethod
+    def _evidence(execution, late_r=0.05):
+        from signal_engine.backtest.live_caps import trade_hash
+        from signal_engine.backtest.perturbation import trade_metrics
+
+        base = {**trade_metrics(execution.trades), "trade_sha256": trade_hash(execution.trades)}
+        return {"version": 1, "state": "complete", "reason": "", "delay_bars": 1,
+                "diagnostic_not_trials": True, "limitations": ["l"], "base": base,
+                "shared": {"bar_size": "5m"},
+                "delayed": {"trades": len(execution.trades), "net_r": late_r, "net_bps": 1.0}}
+
+    def _row(self, record):
+        return next(r for d in record["evaluation"]["dimensions"] for r in d["rows"] if r["gate"] == "G4.2")
+
+    def test_the_evidence_is_sealed_in_the_run_folder_and_scored(self, root):
+        from dataclasses import replace
+
+        execution = _execution()
+        execution = replace(execution, latency=self._evidence(execution))
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: execution,
+                              run_date="2026-09-30", supported=SUPPORTED)
+        record = json.loads(path.read_text())
+        folder = path.parent / record["artifact_dir"].rstrip("/")
+        assert (folder / "evidence" / "latency.json").exists()
+        manifest = json.loads((folder / "manifest.json").read_text())
+        assert "evidence/latency.json" in manifest["artifacts"]
+        assert self._row(record)["status"] == "report"
+
+    def test_a_run_without_the_stage_leaves_it_not_evaluated_and_writes_no_file(self, root):
+        path = rr.record_idea(root, "IDEA-009", execute=lambda key: _execution(),
+                              run_date="2026-09-30", supported=SUPPORTED)
+        record = json.loads(path.read_text())
+        folder = path.parent / record["artifact_dir"].rstrip("/")
+        assert not (folder / "evidence" / "latency.json").exists()
+        assert self._row(record)["status"] == "not_evaluated"
+
+    def test_an_execute_callable_without_the_option_is_refused_not_silently_skipped(self):
+        from types import SimpleNamespace
+
+        frozen = SimpleNamespace(resolved={}, intent={}, profile={})
+        with pytest.raises(ValueError, match="latency"):
+            rr._execute_frozen(lambda key: None, "k", frozen, run_latency=True)

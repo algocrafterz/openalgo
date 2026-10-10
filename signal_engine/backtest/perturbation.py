@@ -332,13 +332,15 @@ def _key(nb: Neighbour) -> str:
     return f"{nb.parameter}@{nb.multiplier}"
 
 
-def _run_symbol(strategy: Any, params: Any, symbol: str, frame: Any, run: Any) -> list:
+def _run_symbol(
+    strategy: Any, params: Any, symbol: str, frame: Any, run: Any, entry_delay_bars: int = 0
+) -> list:
     own = copy.deepcopy(strategy)
     # `prepare` keeps only OHLCV, so the price factor the tick snap needs is carried across it,
     # exactly as the harness does for the headline run.
     factor = frame["price_factor"] if "price_factor" in frame.columns else None
     prepared = tickgrid.carry_price_factor(own.prepare_for(symbol, frame.copy(), params), factor)
-    return simulate(Ctx(prepared, symbol=symbol), own, params, run)
+    return simulate(Ctx(prepared, symbol=symbol), own, params, run, entry_delay_bars=entry_delay_bars)
 
 
 def _same_result(replay: Mapping[str, Any], base: Mapping[str, Any]) -> bool:

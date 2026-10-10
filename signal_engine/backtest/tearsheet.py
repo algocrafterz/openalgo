@@ -361,6 +361,7 @@ def build_run_record(
     perturbation: dict[str, Any] | None = None,
     live_caps: dict[str, Any] | None = None,
     monte_carlo: dict[str, Any] | None = None,
+    latency: dict[str, Any] | None = None,
     ledger_problems: Sequence[str] = (),
     data_quality: dict[str, Any] | None = None,
     calendar: Any = None,
@@ -512,6 +513,7 @@ def build_run_record(
         live_caps=live_caps,
         run_date=run_date,
         monte_carlo=monte_carlo,
+        latency=latency,
     )
     if trials is not None:
         record["trials"] = dict(trials)

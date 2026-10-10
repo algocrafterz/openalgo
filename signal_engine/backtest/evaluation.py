@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as _st
 
+from signal_engine.backtest import latency as latency_mod
 from signal_engine.backtest import live_caps as live_caps_mod
 from signal_engine.backtest import monte_carlo as mc_mod
 from signal_engine.backtest import perturbation, splits, stats, tickgrid
@@ -220,6 +221,7 @@ class _Inputs:
     perturbation: dict[str, Any] | None = None
     live_caps: dict[str, Any] | None = None
     monte_carlo: dict[str, Any] | None = None
+    latency: dict[str, Any] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -1306,6 +1308,54 @@ def _g67(x: _Inputs) -> _Result:
     return "pass", float(age), threshold, note
 
 
+def _g42(x: _Inputs) -> _Result:
+    threshold = (
+        "report: entry delayed by one 5-minute bar; flag if the sign flips (alert lag is "
+        "seconds, so one bar is a severe case)"
+    )
+    evidence = x.latency
+    if evidence is None:
+        return "not_evaluated", None, threshold, "no latency stage was run for this run (opt-in)"
+    problems = latency_mod.validate_evidence(evidence)
+    if problems:
+        return "not_evaluated", None, threshold, "the latency evidence is invalid: " + "; ".join(problems)
+    if evidence["state"] != latency_mod.COMPLETE:
+        return (
+            "not_evaluated", None, threshold,
+            f"the latency stage did not complete ({evidence['state']}): {evidence.get('reason', '')}",
+        )  # fmt: skip
+    if evidence["delay_bars"] != latency_mod.DELAY_BARS:
+        return (
+            "not_evaluated", None, threshold,
+            f"the evidence delays entry by {evidence['delay_bars']} bars, the criterion is "
+            f"{latency_mod.DELAY_BARS}",
+        )  # fmt: skip
+    if (evidence.get("shared") or {}).get("bar_size") != "5m":
+        return (
+            "not_evaluated", None, threshold,
+            "the evidence does not state 5-minute bars, so one bar is not the criterion's delay",
+        )  # fmt: skip
+    base = evidence["base"]
+    if base.get("trades") != len(x.trades) or base.get("trade_sha256") != live_caps_mod.trade_hash(x.trades):
+        return "not_evaluated", None, threshold, "the latency evidence was computed from a different trade list"
+    delayed = evidence["delayed"]
+    base_r, late_r = base.get("net_r"), delayed.get("net_r")
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (base_r, late_r)):
+        return "not_evaluated", None, threshold, "the headline or the delayed run has no defined net R"
+    flips = (base_r > 0) != (late_r > 0)
+    verdict = (
+        f"SIGN FLIPS: net R per trade goes from {base_r:+.4f} to {late_r:+.4f}"
+        if flips
+        else f"the sign does not flip: net R per trade {base_r:+.4f} to {late_r:+.4f}"
+    )
+    text = (
+        f"{verdict}, {base['trades']} trades to {delayed['trades']}, every entry filling one "
+        "5-minute bar later (stop, target and risk as at the signal). A simulation of the delay "
+        "the criteria specify, not a measured latency; per-symbol intraday strategies only"
+    )
+    return "report", _num(late_r), threshold, text
+
+
 def _g51(x: _Inputs) -> _Result:
     threshold = (
         f"at least {MC_MIN_PATHS:,} bootstrap paths, day-block and trade-level, at the deployed "
@@ -1870,6 +1920,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "G3.4": _g34,
     "G3.5": _g35,
     "G4.1": _g41,
+    "G4.2": _g42,
     "G4.3": _g43,
     "G4.4": _g44,
     "G4.5": _g45,
@@ -1930,6 +1981,7 @@ def evaluate(
     live_caps: dict[str, Any] | None = None,
     run_date: str | None = None,
     monte_carlo: dict[str, Any] | None = None,
+    latency: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -1946,7 +1998,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -1977,6 +2029,7 @@ def evaluate(
         live_caps=live_caps,
         run_date=run_date,
         monte_carlo=monte_carlo,
+        latency=latency,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

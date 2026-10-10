@@ -76,10 +76,13 @@ class EntryRequest:
     trades: list[Trade]
 
 
-def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Trade]:
+def simulate(
+    c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None, *, entry_delay_bars: int = 0
+) -> list[Trade]:
     """Run one symbol. `rec` is an optional `ledgers.LedgerRecorder`; with None the run is
-    exactly the unrecorded simulation and no recording code executes."""
-    steps = simulate_steps(c, strategy, p, run, rec)
+    exactly the unrecorded simulation and no recording code executes. `entry_delay_bars` is the
+    G4.2 latency variant (see `simulate_steps`); 0 is the normal run."""
+    steps = simulate_steps(c, strategy, p, run, rec, entry_delay_bars=entry_delay_bars)
     try:
         next(steps)
     except StopIteration as done:
@@ -88,7 +91,14 @@ def simulate(c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None) -> list[Tr
 
 
 def simulate_steps(
-    c: Ctx, strategy: Strategy, p, run: RunConfig, rec=None, gated: bool = False
+    c: Ctx,
+    strategy: Strategy,
+    p,
+    run: RunConfig,
+    rec=None,
+    gated: bool = False,
+    *,
+    entry_delay_bars: int = 0,
 ) -> Generator[EntryRequest, bool, list[Trade]]:
     """`simulate` as a generator, for a portfolio that decides entries across symbols.
 
@@ -97,9 +107,19 @@ def simulate_steps(
     a pending order and expects `send(True)` to take the entry or `send(False)` to veto it. A
     veto is handled like any other rejected signal (`STOP_TOO_TIGHT`): no order, no `on_entry`,
     and the symbol keeps evaluating later bars by the strategy's normal rules. A gated run
-    cannot also record ledgers, because a vetoed signal has no ledger code."""
+    cannot also record ledgers, because a vetoed signal has no ledger code.
+
+    `entry_delay_bars` (default 0, the normal run) delays every entry fill by that many bars, the
+    G4.2 latency variant: a signal on bar i fills at the open of bar i + 1 + delay. The stop,
+    target and risk stay those of the signal (the live engine sizes on the alert), the symbol
+    waits flat with the order in flight, and a signal whose delayed fill would fall outside its
+    session, or after the latest bar the square-off guard allows, is not taken. It is an engine argument and not a `RunConfig` field, so recorded run
+    configurations and fingerprints are unchanged."""
     if gated and rec is not None:
         raise ValueError("a gated run cannot record ledgers")
+    if not isinstance(entry_delay_bars, int) or isinstance(entry_delay_bars, bool) or entry_delay_bars < 0:
+        raise ValueError(f"entry_delay_bars must be an integer >= 0, got {entry_delay_bars!r}")
+    delay = entry_delay_bars
     o, h, low, close = c["Open"], c["High"], c["Low"], c["Close"]
     mins, from_open = c["mins"], c["from_open"]
     days, new_sess = c["day"], c["new_session"]
@@ -109,6 +129,7 @@ def simulate_steps(
     pos: Position | None = None
     pending = None  # (EntrySignal, signal_price) armed for i+1
     pend_i = -1  # signal bar of `pending` (recorder only)
+    pend_due = -1  # bar whose open fills `pending`: signal bar + 1 + delay
     cur_sig = -1  # signal bar of the open position (recorder only)
     legs_logged = 0  # ladder legs already written to the ledger
     b = rec.begin(c) if rec is not None else None
@@ -226,8 +247,8 @@ def simulate_steps(
             pending = None
             strategy.reset_session(p)
 
-        # 1. fill what the previous close armed
-        if pending is not None:
+        # 1. fill what an earlier close armed, once its bar arrives
+        if pending is not None and i >= pend_due:
             sig, sig_px = pending
             pending = None
             fill = float(o[i])
@@ -391,10 +412,17 @@ def simulate_steps(
                 v = cnt[k]
                 cnt[k] = v + 1 if v else (i << _COUNT_BITS) | 1
             continue
-        if i + 1 >= n or days[i + 1] != days[i]:
+        if i + 1 + delay >= n or days[i + 1 + delay] != days[i]:
             if rec is not None:
                 skip(i, _K_NO_NEXT)
             continue  # nothing left to fill into
+        if delay and mins[i + 1 + delay] > time_exit_min:
+            # A delayed fill must not land after the latest bar the square-off guard allows an
+            # exit on (G6.9), or the forced exit would close past it. Not applied to the normal
+            # run, whose fill bar is at most one bar after a signal below the time exit.
+            if rec is not None:
+                skip(i, _K_NO_NEXT)
+            continue
         if trades_capped(policy, trades_today):
             if rec is not None:
                 skip(i, _K_MAX_TRADES)
@@ -424,7 +452,7 @@ def simulate_steps(
                 # No stop: nothing to validate, and no risk distance is invented.
                 if gated and not (
                     yield EntryRequest(
-                        c.symbol, i, times[i + 1], d, float(close[i]), None, float("nan"), trades
+                        c.symbol, i, times[i + 1 + delay], d, float(close[i]), None, float("nan"), trades
                     )
                 ):
                     continue
@@ -432,6 +460,7 @@ def simulate_steps(
                     b_sig((i, d, sig.tag, close[i], float("nan"), sig.tp, float("nan"), -1))
                     pend_i = i
                 pending = (sig, close[i])
+                pend_due = i + 1 + delay
                 strategy.on_entry(c, i, p, sig)
                 break
             risk = abs(close[i] - sig.sl)
@@ -451,7 +480,7 @@ def simulate_steps(
                 continue
             if gated and not (
                 yield EntryRequest(
-                    c.symbol, i, times[i + 1], d, float(close[i]), float(sig.sl), float(risk), trades
+                    c.symbol, i, times[i + 1 + delay], d, float(close[i]), float(sig.sl), float(risk), trades
                 )
             ):
                 continue
@@ -459,6 +488,7 @@ def simulate_steps(
                 b_sig((i, d, sig.tag, close[i], sig.sl, sig.tp, risk, -1))
                 pend_i = i
             pending = (sig, close[i])
+            pend_due = i + 1 + delay
             strategy.on_entry(c, i, p, sig)
             break
 
