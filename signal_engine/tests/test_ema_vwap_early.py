@@ -744,3 +744,62 @@ class TestMissedInitialStop:
         assert se.loc["broker_executed", "median_minutes_to_booked"] == pytest.approx(3.0)
         assert se.loc["safety_market_close", "median_minutes_to_booked"] == pytest.approx(15.08, abs=0.01)
         assert rep.exit_mismatches(rep.attach_pnl(df, closes)).empty  # a safety close agrees with INITIAL_STOP
+
+
+class TestCloseClassification:
+    """2026-10-12: six closes were recorded CLOSED_ELSEWHERE. Two were broker stops that filled inside
+    a still-forming bar (LICI, CHOLAFIN), four were the 14:45 time exit racing the last cycle."""
+
+    @staticmethod
+    def _walk(df, fire, fill_bar, vanish_before, last_bar_min=14 * 60 + 40):
+        """Step the driver; the position leaves the tracker just before `vanish_before` is processed."""
+        positions = FakePositions()
+        driver = make_driver(positions)
+        positions.by_symbol["SYN"] = pos_for(
+            fire, float(df.loc[fill_bar, "Open"]), fill_bar + pd.Timedelta(seconds=5)
+        )
+        for b in df.index[(df.index >= fill_bar) & (df.index.date == fill_bar.date())]:
+            if b.hour * 60 + b.minute > last_bar_min:
+                break
+            if b >= vanish_before:
+                positions.by_symbol.pop("SYN", None)
+            r = df.loc[b]
+            asyncio.run(
+                driver.on_bar("SYN", b, r.Open, r.High, r.Low, r.Close, frame=df[df.index <= b])
+            )
+            if not driver.holds("SYN"):
+                break
+        return driver
+
+    @staticmethod
+    def _trade(reason):
+        df = random_bars(sessions=14, seed=3)  # seed 3 has SL, trailing and time-exit trades
+        t = next(t for t in _trades(df) if t.reason == reason)
+        fill_bar = pd.Timestamp(t.entry_time)
+        return df, all_fires(df)[fill_bar - pd.Timedelta(minutes=5)], fill_bar, t
+
+    def test_stop_filled_inside_the_forming_bar_is_still_an_initial_stop(self):
+        df, fire, fill_bar, t = self._trade("SL")
+        touch = pd.Timestamp(t.exit_time)  # the engine's stop bar
+        # the tracker drops the position while the touch bar is still forming (before it closes)
+        driver = self._walk(df, fire, fill_bar, vanish_before=touch - pd.Timedelta(minutes=5))
+        assert [r["exit_reason"] for r in driver.records] == [core.INITIAL_STOP]
+        assert driver.records[0]["stop_touch_bar"] == str(touch)
+        assert driver.records[0]["mae_r"] >= 1.0 - 1e-9
+
+    def test_time_exit_racing_the_last_cycle_is_a_force_exit(self):
+        df, fire, fill_bar, _ = self._trade("TIME_EXIT")
+        last = pd.Timestamp(dt.datetime.combine(fill_bar.date(), dt.time(14, 40)), tz=IST)
+        driver = self._walk(df, fire, fill_bar, vanish_before=last)
+        assert [r["exit_reason"] for r in driver.records] == [core.FORCE_EXIT]
+
+    def test_a_close_no_bar_explains_is_closed_elsewhere_after_one_bar(self):
+        from signal_engine.pipeline.trail_driver import CLOSED_ELSEWHERE
+
+        df, fire, fill_bar, _ = self._trade("TIME_EXIT")
+        driver = self._walk(df, fire, fill_bar, vanish_before=fill_bar + pd.Timedelta(minutes=10))
+        rec = driver.records
+        assert [r["exit_reason"] for r in rec] == [CLOSED_ELSEWHERE]
+        assert rec[0]["exit_decided_bar"] == str(
+            fill_bar + pd.Timedelta(minutes=15)
+        )  # waited one bar

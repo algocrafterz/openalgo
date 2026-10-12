@@ -4,6 +4,39 @@ EMA/VWAP/ATR early displacement, trailing stop, no take-profit. Python runner, p
 Idea record: `research/ideas/idea-033-ema-vwap-early-trail/idea.md`. Rules:
 `strategy_core/ema_vwap_early.py` (one code path for backtest, paper and live).
 
+### 2026-10-12 16:30 - Second paper session checked; time-exit stop cancel and close records fixed
+
+- **What changed:** No rule change. Two technical fixes. (1) At 14:45 the platform's "cancel all
+  orders" call quietly skipped every stop order, so stops stayed working after the positions were
+  closed; PAYTM's stop then fired at 15:12 and opened an unwanted trade that the broker's own 15:15
+  square-off closed (-Rs 260). The engine now cancels each leftover stop by its own order number.
+  (2) Six trades were labelled "closed elsewhere" in the trade notes although they were ordinary stop
+  hits or time exits; the labels are now worked out correctly.
+- **Entry:** Not affected.
+- **Exit (SL):** Not affected. The safety close from 2026-10-09 worked twice today (HDFCBANK, ETERNAL).
+- **Exit (TP):** Not affected. There is still no profit target.
+- **Consideration:** The stop-cancel problem was in the paper-trading platform itself and affected
+  every strategy's 14:45 close since late July, not only this one. Nothing was tuned from the result.
+
+Session facts (behaviour, not a verdict): 55 trades (first cycle 09:30; the 09:20 bar was lost to two
+engine restarts at 09:19 and 09:24). Every entry was a real +/-0.50 crossing before the crossover with
+EMA20 aligned; the trailing stop never loosened and only trailed after the crossover. 56% reached the
+crossover; median entry advantage 0.05R. Exits, corrected: 29 trailing, 19 initial stop (17 broker
+executed, 2 safety closes), 7 time exit. Stop basis 36 SWING / 19 FALLBACK_EXTREME (avg -0.38R vs
+-0.25R). Re-entries 21 of 55, same average R as first trades. Realized -18.32R (-Rs 16,657) before
+charges; two sessions together 92 trades, -19.74R (-Rs 18,500). End state clean: no working orders,
+all positions flat.
+
+NOTE: (1) `services/sandbox_service.py:532` (OpenAlgo core) filters cancel-all on status
+"trigger_pending" while `sandbox/order_manager.py:656` stores "trigger pending" (upstream 3e7132a52,
+2026-07-24), so cancelallorder never cancels SL/SL-M. `tracker._confirm_orders_cancelled` detected all
+11 working stops at 14:45:10 (4 strategies) and raised the CRITICAL alert, but re-cancelled through
+cancel-all; it now cancels each working order by id (`cancel_order`), falling back to cancel-all only
+when the order book is unreadable. Core left unchanged (project rule). (2) `trail_driver._closed`: a
+close no closed bar explains waits one bar (a stop filled inside the forming bar: LICI, CHOLAFIN); a
+close on the last managed bar is FORCE_EXIT (time exit racing the cycle: BSE, BHARTIARTL, PAYTM,
+HCLTECH). Today's file keeps the old labels; read those six as 2 INITIAL_STOP and 4 FORCE_EXIT.
+
 ### 2026-10-09 15:30 - First paper session checked; missed-stop safety net added
 
 - **What changed:** One technical fix, no rule change. On PFC the price reached the starting stop but

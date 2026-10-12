@@ -5657,6 +5657,11 @@ not a validated edge (IDEA-032 measured the same entry with a zero-cross exit at
   `INITIAL_STOP_SAFETY`, unknown -> no order), at most once per bar and 3 times per position. For that label only,
   main never sends the close if the SL cancel failed (broker flat -> book the stop; else abort and retry). The report
   separates the bar touch from the broker execution (`stop_execution`) and cross-checks exit reasons against trades.db.
+- **2026-10-12 time-exit stop cancel:** OpenAlgo's sandbox `cancelallorder` skips SL/SL-M (`trigger_pending` vs stored
+  `trigger pending`, core bug since 2026-07-24), so stops stayed working after the 14:45 flatten for every strategy
+  (PAYTM opened a phantom long at 15:12). The tracker's order-book confirmation now cancels each working order by id.
+  Trail-driver records: a close inside a forming bar waits one bar; a close on the last managed bar is FORCE_EXIT.
+  Incident record: `docs/INCIDENT-2026-10-12-TIME-EXIT-STOP-NOT-CANCELLED.md`.
 
 ## Backtest Evaluation: Symbol Hold-Out, Regime Activation, Evolution Verdict (2026-10-01)
 

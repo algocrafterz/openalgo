@@ -196,6 +196,8 @@ class TrailExitDriver:
         self._open: dict[str, _Open] = {}
         #: position key -> missed-stop safety state: attempts, last send bar, last broker answer
         self._safety: dict[tuple, dict] = {}
+        #: closed positions whose record waits one bar (the close happened inside a forming bar)
+        self._deferred: set[tuple] = set()
         self.unmanaged: set[str] = set()
         #: every record written this session, newest last (also on disk)
         self.records: list[dict] = []
@@ -230,7 +232,7 @@ class TrailExitDriver:
         key = (symbol, entry_time, getattr(pos, "sig_id", "") or "")
         held = self._open.get(symbol)
         if held is not None and held.key != key:
-            self._closed(symbol, bar_open, frame)  # a new position replaced an unrecorded one
+            self._closed(symbol, bar_open, frame, defer=False)  # a new position replaced it
         if key in self._sent:
             return []
         held = self._remember(symbol, pos, key, entry_time)
@@ -370,17 +372,35 @@ class TrailExitDriver:
         nxt = bar_open + self._interval
         return nxt.hour * 60 + nxt.minute >= self._manage_until
 
-    def _closed(self, symbol: str, bar_open: pd.Timestamp, frame: pd.DataFrame | None) -> None:
-        """The position left the tracker: write its record if no other path did, then forget it."""
-        held = self._open.pop(symbol, None)
+    def _closed(
+        self, symbol: str, bar_open: pd.Timestamp, frame: pd.DataFrame | None, defer: bool = True
+    ) -> None:
+        """The position left the tracker: write its record if no other path did, then forget it.
+
+        The closed bars explain most closes. Two cases they cannot, both seen on 2026-10-12:
+        the tracker's time exit closing the position while the last managed bar is processed
+        (recorded FORCE_EXIT), and a broker stop filling inside the bar that is still forming
+        (the record waits one bar, so the replay includes the bar it closed in).
+        """
+        held = self._open.get(symbol)
         self.unmanaged.discard(symbol)
         if held is None:
             return
         if held.key not in self._recorded and frame is not None and not frame.empty:
             state, exit_bar, inputs = self._replay(symbol, held, bar_open, frame)
             if state is not None:
-                reason = state.exit.reason if state.exit is not None else CLOSED_ELSEWHERE
-                self._record(symbol, held, state, reason, exit_bar or bar_open, inputs)
+                if state.exit is not None:
+                    reason, bar = state.exit.reason, exit_bar
+                elif self._last_managed(bar_open):
+                    reason, bar = FORCE_EXIT, bar_open
+                elif defer and held.key not in self._deferred:
+                    self._deferred.add(held.key)  # keep it held one more bar (holds() stays True)
+                    return
+                else:
+                    reason, bar = CLOSED_ELSEWHERE, bar_open
+                self._record(symbol, held, state, reason, bar, inputs)
+        self._open.pop(symbol, None)
+        self._deferred.discard(held.key)
         self._last_stop.pop(held.key, None)
         self._sent.discard(held.key)
         self._recorded.discard(held.key)
