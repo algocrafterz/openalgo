@@ -161,6 +161,13 @@ automation config, nothing to do with the free-text `strategy` tag on
   cancelled instead of reporting success. Test: `test/sandbox/test_cancel_all_trigger_pending.py`.
   Incident: `signal_engine/docs/INCIDENT-2026-10-12-TIME-EXIT-STOP-NOT-CANCELLED.md`. On an upstream
   merge, keep the fix unless upstream has corrected the filter itself.
+- `services/cancel_all_order_service.py` (2026-10-12, follow-up, not P&L) — publishes
+  `AllOrdersCancelledEvent` only when no order failed to cancel (otherwise `OrderFailedEvent`
+  naming the failures), with counts from the canceled/failed lists in both sandbox and live paths.
+  HTTP responses unchanged. Test: `test/test_cancel_all_order_events.py`.
+- `frontend/src/pages/OrderBook.tsx`, `frontend/src/lib/cancelAllOutcome.ts` (new) (2026-10-12) —
+  "Cancel all" refreshes the order list after a failed or partial cancel too, so orders left working
+  are visible. Test: `frontend/src/lib/cancelAllOutcome.test.ts`.
 
 ## Deliberate design decisions
 

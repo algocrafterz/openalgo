@@ -61,6 +61,33 @@ def import_broker_module(broker_name: str) -> Any | None:
         return None
 
 
+def _publish_cancel_all_result(
+    mode: str, canceled: list, failed: list, request_data: dict, response_data: Any, api_key: str
+) -> None:
+    """Publish AllOrdersCancelledEvent only when nothing failed; otherwise an OrderFailedEvent.
+
+    A cancel-all with failures used to announce "all orders cancelled" (incident 2026-10-12: every
+    sandbox SL-M stayed working). Counts come from the lists, which every path returns.
+    """
+    if failed:
+        ids = ", ".join(str(f.get("orderid", "?")) if isinstance(f, dict) else str(f) for f in failed)
+        bus.publish(OrderFailedEvent(
+            mode=mode, api_type=API_TYPE,
+            request_data=request_data, response_data=response_data, api_key=api_key,
+            error_message=(
+                f"Cancel all: {len(failed)} of {len(canceled) + len(failed)} orders not cancelled "
+                f"({ids})"
+            ),
+        ))
+        return
+    bus.publish(AllOrdersCancelledEvent(
+        mode=mode, api_type=API_TYPE,
+        canceled_count=len(canceled), failed_count=0,
+        canceled_orders=canceled, failed_cancellations=[],
+        request_data=request_data, response_data=response_data, api_key=api_key,
+    ))
+
+
 def cancel_all_orders_with_auth(
     order_data: dict[str, Any], auth_token: str, broker: str, original_data: dict[str, Any]
 ) -> tuple[bool, dict[str, Any], int]:
@@ -104,15 +131,14 @@ def cancel_all_orders_with_auth(
         analyzer_request = order_request_data.copy()
         analyzer_request["api_type"] = API_TYPE
 
-        bus.publish(AllOrdersCancelledEvent(
-            mode="analyze", api_type=API_TYPE,
-            canceled_count=response_data.get("canceled_count", 0) if isinstance(response_data, dict) else 0,
-            failed_count=response_data.get("failed_count", 0) if isinstance(response_data, dict) else 0,
-            canceled_orders=response_data.get("canceled_orders", []) if isinstance(response_data, dict) else [],
-            failed_cancellations=response_data.get("failed_cancellations", []) if isinstance(response_data, dict) else [],
-            request_data=analyzer_request, response_data=response_data,
-            api_key=order_data.get("apikey", ""),
-        ))
+        data = response_data if isinstance(response_data, dict) else {}
+        failed = list(data.get("failed_cancellations", []))
+        if not success and not failed:
+            failed = [{"orderid": "?", "message": data.get("message", "cancel all failed")}]
+        _publish_cancel_all_result(
+            "analyze", list(data.get("canceled_orders", [])), failed,
+            analyzer_request, response_data, order_data.get("apikey", ""),
+        )
         return success, response_data, status_code
 
     broker_module = import_broker_module(broker)
@@ -153,13 +179,10 @@ def cancel_all_orders_with_auth(
         "message": f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders.",
     }
 
-    bus.publish(AllOrdersCancelledEvent(
-        mode="live", api_type=API_TYPE,
-        canceled_count=len(canceled_orders), failed_count=len(failed_cancellations),
-        canceled_orders=canceled_orders, failed_cancellations=failed_cancellations,
-        request_data=order_request_data, response_data=response_data,
-        api_key=original_data.get("apikey", ""),
-    ))
+    _publish_cancel_all_result(
+        "live", list(canceled_orders), list(failed_cancellations),
+        order_request_data, response_data, original_data.get("apikey", ""),
+    )
 
     return True, response_data, 200
 
