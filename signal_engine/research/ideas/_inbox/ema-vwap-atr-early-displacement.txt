@@ -13,3 +13,669 @@ No ADX, DI, EMA slope, VWAP slope or other momentum filter in the baseline.
 5-minute NSE equity is the baseline. 3-minute and 1-minute are separate future variants.
 First benchmark: exit at the zero crossover, no stop, no take profit, fixed notional sizing.
 Later experiment B: ATR stop/target, opposite signal or time exit, optimised separately.
+
+conditions we evaluated so far in a detailed manner
+Yes. Since you are going to Pythonize this for paper trading, I would preserve the entire evolution as a specification, but clearly distinguish final/current conditions from experiments we rejected. That prevents us from accidentally carrying an abandoned filter into Python.
+
+The strategy we have evaluated is essentially:
+
+EMA(9) vs session VWAP, normalized by ATR(14), on 5-minute NSE equity bars, with early-entry threshold signals and a separate reversal layer.
+
+1. Core indicator calculation
+Everything starts with these three values on every 5-minute bar:
+
+ema9 = EMA(close, 9)
+vwap = session_VWAP(hlc3)
+atr14 = ATR(14)
+
+Then:
+
+displacement = (ema9 - vwap) / atr14
+
+Interpretation:
+
+Displacement	Meaning
+> 0	EMA9 above VWAP → bullish side
+< 0	EMA9 below VWAP → bearish side
+0	EMA9 = VWAP
++0.5	EMA9 is 0.5 ATR above VWAP
+-0.5	EMA9 is 0.5 ATR below VWAP
+This normalization was important because it makes the EMA/VWAP separation relative to current volatility rather than using an absolute rupee distance.
+
+2. ORIGINAL EARLY LONG CONDITION — KEEP
+This was the original and, in my view, still the cleanest primary signal.
+
+early_long = (
+    displacement > -0.5
+    and displacement_prev <= -0.5
+)
+
+Meaning
+The previous bar was at or below -0.5 ATR, and the current bar has moved above -0.5 ATR.
+
+Visually:
+
+-0.5 ATR
+──────────────
+       ↑
+       │
+       +   GREEN
+Trading interpretation
+EMA9/VWAP relationship has moved sufficiently away from bearish territory toward bullish territory, before the actual zero crossover.
+
+This is the early LONG candidate.
+
+Important
+We eventually decided this condition should not be modified by the state machine.
+
+It should remain exactly as above.
+
+3. ORIGINAL EARLY SHORT CONDITION — KEEP
+Mirror image:
+
+early_short = (
+    displacement < 0.5
+    and displacement_prev >= 0.5
+)
+
+Meaning
+Previous bar was at or above +0.5 ATR, and current bar has fallen below +0.5 ATR.
+
+Visually:
+
++0.5 ATR
+──────────────
+       ↓
+       │
+       +   RED
+Trading interpretation
+EMA9/VWAP relationship has moved sufficiently away from bullish territory toward bearish territory, before the actual zero crossover.
+
+This is the early SHORT candidate.
+
+4. ORIGINAL LONG WATCH CONDITION
+We used:
+
+long_watch_level = -0.5 + 0.15
+                   = -0.35
+
+Then:
+
+watch_long = (
+    displacement >= -0.35
+    and displacement < 0
+    and displacement_prev < -0.35
+)
+
+Meaning
+The displacement has crossed upward through -0.35, but is still below zero.
+
+So:
+
+-0.50       Early LONG threshold
+-0.35       WATCH
+  0.00       actual crossover
+The watch signal says:
+
+"The bullish transition may be approaching the early-entry threshold."
+
+It is not an entry signal.
+
+5. ORIGINAL SHORT WATCH CONDITION
+Mirror:
+
+short_watch_level = 0.5 - 0.15
+                   = 0.35
+
+watch_short = (
+    displacement <= 0.35
+    and displacement > 0
+    and displacement_prev > 0.35
+)
+
+Meaning:
+
+Displacement is moving down toward the +0.5 early-short threshold but has not reached it yet.
+
+Again, watch only.
+
+6. ACTUAL BULLISH EMA/VWAP CROSSOVER
+We used:
+
+bullish_cross = (
+    displacement > 0
+    and displacement_prev <= 0
+)
+
+Meaning:
+
+EMA9 has crossed above session VWAP.
+
+This is not the early signal.
+
+It is the later confirmation/reference point.
+
+7. ACTUAL BEARISH EMA/VWAP CROSSOVER
+Mirror:
+
+bearish_cross = (
+    displacement < 0
+    and displacement_prev >= 0
+)
+
+Meaning:
+
+EMA9 has crossed below session VWAP.
+
+Again, this is confirmation/reference, not the early signal.
+
+8. FIRST REVERSAL EXPERIMENT — NEAR-ZERO TURN
+We initially experimented with reversal around zero.
+
+The basic concept was:
+
+near_zero = (
+    displacement >= -0.15
+    and displacement <= 0.15
+)
+
+Then:
+
+bullish_turn = (
+    displacement > displacement_prev
+    and displacement_prev <= displacement_2
+)
+
+bearish_turn = (
+    displacement < displacement_prev
+    and displacement_prev >= displacement_2
+)
+
+And:
+
+bullish_reversal = (
+    near_zero
+    and displacement < 0
+    and bullish_turn
+)
+
+bearish_reversal = (
+    near_zero
+    and displacement > 0
+    and bearish_turn
+)
+
+Why we rejected it
+It was too sensitive.
+
+Small oscillations around zero could create reversal signals that did not correspond to a meaningful price reversal.
+
+This produced the type of behavior we didn't want:
+
+tiny wiggle
+   ◆
+   ◆
+   ◆
+So do not use this version in Python.
+
+9. SECOND REVERSAL EXPERIMENT — THREE-BAR TURN
+We then introduced a more explicit 3-bar displacement turn.
+
+Bullish:
+
+long_reversal = (
+    displacement_prev < reversal_distance
+    and displacement_prev <= displacement_2
+    and displacement_2 <= displacement_3
+    and displacement > displacement_prev
+)
+
+Bearish:
+
+short_reversal = (
+    displacement_prev > -reversal_distance
+    and displacement_prev >= displacement_2
+    and displacement_2 >= displacement_3
+    and displacement < displacement_prev
+)
+
+With:
+
+reversal_distance = 0.15
+
+Idea
+For bullish:
+
+bar -3     bar -2     bar -1      current
+  ↓          ↓          ↓            ↑
+                         └────────────┘
+                             turn
+For bearish, mirror it.
+
+This version did succeed in producing a useful bearish reversal on the TCS example, but it also produced too many green reversal signals.
+
+So we moved on.
+
+10. REVERSAL DIRECTION COLOR RULE
+This became an explicit design decision.
+
+Green diamond
+BULLISH REVERSAL
+Expected price direction:
+
+↑ UP
+Red diamond
+BEARISH REVERSAL
+Expected price direction:
+
+↓ DOWN
+This is important because the marker represents the new expected direction, not the direction of the move that preceded it.
+
+11. PRICE-CONFIRMED EARLY ENTRY EXPERIMENT
+We tried making the original + signals more selective.
+
+Long:
+
+long_price_confirm = (
+    close > open
+    and close > close_prev
+    and close > ema9
+)
+
+Short:
+
+short_price_confirm = (
+    close < open
+    and close < close_prev
+    and close < ema9
+)
+
+Then:
+
+early_long = early_long_base and long_price_confirm
+early_short = early_short_base and short_price_confirm
+
+Why we abandoned this
+It changed the character of the original strategy.
+
+The original + was specifically valuable because it gave an early transition.
+
+Requiring price to already be on the correct side of EMA9 made it later and removed some of the original valid signals.
+
+Therefore:
+
+DO NOT use these price-confirmation filters on the primary + signals.
+
+The Python paper-trading version should retain the original conditions.
+
+12. REVERSAL WITH PRIOR MEANINGFUL MOVE
+We then decided a reversal should not be triggered from a tiny oscillator wiggle.
+
+The idea became:
+
+Bullish reversal
+The market must previously have been meaningfully bearish:
+
+displacement[2] <= -0.50
+
+Then:
+
+displacement[1] > displacement[2]
+
+and:
+
+displacement > displacement[1]
+
+So displacement is turning upward over two bars.
+
+Then:
+
+displacement - displacement[1] >= 0.05
+
+to require a minimum reversal movement.
+
+And:
+
+close > close_prev
+
+to ensure price itself is beginning to move upward.
+
+The full experimental condition became:
+
+bullish_reversal_raw = (
+    displacement[2] <= -0.50
+    and displacement[1] > displacement[2]
+    and displacement > displacement[1]
+    and displacement - displacement[1] >= 0.05
+    and close > close_prev
+    and displacement < 0
+)
+
+Interpretation
+The important concept is:
+
+Previous bearish displacement → displacement turns upward → price also turns upward → signal before zero crossover.
+
+13. BEARISH REVERSAL — CURRENT EXPERIMENTAL VERSION
+Mirror image:
+
+bearish_reversal_raw = (
+    displacement[2] >= 0.50
+    and displacement[1] < displacement[2]
+    and displacement < displacement[1]
+    and displacement[1] - displacement >= 0.05
+    and close < close_prev
+    and displacement > 0
+)
+
+Meaning:
+
+Previous bullish displacement → displacement turns downward → price also turns downward → signal before zero crossover.
+
+14. EMA9 PRICE CONFIRMATION ON REVERSALS
+We also tested:
+
+Bullish
+close > ema9
+
+Bearish
+close < ema9
+
+So the stronger version was:
+
+bullish_reversal = bullish_reversal_raw and close > ema9
+
+and:
+
+bearish_reversal = bearish_reversal_raw and close < ema9
+
+Why I now consider this undesirable for an "early reversal"
+It makes the signal too late.
+
+The objective is:
+
+Detect the reversal before EMA/VWAP has completed its crossover.
+
+If we wait for price to clearly cross EMA9 too, we may be giving up much of the early advantage.
+
+So for the Python paper-trading experiment, I would not make EMA9 price crossing a mandatory reversal condition unless we explicitly test it as a separate variant.
+
+15. STATE-LOCK EXPERIMENT FOR ALL SIGNALS
+We then attempted to create:
+
+NEUTRAL
+   │
+   ├── Green + → LONG
+   │
+   └── Red + → SHORT
+and suppress subsequent same-direction signals.
+
+The problem was that this changed the behavior of the original + signals.
+
+You correctly noticed that the original valid + signals disappeared.
+
+Decision
+Do not state-lock the primary + signals.
+
+The original:
+
+early_long
+early_short
+
+must remain independent.
+
+16. REVERSAL-ONLY STATE LOCK
+We then separated the reversal state from the primary signal state.
+
+Conceptually:
+
+reversal_state = 0
+
+where:
+
+ 0 = no reversal yet
++1 = bullish reversal was last signaled
+-1 = bearish reversal was last signaled
+Then:
+
+bullish_reversal = (
+    bullish_reversal_raw
+    and reversal_state != 1
+)
+
+and:
+
+bearish_reversal = (
+    bearish_reversal_raw
+    and reversal_state != -1
+)
+
+After a bullish reversal:
+
+reversal_state = 1
+
+After bearish:
+
+reversal_state = -1
+
+Purpose
+Prevent:
+
+GREEN ◆
+GREEN ◆
+GREEN ◆
+from the same developing reversal.
+
+But this state should not affect early_long or early_short.
+
+17. TRADING-STATE MODEL WE DISCUSSED
+We briefly changed the whole indicator into:
+
+NEUTRAL
+   │
+   ├── Green + → LONG
+   │
+   └── Red + → SHORT
+
+LONG
+   │
+   └── Red ◆ → SHORT
+
+SHORT
+   │
+   └── Green ◆ → LONG
+This is conceptually attractive for a trader, but we then discovered an important issue:
+
+Problem
+The indicator state is not necessarily the same thing as the trader's actual position.
+
+For example:
+
+Day 7:
+LONG → SHORT → LONG
+
+Day 8:
+huge gap up
+A persistent directionState can carry yesterday's state into today's session.
+
+Therefore, if you Pythonize this, do not blindly treat a persistent state variable as your actual broker position.
+
+Paper-trading position state should be separate from signal state.
+
+18. SESSION RESET ISSUE
+Because this is an intraday 5-minute strategy, we identified that a trading state should generally be session-aware.
+
+At minimum, Python should track:
+
+session_date
+
+and detect:
+
+new_session
+
+The strategy can then decide whether its internal signal regime resets at the beginning of each NSE session.
+
+This is particularly important because:
+
+VWAP itself resets each session.
+Intraday positions are expected to be flat by the broker's intraday cutoff.
+Yesterday's directional state should not automatically dictate today's first trade.
+19. FINAL SIGNAL HIERARCHY WE ARRIVED AT
+The cleanest interpretation so far is:
+
+Primary signals
+Green +
+
+EARLY LONG
+Condition:
+
+displacement > -0.5
+and displacement_prev <= -0.5
+
+Red +
+
+EARLY SHORT
+Condition:
+
+displacement < 0.5
+and displacement_prev >= 0.5
+
+These are the primary actionable signals.
+
+Reversal signals
+Green ◆
+
+BULLISH REVERSAL
+Meaning:
+
+Previous bearish move is turning bullish; expected new direction = UP.
+
+Red ◆
+
+BEARISH REVERSAL
+Meaning:
+
+Previous bullish move is turning bearish; expected new direction = DOWN.
+
+These are a separate experimental layer.
+
+Confirmation
+Green triangle
+
+EMA9 crossed above VWAP
+Red triangle
+
+EMA9 crossed below VWAP
+These are confirmation/reference, not necessarily new entries.
+
+Watch
+Green dot
+
+approaching bullish early-entry zone
+Red dot
+
+approaching bearish early-entry zone
+These are attention signals only.
+
+20. Complete current Python specification
+If I were handing this to you as the initial paper-trading specification, I would define the core system as:
+
+# ============================
+# INDICATORS
+# ============================
+
+ema9 = EMA(close, 9)
+session_vwap = VWAP(hlc3, session=True)
+atr14 = ATR(14)
+
+displacement = (ema9 - session_vwap) / atr14
+
+
+# ============================
+# PRIMARY EARLY SIGNALS
+# ============================
+
+early_long = (
+    displacement > -0.50
+    and displacement_prev <= -0.50
+)
+
+early_short = (
+    displacement < 0.50
+    and displacement_prev >= 0.50
+)
+
+
+# ============================
+# WATCH
+# ============================
+
+watch_long = (
+    displacement >= -0.35
+    and displacement < 0
+    and displacement_prev < -0.35
+
+Then optionally apply the reversal-only duplicate suppression:
+
+bullish_reversal = bullish_reversal_raw and reversal_state != "BULLISH"
+bearish_reversal = bearish_reversal_raw and reversal_state != "BEARISH"
+
+while keeping:
+
+early_long
+early_short
+
+completely independent.
+
+21. Conditions we should NOT accidentally carry into Python
+These were evaluated but should not be silently incorporated into the baseline paper strategy:
+
+Experiment	Status
+close > EMA9 for early LONG	Rejected for baseline
+close < EMA9 for early SHORT	Rejected for baseline
+Near-zero ±0.15 reversal	Rejected
+Simple one-bar reversal	Rejected
+3-bar near-zero reversal	Rejected as too noisy
+State-locking the primary + signals	Rejected
+Treating crossover as primary entry	Rejected
+Treating watch dots as entries	Rejected
+Calling the signals "high probability"	Not established
+Treating reversal as guaranteed future movement	Not valid
+One important recommendation before you paper trade
+Since you're moving this from visual GoCharting into Python, don't optimize the thresholds yet.
+
+Run the paper-trading system with exactly:
+
+5-minute bars
+EMA 9
+session VWAP using HLC3
+ATR 14
+displacement (EMA9 - VWAP) / ATR14
+early thresholds ±0.50
+watch offset 0.15
+reversal threshold ±0.50
+reversal minimum displacement move 0.05
+original early signals untouched
+Then record every signal, not just trades:
+
+timestamp
+symbol
+displacement
+EMA9
+VWAP
+ATR14
+signal_type
+direction
+close
+entry_price
+MFE
+MAE
+price_after_1_bar
+price_after_3_bars
+price_after_5_bars
+price_after_10_bars
+That will let us answer the question we've been trying to answer visually:
+
+Does a green + actually lead to upward price movement, does a red + lead to downward movement, and do the reversal diamonds genuinely identify useful turns?
+
+That is much more valuable than continuing to tune the indicator by looking at one TCS chart at a time.
