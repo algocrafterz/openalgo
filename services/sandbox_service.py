@@ -526,10 +526,12 @@ def sandbox_cancel_all_orders(
             return False, orderbook_response, status_code
 
         orders = orderbook_response.get("data", {}).get("orders", [])
+        # Working orders. order_manager stores SL/SL-M as "trigger pending" (space); the underscore
+        # spelling this filter used skipped every stop while answering success (incident 2026-10-12).
         open_orders = [
             order
             for order in orders
-            if order.get("order_status") in ["open", "pending", "trigger_pending"]
+            if order.get("order_status") in ["open", "pending", "trigger pending", "trigger_pending"]
         ]
 
         if not open_orders:
@@ -561,6 +563,21 @@ def sandbox_cancel_all_orders(
                 )
 
         message = f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders."
+
+        # Orders left working must not be reported as success: a caller would trust that every stop is
+        # gone, and a stop left on a flat position can later open a new one.
+        if failed_cancellations:
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": message,
+                    "canceled_orders": canceled_orders,
+                    "failed_cancellations": failed_cancellations,
+                    "mode": "analyze",
+                },
+                500,
+            )
 
         return (
             True,

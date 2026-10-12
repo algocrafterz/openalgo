@@ -154,6 +154,14 @@ confused name): `database/strategy_db.py`, `blueprints/strategy.py`,
 automation config, nothing to do with the free-text `strategy` tag on
 `/api/v1/placeorder`.
 
+- `services/sandbox_service.py` (2026-10-12, owner-approved core fix, not P&L) —
+  `sandbox_cancel_all_orders` now selects `"trigger pending"` SL/SL-M orders (it filtered
+  `"trigger_pending"`, a spelling the sandbox never stores since upstream 3e7132a52, so cancel-all
+  skipped every stop) and returns status `error` / HTTP 500 when any working order could not be
+  cancelled instead of reporting success. Test: `test/sandbox/test_cancel_all_trigger_pending.py`.
+  Incident: `signal_engine/docs/INCIDENT-2026-10-12-TIME-EXIT-STOP-NOT-CANCELLED.md`. On an upstream
+  merge, keep the fix unless upstream has corrected the filter itself.
+
 ## Deliberate design decisions
 
 - **No legacy/pre-migration data shown.** Rows recorded before the mode-
