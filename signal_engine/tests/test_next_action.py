@@ -46,9 +46,10 @@ def test_every_dimension_has_a_default():
 )
 def test_each_backtest_rule_fires_for_its_gate(gate):
     out = act(make_eval(**{gate.replace(".", "_"): "not_evaluated"}))
+    expected = na.NOT_RUN_RULES.get(gate, na.RULES[gate])
     assert out["gate"] == gate
-    assert out["action"] == na.RULES[gate]["action"]
-    assert out["reason"] == na.RULES[gate]["reason"]
+    assert out["action"] == expected["action"]
+    assert out["reason"] == expected["reason"]
 
 
 @pytest.mark.parametrize("gate", ["G7.1", "G8.3", "G9.2"])
@@ -147,3 +148,82 @@ def test_first_hard_failed_gate_beats_gate_order():
 def test_a_diagnostic_gate_is_never_the_next_action():
     out = act(make_eval(G2_7="not_evaluated"))
     assert out["gate"] != "G2.7"
+
+
+# ---- status-aware wording for gates that need opt-in evidence or an attestation ----------------
+
+#: gate -> the record_run flag (or the attestation) that evaluates it.
+STAGE_FLAGS = {
+    "G4.1": "--perturbation",
+    "G4.2": "--latency",
+    "G5.1": "--monte-carlo",
+    "G5.2": "--live-caps",
+    "G5.4": "--capacity",
+    "G5.5": "--live-caps",
+}
+
+
+def _record_run_flags() -> set[str]:
+    import re
+    from pathlib import Path
+
+    text = (Path(na.__file__).parent / "record_run.py").read_text(encoding="utf-8")
+    return set(re.findall(r'"(--[a-z-]+)"', text))
+
+
+@pytest.mark.parametrize("gate,flag", sorted(STAGE_FLAGS.items()))
+def test_a_not_evaluated_stage_gate_names_the_flag_that_evaluates_it(gate, flag):
+    out = act(make_eval(**{gate.replace(".", "_"): "not_evaluated"}))
+    assert out["gate"] == gate
+    assert flag in out["action"]
+    assert flag in _record_run_flags()
+
+
+@pytest.mark.parametrize("gate", ["G0.1", "G0.7"])
+def test_a_not_evaluated_attestation_gate_points_at_the_ledger(gate):
+    out = act(make_eval(**{gate.replace(".", "_"): "not_evaluated"}))
+    assert out["gate"] == gate
+    assert "attestation" in out["action"].lower()
+    assert "attestation" in out["reason"].lower()
+
+
+@pytest.mark.parametrize("gate", sorted(na.FAILED_RULES))
+def test_a_failed_stage_gate_does_not_tell_the_user_to_run_it_again(gate):
+    failed = act(make_eval(**{gate.replace(".", "_"): "fail"}))
+    not_run = act(make_eval(**{gate.replace(".", "_"): "not_evaluated"}))
+    assert failed["gate"] == gate
+    assert failed["action"] == na.FAILED_RULES[gate]["action"]
+    assert failed["action"] != not_run["action"]
+    assert "--" not in failed["action"] and "re-record" not in failed["action"].lower()
+    assert failed["reason"] and failed["reason"] != not_run["reason"]
+
+
+def test_a_gate_without_a_status_specific_rule_reads_the_same_either_way():
+    for gate in ("G1.2", "G2.2", "G6.4"):
+        key = gate.replace(".", "_")
+        failed = act(make_eval(**{key: "fail"}))
+        not_run = act(make_eval(**{key: "not_evaluated"}))
+        assert failed["action"] == not_run["action"] == na.RULES[gate]["action"]
+
+
+def test_status_specific_rules_name_real_backtest_gates():
+    gates = {g[0] for g in ev._GATES}
+    for table in (na.NOT_RUN_RULES, na.FAILED_RULES):
+        for gate, rule in table.items():
+            assert gate in gates and gate in na.RULES
+            assert rule["action"] and rule["reason"]
+
+
+def test_the_dirty_suffix_still_applies_to_a_status_specific_reason():
+    out = act(make_eval(G5_1="not_evaluated"), code_dirty=True)
+    assert out["gate"] == "G5.1"
+    assert out["reason"].endswith(na.DIRTY_SUFFIX)
+    assert "--monte-carlo" in out["action"]
+
+
+def test_the_g4_1_failed_wording_is_true_when_the_base_run_is_not_positive():
+    # G4.1 also fails when the base net R is not positive and no variant ran, so the wording
+    # must not claim that the neighbours were tested.
+    out = act(make_eval(G4_1="fail"))
+    text = (out["action"] + " " + out["reason"]).lower()
+    assert "neighbour" not in text or "base" in text

@@ -1,6 +1,12 @@
 """Next action for a finished run, looked up from a rule table. Pure, no I/O.
 
 The table is data: add a gate to `evaluation._GATES` and a test forces a rule here.
+
+Most rules read the same whether the gate failed or was never evaluated. The gates in
+`NOT_RUN_RULES` are evaluated by an opt-in `record_run` stage or an attestation, so when one was
+not evaluated the useful step is to attach that evidence. The gates in `FAILED_RULES` have already
+run, so telling the user to run them again would be wrong. A test checks that every flag named
+here exists in `record_run`.
 """
 
 from __future__ import annotations
@@ -166,8 +172,82 @@ RULES: dict[str, dict[str, str]] = {
 }
 
 
+#: The gate has not been evaluated and a specific stage or attestation evaluates it.
+NOT_RUN_RULES: dict[str, dict[str, str]] = {
+    "G0.1": _r(
+        "Record an attestation of the shared-code review for this strategy at the current commit",
+        "Without a valid attestation in the ledger the same-logic gate cannot be evaluated",
+    ),
+    "G0.7": _r(
+        "Record pytest coverage for features and strategy_core in the attestation ledger",
+        "Without a valid attestation the test-quality gate cannot be evaluated",
+    ),
+    "G4.1": _r(
+        "Re-record the run with --perturbation",
+        "The parameter neighbourhood is only tested when this stage is run",
+    ),
+    "G4.2": _r(
+        "Re-record the run with --latency",
+        "The delayed-entry replay is only run when this stage is requested",
+    ),
+    "G5.1": _r(
+        "Re-record the run with --monte-carlo",
+        "The drawdown and ruin bootstrap is only run when this stage is requested",
+    ),
+    "G5.2": _r(
+        "Re-record the run with --live-caps",
+        "The live position and loss limits are only applied when this stage is requested",
+    ),
+    "G5.4": _r(
+        "Re-record the run with --capacity",
+        "Order size against bar volume is only measured when this stage is requested",
+    ),
+    "G5.5": _r(
+        "Re-record the run with --live-caps so it records the margin figures",
+        "Peak margin comes from the live-caps stage",
+    ),
+}
+
+#: The gate ran and failed. Running it again would not help; the strategy or its sizing must change.
+FAILED_RULES: dict[str, dict[str, str]] = {
+    "G4.1": _r(
+        "Review the parameter perturbation result",
+        "The base run was not positive or too many neighbouring settings lost the edge",
+    ),
+    "G5.1": _r(
+        "Reduce risk per trade or the strategy's drawdown",
+        "The simulated drawdown or the chance of ruin is above the limit",
+    ),
+    "G5.2": _r(
+        "Review the result with the live limits applied",
+        "With the live position and loss limits the book fails the expectancy or trade-count test",
+    ),
+    "G5.3": _r(
+        "Lower the risk per trade",
+        "Risk per trade is above 1% or half the estimated Kelly fraction, which is zero "
+        "when expectancy is not positive",
+    ),
+    "G5.4": _r(
+        "Reduce order size or avoid thinly traded symbols",
+        "At least one entry order is above the share of bar volume allowed",
+    ),
+    "G5.5": _r(
+        "Reduce the number or size of simultaneous positions",
+        "Peak margin use is above 90% of capital",
+    ),
+}
+
+
 def _lookup(gate: str, dimension: str | None) -> dict[str, str] | None:
     return RULES.get(gate) or DIMENSION_DEFAULTS.get(dimension or "")
+
+
+def _status_rule(gate: str, status: str | None) -> dict[str, str] | None:
+    if status == "NOT_RUN":
+        return NOT_RUN_RULES.get(gate)
+    if status == "FAIL":
+        return FAILED_RULES.get(gate)
+    return None
 
 
 DIRTY_SUFFIX = "; also commit the working tree and re-run from a clean state"
@@ -215,7 +295,11 @@ def next_action(
         for r in dim.get("rows") or []
     }
     gate = _pick_gate(rows, open_gates, primary_gate)
-    rule = _lookup(gate, dims.get(gate)) if gate is not None else None
+    status = None
+    if stage is not None:
+        status = next((g["status"] for g in stages[stage]["gates"] if g["gate"] == gate), None)
+    rule = _status_rule(gate, status) if gate is not None else None
+    rule = rule or (_lookup(gate, dims.get(gate)) if gate is not None else None)
     if gate is not None and rule:
         reason = rule["reason"] + (DIRTY_SUFFIX if unclean else "")
         return {"action": rule["action"], "reason": reason, "gate": gate}
