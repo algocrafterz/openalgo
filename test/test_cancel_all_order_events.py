@@ -46,17 +46,26 @@ def test_sandbox_confirmed_cancel_publishes_all_cancelled_with_real_counts():
 
 
 def test_sandbox_partial_failure_publishes_a_failure_not_all_cancelled():
+    # the documented partial-success shape: processed, but one order is still working
     resp = {
-        "status": "error",
+        "status": "success",
         "message": "Canceled 1 orders. Failed to cancel 1 orders.",
         "canceled_orders": ["A"],
         "failed_cancellations": [{"orderid": "B", "message": "boom"}],
     }
-    (ok, _, code), events = _run_sandbox((False, resp, 500))
-    assert not ok and code == 500
+    (ok, out, code), events = _run_sandbox((True, resp, 200))
+    assert ok and code == 200 and out["failed_cancellations"]  # response contract unchanged
     assert not any(isinstance(e, AllOrdersCancelledEvent) for e in events)
     [event] = events
     assert isinstance(event, OrderFailedEvent) and "B" in event.error_message
+
+
+def test_sandbox_hard_error_publishes_a_failure():
+    resp = {"status": "error", "message": "Error canceling all orders: boom", "mode": "analyze"}
+    (ok, _, code), events = _run_sandbox((False, resp, 500))
+    assert not ok and code == 500
+    [event] = events
+    assert isinstance(event, OrderFailedEvent) and "boom" in event.error_message
 
 
 def test_live_partial_failure_publishes_a_failure_but_keeps_the_response():

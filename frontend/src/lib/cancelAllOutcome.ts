@@ -1,9 +1,11 @@
 /**
- * What the Order Book shows after "Cancel all".
+ * What the Order Book and Scalping screens show after "Cancel all".
  *
- * A failed or partial cancel-all (HTTP 500 with failed_cancellations, since 2026-10-12) must still
- * refresh the order list: the orders that could not be cancelled are still working, and the trader
- * has to see them. Before, only a full success refreshed, so stops left working stayed out of view.
+ * The API contract (docs/api/order-management/cancelallorder.md) answers a partial cancel with
+ * status "success" and a non-empty failed_cancellations list: the request was processed, but those
+ * orders are still working. That must never read as a completed cancel, so a non-empty list is an
+ * error whatever the status says, and the order list is refreshed so the orders left working are
+ * visible (incident 2026-10-12).
  */
 export type CancelAllToast = 'success' | 'info' | 'error'
 
@@ -13,13 +15,22 @@ export interface CancelAllOutcome {
   refresh: boolean
 }
 
-interface CancelAllBody {
+export interface CancelAllBody {
   status?: string
   message?: string
+  failed_cancellations?: unknown[]
 }
 
 /** Outcome of a cancel-all request that returned a body (any HTTP status). */
 export function cancelAllOutcome(body: CancelAllBody | undefined): CancelAllOutcome {
+  const failed = body?.failed_cancellations?.length ?? 0
+  if (failed > 0) {
+    return {
+      toast: 'error',
+      message: body?.message || `Failed to cancel ${failed} order(s)`,
+      refresh: true,
+    }
+  }
   if (body?.status === 'success') {
     return { toast: 'success', message: body.message || 'All orders cancelled', refresh: true }
   }

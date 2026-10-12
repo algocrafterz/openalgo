@@ -34,6 +34,28 @@ def ratelimit_handler(e):
     ), 429
 
 
+def _cancel_all_ui_payload(response_data: dict) -> dict:
+    """The Order Book's "Cancel all" answer for a processed request.
+
+    "No open orders" only when nothing was cancelled AND nothing failed. Any failed cancellation is
+    passed through with the lists, so the UI shows it as an error and refreshes (incident
+    2026-10-12); before, a cancel-all where every order failed was answered "No open orders".
+    """
+    canceled = response_data.get("canceled_orders", [])
+    failed = response_data.get("failed_cancellations", [])
+    if not canceled and not failed:
+        return {"status": "info", "message": "No open orders to cancel"}
+    message = f"Successfully canceled {len(canceled)} orders"
+    if failed:
+        message = f"Canceled {len(canceled)} orders. Failed to cancel {len(failed)} orders"
+    return {
+        "status": "success",
+        "message": message,
+        "canceled_orders": canceled,
+        "failed_cancellations": failed,
+    }
+
+
 def dynamic_import(broker, module_name, function_names):
     module_functions = {}
     try:
@@ -723,23 +745,7 @@ def cancel_all_orders_ui():
 
         # Format the response for UI
         if success and status_code == 200:
-            canceled_count = len(response_data.get("canceled_orders", []))
-            failed_count = len(response_data.get("failed_cancellations", []))
-
-            if canceled_count > 0 or failed_count == 0:
-                message = f"Successfully canceled {canceled_count} orders"
-                if failed_count > 0:
-                    message += f" (Failed to cancel {failed_count} orders)"
-                return jsonify(
-                    {
-                        "status": "success",
-                        "message": message,
-                        "canceled_orders": response_data.get("canceled_orders", []),
-                        "failed_cancellations": response_data.get("failed_cancellations", []),
-                    }
-                ), 200
-            else:
-                return jsonify({"status": "info", "message": "No open orders to cancel"}), 200
+            return jsonify(_cancel_all_ui_payload(response_data)), 200
         else:
             return jsonify(response_data), status_code
 

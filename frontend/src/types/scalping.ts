@@ -86,6 +86,8 @@ export interface ScalpingOrderResponse {
   status: string
   orderid?: string
   message?: string
+  /** cancel-all only: orders still working (documented partial-success shape) */
+  failed_cancellations?: unknown[]
 }
 
 // Stop-loss / trailing-SL state persisted per (symbol, exchange, product) leg.

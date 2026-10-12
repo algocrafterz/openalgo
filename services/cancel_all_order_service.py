@@ -62,13 +62,26 @@ def import_broker_module(broker_name: str) -> Any | None:
 
 
 def _publish_cancel_all_result(
-    mode: str, canceled: list, failed: list, request_data: dict, response_data: Any, api_key: str
+    mode: str,
+    canceled: list,
+    failed: list,
+    request_data: dict,
+    response_data: Any,
+    api_key: str,
+    error: str | None = None,
 ) -> None:
     """Publish AllOrdersCancelledEvent only when nothing failed; otherwise an OrderFailedEvent.
 
     A cancel-all with failures used to announce "all orders cancelled" (incident 2026-10-12: every
     sandbox SL-M stayed working). Counts come from the lists, which every path returns.
     """
+    if error:  # the request itself failed: no per-order lists to report
+        bus.publish(OrderFailedEvent(
+            mode=mode, api_type=API_TYPE,
+            request_data=request_data, response_data=response_data, api_key=api_key,
+            error_message=f"Cancel all failed: {error}",
+        ))
+        return
     if failed:
         ids = ", ".join(str(f.get("orderid", "?")) if isinstance(f, dict) else str(f) for f in failed)
         bus.publish(OrderFailedEvent(
@@ -132,12 +145,11 @@ def cancel_all_orders_with_auth(
         analyzer_request["api_type"] = API_TYPE
 
         data = response_data if isinstance(response_data, dict) else {}
-        failed = list(data.get("failed_cancellations", []))
-        if not success and not failed:
-            failed = [{"orderid": "?", "message": data.get("message", "cancel all failed")}]
         _publish_cancel_all_result(
-            "analyze", list(data.get("canceled_orders", [])), failed,
+            "analyze", list(data.get("canceled_orders", [])),
+            list(data.get("failed_cancellations", [])),
             analyzer_request, response_data, order_data.get("apikey", ""),
+            error=None if success else str(data.get("message", "cancel all failed")),
         )
         return success, response_data, status_code
 
