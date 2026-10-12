@@ -54,6 +54,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 // Note: AlertDialog still used for Cancel All Orders
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { cancelAllOutcome } from '@/lib/cancelAllOutcome'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -316,22 +317,20 @@ export default function OrderBook() {
   }
 
   const handleCancelAllOrders = async () => {
+    let body: { status?: string; message?: string } | undefined
     try {
-      const response = await tradingApi.cancelAllOrders()
-      if (response.status === 'success') {
-        showToast.success(response.message || 'All orders cancelled', 'orders')
-        // Delay refresh to allow broker to process cancellations
-        setTimeout(() => fetchOrders(true), 2000)
-      } else if (response.status === 'info') {
-        showToast.info(response.message || 'No open orders to cancel', 'orders')
-      } else {
-        showToast.error(response.message || 'Failed to cancel all orders', 'orders')
-      }
+      body = await tradingApi.cancelAllOrders()
     } catch (error) {
-      const axiosError = error as { response?: { data?: { message?: string } } }
-      const message = axiosError.response?.data?.message || 'Failed to cancel all orders'
-      showToast.error(message, 'orders')
+      // A partial failure arrives as HTTP 500 with the message and failed list in the body
+      const data = (error as { response?: { data?: { status?: string; message?: string } } })
+        .response?.data
+      body = { status: 'error', message: data?.message }
     }
+    const outcome = cancelAllOutcome(body)
+    showToast[outcome.toast](outcome.message, 'orders')
+    // Delay refresh to allow broker to process cancellations; after a failure the orders left
+    // working must become visible too
+    if (outcome.refresh) setTimeout(() => fetchOrders(true), 2000)
   }
 
   const openModifyDialog = async (order: Order) => {
