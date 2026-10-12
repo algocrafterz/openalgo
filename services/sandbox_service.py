@@ -564,21 +564,10 @@ def sandbox_cancel_all_orders(
 
         message = f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders."
 
-        # Orders left working must not be reported as success: a caller would trust that every stop is
-        # gone, and a stop left on a flat position can later open a new one.
-        if failed_cancellations:
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": message,
-                    "canceled_orders": canceled_orders,
-                    "failed_cancellations": failed_cancellations,
-                    "mode": "analyze",
-                },
-                500,
-            )
-
+        # Partial failure follows the documented contract (docs/api/order-management/
+        # cancelallorder.md, "Partial Success"): status "success" means the request was processed,
+        # and failed_cancellations lists the orders still working. Live brokers answer the same way;
+        # callers must read the list. The service then publishes a failure event, not "all cancelled".
         return (
             True,
             {

@@ -71,6 +71,12 @@ curl -X POST http://127.0.0.1:5000/api/v1/cancelallorder \
 }
 ```
 
+**What `status: "success"` means.** The request was processed. It does not mean every order was
+cancelled: read `failed_cancellations`. A non-empty list names orders that are still working (for
+example a stop-loss order that can still trigger). Live brokers and analyze (sandbox) mode answer the
+same way; analyze mode cancels trigger-pending SL/SL-M orders as well. A request that could not be
+processed at all answers `status: "error"`.
+
 ## Request Body
 
 | Parameter | Description | Mandatory/Optional | Default Value |

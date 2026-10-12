@@ -33,4 +33,23 @@ describe('cancelAllOutcome', () => {
   it('does not refresh when there was nothing to cancel', () => {
     expect(cancelAllOutcome({ status: 'info' }).refresh).toBe(false)
   })
+
+  it('treats a documented partial success (status success, failures listed) as an error', () => {
+    const outcome = cancelAllOutcome({
+      status: 'success',
+      message: 'Successfully canceled 2 orders (Failed to cancel 1 orders)',
+      failed_cancellations: [{ orderid: 'SL1', message: 'boom' }],
+    })
+    expect(outcome).toEqual({
+      toast: 'error',
+      message: 'Successfully canceled 2 orders (Failed to cancel 1 orders)',
+      refresh: true,
+    })
+  })
+
+  it('names the failure count when the body has no message', () => {
+    expect(cancelAllOutcome({ status: 'success', failed_cancellations: [{}, {}] }).message).toBe(
+      'Failed to cancel 2 order(s)'
+    )
+  })
 })

@@ -73,12 +73,22 @@ def test_no_working_orders_is_still_success():
     assert ok is True and resp["status"] == "success" and resp["canceled_orders"] == []
 
 
-def test_a_failed_cancel_is_not_reported_as_success(monkeypatch):
+def test_partial_failure_follows_the_documented_contract(monkeypatch):
+    # docs/api/order-management/cancelallorder.md "Partial Success": status success means the
+    # request was processed; failed_cancellations names the orders still working (same as live).
     stop = _seed("trigger pending")
-    monkeypatch.setattr(
-        OrderManager, "cancel_order", lambda self, oid: (False, {"message": "boom"}, 500)
-    )
+    limit = _seed("open", price_type="LIMIT")
+    real_cancel = OrderManager.cancel_order
+
+    def cancel(self, oid):
+        if oid == stop:
+            return False, {"message": "boom"}, 500
+        return real_cancel(self, oid)
+
+    monkeypatch.setattr(OrderManager, "cancel_order", cancel)
     ok, resp, code = _cancel_all()
-    assert ok is False and resp["status"] == "error" and code >= 400
+    assert ok is True and code == 200 and resp["status"] == "success"
+    assert resp["canceled_orders"] == [limit]
     assert [f["orderid"] for f in resp["failed_cancellations"]] == [stop]
+    assert "Failed to cancel 1 orders" in resp["message"]
     assert _status(stop) == "trigger pending"  # still working, and the caller is told so

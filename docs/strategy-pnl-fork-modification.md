@@ -157,17 +157,21 @@ automation config, nothing to do with the free-text `strategy` tag on
 - `services/sandbox_service.py` (2026-10-12, owner-approved core fix, not P&L) —
   `sandbox_cancel_all_orders` now selects `"trigger pending"` SL/SL-M orders (it filtered
   `"trigger_pending"`, a spelling the sandbox never stores since upstream 3e7132a52, so cancel-all
-  skipped every stop) and returns status `error` / HTTP 500 when any working order could not be
-  cancelled instead of reporting success. Test: `test/sandbox/test_cancel_all_trigger_pending.py`.
+  skipped every stop). A partial failure follows the documented API contract like live brokers:
+  status `success` (request processed) with `failed_cancellations` naming the orders still working. Test: `test/sandbox/test_cancel_all_trigger_pending.py`.
   Incident: `signal_engine/docs/INCIDENT-2026-10-12-TIME-EXIT-STOP-NOT-CANCELLED.md`. On an upstream
   merge, keep the fix unless upstream has corrected the filter itself.
 - `services/cancel_all_order_service.py` (2026-10-12, follow-up, not P&L) — publishes
   `AllOrdersCancelledEvent` only when no order failed to cancel (otherwise `OrderFailedEvent`
   naming the failures), with counts from the canceled/failed lists in both sandbox and live paths.
   HTTP responses unchanged. Test: `test/test_cancel_all_order_events.py`.
-- `frontend/src/pages/OrderBook.tsx`, `frontend/src/lib/cancelAllOutcome.ts` (new) (2026-10-12) —
-  "Cancel all" refreshes the order list after a failed or partial cancel too, so orders left working
-  are visible. Test: `frontend/src/lib/cancelAllOutcome.test.ts`.
+- `frontend/src/pages/OrderBook.tsx`, `frontend/src/pages/Scalping.tsx`, `frontend/src/types/scalping.ts`,
+  `frontend/src/lib/cancelAllOutcome.ts` (new) (2026-10-12) — a non-empty `failed_cancellations` is
+  shown as an error whatever the status says; the Order Book refreshes after a failed or partial
+  cancel too. Test: `frontend/src/lib/cancelAllOutcome.test.ts`.
+- `blueprints/orders.py` (2026-10-12) — `_cancel_all_ui_payload`: "No open orders to cancel" only when
+  nothing was cancelled and nothing failed (every-cancel-failed used to be answered that way).
+  Test: `test/test_cancel_all_ui_payload.py`.
 
 ## Deliberate design decisions
 

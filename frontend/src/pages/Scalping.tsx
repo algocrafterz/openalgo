@@ -29,6 +29,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
+import { cancelAllOutcome } from '@/lib/cancelAllOutcome'
 import { priceDecimals } from '@/lib/scalpingPrice'
 import { buildPositionRows } from '@/lib/scalpingRows'
 import { mergeTick, type TickView } from '@/lib/scalpingTick'
@@ -905,7 +906,11 @@ export default function Scalping() {
   const doCancelAll = useCallback(async () => {
     try {
       const res = await scalpingApi.cancelAll()
-      if (res.status !== 'success' && appMode === 'live') {
+      if (res.failed_cancellations?.length) {
+        // documented partial success: processed, but these orders are still working (any mode;
+        // the analyzer's global error handler never sees a "success" response)
+        showToast.error(cancelAllOutcome(res).message, 'orders')
+      } else if (res.status !== 'success' && appMode === 'live') {
         showToast.error(res.message ?? 'Cancel all failed', 'orders')
       }
     } catch (e) {
