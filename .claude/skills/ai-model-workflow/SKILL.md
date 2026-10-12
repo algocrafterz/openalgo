@@ -1,282 +1,115 @@
 ---
 name: ai-model-workflow
-description: Choose which Claude model does which phase of a task (`opus` and `sonnet` aliases only), and how to hand work between them. Use before starting any task that is more than a simple, well-defined change, before spawning any subagent, or when asked about model selection. Applies most to trading or backtest logic, financial calculations, broker or order execution, migrations, security, and architecture.
+description: Choose the least costly capable model and workflow for the task. Sonnet is the default. Use Opus only as a break-glass escalation for genuinely difficult or critical reasoning. Avoid unnecessary subagents, planning, review, documentation, and context usage.
 ---
 
 # AI Model Workflow
 
-Opus is the primary reasoning and review model for decisions that materially affect design,
-behavior, or risk. Sonnet is the default implementation model. Sonnet makes normal
-implementation decisions inside the approved design.
-Do not optimize for model usage. Optimize for reasoning quality, implementation speed, and confidence.
+Goal: correctness first, then speed and token efficiency. Use the least capable model that
+can safely complete the task. Sonnet is the default. Opus is break-glass, not a normal phase.
+Load this skill only when model selection, Opus escalation, user approval, or multi-phase
+coordination matters. File count is not a complexity proxy.
 
-## Allowed models
+## Models
 
-- Use only the `opus` and `sonnet` model aliases for this workflow.
-- Do not pin model version IDs.
-- Do not use Haiku or other lower-capability models for this workflow.
-- Sonnet is the default implementation model.
-- Pass `model` explicitly whenever spawning a subagent or ECC agent. Never rely on the
-  environment's default subagent model for this workflow.
-- If a phase needs Opus and the `opus` model is unavailable, do not silently substitute
-  Sonnet. For a non-risky task, ask the user whether to proceed with Sonnet.
-  For a mandatory-review or high-risk phase, stop and wait for Opus.
+- Sonnet: exploration, search, debugging with a discoverable root cause, implementation,
+  tests, refactoring, logging, docs, UI, data processing, implementing an approved design,
+  routine review, summaries.
+- A cheaper model is fine for simple, repetitive, or retrieval tasks.
+- Opus: only a genuinely hard reasoning problem where a cheaper model could plausibly get
+  it wrong, such as:
+  - materially different interpretations that repository evidence cannot resolve;
+  - a novel architecture or algorithm decision with large consequences;
+  - ambiguous trading, P&L, cost, fill, or execution semantics that matter;
+  - a major data or migration decision that evidence cannot settle;
+  - a genuine Sonnet reasoning dead-end;
+  - the user asks for Opus.
+- Trading, backtest, financial, market-data, database, migration, security, architecture,
+  and broker work need strong validation. They do not by themselves need Opus.
 
-## Decision rule
+## Opus discipline
 
-Ask one question: is deciding WHAT to do substantially harder than implementing HOW to do it?
+- Uncertainty alone does not justify Opus.
+- First resolve it from repository code, tests, authoritative documentation, and existing decisions.
+- Do not escalate for ordinary implementation errors, obvious test failures, or incomplete code.
+- Escalate only when the remaining problem is genuinely difficult or materially consequential.
 
-```text
-Simple, well-defined task
-  -> Sonnet
-
-Non-trivial task where deciding WHAT to do needs meaningful reasoning
-  -> Opus: investigate and design
-  -> Sonnet: implement and test
-  -> Opus: independent review, when the change warrants it
-```
-
-If the answer is no, use Sonnet directly. Do not add a phase for ceremony.
-
-Signs that WHAT is hard: ambiguous requirements, several reasonable designs,
-several interacting components, unfamiliar code, an expensive wrong decision.
-
-## Plan size
-
-Match the plan to the task.
-
-| Task | Plan |
-| --- | --- |
-| Trivial | No Opus phase, no plan |
-| Straightforward bug, root cause known | Objective, files, constraints, acceptance criteria |
-| Small multi-file change | Concise plan: objective, approach, files, tests |
-| Architecture or design work | Detailed plan: add current and desired behavior, root cause, alternatives, edge cases, out of scope |
-
-Write a plan file (`docs/plans/<change>.md`) only when the work crosses phases or sessions,
-or when the plan has durable value. Do not require one for a small task.
-For a small change, keep the plan in the implementation prompt. Do not create a plan file.
-For trading changes, state the old behavior and the new behavior.
-
-## Phases
-
-**Reasoning (Opus).** Read the relevant code. State current and desired behavior.
-Find the root cause when fixing a defect. Choose the simplest design that meets the requirements.
-Record risks and edge cases. Label exploratory ideas so they do not become requirements.
-
-**Implementation (Sonnet).** Treat the plan as the contract. Make the smallest correct change.
-Keep existing behavior, APIs, and naming unless the plan changes them.
-Do not redesign. Run the relevant tests. Report what changed and what ran.
-If the plan conflicts with the code, or an escalation condition is met, stop and escalate.
-
-**Review (Opus).** Compare the diff to the plan. Check correctness, requirements coverage,
-edge cases, regression risk, test coverage, unintended changes, and scope.
-List concrete issues by severity. Do not modify code unless asked.
-
-After implementation, the orchestrator also reads the full diff and runs the repository checks.
-A successful compile is not a successful task.
-
-## Opus review
-
-Opus review is mandatory for:
-
-- Trading or backtest logic
-- Financial calculations
-- Broker or order execution
-- Market-data ingestion or transformation
-- Database or data migrations
-- Security-sensitive changes
-- Architecture changes
-- Changes with significant regression risk
-
-"Significant regression risk" means a change that can affect several independent flows,
-shared infrastructure, persistent data, production runtime behavior, or externally visible behavior.
-
-For other non-trivial work, Opus review is recommended, not mandatory.
-Skip it when the change is low-risk and the review cost is disproportionate to the likely benefit.
-Do not force three phases on every change.
-
-## Escalate to Opus
-
-Sonnet must stop and escalate when implementation reveals a problem that changes the approved
-design, requirements, externally visible behavior, public API, data semantics, security
-properties, or architectural boundaries. This includes a plan that conflicts with the code,
-a fix that needs broad refactoring, and scope that has grown.
-
-Do not escalate for ordinary implementation details that can be resolved without changing
-those things. Use this format:
+Before invoking Opus, answer:
 
 ```text
-Problem discovered:
-Why the plan is insufficient:
-Impact:
-Options:
-Recommendation:
+Problem requiring Opus:
+Why Sonnet or a cheaper model is insufficient:
+Decision Opus must resolve:
+Consequence if resolved incorrectly:
 ```
 
-Do not make a major design decision silently during implementation.
+If you cannot answer clearly, do not invoke Opus. Opus decides; Sonnet implements.
 
-## Make it observable
+## Subagents
 
-For a non-trivial task, explicitly state which workflow is being used.
-If Opus is intentionally skipped, briefly explain why. Examples:
+- Use the least capable model that can do the task. An Opus parent does not imply Opus subagents.
+- Opus subagent only with a stated reasoning problem, why Sonnet is insufficient, and the
+  expected concise output. Never for search, exploration, tests, implementation, formatting,
+  docs, or collecting information.
+- Prefer direct execution. Do not split work to gain parallelism.
+- Pass only: objective, constraints, file paths, approved plan, acceptance criteria.
+  Return only: conclusions, decisions, changed files, test results, open issues, artifact paths.
 
-```text
-Workflow: Sonnet direct implementation.
-Reason: The change is well-defined and has no architectural or design ambiguity.
-```
+## Paths
 
-```text
-Reasoning phase: Opus
-Plan written to: docs/plans/<change>.md
-Implementation phase: Sonnet
-Review phase: Opus
-```
+- Fast (clear, localized, low-risk, no semantic ambiguity): inspect, implement with Sonnet,
+  run targeted tests, inspect the diff. No Opus, ECC, planning agent, or review agent.
+- Normal (several interacting decisions): add a short in-context plan
+  (Goal, Approach, Files, Tests). Write `docs/plans/<change>.md` only if the work crosses
+  sessions, phases depend on it, or it records a durable architecture or semantics decision.
+- Critical (meets the Opus gate): Opus resolves the question, record a concise decision,
+  Sonnet implements, targeted tests, diff review.
 
-State each phase when it starts. Use the `Plan written to:` line only when a plan file is created.
+## Trading and backtest changes
 
-## Context and token efficiency
+- No semantic change (tests, logging, equivalent refactor or speedup, formatting, known
+  fixes): Sonnet.
+- Semantic change with clear specification (from the request, approved plan, or repository
+  convention): Sonnet.
+- Semantic change with material ambiguity (entry/exit, sizing, SL/TP, fill timing, slippage,
+  costs, P&L, look-ahead, dataset eligibility, execution): resolve from evidence, then Opus
+  if still ambiguous. Never infer a new trading rule from implementation details.
+- State old behavior, new behavior, and why. Approval is separate from model selection.
+  Require user approval when trading semantics materially change, unless the user's request
+  or an approved durable plan explicitly authorizes the new behavior. Existing tests
+  establish current behavior only. They must not by themselves authorize a new trading rule.
 
-Treat context and token usage as resources.
+## Review
 
-- Do not read files, documentation, history, or tool output that is not relevant to the current decision or implementation.
-- Prefer targeted repository search and the smallest sufficient file/range over broad scans.
-- Reuse verified findings, plans, test results, and file references from earlier phases instead of rediscovering the same information.
-- A subagent must receive the smallest self-contained context needed to perform its task. Do not pass the full conversation or unrelated repository material.
-- Do not repeat research already completed by another phase unless verification is required or the earlier result is uncertain.
-- Do not create a separate agent/task when the current agent can complete the work directly without meaningful loss of quality.
-- Do not split work into subtasks merely to increase parallelism.
-- Prefer one focused investigation over several overlapping investigations.
-- Ask for distilled conclusions from research or heavy computation, not raw output.
-- When a task is complete, stop. Do not perform speculative cleanup, additional research, or unrelated improvements.
+Default: Sonnet implementation, targeted tests, final diff inspection. Use an independent
+reviewer when it adds value. Opus review is optional: use it only when the change is
+critical, tests cannot establish correctness, consequences are material, and independent
+high-confidence review adds real value, or the user asks.
 
-## Spawning subagents
+## ECC
 
-- A subagent does not see this conversation. Give it a self-contained prompt.
-- Pass the plan or the plan file path. Do not rely on chat history.
-- Do not start implementation before the user approves the plan when the change alters
-  trading behavior, financial calculations, security, architecture, or externally visible
-  execution semantics. Examples that need approval: a filter threshold, the stop-loss
-  calculation, fill semantics, position sizing, the backtest cost model.
-  Examples that do not: logging, refactoring inside one function, adding a test.
-  Do not require approval for ordinary implementation work.
-- Send heavy backtest or sweep work to a subagent. Ask for a distilled conclusion, not raw output.
-- If the main session already runs on the model a phase needs, do that phase directly.
+Optional. Use the smallest relevant capability only when it adds a concrete benefit. Do not
+check ECC versions, use it for simple implementation or routine tests, or run full
+orchestration when direct execution suffices. ECC must not trigger an unnecessary Opus call.
 
-## ECC coordination
+## Context and communication
 
-ECC (`affaan-m/ECC`) is installed in this Claude Code environment and should be used
-as the available coordination/tooling layer for complex workflows.
+- Read only relevant files and ranges. Use targeted search. Filter large output. Reuse
+  verified findings. Do not repeat research, run overlapping investigations, or duplicate reviews.
+- Document only what has durable value: a design decision, a behavior change, or something
+  repository policy requires. No ceremonial plans, reports, or summaries.
+- Do not narrate routine work or announce the workflow. Default report: Changed, Verified,
+  Result. Explain reasoning for significant decisions, behavior-affecting assumptions, test
+  failures, escalations, or approvals. State why if Opus is used.
 
-Before a substantial workflow:
+## Escalation and completion
 
-1. Inspect the installed ECC version and relevant available skills/agents.
-2. Check whether a newer ECC version provides a capability materially relevant to this task.
-3. If a relevant update is available, report it before relying on the new capability.
-4. Do not update ECC automatically during task implementation unless the user explicitly
-   authorizes the update.
-5. Do not install ECC again if it is already installed.
+Sonnet escalates when implementation reveals a problem that changes requirements, approved
+behavior, public API, data semantics, security properties, architectural boundaries, or
+critical trading semantics. Use: Problem, Why the current approach is insufficient, Impact,
+Options, Recommendation. Resolve ordinary details from evidence. Never make a major design
+decision silently.
 
-Use the most appropriate ECC skill/agent when it materially improves:
-- research or repository exploration
-- planning
-- implementation
-- TDD/test-driven development
-- code review
-- security review
-- architecture review
-- multi-agent coordination
-- context/session handoff
-
-Do not invoke ECC skills merely for ceremony. Prefer the smallest ECC capability or workflow
-that provides a meaningful benefit.
-
-Do not let ECC override this skill's model-selection or approval rules.
-`ai-model-workflow` remains authoritative for:
-- Opus vs Sonnet selection
-- phase boundaries
-- implementation handoff
-- escalation
-- mandatory Opus review
-- user approval requirements
-
-When an ECC orchestration workflow overlaps with this workflow, compose them rather
-than running two competing pipelines. Avoid duplicate planning, implementation,
-testing, or review phases.
-
-Prefer individual ECC capabilities over a full ECC orchestration pipeline when
-`ai-model-workflow` already defines the required phases. Use an ECC `orch-*`
-workflow only when its additional coordination or gating provides a clear benefit.
-
-Before invoking an ECC skill, determine what phase it belongs to and which model should
-perform that phase. Pass the approved plan/context explicitly to the ECC agent or skill.
-
-If an ECC skill proposes a model or workflow that conflicts with this skill, follow
-`ai-model-workflow` and adapt the ECC workflow accordingly.
-
-Record significant ECC usage in the observable workflow status so the user can see
-how coordination was performed.
-
-### Context handoff
-
-When using ECC agents or subagents, prefer artifact-based handoff over conversational handoff.
-
-Pass:
-- task objective
-- relevant constraints
-- approved plan
-- relevant file paths
-- acceptance criteria
-
-Return:
-- conclusions
-- decisions
-- changed files
-- test results
-- unresolved issues
-- artifact paths
-
-Do not pass or return large raw outputs unless required for the next decision.
-
-### ECC selection rule
-
-Use ECC when it provides a concrete capability that materially improves the task
-or avoids duplicating workflow logic in this repository.
-
-Examples:
-
-| Need | Preferred approach |
-|---|---|
-| Repository research/exploration | Relevant ECC research/navigation skill |
-| TDD implementation | ECC TDD skill/agent + Sonnet implementation |
-| Security-sensitive change | ECC security workflow + mandatory Opus review |
-| Architecture/design | ECC architecture/planning capability + Opus |
-| Code review | ECC review capability + Opus |
-| Large multi-step workflow | Relevant ECC orchestration workflow |
-| Simple one-file change | Do not invoke ECC unnecessarily |
-| Trading/backtest behavior | Follow `ai-model-workflow`; use ECC capabilities where they improve research, testing, or review |
-
-### ECC and model workflow
-
-ECC coordinates capabilities; `ai-model-workflow` decides model responsibility.
-
-For example:
-
-    Opus
-      -> determine problem and architecture
-      -> create/approve plan
-
-    ECC
-      -> provide repository research / TDD / specialist / orchestration capability
-
-    Sonnet
-      -> implement approved plan
-      -> run tests
-
-    ECC
-      -> provide relevant verification/review tooling
-
-    Opus
-      -> perform independent review for mandatory-review changes
-
-Do not allow an ECC agent to silently turn a Sonnet implementation phase into an Opus phase,
-or vice versa. The selected model must remain explicit and observable.
+Done when the behavior is implemented, relevant checks pass, the diff is inspected, needed
+docs are updated, and no critical issue remains. Then stop. No speculative cleanup, extra
+research, or extra review.
