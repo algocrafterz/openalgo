@@ -1741,8 +1741,20 @@ class PositionTracker:
                 + ("order book unreadable" if book is None else f"{len(working)} order(s) still working")
                 + f", re-cancelling ({attempt + 1}/{_CANCEL_RETRIES}) for {', '.join(sorted(retry))}"
             )
-            for strategy in retry:
-                await cancel_all_orders(strategy)
+            if book is None:
+                for strategy in retry:
+                    await cancel_all_orders(strategy)
+            else:
+                # Cancel each working order by its id. The sandbox's cancelallorder filters status
+                # "trigger_pending" but stores "trigger pending", so it skips every SL/SL-M while
+                # reporting success (2026-10-12: PAYTM's stop then opened a long at 15:12).
+                for o in working:
+                    order_id = str(o.get("orderid") or o.get("order_id") or "")
+                    tag = str(o.get("strategy") or "").strip() or next(iter(sorted(strategies)))
+                    if order_id:
+                        await cancel_order(order_id, tag)
+                    else:
+                        await cancel_all_orders(tag)
             await asyncio.sleep(_CANCEL_WAIT)
 
         if book is None:
