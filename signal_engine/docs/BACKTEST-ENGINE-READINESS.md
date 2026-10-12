@@ -26,6 +26,24 @@ Build plan for the first three P1 steps (spec schema, assumption ledger, run man
 `BACKTESTS-UI-TECHNICAL-REQUIREMENTS.md`, `BACKTESTS-UI-PLAN.md`. Canonical lifecycle and
 minimum run schema (wins on conflict): `BACKTEST-LIFECYCLE-AND-RUN-SCHEMA.md`.
 
+## MVP closure status (2026-10-12)
+
+State after commits `e61c023ea` and `0b8a6fa4f`. The rows below are the single place that says what is finished,
+what waits for evidence and what is blocked; the tables further down hold the per-capability detail.
+
+| Class | Items |
+| --- | --- |
+| Complete and verified | The verdict policy and the evaluators: 46 of the 48 backtest-stage gates (G0 to G6) have one; the other two, G4.8 and G6.6, are the owner-approved paper-stage exceptions. P1 rows 1, 2, 3, 6, 8, 10, 11, 12, 13 and 14. A2 and G5.2 (accepted; IDEA-029 v4 stays NO_EDGE, net -0.224 R). The Backtests page, including the strategy definition read from the run's frozen spec |
+| Implemented, awaiting a recorded run | P1 rows 7 (calendar label) and 9 (timeframe-aware warm-up): the fixes are tested, but an old manifest cannot show them, and re-recording IDEA-029 would be a new trial. The five opt-in evidence stages (`--perturbation`, `--live-caps`, `--monte-carlo`, `--latency`, `--capacity`) and the status-aware next-action wording: tested, and no recorded run holds their output because IDEA-029 v4 predates them |
+| Blocked on a decision or a real-world input | P1 row 5 (point-in-time universe): deferred by the owner on 2026-10-12; revisit when a strategy clears the hard gates and EDGE looks reachable; any data spike starts with written NSE terms. P1 row 4 (strategy versions): only v1 exists in real data; needs the owner's call on test-only evidence or a real second version. G6.4 part B (hard gate): needs one accepted real broker stop order per price tier in `broker-tick-checks.yaml`; no reader exists and none should be written before the first real record |
+| Unfinished, not essential to the MVP | Regime table (NIFTY and VIX are in no published dataset version), position ledger and sector or correlation exposure, stagnation evidence, re-entry trigger context, the `null_entry` implementation for a real strategy, all P3 rows, the next-action gate link and Phase 4 in the Backtests page, the coroutine-never-awaited test warnings, the legacy root `test/` failures |
+
+EDGE stays unreachable until row 5 and G6.4 part B are resolved, rows 4, 7 and 9 are verified and a strategy passes the gates. No verdict rule was changed to reach it.
+
+Tests: `signal_engine/scripts/run_full_tests.sh` gave 8,138 passed, 1 skipped, 0 failed on code identical to `e61c023ea`; `0b8a6fa4f` changes only this file and was followed by `test_readiness.py` and `test_verdict_mvp_policy.py` (140 passed). The root `test/` suite last ran at `948d0ee51`: 2,554 passed, 10 skipped, 27 failed, 25 errors, all in legacy files; only 13 named files from it run in CI (`ci.yml`, job `backend-test`), and the results-service, route and Definition-of-Done tests have no CI coverage.
+
+Next step that needs the owner: one first recording of a new strategy on a clean tree with all five evidence flags (it creates a trial). It would clear rows 7 and 9 and the awaiting-evidence items together.
+
 ## Build order progress
 
 The order is in `BACKTESTS-UI-PLAN.md`, "Build order". One step per conversation, each ending

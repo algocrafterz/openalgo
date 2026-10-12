@@ -5856,3 +5856,24 @@ bad-fill kind (`ENTRY_REJECTED_STOP_BREACHED`, class `BAD_FILL_CLOSE`) in every 
 
 **In plain terms:** the strategy now has one rulebook and every mode reads it. The paper trader can no
 longer take a symbol three times in a day, and its limits match live.
+
+## Backtest MVP Closed Out; EDGE Still Locked (2026-10-12)
+
+**Why.** The backtest system had to be reconciled against the repository before anyone relied on it, and its
+open items sorted into what is finished, what waits for evidence and what needs a decision.
+
+**What exists.**
+- All 48 backtest-stage gates except G4.8 and G6.6 (owner-approved paper-stage exceptions) have an evaluator.
+  Ten of the fourteen P1 capabilities are verified; the Backtests page shows each run's frozen strategy rules,
+  version, fingerprints, verdict with reasons, gates, promotion and next action.
+- The next action now names the `record_run` flag or the attestation that evaluates a not-evaluated gate, and
+  no longer tells the user to re-run a gate that already failed. Wording only; the verdict is unchanged.
+- `signal_engine/docs/BACKTEST-ENGINE-READINESS.md`, section "MVP closure status", is the record.
+
+**Not changed.** No verdict rule, gate threshold or recorded run. IDEA-029 v4 stays NO_EDGE. EDGE is blocked by
+the point-in-time universe (deferred by the owner), the broker tick-size attestation (needs real broker orders)
+and the P1 rows that need a recorded run or an owner decision.
+
+**In plain terms:** the backtest tool is finished as an honest "no edge" machine and cannot be talked into
+"edge". What is left needs real-world input: a new recorded run, real broker orders and two owner decisions.
+
