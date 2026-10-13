@@ -10,7 +10,7 @@ from datetime import datetime
 
 from loguru import logger
 
-from signal_engine import freshness, notifier, startup
+from signal_engine import freshness, notifier, order_reconcile, startup
 from signal_engine.api_client import (
     MarginAPIError,
     cancel_order,
@@ -584,7 +584,16 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
 
     MARKET orders rarely reject but network timeouts are possible. We retry on any
     non-SUCCESS status. After SL cancel the position is unprotected, so we must exit.
+
+    A client-side TIMEOUT is never retried blindly: see order_reconcile for why. The order
+    is resent only when the broker's order book was read and holds no copy of it. When that
+    cannot be established, nothing more is sent for this position until a later attempt
+    reconciles it (the held result is a TIMEOUT, so the caller leaves the position
+    registered and the next exit signal or bar tries again).
     """
+    held = await _settle_prior_uncertain_exit(exit_order, pos)
+    if held is not None:
+        return held
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
     attempt_started = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
@@ -596,26 +605,115 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
             f"{pos.symbol}: {trade_result.message}"
         )
         if trade_result.status == OrderStatus.TIMEOUT:
-            # A client-side TIMEOUT does not mean the broker never got the order -
-            # only that the response never arrived in time. Blindly retrying risks
-            # double-booking the exit (duplicate fill in trades.db, wrong P&L
-            # delta, and per the Indian-broker OCO quirk documented on
-            # _cancel_sl_before_exit, a second SELL can even be treated as a new
-            # SHORT). Confirmed for SL-M orders in production 2026-09-24 (see
-            # executor.py's _find_resting_sl_order); a MARKET exit is exposed to
-            # the identical risk. Check before retrying so a genuine broker fill
-            # is adopted, not duplicated.
-            recovered = await _find_recent_market_exit_fill(exit_order, attempt_started)
-            if recovered is not None:
-                trade_result = recovered
+            outcome = await _reconcile_exit(exit_order, pos, attempt_started)
+            if outcome.status == OrderStatus.SUCCESS:
                 logger.info(
                     f"EXIT for {pos.symbol} confirmed live on the broker despite client "
-                    f"timeout: id={recovered.order_id} (attempt {_attempt})"
+                    f"timeout: id={outcome.order_id} (attempt {_attempt})"
                 )
-                break
+                return outcome
+            if outcome.status == OrderStatus.TIMEOUT:
+                return outcome
         if _attempt < settings.bracket_tp_exit_retries:
             await asyncio.sleep(settings.bracket_retry_delay)
     return trade_result
+
+
+async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
+    """Settle a timed-out exit against the order book.
+
+    SUCCESS: the broker holds it, adopt the id. TIMEOUT: uncertain, the position is marked and
+    a CRITICAL alert raised, do not resend. ERROR: the book was read and has no copy, a resend is
+    safe.
+    """
+    result = await order_reconcile.reconcile_timed_out_order(
+        symbol=exit_order.symbol,
+        action=exit_order.action.value,
+        quantity=exit_order.quantity,
+        since=since,
+        fetch_orderbook=fetch_orderbook,
+        attempts=settings.entry_timeout_recovery_attempts,
+        delay=settings.entry_timeout_recovery_delay_seconds,
+    )
+    if result.outcome == order_reconcile.FILLED:
+        order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
+        if result.duplicate_ids:
+            await _alert_duplicate_fills(exit_order, pos, result)
+        return TradeResult(
+            order_id=result.order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
+        )
+    if result.outcome == order_reconcile.ABSENT:
+        order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
+        return TradeResult(status=OrderStatus.ERROR, message="timed out; no copy on the broker")
+    order_reconcile.mark_uncertain(
+        order_reconcile.UncertainOrder(
+            strategy=pos.strategy, symbol=pos.symbol, action=exit_order.action.value,
+            quantity=exit_order.quantity, since=since, kind="EXIT",
+        )
+    )
+    return await _hold_uncertain_exit(exit_order, pos, result.detail)
+
+
+async def _hold_uncertain_exit(exit_order, pos, detail: str) -> TradeResult:
+    message = (
+        f"UNCERTAIN: {exit_order.action.value} {exit_order.quantity} {pos.symbol} "
+        f"[{pos.strategy}] timed out and could not be confirmed ({detail}); not resent"
+    )
+    logger.critical(f"EXIT {message}")
+    await notifier.notify(
+        f"ORDER UNCONFIRMED: {message}. No further orders go out for this position until the "
+        "broker order book confirms it. Its stop may already be cancelled: check the broker now."
+    )
+    return TradeResult(status=OrderStatus.TIMEOUT, message=message)
+
+
+async def _alert_duplicate_fills(exit_order, pos, result) -> None:
+    ids = ", ".join(result.duplicate_ids)
+    logger.critical(
+        f"EXIT {pos.symbol} [{pos.strategy}]: the broker holds extra completed copies of "
+        f"{exit_order.action.value} {exit_order.quantity} (adopted {result.order_id}, extra: {ids})"
+    )
+    await notifier.notify(
+        f"DUPLICATE FILLS: {pos.symbol} [{pos.strategy}] {exit_order.action.value} "
+        f"{exit_order.quantity} filled more than once (adopted {result.order_id}, extra: {ids}). "
+        "The extras opened a position the engine does not track: check the broker now."
+    )
+
+
+async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
+    """Before any new exit order: resolve an earlier exit that was left unconfirmed.
+
+    None means no hold applies and the exit may proceed. A SUCCESS result adopts the earlier
+    order as this exit. A TIMEOUT result keeps the hold.
+    """
+    pending = order_reconcile.get_uncertain(pos.strategy, pos.symbol)
+    if pending is None or pending.kind != "EXIT":
+        return None
+    result = await order_reconcile.reconcile_timed_out_order(
+        symbol=pending.symbol,
+        action=pending.action,
+        quantity=pending.quantity,
+        since=pending.since,
+        fetch_orderbook=fetch_orderbook,
+        attempts=settings.entry_timeout_recovery_attempts,
+        delay=settings.entry_timeout_recovery_delay_seconds,
+    )
+    if result.outcome == order_reconcile.UNCERTAIN:
+        return await _hold_uncertain_exit(exit_order, pos, result.detail)
+    if result.outcome == order_reconcile.ABSENT:
+        order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
+        logger.warning(f"EXIT {pos.symbol}: earlier unconfirmed exit is not on the broker; exiting afresh")
+        return None
+    if pending.quantity != exit_order.quantity:
+        # The earlier order closed a different size than this exit wants: booking it as this
+        # exit would misstate the position. Keep the hold for a person.
+        return await _hold_uncertain_exit(
+            exit_order, pos, f"earlier order {result.order_id} filled {pending.quantity}, not {exit_order.quantity}"
+        )
+    order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
+    if result.duplicate_ids:
+        await _alert_duplicate_fills(exit_order, pos, result)
+    return TradeResult(order_id=result.order_id, status=OrderStatus.SUCCESS, message="recovered after timeout")
 
 
 async def _find_recent_market_exit_fill(order, since: datetime) -> TradeResult | None:
@@ -1153,6 +1251,9 @@ async def _handle_entry(signal) -> None:
     if not await _entry_passes_risk_gates(signal):
         return
 
+    if await _entry_held_by_unresolved_order(signal):
+        return
+
     capital = await _resolve_entry_capital(signal)
     if capital is None:
         return
@@ -1558,11 +1659,15 @@ async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None
     # and left the tracker). ADANIPORTS 2026-10-01: the 11:20 re-entry timed out and the
     # 10:50 entry (same symbol, side and quantity) was adopted in its place.
     booked_ids = fetch_order_ids_today(signal.symbol)
+    since = datetime.now(IST).replace(microsecond=0)
+    last_read_clean = False
     for attempt in range(1, settings.entry_timeout_recovery_attempts + 1):
         await asyncio.sleep(settings.entry_timeout_recovery_delay_seconds)
         orderbook = await fetch_orderbook()
         if orderbook is None:
+            last_read_clean = False
             continue
+        last_read_clean = True
         for o in orderbook:
             if not isinstance(o, dict):
                 continue
@@ -1577,6 +1682,8 @@ async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None
                 continue
             status = str(o.get("order_status") or o.get("status") or "").lower()
             if status not in ("complete", "filled"):
+                if status not in ("rejected", "cancelled", "canceled", "expired"):
+                    last_read_clean = False  # still working or partly filled: not a clean "no"
                 continue
             order_id = str(o.get("orderid") or o.get("order_id") or "")
             if not order_id:
@@ -1597,11 +1704,73 @@ async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None
             return TradeResult(
                 order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
             )
+    if not last_read_clean:
+        return await _hold_uncertain_entry(signal, order, since)
     logger.info(
         f"Entry timeout recovery for {signal.symbol}: no matching completed order found "
         f"after {settings.entry_timeout_recovery_attempts} checks — treating as a genuine failure"
     )
     return None
+
+
+async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
+    """The entry's fate is unknown (book unreadable or the order still working): block new
+    orders for this strategy and symbol until it is reconciled, and alert.
+
+    KALYANKJIL 2026-10-13: a timed-out BUY 188 filled on the broker and nothing tracked it.
+    """
+    order_reconcile.mark_uncertain(
+        order_reconcile.UncertainOrder(
+            strategy=signal.strategy, symbol=signal.symbol, action=order.action.value,
+            quantity=order.quantity, since=since, kind="ENTRY",
+        )
+    )
+    message = (
+        f"UNCERTAIN: {order.action.value} {order.quantity} {signal.symbol} [{signal.strategy}] "
+        "entry timed out and the broker order book could not confirm it; no further orders for "
+        "this symbol until it is reconciled"
+    )
+    logger.critical(f"ENTRY {message}")
+    await notifier.notify(
+        f"ORDER UNCONFIRMED: {message}. The order may be live at the broker with no stop: check now."
+    )
+    return TradeResult(status=OrderStatus.TIMEOUT, message=message)
+
+
+async def _entry_held_by_unresolved_order(signal) -> bool:
+    """True when an earlier order for this strategy and symbol is still unconfirmed.
+
+    Reconciles first. A completed or absent order releases the hold; a completed one is
+    alerted (the engine does not track it; an exit signal or the time exit will manage it).
+    """
+    pending = order_reconcile.get_uncertain(signal.strategy, signal.symbol)
+    if pending is None:
+        return False
+    result = await order_reconcile.reconcile_timed_out_order(
+        symbol=pending.symbol, action=pending.action, quantity=pending.quantity,
+        since=pending.since, fetch_orderbook=fetch_orderbook,
+        attempts=settings.entry_timeout_recovery_attempts,
+        delay=settings.entry_timeout_recovery_delay_seconds,
+    )
+    if result.outcome == order_reconcile.UNCERTAIN:
+        logger.critical(
+            f"ENTRY blocked for {signal.symbol} [{signal.strategy}]: an earlier {pending.kind} "
+            f"order is still unconfirmed ({result.detail})"
+        )
+        return True
+    order_reconcile.clear_uncertain(signal.strategy, signal.symbol)
+    if result.outcome == order_reconcile.FILLED:
+        logger.critical(
+            f"ENTRY blocked for {signal.symbol} [{signal.strategy}]: the earlier {pending.kind} "
+            f"order {result.order_id} completed at the broker and is not tracked by the engine"
+        )
+        await notifier.notify(
+            f"UNTRACKED FILL: {pending.action} {pending.quantity} {signal.symbol} [{signal.strategy}] "
+            f"order {result.order_id} completed after a timeout. The engine has no stop for it: "
+            "check the broker; an exit signal or the time exit will close it."
+        )
+        return True
+    return False
 
 
 async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
