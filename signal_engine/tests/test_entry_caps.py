@@ -96,7 +96,9 @@ class TestStatedSessionTotal:
 
     def test_two_different_totals_in_the_text_are_refused(self):
         with pytest.raises(tp.SpecConflict, match="1.*2|2.*1"):
-            tp.stated_session_total(["at most 1 trade per symbol per day", "at most 2 trades per symbol per session"])
+            tp.stated_session_total(
+                ["at most 1 trade per symbol per day", "at most 2 trades per symbol per session"]
+            )
 
     def test_an_agreeing_total_is_accepted(self):
         caps = entry_caps_from_spec(
@@ -106,9 +108,7 @@ class TestStatedSessionTotal:
 
     def test_a_disagreeing_total_is_refused_with_both_readings(self):
         with pytest.raises(tp.SpecConflict) as err:
-            entry_caps_from_spec(
-                {"allowed": True, "max_per_symbol_day": 2}, stated_session_total=2
-            )
+            entry_caps_from_spec({"allowed": True, "max_per_symbol_day": 2}, stated_session_total=2)
         assert "2 trades" in str(err.value) and "3" in str(err.value)
 
     def test_a_conflict_is_a_value_error(self):
@@ -238,12 +238,40 @@ class TestFrozenSpecsAreReconciledNotConcealed:
         caps = self._caps("idea-031-*")
         assert (caps.max_entries_per_direction, caps.max_trades_per_day) == (2, 4)
 
-    def test_vwap_reversion_text_and_field_disagree_so_it_is_isolated_not_guessed(self):
-        """The frozen text of IDEA-029 says 'at most 2 trades per symbol per session' while its
-        field says 2 re-entries (3 trades). Neither reading is invented: the spec is refused
-        until a new version states one rule. The recorded v1 to v4 runs used 2 and stand."""
+    def test_vwap_reversion_v2_states_one_rule_two_trades_per_session(self):
+        """IDEA-029 v2 resolves the v1 ambiguity in the direction its own text and its recorded
+        runs took: 2 trades per symbol per session in total, the first entry and one re-entry."""
+        caps = self._caps("idea-029-*")
+        assert (caps.max_trades_per_day, caps.max_entries_per_direction) == (2, None)
+
+    def test_vwap_reversion_v2_reaches_the_engine_as_two_trades(self):
+        from signal_engine.backtest import record_run as rr
+        from signal_engine.backtest.types import RunConfig
+        from signal_engine.research.intake.freeze import freeze
+
+        folder = next(IDEAS.glob("idea-029-*"))
+        frozen = freeze(folder, idea_id="IDEA-029", register_version=False)
+        versions = yaml.safe_load((folder / "versions.yaml").read_text(encoding="utf-8"))
+        assert frozen.strategy_fingerprint == versions[-1]["strategy_fingerprint"]
+        run = rr._apply_entry_caps(RunConfig(), rr._intent_settings(frozen.intent))
+        assert (run.max_trades_per_day, run.max_entries_per_direction) == (2, None)
+
+    def test_vwap_reversion_v1_stays_frozen_and_still_conflicts(self):
+        """The v1 intent each recorded run was made from is untouched (rebuilt from the run
+        folder, fingerprint-checked) and is still refused, not silently reread as v2."""
+        from signal_engine.research.intake.freeze import from_run_folder
+
+        folder = next(IDEAS.glob("idea-029-*"))
+        v1 = from_run_folder(folder / "runs" / "2026-10-06-vwap-2sd-range-mean-reversion-v1")
+        assert v1.intent["re_entry"]["max_per_symbol_day"] == 2
         with pytest.raises(tp.SpecConflict, match="2 trades.*3"):
-            self._caps("idea-029-*")
+            entry_caps_from_spec(
+                v1.intent["re_entry"],
+                stated_session_total=tp.stated_session_total(v1.intent.get("entry")),
+            )
+        versions = yaml.safe_load((folder / "versions.yaml").read_text(encoding="utf-8"))
+        assert [(v["version"], v["parent"]) for v in versions] == [("v1", None), ("v2", "v1")]
+        assert versions[0]["strategy_fingerprint"] == v1.strategy_fingerprint
 
     def test_displacement_without_re_entry_is_one_trade(self):
         assert self._caps("idea-032-*").max_trades_per_day == 1

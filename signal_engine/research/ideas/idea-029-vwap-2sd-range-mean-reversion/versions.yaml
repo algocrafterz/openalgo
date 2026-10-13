@@ -3,3 +3,10 @@
   parent: null
   created_ist: '2026-10-06T19:52:13+05:30'
   note: ''
+- version: v2
+  strategy_fingerprint: 6e036aef21bb1c23a5808059069dfb098469f76c4cde4deb973cb4a02262c5fa
+  parent: v1
+  created_ist: '2026-10-13T15:58:06+05:30'
+  note: 'Resolves the v1 entry-cap ambiguity: rule text says 2 trades per symbol per
+    session, re_entry.max_per_symbol_day 2 read as 3. v2 states 1 re-entry (2 trades
+    total), as the text and the v1 runs did. No run made for v2.'
