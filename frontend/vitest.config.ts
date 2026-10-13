@@ -31,6 +31,10 @@ export default defineConfig({
     // jsdom integration tests (StrategyBuilder, flow panels) ran 2-3.5x slower when every core
     // but one ran a worker, and timed out: 15 failures at 11 workers, 3 at 6, on a 12-core host.
     maxWorkers: '50%',
+    // `npm run test:coverage` pins 2 workers, as CI's 4-vCPU runner gets from 50%. On a 12-core
+    // host, 6 coverage workers ran the slow integration tests 3-4x slower than alone (calendar
+    // 11.2 s vs 3.7 s at 2 workers; flow lookup 3.8 s vs 1.4 s) for no wall-time gain (124 s vs
+    // 129 s), and intermittently past their timeouts.
   },
   resolve: {
     alias: {

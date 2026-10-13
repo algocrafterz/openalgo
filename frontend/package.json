@@ -15,7 +15,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --maxWorkers=2",
     "test:ui": "vitest --ui",
     "test:a11y": "vitest run --testNamePattern='accessibility'",
     "e2e": "playwright test",
