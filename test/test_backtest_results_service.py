@@ -350,7 +350,18 @@ class TestTuningSummary:
         assert t["best_single"]["values"] == {"ema_fast": 5}
         assert t["selected_is_not_the_single_best"] is True
         assert t["pbo"] == {"value": 0.25, "role": "diagnostic"}
+        assert t["constraints"] == {"fully_constrained": False, "basis": None, "unconstrained": 0}
         assert "results" not in t
+
+    def test_a_portfolio_constrained_tuning_is_reported_as_such(self, root):
+        cons = {"fully_constrained": True, "basis": "live caps", "unconstrained": []}
+        _tuning_record(self._folder(root), constraints=cons)
+        _, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert body["tuning"][0]["constraints"] == {
+            "fully_constrained": True,
+            "basis": "live caps",
+            "unconstrained": 0,
+        }
 
     def test_an_unreadable_tuning_record_is_reported_not_hidden(self, root):
         path = _tuning_record(self._folder(root))

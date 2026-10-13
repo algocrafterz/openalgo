@@ -274,6 +274,20 @@ describe('RunAssessment', () => {
       'This run uses the selected values'
     )
     expect(t).toHaveTextContent('Diagnostic only, not a gate')
+    expect(screen.getByTestId('tuning-constraints')).toHaveTextContent(
+      'Not a fully constrained selection'
+    )
+  })
+
+  it('a tuning ranked under the live portfolio limits says so', () => {
+    const constrained: TuningSummary = {
+      ...TUNED,
+      constraints: { fully_constrained: true, basis: 'live caps', unconstrained: 0 },
+    }
+    render(<RunAssessment run={makeRun()} detail={detail()} tuning={[constrained]} />)
+    expect(screen.getByTestId('tuning-constraints')).toHaveTextContent(
+      'Ranked with the live portfolio limits applied'
+    )
   })
 
   it('a selection with a losing neighbour is called fragile', () => {

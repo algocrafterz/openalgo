@@ -185,6 +185,11 @@ function TuningRecord({ t, run }: { t: TuningSummary; run: RunRecord }) {
         {t.combinations} settings tried ({t.usable} with enough trades) on sessions up to{' '}
         {t.in_sample_end}; sessions from {t.held_out_from} were not read.
       </li>
+      <li data-testid="tuning-constraints">
+        {t.constraints?.fully_constrained
+          ? 'Ranked with the live portfolio limits applied (open positions, trades per day, loss limits).'
+          : 'Not a fully constrained selection: settings were ranked without the live portfolio limits, so the ranking may change once they apply.'}
+      </li>
       {sel ? (
         <>
           <li>

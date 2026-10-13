@@ -380,6 +380,13 @@ def _tuning_summary(path: Path, base: Path) -> dict[str, Any]:
     out["best_single"] = _tuned_row(record.get("best_single"), record.get("grid"))
     pbo = record.get("pbo") if isinstance(record.get("pbo"), dict) else {}
     out["pbo"] = {"value": _jsonable(pbo.get("value")), "role": "diagnostic"}
+    # A record without the block predates portfolio caps in tuning: never shown as constrained.
+    cons = record.get("constraints") if isinstance(record.get("constraints"), dict) else {}
+    out["constraints"] = {
+        "fully_constrained": cons.get("fully_constrained") is True,
+        "basis": _str_or_none(cons.get("basis")),
+        "unconstrained": len(cons.get("unconstrained") or []),
+    }
     return out
 
 
@@ -656,6 +663,7 @@ def _resolve_run_folder(
 #: Run records with an artifact folder: schema 3, and schema 4 (published dataset version,
 #: preflight and run status; signal_engine plan Phase 4). Schema 2 records have no folder.
 _ARTIFACT_SCHEMAS = (3, 4)
+
 
 def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any]:
     return {

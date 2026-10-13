@@ -696,6 +696,8 @@ export interface TuningSummary {
   selected_is_not_the_single_best?: boolean | null
   /** Diagnostic only: measures single-best selection, no gate reads it. */
   pbo?: { value: number | null; role: 'diagnostic' }
+  /** True only when every setting was ranked with the live portfolio entry limits applied. */
+  constraints?: { fully_constrained: boolean; basis: string | null; unconstrained: number }
 }
 
 // ---- Run comparison (build order 6) ---------------------------------------------------------
