@@ -75,10 +75,29 @@ class TestHandleMessage:
         self.dispatch.assert_not_awaited()
         assert self.decline.await_args.kwargs["stage"] == "superseded"
 
-    async def test_a_pine_exit_is_never_suppressed(self, monkeypatch):
+    async def test_a_pine_exit_for_a_position_the_engine_tracks_still_passes(self, monkeypatch):
+        monkeypatch.setattr(main, "tracker", SimpleNamespace(find_position=lambda sym, strat: object()))
         await self._send(monkeypatch, self._signal(Direction.EXIT))
         self.dispatch.assert_awaited_once()
         self.decline.assert_not_awaited()
+
+    async def test_a_pine_exit_with_no_tracked_position_on_a_superseded_symbol_is_declined(
+        self, monkeypatch
+    ):
+        """2026-10-13 HINDALCO: the Pine BREAKOUT entry was never traded (Python owns the symbol), yet
+        its TP3 exit reached broker recovery and sent a BUY 320 that opened an unmanaged long."""
+        monkeypatch.setattr(main, "settings", SimpleNamespace(runner=cfg(universe=("HINDALCO",))))
+        monkeypatch.setattr(main, "tracker", SimpleNamespace(find_position=lambda sym, strat: None))
+        await self._send(monkeypatch, self._signal(Direction.EXIT, "HINDALCO"))
+        self.dispatch.assert_not_awaited()
+        assert self.decline.await_args.kwargs["stage"] == "superseded"
+
+    async def test_a_pine_exit_with_no_tracked_position_on_an_uncovered_symbol_still_passes(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(main, "tracker", SimpleNamespace(find_position=lambda sym, strat: None))
+        await self._send(monkeypatch, self._signal(Direction.EXIT, "RECLTD"))
+        self.dispatch.assert_awaited_once()
 
     async def test_a_pine_entry_on_an_uncovered_symbol_is_traded(self, monkeypatch):
         await self._send(monkeypatch, self._signal(Direction.LONG, "RECLTD"))

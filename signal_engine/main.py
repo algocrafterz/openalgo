@@ -411,6 +411,13 @@ async def _recover_position_from_broker(signal) -> "TrackedPosition | None":
     )
     exchange = signal.exchange or settings.exchange
     product = signal.product or settings.product
+    if tracker.other_strategy_exit_in_flight(signal.symbol, exchange, product, signal.strategy):
+        # The attribution below is only valid when no other strategy's fill is half-booked.
+        logger.warning(
+            f"EXIT: {signal.symbol} for {signal.strategy} not recovered: another strategy is "
+            "mid-exit on the same broker position, so its share cannot be derived yet; no order sent"
+        )
+        return None
     # The broker nets by symbol across strategies, so take only this strategy's share: a Pine
     # TP alert must not sell shares that belong to BREAKOUT-PY (TCS, 2026-10-01).
     api_qty = await tracker.fetch_own_position(signal.symbol, signal.strategy, exchange, product)
@@ -2143,7 +2150,7 @@ async def handle_message(text: str) -> None:
         return
 
     # Parity guard: while a Python strategy supersedes this Pine tag on the symbol, a Pine ENTRY would be a
-    # duplicate paper trade. The alert is kept as a declined row for the comparison; EXITs always pass.
+    # duplicate paper trade. The alert is kept as a declined row for the comparison. A superseded tag's EXIT passes only when the engine tracks a position for it.
     if signal.direction != Direction.EXIT and single_source.pine_superseded(
         settings.runner, signal.strategy, signal.symbol
     ):
@@ -2153,6 +2160,23 @@ async def handle_message(text: str) -> None:
         )
         await _decline(
             signal, stage="superseded", reason="the Python strategy is the sole execution source on this symbol"
+        )
+        return
+
+    # A superseded Pine tag never opens a position on this symbol, so an EXIT with no tracked position can
+    # only concern a trade the engine does not own. Letting it reach broker recovery rebuilt a position from
+    # the net broker quantity and sent an order (2026-10-13 HINDALCO: BUY 320, an unmanaged long).
+    if (
+        signal.direction == Direction.EXIT
+        and single_source.pine_superseded(settings.runner, signal.strategy, signal.symbol)
+        and tracker.find_position(signal.symbol, signal.strategy) is None
+    ):
+        logger.warning(
+            f"Pine exit not acted on for {signal.strategy} {signal.symbol}: the Python strategy owns "
+            "this symbol and the engine holds no position for the Pine tag"
+        )
+        await _decline(
+            signal, stage="superseded", reason="exit for a superseded Pine tag with no tracked position"
         )
         return
 

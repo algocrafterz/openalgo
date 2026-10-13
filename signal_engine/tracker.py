@@ -359,6 +359,23 @@ class PositionTracker:
             total += p.quantity if p.direction == Direction.LONG else -p.quantity
         return total
 
+    def other_strategy_exit_in_flight(
+        self, symbol: str, exchange: str, product: str, exclude_strategy: str
+    ) -> bool:
+        """True while another strategy is mid-exit on the same broker position.
+
+        The broker nets by symbol, and an exit order can fill before the tracker unregisters the
+        position. In that window net minus other-strategy quantity is wrong for everyone else
+        (2026-10-13 HINDALCO: net 0, tracker still held +320, so the other tag's share read as
+        -320 and a BUY 320 went out). Callers deriving a position from the net must wait.
+        """
+        return any(
+            p.strategy != exclude_strategy
+            and (p.symbol, p.exchange, p.product) == (symbol, exchange, product)
+            and p.exit_pending
+            for p in self._positions.values()
+        )
+
     async def fetch_own_position(
         self, symbol: str, strategy: str, exchange: str, product: str
     ) -> "int | None":
