@@ -266,6 +266,8 @@ export interface DerivedVerdict {
   reasons: VerdictReason[]
   /** For example `engine readiness: ...` when EDGE was held at MARGINAL. */
   caps_applied: string[]
+  /** Limitations that qualify the verdict without capping it, e.g. a survivor-biased universe. */
+  qualifications?: string[]
 }
 
 export interface PromotionStageResult {
@@ -660,6 +662,40 @@ export interface BacktestIdeaResponse extends Envelope {
   /** A plain sentence when versions.yaml exists but could not be read; null when it is fine or absent. */
   versions_error?: string | null
   version_pointers?: VersionPointers
+  /** Every parameter-tuning record of the idea, oldest first. Empty when no tuning ran. */
+  tuning?: TuningSummary[]
+}
+
+/** One grid combination of a tuning record and its neighbourhood (itself and one step around). */
+export interface TunedCombination {
+  values: Record<string, unknown>
+  trades: number | null
+  net_r: number | null
+  region_worst_net_r: number | null
+  region_median_net_r: number | null
+  region_size: number | null
+  /** Grid points within one step in every parameter; region_size below it means gaps. */
+  region_possible: number | null
+}
+
+/** Headline of a tuning record (backtest/tuning.py). Read only; the UI never re-ranks. */
+export interface TuningSummary {
+  tuning_id: string
+  /** Set when the record could not be read; every other field is then absent. */
+  error?: string
+  created_ist?: string | null
+  objective?: string | null
+  grid?: Record<string, unknown[]> | null
+  min_trades?: number | null
+  in_sample_end?: string | null
+  held_out_from?: string | null
+  combinations?: number | null
+  usable?: number
+  selected?: TunedCombination | null
+  best_single?: TunedCombination | null
+  selected_is_not_the_single_best?: boolean | null
+  /** Diagnostic only: measures single-best selection, no gate reads it. */
+  pbo?: { value: number | null; role: 'diagnostic' }
 }
 
 // ---- Run comparison (build order 6) ---------------------------------------------------------
@@ -849,7 +885,11 @@ export const backtestResultsApi = {
       'Failed to load backtest history'
     ),
 
-  trades: (ideaId: string, runId: string, query: TradesQuery = {}): Promise<BacktestTradesResponse> => {
+  trades: (
+    ideaId: string,
+    runId: string,
+    query: TradesQuery = {}
+  ): Promise<BacktestTradesResponse> => {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined && value !== null && value !== '') params.set(key, String(value))

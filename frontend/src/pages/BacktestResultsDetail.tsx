@@ -7,6 +7,7 @@ import {
   type RunDetail,
   type RunRecord,
   type TradeSubset,
+  type TuningSummary,
 } from '@/api/backtestResults'
 import { BacktestScope } from '@/components/backtest-results/BacktestScope'
 import { CompareView } from '@/components/backtest-results/CompareView'
@@ -17,6 +18,7 @@ import { PromotionGate } from '@/components/backtest-results/PromotionGate'
 import { RelatedStrategies } from '@/components/backtest-results/RelatedStrategies'
 import { Reproducibility } from '@/components/backtest-results/Reproducibility'
 import { ResearchNotes } from '@/components/backtest-results/ResearchNotes'
+import { RunAssessment } from '@/components/backtest-results/RunAssessment'
 import { RunEvidence, type TradesDrillState } from '@/components/backtest-results/RunEvidence'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
 import { RunIdentity } from '@/components/backtest-results/RunIdentity'
@@ -57,12 +59,14 @@ function RunDetailBlocks({
   run,
   detail,
   isLatestRun,
+  tuning,
   onShowTrades,
 }: {
   idea: IdeaCardLike
   run: RunRecord
   detail: RunDetail
   isLatestRun: boolean
+  tuning?: TuningSummary[]
   onShowTrades?: (subset: TradeSubset) => void
 }) {
   return (
@@ -90,6 +94,7 @@ function RunDetailBlocks({
         evaluation={run.evaluation ?? null}
         onShowTrades={onShowTrades}
       />
+      {detail.captured && <RunAssessment run={run} detail={detail} tuning={tuning} />}
       <PromotionGate
         promotion={detail.promotion}
         evaluation={run.evaluation ?? null}
@@ -223,6 +228,7 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
           run={current}
           detail={detail}
           isLatestRun={isLatestRun}
+          tuning={data.tuning ?? []}
           onShowTrades={detail.captured && detail.has_trades ? openTrades : undefined}
         />
       )}
