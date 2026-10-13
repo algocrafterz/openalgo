@@ -68,10 +68,14 @@ function ResearcherConclusion({
   runs: RunRecord[]
   shownRunId: string | null
 }) {
-  if (!idea.result && !idea.revisit_when) return null
+  const basis = idea.rejection_basis ?? idea.block_reason
   return (
     <div className="max-w-5xl space-y-1 text-sm" data-testid="researcher-conclusion">
       <div className="text-xs font-medium">Researcher's recorded conclusion</div>
+      <p data-testid="recorded-status">
+        Recorded status: {idea.status}
+        {basis ? ` (${basis})` : ''}
+      </p>
       {idea.result && (
         <>
           <p className="text-xs text-muted-foreground" data-testid="conclusion-source">
@@ -235,27 +239,30 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
           </h1>
           <GlossaryDrawer />
         </div>
-        <div className="flex flex-wrap gap-2">
-          <StatusBadge status={idea.status} />
-          {/* One chip says it once: a rejected idea with a stated basis shows the basis. */}
-          {idea.rejection_basis ? (
-            <Badge variant="outline" data-testid="rejection-basis">
-              rejected: {idea.rejection_basis}
-            </Badge>
-          ) : idea.block_reason ? (
-            <Badge variant="outline" data-testid="block-reason">
-              blocked: {idea.block_reason}
-            </Badge>
-          ) : (
-            !detail &&
-            isLatestRun && (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                Latest run verdict
-                <VerdictBadge verdict={idea.verdict} />
-              </span>
-            )
-          )}
-        </div>
+        {/* With a decision brief, the raw status labels move into "How this decision was reached". */}
+        {!(detail?.captured && !detailFailed) && (
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge status={idea.status} />
+            {/* One chip says it once: a rejected idea with a stated basis shows the basis. */}
+            {idea.rejection_basis ? (
+              <Badge variant="outline" data-testid="rejection-basis">
+                rejected: {idea.rejection_basis}
+              </Badge>
+            ) : idea.block_reason ? (
+              <Badge variant="outline" data-testid="block-reason">
+                blocked: {idea.block_reason}
+              </Badge>
+            ) : (
+              !detail &&
+              isLatestRun && (
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  Latest run verdict
+                  <VerdictBadge verdict={idea.verdict} />
+                </span>
+              )
+            )}
+          </div>
+        )}
         <p className="text-sm max-w-3xl">{idea.summary}</p>
         {recordInHeader && idea.result && (
           <p className="text-sm max-w-3xl">

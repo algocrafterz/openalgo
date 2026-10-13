@@ -89,6 +89,9 @@ describe('BacktestResultsDetail decision-first view', () => {
     expect(screen.getByTestId('summary-verdict')).not.toBeVisible()
     expect(screen.getByTestId('researcher-conclusion')).not.toBeVisible()
     expect(screen.queryByText(/^Conclusion:/)).not.toBeInTheDocument()
+    // The raw status labels are not in the header; the plain recommendation leads.
+    expect(screen.queryByTestId('rejection-basis')).not.toBeInTheDocument()
+    expect(screen.getByTestId('recorded-status')).not.toBeVisible()
   })
 
   it('shows no gate ids or statistics in the visible decision', async () => {
@@ -114,6 +117,9 @@ describe('BacktestResultsDetail decision-first view', () => {
     expect(screen.getByTestId('summary-verdict')).toBeVisible()
     expect(screen.getByTestId('summary-failed')).toHaveTextContent('G3.2')
     expect(screen.getByTestId('researcher-conclusion')).toHaveTextContent('G2.2 t 5.66')
+    expect(screen.getByTestId('recorded-status')).toHaveTextContent(
+      `Recorded status: ${IDEA.status} (not-robust)`
+    )
     expect(screen.getByTestId('conclusion-source')).toHaveTextContent(
       `Recorded for the run shown (${RUN.run_id}).`
     )
