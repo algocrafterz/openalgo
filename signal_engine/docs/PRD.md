@@ -5963,6 +5963,20 @@ The owner asked to stop expanding the backtester and finish a dependable researc
   passed, fell short (observed against needed) or lack evidence, the checks owed only at paper or live, limitations
   (survivorship qualification, data-quality warnings, thin sample), tuning evidence (or "not performed") and
   evidence-linked follow-ups. It reads the run record and `tuning` from the idea endpoint only; it derives no verdict.
+- **Portfolio caps in tuning.** Every combination runs the G5.2 live-caps stage and is ranked on its primary
+  capped pass, the policy the recorded run's G5.2 gate judges. If any combination cannot be capped (swing, panel,
+  no stops, base-replay mismatch), all are ranked uncapped and the record and GUI say the selection is not fully
+  constrained.
+- **IDEA-029 spec v2.** v1's rule text (2 trades per symbol per session) and `re_entry.max_per_symbol_day: 2`
+  (3 trades) disagreed. v2 (parent v1) states 1 re-entry, 2 trades in total, as the text said and the v1 runs
+  traded. v1, its runs and its NO_EDGE verdict are unchanged; no run or trial was made.
+- **Tick reference.** The 2024-06-10 and 2025-04-15 changes are verified against NSE/CMTR/62174 and
+  NSE/CMTR/67133 themselves (sha256 recorded). Still secondary: that Rs 0.05 applied unchanged from 2016-01-01
+  (62174 confirms it only as the tick in force in May 2024) and the stock-futures date.
+- **Frontend suite.** `navigation.test.ts` expected the nav before P&L, Performance and Backtests were added
+  deliberately; updated. A StrategyBuilder margin test raced a legitimate fresh request; it now asserts the stale
+  value never shows. Vitest runs at most 50% of cores as workers (11 workers gave 15 timeouts, 6 gave 3), and the
+  two StrategyBuilder files apply their existing 15 s integration budget to every test (each takes 1 to 4.3 s alone).
 - **Status.** The epic is complete for research use. Live readiness is a separate milestone.
 
 ## EOD review fixes: combined time-exit close and over-long day summary (2026-10-13)
