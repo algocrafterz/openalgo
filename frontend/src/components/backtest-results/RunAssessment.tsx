@@ -108,11 +108,22 @@ function Findings({ a }: { a: Assessment }) {
         </div>
       )}
       {a.missing.length > 0 && (
-        <div>
+        <div data-testid="assessment-missing-section">
           <div className="text-xs font-medium text-amber-700">
-            Not yet established (missing evidence, not a failure)
+            Not yet established ({a.missing.length}): missing evidence for this run, not a failure
           </div>
-          <FindingList items={a.missing} testId="assessment-missing" />
+          <FindingList items={a.missing.slice(0, MISSING_SHOWN)} testId="assessment-missing" />
+          {a.missing.length > MISSING_SHOWN && (
+            <details data-testid="assessment-missing-more">
+              <summary className="cursor-pointer text-sm">
+                Show the other {a.missing.length - MISSING_SHOWN}
+              </summary>
+              <FindingList
+                items={a.missing.slice(MISSING_SHOWN)}
+                testId="assessment-missing-rest"
+              />
+            </details>
+          )}
         </div>
       )}
       <details data-testid="assessment-worked">
@@ -129,6 +140,29 @@ function Findings({ a }: { a: Assessment }) {
         strategy.
       </p>
     </div>
+  )
+}
+
+/** The most important applicable gates without evidence, shown before the expander. */
+const MISSING_SHOWN = 3
+
+function RecordedUnverified({ items }: { items: string[] }) {
+  if (items.length === 0) return null
+  return (
+    <details data-testid="assessment-recorded-unverified">
+      <summary className="cursor-pointer text-sm">
+        Recorded at run time as not yet verified ({items.length})
+      </summary>
+      <p className="text-xs text-muted-foreground">
+        What this run's record listed as not yet verified when it was made. It describes that run,
+        not the current state of the engine, which the readiness ledger holds.
+      </p>
+      <ul className="list-disc pl-5 text-sm">
+        {items.map((t) => (
+          <li key={t}>{t}</li>
+        ))}
+      </ul>
+    </details>
   )
 }
 
@@ -274,6 +308,7 @@ export function RunAssessment({
       <CostLine run={run} />
       <Findings a={a} />
       <Limitations items={a.limitations} />
+      <RecordedUnverified items={a.recordedUnverified} />
       <TuningEvidence tuning={tuning} run={run} />
       <Recommendations a={a} />
       <p className="text-xs text-muted-foreground">

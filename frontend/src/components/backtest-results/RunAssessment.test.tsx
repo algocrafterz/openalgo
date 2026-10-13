@@ -176,6 +176,83 @@ describe('RunAssessment', () => {
     )
   })
 
+  it('shows the three highest-priority missing items and keeps the rest behind an expander', () => {
+    const run = makeRun({
+      evaluation: evaluation([
+        row('G1.2', 'fail', { value: -0.1, threshold: '>= 0.05' }),
+        row('G1.5', 'not_evaluated', { hard: false }),
+        row('G1.6', 'not_evaluated'),
+        row('G2.1', 'not_evaluated', { hard: false }),
+        row('G2.2', 'not_evaluated'),
+        row('G3.2', 'not_evaluated'),
+      ]),
+    })
+    render(
+      <RunAssessment run={run} detail={detail({ promotion: promotion(['G1', 'G2', 'G3']) })} />
+    )
+    const missing = screen.getByTestId('assessment-missing-section')
+    expect(missing).toHaveTextContent('Not yet established (5)')
+    // Hard gates first, in gate order; the soft ones wait in the expander.
+    const top = within(screen.getByTestId('assessment-missing')).getAllByRole('listitem')
+    expect(top.map((li) => li.textContent?.split(' ')[0])).toEqual(['G1.6', 'G2.2', 'G3.2'])
+    const more = screen.getByTestId('assessment-missing-more')
+    expect(more).not.toHaveAttribute('open')
+    expect(more).toHaveTextContent('Show the other 2')
+    expect(within(more).getAllByRole('listitem')).toHaveLength(2)
+    // Failed gates are never collapsed.
+    expect(screen.getByTestId('assessment-shortfalls')).toBeVisible()
+  })
+
+  it('three or fewer missing items need no expander', () => {
+    const run = makeRun({ evaluation: evaluation([row('G2.1', 'not_evaluated')]) })
+    render(<RunAssessment run={run} detail={detail()} />)
+    expect(screen.queryByTestId('assessment-missing-more')).toBeNull()
+  })
+
+  it('the run record capability list is collapsed and labelled as of run time, not current', () => {
+    render(
+      <RunAssessment
+        run={makeRun({ metrics: { ...makeRun().metrics, trades: 1200 } })}
+        detail={detail({
+          missing_capabilities: ['Strategy versions', 'Spec validation'],
+          data_quality: {
+            schema: 1,
+            status: 'WARNING',
+            affects_validity: false,
+            thresholds: {},
+            items: [
+              {
+                check: 'gaps',
+                severity: 'warning',
+                detail: '3 sessions missing',
+                count: 3,
+                symbols: [],
+              },
+            ],
+            summary: {},
+            dropped: {},
+            policy: { corporate_actions: '', closing_auction: '', timestamps: '' },
+          },
+        })}
+      />
+    )
+    const recorded = screen.getByTestId('assessment-recorded-unverified')
+    expect(recorded).not.toHaveAttribute('open')
+    expect(recorded).toHaveTextContent('Recorded at run time as not yet verified (2)')
+    expect(recorded).toHaveTextContent('not the current state of the engine')
+    expect(recorded).toHaveTextContent('Strategy versions')
+    // Material data-quality warnings stay in the visible limitations; the record list does not.
+    const limits = screen.getByTestId('assessment-limitations')
+    expect(limits).toHaveTextContent('Data quality: 3 sessions missing')
+    expect(limits).not.toHaveTextContent('Strategy versions')
+    expect(screen.queryByText(/Engine capability not modelled/)).toBeNull()
+  })
+
+  it('a run with no recorded capability list shows no such section', () => {
+    render(<RunAssessment run={makeRun()} detail={detail()} />)
+    expect(screen.queryByTestId('assessment-recorded-unverified')).toBeNull()
+  })
+
   it('an invalid run: validity failures are named and missing evidence is not a failure', () => {
     const run = makeRun({
       evaluation: evaluation([row('G2.1', 'not_evaluated', { threshold: '>= 200 trades' })]),

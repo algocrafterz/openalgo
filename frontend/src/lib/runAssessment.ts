@@ -35,6 +35,11 @@ export interface RunAssessment {
   later: number
   notApplicable: number
   limitations: string[]
+  /**
+   * The capabilities this run's record listed as not yet verified when it was made. A fact about
+   * that run, frozen with it; not the engine's current state, which only the readiness ledger holds.
+   */
+  recordedUnverified: string[]
   recommendations: Recommendation[]
 }
 
@@ -150,9 +155,6 @@ function limitations(run: RunRecord, detail: RunDetail): string[] {
       `Short history: ${run.metrics.days} trading days, so annualised ratios are extrapolated.`
     )
   }
-  for (const cap of detail.missing_capabilities ?? []) {
-    out.push(`Engine capability not modelled: ${cap}`)
-  }
   return out
 }
 
@@ -179,7 +181,11 @@ export function assessRun(
     .sort((a, b) => Number(b.hard) - Number(a.hard))
   const shortfalls = rows.filter((r) => r.status === 'fail').map(finding)
   const pending = rows.filter((r) => r.status === 'not_evaluated')
-  const missing = pending.filter((r) => inStage(r.gate, stage)).map(finding)
+  // Hard gates first, then gate order (Array.prototype.sort is stable).
+  const missing = pending
+    .filter((r) => inStage(r.gate, stage))
+    .map(finding)
+    .sort((a, b) => Number(b.hard) - Number(a.hard))
   return {
     validity: validity(detail),
     worked,
@@ -188,6 +194,7 @@ export function assessRun(
     later: pending.length - missing.length,
     notApplicable: rows.filter((r) => r.status === 'not_applicable').length,
     limitations: limitations(run, detail),
+    recordedUnverified: [...(detail.missing_capabilities ?? [])],
     recommendations: recommendations(shortfalls, missing, tuning),
   }
 }
