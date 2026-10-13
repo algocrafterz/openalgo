@@ -1,0 +1,61 @@
+# NSE cash-segment (equity) tick size by price, by effective date.
+#
+# Used by backtest/tick_reference.py to snap and to validate stop triggers on the tick grid that was
+# in force on each trade's date. A stop is a cash-equity order; stock futures inherit the tick of
+# the underlying (FAOP67134, 13 Mar 2025).
+#
+# Tier rule in every regime: the exchange reviews tick sizes monthly, and the closing price on the
+# last trading day of a month fixes the tier for the next month. So the tier of a session comes
+# from the PREVIOUS month's last close.
+#
+# Verification status. The regimes and effective dates below were checked against several
+# consistent secondary sources (broker and press notices of the circulars) on 2026-10-13. The primary
+# NSE circular PDFs could not be opened from this environment (requests timed out), so
+# `verification: secondary`. Re-verify against the primary circulars before relying on a date to the
+# day, and change this file deliberately, in this repository, with a dated reason.
+#
+# Coverage. `coverage_start` is the earliest date this repository's data uses; the Rs 0.05 regime
+# is stated by the sources to have applied before 2024-06-10 but this file does not claim its start
+# date. A date before `coverage_start`, or in a gap, has no tick: the validation reports it as
+# not covered and never assumes a tick.
+version: 1
+verified_on: 2026-10-13
+verification: secondary
+coverage_start: 2016-01-01
+series: [EQ, BE, BZ, BO, RL, AF]
+excluded_series_note: ETFs have their own ticks and are outside this table.
+regimes:
+  - id: flat-0.05
+    effective_from: 2016-01-01
+    effective_to: 2024-06-09
+    source: >-
+      Five-paisa tick for all cash-segment securities before the May 2024 circular
+      (press coverage of NSE/CMTR/62174, 24 May 2024).
+    tiers:
+      - {upper: null, tick: 0.05}
+  - id: two-tier-2024
+    effective_from: 2024-06-10
+    effective_to: 2025-04-14
+    source: >-
+      NSE/CMTR/62174, 24 May 2024: below Rs 250 Re 0.01; Rs 250 and above Rs 0.05; reviewed monthly.
+      Cash segment effective 2024-06-10 (stock futures from 2024-07-08).
+    tiers:
+      - {upper: 250, inclusive: false, tick: 0.01}
+      - {upper: null, tick: 0.05}
+  - id: six-tier-2025
+    effective_from: 2025-04-15
+    effective_to: null
+    source: >-
+      NSE/CMTR/67133, 13 Mar 2025 (partially modifies 62174), effective trade date 2025-04-15. A
+      band's upper edge belongs to the finer tier (Rs 1,000 is Rs 0.05, Rs 5,000 is Rs 0.10).
+    tiers:
+      - {upper: 250, inclusive: false, tick: 0.01}
+      - {upper: 1000, inclusive: true, tick: 0.05}
+      - {upper: 5000, inclusive: true, tick: 0.10}
+      - {upper: 10000, inclusive: true, tick: 0.50}
+      - {upper: 20000, inclusive: true, tick: 1.00}
+      - {upper: null, tick: 5.00}
+sources:
+  - https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf
+  - https://nsearchives.nseindia.com/content/circulars/FAOP67134.pdf
+  - https://nsearchives.nseindia.com/web/sites/default/files/inline-files/Tick%20size%20of%20securities%20in%20the%20Capital%20Market%20Segment%20and%20Stock%20Futures.pdf
