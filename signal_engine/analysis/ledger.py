@@ -471,7 +471,7 @@ def _settle_combined_closes(positions: list[Position], fills: dict[str, dict], m
             fill_day = _parse_ts(f.get("timestamp"))
             if (fill_day and fill_day.date() != day) or f["qty"] != total:
                 continue
-            for p, x in legs:
+            for _, x in legs:
                 x.fill_price, x.fill_qty, x.fill_at = f["price"], x.order_qty, f["timestamp"]
             matched_ids.add(oid)
             for p in {id(p): p for p, _ in legs}.values():
