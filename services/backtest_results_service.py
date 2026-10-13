@@ -692,6 +692,7 @@ def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any
         "cost_components": None,
         "has_trades": False,
         "has_ledgers": False,
+        "evaluations": {"corrections": [], "portfolio": None, "diagnostics": []},
     }
 
 
@@ -858,7 +859,106 @@ def get_run_detail(
     detail = _empty_run_detail(run_id, 3, True)
     detail["manifest_sha256"] = record.get("manifest_sha256")
     _read_run_folder(folder, runs_dir, run_id, detail)
+    detail["evaluations"] = read_evaluations(
+        _idea_folder(idea, root), run_id, root / "research" / "ideas", record)
     return True, {"status": "success", "run": detail}, 200
+
+
+# ---- Evaluation sidecars: corrections and derived evidence beside a sealed run ---------------
+
+#: Most points of a portfolio series sent to the page.
+_MAX_PORTFOLIO_POINTS = 500
+_GATE_KEY = re.compile(r"^G\d+\.\d+\Z")
+_ROW_KEYS = ("status", "value", "threshold", "evidence")
+
+
+def _thin(points: Any, keep_min: bool = False) -> list:
+    """At most `_MAX_PORTFOLIO_POINTS` [day, value] pairs, the first and last always kept."""
+    rows = [p for p in points if isinstance(p, list) and len(p) == 2] if isinstance(points, list) else []
+    if len(rows) <= _MAX_PORTFOLIO_POINTS:
+        return rows
+    inner = rows[1:-1]
+    size = math.ceil(len(inner) / (_MAX_PORTFOLIO_POINTS - 2))
+    buckets = [inner[i : i + size] for i in range(0, len(inner), size)]
+    middle = [min(b, key=lambda p: p[1]) if keep_min else b[-1] for b in buckets]
+    return [rows[0], *middle, rows[-1]]
+
+
+def _portfolio_view(block: dict[str, Any], source: str, meta: dict[str, Any]) -> dict[str, Any]:
+    if "unavailable" in block:
+        return {"source": source, "unavailable": str(block["unavailable"]), **meta}
+    series = _dict(block.get("series"))
+    return {
+        "source": source,
+        "method": block.get("method"),
+        "capital_rs": block.get("capital_rs"),
+        "notional_rs": block.get("notional_rs"),
+        "slots": block.get("slots"),
+        "cost_column": block.get("cost_column"),
+        "stats": _dict(block.get("stats")),
+        "alternate_cost": block.get("alternate_cost"),
+        "reconciliation": block.get("reconciliation"),
+        "equity_pct": _thin(series.get("equity_pct")),
+        "drawdown_pct": _thin(series.get("drawdown_pct"), keep_min=True),
+        "monthly_pct": [m for m in series.get("monthly_pct") or [] if isinstance(m, dict)],
+        **meta,
+    }
+
+
+def _corrections(doc: dict[str, Any], meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Gate rows as recorded and as corrected, from either sidecar layout."""
+    gates = doc.get("gates") if isinstance(doc.get("gates"), dict) else {
+        k: v for k, v in doc.items() if _GATE_KEY.match(k)}
+    out = []
+    for gate, entry in sorted(gates.items()):
+        recorded, corrected = _dict(_dict(entry).get("recorded")), _dict(_dict(entry).get("corrected"))
+        if not recorded or not corrected:
+            continue
+        out.append({"gate": gate,
+                    "recorded": {k: recorded.get(k) for k in _ROW_KEYS},
+                    "corrected": {k: corrected.get(k) for k in _ROW_KEYS},
+                    "changed_status": recorded.get("status") != corrected.get("status"),
+                    **meta})
+    return out
+
+
+def read_evaluations(
+    idea_folder: Path, run_id: str, base: Path, record: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """What `evaluations/<run_id>/` adds to a sealed run, never replacing the record.
+
+    `corrections` are gate rows re-scored after an evaluator fix (latest file wins per gate);
+    `portfolio` is the record's own daily book when it has one, else the latest reconstructed
+    one; `diagnostics` are cited findings that are not gates. Files are read in name order,
+    which is their IST timestamp order.
+    """
+    out: dict[str, Any] = {"corrections": [], "portfolio": None, "diagnostics": []}
+    by_gate: dict[str, dict[str, Any]] = {}
+    folder = idea_folder / "evaluations" / run_id
+    if folder.is_dir() and not folder.is_symlink():
+        for path in sorted(folder.glob("*.json")):
+            doc = _read_json(path, base)
+            if not isinstance(doc, dict) or doc.get("run_id") != run_id:
+                continue
+            meta = {"file": path.name, "evaluated_ist": _str_or_none(
+                doc.get("evaluated_ist") or doc.get("recorded_ist")),
+                "reason": _str_or_none(doc.get("reason"))}
+            kind = doc.get("kind")
+            if kind == "corrected_gate_evaluation":
+                by_gate.update({c["gate"]: c for c in _corrections(doc, meta)})
+            elif kind == "reconstructed_portfolio" and isinstance(doc.get("portfolio"), dict):
+                out["portfolio"] = {**_portfolio_view(doc["portfolio"], "reconstructed", meta),
+                                    "session_counts": _dict(doc.get("session_counts")),
+                                    "cost_basis": _str_or_none(doc.get("cost_basis"))}
+            elif kind == "cited_diagnostic":
+                out["diagnostics"].append(_jsonable({k: v for k, v in doc.items()
+                                                     if k not in ("kind", "run_id")}))
+    out["corrections"] = [by_gate[g] for g in sorted(by_gate)]
+    recorded = (record or {}).get("portfolio")
+    if isinstance(recorded, dict):
+        out["portfolio"] = _portfolio_view(recorded, "recorded", {"file": None,
+                                           "evaluated_ist": None, "reason": None})
+    return out
 
 
 # ---- Evidence read-model: validity, data quality, cost components, trades, lineage ------------
