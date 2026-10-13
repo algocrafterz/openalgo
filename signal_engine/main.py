@@ -363,7 +363,7 @@ async def _handle_exit_locked(signal) -> None:
             # is the only row ever written for that leg (see db.fetch_day_trades()).
             return
     else:
-        await _handle_exit_order_failure(pos, trade_result)
+        await _handle_exit_order_failure(pos, trade_result, stop_cancelled=bool(sl_cancelled))
 
     save(signal, exit_order, trade_result)
 
@@ -1184,7 +1184,7 @@ async def _place_runner_sl(
         )
 
 
-async def _handle_exit_order_failure(pos, trade_result) -> None:
+async def _handle_exit_order_failure(pos, trade_result, stop_cancelled: bool = False) -> None:
     """Exit order could not be placed — reconcile against the broker before alarming.
 
     The SL may have fired in the window between our SL cancel attempt and this exit
@@ -1224,6 +1224,17 @@ async def _handle_exit_order_failure(pos, trade_result) -> None:
         # Clear exit_pending so the next TP/EXIT signal can retry.
         pos.exit_pending = False
         await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
+        if (
+            stop_cancelled
+            and pos.sl_order_id
+            and order_reconcile.get_uncertain(pos.strategy, pos.symbol) is None
+        ):
+            # The stop was cancelled for an exit that then failed outright (the order book shows no
+            # copy): the position is open and naked. Clearing the dead id lets the poll re-place it.
+            pos.sl_order_id = ""
+            pos.sl_retry_count = 0
+            pos.last_sl_retry_at = None
+            logger.critical(f"EXIT failed for {pos.symbol} [{pos.strategy}] after its stop was cancelled: re-protecting")
 
 
 async def _decline(signal, stage: str, reason: str) -> None:
@@ -1279,9 +1290,10 @@ async def _handle_entry(signal) -> None:
     order = _build_entry_order(signal, quantity, is_analyze)
 
     # Send to OpenAlgo (routes to live broker or sandbox automatically)
+    sent_at = datetime.now(IST).replace(microsecond=0)  # broker order stamps are whole seconds
     trade_result = await send_order(order)
     if trade_result.status == OrderStatus.TIMEOUT:
-        recovered = await _recover_ambiguous_entry_timeout(signal, order)
+        recovered = await _recover_ambiguous_entry_timeout(signal, order, sent_at)
         if recovered is not None:
             trade_result = recovered
     await _notify_entry_outcome(signal, trade_result, rr)
@@ -1643,7 +1655,9 @@ def _build_entry_order(signal, quantity: int, is_analyze: bool):
     return build_order(signal, quantity, product="CNC" if off_hours_product_override else "")
 
 
-async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None":
+async def _recover_ambiguous_entry_timeout(
+    signal, order, sent_at: datetime | None = None
+) -> "TradeResult | None":
     """Check whether an entry order that TIMED OUT/ERRORed client-side actually filled.
 
     send_order's TIMEOUT/ERROR only means the HTTP response never arrived in time — not
@@ -1666,7 +1680,7 @@ async def _recover_ambiguous_entry_timeout(signal, order) -> "TradeResult | None
     # and left the tracker). ADANIPORTS 2026-10-01: the 11:20 re-entry timed out and the
     # 10:50 entry (same symbol, side and quantity) was adopted in its place.
     booked_ids = fetch_order_ids_today(signal.symbol)
-    since = datetime.now(IST).replace(microsecond=0)
+    since = sent_at or datetime.now(IST).replace(microsecond=0)
     last_read_clean = False
     for attempt in range(1, settings.entry_timeout_recovery_attempts + 1):
         await asyncio.sleep(settings.entry_timeout_recovery_delay_seconds)
@@ -1729,7 +1743,7 @@ async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
     order_reconcile.mark_uncertain(
         order_reconcile.UncertainOrder(
             strategy=signal.strategy, symbol=signal.symbol, action=order.action.value,
-            quantity=order.quantity, since=since, kind="ENTRY",
+            quantity=order.quantity, since=since, kind="ENTRY", signal=signal, order=order,
         )
     )
     message = (
@@ -1767,17 +1781,128 @@ async def _entry_held_by_unresolved_order(signal) -> bool:
         return True
     order_reconcile.clear_uncertain(signal.strategy, signal.symbol)
     if result.outcome == order_reconcile.FILLED:
+        await _adopt_untracked_entry(pending, result.order_id)
+        return True  # the symbol now holds a position for this strategy: no second entry
+    return False
+
+
+async def _adopt_untracked_entry(pending, order_id: str) -> None:
+    """An entry that timed out was found filled at the broker: track it and place its stop.
+
+    Runs the same establishment path as a normal entry, so the signal's stop goes in, the fill is
+    priced, and the bad-fill guard closes it at once if it slipped past the entry limits.
+    KALYANKJIL 2026-10-13 sat on the broker 49 minutes with no stop because nothing did this.
+    """
+    signal, order = pending.signal, pending.order
+    if signal is None or order is None:
         logger.critical(
-            f"ENTRY blocked for {signal.symbol} [{signal.strategy}]: the earlier {pending.kind} "
-            f"order {result.order_id} completed at the broker and is not tracked by the engine"
+            f"UNTRACKED FILL {pending.action} {pending.quantity} {pending.symbol} "
+            f"[{pending.strategy}] order {order_id}: no signal kept, cannot place a stop"
         )
         await notifier.notify(
-            f"UNTRACKED FILL: {pending.action} {pending.quantity} {signal.symbol} [{signal.strategy}] "
-            f"order {result.order_id} completed after a timeout. The engine has no stop for it: "
-            "check the broker; an exit signal or the time exit will close it."
+            f"UNTRACKED FILL: {pending.action} {pending.quantity} {pending.symbol} [{pending.strategy}] "
+            f"order {order_id} has no stop and is not tracked. Close it or protect it at the broker now."
         )
-        return True
-    return False
+        return
+    trade_result = TradeResult(order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout")
+    logger.critical(
+        f"ENTRY {pending.symbol} [{pending.strategy}] order {order_id} completed after a timeout: "
+        "adopting it and placing its stop"
+    )
+    try:
+        if await _establish_position(signal, order, order.quantity, trade_result):
+            save(signal, order, trade_result)
+    except Exception:  # noqa: BLE001 - alert instead of losing the position silently
+        logger.exception(f"Adopting untracked entry {pending.symbol} [{pending.strategy}] failed")
+        await notifier.notify(
+            f"UNTRACKED FILL: {pending.symbol} [{pending.strategy}] order {order_id} filled but "
+            "adopting it failed. It has no stop: check the broker now."
+        )
+        return
+    await notifier.notify(
+        f"ENTRY ADOPTED: {pending.symbol} [{pending.strategy}] order {order_id} filled after a timeout "
+        "and is now tracked with its stop."
+    )
+
+
+_SWEEP_INTERVAL_SECONDS = 30.0
+_UNRESOLVED_ALERT_SECONDS = 600.0
+
+
+async def sweep_unresolved_orders() -> None:
+    """Resolve timed-out orders left UNCERTAIN, from the tracker poll once the broker answers.
+
+    Without this a held order waits for the next signal on its symbol, and a position whose stop
+    was cancelled for an exit that never confirmed stays naked in between. Stop protection is
+    restored only on proof: an exit the order book shows absent (position still open, the stop
+    confirmed not working); an entry found filled is adopted with its stop.
+    """
+    now = datetime.now(IST)
+    for pending in order_reconcile.all_uncertain():
+        if pending.since.date() != now.date():
+            logger.critical(
+                f"Unresolved {pending.kind} order for {pending.symbol} [{pending.strategy}] is from "
+                f"{pending.since.date()}: dropping the hold, verify the broker position by hand"
+            )
+            order_reconcile.clear_uncertain(pending.strategy, pending.symbol)
+            continue
+        if not order_reconcile.due(pending, now, _SWEEP_INTERVAL_SECONDS):
+            continue
+        result = await order_reconcile.reconcile_timed_out_order(
+            symbol=pending.symbol, action=pending.action, quantity=pending.quantity,
+            since=pending.since, fetch_orderbook=fetch_orderbook, attempts=1, delay=0.0,
+        )
+        if result.outcome == order_reconcile.UNCERTAIN:
+            if order_reconcile.alert_due(pending, now, _UNRESOLVED_ALERT_SECONDS):
+                logger.critical(
+                    f"{pending.kind} order for {pending.symbol} [{pending.strategy}] still unconfirmed "
+                    f"({result.detail})"
+                )
+                await notifier.notify(
+                    f"STILL UNCONFIRMED: {pending.kind} {pending.action} {pending.quantity} "
+                    f"{pending.symbol} [{pending.strategy}] ({result.detail}). Check the broker."
+                )
+            continue
+        order_reconcile.clear_uncertain(pending.strategy, pending.symbol)
+        if pending.kind == "ENTRY":
+            if result.outcome == order_reconcile.FILLED:
+                await _adopt_untracked_entry(pending, result.order_id)
+            else:
+                logger.warning(f"ENTRY {pending.symbol} [{pending.strategy}]: not on the broker, hold released")
+            continue
+        if result.outcome == order_reconcile.FILLED:
+            logger.critical(
+                f"EXIT {pending.symbol} [{pending.strategy}] order {result.order_id} completed at the broker; "
+                "the tracker poll books the close"
+            )
+            continue
+        await _restore_stop_after_absent_exit(pending)
+
+
+async def _restore_stop_after_absent_exit(pending) -> None:
+    """The unconfirmed exit is not on the broker, so the position is still open: re-protect it.
+
+    Clears the stale stop id only when the broker confirms that stop is not working, so the
+    tracker poll's missing-stop retry then places a fresh one. A stop still working is left alone.
+    """
+    pos = tracker.find_position(pending.symbol, pending.strategy)
+    if pos is None or not pos.sl_order_id:
+        return
+    status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+    if status in ("", "trigger pending", "open", "pending"):
+        return  # unknown, or still working: never stack a second stop
+    pos.sl_order_id = ""
+    pos.sl_retry_count = 0
+    pos.last_sl_retry_at = None
+    pos.exit_pending = False
+    logger.critical(
+        f"EXIT {pending.symbol} [{pending.strategy}] is not on the broker and its stop is {status}: "
+        "the position is open, restoring its stop"
+    )
+    await notifier.notify(
+        f"STOP RESTORING: {pending.symbol} [{pending.strategy}] exit never reached the broker; "
+        "re-placing its stop."
+    )
 
 
 async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:

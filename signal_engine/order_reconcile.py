@@ -15,7 +15,7 @@ Pure logic plus a small registry; the caller owns logging and alerts.
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from signal_engine.timeutils import IST
@@ -46,11 +46,19 @@ class UncertainOrder:
     quantity: int
     since: datetime
     kind: str  # "EXIT" | "ENTRY"
+    #: For an ENTRY: the signal and order, so a fill found later can be adopted and given its stop.
+    signal: object | None = field(default=None, compare=False)
+    order: object | None = field(default=None, compare=False)
 
 
 # (strategy, symbol) -> the unresolved order. Bounded by strategies x symbols; an entry is
 # removed when a reconcile settles it.
 _uncertain: dict[tuple[str, str], UncertainOrder] = {}
+
+
+# (strategy, symbol) -> when the sweeper last looked, and when an alert last went out.
+_last_checked: dict[tuple[str, str], datetime] = {}
+_last_alerted: dict[tuple[str, str], datetime] = {}
 
 
 def mark_uncertain(order: UncertainOrder) -> None:
@@ -61,8 +69,35 @@ def get_uncertain(strategy: str, symbol: str) -> UncertainOrder | None:
     return _uncertain.get((strategy, symbol))
 
 
+def all_uncertain() -> list[UncertainOrder]:
+    return list(_uncertain.values())
+
+
 def clear_uncertain(strategy: str, symbol: str) -> None:
-    _uncertain.pop((strategy, symbol), None)
+    key = (strategy, symbol)
+    _uncertain.pop(key, None)
+    _last_checked.pop(key, None)
+    _last_alerted.pop(key, None)
+
+
+def due(order: UncertainOrder, now: datetime, interval_seconds: float) -> bool:
+    """True when the sweeper has not looked at this order within `interval_seconds`; records the look."""
+    key = (order.strategy, order.symbol)
+    last = _last_checked.get(key)
+    if last is not None and (now - last).total_seconds() < interval_seconds:
+        return False
+    _last_checked[key] = now
+    return True
+
+
+def alert_due(order: UncertainOrder, now: datetime, interval_seconds: float) -> bool:
+    """Rate limit for repeat alerts about an order that stays unresolved; records the alert."""
+    key = (order.strategy, order.symbol)
+    last = _last_alerted.get(key)
+    if last is not None and (now - last).total_seconds() < interval_seconds:
+        return False
+    _last_alerted[key] = now
+    return True
 
 
 def _placed_at_or_after(row: dict, since: datetime) -> bool:

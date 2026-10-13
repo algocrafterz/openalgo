@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from loguru import logger
 
-from signal_engine import db, notifier
+from signal_engine import db, notifier, order_reconcile
 from signal_engine.api_client import (
     cancel_all_orders,
     cancel_order,
@@ -874,6 +874,15 @@ class PositionTracker:
         if self._time_exit_active:
             return
 
+        # Before the positionbook read, so an outage that fails it still re-checks (and keeps
+        # alerting about) orders left unconfirmed; the sweep needs only the order book.
+        try:
+            from signal_engine.main import sweep_unresolved_orders
+
+            await sweep_unresolved_orders()
+        except Exception:  # noqa: BLE001 - the sweep must never break the poll
+            logger.exception("Sweep of unresolved orders failed")
+
         book = await fetch_positionbook()
         if book is None:
             await self._note_positionbook_failure()
@@ -926,6 +935,8 @@ class PositionTracker:
         for key, pos in list(self._positions.items()):
             if pos.sl_order_id or pos.exit_pending or pos.quantity <= 0:
                 continue
+            if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not None:
+                continue  # an order for this position is unconfirmed: a stop now could reverse it
             entry = book_data.get(pos.symbol)
             if entry is None or entry.quantity == 0:
                 continue  # not confirmed open yet, or already closed — nothing to protect

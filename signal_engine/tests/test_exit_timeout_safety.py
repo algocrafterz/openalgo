@@ -218,3 +218,203 @@ class TestUnresolvedEntryBlocksNewOrders:
         self._mark()
         held, _ = await self._held([[], [], []])
         assert held is False and oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is None
+
+
+# ---- sweeper and stop protection ----------------------------------------------------------
+
+def _tracked(symbol="LAURUSLABS", qty=74, sl_id="SL-1", exit_pending=False):
+    from signal_engine.tracker import TrackedPosition
+
+    return TrackedPosition(symbol=symbol, strategy="BREAKOUT-PY", exchange="NSE", product="MIS",
+                           entry_price=2050.0, quantity=qty, sl=2040.0, tp=0.0,
+                           direction=Direction.LONG, sl_order_id=sl_id, exit_pending=exit_pending)
+
+
+def _mark_exit(symbol="LAURUSLABS", qty=74, since=None):
+    oc.mark_uncertain(oc.UncertainOrder(
+        "BREAKOUT-PY", symbol, "SELL", qty, since or datetime.now(IST).replace(microsecond=0), "EXIT"))
+
+
+async def _sweep(books, *, position=None, sl_status="canceled"):
+    from signal_engine.main import sweep_unresolved_orders
+
+    notify = AsyncMock()
+    tracker = MagicMock()
+    tracker.find_position = MagicMock(return_value=position)
+    with (
+        patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
+        patch("signal_engine.main.fetch_order_status", AsyncMock(return_value=sl_status)),
+        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
+        patch("signal_engine.main.tracker", tracker),
+    ):
+        await sweep_unresolved_orders()
+    return notify
+
+
+@pytest.mark.asyncio
+class TestSweeper:
+    async def test_exit_absent_and_stop_not_working_restores_protection(self):
+        pos = _tracked()
+        _mark_exit()
+        notify = await _sweep([[]], position=pos)
+        assert pos.sl_order_id == "" and pos.sl_retry_count == 0
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+        assert "STOP RESTORING" in str(notify.await_args_list)
+
+    async def test_a_stop_still_working_is_never_stacked(self):
+        pos = _tracked()
+        _mark_exit()
+        await _sweep([[]], position=pos, sl_status="trigger pending")
+        assert pos.sl_order_id == "SL-1"
+
+    async def test_unknown_stop_status_changes_nothing(self):
+        pos = _tracked()
+        _mark_exit()
+        await _sweep([[]], position=pos, sl_status="")
+        assert pos.sl_order_id == "SL-1"
+
+    async def test_exit_found_filled_releases_the_hold_and_places_no_stop(self):
+        pos = _tracked()
+        _mark_exit()
+        await _sweep([[_filled_row("F1")]], position=pos)
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+        assert pos.sl_order_id == "SL-1"
+
+    async def test_still_unreadable_keeps_the_hold_and_alerts_once_per_window(self):
+        pos = _tracked()
+        _mark_exit()
+        notify = await _sweep([None], position=pos)
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+        assert notify.await_count == 1
+        # an immediate second sweep is throttled: no second look, no second alert
+        notify2 = await _sweep([None], position=pos)
+        assert notify2.await_count == 0
+
+    async def test_entry_found_filled_is_adopted_with_its_stop(self):
+        from signal_engine.main import sweep_unresolved_orders
+
+        oc.mark_uncertain(oc.UncertainOrder(
+            "BREAKOUT-PY", "KALYANKJIL", "BUY", 188, datetime.now(IST).replace(microsecond=0),
+            "ENTRY", signal=_entry_signal(), order=_entry_order()))
+        establish, save = AsyncMock(return_value=True), MagicMock()
+        row = _filled_row("E1", "KALYANKJIL", 188, action="BUY")
+        with (
+            patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=[row])),
+            patch("signal_engine.main._establish_position", establish),
+            patch("signal_engine.main.save", save),
+            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
+        ):
+            await sweep_unresolved_orders()
+        establish.assert_awaited_once()
+        assert establish.await_args.args[3].order_id == "E1"
+        save.assert_called_once()
+        assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is None
+
+    async def test_entry_not_on_the_broker_just_releases_the_hold(self):
+        oc.mark_uncertain(oc.UncertainOrder(
+            "BREAKOUT-PY", "KALYANKJIL", "BUY", 188, datetime.now(IST).replace(microsecond=0),
+            "ENTRY", signal=_entry_signal(), order=_entry_order()))
+        establish = AsyncMock()
+        with (
+            patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=[])),
+            patch("signal_engine.main._establish_position", establish),
+            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
+        ):
+            from signal_engine.main import sweep_unresolved_orders
+
+            await sweep_unresolved_orders()
+        establish.assert_not_awaited()
+        assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is None
+
+    async def test_a_hold_from_an_earlier_day_is_dropped_with_a_critical_log(self):
+        _mark_exit(since=datetime(2026, 10, 12, 14, 0, 0, tzinfo=IST))
+        await _sweep([], position=_tracked())
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+
+
+@pytest.mark.asyncio
+class TestFailedExitReprotects:
+    async def _fail(self, *, message="rejected", stop_cancelled=True, held=False):
+        from signal_engine.main import _handle_exit_order_failure
+
+        pos = _tracked(exit_pending=True)
+        if held:
+            _mark_exit()
+        tracker = MagicMock(fetch_own_position=AsyncMock(return_value=74))
+        with (
+            patch("signal_engine.main.tracker", tracker),
+            patch("signal_engine.main.notifier", MagicMock(notify_exit_failed=AsyncMock())),
+        ):
+            await _handle_exit_order_failure(
+                pos, TradeResult(status=OrderStatus.ERROR, message=message), stop_cancelled=stop_cancelled)
+        return pos
+
+    async def test_exit_failed_after_the_stop_was_cancelled_clears_the_dead_stop_id(self):
+        pos = await self._fail()
+        assert pos.sl_order_id == "" and pos.exit_pending is False
+
+    async def test_stop_that_was_not_cancelled_keeps_its_id(self):
+        pos = await self._fail(stop_cancelled=False)
+        assert pos.sl_order_id == "SL-1"
+
+    async def test_an_unresolved_order_defers_to_the_sweeper(self):
+        pos = await self._fail(held=True)
+        assert pos.sl_order_id == "SL-1"
+
+
+@pytest.mark.asyncio
+class TestPollDoesNotPlaceAStopWhileAnOrderIsUnresolved:
+    async def _poll(self, *, held):
+        from signal_engine.tracker import PositionTracker
+
+        t = PositionTracker(MagicMock())
+        t.register(_tracked(sl_id=""))
+        if held:
+            _mark_exit()
+        settings = SimpleNamespace(bracket_enabled=True, bracket_max_sl_reretries=5,
+                                   bracket_sl_reretry_interval_seconds=0)
+        place = AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="SL-NEW"))
+        book = {"LAURUSLABS": SimpleNamespace(quantity=74)}
+        with (
+            patch("signal_engine.tracker.place_sl_order", place),
+            patch("signal_engine.tracker.notifier", MagicMock(notify_sl_placed=AsyncMock())),
+        ):
+            await t._retry_missing_sl(book, settings)
+        return place
+
+    async def test_unresolved_order_blocks_the_stop(self):
+        place = await self._poll(held=True)
+        place.assert_not_awaited()
+
+    async def test_resolved_position_gets_its_stop(self):
+        place = await self._poll(held=False)
+        place.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+class TestSweepRunsDuringAPositionbookOutage:
+    async def test_poll_sweeps_even_when_the_positionbook_cannot_be_read(self):
+        from signal_engine.tracker import PositionTracker
+
+        t = PositionTracker(MagicMock())
+        t._note_positionbook_failure = AsyncMock()
+        sweep = AsyncMock()
+        with (
+            patch("signal_engine.main.sweep_unresolved_orders", sweep),
+            patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)),
+        ):
+            await t.check_positions()
+        sweep.assert_awaited_once()
+        t._note_positionbook_failure.assert_awaited_once()
+
+    async def test_a_failing_sweep_does_not_break_the_poll(self):
+        from signal_engine.tracker import PositionTracker
+
+        t = PositionTracker(MagicMock())
+        t._note_positionbook_failure = AsyncMock()
+        with (
+            patch("signal_engine.main.sweep_unresolved_orders", AsyncMock(side_effect=RuntimeError("x"))),
+            patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)),
+        ):
+            await t.check_positions()
+        t._note_positionbook_failure.assert_awaited_once()

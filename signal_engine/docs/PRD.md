@@ -6015,3 +6015,21 @@ reached broker recovery during BREAKOUT-PY's half-booked exit and sent BUY 320 H
 - EOD check "Trade - execution integrity": fails on duplicate fills and on any strategy whose engine books differ from
   the fill-backed page by more than Rs 25. Replayed on 2026-10-13 (both gaps and both triple fills flagged) and
   2026-10-12 (the 260.4 PAYTM stray stop).
+
+## Unresolved-order sweeper and stop re-protection (2026-10-14)
+
+Closes the gaps left by the order-timeout hold: a position whose stop was cancelled for an exit that never
+confirmed stayed naked, and an entry that filled after a timeout stayed untracked until the next signal.
+
+- `main.sweep_unresolved_orders`, run from the tracker poll BEFORE the positionbook read (so a positionbook outage
+  still re-checks and alerts every 10 minutes), re-reads the order book for each held order every 30 s.
+  Exit found filled: hold released, the poll books the close. Exit absent from the book: the stale stop id is cleared
+  only if the broker reports that stop not working, then the poll re-places the stop. Entry found filled: adopted
+  through `_establish_position` (stop, fill pricing, bad-fill guard). Holds from an earlier day are dropped with a
+  CRITICAL log.
+- The poll's missing-stop retry skips any position with an unresolved order, so it cannot place a stop on a position
+  that an unconfirmed exit may already have closed (the 2026-10-12 PAYTM reversal class).
+- An exit that fails outright after its stop was cancelled now clears the dead stop id so the poll re-protects it.
+- Entry hold uses the time the order was sent, not the time recovery started.
+- Not covered: the hold registry is in memory, so a restart forgets it (verify the broker by hand before restarting);
+  after 14:45 the time exit owns everything and the sweep stands down.
