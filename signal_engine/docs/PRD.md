@@ -5877,3 +5877,90 @@ and the P1 rows that need a recorded run or an owner decision.
 **In plain terms:** the backtest tool is finished as an honest "no edge" machine and cannot be talked into
 "edge". What is left needs real-world input: a new recorded run, real broker orders and two owner decisions.
 
+## Backtest Research System Hardened: Three Questions, Causal Engine, Honest Statuses (2026-10-13)
+
+The backtest system could not tell a strategy that failed from a test that was not yet possible, and one unverified
+engine capability (the survivor-biased universe) held every strategy at not ready. This pass separated the questions
+and fixed the defects an audit found.
+
+- **Three questions, kept apart.** Each run report now carries an `assessment` (`backtest/gate_semantics.py`):
+  research validity (PASS, FAIL, BLOCKED), strategy evidence (EDGE, PROMISING, MARGINAL, NO_EDGE, INCONCLUSIVE) and
+  promotion readiness. Gate outcomes are PASS, FAIL, BLOCKED, INCONCLUSIVE, NOT_APPLICABLE and REPORT; stored statuses
+  and the stored `run_verdict` vocabulary are unchanged, so existing records and the Backtests page keep working.
+  `GATE-MATRIX.md` is generated from the code and a test fails when it is stale.
+- **Promotion no longer waits on an unrelated row.** An open research limitation caps the claim and holds the live
+  stage; it no longer holds the backtest-to-paper step. Promotion now also refuses an invalid run (it used to say
+  READY while the verdict said INCONCLUSIVE), and the X rows are diagnostics in the verdict and in promotion alike.
+- **A failed integrity gate is INCONCLUSIVE, not NO_EDGE or MARGINAL**, as the criteria always said (G6.9, G0.x, G2.5,
+  G3.5, G6.1, G6.8 and similar). Tick size and charge-schedule age are not integrity gates, so IDEA-029 stays NO_EDGE.
+  Malformed perturbation or tick-grid evidence is BLOCKED, not a strategy failure.
+- **Look-ahead removed.** A trailing stop used to read the bar it protected (engine 1.3 passes the last completed
+  bar; the `ema_pullback` golden changed 49 to 50 trades, net +246.9 to +255.4 bps; no recorded run used a trail).
+  Eligibility floors used the same session's close and volume (policy 3 uses the previous session).
+- **Statistics inputs.** Sharpe, DSR, Newey-West and track length now count idle sessions as zero. For swing runs G2.2
+  also clears an overlap-robust Newey-West t, and the Sidak hurdle uses the session count for its degrees of freedom.
+- **Data loaders.** Intraday and daily loaders include the end date; an emptied symbol is recorded as a drop; a
+  tz-naive frame is refused instead of being shifted by 5h30; the cost decomposition refuses a trade with no risk.
+- **Regime without NIFTY or VIX.** The regime block is built from the equal-weight universe (causal, labelled,
+  survivor-biased, realised volatility only). Sector and correlation exposure is a new standalone diagnostic. X.4 reads
+  the random-entry baseline.
+- **Verified on fixtures, no trial spent.** `tests/test_workflow_end_to_end.py` runs idea, spec, run, ledger, verdict,
+  promotion, assessment and registry in a temporary root, and verifies readiness rows 4, 7 and 9.
+- **Still blocked, with reasons.** Point-in-time universe membership (needs NSE's written terms), G6.4 part B (needs a
+  real broker order per tick tier), the meaning of the re-entry cap (owner), and NIFTY or India VIX data. Until then no
+  run can reach EDGE and none may claim an unbiased edge.
+
+## Paper Eligibility Without Live Certification; Dated Tick Grid; Re-entry Defined (2026-10-13, second pass)
+
+The first hardening pass still left paper evaluation waiting on live-only items, an undated tick table and an
+ambiguous re-entry field. This pass fixes those and the safety of the promotion evaluator itself.
+
+- **Promotion fails closed in the evaluator.** Validity, data quality and run status are required inputs; a missing gate
+  row counts as not run; the verdict is re-derived so NO_EDGE or INCONCLUSIVE can never be READY. The lifecycle check
+  also refuses them, and it no longer rejects schema 4 runs (it rejected every run recorded since 2026-10-05).
+- **Paper eligibility.** A PROMISING candidate reaches paper without being EDGE. The test-coverage attestation (G0.7)
+  and PBO (G2.4) are live-only: they need not have run, but a failure still blocks. Unverified engine capabilities are
+  critical (hold paper) unless tagged as a limitation (hold live only).
+- **G6.4 is automated.** Stops are snapped and validated against a dated tick reference (three regimes), engine 1.4.
+  Broker acceptance is a pre-live check (G8.2). Reference verified from secondary sources only.
+- **Re-entry** is defined (re-entry events per symbol per session, both directions, initial excluded; an explicit
+  direction rule wins) and derived in the shared trade policy. IDEA-029's own text and field disagree; left for the owner.
+- **Benchmark.** The stock-basket regime table was removed. Independent NIFTY is opt-in (`--regimes`), VIX optional.
+- **Survivorship.** Terms review done, nothing fetched: NSE's terms appear to bar storing site data without written
+  permission. The owner must read them and obtain permission or a licence before any membership data is acquired.
+
+
+## Research System Finalised: No Membership Dependency, Swing Tick Grid, Bounded Tuning (2026-10-13, finalisation)
+
+The owner asked to stop expanding the backtester and finish a dependable research system.
+
+- **Survivorship is a qualification, not a blocker.** Historical NSE membership data is not a dependency of research,
+  an EDGE verdict, paper eligibility or the live stage. Every run still records its universe, dataset version, date
+  range and `survivorship_bias = true`; the verdict lists the limitation in `verdict.qualifications`, and an EDGE reads
+  "edge within the tested universe and period only". Only an unverified critical engine capability caps the verdict.
+- **Swing stops on the dated tick grid.** The swing engine filled stops at the raw signal price; it now snaps them like
+  the intraday engine (engine 1.5), the CNC profile declares `price_grid: safe_tick`, and G6.4 applies to swing runs
+  (NOT_APPLICABLE when no stop is placed). G6.4 is no longer hard: an off-grid trigger blocks promotion but is never
+  read as NO_EDGE. Dates before 2016-01-01 have no tick and are never assumed.
+- **Spec conflicts are isolated.** A spec whose rule text states a per-session trade total that disagrees with its
+  `re_entry` field stops with `SpecConflict` before anything runs. IDEA-029 is the one such spec.
+- **Bounded tuning** (`backtest/tuning.py`): at most 64 combinations, in-sample sessions only (first 60%), real engine
+  and statutory costs, selection by worst-case region (plateau over peak), PBO, one trial-ledger entry for every
+  combination, and a validity check that fails a recorded run whose hold-out overlaps a tuning period.
+- **Verification.** `signal_engine/scripts/run_full_tests.sh --timeout=120`: 8,444 passed, 1 skipped, exit 0, after
+  every change of this pass. `uv run ruff check signal_engine/`: clean. The 13 CI backend test files: 53 passed. The
+  Backtests results-service, route and Definition-of-Done tests: 274 passed. `build_registry`: 7 ideas.
+
+## Backtest-System Epic Closed for Research Use (2026-10-13, closure)
+
+- **Tuning PBO is a labelled diagnostic.** Identical combinations (a parameter with no in-sample effect) are ranked
+  once; kept as rivals they reported PBO 1.0 for no selection at all. The record's `pbo` carries `role: diagnostic`
+  and a method note: it measures picking the single best combination, not the stable-region selection, and no gate
+  reads it. The 10% of sessions between the tuning cut (60%) and the recorded run's hold-out (70%) is documented as a
+  buffer, because the recorded run fixes its hold-out start from its own sessions and trades.
+- **Backtests GUI assessment.** The run detail page shows a short "How good is this result?" block under the decision:
+  run validity, net R per trade, trades, drawdown, in- and out-of-sample net bps, what costs take, the gates that
+  passed, fell short (observed against needed) or lack evidence, the checks owed only at paper or live, limitations
+  (survivorship qualification, data-quality warnings, thin sample), tuning evidence (or "not performed") and
+  evidence-linked follow-ups. It reads the run record and `tuning` from the idea endpoint only; it derives no verdict.
+- **Status.** The epic is complete for research use. Live readiness is a separate milestone.
