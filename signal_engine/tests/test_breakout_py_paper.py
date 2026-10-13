@@ -331,11 +331,28 @@ class TestShippedConfig:
     def test_shipped_config_is_coherent(self):
         single_source.check_consistency(self.runner, REGISTRY.keys())
 
-    def test_python_tag_has_a_bhel_block_and_a_tight_stop_floor_like_pine(self):
+    def test_python_tag_has_a_bhel_block_and_the_spec_stop_floor(self):
+        """The validator floor equals the frozen v1.0 floor (spec sl_min_pct 0.003, the core's
+        SL_MIN_PCT), so it can never admit a stop the spec cannot produce. The Pine BREAKOUT keeps
+        its own looser 0.20%."""
+        from signal_engine.strategy_core.breakout import SL_MIN_PCT
+
         assert "BHEL" in settings.blacklist[PY]
         profile = settings.strategy_profiles[PY]
         assert profile["product"] == "MIS"
-        assert profile["min_sl_pct"] == settings.strategy_profiles["BREAKOUT"]["min_sl_pct"]
+        assert profile["min_sl_pct"] == SL_MIN_PCT == 0.003
+        assert settings.strategy_profiles["BREAKOUT"]["min_sl_pct"] == 0.002
+
+    def test_validator_rejects_a_stop_the_spec_cannot_produce_for_the_python_tag_only(self):
+        from signal_engine.models import Direction, Signal
+        from signal_engine.validator import _check_sl_distance
+
+        def sig(tag):
+            return Signal(strategy=tag, direction=Direction.LONG, symbol="TCS", entry=1000.0,
+                          sl=997.5, tp=1004.0, raw_message="x")  # a 0.25% stop
+
+        assert _check_sl_distance(sig(PY)) is not None
+        assert _check_sl_distance(sig("BREAKOUT")) is None
 
     def test_only_the_python_tag_is_ladder_owned(self):
         from signal_engine.tracker import _ladder_owns_exits

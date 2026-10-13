@@ -960,8 +960,11 @@ strategy_profiles:
     product: MIS
     # tp_levels absent: the runner's ExitDriver sends the exit fraction in each EXIT signal.
     #
-    # Same key-level stops as BREAKOUT (same core), so the same 0.20% floor, for the same reason.
-    min_sl_pct: 0.002
+    # The validator floor equals the frozen v1.0 floor (spec sl_min_pct 0.003 = strategy_core SL_MIN_PCT).
+    # The core never emits a tighter stop (all 92 entries since 2026-09-25 sit at or above 0.30%), so this
+    # changes no signal today; it stops the validator admitting a 0.20-0.30% stop the spec cannot produce.
+    # The Pine BREAKOUT keeps its own 0.20% above (calibrated to Pine's stops, e.g. VEDL 0.2465%).
+    min_sl_pct: 0.003
   EVWAP-EARLY-PY:
     product: MIS
     # No take-profit. Its signals carry tp 0, meaning "none" (exit_plan trailing_stop); the validator
