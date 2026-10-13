@@ -6033,3 +6033,15 @@ confirmed stayed naked, and an entry that filled after a timeout stayed untracke
 - Entry hold uses the time the order was sent, not the time recovery started.
 - Not covered: the hold registry is in memory, so a restart forgets it (verify the broker by hand before restarting);
   after 14:45 the time exit owns everything and the sweep stands down.
+
+## Health probe and operator entry hold (2026-10-14)
+
+- `openalgoctl.sh` probed `/`, which serves `frontend/dist/index.html` and answers 503 ("Frontend Not Built") while a
+  concurrent frontend build leaves dist empty. The probe failed every few minutes (02:30, 02:32, 02:36, 02:44); three in
+  a row mark the app wedged and restart it. It now probes `/health/status`, a backend-only route.
+- `signal_engine/data/ENTRY_HOLD` (untracked): while the file exists, `mode_guard.is_halted()` is true, so new entries and
+  the Python runner's dispatch are refused; exits are not. Its text is the reason. Deleting the file resumes at once.
+  Tests ignore any real file through an autouse fixture in `tests/conftest.py`.
+- Restart procedure used: place ENTRY_HOLD, `openalgoctl.sh stop restart`, confirm processes and ports are gone, start,
+  confirm the new process start time is after the last code change. Do not edit `openalgoctl.sh` while a supervisor
+  is running: bash reads a running script by byte offset.
