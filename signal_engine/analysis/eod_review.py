@@ -206,6 +206,33 @@ def check_pages_vs_fills(mode: str, day: str) -> str:
     return result.summary()
 
 
+def check_execution_integrity(mode: str, day: str) -> str:
+    """The engine's own books must agree with the fill-backed strategy pages, and no order
+    may have filled more than once.
+
+    2026-10-13: the engine booked +5,140 against a broker +2,176.4 because duplicate exit fills
+    and an untracked entry were booked as strategy P&L, and nothing alarmed; each strategy's
+    gap was only an "info" line in the report. Both conditions now fail the day.
+    """
+    from signal_engine.analysis import pages_vs_fills
+
+    if mode not in ("analyze", "live"):
+        return f"SKIPPED - trading mode is {mode!r}, nothing to compare"
+    result = pages_vs_fills.run(day, mode)
+    problems = [
+        f"{s}: engine books {e:,.1f} vs fill-backed page {p:,.1f} (off by {gap:,.1f})"
+        for s, e, p, gap in result.engine_gaps_over()
+    ]
+    problems += [
+        f"{d.action} {d.quantity:g} {d.symbol} [{d.strategy}] filled {d.copies}x within seconds "
+        f"from {d.first_at}"
+        for d in result.duplicates
+    ]
+    if problems:
+        raise RuntimeError("; ".join(problems))
+    return f"OK - engine books match the pages for {len(result.engine_gap)} strateg(ies), no duplicate fills"
+
+
 # ── SIGNAL ───────────────────────────────────────────────────────────────────
 
 def check_notifier_delivery(day: str) -> str:
@@ -440,6 +467,7 @@ async def run_eod_review(day: str) -> EODReport:
     report.add("TRADE", await _atime_check("Trade — engine vs broker P&L", check_reconciliation(mode, day)))
 
     report.add("TRADE", _time_check("Trade — pages vs broker fills", lambda: check_pages_vs_fills(mode, day)))
+    report.add("TRADE", _time_check("Trade — execution integrity", lambda: check_execution_integrity(mode, day)))
 
     report.add("SIGNAL", _time_check("Signal — notifier delivery", lambda: check_notifier_delivery(day)))
     report.add("SIGNAL", _time_check(

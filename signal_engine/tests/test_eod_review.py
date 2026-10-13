@@ -286,3 +286,46 @@ class TestSendToAdminChannel:
         )
 
         assert eod_review.send_to_admin_channel("hello", "analyze") is False
+
+
+# ---------------------------------------------------------------------------
+# Execution integrity (duplicate fills, engine books vs fill-backed pages)
+# ---------------------------------------------------------------------------
+
+class TestExecutionIntegrity:
+    def _result(self, *, gap=None, dups=()):
+        from signal_engine.analysis import pages_vs_fills as pvf
+
+        res = pvf.Result(day="2026-10-13", mode="analyze")
+        res.engine_gap = dict(gap or {})
+        res.duplicates = list(dups)
+        return res
+
+    def _check(self, monkeypatch, result, mode="analyze"):
+        from signal_engine.analysis import pages_vs_fills as pvf
+
+        monkeypatch.setattr(pvf, "run", lambda day, m: result)
+        return eod_review.check_execution_integrity(mode, "2026-10-13")
+
+    def test_clean_day_passes(self, monkeypatch):
+        out = self._check(monkeypatch, self._result(gap={"ORB": (-1.4, -1.4)}))
+        assert out.startswith("OK")
+
+    def test_engine_books_off_the_pages_fail_naming_each_strategy(self, monkeypatch):
+        """13 Oct: engine +5,140 vs broker +2,176; EVWAP +2,882.9 booked vs +671.2 filled."""
+        res = self._result(gap={"EVWAP-EARLY-PY": (2882.9, 671.2), "BREAKOUT": (-854.7, -1606.7)})
+        with pytest.raises(RuntimeError) as exc:
+            self._check(monkeypatch, res)
+        assert "EVWAP-EARLY-PY" in str(exc.value) and "BREAKOUT" in str(exc.value)
+
+    def test_duplicate_fills_fail(self, monkeypatch):
+        from signal_engine.analysis.pages_vs_fills import DuplicateFill
+
+        dup = DuplicateFill("EVWAP-EARLY-PY", "SUNPHARMA", "SELL", 236, 3, "2026-10-13 13:56:46")
+        with pytest.raises(RuntimeError) as exc:
+            self._check(monkeypatch, self._result(dups=[dup]))
+        assert "SUNPHARMA" in str(exc.value) and "3x" in str(exc.value)
+
+    def test_unknown_mode_is_skipped(self, monkeypatch):
+        out = self._check(monkeypatch, self._result(), mode="unknown")
+        assert out.startswith("SKIPPED")

@@ -379,3 +379,58 @@ class TestChargesFollowTheBroker:
         con.commit()
         con.close()
         assert pvf.load_closed_trades(DAY, "analyze", core_db=db)[0]["broker"] == "flattrade"
+
+
+def T(strategy, symbol, action, qty, price, at, product="MIS"):
+    return Fill(strategy, symbol, product, action, qty, price, at)
+
+
+class TestDuplicateFills:
+    """2026-10-13 13:56: three SELL 74 LAURUSLABS and three SELL 236 SUNPHARMA within seconds. One
+    closed the long; the other two opened shorts nothing tracked. A duplicate must be visible, not
+    silently folded into the strategy's P&L."""
+
+    def test_repeated_identical_fills_seconds_apart_are_flagged_beyond_the_first(self):
+        fills = [
+            T("EVWAP-EARLY-PY", "LAURUSLABS", "SELL", 74, 2050.0, "2026-10-13 13:56:46.1"),
+            T("EVWAP-EARLY-PY", "LAURUSLABS", "SELL", 74, 2050.0, "2026-10-13 13:56:49.3"),
+            T("EVWAP-EARLY-PY", "LAURUSLABS", "SELL", 74, 2050.0, "2026-10-13 13:56:52.8"),
+        ]
+        dups = pvf.duplicate_fills(fills)
+        assert [(d.symbol, d.copies, d.quantity) for d in dups] == [("LAURUSLABS", 3, 74)]
+
+    def test_two_partial_exits_of_equal_size_minutes_apart_are_not_duplicates(self):
+        fills = [
+            T("ORB", "SBIN", "SELL", 50, 800.0, "2026-10-13 10:00:00"),
+            T("ORB", "SBIN", "SELL", 50, 801.0, "2026-10-13 10:30:00"),
+        ]
+        assert pvf.duplicate_fills(fills) == []
+
+    def test_same_size_on_different_strategies_is_not_a_duplicate(self):
+        fills = [
+            T("ORB", "SBIN", "SELL", 50, 800.0, "2026-10-13 10:00:00"),
+            T("BREAKOUT-PY", "SBIN", "SELL", 50, 800.0, "2026-10-13 10:00:01"),
+        ]
+        assert pvf.duplicate_fills(fills) == []
+
+    def test_fills_without_timestamps_are_never_flagged(self):
+        fills = [F("A", "X", "SELL", 74, 50.0), F("A", "X", "SELL", 74, 50.0)]
+        assert pvf.duplicate_fills(fills) == []
+
+
+class TestEngineGap:
+    def _result(self, gap):
+        res = pvf.Result(day=DAY, mode="analyze")
+        res.engine_gap = gap
+        return res
+
+    def test_gaps_beyond_the_threshold_are_reported_per_strategy(self):
+        res = self._result({"EVWAP-EARLY-PY": (2882.9, 671.2), "ORB": (-1.4, -1.4)})
+        assert [g[0] for g in res.engine_gaps_over(25.0)] == ["EVWAP-EARLY-PY"]
+
+    def test_gap_amount_is_engine_minus_page(self):
+        res = self._result({"BREAKOUT": (-854.7, -1606.7)})
+        assert res.engine_gaps_over(25.0) == [("BREAKOUT", -854.7, -1606.7, 752.0)]
+
+    def test_matching_books_raise_no_alarm(self):
+        assert self._result({"ORB": (100.0, 100.4)}).engine_gaps_over(25.0) == []

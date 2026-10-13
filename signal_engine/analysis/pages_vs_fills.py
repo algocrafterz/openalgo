@@ -62,6 +62,61 @@ class Fill:
     action: str  # BUY | SELL
     quantity: float
     price: float
+    at: str = ""  # broker/sandbox fill time, "" when the source carries none
+
+
+#: Identical orders closer together than this are one order sent more than once, not a ladder.
+DUPLICATE_WINDOW_SECONDS = 120.0
+#: Rupees. An engine-vs-page gap above this means the engine's books misstate a strategy's day.
+ENGINE_GAP_ALARM = 25.0
+
+
+@dataclass(frozen=True)
+class DuplicateFill:
+    strategy: str
+    symbol: str
+    action: str
+    quantity: float
+    copies: int
+    first_at: str
+
+
+def _parse_at(raw: str) -> datetime | None:
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def duplicate_fills(
+    fills: list[Fill], window_seconds: float = DUPLICATE_WINDOW_SECONDS
+) -> list[DuplicateFill]:
+    """Same strategy, symbol, side and size filled again within seconds of itself.
+
+    2026-10-13 13:56: a timed-out exit was resent and the broker filled three SELL 74 LAURUSLABS
+    and three SELL 236 SUNPHARMA. The first closed the long; the extras opened shorts nothing
+    tracked, and their cost landed on the strategy's page as if it were a trade.
+    """
+    groups: dict[tuple, list[tuple[datetime, str]]] = defaultdict(list)
+    for f in fills:
+        when = _parse_at(f.at) if f.at else None
+        if when is None or not f.strategy:
+            continue
+        groups[(f.strategy, f.symbol, f.product, f.action.upper(), f.quantity)].append((when, f.at))
+    out: list[DuplicateFill] = []
+    for (strategy, symbol, _product, action, qty), times in groups.items():
+        times.sort()
+        cluster = [times[0]]
+        for item in times[1:] + [None]:
+            if item is not None and (item[0] - cluster[-1][0]).total_seconds() <= window_seconds:
+                cluster.append(item)
+                continue
+            if len(cluster) > 1:
+                out.append(DuplicateFill(strategy, symbol, action, qty, len(cluster), cluster[0][1]))
+            cluster = [item] if item is not None else []
+    return sorted(out, key=lambda d: (d.first_at, d.symbol))
 
 
 @dataclass
@@ -83,6 +138,15 @@ class Result:
     charges_headline: str = ""
     by_strategy: dict[str, tuple[float, float]] = field(default_factory=dict)  # fills, page
     engine_gap: dict[str, tuple[float, float]] = field(default_factory=dict)  # engine, page
+    duplicates: list[DuplicateFill] = field(default_factory=list)
+
+    def engine_gaps_over(self, threshold: float = ENGINE_GAP_ALARM) -> list[tuple[str, float, float, float]]:
+        """(strategy, engine, page, engine - page) where the engine's books are off the fill-backed page."""
+        return [
+            (s, e, p, e - p)
+            for s, (e, p) in sorted(self.engine_gap.items())
+            if abs(e - p) > threshold
+        ]
 
     @property
     def passed(self) -> bool:
@@ -120,6 +184,11 @@ class Result:
                     f"info: engine books {e:,.1f} vs page {p:,.1f} for {s} "
                     "(engine records only; the pages are the fill-backed numbers)"
                 )
+        for d in self.duplicates:
+            lines.append(
+                f"ARTIFACT: {d.action} {d.quantity:g} {d.symbol} [{d.strategy}] filled {d.copies}x "
+                f"within seconds from {d.first_at}: an order sent more than once, not strategy trades"
+            )
         if self.account:
             lines.append("")
             lines.append(
@@ -327,14 +396,14 @@ def load_fills_analyze(day: str, sandbox_db: Path = SANDBOX_DB) -> list[Fill]:
     con = _ro(sandbox_db)
     try:
         rows = con.execute(
-            "select strategy, symbol, product, action, quantity, price from sandbox_trades "
+            "select strategy, symbol, product, action, quantity, price, trade_timestamp from sandbox_trades "
             "where date(trade_timestamp)=? order by trade_timestamp, id",
             (day,),
         ).fetchall()
     finally:
         con.close()
     return [
-        Fill(_tag(r[0]), r[1], r[2] or "MIS", r[3], float(r[4]), float(r[5])) for r in rows
+        Fill(_tag(r[0]), r[1], r[2] or "MIS", r[3], float(r[4]), float(r[5]), str(r[6] or "")) for r in rows
     ]
 
 
@@ -366,6 +435,7 @@ def load_fills_live(day: str, snap_dir: Path = SNAP_DIR, core_db: Path = CORE_DB
                 t["action"],
                 float(t["quantity"]),
                 float(t.get("average_price") or t.get("price") or 0),
+                str(t.get("timestamp") or ""),
             )
         )
     return out
@@ -541,6 +611,7 @@ def run(day: str, mode: str) -> Result:
         res.notes.append(
             f"untagged {f.action} {f.quantity:g} {f.symbol} @ {f.price} closed nothing a strategy held"
         )
+    res.duplicates = duplicate_fills(fills)
     for strategy, engine in engine_totals(day, mode).items():
         if strategy in res.by_strategy:
             res.engine_gap[strategy] = (engine, res.by_strategy[strategy][1])
