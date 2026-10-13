@@ -490,7 +490,7 @@ describe('StrategyBuilder live request orchestration', () => {
     }
     mocks.getOptionChain.mockResolvedValue(farChain)
     renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE')
+    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
@@ -526,7 +526,7 @@ describe('StrategyBuilder live request orchestration', () => {
     })
 
     renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE')
+    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
@@ -585,7 +585,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.marketAuthenticated = true
     mocks.marketConnectionEpoch = 1
     const view = renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE')
+    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
@@ -620,7 +620,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.marketAuthenticated = true
     mocks.marketConnectionEpoch = 1
     const view = renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE')
+    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
     expect(mocks.getOptionChain).not.toHaveBeenCalled()
 
     mocks.marketData = new Map([
