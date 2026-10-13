@@ -5997,3 +5997,21 @@ Root cause, from the 2026-10-12 EOD report (4 of 11 checks failed):
   correct: trades.db has no row for that stray stop fill.
 - Not a bug: the 240 app errors were Flattrade websocket drops (08:46, 10:02), history timeouts, and "Invalid
   openalgo apikey" at 16:49 after market close.
+
+## Order-timeout safety, Pine exit race and EOD execution alarm (2026-10-14)
+
+Root cause, 2026-10-13: a broker connection outage made exit orders time out while the order book could not be
+read. The retry loop read "unreadable" as "not filled" and resent, so LAURUSLABS (74) and SUNPHARMA (236) filled
+three times each. KALYANKJIL's timed-out entry filled untracked. A Pine BREAKOUT exit for a symbol Python owns
+reached broker recovery during BREAKOUT-PY's half-booked exit and sent BUY 320 HINDALCO.
+
+- `order_reconcile.py`: a timed-out order is resent only when the order book was read and holds no copy. Unreadable
+  book or a working or part-filled copy is UNCERTAIN: nothing more is sent for that position or symbol, a CRITICAL
+  alert goes out, and the next exit or entry attempt reconciles first. Duplicate completed copies are adopted once and
+  alerted. Limits: the stop is already cancelled when an exit is held, and an untracked entry fill is closed only by an
+  exit signal or the 14:45 time exit.
+- Pine EXIT alerts for a superseded tag with no tracked position are declined. Broker recovery waits while another
+  strategy on the symbol is mid-exit (`other_strategy_exit_in_flight`).
+- EOD check "Trade - execution integrity": fails on duplicate fills and on any strategy whose engine books differ from
+  the fill-backed page by more than Rs 25. Replayed on 2026-10-13 (both gaps and both triple fills flagged) and
+  2026-10-12 (the 260.4 PAYTM stray stop).
