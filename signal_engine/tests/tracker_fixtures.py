@@ -37,7 +37,10 @@ def _make_position(**overrides) -> TrackedPosition:
         "quantity": 50,
         "sl": 2485.0,
         "tp": 2540.0,
-        "entry_time": _AGED,  # bypass Guard 1 (min_position_age_seconds) in close-detection tests
+        # 5 minutes old when the position is made: past Guard 1 (30 s) and short of the 30 min
+        # Guard 2 timeout. The import-time _AGED aged with the suite (and with any wall-clock
+        # jump), so in a long full run a "young" position could cross the timeout.
+        "entry_time": datetime.now(_IST) - timedelta(minutes=5),
     }
     defaults.update(overrides)
     return TrackedPosition(**defaults)
