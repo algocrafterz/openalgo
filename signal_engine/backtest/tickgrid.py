@@ -58,7 +58,8 @@ NOT_COVERED = (
     "trailed stops are snapped by the engine but only the initial stop of each trade is checked",
     "targets are market exits in production and are not orders",
     "broker acceptance of a trigger is a pre-live operational check and is not part of this evidence",
-    "the dated tick reference is verified against secondary sources (see its header)",
+    "the dated tick reference is verified against the NSE circulars for the 2024 and 2025 changes; "
+    "the Rs 0.05 tick before 2024-06-10 is primary-confirmed only as of May 2024 (see its header)",
 )
 
 

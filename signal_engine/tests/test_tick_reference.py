@@ -118,8 +118,22 @@ class TestReferenceFileIsSound:
     )
 
     def test_it_declares_how_it_was_verified(self):
-        assert self.RAW["verification"] in ("primary", "secondary")
+        assert self.RAW["verification"] in ("primary", "partial", "secondary")
         assert self.RAW["verified_on"] and self.RAW["sources"]
+
+    def test_each_regime_states_its_own_evidence_and_the_file_claims_no_more(self):
+        """The 2024 and 2025 changes were read in the NSE circulars themselves (2026-10-13); the
+        flat Rs 0.05 regime is confirmed only as the tick in force in May 2024, not from 2016."""
+        levels = {r["id"]: r["verification"] for r in self.RAW["regimes"]}
+        assert levels == {
+            "flat-0.05": "partial",
+            "two-tier-2024": "primary",
+            "six-tier-2025": "primary",
+        }
+        assert self.RAW["verification"] == "partial"
+        for r in self.RAW["regimes"]:
+            if r["verification"] == "primary":
+                assert len(r["primary_source_sha256"]) == 64
 
     def test_regimes_are_contiguous_and_ordered(self):
         spans = [(r["effective_from"], r["effective_to"]) for r in self.RAW["regimes"]]

@@ -8,11 +8,18 @@
 # last trading day of a month fixes the tier for the next month. So the tier of a session comes
 # from the PREVIOUS month's last close.
 #
-# Verification status. The regimes and effective dates below were checked against several
-# consistent secondary sources (broker and press notices of the circulars) on 2026-10-13. The primary
-# NSE circular PDFs could not be opened from this environment (requests timed out), so
-# `verification: secondary`. Re-verify against the primary circulars before relying on a date to the
-# day, and change this file deliberately, in this repository, with a dated reason.
+# Verification status (2026-10-13), per regime in `verification`:
+#   two-tier-2024, six-tier-2025  primary. Read in the NSE circular PDFs themselves (NSE/CMTR/62174,
+#                                 24 May 2024; NSE/CMTR/67133, 13 Mar 2025), downloaded from
+#                                 nsearchives.nseindia.com; their sha256 is recorded per regime.
+#                                 Tiers, band edges, effective trade dates and the monthly
+#                                 previous-month-close rule match the circulars.
+#   flat-0.05                     partial. NSE/CMTR/62174 confirms Rs 0.05 as the tick in force
+#                                 when it was issued ("as against the current tick size Rs 0.05").
+#                                 That Rs 0.05 applied unchanged back to 2016-01-01 rests on
+#                                 secondary sources only; no primary circular for that span was read.
+# Not verified from a primary source: the stock-futures date in the two-tier-2024 note, and
+# FAOP67134. Change this file deliberately, in this repository, with a dated reason.
 #
 # Coverage. `coverage_start` is the earliest date this repository's data uses; the Rs 0.05 regime
 # is stated by the sources to have applied before 2024-06-10 but this file does not claim its start
@@ -20,34 +27,43 @@
 # not covered and never assumes a tick.
 version: 1
 verified_on: 2026-10-13
-verification: secondary
+verification: partial
 coverage_start: 2016-01-01
-series: [EQ, BE, BZ, BO, RL, AF]
+series: [EQ, T0, BE, BZ, BO, RL, AF]
 excluded_series_note: ETFs have their own ticks and are outside this table.
 regimes:
   - id: flat-0.05
     effective_from: 2016-01-01
     effective_to: 2024-06-09
+    verification: partial
     source: >-
-      Five-paisa tick for all cash-segment securities before the May 2024 circular
-      (press coverage of NSE/CMTR/62174, 24 May 2024).
+      Five-paisa tick for all cash-segment securities before the May 2024 circular. NSE/CMTR/62174
+      names Rs 0.05 as the current tick on 24 May 2024 (primary); its use since 2016-01-01 is from
+      secondary sources only.
     tiers:
       - {upper: null, tick: 0.05}
   - id: two-tier-2024
     effective_from: 2024-06-10
     effective_to: 2025-04-14
+    verification: primary
+    primary_source_sha256: 073c209b8f9d181841afc15e77a053156fe1502f9ed012547e44dc639507f1a0
     source: >-
-      NSE/CMTR/62174, 24 May 2024: below Rs 250 Re 0.01; Rs 250 and above Rs 0.05; reviewed monthly.
-      Cash segment effective 2024-06-10 (stock futures from 2024-07-08).
+      NSE/CMTR/62174, 24 May 2024: below Rs 250 Re 0.01; Rs 250 and above Rs 0.05; reviewed monthly
+      on the last trading day's close for the next month. Effective trade date 2024-06-10, tiers
+      from the 2024-05-31 close. (Stock futures from 2024-07-08 is from secondary sources.)
     tiers:
       - {upper: 250, inclusive: false, tick: 0.01}
       - {upper: null, tick: 0.05}
   - id: six-tier-2025
     effective_from: 2025-04-15
     effective_to: null
+    verification: primary
+    primary_source_sha256: 8b26e35e148ff1301a4fe12a16170f2af394156271a86ed7943548a96b38589e
     source: >-
-      NSE/CMTR/67133, 13 Mar 2025 (partially modifies 62174), effective trade date 2025-04-15. A
-      band's upper edge belongs to the finer tier (Rs 1,000 is Rs 0.05, Rs 5,000 is Rs 0.10).
+      NSE/CMTR/67133, 13 Mar 2025 (partially modifies 62174), effective trade date 2025-04-15, first
+      tiers from the 2025-03-28 close. Bands as stated there (">= 250 to 1,000", "> 1,000 to
+      5,000"): a band's upper edge belongs to the finer tier (Rs 1,000 is Rs 0.05, Rs 5,000 is
+      Rs 0.10).
     tiers:
       - {upper: 250, inclusive: false, tick: 0.01}
       - {upper: 1000, inclusive: true, tick: 0.05}
@@ -56,6 +72,7 @@ regimes:
       - {upper: 20000, inclusive: true, tick: 1.00}
       - {upper: null, tick: 5.00}
 sources:
+  - https://nsearchives.nseindia.com/content/circulars/CMTR62174.pdf
   - https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf
   - https://nsearchives.nseindia.com/content/circulars/FAOP67134.pdf
   - https://nsearchives.nseindia.com/web/sites/default/files/inline-files/Tick%20size%20of%20securities%20in%20the%20Capital%20Market%20Segment%20and%20Stock%20Futures.pdf
