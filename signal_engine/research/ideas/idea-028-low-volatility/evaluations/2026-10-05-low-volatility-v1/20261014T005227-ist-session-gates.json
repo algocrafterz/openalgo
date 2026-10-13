@@ -1,0 +1,89 @@
+{
+  "kind": "corrected_gate_evaluation",
+  "run_id": "2026-10-05-low-volatility-v1",
+  "evaluated_ist": "2026-10-14T00:52:27.497577+05:30",
+  "new_trial": false,
+  "sealed_run_unchanged": {
+    "record_sha256": "690b6fe8f0cff1e9c6b8f7377c06cc327dc69c39449eade4b7883271d2f76eef",
+    "trades_sha256": "d54f90afeb39ada50b1fceb97892a89ea0b8fdf7d137c5103680659feaabac80"
+  },
+  "inputs": {
+    "trades": "runs/2026-10-05-low-volatility-v1/evidence/trades.parquet",
+    "trades_count": 301,
+    "dataset_version": "nse-daily-20261005-002",
+    "dataset_root_hash": "429123fbcbaccd2144e363b48d849d7349f07930b155ad2961c3f3d4aff20f30",
+    "calendar_version": "b421112497193bce867b4c32633aa1f79b1a5cd5ae3d72ef863368b3d138468b"
+  },
+  "reason": "G2.3, G2.6 and G2.7 re-scored on the daily marked-to-market portfolio returns over every session instead of trade results grouped by entry session; G3.2 compares out-of-sample with the purged in-sample set the record's in_sample block reports. No threshold, split or trade changed.",
+  "scope": "G2.3, G2.6, G2.7, G3.2 only; every other row is the sealed run's, unchanged",
+  "gates": {
+    "G2.3": {
+      "recorded": {
+        "gate": "G2.3",
+        "title": "Deflated Sharpe",
+        "status": "pass",
+        "hard": false,
+        "value": 1.0,
+        "threshold": "DSR >= 0.90 at the true trial count",
+        "evidence": "DSR 1.000 over 114 sessions at 1 trials (daily Sharpe 0.306 against a deflation threshold of 0.000); assumption: trial Sharpe variance is assumed to be the no-edge sampling variance, because only the trial count is recorded"
+      },
+      "corrected": {
+        "status": "pass",
+        "value": 0.9993,
+        "threshold": "DSR >= 0.90 at the true trial count",
+        "evidence": "DSR 0.999 over 2396 sessions at 1 trials (daily Sharpe 0.068 against a deflation threshold of 0.000); series: daily portfolio returns, open positions marked to market every session; assumption: trial Sharpe variance is assumed to be the no-edge sampling variance, because only the trial count is recorded"
+      }
+    },
+    "G2.6": {
+      "recorded": {
+        "gate": "G2.6",
+        "title": "Dependence (Newey-West)",
+        "status": "report",
+        "hard": false,
+        "value": 3.207,
+        "threshold": "t on daily aggregated P&L with a Newey-West autocorrelation adjustment",
+        "evidence": "Newey-West t 3.21 over 114 sessions (plain daily t 3.28); compare with the G2.2 bar, which the trade-clustered t already has to clear"
+      },
+      "corrected": {
+        "status": "report",
+        "value": 3.058,
+        "threshold": "t on daily aggregated P&L with a Newey-West autocorrelation adjustment",
+        "evidence": "Newey-West t 3.06 over 2396 sessions (plain daily t 3.32; series: daily portfolio returns, open positions marked to market every session); compare with the G2.2 bar, which the trade-clustered t already has to clear"
+      }
+    },
+    "G2.7": {
+      "recorded": {
+        "gate": "G2.7",
+        "title": "Track length",
+        "status": "report",
+        "hard": false,
+        "value": 10.1,
+        "threshold": "sample length against the Minimum Track Record Length at 95 percent",
+        "evidence": "114 sessions observed against a minimum of 10 sessions: sufficient"
+      },
+      "corrected": {
+        "status": "report",
+        "value": 635.3,
+        "threshold": "sample length against the Minimum Track Record Length at 95 percent",
+        "evidence": "2396 sessions observed against a minimum of 635 sessions: sufficient (series: daily portfolio returns, open positions marked to market every session)"
+      }
+    },
+    "G3.2": {
+      "recorded": {
+        "gate": "G3.2",
+        "title": "Out-of-sample result",
+        "status": "fail",
+        "hard": false,
+        "value": 476.8573,
+        "threshold": "OOS net > 0 and >= 40% of in-sample",
+        "evidence": "OOS +476.9 bps (92 trades) vs in-sample +2109.3 bps (209 trades)"
+      },
+      "corrected": {
+        "status": "fail",
+        "value": 476.8573,
+        "threshold": "OOS net > 0 and >= 40% of in-sample",
+        "evidence": "OOS +476.9 bps (92 trades) vs in-sample +1333.2 bps (179 trades); 30 trades straddling the cut are purged from in-sample, as in the record's in-sample block"
+      }
+    }
+  }
+}

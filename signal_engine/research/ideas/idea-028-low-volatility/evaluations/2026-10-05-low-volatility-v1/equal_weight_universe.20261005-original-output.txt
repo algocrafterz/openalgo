@@ -1,0 +1,26 @@
+strategy book reconstructs the 301 sealed trades; max net bps difference 0.0020
+Per-trade (the platform's convention; NOT comparable across books with different holding periods):
+low-vol    trades   301  mean net   1610.4 bps  median   616.6  win 0.651  mean hold   352 d
+universe   trades   206  mean net  42468.0 bps  median 17201.6  win 0.908  mean hold  2900 d
+Time-weighted monthly books, 2017-02-01 to 2026-10-01, 117 periods, net of turnover cost:
+low-vol    CAGR  14.57%  ann. vol 13.58%  return/vol  1.07  max DD -18.99%  growth x 3.72
+universe   CAGR  20.75%  ann. vol 19.36%  return/vol  1.07  max DD -31.80%  growth x 6.18
+universe book names per period: median 169 (min 134, max 206)
+monthly excess low-vol minus universe: mean  -52.4 bps  t -1.83  months positive 42.7%
+  before OOS start  months  78  mean excess  -31.9 bps  t -0.88
+  from OOS start    months  39  mean excess  -93.5 bps  t -2.06
+Calendar-year returns (by period start):
+       low  univ  excess
+year                    
+2017  23.3  34.2   -11.0
+2018   7.1  -7.0    14.1
+2019   3.8   6.3    -2.5
+2020  37.5  28.7     8.8
+2021  26.8  51.3   -24.6
+2022   6.7  11.9    -5.2
+2023  29.7  52.2   -22.5
+2024  10.5  32.8   -22.3
+2025  13.8   9.9     3.9
+2026 -10.4  -3.7    -6.7
+months the universe fell: 40; low-vol mean -216 bps vs universe -383 bps
+months the universe rose: 77; low-vol mean 295 bps vs universe 462 bps

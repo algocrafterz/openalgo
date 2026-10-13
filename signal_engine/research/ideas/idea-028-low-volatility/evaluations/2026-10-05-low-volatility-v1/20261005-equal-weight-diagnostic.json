@@ -1,0 +1,74 @@
+{
+  "kind": "cited_diagnostic",
+  "run_id": "2026-10-05-low-volatility-v1",
+  "name": "equal_weight_eligible_universe",
+  "title": "Equal-weight eligible universe",
+  "recorded_ist": "2026-10-05",
+  "source": "idea.md, 'Supporting diagnostics' and the decision log of 2026-10-05",
+  "reproducible": true,
+  "reproducibility_note": "the original script was recovered on 2026-10-14 from the 2026-10-05 research session transcript and is kept verbatim beside this file; re-run unchanged on 2026-10-14 against the same frozen inputs it reproduced every reported figure exactly; the only difference is its own faithfulness check against the sealed trades (largest per-trade gap 0.0016 bps against 0.0020 bps then, well inside its 0.5 bps assertion)",
+  "gate": false,
+  "method": "every stock with a valid 252-return volatility on the same rebalance days, same next-open fills, same data and costs, held equal weight; both books use this same model, so the pair is like for like with each other but not with the fixed-notional book",
+  "strategy": {
+    "annual_return_pct": 14.57,
+    "annual_volatility_pct": 13.58,
+    "max_drawdown_pct": -18.99,
+    "return_per_volatility": 1.07
+  },
+  "benchmark": {
+    "annual_return_pct": 20.75,
+    "annual_volatility_pct": 19.36,
+    "max_drawdown_pct": -31.8,
+    "return_per_volatility": 1.07
+  },
+  "monthly_excess": {
+    "mean_bps": -52,
+    "t_stat": -1.83,
+    "before_oos_mean_bps": -32,
+    "before_oos_t_stat": -0.88,
+    "after_oos_mean_bps": -94,
+    "after_oos_t_stat": -2.06
+  },
+  "down_months": {
+    "count": 40,
+    "strategy_pct": -2.2,
+    "benchmark_pct": -3.8
+  },
+  "up_months": {
+    "count": 77,
+    "strategy_pct": 3.0,
+    "benchmark_pct": 4.6
+  },
+  "evidential_weight": "supporting diagnostic only: not a gate, not a verdict rule and not decisive; the primary evidence against the selection edge is the matched random-entry comparison and the G3.2 out-of-sample failure",
+  "script": {
+    "path": "equal_weight_universe.py",
+    "sha256": "505562f1ff013a767d5676b39662451a6a9fbd7b5b13732703ceffc44357316a",
+    "command": "PYTHONPATH=. uv run python signal_engine/research/ideas/idea-028-low-volatility/evaluations/2026-10-05-low-volatility-v1/equal_weight_universe.py",
+    "run_from": "repository root",
+    "writes": "nothing; prints its result"
+  },
+  "inputs": {
+    "run": "runs/2026-10-05-low-volatility-v1 (manifest, frozen spec, evidence/trades.parquet, report/report.json)",
+    "dataset_version": "nse-daily-20261005-002",
+    "dataset_root_hash": "429123fbcbaccd2144e363b48d849d7349f07930b155ad2961c3f3d4aff20f30"
+  },
+  "assumptions": [
+    "same dataset, eligibility, calendar, rebalance sessions and next-open fills as the run",
+    "universe book: every stock with a valid 252-return volatility on the rebalance day, equal weight, no ranking",
+    "time-weighted monthly periods from one execution open to the next; the last period ends at the last close",
+    "turnover cost 12 bps per side for each name added or dropped, as a share of the book",
+    "compounded growth; CAGR over calendar years (365.25 days); volatility of monthly returns times sqrt(12)",
+    "both books use this one model, so the figures are like for like with each other and not with the run's fixed-notional book"
+  ],
+  "outputs": {
+    "original": {
+      "file": "equal_weight_universe.20261005-original-output.txt",
+      "sha256": "6a3671bfff9231166fe76690f700470772f30622aafeeba3d1cae29470460a5c",
+      "captured": "2026-10-05T09:25:57Z, from the session transcript; blank lines were filtered by the original command"
+    },
+    "rerun": {
+      "file": "equal_weight_universe.20261014-rerun-output.txt",
+      "sha256": "ebccf1ab07c0a9437c3179302d2cbefbfd5b614644b766a57a1e5ba0879a03a6"
+    }
+  }
+}
