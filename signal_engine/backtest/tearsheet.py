@@ -329,6 +329,19 @@ def _position_caps(
     return concurrency_profile(trades), rows
 
 
+def _thin_portfolio(portfolio: dict[str, Any]) -> dict[str, Any]:
+    """The `portfolio` block with its daily series thinned to MAX_SERIES_POINTS for the record."""
+    series = portfolio.get("series")
+    if not series:
+        return dict(portfolio)
+    thinned = {
+        **series,
+        "equity_pct": downsample(series["equity_pct"], MAX_SERIES_POINTS),
+        "drawdown_pct": downsample(series["drawdown_pct"], MAX_SERIES_POINTS, keep="min"),
+    }
+    return {**portfolio, "series": thinned}
+
+
 def build_run_record(
     trades: Iterable,
     *,
@@ -369,6 +382,8 @@ def build_run_record(
     data_quality: dict[str, Any] | None = None,
     calendar: Any = None,
     membership: dict[str, Any] | None = None,
+    portfolio: dict[str, Any] | None = None,
+    portfolio_returns: Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Build a schema-v2 run record from `Trade` objects. Inputs are not modified.
 
@@ -521,7 +536,10 @@ def build_run_record(
         attestation=attestation,
         attestation_g07=attestation_g07,
         baseline=baseline,
+        portfolio_returns=portfolio_returns,
     )
+    if portfolio is not None:
+        record["portfolio"] = _thin_portfolio(portfolio)
     if trials is not None:
         record["trials"] = dict(trials)
     if baseline is not None:

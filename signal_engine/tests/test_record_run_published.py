@@ -272,3 +272,14 @@ def test_a_version_that_fails_to_open_is_a_load_rejection(published):
     res = dataclasses.replace(res, manifest={**res.manifest, "root_hash": "0" * 64})
     with pytest.raises(rr.LoadRejected, match="root hash"):
         rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False, dataset=res)
+
+
+def test_a_fixed_notional_swing_run_records_its_daily_book(published, no_landing_store):
+    ex = rr.execute_backtest("high_proximity", settings=NO_STOP_SETTINGS, run_truncation=False,
+                             dataset=_resolution(published))
+    assert ex.trades
+    block = ex.portfolio
+    assert block["notional_rs"] == 100000 and block["slots"] == 20
+    assert abs(block["reconciliation"]["difference_rs"]) < 1.0
+    assert len(ex.portfolio_returns) == block["stats"]["sessions"]
+    assert block["stats"]["max_open_positions"] <= block["slots"]

@@ -335,3 +335,47 @@ class TestG22SwingOverlap:
                      "days": 500},
         )
         assert _row(profile, "G2.2")["status"] == "fail"
+
+
+class TestPortfolioSessionSeries:
+    """G2.3, G2.6 and G2.7 read the marked-to-market daily series when the run has one."""
+
+    def test_portfolio_returns_replace_trade_day_sums(self):
+        trades = _noisy_book(n=50)
+        rng = np.random.default_rng(1)
+        daily = list(rng.normal(0.0005, 0.01, 900))
+        profile = _evaluate(trades, portfolio_returns=daily)
+        for gate in ("G2.3", "G2.6", "G2.7"):
+            row = _row(profile, gate)
+            assert "900 sessions" in row["evidence"]
+            assert "marked to market" in row["evidence"]
+
+    def test_without_portfolio_returns_the_trade_day_series_is_named(self):
+        row = _row(_evaluate(_noisy_book(n=50)), "G2.6")
+        assert "booked on its entry session" in row["evidence"]
+
+
+class TestG32UsesThePurgedInSample:
+    def test_straddling_trades_are_left_out_of_in_sample(self):
+        # In-sample: two plain trades at +1R; one big winner straddles the cut.
+        trades = [
+            _t("2024-01-02", 1.0),
+            _t("2024-01-03", 1.0),
+            _t("2024-01-04", 20.0, exit_day="2024-02-05"),
+            _t("2024-02-06", 0.5),
+            _t("2024-02-07", 0.5),
+        ]
+        split = {"type": "oos", "oos_start": "2024-02-01", "embargo_sessions": 1,
+                 "purged_in_sample": 1, "embargoed_oos": 0}
+        row = _row(_evaluate(trades, oos_start="2024-02-01", split=split), "G3.2")
+        # Purged: 0.5 against 1.0 holds (50% >= 40%); unpurged it would be 0.5 against 7.33.
+        assert row["status"] == "pass"
+        assert "(2 trades)" in row["evidence"]
+        assert "1 trades straddling the cut are purged" in row["evidence"]
+
+    def test_without_purge_counts_the_split_is_unchanged(self):
+        trades = [_t("2024-01-02", 1.0), _t("2024-01-04", 20.0, exit_day="2024-02-05"),
+                  _t("2024-02-06", 0.5)]
+        row = _row(_evaluate(trades, oos_start="2024-02-01"), "G3.2")
+        assert row["status"] == "fail"
+        assert "purged" not in row["evidence"]

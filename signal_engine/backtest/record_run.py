@@ -229,6 +229,11 @@ class Execution:
     n_minutes_distribution: dict[str, Any] | None = None
     #: The strategy's own `diagnostics()` counters after the headline run, or None without any.
     strategy_diagnostics: dict[str, int] | None = None
+    #: Daily marked-to-market book (`book_series.portfolio_block`), `{"unavailable": reason}`
+    #: when it cannot be built, or None for a run it does not apply to (stop-sized intraday).
+    portfolio: dict[str, Any] | None = None
+    #: The book's daily returns, the session series of G2.3, G2.6 and G2.7; None without a book.
+    portfolio_returns: list[float] | None = None
 
 
 #: Symbols the look-ahead check re-runs on truncated data.
@@ -1161,6 +1166,10 @@ def _execute_on(
             cost_model,
             symbols=loaded_symbols,
         )
+    portfolio, portfolio_returns = _portfolio_stage(
+        kind, trades, cost_model, jsonable(params), cost_components, layer.calendar, days,
+        lambda symbols: source.daily(symbols, until, min_sessions),
+    )
     caps_record = None if kind == "swing" else _entry_caps_record(cfg)
     return Execution(
         trades=trades,
@@ -1200,7 +1209,49 @@ def _execute_on(
         capacity=capacity_evidence,
         n_minutes_distribution=n_minutes,
         strategy_diagnostics=diagnostics,
+        portfolio=portfolio,
+        portfolio_returns=portfolio_returns,
     )
+
+
+def _portfolio_stage(
+    kind: str,
+    trades: Sequence,
+    cost_model: CostModel | None,
+    params: Mapping[str, Any],
+    components: pd.DataFrame | None,
+    calendar: Any,
+    days: Sequence[str],
+    load_daily: Callable[[list[str]], dict[str, pd.DataFrame]],
+) -> tuple[dict[str, Any] | None, list[float] | None]:
+    """The daily book of a fixed-notional swing run, from the same published closes.
+
+    A ranked swing book holds positions for many sessions, so its portfolio return, drawdown and
+    session statistics need every holding marked each session. Applies only to a swing run with
+    a fixed notional per position and a declared `max_positions`; anything that stops the book
+    is recorded as the reason it is unavailable, and the run itself goes on.
+    """
+    from signal_engine.backtest import book_series, trades_io
+
+    notional = getattr(cost_model, "fixed_notional", None) if cost_model is not None else None
+    if kind != "swing" or not notional or not trades:
+        return None, None
+    slots = (params or {}).get("max_positions")
+    if not slots:
+        return {"unavailable": "the strategy declares no max_positions, so no book size"}, None
+    frame = trades_io.trades_to_frame(trades, components=components)
+    first = min(pd.Timestamp(t).date() for t in frame["entry_time"])
+    last = date.fromisoformat(days[-1])
+    sessions = sorted(d for d in calendar.trading_days if first <= d <= last)
+    frames = load_daily(sorted(frame["symbol"].unique()))
+    closes = book_series.closes_frame(tickgrid.session_closes(frames))
+    try:
+        block, returns = book_series.portfolio_block(
+            frame, closes, sessions=sessions, notional=float(notional), slots=int(slots),
+            cost_column="cost_bps", alternate_cost_column="modeled_cost_bps")
+    except book_series.BookError as exc:
+        return {"unavailable": str(exc)}, None
+    return block, [float(r) for r in returns]
 
 
 def _baseline_frames(
@@ -1785,6 +1836,8 @@ def record_idea(
         data_quality=getattr(execution, "data_report", None),
         calendar=getattr(execution, "calendar", None),
         membership=getattr(execution, "membership", None),
+        portfolio=getattr(execution, "portfolio", None),
+        portfolio_returns=getattr(execution, "portfolio_returns", None),
         notes=(
             f"Shipped default configuration on {execution.data['universe']}. {trials_note}"
             f"{regime_note}"

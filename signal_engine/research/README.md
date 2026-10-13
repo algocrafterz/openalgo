@@ -160,6 +160,27 @@ omitted, never written as 0. A run with `trades` 0 carries 0.0 in `gross_bps` an
 only because the schema requires them; readers must treat those as n/a. Run the validation
 suite (`backtest/validation.py`) before recording runs and say so in `validation`.
 
+### Portfolio book and evaluation sidecars
+
+`metrics.days` counts the sessions on which a trade was entered, not the tested sessions: for a
+monthly ranked book it is the number of rebalances. A swing run with a fixed notional per position
+and a declared `max_positions` records a `portfolio` block (`backtest/book_series.py`): every
+position marked to each session close, return and drawdown in percent of the book (slots times
+notional, profits not reinvested), and statistics over every session. G2.3, G2.6 and G2.7 use its
+daily returns. Other runs have no portfolio block; the results page says so.
+
+A sealed run is never rewritten. Evidence derived after it lives in
+`ideas/<idea>/evaluations/<run_id>/`, one JSON file per evaluation, named by its IST timestamp:
+
+- `corrected_gate_evaluation`: gates re-scored after an evaluator fix, each with its `recorded`
+  and `corrected` row. No trial is counted and the verdict is not rewritten.
+- `reconstructed_portfolio`: the portfolio block rebuilt from the run's frozen trades, published
+  dataset version and calendar (`python -m signal_engine.backtest.reconstruct_portfolio`).
+- `cited_diagnostic`: a finding recorded elsewhere (for example `idea.md`) in structured form.
+  Not a gate and not decisive evidence. When its calculation is kept beside it (`script`, with
+  inputs, assumptions and outputs), `reproducible` is true; otherwise it is false and the finding
+  is a historical diagnostic only.
+
 ## Publishing
 
 `site/index.html` is one file with inline CSS and JS and no external requests. Regenerate,

@@ -324,3 +324,33 @@ def test_headline_metrics_carry_total_cost_in_r():
     trades = _trades()
     expected = sum(t.r_gross - t.r_net for t in trades)
     assert rec["metrics"]["total_cost_r"] == pytest.approx(expected, abs=1e-3)
+
+
+class TestPortfolioBlock:
+    """A fixed-notional run's daily book is kept in the record, thinned like the other series."""
+
+    def _block(self, n):
+        days = [f"2024-01-{1 + i % 28:02d}" for i in range(n)]
+        return {"capital_rs": 3e6, "stats": {"max_drawdown_pct": -float(n)},
+                "series": {"equity_pct": [[d, float(i)] for i, d in enumerate(days)],
+                           "drawdown_pct": [[d, -float(i)] for i, d in enumerate(days)],
+                           "monthly_pct": [{"month": "2024-01", "return_pct": 1.0}]}}
+
+    def test_block_is_recorded_and_its_series_thinned(self):
+        rec = build_run_record(_trades(), **META, portfolio=self._block(2000))
+        series = rec["portfolio"]["series"]
+        assert len(series["equity_pct"]) <= MAX_SERIES_POINTS
+        assert min(v for _d, v in series["drawdown_pct"]) == -1999.0
+        assert rec["portfolio"]["stats"]["max_drawdown_pct"] == -2000.0
+        assert br._validate_run(json.loads(json.dumps(rec, allow_nan=False))) == []
+
+    def test_portfolio_returns_feed_the_session_gates(self):
+        returns = [0.001 * ((-1) ** i) + 0.0005 for i in range(800)]
+        rec = build_run_record(_trades(), **META, portfolio_returns=returns)
+        rows = {r["gate"]: r for d in rec["evaluation"]["dimensions"] for r in d["rows"]}
+        assert "800 sessions" in rows["G2.6"]["evidence"]
+        assert "portfolio" not in rec
+
+    def test_unavailable_block_is_kept_as_is(self):
+        rec = build_run_record(_trades(), **META, portfolio={"unavailable": "no slots"})
+        assert rec["portfolio"] == {"unavailable": "no slots"}

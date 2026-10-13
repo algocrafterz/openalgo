@@ -234,6 +234,9 @@ class _Inputs:
     capacity: dict[str, Any] | None = None
     attestation: dict[str, Any] | None = None
     attestation_g07: dict[str, Any] | None = None
+    #: Daily portfolio returns, positions marked to market each session (`book_series`), or
+    #: None. With it, G2.3, G2.6 and G2.7 use these sessions instead of trade-day sums.
+    portfolio_returns: Sequence[float] | None = None
 
 
 #: An evaluator returns (status, value, threshold, evidence).
@@ -661,16 +664,35 @@ def _g32(x: _Inputs) -> _Result:
     parts = _split(x)
     if parts is None:
         return "not_evaluated", None, threshold, "no out-of-sample split"
-    in_sample = float(_r_net(parts[0]).mean())
-    oos = float(_r_net(parts[1]).mean())
+    before, after, purged = _purged_parts(x, parts)
+    in_sample = float(_r_net(before).mean())
+    oos = float(_r_net(after).mean())
     holds = oos > 0 and (in_sample <= 0 or oos >= MIN_OOS_FRACTION_OF_IS * in_sample)
+    note = (f"; {purged} trades straddling the cut are purged from in-sample, as in the "
+            "record's in-sample block" if purged else "")
     return (
         "pass" if holds else "fail",
         _num(oos),
         threshold,
-        f"OOS {_fmt(oos, x.trades)} ({len(parts[1])} trades) vs in-sample "
-        f"{_fmt(in_sample, x.trades)} ({len(parts[0])} trades)",
+        f"OOS {_fmt(oos, x.trades)} ({len(after)} trades) vs in-sample "
+        f"{_fmt(in_sample, x.trades)} ({len(before)} trades){note}",
     )
+
+
+def _purged_parts(x: _Inputs, parts: tuple[list, list]) -> tuple[list, list, int]:
+    """In-sample and out-of-sample with the record's purge and embargo, when it has them.
+
+    G3.2 compares the same trade sets as the record's `in_sample` and `out_of_sample` blocks;
+    a trade that straddles the cut has seen out-of-sample prices and does not count in-sample.
+    """
+    split = x.split or {}
+    if x.oos_start is None or "purged_in_sample" not in split:
+        return parts[0], parts[1], 0
+    before, after, info = splits.purge_and_embargo(
+        x.trades, x.oos_start, int(split.get("embargo_sessions") or 0))
+    if not before or not after:
+        return parts[0], parts[1], 0
+    return before, after, int(info["purged_in_sample"])
 
 
 MIN_HOLDOUT_SYMBOLS = 10  # G3.4
@@ -900,12 +922,27 @@ def _daily_r(trades: Sequence, sessions: Sequence | None = None) -> np.ndarray:
     return by_day.sort_index().to_numpy(dtype=float)
 
 
+def _session_returns(x: _Inputs) -> tuple[np.ndarray, str]:
+    """The per-session series G2.3, G2.6 and G2.7 use, and a phrase naming it.
+
+    A marked-to-market portfolio series when the run supplies one: a multi-day position earns
+    on every session it is held. Otherwise each trade's whole result on its entry session, with
+    idle sessions zero-filled, which is exact only for trades that open and close in a session.
+    """
+    if x.portfolio_returns is not None:
+        return (np.asarray(x.portfolio_returns, dtype=float),
+                "daily portfolio returns, open positions marked to market every session")
+    sessions, basis = _session_axis(x)
+    return (_daily_r(x.trades, sessions),
+            f"each trade booked on its entry session, idle sessions zero-filled ({basis})")
+
+
 def _g23(x: _Inputs) -> _Result:
     threshold = f"DSR >= {MIN_DSR:.2f} at the true trial count"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    sessions, basis = _session_axis(x)
-    out = stats.deflated_sharpe(_daily_r(x.trades, sessions), x.n_trials)
+    daily, basis = _session_returns(x)
+    out = stats.deflated_sharpe(daily, x.n_trials)
     if out is None:
         return "not_evaluated", None, threshold, "daily P&L too short or constant for a Sharpe"
     note = (
@@ -920,7 +957,7 @@ def _g23(x: _Inputs) -> _Result:
         threshold,
         f"DSR {out['dsr']:.3f} over {out['n_obs']} sessions at {out['n_trials']} trials "
         f"(daily Sharpe {out['sharpe_daily']:.3f} against a deflation threshold of "
-        f"{out['sharpe_threshold']:.3f}); idle sessions are zero-filled ({basis}); "
+        f"{out['sharpe_threshold']:.3f}); series: {basis}; "
         f"assumption: {note}",
     )
 
@@ -929,8 +966,7 @@ def _g26(x: _Inputs) -> _Result:
     threshold = "t on daily aggregated P&L with a Newey-West autocorrelation adjustment"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    sessions, basis = _session_axis(x)
-    daily = _daily_r(x.trades, sessions)
+    daily, basis = _session_returns(x)
     nw = stats.newey_west_t(daily)
     plain = stats.newey_west_t(daily, lags=0)
     if not math.isfinite(nw):
@@ -939,8 +975,8 @@ def _g26(x: _Inputs) -> _Result:
         "report",
         _num(nw, 3),
         threshold,
-        f"Newey-West t {nw:.2f} over {len(daily)} sessions (plain daily t {plain:.2f}; idle "
-        f"sessions zero-filled, {basis}); "
+        f"Newey-West t {nw:.2f} over {len(daily)} sessions (plain daily t {plain:.2f}; "
+        f"series: {basis}); "
         "compare with the G2.2 bar, which the trade-clustered t already has to clear",
     )
 
@@ -949,8 +985,7 @@ def _g27(x: _Inputs) -> _Result:
     threshold = "sample length against the Minimum Track Record Length at 95 percent"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    sessions, _basis = _session_axis(x)
-    daily = _daily_r(x.trades, sessions)
+    daily, basis = _session_returns(x)
     minimum = stats.min_track_record_length(daily)
     if math.isnan(minimum):
         return "not_evaluated", None, threshold, "daily P&L too short or constant"
@@ -960,14 +995,15 @@ def _g27(x: _Inputs) -> _Result:
             None,
             threshold,
             f"{len(daily)} sessions observed; the observed Sharpe is not above zero, so no "
-            "track length would be enough",
+            f"track length would be enough (series: {basis})",
         )
     verdict = "sufficient" if len(daily) >= minimum else "too short"
     return (
         "report",
         _num(minimum, 1),
         threshold,
-        f"{len(daily)} sessions observed against a minimum of {minimum:.0f} sessions: {verdict}",
+        f"{len(daily)} sessions observed against a minimum of {minimum:.0f} sessions: {verdict} "
+        f"(series: {basis})",
     )
 
 
@@ -2464,6 +2500,7 @@ def evaluate(
     attestation: dict[str, Any] | None = None,
     attestation_g07: dict[str, Any] | None = None,
     baseline: dict[str, Any] | None = None,
+    portfolio_returns: Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -2480,7 +2517,7 @@ def evaluate(
     its input. `trials` (material, external, total, source) feeds G2.5 and `truncation` (the
     `TruncationResult` or its dict) feeds G0.2, and `tick_grid` (`tickgrid.tick_grid_evidence`) feeds
     G6.4 part A, `perturbation` (`perturbation.run_variants`) feeds G4.1 and `live_caps`
-    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, `attestation` (`attestations.verify`) feeds G0.1, `attestation_g07` feeds G0.7, each not_evaluated without its input. Returns `{version, criteria, horizon, dimensions, summary}`.
+    (`live_caps.run_stage`) feeds G5.2, `run_date` ages the fee schedule for G6.7, `monte_carlo` (`monte_carlo.attached_evidence`) feeds G5.1, `latency` (`latency.run_stage`) feeds G4.2, `capacity` (`capacity.run_stage`) feeds G5.4, `attestation` (`attestations.verify`) feeds G0.1, `attestation_g07` feeds G0.7, each not_evaluated without its input. `portfolio_returns` (daily, marked to market) is the session series of G2.3, G2.6 and G2.7 when given. Returns `{version, criteria, horizon, dimensions, summary}`.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {', '.join(HORIZONS)}, got {horizon!r}")
@@ -2516,6 +2553,7 @@ def evaluate(
         attestation=attestation,
         attestation_g07=attestation_g07,
         baseline=baseline,
+        portfolio_returns=portfolio_returns,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:
