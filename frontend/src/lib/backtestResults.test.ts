@@ -74,6 +74,15 @@ describe('formatting', () => {
     expect(isExtrapolated({ trades: 1, gross_bps: 0, net_bps: 0, days: 252 })).toBe(false)
     expect(isExtrapolated({ trades: 1, gross_bps: 0, net_bps: 0 })).toBe(false)
   })
+
+  it('judges extrapolation on the tested period when it is known, not on trading days', () => {
+    // A monthly-rebalance strategy has few days with P&L over a long test (IDEA-028: 114 days
+    // over 10.7 years). Its annualised ratios are not extrapolated.
+    const sparse = { trades: 301, gross_bps: 0, net_bps: 0, days: 114 }
+    expect(isExtrapolated(sparse, 10.7)).toBe(false)
+    expect(isExtrapolated({ ...sparse, days: 400 }, 0.6)).toBe(true)
+    expect(isExtrapolated(sparse, null)).toBe(true)
+  })
 })
 
 describe('sortIdeas', () => {

@@ -41,12 +41,22 @@ function CostLine({ run }: { run: RunRecord }) {
   const m = run.metrics
   if (!isKnown(m, m.gross_bps) || !isKnown(m, m.net_bps)) return null
   const cost = m.gross_bps - m.net_bps
-  const erased = m.gross_bps > 0 && m.net_bps <= 0
+  if (m.gross_bps <= 0) {
+    // No edge to erode: a break-even cost below zero means nothing, so it is not shown.
+    return (
+      <p className="text-sm" data-testid="assessment-costs">
+        No edge before costs: {fmtNum(m.gross_bps, 1)} bps per trade gross. Costs add another{' '}
+        {fmtNum(cost, 1)} bps.
+      </p>
+    )
+  }
+  const erased = m.net_bps <= 0
   return (
     <p className="text-sm" data-testid="assessment-costs">
       Costs take {fmtNum(cost, 1)} bps of a {fmtNum(m.gross_bps, 1)} bps gross result per trade
       {erased ? ', which removes the whole gross edge.' : '.'}
       {isKnown(m, m.breakeven_cost_bps) &&
+        m.breakeven_cost_bps > 0 &&
         ` Break-even cost: ${fmtNum(m.breakeven_cost_bps, 1)} bps per trade.`}
     </p>
   )

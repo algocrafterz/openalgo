@@ -51,6 +51,18 @@ const STAGE_LABEL: Record<Stage, string> = {
   retired: 'Retired',
 }
 
+/** Reasons shown before the expander: the verdict's and each promotion stage's. */
+const REASONS_SHOWN = 3
+const STAGE_REASONS_SHOWN = 2
+
+/** Failures first, then the rest in their original order (the sort is stable). */
+function failuresFirst<T>(items: readonly T[], failed: (item: T) => boolean): T[] {
+  return [...items].sort((a, b) => Number(failed(b)) - Number(failed(a)))
+}
+
+const isFailedReason = (r: VerdictReason) => /fail/i.test(r.status ?? '')
+const isFailedStageReason = (r: string) => /\bfailed\b/i.test(r)
+
 const PROMOTION_STAGES = [
   ['backtest', 'Backtest'],
   ['paper', 'Paper'],
@@ -111,6 +123,7 @@ function RunVerdictRegion({
   evaluation?: EvaluationBlock | null
   onShowTrades?: (subset: TradeSubset) => void
 }) {
+  const reasons = failuresFirst(verdict?.reasons ?? [], isFailedReason)
   return (
     <section
       className="rounded-md border p-3 space-y-2 flex-1 min-w-[16rem]"
@@ -136,17 +149,36 @@ function RunVerdictRegion({
               Held at MARGINAL: {cap}
             </div>
           ))}
-          {(verdict.reasons ?? []).length > 0 && (
-            <ul className="space-y-1 list-disc pl-5" data-testid="verdict-reasons">
-              {(verdict.reasons ?? []).map((r, i) => (
-                <ReasonItem
-                  key={`${r.text}-${r.evidence_ref ?? ''}-${i}`}
-                  reason={r}
-                  evaluation={evaluation}
-                  onShowTrades={onShowTrades}
-                />
-              ))}
-            </ul>
+          {reasons.length > 0 && (
+            <div data-testid="verdict-reasons">
+              <ul className="space-y-1 list-disc pl-5">
+                {reasons.slice(0, REASONS_SHOWN).map((r, i) => (
+                  <ReasonItem
+                    key={`${r.text}-${r.evidence_ref ?? ''}-${i}`}
+                    reason={r}
+                    evaluation={evaluation}
+                    onShowTrades={onShowTrades}
+                  />
+                ))}
+              </ul>
+              {reasons.length > REASONS_SHOWN && (
+                <details data-testid="verdict-reasons-more" className="mt-1">
+                  <summary className="cursor-pointer text-sm text-muted-foreground">
+                    Show {reasons.length - REASONS_SHOWN} more reasons
+                  </summary>
+                  <ul className="space-y-1 list-disc pl-5">
+                    {reasons.slice(REASONS_SHOWN).map((r, i) => (
+                      <ReasonItem
+                        key={`${r.text}-${r.evidence_ref ?? ''}-more-${i}`}
+                        reason={r}
+                        evaluation={evaluation}
+                        onShowTrades={onShowTrades}
+                      />
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
           )}
         </>
       ) : (
@@ -187,7 +219,7 @@ function PromotionSummary({ promotion }: { promotion: Promotion }) {
       <ul className="grid gap-2 sm:grid-cols-3">
         {PROMOTION_STAGES.map(([key, label]) => {
           const st = promotion.stages?.[key]
-          const reasons = st?.reasons ?? []
+          const reasons = failuresFirst(st?.reasons ?? [], isFailedStageReason)
           return (
             <li key={key} className="rounded-md border p-2" data-testid={`promotion-${key}`}>
               <div className="text-sm font-medium">{label}</div>
@@ -196,10 +228,26 @@ function PromotionSummary({ promotion }: { promotion: Promotion }) {
               </div>
               {reasons.length > 0 && (
                 <ul className="list-disc pl-4 text-xs text-muted-foreground">
-                  {reasons.map((r, i) => (
-                    <li key={`${r}-${i}`}>{r}</li>
+                  {reasons.slice(0, STAGE_REASONS_SHOWN).map((r, i) => (
+                    <li key={`${r}-${i}`} className="break-words">
+                      {r}
+                    </li>
                   ))}
                 </ul>
+              )}
+              {reasons.length > STAGE_REASONS_SHOWN && (
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">
+                    {reasons.length - STAGE_REASONS_SHOWN} more
+                  </summary>
+                  <ul className="list-disc pl-4">
+                    {reasons.slice(STAGE_REASONS_SHOWN).map((r, i) => (
+                      <li key={`${r}-more-${i}`} className="break-words">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               )}
             </li>
           )

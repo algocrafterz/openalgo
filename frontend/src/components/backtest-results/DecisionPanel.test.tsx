@@ -68,6 +68,74 @@ function renderPanel(over: Partial<React.ComponentProps<typeof DecisionPanel>> =
   )
 }
 
+describe('DecisionPanel keeps long reason lists short', () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      text: `Reason number ${i + 1}`,
+      gate: `G4.${i + 1}`,
+      status: 'NOT_RUN',
+      evidence_ref: `evaluation:G4.${i + 1}`,
+    }))
+
+  it('shows the first three verdict reasons and the rest behind a closed expander', () => {
+    renderPanel({ verdict: verdict('MARGINAL', { reasons: many(7) }) })
+    const box = screen.getByTestId('verdict-reasons')
+    expect(
+      within(box)
+        .getAllByRole('listitem')
+        .filter((li) => !li.closest('details'))
+    ).toHaveLength(3)
+    const more = screen.getByTestId('verdict-reasons-more')
+    expect(more).not.toHaveAttribute('open')
+    expect(more).toHaveTextContent('Show 4 more reasons')
+    // Nothing is dropped: the full list stays in the panel for audit.
+    expect(box).toHaveTextContent('Reason number 7')
+  })
+
+  it('puts failed gates before open ones, so a failure is never folded away', () => {
+    const reasons = [
+      ...many(4),
+      {
+        text: 'Out-of-sample result failed',
+        gate: 'G3.2',
+        status: 'FAIL',
+        evidence_ref: 'evaluation:G3.2',
+      },
+    ]
+    renderPanel({ verdict: verdict('MARGINAL', { reasons }) })
+    const shown = within(screen.getByTestId('verdict-reasons'))
+      .getAllByRole('listitem')
+      .filter((li) => !li.closest('details'))
+    expect(shown[0]).toHaveTextContent('Out-of-sample result failed')
+  })
+
+  it('puts failed gates first among a promotion stage reasons', () => {
+    const reasons = ['gate G0.1 has not been run', 'gate G0.4 has not been run', 'gate G3.2 failed']
+    renderPanel({ promotion: promotion(stage('NOT_READY', reasons)) })
+    const shown = within(screen.getByTestId('promotion-backtest'))
+      .getAllByRole('listitem')
+      .filter((li) => !li.closest('details'))
+    expect(shown[0]).toHaveTextContent('gate G3.2 failed')
+  })
+
+  it('needs no expander for three reasons or fewer', () => {
+    renderPanel({ verdict: verdict('MARGINAL', { reasons: many(3) }) })
+    expect(screen.queryByTestId('verdict-reasons-more')).toBeNull()
+  })
+
+  it('shows two reasons per promotion stage and folds the rest', () => {
+    const reasons = Array.from({ length: 6 }, (_, i) => `gate G${i}.1 has not been run`)
+    renderPanel({ promotion: promotion(stage('NOT_READY', reasons)) })
+    const stageBox = screen.getByTestId('promotion-backtest')
+    const shown = within(stageBox)
+      .getAllByRole('listitem')
+      .filter((li) => !li.closest('details'))
+    expect(shown).toHaveLength(2)
+    expect(within(stageBox).getByText('4 more')).toBeInTheDocument()
+    expect(stageBox).toHaveTextContent('gate G5.1 has not been run')
+  })
+})
+
 describe('DecisionPanel verdict', () => {
   const cases: [RunVerdictValue, string][] = [
     ['EDGE', 'Edge'],

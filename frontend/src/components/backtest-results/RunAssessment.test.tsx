@@ -327,6 +327,18 @@ describe('RunAssessment', () => {
     expect(recs).toHaveTextContent('Do not re-tune on this hold-out')
   })
 
+  it('a loss before costs is said plainly, with no meaningless break-even cost', () => {
+    const run = makeRun({
+      metrics: { ...makeRun().metrics, gross_bps: -4.2, net_bps: -15.7, breakeven_cost_bps: -4.2 },
+    })
+    render(<RunAssessment run={run} detail={detail()} />)
+    const costs = screen.getByTestId('assessment-costs')
+    expect(costs).toHaveTextContent(
+      'No edge before costs: -4.2 bps per trade gross. Costs add another 11.5 bps.'
+    )
+    expect(costs).not.toHaveTextContent('Break-even')
+  })
+
   it('costs that erase a gross edge are said plainly', () => {
     render(<RunAssessment run={makeRun()} detail={detail()} />)
     expect(screen.getByTestId('assessment-costs')).toHaveTextContent(

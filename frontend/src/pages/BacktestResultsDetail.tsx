@@ -13,6 +13,7 @@ import { BacktestScope } from '@/components/backtest-results/BacktestScope'
 import { CompareView } from '@/components/backtest-results/CompareView'
 import { DataCoverage } from '@/components/backtest-results/DataCoverage'
 import { DecisionPanel } from '@/components/backtest-results/DecisionPanel'
+import { DetailSection } from '@/components/backtest-results/DetailSection'
 import { GlossaryDrawer } from '@/components/backtest-results/GlossaryDrawer'
 import { PromotionGate } from '@/components/backtest-results/PromotionGate'
 import { RelatedStrategies } from '@/components/backtest-results/RelatedStrategies'
@@ -95,11 +96,6 @@ function RunDetailBlocks({
         onShowTrades={onShowTrades}
       />
       {detail.captured && <RunAssessment run={run} detail={detail} tuning={tuning} />}
-      <PromotionGate
-        promotion={detail.promotion}
-        evaluation={run.evaluation ?? null}
-        onShowTrades={onShowTrades}
-      />
     </>
   )
 }
@@ -233,79 +229,126 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
         />
       )}
 
-      <StrategyDefinition
-        spec={data.spec}
-        loading={!!current && detailQuery.isLoading}
-        frozen={
-          detail?.captured
-            ? {
-                spec: detail.spec,
-                version: detail.strategy_version,
-                parentVersion: detail.parent_version,
-                branchLabel: detail.branch_label,
-                fingerprints: detail.fingerprints,
-              }
-            : undefined
-        }
-      />
-
-      {detail?.captured && (
-        <>
-          <BacktestScope scope={detail.scope} />
-          <Reproducibility
-            reproducibility={detail.reproducibility}
-            fingerprints={detail.fingerprints}
-            manifestSha256={detail.manifest_sha256}
-            changeClasses={detail.change_classes}
-          />
-        </>
-      )}
-
-      {current && detail && (
-        <RunEvidence
-          ideaId={ideaId}
-          run={current}
-          detail={detail}
-          drill={drill}
-          onOpenTrades={openTrades}
-          onCloseTrades={() => setDrill(null)}
-        />
-      )}
-
       {runs.length === 0 || !current ? (
         <div className="text-sm text-muted-foreground" data-testid="no-runs">
           No backtest run has been recorded for this idea yet.
         </div>
       ) : (
-        <>
-          <DataCoverage run={current} />
-          <VersionTree
-            versions={data.versions ?? null}
-            versionsError={data.versions_error ?? null}
-            pointers={data.version_pointers}
-            runs={runs}
-            selectedRunId={current.run_id}
-            onSelectRun={selectRun}
-          />
-          <RunHistory
-            runs={runs}
-            selectedId={current.run_id}
-            onSelect={selectRun}
-            versions={data.versions ?? null}
-            pointers={data.version_pointers}
-          />
-          <div className="text-sm text-muted-foreground">
-            Showing run {current.run_id} ({current.date}). Select another date above to view it.
-          </div>
-          <RunTearsheet
-            run={current}
-            ideaId={ideaId}
-            assumptions={detail?.captured ? detail.assumptions : undefined}
-            onShowTrades={detail?.captured && detail.has_trades ? openTrades : undefined}
-          />
-          <CompareView ideaId={ideaId} runs={runs} />
-        </>
+        <div className="text-sm text-muted-foreground" data-testid="showing-run">
+          Showing run {current.run_id} ({current.date})
+          {runs.length > 1
+            ? `, the ${isLatestRun ? 'latest' : 'selected'} of ${runs.length} runs. Open "Run history" to view another.`
+            : '.'}
+        </div>
       )}
+
+      {/* Everything below is detail for investigation: collapsed, complete and linkable. */}
+      <div className="space-y-3" data-testid="detail-sections">
+        {current && detail?.captured && (
+          <DetailSection
+            id="gates"
+            title="Gate-by-gate evidence"
+            summary="every acceptance gate by promotion stage, with its evidence"
+          >
+            <PromotionGate
+              promotion={detail.promotion}
+              evaluation={current.evaluation ?? null}
+              onShowTrades={detail.has_trades ? openTrades : undefined}
+            />
+          </DetailSection>
+        )}
+        {current && (
+          <DetailSection
+            id="performance"
+            title="Performance detail"
+            summary="headline statistics, equity and drawdown, monthly results, full evaluation table, regimes, robustness and assumptions"
+            // Open only when no summary above stands in for it: a legacy run or failed detail.
+            defaultOpen={detailFailed || (detail !== undefined && !detail.captured)}
+          >
+            <RunTearsheet
+              run={current}
+              ideaId={ideaId}
+              assumptions={detail?.captured ? detail.assumptions : undefined}
+              onShowTrades={detail?.captured && detail.has_trades ? openTrades : undefined}
+            />
+          </DetailSection>
+        )}
+        {current && detail && (
+          <DetailSection
+            id="evidence"
+            title="Run evidence and trades"
+            summary="integrity checks, data quality, lineage, trials, cost breakdown and the trade list"
+            defaultOpen={!detail.captured}
+            forceOpen={drill !== null}
+          >
+            <RunEvidence
+              ideaId={ideaId}
+              run={current}
+              detail={detail}
+              drill={drill}
+              onOpenTrades={openTrades}
+              onCloseTrades={() => setDrill(null)}
+            />
+          </DetailSection>
+        )}
+        <DetailSection
+          id="definition"
+          title="Strategy definition and test setup"
+          summary="rules, parameters, scope, dataset and reproducibility"
+        >
+          <StrategyDefinition
+            spec={data.spec}
+            loading={!!current && detailQuery.isLoading}
+            frozen={
+              detail?.captured
+                ? {
+                    spec: detail.spec,
+                    version: detail.strategy_version,
+                    parentVersion: detail.parent_version,
+                    branchLabel: detail.branch_label,
+                    fingerprints: detail.fingerprints,
+                  }
+                : undefined
+            }
+          />
+          {detail?.captured && (
+            <>
+              <BacktestScope scope={detail.scope} />
+              <Reproducibility
+                reproducibility={detail.reproducibility}
+                fingerprints={detail.fingerprints}
+                manifestSha256={detail.manifest_sha256}
+                changeClasses={detail.change_classes}
+              />
+            </>
+          )}
+        </DetailSection>
+        {current && (
+          <DetailSection
+            id="history"
+            title="Run history and comparison"
+            summary={`${runs.length} ${runs.length === 1 ? 'run' : 'runs'}: data coverage, versions, history and run comparison`}
+          >
+            <DataCoverage run={current} />
+            <VersionTree
+              versions={data.versions ?? null}
+              versionsError={data.versions_error ?? null}
+              pointers={data.version_pointers}
+              runs={runs}
+              selectedRunId={current.run_id}
+              onSelectRun={selectRun}
+            />
+            <RunHistory
+              runs={runs}
+              selectedId={current.run_id}
+              onSelect={selectRun}
+              versions={data.versions ?? null}
+              pointers={data.version_pointers}
+            />
+            <CompareView ideaId={ideaId} runs={runs} />
+          </DetailSection>
+        )}
+      </div>
 
       <ResearchNotes notes={data.research_notes} />
 

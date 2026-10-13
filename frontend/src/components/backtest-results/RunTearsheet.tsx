@@ -91,10 +91,13 @@ export function RunTearsheet({
   return (
     <div className="space-y-6" data-testid="run-tearsheet">
       {ideaId && <ExportMenu ideaId={ideaId} runId={run.run_id} hasTrades={run.trades_export} />}
-      {isExtrapolated(run.metrics) && (
+      {isExtrapolated(run.metrics, run.years) && (
         <div role="note" className="rounded-md border border-yellow-500/50 p-3 text-sm">
-          Only {run.metrics.days} trading days: ratios such as Sharpe are extrapolated from less
-          than a year of data and should be read with caution.
+          {typeof run.years === 'number'
+            ? `Only ${run.years} years tested`
+            : `Only ${run.metrics.days} trading days`}
+          : ratios such as Sharpe are extrapolated from less than a year of data and should be read
+          with caution.
         </div>
       )}
       <HeadlineStats run={run} />

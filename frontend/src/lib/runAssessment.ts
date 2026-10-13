@@ -150,10 +150,12 @@ function limitations(run: RunRecord, detail: RunDetail): string[] {
   if (trades !== undefined && trades > 0 && trades < THIN_SAMPLE_TRADES) {
     out.push(`Thin sample: ${trades} trades, fewer than ${THIN_SAMPLE_TRADES}.`)
   }
-  if (run.metrics && isExtrapolated(run.metrics)) {
-    out.push(
-      `Short history: ${run.metrics.days} trading days, so annualised ratios are extrapolated.`
-    )
+  if (run.metrics && isExtrapolated(run.metrics, run.years)) {
+    const span =
+      typeof run.years === 'number'
+        ? `${run.years} years tested`
+        : `${run.metrics.days} trading days`
+    out.push(`Short history: ${span}, so annualised ratios are extrapolated.`)
   }
   return out
 }

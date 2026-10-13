@@ -123,7 +123,13 @@ export function tVsHurdle(metrics: RunMetrics): string {
 }
 
 /** Fewer than a year of trading days means annualised-style ratios are extrapolated. */
-export function isExtrapolated(metrics: RunMetrics): boolean {
+/**
+ * Whether annualised ratios are extrapolated from less than a year. The tested period (`years`)
+ * decides when it is known; `days` counts days with P&L, which a strategy that trades rarely
+ * (a monthly rebalance) keeps low over a long test, so it is only the fallback.
+ */
+export function isExtrapolated(metrics: RunMetrics, years?: number | null): boolean {
+  if (typeof years === 'number' && Number.isFinite(years)) return years < 1
   return metrics.days !== undefined && metrics.days < 252
 }
 

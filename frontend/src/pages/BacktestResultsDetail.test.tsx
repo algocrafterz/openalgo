@@ -474,7 +474,8 @@ describe('BacktestResultsDetail data coverage and reality checks', () => {
   it('puts the data coverage above the run history so the window is read before the numbers', async () => {
     renderPage(ideaResponse([RUN_V1]))
     const coverage = await screen.findByTestId('data-coverage')
-    const history = screen.getByText(/Run history/i)
+    // The run-history heading itself, not the collapsed section title that names it.
+    const history = screen.getByRole('heading', { name: /Run history/i })
     expect(
       coverage.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
@@ -483,7 +484,7 @@ describe('BacktestResultsDetail data coverage and reality checks', () => {
   it('shows the reality checks right after the headline numbers', async () => {
     renderPage(ideaResponse([RUN_V1]))
     const checks = await screen.findByTestId('reality-checks')
-    const chart = screen.getByText(/Equity and drawdown/i)
+    const chart = within(screen.getByTestId('run-tearsheet')).getByText(/Equity and drawdown/i)
     expect(checks.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
