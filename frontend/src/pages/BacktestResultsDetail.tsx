@@ -32,6 +32,7 @@ import { VersionTree } from '@/components/backtest-results/VersionTree'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useRunDetail } from '@/hooks/useRunDetail'
+import { conclusionSource } from '@/lib/decisionBrief'
 
 function Failure({ message }: { message: string }) {
   return (
@@ -57,13 +58,28 @@ function RunDetailLoading() {
 
 type IdeaCardLike = NonNullable<Awaited<ReturnType<typeof backtestResultsApi.idea>>['idea']>
 
-/** The researcher's own record, in its original technical wording. */
-function ResearcherConclusion({ idea }: { idea: IdeaCardLike }) {
+/** The researcher's own record, in its original technical wording, with the run it is about. */
+function ResearcherConclusion({
+  idea,
+  runs,
+  shownRunId,
+}: {
+  idea: IdeaCardLike
+  runs: RunRecord[]
+  shownRunId: string | null
+}) {
   if (!idea.result && !idea.revisit_when) return null
   return (
     <div className="max-w-5xl space-y-1 text-sm" data-testid="researcher-conclusion">
       <div className="text-xs font-medium">Researcher's recorded conclusion</div>
-      {idea.result && <p>{idea.result}</p>}
+      {idea.result && (
+        <>
+          <p className="text-xs text-muted-foreground" data-testid="conclusion-source">
+            {conclusionSource(idea.result, runs, shownRunId)}
+          </p>
+          <p>{idea.result}</p>
+        </>
+      )}
       {idea.revisit_when && (
         <p className="text-muted-foreground">Revisit when: {idea.revisit_when}</p>
       )}
@@ -76,6 +92,7 @@ function RunDetailBlocks({
   run,
   detail,
   isLatestRun,
+  runs,
   tuning,
   onShowTrades,
 }: {
@@ -83,6 +100,7 @@ function RunDetailBlocks({
   run: RunRecord
   detail: RunDetail
   isLatestRun: boolean
+  runs: RunRecord[]
   tuning?: TuningSummary[]
   onShowTrades?: (subset: TradeSubset) => void
 }) {
@@ -120,7 +138,7 @@ function RunDetailBlocks({
           title="How this decision was reached"
           summary="the system's verdict, research and promotion statuses, every test result, benchmarks, corrections and the full assessment"
         >
-          <ResearcherConclusion idea={idea} />
+          <ResearcherConclusion idea={idea} runs={runs} shownRunId={run.run_id} />
           <RunSummary idea={idea} run={run} detail={detail} />
           {decision}
           <RunAssessment run={run} detail={detail} tuning={tuning} />
@@ -240,7 +258,12 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
         </div>
         <p className="text-sm max-w-3xl">{idea.summary}</p>
         {recordInHeader && idea.result && (
-          <p className="text-sm max-w-3xl">Conclusion: {idea.result}</p>
+          <p className="text-sm max-w-3xl">
+            Conclusion: {idea.result}{' '}
+            <span className="text-muted-foreground" data-testid="conclusion-source">
+              {conclusionSource(idea.result, runs, current?.run_id ?? null)}
+            </span>
+          </p>
         )}
         {recordInHeader && idea.revisit_when && (
           <p className="text-sm text-muted-foreground max-w-3xl">
@@ -261,6 +284,7 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
           run={current}
           detail={detail}
           isLatestRun={isLatestRun}
+          runs={runs}
           tuning={data.tuning ?? []}
           onShowTrades={detail.captured && detail.has_trades ? openTrades : undefined}
         />

@@ -36,7 +36,7 @@ const IDEA = {
     rejection_basis: 'not-robust',
     revisit_when: 'Only a new, pre-specified hypothesis, recorded as a separate idea.',
   }),
-  result: 'MARGINAL on the dataset: G2.2 t 5.66 (pass); G3.2 out-of-sample FAIL.',
+  result: `MARGINAL (run ${RUN.run_id}): G2.2 t 5.66 (pass); G3.2 out-of-sample FAIL.`,
 }
 
 const SECTIONS = ['decision', 'gates', 'performance', 'evidence', 'definition', 'history']
@@ -114,6 +114,9 @@ describe('BacktestResultsDetail decision-first view', () => {
     expect(screen.getByTestId('summary-verdict')).toBeVisible()
     expect(screen.getByTestId('summary-failed')).toHaveTextContent('G3.2')
     expect(screen.getByTestId('researcher-conclusion')).toHaveTextContent('G2.2 t 5.66')
+    expect(screen.getByTestId('conclusion-source')).toHaveTextContent(
+      `Recorded for the run shown (${RUN.run_id}).`
+    )
   })
 
   it('opens the right evidence when a finding is followed', async () => {

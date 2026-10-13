@@ -308,3 +308,25 @@ export function buildDecisionBrief(
     action: action(idea, detail),
   }
 }
+
+/**
+ * Which recorded run a researcher's free-text conclusion is about, so it is never read as a
+ * statement on another run. Only this idea's own run ids are matched; the text is not altered.
+ */
+export function conclusionSource(
+  result: string,
+  runs: { run_id: string; date: string }[],
+  shownRunId: string | null
+): string {
+  const named = runs.filter((r) => result.includes(r.run_id))
+  if (named.length === 0) {
+    return 'The run this conclusion refers to was not recorded; it may not describe the run shown.'
+  }
+  if (named.length === 1 && named[0].run_id === shownRunId) {
+    return `Recorded for the run shown (${named[0].run_id}).`
+  }
+  const list = named.map((r) => `${r.run_id} (${r.date})`).join(', ')
+  return shownRunId && !named.some((r) => r.run_id === shownRunId)
+    ? `Recorded for run ${list}, not the run shown (${shownRunId}).`
+    : `Recorded for runs ${list}.`
+}

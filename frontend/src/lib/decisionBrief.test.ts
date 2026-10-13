@@ -7,7 +7,7 @@ import {
   makeSwingDetail,
   makeSwingRun,
 } from '@/test/backtestResultsFixtures'
-import { buildDecisionBrief } from './decisionBrief'
+import { buildDecisionBrief, conclusionSource } from './decisionBrief'
 
 const REJECTED = makeCard({
   research_state: 'rejected',
@@ -173,5 +173,32 @@ describe('buildDecisionBrief', () => {
     })
     const b = buildDecisionBrief(makeCard({ research_state: 'active' }), makeRun(), detail)
     expect(b.action).toEqual({ text: 'Run the parameter sweep', why: 'Settings must be robust' })
+  })
+})
+
+describe('conclusionSource', () => {
+  const RUNS = [
+    { run_id: '2026-10-06-vwap-v1', date: '2026-10-06' },
+    { run_id: '2026-10-09-vwap-v4', date: '2026-10-09' },
+  ]
+
+  it('names an older run so it is not read as the run shown', () => {
+    expect(
+      conclusionSource('NO_EDGE (run 2026-10-06-vwap-v1): net -20 bps', RUNS, '2026-10-09-vwap-v4')
+    ).toBe(
+      'Recorded for run 2026-10-06-vwap-v1 (2026-10-06), not the run shown (2026-10-09-vwap-v4).'
+    )
+  })
+
+  it('confirms when the conclusion is about the run shown', () => {
+    expect(conclusionSource('MARGINAL (run 2026-10-09-vwap-v4)', RUNS, '2026-10-09-vwap-v4')).toBe(
+      'Recorded for the run shown (2026-10-09-vwap-v4).'
+    )
+  })
+
+  it('warns when the conclusion names no run', () => {
+    expect(conclusionSource('No edge.', RUNS, '2026-10-09-vwap-v4')).toMatch(
+      /was not recorded; it may not describe the run shown/
+    )
   })
 })
