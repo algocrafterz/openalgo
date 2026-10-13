@@ -10,7 +10,8 @@ import {
 describe('Navigation Config', () => {
   describe('navItems', () => {
     it('contains the expected main navigation items', () => {
-      expect(navItems).toHaveLength(10)
+      // P&L and Performance (strategy P&L pages) and Backtests were added deliberately.
+      expect(navItems).toHaveLength(12)
 
       const labels = navItems.map((item) => item.label)
       expect(labels).toContain('Dashboard')
@@ -18,7 +19,9 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Orderbook')
       expect(labels).toContain('Positions')
       expect(labels).toContain('Strategy')
-      expect(labels).toContain('Strategy P&L')
+      expect(labels).toContain('P&L')
+      expect(labels).toContain('Performance')
+      expect(labels).toContain('Backtests')
       expect(labels).toContain('Trading')
     })
 

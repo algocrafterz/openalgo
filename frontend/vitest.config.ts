@@ -28,6 +28,9 @@ export default defineConfig({
       ],
     },
     css: true,
+    // jsdom integration tests (StrategyBuilder, flow panels) ran 2-3.5x slower when every core
+    // but one ran a worker, and timed out: 15 failures at 11 workers, 3 at 6, on a 12-core host.
+    maxWorkers: '50%',
   },
   resolve: {
     alias: {
