@@ -29,7 +29,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from signal_engine.features.instruments import round_to_safe_tick, safe_tick, tick_for_price
+from signal_engine.backtest import tick_reference
+from signal_engine.features.instruments import round_to_safe_tick
 
 #: `RunConfig.tick_grid` values. NONE keeps the legacy engine, which every run recorded before
 #: engine 1.2 used.
@@ -37,7 +38,9 @@ NONE = "none"
 SAFE_TICK = "safe_tick"
 MODES = (NONE, SAFE_TICK)
 
-EVIDENCE_VERSION = 1
+#: 2: ticks come from the dated reference (`tick_reference`); the evidence pins it and counts stops
+#: on dates it does not cover. Version 1 used today's table for every date.
+EVIDENCE_VERSION = 2
 
 #: A stop is on the grid when its distance to the nearest tick multiple is below this many ticks.
 GRID_TOLERANCE_TICKS = 1e-6
@@ -54,12 +57,18 @@ NOT_COVERED = (
     "stops moved by a ladder exit plan are not snapped or checked",
     "trailed stops are snapped by the engine but only the initial stop of each trade is checked",
     "targets are market exits in production and are not orders",
-    "broker acceptance (part B) is recorded separately and is not computed",
+    "broker acceptance of a trigger is a pre-live operational check and is not part of this evidence",
+    "the dated tick reference is verified against secondary sources (see its header)",
 )
 
 
-def snap_stop(stop: float, direction: int, price_factor: float = 1.0) -> float:
+def snap_stop(
+    stop: float, direction: int, price_factor: float = 1.0, day: date | None = None
+) -> float:
     """The trigger the executor sends for `stop`, in the frame's (possibly adjusted) price units.
+
+    With `day`, the grid is the one in force on that date (`tick_reference`); without it, today's
+    table (`features.instruments`), which is what the live executor uses.
 
     Raises:
         ValueError: The price factor or the raw stop is not a positive finite number.
@@ -69,7 +78,10 @@ def snap_stop(stop: float, direction: int, price_factor: float = 1.0) -> float:
     raw = stop / price_factor
     if not (math.isfinite(raw) and raw > 0):
         raise ValueError(f"raw stop must be positive and finite, got {raw!r}")
-    snapped = round_to_safe_tick(raw, "up" if direction == 1 else "down")
+    way = "up" if direction == 1 else "down"
+    snapped = round_to_safe_tick(raw, way) if day is None else (
+        tick_reference.round_to_safe_tick(raw, way, day)
+    )
     return snapped * price_factor
 
 
@@ -114,7 +126,11 @@ def tick_grid_evidence(
     *,
     engine_mode: str = NONE,
 ) -> dict[str, Any]:
-    """Part A of G6.4: is the initial stop of every trade on the exchange tick grid?
+    """G6.4: is the initial stop of every trade on the exchange tick grid of its own date?
+
+    Each stop is checked against the tick regime in force on the trade's date
+    (`research/reference/nse_tick_size.yaml`). A stop on a date the reference does not cover is
+    counted under `uncovered` and not checked: no tick is assumed.
 
     Args:
         trades: Engine trades; a trade with a NaN stop has no resting order and is not counted.
@@ -126,7 +142,8 @@ def tick_grid_evidence(
     by_tier: dict[str, Counter] = {}
     basis: Counter = Counter()
     worst: list[dict[str, Any]] = []
-    checked = off = 0
+    checked = off = uncovered = 0
+    reference = tick_reference.default_reference()
     for t in trades:
         sl = float(t.sl)
         if not math.isfinite(sl):
@@ -134,11 +151,16 @@ def tick_grid_evidence(
         factor = float(factors.get(t.symbol, {}).get(_as_date(t.day), 1.0))
         raw = sl / factor
         prev = month_closes.get(t.symbol, {}).get(previous_month_key(month_key(t.day)))
-        if prev is not None and prev > 0:
-            # the previous month's close restated into this session's price units
-            tick, source = tick_for_price(prev / factor), "exact"
-        else:
-            tick, source = safe_tick(raw), "fallback_safe_tick"
+        day = _as_date(t.day)
+        try:
+            if prev is not None and prev > 0:
+                # the previous month's close restated into this session's price units
+                tick, source = tick_reference.tick_for_price(prev / factor, day, reference), "exact"
+            else:
+                tick, source = tick_reference.safe_tick(raw, day, reference), "fallback_safe_tick"
+        except tick_reference.NotCovered:
+            uncovered += 1
+            continue
         ok = on_grid(raw, tick)
         checked += 1
         basis[source] += 1
@@ -163,6 +185,8 @@ def tick_grid_evidence(
         "version": EVIDENCE_VERSION,
         "rule": RULE,
         "engine_tick_grid": engine_mode,
+        "reference": reference.info(),
+        "uncovered": uncovered,
         "stops_checked": checked,
         "on_grid": checked - off,
         "off_grid": off,

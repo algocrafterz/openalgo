@@ -37,6 +37,8 @@ def make_eval(default: str = "pass", **overrides: str) -> dict[str, Any]:
 
 OK = {"ok": True, "failures": []}
 DQ_OK = {"status": "PASS", "affects_validity": False, "items": []}
+#: The three inputs the promotion evaluator requires, for a clean valid run.
+CLEAN_RUN = {"validity": OK, "data_quality": DQ_OK, "run_status": "VALID"}
 
 
 def derive(evaluation, **kw):
@@ -51,7 +53,13 @@ def gates(result):
 
 def test_shape_is_exact():
     r = derive(make_eval())
-    assert set(r) == {"run_verdict", "primary_failed_gate", "reasons", "caps_applied"}
+    assert set(r) == {
+        "run_verdict",
+        "primary_failed_gate",
+        "reasons",
+        "caps_applied",
+        "qualifications",
+    }
 
 
 def test_rule1_validity_failure_is_inconclusive_with_no_gates():
@@ -115,11 +123,18 @@ def test_hard_gate_not_evaluated_is_not_no_edge():
 
 
 def test_rule4_required_backtest_gate_fail_or_not_run_is_marginal():
-    r = derive(make_eval(G3_2="not_evaluated", G0_1="fail", G6_1="fail"))
+    r = derive(make_eval(G3_2="not_evaluated", G3_4="fail", G5_3="fail"))
     assert r["run_verdict"] == "MARGINAL"
-    assert gates(r) == ["G0.1", "G3.2", "G6.1"]
+    assert gates(r) == ["G3.2", "G3.4", "G5.3"]
+    assert r["primary_failed_gate"] == "G3.2"
+    assert [x["status"] for x in r["reasons"]] == ["NOT_RUN", "FAIL", "FAIL"]
+
+
+def test_failed_integrity_gate_is_inconclusive_not_marginal():
+    r = derive(make_eval(G3_2="not_evaluated", G0_1="fail", G6_1="fail"))
+    assert r["run_verdict"] == "INCONCLUSIVE"
+    assert gates(r) == ["G0.1", "G6.1"]
     assert r["primary_failed_gate"] == "G0.1"
-    assert [x["status"] for x in r["reasons"]] == ["FAIL", "NOT_RUN", "FAIL"]
 
 
 def test_not_run_never_counts_as_pass():
@@ -149,6 +164,29 @@ def test_readiness_cap_turns_edge_into_marginal():
     assert r["run_verdict"] == "MARGINAL"
     assert r["caps_applied"] == ["engine readiness: cost model, dst"]
     assert any("readiness" in x["text"].lower() for x in r["reasons"])
+
+
+class TestScopedLimitationQualifiesButNeverCaps:
+    """A scoped limitation (row 5: survivor-biased universe) narrows what the verdict claims;
+    it never holds a clean result below EDGE."""
+
+    SURVIVOR = "Point-in-time universe membership and per-date eligibility"
+
+    def test_a_clean_run_with_only_a_limitation_is_edge_with_the_qualification_visible(self):
+        r = derive(make_eval(), qualifications=[self.SURVIVOR])
+        assert r["run_verdict"] == "EDGE"
+        assert r["caps_applied"] == []
+        assert r["qualifications"] == [self.SURVIVOR]
+        assert any("tested universe" in x["text"] for x in r["reasons"])
+
+    def test_the_qualification_is_recorded_on_every_verdict(self):
+        for kw, expected in (({"G1_2": "fail"}, "NO_EDGE"), ({"G3_1": "fail"}, "MARGINAL")):
+            r = derive(make_eval(**kw), qualifications=[self.SURVIVOR])
+            assert r["run_verdict"] == expected
+            assert r["qualifications"] == [self.SURVIVOR]
+
+    def test_no_qualification_means_an_empty_list(self):
+        assert derive(make_eval())["qualifications"] == []
 
 
 def test_readiness_cap_does_not_touch_other_verdicts():

@@ -77,8 +77,21 @@ class TestRunConfigMapping:
         assert applied.squareoff_margin_min == base.squareoff_margin_min
         assert applied.time_exit_min == base.time_exit_min
 
-    def test_cnc_has_no_intraday_cutoffs_to_map(self):
-        assert profiles.load_profile("flattrade-nse-cash").run_config_fields("CNC") == {}
+    def test_cnc_maps_only_its_stop_price_grid(self):
+        """A CNC stop is a resting order too: the executor rounds it onto the same grid."""
+        assert profiles.load_profile("flattrade-nse-cash").run_config_fields("CNC") == {
+            "tick_grid": "safe_tick"
+        }
+
+    def test_cnc_without_a_price_grid_maps_nothing(self, tmp_path):
+        p = _load_with(tmp_path, {**GOOD, "products": {"CNC": {"carry_forward": True}}})
+        assert p.run_config_fields("CNC") == {}
+
+    def test_the_cnc_price_grid_applies_to_the_swing_engine(self):
+        from signal_engine.backtest.swing_engine import SwingRunConfig
+
+        fields = profiles.load_profile("flattrade-nse-cash").run_config_fields("CNC")
+        assert SwingRunConfig().with_(**fields).tick_grid == "safe_tick"
 
     def test_unsupported_product_raises(self, tmp_path):
         cnc_only = {**GOOD, "products": {"CNC": {"carry_forward": True}}}
@@ -165,6 +178,13 @@ class TestLoading:
         data["products"]["CNC"] = {}
         _write(tmp_path, data)
         with pytest.raises(profiles.ProfileError, match="carry_forward"):
+            profiles.load_profile("test-profile", tmp_path)
+
+    def test_cnc_price_grid_must_be_a_known_mode(self, tmp_path):
+        data = copy.deepcopy(GOOD)
+        data["products"]["CNC"]["price_grid"] = "nearest"
+        _write(tmp_path, data)
+        with pytest.raises(profiles.ProfileError, match="price_grid"):
             profiles.load_profile("test-profile", tmp_path)
 
     def test_cnc_has_no_mis_cutoff(self, tmp_path):

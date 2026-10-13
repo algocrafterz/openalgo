@@ -8,8 +8,11 @@ import pytest
 
 from signal_engine.backtest import attestations as at
 from signal_engine.backtest import evaluation as ev
+from signal_engine.tests import test_g01_gate as g01
 from signal_engine.tests.test_evaluation_stats_gates import _evaluate, _noisy_book, _row
-from signal_engine.tests.test_g01_gate import COVERED, attest, git, repo, verify  # noqa: F401  (fixture)
+from signal_engine.tests.test_g01_gate import COVERED, attest, git, verify
+
+repo = g01.repo  # re-export the pytest fixture so tests in this module can request it
 
 
 def _att(features=(900, 1000), core=(850, 1000), status="valid", **extra):

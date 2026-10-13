@@ -160,7 +160,7 @@ _GATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("G6.1", "deployment", "Session and square-off", False, "needs the strategy window"),
     ("G6.2", "deployment", "Daily eligibility", False, "live-universe check"),
     ("G6.3", "deployment", "Circuits", False, "needs the daily price band"),
-    ("G6.4", "deployment", "Tick size", True, "verified against the broker before live"),
+    ("G6.4", "deployment", "Tick size", False, "stop triggers validated against the dated exchange tick tiers"),
     ("G6.5", "deployment", "Gap-through stops", False, "live stop-type test"),
     ("G6.6", "deployment", "SEBI retail algo framework", False, "operational"),
     ("G6.7", "deployment", "Charges current", False, "operational"),
@@ -186,10 +186,16 @@ _GATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("X.1", "complexity", "Strategy parameter count", False, "no parameters recorded"),
     ("X.2", "regime_robustness", "Regime dispersion", False, "no regime block supplied"),
     ("X.3", "regime_robustness", "Regime activation hypothesis", False, "no regime block supplied"),
+    ("X.4", "edge", "Edge over matched random entry", False, "no random-entry baseline recorded"),
 )
 
 #: Gates the swing engine does not face: MIS session, square-off and auction rules.
-_INTRADAY_ONLY = frozenset(g[0] for g in _GATES if g[0].startswith("G6."))
+#: G6 rows that describe MIS sessions, stop orders or intraday ledgers. G6.6 (SEBI framework) and
+#: G6.7 (charge schedule age) concern every algo order and every cost model, so they apply to
+#: swing and positional runs too.
+_INTRADAY_ONLY = frozenset(
+    g[0] for g in _GATES if g[0].startswith("G6.") and g[0] not in ("G6.4", "G6.6", "G6.7")
+)
 
 
 @dataclass(frozen=True)
@@ -216,6 +222,7 @@ class _Inputs:
     ledger_problems: Sequence[str] = ()
     data_quality: dict[str, Any] | None = None
     calendar: Any = None
+    baseline: dict[str, Any] | None = None
     membership: dict[str, Any] | None = None
     trials: dict[str, Any] | None = None
     truncation: Any = None
@@ -413,21 +420,100 @@ def _g21(x: _Inputs) -> _Result:
     return status, n, f">= {MIN_TRADES} net trades", f"{n} trades"
 
 
+def _naive_day(stamp: Any) -> pd.Timestamp:
+    """The calendar day of a (possibly tz-aware IST) timestamp, as a naive midnight."""
+    ts = pd.Timestamp(stamp)
+    return (ts.tz_localize(None) if ts.tzinfo is not None else ts).normalize()
+
+
+def _holding_sessions(trades: Sequence) -> int:
+    """Median holding period in weekdays, at least 1: how far a trade's outcome reaches forward."""
+    spans = [
+        len(pd.bdate_range(_day(t), _naive_day(t.exit_time)))
+        for t in trades
+        if pd.notna(t.exit_time)
+    ]
+    return max(1, int(np.ceil(np.median(spans)))) if spans else 1
+
+
+def _overlap_robust_t(x: _Inputs) -> tuple[float, int] | None:
+    """Newey-West t on the zero-filled daily R series with lags covering the holding period.
+
+    Trades held across several sessions overlap the trades entered after them, so the entry-day
+    clustered t counts correlated outcomes as independent. Returns (t, lags), or None when the
+    series is too short or constant.
+    """
+    sessions, _basis = _session_axis(x)
+    daily = _daily_r(x.trades, sessions)
+    default_lags = int(math.floor(4 * (len(daily) / 100) ** (2 / 9)))
+    lags = max(default_lags, _holding_sessions(x.trades))
+    value = stats.newey_west_t(daily, lags=lags)
+    return None if not math.isfinite(value) else (value, lags)
+
+
+def _x4(x: _Inputs) -> _Result:
+    """X.4, a DIAGNOSTIC: does the entry signal beat a random entry with the same exits?
+
+    The matched random-entry baseline keeps the strategy's holding periods and costs and moves
+    only the entry time, so the paired excess isolates what the signal adds. It never decides:
+    a long-only book can earn real money from drift alone, which the other gates already judge.
+    """
+    threshold = "report: paired excess net bps over the matched random-entry baseline"
+    b = x.baseline
+    if not b or b.get("excess_net_bps") is None:
+        return "not_evaluated", None, threshold, "no random-entry baseline recorded for this run"
+    excess = float(b["excess_net_bps"])
+    t = b.get("excess_t_stat")
+    clears = t is not None and float(t) >= 2.0 and excess > 0
+    verdict = (
+        "the signal adds value beyond random entry"
+        if clears
+        else "the excess does not clear a day-clustered t of 2.0, so the entry signal is not "
+        "shown to add value beyond random entry"
+    )
+    t_text = "undefined" if t is None else f"{float(t):.1f}"
+    return (
+        "report",
+        _num(excess, 1),
+        threshold,
+        f"strategy net {b.get('trade_net_bps')} bps against random entry {b.get('net_bps')} bps "
+        f"over {b.get('trades')} matched trades: excess {excess:.1f} bps, t {t_text}; {verdict}",
+    )
+
+
 def _g22(x: _Inputs) -> _Result:
+    days = x.metrics.get("days")
+    dof = max(int(days) - 1, 2) if isinstance(days, (int, float)) and days else 200
     criteria = t_threshold(x.n_trials)
-    hurdle = hurdle_t(x.n_trials)
+    hurdle = hurdle_t(x.n_trials, dof=dof)
     bar = max(criteria, hurdle)
     threshold = f">= {bar:.2f} at {x.n_trials} trials"
     t_stat = x.metrics.get("t_stat")
     if t_stat is None:
         return "not_evaluated", None, threshold, "t-statistic is undefined for this run"
-    status = "pass" if float(t_stat) >= bar else "fail"
+    effective = float(t_stat)
+    overlap = ""
+    if x.horizon != "intraday" and x.trades:
+        robust = _overlap_robust_t(x)
+        if robust is None:
+            return (
+                "not_evaluated",
+                _num(t_stat),
+                threshold,
+                "overlap-robust t is undefined: the daily series is too short or constant",
+            )
+        effective = min(effective, robust[0])
+        overlap = (
+            f"; overlap-robust (Newey-West, {robust[1]} lags to cover the holding period) "
+            f"t {robust[0]:.2f}, and the smaller of the two decides"
+        )
+    status = "pass" if effective >= bar else "fail"
     return (
         status,
-        _num(t_stat),
+        _num(effective),
         threshold,
-        f"day-clustered t {float(t_stat):.2f} against the larger of the criteria level "
-        f"{criteria:.2f} and the record's Sidak hurdle {hurdle:.2f}",
+        f"day-clustered t {float(t_stat):.2f}{overlap}, against the larger of the criteria level "
+        f"{criteria:.2f} and the record's Sidak hurdle {hurdle:.2f} ({dof} degrees of freedom)",
     )
 
 
@@ -785,17 +871,41 @@ def _g69(x: _Inputs) -> _Result:
     return status, stamp, threshold, f"latest exit at {stamp}"
 
 
-def _daily_r(trades: Sequence) -> np.ndarray:
-    """One number per session: the sum of that day's net R, in date order."""
+def _session_axis(x: _Inputs) -> tuple[list, str]:
+    """The sessions between the first and the last trade day, and where they came from.
+
+    A session with no trade is an idle session, not a missing one: the Sharpe, the Newey-West
+    lags and the track length must count it. The run's calendar is used when it has one, so
+    exchange holidays are not counted as idle; without it, weekdays stand in and the evidence
+    says so.
+    """
+    days = sorted({_day(t) for t in x.trades})
+    first, last = days[0], days[-1]
+    trading = getattr(x.calendar, "trading_days", None)
+    if trading:
+        inside = [pd.Timestamp(d) for d in sorted(trading)]
+        return [d for d in inside if first <= d <= last], "calendar sessions"
+    return list(pd.bdate_range(first, last)), "weekdays, no calendar"
+
+
+def _daily_r(trades: Sequence, sessions: Sequence | None = None) -> np.ndarray:
+    """One number per session: the sum of that day's net R, in date order.
+
+    With `sessions`, every listed session without a trade contributes a zero.
+    """
     frame = pd.DataFrame({"day": [_day(t) for t in trades], "r": _r_net(trades)})
-    return frame.groupby("day")["r"].sum().sort_index().to_numpy(dtype=float)
+    by_day = frame.groupby("day")["r"].sum()
+    if sessions is not None:
+        by_day = by_day.reindex(sorted(set(sessions) | set(by_day.index)), fill_value=0.0)
+    return by_day.sort_index().to_numpy(dtype=float)
 
 
 def _g23(x: _Inputs) -> _Result:
     threshold = f"DSR >= {MIN_DSR:.2f} at the true trial count"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    out = stats.deflated_sharpe(_daily_r(x.trades), x.n_trials)
+    sessions, basis = _session_axis(x)
+    out = stats.deflated_sharpe(_daily_r(x.trades, sessions), x.n_trials)
     if out is None:
         return "not_evaluated", None, threshold, "daily P&L too short or constant for a Sharpe"
     note = (
@@ -810,7 +920,8 @@ def _g23(x: _Inputs) -> _Result:
         threshold,
         f"DSR {out['dsr']:.3f} over {out['n_obs']} sessions at {out['n_trials']} trials "
         f"(daily Sharpe {out['sharpe_daily']:.3f} against a deflation threshold of "
-        f"{out['sharpe_threshold']:.3f}); assumption: {note}",
+        f"{out['sharpe_threshold']:.3f}); idle sessions are zero-filled ({basis}); "
+        f"assumption: {note}",
     )
 
 
@@ -818,7 +929,8 @@ def _g26(x: _Inputs) -> _Result:
     threshold = "t on daily aggregated P&L with a Newey-West autocorrelation adjustment"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    daily = _daily_r(x.trades)
+    sessions, basis = _session_axis(x)
+    daily = _daily_r(x.trades, sessions)
     nw = stats.newey_west_t(daily)
     plain = stats.newey_west_t(daily, lags=0)
     if not math.isfinite(nw):
@@ -827,7 +939,8 @@ def _g26(x: _Inputs) -> _Result:
         "report",
         _num(nw, 3),
         threshold,
-        f"Newey-West t {nw:.2f} over {len(daily)} sessions (plain daily t {plain:.2f}); "
+        f"Newey-West t {nw:.2f} over {len(daily)} sessions (plain daily t {plain:.2f}; idle "
+        f"sessions zero-filled, {basis}); "
         "compare with the G2.2 bar, which the trade-clustered t already has to clear",
     )
 
@@ -836,7 +949,8 @@ def _g27(x: _Inputs) -> _Result:
     threshold = "sample length against the Minimum Track Record Length at 95 percent"
     if not x.trades:
         return "not_evaluated", None, threshold, "no trades"
-    daily = _daily_r(x.trades)
+    sessions, _basis = _session_axis(x)
+    daily = _daily_r(x.trades, sessions)
     minimum = stats.min_track_record_length(daily)
     if math.isnan(minimum):
         return "not_evaluated", None, threshold, "daily P&L too short or constant"
@@ -2118,21 +2232,40 @@ def _g62(x: _Inputs) -> _Result:
 
 
 _G64_THRESHOLD = (
-    "every modelled stop trigger on the exchange tick grid (part A), and one accepted real "
-    "broker order per price tier (part B)"
+    "every modelled stop trigger a multiple of the exchange tick in force on its own date "
+    "(dated reference)"
 )
 
 
 def _g64(x: _Inputs) -> _Result:
-    """Part A only: part B is a recorded broker attestation that does not exist yet, so a clean
-    part A is not_evaluated with the owed check named, never pass."""
+    """G6.4: every stop trigger is a multiple of the exchange tick in force on its own date.
+
+    Validated against the dated reference (`research/reference/nse_tick_size.yaml`), so it can
+    pass in a backtest. Whether a particular broker accepts a trigger is a pre-live operational
+    check (G8.2) and is not part of this statistical-edge gate.
+    """
     if x.tick_grid is None:
         return "not_evaluated", None, _G64_THRESHOLD, "no tick-grid check was run for this run"
     ev = x.tick_grid
     problems = tickgrid.validate_evidence(ev)
     if problems:
-        return "fail", None, _G64_THRESHOLD, "the tick-grid evidence is malformed: " + "; ".join(problems)
-    checked, off = int(ev["stops_checked"]), int(ev["off_grid"])
+        return (
+            "not_evaluated",
+            None,
+            _G64_THRESHOLD,
+            "the tick-grid evidence was rejected as malformed (a plumbing problem, not a "
+            "strategy result): " + "; ".join(problems),
+        )
+    if ev.get("version") != tickgrid.EVIDENCE_VERSION or "reference" not in ev:
+        return (
+            "not_evaluated",
+            None,
+            _G64_THRESHOLD,
+            "the tick-grid evidence predates the dated reference (it checked every date against "
+            "today's table); record the run again to validate against the dated tick regimes",
+        )
+    checked, off, uncovered = int(ev["stops_checked"]), int(ev["off_grid"]), int(ev["uncovered"])
+    ref = ev["reference"]
     if off:
         tiers = ", ".join(
             f"tick {k}: {v.get('off_grid', 0)} of {v.get('checked', 0)}"
@@ -2144,18 +2277,34 @@ def _g64(x: _Inputs) -> _Result:
             "fail",
             off,
             _G64_THRESHOLD,
-            f"{off} of {checked} stop triggers are off the exchange tick grid ({tiers}); worst: "
-            f"{worst.get('symbol')} {worst.get('day')} stop {worst.get('raw_stop')} on tick "
-            f"{worst.get('tick')}. Engine tick_grid is {ev.get('engine_tick_grid')!r}.",
+            f"{off} of {checked} stop triggers are off the exchange tick grid of their date "
+            f"({tiers}); worst: {worst.get('symbol')} {worst.get('day')} stop "
+            f"{worst.get('raw_stop')} on tick {worst.get('tick')}. Engine tick_grid is "
+            f"{ev.get('engine_tick_grid')!r}.",
+        )
+    if uncovered:
+        return (
+            "not_evaluated",
+            None,
+            _G64_THRESHOLD,
+            f"{uncovered} stop triggers fall on dates that are not covered by the tick reference "
+            f"(coverage starts {ref.get('coverage_start', 'unknown')}); no tick is assumed",
         )
     if checked == 0:
-        return "not_evaluated", None, _G64_THRESHOLD, "the run placed no stop orders to check"
+        return (
+            "not_applicable",
+            None,
+            _G64_THRESHOLD,
+            "the run placed no stop orders, so there is no trigger to put on the tick grid",
+        )
     return (
-        "not_evaluated",
+        "pass",
         checked,
         _G64_THRESHOLD,
-        f"part A clean: all {checked} stop triggers are on the exchange tick grid. Part B is owed: "
-        "one accepted real broker order per price tier has not been recorded.",
+        f"all {checked} stop triggers are on the exchange tick grid of their own date (dated "
+        f"reference v{ref.get('version')}, {ref.get('verification')} verification, sha256 "
+        f"{str(ref.get('sha256'))[:12]}). Broker acceptance of a trigger is a pre-live check, "
+        "not part of this gate.",
     )
 
 
@@ -2172,7 +2321,13 @@ def _g41(x: _Inputs) -> _Result:
         return "not_evaluated", None, _G41_THRESHOLD, "the perturbation stage was not run for this run"
     problems = perturbation.validate_evidence(ev)
     if problems:
-        return "fail", None, _G41_THRESHOLD, "the perturbation evidence is malformed: " + "; ".join(problems)
+        return (
+            "not_evaluated",
+            None,
+            _G41_THRESHOLD,
+            "the perturbation evidence was rejected as malformed (a plumbing problem, not a "
+            "strategy result): " + "; ".join(problems),
+        )
     state = ev["state"]
     if state == perturbation.BASE_NOT_POSITIVE:
         return "fail", ev["base"].get("net_r"), _G41_THRESHOLD, str(ev.get("reason"))
@@ -2261,6 +2416,7 @@ _EVALUATORS: dict[str, Callable[[_Inputs], _Result]] = {
     "X.1": _params_count,
     "X.2": _regime_dispersion,
     "X.3": _regime_activation,
+    "X.4": _x4,
 }
 
 
@@ -2307,6 +2463,7 @@ def evaluate(
     capacity: dict[str, Any] | None = None,
     attestation: dict[str, Any] | None = None,
     attestation_g07: dict[str, Any] | None = None,
+    baseline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a run against the acceptance criteria. Inputs are not modified.
 
@@ -2358,6 +2515,7 @@ def evaluate(
         capacity=capacity,
         attestation=attestation,
         attestation_g07=attestation_g07,
+        baseline=baseline,
     )
     rows_by_dimension: dict[str, list[dict[str, Any]]] = {d: [] for d in DIMENSIONS}
     for gate, dimension, title, hard, why in _GATES:

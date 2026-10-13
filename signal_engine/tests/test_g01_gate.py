@@ -50,10 +50,10 @@ COVERED = ["signal_engine/strategy_core", "signal_engine/adapters/a.py"]
 
 
 def attest(repo, commit_sha=None, **kw):
-    args = dict(root=repo / "signal_engine", gate="G0.1", commit=commit_sha or git(repo, "rev-parse", "HEAD"),
-                covered_paths=COVERED, strategies=["VwapReversion"],
-                evidence={"checks": [{"name": "t", "result": "ok"}], "modes": {"VwapReversion": "backtest"}},
-                reviewer="rev", on=date(2026, 10, 10))  # fmt: skip
+    args = {"root": repo / "signal_engine", "gate": "G0.1", "commit": commit_sha or git(repo, "rev-parse", "HEAD"),
+                "covered_paths": COVERED, "strategies": ["VwapReversion"],
+                "evidence": {"checks": [{"name": "t", "result": "ok"}], "modes": {"VwapReversion": "backtest"}},
+                "reviewer": "rev", "on": date(2026, 10, 10)}  # fmt: skip
     args.update(kw)
     return at.append(at.ledger_path(repo / "signal_engine"), **args)
 

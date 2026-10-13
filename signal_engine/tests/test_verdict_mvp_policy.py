@@ -22,7 +22,9 @@ import pytest
 from signal_engine.backtest import evaluation as ev
 from signal_engine.backtest import promotion as pr
 from signal_engine.backtest import verdict as vd
+from signal_engine.backtest.gate_semantics import INTEGRITY, gate_class
 from signal_engine.tests.test_evaluation_stats_gates import _evaluate, _noisy_book, _row
+from signal_engine.tests.test_verdict import CLEAN_RUN
 
 OK = {"ok": True, "failures": []}
 DQ_OK = {"status": "PASS", "affects_validity": False, "items": []}
@@ -128,7 +130,10 @@ class TestEdgeNeedsEveryRequiredGate:
         result = _derive(_evaluation("pass", **{gate.replace(".", "_"): "fail"}))
         assert result["run_verdict"] != vd.EDGE
         if gate in HARD:
-            assert result["run_verdict"] == vd.NO_EDGE
+            # a hard gate that checks the simulation itself (G6.9: a trade open past the
+            # broker square-off) is a validity failure, which the criteria call INCONCLUSIVE
+            integrity = gate_class(gate) == INTEGRITY
+            assert result["run_verdict"] == (vd.INCONCLUSIVE if integrity else vd.NO_EDGE)
 
     def test_a_report_or_not_applicable_row_does_not_block(self):
         evaluation = _evaluation("pass", G2_4="not_applicable", G4_6="report")
@@ -161,7 +166,7 @@ class TestPaperStageRequirementsStayVisible:
 
     def test_g48_not_run_blocks_paper_promotion_and_is_never_shown_as_passed(self):
         evaluation = _evaluation("pass", G4_8="not_evaluated")
-        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True)
+        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True, **CLEAN_RUN)
         paper = out["stages"]["paper"]
         assert out["stages"]["backtest"]["decision"] == pr.READY
         assert paper["decision"] == pr.NOT_READY and "gate G4.8 has not been run" in paper["reasons"]
@@ -169,7 +174,7 @@ class TestPaperStageRequirementsStayVisible:
 
     def test_g48_evaluated_clears_the_paper_block(self):
         evaluation = _evaluation("pass", G4_8="report")
-        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True)
+        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True, **CLEAN_RUN)
         assert "gate G4.8 has not been run" not in out["stages"]["paper"]["reasons"]
         assert not [r for r in _derive(evaluation)["reasons"] if r["gate"] == "G4.8"]
 
@@ -183,7 +188,7 @@ class TestPaperStageRequirementsStayVisible:
 
     def test_promotion_blocks_the_paper_stage_on_g66(self):
         evaluation = _evaluation("pass", G6_6="not_evaluated")
-        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True)
+        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True, **CLEAN_RUN)
         backtest, paper = out["stages"]["backtest"], out["stages"]["paper"]
         assert backtest["decision"] == pr.READY
         assert paper["decision"] == pr.NOT_READY
@@ -193,7 +198,7 @@ class TestPaperStageRequirementsStayVisible:
 
     def test_a_required_backtest_gate_not_run_keeps_the_backtest_stage_not_ready(self):
         evaluation = _evaluation("pass", G5_5="not_evaluated")
-        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True)
+        out = pr.evaluate_promotion(evaluation, code_dirty=False, reproducible=True, **CLEAN_RUN)
         assert out["stages"]["backtest"]["decision"] == pr.NOT_READY
         assert out["stages"]["paper"]["decision"] == pr.BLOCKED
 
@@ -288,7 +293,7 @@ class TestIdea029StaysNoEdge:
 
     def test_the_backtest_stage_is_not_ready_and_later_stages_are_blocked(self):
         rec = self._recorded()
-        out = pr.evaluate_promotion(rec["evaluation"], code_dirty=False, reproducible=True)
+        out = pr.evaluate_promotion(rec["evaluation"], code_dirty=False, reproducible=True, **CLEAN_RUN)
         assert out["stages"]["backtest"]["decision"] == pr.NOT_READY
         assert out["stages"]["paper"]["decision"] == pr.BLOCKED
         assert out["stages"]["live"]["decision"] == pr.BLOCKED

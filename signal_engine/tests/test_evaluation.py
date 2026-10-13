@@ -280,6 +280,13 @@ class TestHorizon:
         for gate in ("G6.1", "G6.9", "G6.8"):
             assert _row(profile, gate)["status"] == "not_applicable"
 
+    def test_swing_still_checks_what_is_not_about_the_intraday_session(self):
+        """Charge-schedule age and the SEBI framework apply to every horizon; only the MIS
+        session rules (G6.1, G6.8, G6.9) and the stop-order and ledger checks are intraday-only."""
+        profile = _evaluate(_book(exit_hm="00:00"), horizon="swing")
+        assert _row(profile, "G6.7")["status"] != "not_applicable"
+        assert _row(profile, "G6.6")["status"] == "not_evaluated"
+
     def test_unknown_horizon_is_rejected(self):
         with pytest.raises(ValueError, match="horizon"):
             _evaluate(_book(), horizon="scalp")
@@ -481,3 +488,30 @@ class TestRegimeActivation:
 
     def test_no_regime_block_not_evaluated(self):
         assert _row(_evaluate(_book()), "X.3")["status"] == "not_evaluated"
+
+
+class TestEdgeOverRandomEntry:
+    """X.4: the matched random-entry baseline is evidence, so a row reads it. It is a diagnostic
+    and never decides: market drift alone can make a long-only book profitable."""
+
+    BASE = {"method": "m", "trades": 500, "gross_bps": 5.0, "net_bps": -4.0,
+            "trade_net_bps": 6.0, "excess_net_bps": 10.0, "excess_t_stat": 3.1}
+
+    def test_without_a_baseline_it_is_not_evaluated(self):
+        assert _row(_evaluate(_book()), "X.4")["status"] == "not_evaluated"
+
+    def test_with_a_baseline_it_reports_the_excess_and_its_t(self):
+        row = _row(_evaluate(_book(), baseline=self.BASE), "X.4")
+        assert row["status"] == "report"
+        assert "10.0" in row["evidence"] and "3.1" in row["evidence"]
+
+    def test_an_edge_that_is_no_better_than_random_entry_is_said_plainly(self):
+        weak = {**self.BASE, "excess_net_bps": 0.4, "excess_t_stat": 0.3}
+        row = _row(_evaluate(_book(), baseline=weak), "X.4")
+        assert row["status"] == "report"
+        assert "does not clear" in row["evidence"]
+
+    def test_it_is_a_diagnostic_and_never_blocks(self):
+        from signal_engine.backtest import promotion
+
+        assert "X.4" in promotion.DIAGNOSTIC_GATES

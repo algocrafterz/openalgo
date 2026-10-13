@@ -14,6 +14,7 @@ closes at once.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass, replace
 
 # Verdict codes. The names are the backtest ledger codes (`backtest/ledgers.py` CODE_INDEX) so every
@@ -46,6 +47,110 @@ class TradePolicy:
             allow_longs=run.allow_longs,
             allow_shorts=run.allow_shorts,
         )
+
+
+@dataclass(frozen=True)
+class EntryCaps:
+    """Entry caps derived from a strategy's frozen re-entry rule, with the rule that produced them."""
+
+    max_trades_per_day: int
+    max_entries_per_direction: int | None
+    rule: str
+
+    def run_fields(self) -> dict[str, int | bool | None]:
+        """The backtest `RunConfig` fields that enforce these caps.
+
+        `one_trade_per_direction` is cleared because its default (True) is a second cap of one
+        entry per direction, which would silently override a spec that allows re-entries.
+        """
+        return {
+            "max_trades_per_day": self.max_trades_per_day,
+            "max_entries_per_direction": self.max_entries_per_direction,
+            "one_trade_per_direction": False,
+        }
+
+
+def _count(value, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"re_entry.max_per_symbol_day must be a whole number >= 0, got {value!r}")
+    return value
+
+
+class SpecConflict(ValueError):  # noqa: N818 - names the condition, as NotCovered does
+    """A frozen spec states two different entry limits; neither is chosen for it."""
+
+
+_SESSION_TOTAL = re.compile(
+    r"at most (\d+) trades? per symbol per (?:session|day|trading session|trading day)",
+    re.IGNORECASE,
+)
+
+
+def stated_session_total(rules) -> int | None:
+    """The per-symbol per-session trade total a spec states in its own rule text, or None.
+
+    `rules` is a rule string or a list of them (a spec's `entry` section). A per-direction
+    count ('entries per symbol per direction') is not a session total and is not read. Two
+    different totals in the same text are a conflict.
+    """
+    texts = [rules] if isinstance(rules, str) else list(rules or [])
+    found = {int(m) for t in texts if isinstance(t, str) for m in _SESSION_TOTAL.findall(t)}
+    if len(found) > 1:
+        raise SpecConflict(f"the rule text states different session totals: {sorted(found)}")
+    return found.pop() if found else None
+
+
+def entry_caps_from_spec(
+    re_entry,
+    *,
+    per_direction_rule: int | None = None,
+    both_directions: bool = True,
+    stated_session_total: int | None = None,
+) -> EntryCaps | None:
+    """The entry caps a frozen spec states, or None when it states none.
+
+    `re_entry.max_per_symbol_day` is the number of RE-ENTRY events per symbol per trading
+    session, across both directions; the initial entry does not count, so the session allows
+    1 + max_per_symbol_day entries, and 1 when re-entry is not allowed. A strategy that states
+    an explicit per-direction rule (`per_direction_rule`, entries per symbol per direction per
+    session) keeps it: each direction is capped on its own and the session total is that count
+    for each direction the strategy trades. Malformed values are refused, never guessed.
+
+    `stated_session_total` is a trade total the spec states in its rule text
+    (`stated_session_total()`). When it disagrees with the re-entry field the spec is ambiguous:
+    `SpecConflict` is raised and no reading is chosen for it.
+    """
+    if per_direction_rule is not None:
+        n = _count(per_direction_rule, "per_direction_rule")
+        if n < 1:
+            raise ValueError("a per-direction rule must allow at least one entry")
+        return EntryCaps(
+            max_trades_per_day=n * (2 if both_directions else 1),
+            max_entries_per_direction=n,
+            rule=f"explicit direction rule: {n} entries per symbol per direction per session",
+        )
+    if re_entry is None:
+        return None
+    allowed = re_entry.get("allowed")
+    if not isinstance(allowed, bool):
+        raise ValueError(f"re_entry.allowed must be true or false, got {allowed!r}")
+    if not allowed:
+        if "max_per_symbol_day" in re_entry:
+            raise ValueError("re_entry.max_per_symbol_day is set but re-entry is not allowed")
+        return EntryCaps(1, None, "re-entry not allowed: one entry per symbol per session")
+    n = _count(re_entry.get("max_per_symbol_day"), "max_per_symbol_day")
+    if stated_session_total is not None and stated_session_total != 1 + n:
+        raise SpecConflict(
+            f"the rule text says at most {stated_session_total} trades per symbol per session, "
+            f"but re_entry.max_per_symbol_day {n} means {1 + n} (the initial entry plus {n} "
+            "re-entries); state one rule in a new spec version"
+        )
+    return EntryCaps(
+        max_trades_per_day=1 + n,
+        max_entries_per_direction=None,
+        rule=f"{n} re-entry events per symbol per session across both directions "
+        "(the initial entry does not count)",
+    )
 
 
 @dataclass(frozen=True)

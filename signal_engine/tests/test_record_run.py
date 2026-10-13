@@ -7,8 +7,8 @@ validates against the registry schema, and one failing idea cannot stop the othe
 
 import json
 from datetime import date
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -241,15 +241,16 @@ class TestRegimesInRecord:
         rec = json.loads(self._record(root).read_text())
         assert "regimes" not in rec
 
-    def test_a_loader_is_never_called_on_a_published_dataset_run(self, root):
-        """Owner decision 1 (plan Phase 4): NIFTY/VIX are not in any published dataset, so the
-        regime block is unavailable; no loader (live store or Yahoo) is ever called."""
+    def test_a_supplied_loader_is_called_once_and_its_source_is_recorded(self, root):
+        """Superseded 2026-10-13 (owner instruction): independent NIFTY is used when supplied.
+        Without a loader nothing is read, so a published-dataset run never touches a live store
+        unasked."""
         called = []
         rec = json.loads(self._record(root, regimes=lambda: called.append(1)
                                       or _regime_inputs()).read_text())
-        assert called == [] and "regimes" not in rec
+        assert called == [1]
         assert br._validate_run(rec) == []
-        assert "Regime analysis not available" in rec["notes"]
+        assert "regimes" in rec and "independent NIFTY" in rec["notes"]
 
     def test_a_broken_loader_cannot_affect_the_run(self, root):
         def broken():
@@ -257,8 +258,8 @@ class TestRegimesInRecord:
 
         rec = json.loads(self._record(root, regimes=broken).read_text())
         assert "regimes" not in rec
-        assert "Regime analysis not available" in rec["notes"]
-        assert "offline" not in rec["notes"]
+        assert br._validate_run(rec) == []
+        assert "Regime analysis not recorded: offline" in rec["notes"]
 
 
 class TestRecordIdea:

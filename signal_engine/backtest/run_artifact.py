@@ -20,6 +20,7 @@ from typing import Any
 
 import yaml
 
+from signal_engine.backtest import gate_semantics as gate_semantics_mod
 from signal_engine.backtest import manifest as manifest_mod
 from signal_engine.backtest import next_action as next_action_mod
 from signal_engine.backtest import promotion as promotion_mod
@@ -41,7 +42,7 @@ from signal_engine.research.intake import profiles as profiles_mod
 from signal_engine.research.intake.versions import require_aware
 from signal_engine.timeutils import IST
 
-ENGINE_VERSION = "1.2"
+ENGINE_VERSION = "1.5"
 SCHEMA = 4
 #: Packages whose versions are pinned into the manifest (names as in uv.lock).
 ENVIRONMENT_PACKAGES = ("pandas", "numpy", "pyarrow", "duckdb", "pyyaml")
@@ -308,6 +309,8 @@ def _derived(
     reproducible: bool,
     data_quality: Mapping[str, Any] | None = None,
     validity: Mapping[str, Any] | None = None,
+    run_status: str = "VALID",
+    readiness_critical: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Verdict, promotion and next action for a run, derived from its evaluation block.
 
@@ -324,19 +327,27 @@ def _derived(
         if data_quality is not None
         else {"status": "NOT_RUN", "affects_validity": False, "items": []}
     )
+    # Critical readiness rows hold a clean result below EDGE; the other unverified rows are
+    # scoped limitations that qualify the verdict without capping it.
+    critical = [str(m) for m in readiness_critical]
     run_verdict = verdict_mod.derive(
         evaluation,
         validity=validity,
         data_quality=data_quality,
-        readiness_missing=list(readiness_missing),
+        readiness_missing=critical,
         code_dirty=code_dirty,
         reproducible=reproducible,
+        qualifications=[str(m) for m in readiness_missing if str(m) not in critical],
     )
     promo = promotion_mod.evaluate_promotion(
         evaluation,
         code_dirty=code_dirty,
         reproducible=reproducible,
         readiness_missing=list(readiness_missing),
+        validity=validity,
+        data_quality=data_quality,
+        run_status=run_status,
+        readiness_critical=list(readiness_critical),
     )
     action = next_action_mod.next_action(
         promo,
@@ -351,6 +362,13 @@ def _derived(
         "verdict": run_verdict,
         "promotion": promo,
         "next_action": action,
+        "assessment": gate_semantics_mod.assess(
+            evaluation,
+            verdict=run_verdict,
+            promotion=promo,
+            validity=validity,
+            data_quality=data_quality,
+        ),
     }
 
 
@@ -414,6 +432,7 @@ def _report(
         "verdict": derived["verdict"],
         "run_status": derived.get("run_status", "VALID"),
         "promotion": derived["promotion"],
+        "assessment": derived["assessment"],
         "next_action": derived["next_action"],
         "n_trials": record.get("n_trials"),
         "notes": record.get("notes", ""),
@@ -682,6 +701,7 @@ def prepare_run_artifact(
     parent_run_id: str | None,
     now: datetime,
     resolution: Any = None,
+    readiness_critical: Sequence[str] = (),
     run_status: str = "VALID",
     invalid_reason: Sequence[str] = (),
     trial_counted: bool = True,
@@ -719,12 +739,25 @@ def prepare_run_artifact(
         reproducible,
         getattr(execution, "data_quality", None),
         validity,
+        run_status=run_status,
+        readiness_critical=readiness_critical,
     )
     if run_status == "INVALID_DATA":
         # Plan D17: INVALID_DATA is a run status, never a verdict, and never a trial.
+        invalid = {
+            "ok": False,
+            "failures": [{"check": "data", "detail": str(r)} for r in invalid_reason],
+        }
         derived = {**derived, "verdict": None, "run_status": run_status,
                    "next_action": "Fix the data, then rerun. This run has no verdict and is "
-                                  "not a trial: " + "; ".join(invalid_reason)}
+                                  "not a trial: " + "; ".join(invalid_reason),
+                   "assessment": gate_semantics_mod.assess(
+                       record.get("evaluation") or {},
+                       verdict={"run_verdict": "INCONCLUSIVE", "reasons": []},
+                       promotion=derived["promotion"],
+                       validity=invalid,
+                       data_quality=derived["data_quality"],
+                   )}
     else:
         derived = {**derived, "run_status": run_status}
     files: dict[str, bytes] = {

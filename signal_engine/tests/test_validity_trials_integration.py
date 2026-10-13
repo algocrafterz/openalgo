@@ -689,12 +689,13 @@ class TestCapLift:
     VALID = {"ok": True, "failures": [], "checks_run": ["data_quality", "config", "lineage"]}
     DQ = {"status": "PASS", "affects_validity": False, "items": []}
 
-    def _derive(self, missing):
+    def _derive(self, missing, qualifications=()):
         return verdict_mod.derive(
             _everything_the_engine_can_evaluate_passes(),
             validity=self.VALID,
             data_quality=self.DQ,
             readiness_missing=missing,
+            qualifications=qualifications,
         )
 
     def test_everything_passing_and_nothing_missing_is_edge(self):
@@ -702,23 +703,41 @@ class TestCapLift:
         assert out["run_verdict"] == "EDGE"
         assert out["caps_applied"] == []
 
-    def test_one_missing_readiness_row_holds_it_at_marginal(self):
-        out = self._derive(["Point-in-time universe membership"])
+    def test_one_missing_critical_readiness_row_holds_it_at_marginal(self):
+        out = self._derive(["Run manifest"])
         assert out["run_verdict"] == "MARGINAL"
-        assert out["caps_applied"] == ["engine readiness: Point-in-time universe membership"]
+        assert out["caps_applied"] == ["engine readiness: Run manifest"]
 
-    def test_promotion_is_not_ready_while_readiness_is_missing(self):
+    def test_the_survivorship_limitation_qualifies_edge_and_never_caps_it(self):
+        out = self._derive([], ["Point-in-time universe membership"])
+        assert out["run_verdict"] == "EDGE"
+        assert out["caps_applied"] == []
+        assert out["qualifications"] == ["Point-in-time universe membership"]
+
+    def test_limitation_holds_no_stage_and_is_carried(self):
         evaluation = _everything_the_engine_can_evaluate_passes()
         held = promo.evaluate_promotion(
             evaluation,
             code_dirty=False,
             reproducible=True,
             readiness_missing=["Point-in-time universe membership"],
+            validity=self.VALID,
+            data_quality=self.DQ,
+            run_status="VALID",
         )
-        assert held["stages"]["backtest"]["decision"] == promo.NOT_READY
-        assert any("engine readiness" in r for r in held["stages"]["backtest"]["reasons"])
+        assert held["stages"]["backtest"]["decision"] == promo.READY
+        assert held["limitations"] == ["Point-in-time universe membership"]
+        # No paper gate has evidence in this fixture, so live is blocked behind paper only.
+        assert held["stages"]["live"]["decision"] == promo.BLOCKED
+        assert held["stages"]["live"]["reasons"] == ["the paper stage is not ready"]
         clear = promo.evaluate_promotion(
-            evaluation, code_dirty=False, reproducible=True, readiness_missing=[]
+            evaluation,
+            code_dirty=False,
+            reproducible=True,
+            readiness_missing=[],
+            validity=self.VALID,
+            data_quality=self.DQ,
+            run_status="VALID",
         )
         assert clear["stages"]["backtest"]["decision"] == promo.READY
 

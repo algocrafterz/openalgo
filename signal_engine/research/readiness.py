@@ -18,6 +18,8 @@ HEADER = ("capability", "status", "code", "tests", "verified")
 _TIER_RE = re.compile(r"^##\s+(P[123])\b")
 _HEADING_RE = re.compile(r"^#{1,6}\s")
 _STATUS_RE = re.compile("^(" + "|".join(STATUSES) + r")\b", re.IGNORECASE)
+CLASSES = ("critical", "limitation")
+_CLASS_RE = re.compile(r"\(class:\s*([a-z]+)\)", re.IGNORECASE)
 _PIPE_RE = re.compile(r"(?<!\\)\|")
 
 
@@ -37,6 +39,9 @@ class Row:
         code: Code cell.
         tests: Tests cell.
         verified: Verified cell.
+        klass: "critical" (bears on the trustworthiness of results; the default, so an
+            unclassified row fails closed) or "limitation" (only limits how strongly a result
+            may be claimed). Set with `(class: limitation)` in the status cell.
     """
 
     tier: str
@@ -46,6 +51,7 @@ class Row:
     code: str
     tests: str
     verified: str
+    klass: str = "critical"
 
 
 def _cells(line: str) -> list[str]:
@@ -72,7 +78,11 @@ def _parse_row(tier: str, cells: list[str], where: str) -> Row:
             f"{where}: status {status_cell!r} must start with one of {', '.join(STATUSES)}"
         )
     detail = status_cell[match.end() :].strip()
-    return Row(tier, capability, match.group(1).lower(), detail, code, tests, verified)
+    found = _CLASS_RE.search(status_cell)
+    klass = found.group(1).lower() if found else "critical"
+    if klass not in CLASSES:
+        raise ReadinessError(f"{where}: class {klass!r} must be one of {', '.join(CLASSES)}")
+    return Row(tier, capability, match.group(1).lower(), detail, code, tests, verified, klass)
 
 
 def parse_text(text: str, source: str = "<text>") -> list[Row]:
@@ -160,3 +170,26 @@ def missing(tier: str = "P1", path: Path | str | None = None) -> list[str]:
 def missing_p1(path: Path | str | None = None) -> list[str]:
     """Return the unverified P1 capabilities."""
     return missing("P1", path)
+
+
+def missing_p1_text(text: str) -> list[str]:
+    """Unverified P1 capabilities of readiness markdown `text`."""
+    return [r.capability for r in parse_text(text) if r.tier == "P1" and r.status != "verified"]
+
+
+def critical_p1_text(text: str) -> list[str]:
+    """Unverified P1 capabilities of `text` that bear on the trustworthiness of results."""
+    return [
+        r.capability
+        for r in parse_text(text)
+        if r.tier == "P1" and r.status != "verified" and r.klass == "critical"
+    ]
+
+
+def critical_p1(path: Path | str | None = None) -> list[str]:
+    """The unverified P1 capabilities that hold the backtest-to-paper step."""
+    return [
+        r.capability
+        for r in parse(path)
+        if r.tier == "P1" and r.status != "verified" and r.klass == "critical"
+    ]

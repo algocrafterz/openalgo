@@ -388,9 +388,11 @@ class TestGate:
         status, _, _, note = evaluation._g41(_inputs(None))
         assert status == "not_evaluated" and "not run" in note
 
-    def test_malformed_evidence_fails(self):
-        assert evaluation._g41(_inputs({"state": "bogus", "base": {"trades": 1}}))[0] == "fail"
-        assert evaluation._g41(_inputs({"state": "complete", "base": {"trades": 1}}))[0] == "fail"
+    def test_malformed_evidence_is_not_evaluated_never_a_strategy_failure(self):
+        for bad in ({"state": "bogus", "base": {"trades": 1}},
+                    {"state": "complete", "base": {"trades": 1}}):
+            status, _, _, note = evaluation._g41(_inputs(bad))
+            assert status == "not_evaluated" and "rejected as malformed" in note
 
     def test_seven_in_ten_passes_and_six_in_ten_fails(self):
         assert evaluation._g41(_inputs(_evidence(1.0, [0.9] * 7 + [-0.1] * 3)))[0] == "fail"  # weak

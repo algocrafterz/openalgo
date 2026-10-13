@@ -208,6 +208,35 @@ class TestCosts:
 
 
 class TestTrailRatchets:
+    def test_a_trail_cannot_see_the_bar_it_is_protecting(self):
+        """A stop is a resting order placed before the bar trades, so its level may use
+        bars up to the previous one only. This bar dips under the entry and closes well
+        above it; a breakeven raise driven by that close must not exit the same bar."""
+
+        class BreakevenOnClose(FireOnce):
+            def trail(self, c, i, p, pos):
+                return pos.entry if c["Close"][i] >= 105 else None
+
+        df = bars([(100, 101, 99, 100), (100, 101, 99, 100),
+                   (100, 101, 99, 100), (100, 106, 99, 105), (105, 106, 104, 105)])
+        t = run_one(df, BreakevenOnClose(at=1, sl=90, tp=200))
+        assert len(t) == 1
+        assert t[0].exit_time != df.index[3]
+        assert t[0].reason not in ("SL", "SL_GAP")
+
+    def test_a_trail_that_used_the_prior_bar_does_ratchet(self):
+        class BreakevenOnClose(FireOnce):
+            def trail(self, c, i, p, pos):
+                return pos.entry if c["Close"][i] >= 105 else None
+
+        df = bars([(100, 101, 99, 100), (100, 101, 99, 100),
+                   (100, 101, 99, 100), (100, 106, 100, 105), (100, 101, 99, 100),
+                   (100, 101, 99, 100)])
+        t = run_one(df, BreakevenOnClose(at=1, sl=90, tp=200))
+        # bar 3 closes at 105 -> the stop moves to entry for bar 4, which opens at 100
+        assert len(t) == 1 and t[0].exit == 100
+        assert t[0].exit_time == df.index[4]
+
     def test_a_trail_never_loosens_the_stop(self):
         class Loosen(FireOnce):
             def trail(self, c, i, p, pos):

@@ -6,8 +6,12 @@ point-in-time, and symbols that were delisted or dropped from F&O are absent. Ev
 say so, and the survivorship gate reports the bias rather than passing it.
 
 A symbol-session is eligible when the symbol has at least `min_prior_sessions` earlier traded
-sessions in the calendar, traded that day, session volume is above `min_volume` and the session
-close is at or above `min_price` (the NSE raw close when `price_factors` is given).
+sessions in the calendar, traded that day with volume above 1 (or `min_volume` when lower),
+and the PREVIOUS traded session's volume is above `min_volume` and its close is at or above
+`min_price` (the NSE raw close when `price_factors` is given). The floors look at the previous
+session because an entry at 09:20 cannot know the closing price or total volume of the day it
+trades in. A symbol's first traded session has no previous session and is not tested.
+After a long halt the previous traded session can be old; its close is still the last one that was known, so the test stays causal but may be stale.
 
 Two limits of the data, stated rather than hidden. The listing-age rule only applies to a symbol
 whose first session lies more than `LISTING_TOLERANCE_SESSIONS` calendar sessions after the
@@ -43,7 +47,9 @@ PRICE_FLOOR_NOT_APPLIED = (
     "traded price"
 )
 #: Version of the eligibility policy. 2: the price floor tests the NSE raw close, not the frame.
-ELIGIBILITY_POLICY_VERSION = 2
+#: 3: the price floor and a liquidity floor above 1 test the previous traded session, so a
+#: session is never dropped on information that only exists after it closes.
+ELIGIBILITY_POLICY_VERSION = 3
 BASIS_NSE_RAW = "nse_raw_last_bar_close"
 BASIS_NOT_APPLIED = "not_applied_back_adjusted"
 BASIS_AS_LOADED = "frame_close_as_loaded"
@@ -128,8 +134,12 @@ def _symbol(
     traded[pos] = True
     vol = np.zeros(cal.size)
     vol[pos] = volume
-    px = np.zeros(cal.size)
-    px[pos] = close
+    # what was known before each traded session opened: the previous traded session's close
+    # and volume (NaN for the first one, which is therefore not tested against the floors)
+    prev_px = np.full(cal.size, np.nan)
+    prev_vol = np.full(cal.size, np.nan)
+    prev_px[pos[1:]] = close[:-1]
+    prev_vol[pos[1:]] = volume[:-1]
     prior = np.cumsum(traded) - traded
     span = (np.arange(cal.size) >= pos[0]) & (np.arange(cal.size) <= pos[-1])
     reason = np.full(cal.size, "", dtype=object)
@@ -139,8 +149,15 @@ def _symbol(
     for mask, code in (
         (~traded, NO_TRADE),
         (no_mask if from_start else prior < policy.min_prior_sessions, LISTING_AGE),
-        (~(vol > policy.min_volume), ZERO_VOLUME),
-        (no_mask if adjusted_prices else ~(px >= policy.min_price), PRICE_FLOOR),
+        # same-day test: did the session trade at all (a data-validity test, not a liquidity one)
+        (~(vol > min(policy.min_volume, 1.0)), ZERO_VOLUME),
+        (np.isfinite(prev_vol) & ~(prev_vol > policy.min_volume), ZERO_VOLUME),
+        (
+            no_mask
+            if adjusted_prices
+            else np.isfinite(prev_px) & ~(prev_px >= policy.min_price),
+            PRICE_FLOOR,
+        ),
     ):
         hit = todo & mask
         reason[hit] = code

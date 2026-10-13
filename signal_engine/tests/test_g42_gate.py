@@ -12,7 +12,7 @@ from signal_engine.backtest.live_caps import trade_hash
 from signal_engine.backtest.perturbation import trade_metrics
 from signal_engine.tests.cost_fixtures import make_model
 from signal_engine.tests.test_evaluation_stats_gates import _evaluate, _noisy_book, _row
-from signal_engine.tests.test_perturbation import _frames, _headline, _Long, _P, _run
+from signal_engine.tests.test_perturbation import _P, _frames, _headline, _Long, _run
 
 
 def _stage(frames, headline=None, **kw):

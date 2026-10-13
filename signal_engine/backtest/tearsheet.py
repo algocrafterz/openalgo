@@ -520,6 +520,7 @@ def build_run_record(
         capacity=capacity,
         attestation=attestation,
         attestation_g07=attestation_g07,
+        baseline=baseline,
     )
     if trials is not None:
         record["trials"] = dict(trials)

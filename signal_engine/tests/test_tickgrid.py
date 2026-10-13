@@ -159,15 +159,24 @@ def _inputs(tick_grid):
 
 class TestGateG64:
     def _ev(self, **kw):
-        base = {"stops_checked": 10, "on_grid": 10, "off_grid": 0, "engine_tick_grid": "safe_tick"}
+        base = {
+            "version": 2,
+            "stops_checked": 10,
+            "on_grid": 10,
+            "off_grid": 0,
+            "uncovered": 0,
+            "engine_tick_grid": "safe_tick",
+            "reference": {"version": 1, "sha256": "ab" * 32, "verification": "secondary"},
+        }
         return {**base, **kw}
 
     def test_no_evidence_is_not_evaluated(self):
         assert evaluation._g64(_inputs(None))[0] == "not_evaluated"
 
-    def test_malformed_evidence_fails(self):
-        assert evaluation._g64(_inputs({"stops_checked": 3}))[0] == "fail"
-        assert evaluation._g64(_inputs(self._ev(on_grid=4)))[0] == "fail"
+    def test_malformed_evidence_is_not_evaluated_never_a_strategy_failure(self):
+        for bad in ({"stops_checked": 3}, self._ev(on_grid=4)):
+            status, _, _, note = evaluation._g64(_inputs(bad))
+            assert status == "not_evaluated" and "rejected as malformed" in note
 
     def test_off_grid_stops_fail_and_name_the_worst(self):
         ev = self._ev(
@@ -180,18 +189,33 @@ class TestGateG64:
         assert (status, value) == ("fail", 3)
         assert "TCS" in text and "tick 0.1: 3 of 10" in text
 
-    def test_no_stops_is_not_evaluated(self):
+    def test_no_stops_is_not_applicable(self):
+        """A stopless strategy (IDEA-027, IDEA-028) has no trigger to put on the grid."""
         ev = self._ev(stops_checked=0, on_grid=0)
-        assert evaluation._g64(_inputs(ev))[0] == "not_evaluated"
+        assert evaluation._g64(_inputs(ev))[0] == "not_applicable"
 
-    def test_clean_part_a_never_passes_without_the_broker_check(self):
-        status, _, _, text = evaluation._g64(_inputs(self._ev()))
+    def test_clean_dated_evidence_passes_without_any_broker_order(self):
+        status, value, _, text = evaluation._g64(_inputs(self._ev()))
+        assert (status, value) == ("pass", 10)
+        assert "dated" in text and "pre-live" in text
+        assert "Part B" not in text
+
+    def test_stops_on_dates_the_reference_does_not_cover_are_not_evaluated(self):
+        status, _, _, text = evaluation._g64(_inputs(self._ev(uncovered=2)))
         assert status == "not_evaluated"
-        assert "Part B is owed" in text
+        assert "2 stop" in text and "not covered" in text
 
-    def test_the_gate_is_registered_and_hard(self):
+    def test_evidence_from_before_the_dated_reference_is_not_accepted(self):
+        old = {k: v for k, v in self._ev().items() if k not in ("reference", "uncovered", "version")}
+        old["version"] = 1
+        status, _, _, text = evaluation._g64(_inputs(old))
+        assert status == "not_evaluated" and "dated reference" in text
+
+    def test_the_gate_is_registered_and_not_hard(self):
+        """A failure blocks promotion; it is never read as evidence that the strategy has no
+        edge (see test_gate_semantics)."""
         assert "G6.4" in evaluation._EVALUATORS
-        assert next(g for g in evaluation._GATES if g[0] == "G6.4")[3] is True
+        assert next(g for g in evaluation._GATES if g[0] == "G6.4")[3] is False
 
 
 class TestPriceFactorColumns:

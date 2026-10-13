@@ -20,3 +20,5 @@ products:
   CNC:
     # Delivery: overnight holding allowed, no intraday force-flat and no MIS cutoff.
     carry_forward: true
+    # A CNC stop is a resting order too, rounded by the same executor code (2026-10-13).
+    price_grid: safe_tick

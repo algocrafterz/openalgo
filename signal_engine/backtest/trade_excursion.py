@@ -207,7 +207,7 @@ def dist(s: pd.Series) -> dict[str, Any]:
     if len(s) < MIN_GROUP:
         return {"n": int(len(s)), "withheld": f"fewer than {MIN_GROUP} observations"}
     q = np.percentile(s, PERCENTILES)
-    return {"n": int(len(s)), "mean": _num(s.mean()), **{f"p{p}": _num(v) for p, v in zip(PERCENTILES, q)}}
+    return {"n": int(len(s)), "mean": _num(s.mean()), **{f"p{p}": _num(v) for p, v in zip(PERCENTILES, q, strict=True)}}
 
 
 def _excursion_block(g: pd.DataFrame) -> dict[str, Any]:
@@ -224,7 +224,7 @@ def _excursion_block(g: pd.DataFrame) -> dict[str, Any]:
 def _bucket(g: pd.DataFrame, col: str, edges: Sequence[float]) -> list[dict[str, Any]]:
     bins = [*edges, np.inf]
     rows = []
-    for lo, hi in zip(bins[:-1], bins[1:]):
+    for lo, hi in zip(bins[:-1], bins[1:], strict=True):
         m = g[(g[col] >= lo) & (g[col] < hi)]
         rows.append(
             {

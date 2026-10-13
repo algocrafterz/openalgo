@@ -148,3 +148,30 @@ def test_real_doc_works_from_other_cwd(tmp_path, monkeypatch):
     verified = {r.capability for r in p1 if r.status == "verified"}
     assert not verified & set(miss)
     assert isinstance(readiness.DEFAULT_PATH, Path)
+
+
+class TestCriticalVersusLimitation:
+    """An unverified capability either bears on the trustworthiness of results (critical) or
+    only limits how strongly a result may be claimed (limitation). Unclassified fails closed."""
+
+    def test_an_untagged_unverified_row_is_critical(self):
+        text = _doc(_row("A", "built"))
+        assert readiness.critical_p1_text(text) == ["A"]
+
+    def test_a_tagged_limitation_is_not_critical(self):
+        text = _doc(_row("A", "built (class: limitation) survivor-biased") + _row("B", "built"))
+        assert readiness.critical_p1_text(text) == ["B"]
+        assert readiness.missing_p1_text(text) == ["A", "B"]
+
+    def test_a_verified_row_is_neither(self):
+        text = _doc(_row("A", "verified 2026-10-13 (class: limitation)"))
+        assert readiness.critical_p1_text(text) == []
+
+    def test_an_unknown_class_word_is_an_error(self):
+        text = _doc(_row("A", "built (class: cosmetic)"))
+        with pytest.raises(ReadinessError, match="class"):
+            readiness.parse_text(text)
+
+    def test_the_real_ledger_has_only_the_universe_limitation_open(self):
+        assert readiness.critical_p1() == []
+        assert readiness.missing_p1() == ["Point-in-time universe membership and per-date eligibility"]

@@ -179,7 +179,7 @@ class TestSessionModel:
         official = session.Calendar((), (), session.OFFICIAL_SOURCE, "nse-official-b1")
         derived = self._cal()
         other = session.Calendar((), (), "some_other_source", "v")
-        kw = dict(profile_rules=PROFILE.products["MIS"], product="MIS", strategy_window="09:20-14:45")
+        kw = {"profile_rules": PROFILE.products["MIS"], "product": "MIS", "strategy_window": "09:20-14:45"}
         assert "official NSE calendar" in session.session_model(official, **kw)["exchange"]
         assert "derived" not in session.session_model(official, **kw)["exchange"]
         assert "(derived calendar)" in session.session_model(derived, **kw)["exchange"]

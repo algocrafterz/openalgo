@@ -174,7 +174,7 @@ def trade_paths(rng: np.random.Generator, s: Sessions, n_paths: int) -> Iterator
 
 def _summary(values: np.ndarray) -> dict[str, Any]:
     q = np.percentile(values, PERCENTILES)
-    return {"mean": _num(values.mean()), **{f"p{p}": _num(v) for p, v in zip(PERCENTILES, q)}}
+    return {"mean": _num(values.mean()), **{f"p{p}": _num(v) for p, v in zip(PERCENTILES, q, strict=True)}}
 
 
 def _prob(flags: np.ndarray) -> dict[str, Any]:
@@ -329,7 +329,7 @@ def build_report(
         ["day", "trade", *[f"block_{n}" for n in BLOCK_LENGTHS], "recent_day"]
         + [f"day_cost_{m:g}x" for m in COST_MULTIPLIERS]
     )
-    streams = dict(zip(plan, np.random.SeedSequence(seed).spawn(len(plan))))
+    streams = dict(zip(plan, np.random.SeedSequence(seed).spawn(len(plan)), strict=True))
     rng = {k: np.random.default_rng(v) for k, v in streams.items()}
     results: dict[str, Any] = {
         "day": run_method(day_paths(rng["day"], s, n_paths), fractions, theta, deployed_f),

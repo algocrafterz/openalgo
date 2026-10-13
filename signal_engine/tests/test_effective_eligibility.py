@@ -124,7 +124,7 @@ class TestRawFloorBasis:
         assert m["price_floor_basis"] == "nse_raw_last_bar_close"
         assert m["price_floor_source"]["daily_version"] == "nse-daily-x-001"
         assert m["price_floor_source"]["daily_root_hash"] == "h" * 64
-        assert m["eligibility_policy_version"] == 2
+        assert m["eligibility_policy_version"] == 3
         assert m["price_floor_applied"] is True
 
     def test_swing_layer_records_not_applied_basis(self):
@@ -133,7 +133,7 @@ class TestRawFloorBasis:
         ).membership
         assert m["price_floor_basis"] == "not_applied_back_adjusted"
         assert m["price_floor_applied"] is False
-        assert m["eligibility_policy_version"] == 2
+        assert m["eligibility_policy_version"] == 3
 
     def test_no_factors_records_frame_close_basis(self):
         m = self._plain().membership

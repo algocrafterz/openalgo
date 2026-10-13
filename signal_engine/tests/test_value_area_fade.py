@@ -14,7 +14,7 @@ from signal_engine.backtest.types import Ctx
 
 IST = "Asia/Kolkata"
 
-ALL_OFF = dict(use_clv=False, use_volume=False, use_vwap_filter=False)
+ALL_OFF = {"use_clv": False, "use_volume": False, "use_vwap_filter": False}
 
 
 def params(**overrides) -> FadeParams:
@@ -106,7 +106,7 @@ def test_target_is_poc_when_it_lies_meaningfully_ahead():
     # mistake the first version of this fixture made.
     path = [50, 50, 50, 70, 70, 100, 100, 100, 100, 100, 130, 150]
     vols = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 50, 50]
-    ctx_rows = [(pr, pr + 0.05, pr - 0.05, pr, v) for pr, v in zip(path, vols)]
+    ctx_rows = [(pr, pr + 0.05, pr - 0.05, pr, v) for pr, v in zip(path, vols, strict=True)]
     frames = [_bars(f"2026-06-0{k + 1}", "09:15", ctx_rows) for k in range(3)]
     # Reclaim closes BETWEEN VAL(~50.25) and POC(~100.5) - POC lies ahead of entry.
     test_day = _bars("2026-06-10", "09:15", [(70.0, 66.0, 49.0, 65.0, 50)])
@@ -221,7 +221,7 @@ def test_htf_trend_filter_blocks_a_long_fade_into_a_strong_downtrend():
     # by the test day, then a valid VAL-REJ wick (a fade UP, against that downtrend).
     down_days = [_bars(f"2026-05-{d:02d}", "09:15",
                        [(p, p + 0.05, p - 0.05, p, 50) for _ in range(30)])
-                 for d, p in zip(range(1, 26), [200 - k * 6 for k in range(25)])]
+                 for d, p in zip(range(1, 26), [200 - k * 6 for k in range(25)], strict=True)]
     rows = [(99.0, 101.5, 95.0, 101.0, 50)]
     p = params(htf_trend_atr_mult=1.0, htf_ema_len=5, atr_len=5)
 

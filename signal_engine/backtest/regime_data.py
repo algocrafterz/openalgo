@@ -14,6 +14,7 @@ The Yahoo fetch is injected (`fetch`) so tests never touch the network.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,10 @@ _OPEN_SEC, _CLOSE_SEC = 9 * 3600 + 15 * 60, 15 * 3600 + 29 * 60
 #: A session with fewer minute bars than this is partial (early close, feed outage).
 MIN_SESSION_BARS = 300
 _IST_OFFSET = 19800
+
+
+class RegimeDataUnavailable(RuntimeError):
+    """The independent NIFTY series cannot be loaded (no store, or no NIFTY in it)."""
 
 
 @dataclass(frozen=True)
@@ -151,3 +156,34 @@ def load_regime_inputs(
         source["vix_from"] = _day(vix.index[0])
         source["vix_to"] = _day(vix.index[-1])
     return RegimeInputs(close=close, vix=vix, source=source)
+
+
+def load_independent_regime_inputs(db_path: str | Path | None = None) -> RegimeInputs:
+    """NIFTY closes from the broker store alone: no Yahoo, no substitute basket, no VIX.
+
+    VIX stays optional (`vix is None`; the classifier then uses NIFTY's realised volatility). The
+    source record pins the series by a hash of its values so a run that used it can be checked
+    against the same series later; the store is a live one, not a published dataset version.
+    """
+    path = Path(db_path or HISTORIFY_DB)
+    if not path.exists():
+        raise RegimeDataUnavailable(f"no Historify store at {path}")
+    try:
+        close = daily_close_from_historify(path)
+    except Exception as exc:  # a store without the table is as unavailable as a missing one
+        raise RegimeDataUnavailable(f"cannot read {NIFTY_SYMBOL} from {path}: {exc}") from exc
+    if close.empty:
+        raise RegimeDataUnavailable(f"{NIFTY_SYMBOL} ({NIFTY_EXCHANGE}) has no complete sessions")
+    digest = hashlib.sha256(
+        "\n".join(f"{d.date().isoformat()},{v!r}" for d, v in close.items()).encode("utf-8")
+    ).hexdigest()
+    source: dict[str, Any] = {
+        "nifty_source": f"historify {NIFTY_EXCHANGE} {NIFTY_SYMBOL} 1m, last bar of complete sessions",
+        "external_sources": "none",
+        "nifty_sessions": int(len(close)),
+        "nifty_from": _day(close.index[0]),
+        "nifty_to": _day(close.index[-1]),
+        "nifty_sha256": digest,
+        "vix_source": "unavailable",
+    }
+    return RegimeInputs(close=close, vix=None, source=source)

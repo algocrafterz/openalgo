@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import functools
 import hashlib
 import inspect
 import json
@@ -49,16 +48,23 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from signal_engine.backtest import data as data_mod
-from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import attestations as attestations_mod
 from signal_engine.backtest import capacity as capacity_mod
+from signal_engine.backtest import data as data_mod
 from signal_engine.backtest import latency as latency_mod
+from signal_engine.backtest import ledgers as ledgers_mod
 from signal_engine.backtest import live_caps as live_caps_mod
-from signal_engine.backtest import monte_carlo as monte_carlo_mod
 from signal_engine.backtest import manifest as manifest_mod
+from signal_engine.backtest import monte_carlo as monte_carlo_mod
 from signal_engine.backtest import perturbation as perturbation_mod
-from signal_engine.backtest import regime, regime_data, run_artifact, run_diagnostics, tickgrid
+from signal_engine.backtest import (
+    regime,
+    regime_data,
+    run_artifact,
+    run_diagnostics,
+    tickgrid,
+)
+from signal_engine.backtest import tuning as tuning_mod
 from signal_engine.backtest.baseline import (
     INTRADAY_MAX_TRADES,
     random_entry_baseline,
@@ -114,6 +120,11 @@ from signal_engine.research.intake import freeze as intake_freeze
 from signal_engine.research.intake import spec, versions
 from signal_engine.research.intake import trials as trials_mod
 from signal_engine.research.intake.spec import NO_MAXIMUM_HOLD
+from signal_engine.strategy_core.trade_policy import (
+    EntryCaps,
+    entry_caps_from_spec,
+    stated_session_total,
+)
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -125,6 +136,8 @@ STATUTORY_MODEL = MODEL_NAME
 #: Engine defaults, identical to the `python -m signal_engine.backtest` CLI.
 INTRADAY_COST_BPS = 16.0
 SWING_COST_BPS = 24.0
+#: Settings key for a tuning variant's parameter values (`backtest.tuning` only).
+PARAMETER_OVERRIDES = "parameter_overrides"
 OOS_FRACTION = HOLDOUT_OOS_FRACTION  # G3.1: hold out the last 30% to 40% of sessions
 EMBARGO_SESSIONS = 1  # G3.5: purge straddling trades and skip one session after the cut
 #: Slippage per side for the per-trade cost model, the same working figure as
@@ -147,8 +160,8 @@ prepare_data = preflight_mod.prepare_data
 VALID, INVALID_DATA = "VALID", "INVALID_DATA"
 
 #: Recorded in the notes of every run on a published version (owner decision 2026-10-05).
-REGIME_UNAVAILABLE = ("Regime analysis not available: no published index dataset (NIFTY/VIX); "
-                      "no external source is used and the verdict is unaffected.")
+REGIME_UNAVAILABLE = ("Regime analysis not available: no independent NIFTY series was loaded; "
+                      "the stock basket is never used as a stand-in and the verdict is unaffected.")
 
 
 class PublishedDataRequired(RuntimeError):
@@ -200,7 +213,7 @@ class Execution:
     membership: dict[str, Any] | None = None
     #: Look-ahead check result (`TruncationResult.to_dict()`), or None when it was not run.
     truncation: dict[str, Any] | None = None
-    #: Part A of gate G6.4 (`tickgrid.tick_grid_evidence`), or None when the run has no intraday stops.
+    #: Gate G6.4 evidence (`tickgrid.tick_grid_evidence`), or None when no check was run.
     tick_grid: dict[str, Any] | None = None
     #: G4.1 evidence (`perturbation.run_variants`), or None when the stage was not run.
     perturbation: dict[str, Any] | None = None
@@ -561,6 +574,39 @@ def _apply_profile_settings(run: Any, cfg: Mapping[str, Any]) -> Any:
     return run.with_(**changes) if changes else run
 
 
+def _entry_caps(cfg: Mapping[str, Any]) -> EntryCaps | None:
+    """The entry caps the frozen spec states, or None when it states none."""
+    return entry_caps_from_spec(
+        cfg.get("re_entry"),
+        per_direction_rule=cfg.get("per_direction_rule"),
+        both_directions=cfg.get("direction", "both") == "both",
+        stated_session_total=cfg.get("stated_session_total"),
+    )
+
+
+def _apply_entry_caps(run: Any, cfg: Mapping[str, Any]) -> Any:
+    """Overlay the spec's re-entry caps on an intraday RunConfig.
+
+    The spec wins over a strategy's own `run_overrides`: a backtest must enforce the limit the
+    frozen specification states, and a mismatch is then impossible rather than hidden. A spec
+    that states no rule leaves the strategy's constants unchanged.
+    """
+    caps = _entry_caps(cfg)
+    return run if caps is None else run.with_(**caps.run_fields())
+
+
+def _entry_caps_record(cfg: Mapping[str, Any]) -> dict[str, Any] | None:
+    """What was applied, for the run record (`params.entry_caps`)."""
+    caps = _entry_caps(cfg)
+    if caps is None:
+        return None
+    return {
+        "max_trades_per_day": caps.max_trades_per_day,
+        "max_entries_per_direction": caps.max_entries_per_direction,
+        "rule": caps.rule,
+    }
+
+
 def _end_of_session(end: str | None) -> str | None:
     """`end` (an ISO date) as the last second of that session, or None.
 
@@ -880,11 +926,18 @@ def _execute_on(
     # The statutory cost model is built first: a fault stops the run before any data is read.
     cost_model = _primary_cost_model(kind, cfg)
     strategy, params = cls(), params_cls()
+    # Only the tuning workflow sets overrides (`backtest.tuning`); a recorded run never does, so
+    # its parameters are always the strategy class's own, bound to the frozen spec below.
+    overrides = cfg.get(PARAMETER_OVERRIDES)
+    if overrides:
+        params = dataclasses.replace(params, **dict(overrides))
     if "parameters" in cfg:
         check_parameter_binding(cfg["parameters"], jsonable(params))
     collector = DataCollector()
     min_sessions = dataset.contract.loader_min_sessions
     price_factors = price_floor_source = None
+    #: adjusted / NSE raw price per session, for the stop snap and the tick check (G6.4)
+    stop_factors = None
     if kind == "swing":
         frames = source.daily(dataset.eligible, until, min_sessions, collector)
         run = SwingRunConfig(cost_bps=cfg.get("cost_bps", SWING_COST_BPS))
@@ -892,10 +945,15 @@ def _execute_on(
         if _hold_is_unlimited(cfg.get("holding_period")):
             # The frozen spec says no maximum holding period, so no engine cap may stand in.
             run = run.with_(max_hold_bars=None)
+        if "tick_grid" in cfg:
+            run = run.with_(tick_grid=str(cfg["tick_grid"]))
+        # A swing stop is a resting order too: its tick check and snap need raw prices.
+        stop_factors = source.daily_price_factors(sorted(frames), until)
         bar_size = "1d"
     else:
         frames = source.intraday(dataset.eligible, "5m", until, collector)
         price_factors = source.session_price_factors(sorted(frames), until)
+        stop_factors = price_factors
         pinned = dataset.manifest["contract"]
         price_floor_source = {
             "daily_version": pinned["daily_version"],
@@ -907,6 +965,7 @@ def _execute_on(
             **getattr(strategy, "run_overrides", {})
         )
         run = _apply_profile_settings(run, cfg)
+        run = _apply_entry_caps(run, cfg)
         bar_size = "5m"
     if "warmup_bars" in cfg:
         run = run.with_(warmup_bars=int(cfg["warmup_bars"]))
@@ -928,13 +987,13 @@ def _execute_on(
     # Raw month-end closes fix each month's exact tick tier; read before the engine frames are
     # released. The engine snaps stops on RAW prices, so each bar carries its session's factor.
     month_closes = None
-    grid_mode = getattr(run, "tick_grid", tickgrid.NONE)  # a swing run has no stop orders
-    if kind != "swing":
+    grid_mode = getattr(run, "tick_grid", tickgrid.NONE)
+    if stop_factors is not None:
         month_closes = tickgrid.month_end_closes(tickgrid.session_closes(layer.frames))
         if grid_mode == tickgrid.SAFE_TICK:
             layer = dataclasses.replace(
                 layer,
-                frames=tickgrid.attach_price_factors(layer.frames, price_factors, in_place=True),
+                frames=tickgrid.attach_price_factors(layer.frames, stop_factors, in_place=True),
             )
     del frames  # the harness releases its raw frames as it goes; do not keep a second copy
     # Load-time rejection (plan section 8): a data defect that affects validity, or a calendar
@@ -1060,7 +1119,7 @@ def _execute_on(
         )
     if month_closes is not None:
         tick_grid = tickgrid.tick_grid_evidence(
-            trades, month_closes, price_factors, engine_mode=grid_mode
+            trades, month_closes, stop_factors, engine_mode=grid_mode
         )
     baseline = None
     if kind != "swing":
@@ -1102,6 +1161,7 @@ def _execute_on(
             cost_model,
             symbols=loaded_symbols,
         )
+    caps_record = None if kind == "swing" else _entry_caps_record(cfg)
     return Execution(
         trades=trades,
         params={
@@ -1109,6 +1169,7 @@ def _execute_on(
             "engine": kind,
             "strategy": jsonable(params),
             "run": jsonable(run),
+            **({"entry_caps": caps_record} if caps_record else {}),
         },
         data={
             "source": f"published:{dataset.version_id}",
@@ -1270,17 +1331,24 @@ def parse_caps(text: str) -> tuple[int, ...]:
 def _regime_inputs(
     loader: Callable[[], regime_data.RegimeInputs] | None,
 ) -> tuple[pd.DataFrame | None, dict[str, Any] | None, str]:
-    """Daily regime labels, their source record, and a note when they could not be built."""
+    """Daily regime labels, their source record, and the note for the run record.
+
+    No loader means the analysis was not requested. A loader that finds no NIFTY is a plain
+    unavailable note, not an error.
+    """
     if loader is None:
-        return None, None, ""
+        return None, None, f" {REGIME_UNAVAILABLE} (not requested: pass --regimes)."
     try:
         inputs = loader()
         days = regime.build_regime_days(inputs.close, inputs.vix)
+    except regime_data.RegimeDataUnavailable as exc:
+        return None, None, f" {REGIME_UNAVAILABLE} ({exc})."
     except Exception as exc:
         logger.exception("Regime analysis unavailable")
         return None, None, f" Regime analysis not recorded: {exc}."
     source = {**inputs.source, "vol_agreement": regime.vol_agreement(days)}
-    return days, jsonable(source), ""
+    vix_text = "with India VIX." if inputs.vix is not None else "(India VIX unavailable: realised volatility)."
+    return days, jsonable(source), f" Regime labels come from independent NIFTY data {vix_text}"
 
 
 #: Frozen resolved field -> `settings` key handed to the execute callable.
@@ -1310,6 +1378,9 @@ _INTENT_SETTINGS = {
     "sizing_basis": ("sizing", "basis"),
     "capital_per_trade": ("sizing", "capital_per_trade"),
     "reference_round_trip_bps": ("costs", "reference_round_trip_bps"),
+    "re_entry": ("re_entry",),
+    "per_direction_rule": ("parameters", "max_entries_per_direction_per_symbol_per_day"),
+    "direction": ("direction",),
 }
 
 
@@ -1323,6 +1394,10 @@ def _intent_settings(intent: Mapping[str, Any]) -> dict[str, Any]:
             out[name] = node
     if "sizing_basis" not in out:
         out.pop("capital_per_trade", None)  # only meaningful with a stated basis
+    # A trade total stated in the entry rules' own words; checked against the re-entry field.
+    total = stated_session_total(intent.get("entry"))
+    if total is not None:
+        out["stated_session_total"] = total
     return out
 
 
@@ -1353,6 +1428,23 @@ def session_inputs(frozen: Any, execution: Execution) -> dict[str, Any] | None:
     }
 
 
+def frozen_settings(frozen: Any) -> dict[str, Any]:
+    """The settings a frozen spec hands to `execute_backtest`: resolved execution fields, the
+    strategy-intent fields and the profile's broker."""
+    settings = {
+        name: frozen.resolved[field_name]["value"]
+        for name, field_name in _SETTINGS_FIELDS.items()
+        if field_name in frozen.resolved
+    }
+    settings.update(_intent_settings(frozen.intent))
+    # The deployment profile's broker prices brokerage; a profile with none is priced on the
+    # portfolio default schedule, and the record says so.
+    broker = frozen.profile.get("broker") if isinstance(frozen.profile, Mapping) else None
+    if broker is not None:
+        settings["broker"] = broker
+    return settings
+
+
 def _execute_frozen(
     execute: Callable[..., Execution],
     key: str,
@@ -1368,17 +1460,7 @@ def _execute_frozen(
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
     them, then verify the cost."""
-    settings = {
-        name: frozen.resolved[field_name]["value"]
-        for name, field_name in _SETTINGS_FIELDS.items()
-        if field_name in frozen.resolved
-    }
-    settings.update(_intent_settings(frozen.intent))
-    # The deployment profile's broker prices brokerage; a profile with none is priced on the
-    # portfolio default schedule, and the record says so.
-    broker = frozen.profile.get("broker") if isinstance(frozen.profile, Mapping) else None
-    if broker is not None:
-        settings["broker"] = broker
+    settings = frozen_settings(frozen)
     try:
         accepted = inspect.signature(execute).parameters
     except (TypeError, ValueError):
@@ -1474,6 +1556,7 @@ def record_idea(
     attestation_fn: Callable[..., dict[str, Any]] | None = None,
     dataset_fingerprint_fn: Callable[[Sequence[str], str, str], str] | None = None,
     readiness_missing_fn: Callable[[], list[str]] | None = None,
+    readiness_critical_fn: Callable[[], list[str]] | None = None,
     now: datetime | None = None,
     frozen: intake_freeze.FrozenSpec | None = None,
     end: str | None = None,
@@ -1577,9 +1660,12 @@ def record_idea(
         report.created_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         raise preflight_mod.DataNotReadyError(
             report, preflight_mod.write_record(report, folder)) from exc
-    # Regime inputs (NIFTY, VIX) are not in any published dataset: the block is unavailable and
-    # no external source is used (owner decision 2026-10-05). It never affects the verdict.
-    regime_days, regime_source, regime_note = None, None, f" {REGIME_UNAVAILABLE}"
+    # The regime block comes from an independent NIFTY series (the broker store) when a loader is
+    # supplied, with VIX optional; it is never built from the strategy's own stock basket, which
+    # is survivor-biased and not a market benchmark. With no loader, or no NIFTY, the block is
+    # unavailable and says why. It feeds the X rows only, which never decide a verdict or a
+    # promotion.
+    regime_days, regime_source, regime_note = _regime_inputs(regimes)
     # The id is chosen only now, after the long backtest, to keep the window in which another
     # process could take it as short as possible.
     run_id = next_run_id(runs_dir, run_date, run_slug(folder))
@@ -1596,6 +1682,17 @@ def record_idea(
         trades=execution.trades,
         truncation=execution.truncation,
     )
+    if tuning_mod.has_tuning(folder):
+        # A tuning of this idea that read any session of this run's hold-out has seen the period
+        # the run validates on: the run is not valid (no performance number can be trusted).
+        separation = tuning_mod.separation_failures(
+            folder, oos_start or default_oos_start(execution.days, execution.trades)
+        )
+        validity = {
+            "ok": validity["ok"] and not separation,
+            "failures": [*validity["failures"], *separation],
+            "checks_run": [*validity["checks_run"], "tuning_separation"],
+        }
     data_failures = [f for f in validity["failures"] if f.get("check") == "data_quality"]
     run_status = INVALID_DATA if data_failures else VALID
     trial_counted = run_status == VALID
@@ -1697,6 +1794,7 @@ def record_idea(
     # everything that can raise before anything is written.
     engine = run_artifact.settle_git(git, git_fn(root), allow_dirty)
     readiness_missing = (readiness_missing_fn or readiness.missing_p1)()
+    readiness_critical = (readiness_critical_fn or readiness.critical_p1)()
     # The manifest records the dry-run version; the real registration must agree with it.
     dry = (
         intake_freeze.register(folder, frozen, dry_run=True, **version_args)
@@ -1714,6 +1812,7 @@ def record_idea(
         engine=engine,
         dataset_fingerprint_fn=dataset_fingerprint_fn or manifest_mod.dataset_fingerprint,
         readiness_missing=readiness_missing,
+        readiness_critical=readiness_critical,
         parent_run_id=parent,
         now=stamp,
         resolution=resolution,
@@ -1923,7 +2022,12 @@ def main(
     parser.add_argument("--validation", action="append", default=[], help="repeatable")
     parser.add_argument(
         "--no-regimes", action="store_true",
-        help="no effect: the regime block is unavailable on published-dataset runs"
+        help="skip the regime block even when --regimes is given (kept for compatibility)"
+    )
+    parser.add_argument(
+        "--regimes", action="store_true",
+        help="build the regime block from independent NIFTY data in the broker store "
+        "(Historify); India VIX is optional and no external source is used"
     )
     parser.add_argument(
         "--allow-dirty",
@@ -1977,10 +2081,10 @@ def main(
         hooks = {"git_state_fn": git_state_fn, "dataset_fingerprint_fn": dataset_fingerprint_fn}
         return _reproduce_main(args, run, keys, hooks)
     load_regimes = None
-    if not args.no_regimes:
-        # Regime inputs (NIFTY, VIX) are not in any published dataset, so a recorded run never
-        # loads them (owner decision 2026-10-05): no live-store read and no external source.
-        load_regimes = regimes
+    if args.regimes and not args.no_regimes:
+        # Opt-in: independent NIFTY from the broker store, never an external source and never
+        # the stock basket. The series is pinned in the run record by a hash of its values.
+        load_regimes = regimes or regime_data.load_independent_regime_inputs
     ids = _ideas_with_module(args.root) if args.all else [args.idea or args.rerun]
     failures = 0
     for idea_id in ids:

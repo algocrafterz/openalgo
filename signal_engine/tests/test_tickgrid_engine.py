@@ -165,3 +165,28 @@ class TestHarnessCarriesThePriceFactor:
         out = tickgrid.attach_price_factors(frames, {"A": {date(2026, 2, 3): 0.8}}, in_place=True)
         assert out["A"] is frames["A"]
         assert (frames["A"]["price_factor"] == 0.8).all()
+
+
+class TestEngineSnapsOnTheGridOfTheTradesOwnDate:
+    """The exchange tick was Rs 0.05 for every stock before 2024-06-10; a 2020 backtest must not
+    model a Rs 0.01 trigger."""
+
+    def _frame_on(self, start):
+        f = _frame(100.0, lows={6: 90.0})
+        f.index = pd.date_range(f"{start} 09:15", periods=len(f), freq="5min", tz="Asia/Kolkata")
+        return f
+
+    def test_a_2020_stop_lands_on_the_five_paise_grid(self):
+        t = _trades(_Dip(99.53), self._frame_on("2020-03-25"), _run(tick_grid="safe_tick"))
+        assert t[0].sl == pytest.approx(99.55)
+
+    def test_a_2026_stop_of_the_same_price_lands_on_the_one_paise_grid(self):
+        t = _trades(_Dip(99.53), self._frame_on("2026-02-03"), _run(tick_grid="safe_tick"))
+        assert t[0].sl == pytest.approx(99.53)
+
+    def test_the_recorded_evidence_agrees_with_what_the_engine_did(self):
+        for start in ("2020-03-25", "2026-02-03"):
+            t = _trades(_Dip(99.53), self._frame_on(start), _run(tick_grid="safe_tick"))
+            closes = {"X": {f"{start[:4]}-{int(start[5:7]) - 1:02d}": 100.0}}
+            ev = tickgrid.tick_grid_evidence(t, closes, engine_mode="safe_tick")
+            assert ev["off_grid"] == 0 and ev["stops_checked"] == 1, start

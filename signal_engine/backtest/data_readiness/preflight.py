@@ -321,6 +321,23 @@ class PublishedSource:
                                          interval, end, root=self._resolution.root,
                                          collector=collector)
 
+    def daily_price_factors(self, symbols, end):
+        """Per symbol and session, this daily version's `price_factor` (adjusted / NSE raw)."""
+        names = sorted(set(symbols))
+        out: dict = {s: {} for s in names}
+        if not names:
+            return out
+        sql = "SELECT symbol, session, price_factor FROM bars WHERE list_contains(?, symbol)"
+        args: list = [names]
+        if end:
+            sql += " AND session <= ?"
+            args.append(date.fromisoformat(str(end)[:10]))
+        rows = self._con.execute(sql, args).df()
+        for sym, ses, fac in zip(rows.symbol, pd.to_datetime(rows.session).dt.date,
+                                 rows.price_factor, strict=True):
+            out[sym][ses] = float(fac)
+        return out
+
     def session_price_factors(self, symbols, end):
         from signal_engine.backtest.data_readiness import intraday_access
 

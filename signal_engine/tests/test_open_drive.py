@@ -21,9 +21,9 @@ from signal_engine.backtest.types import Ctx
 IST = "Asia/Kolkata"
 
 #: Every setup/filter off by default; each test enables exactly what it needs.
-ALL_OFF = dict(use_day_type_filter=False, use_retest=False, use_rejection=False,
-               use_acceptance=False, use_clv=False, use_volume=False,
-               use_vwap_filter=False)
+ALL_OFF = {"use_day_type_filter": False, "use_retest": False, "use_rejection": False,
+               "use_acceptance": False, "use_clv": False, "use_volume": False,
+               "use_vwap_filter": False}
 
 
 def params(**overrides) -> OpenDriveParams:

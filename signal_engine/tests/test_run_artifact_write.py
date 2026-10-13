@@ -148,9 +148,27 @@ class TestLayout:
             "primary_failed_gate",
             "reasons",
             "caps_applied",
+            "qualifications",
         }
         assert report["verdict"]["run_verdict"] != "EDGE"
         assert set(report["promotion"]["stages"]) == {"backtest", "paper", "live"}
+        assessment = report["assessment"]
+        assert set(assessment) == {
+            "research_validity",
+            "strategy_evidence",
+            "promotion_readiness",
+            "gates",
+        }
+        legacy = report["verdict"]["run_verdict"]
+        if legacy == "MARGINAL":
+            assert assessment["strategy_evidence"]["status"] in ("MARGINAL", "PROMISING")
+        else:
+            assert assessment["strategy_evidence"]["status"] == legacy
+        assert (
+            assessment["promotion_readiness"]["backtest"]
+            == report["promotion"]["stages"]["backtest"]["decision"]
+        )
+        assert assessment["research_validity"]["limitations"] == report["promotion"]["limitations"]
         assert set(report["next_action"]) == {"action", "reason", "gate"}
         assert flat["run_verdict"] == report["verdict"]["run_verdict"]
         assert flat["promotion_decision"] == report["promotion"]["stages"]["backtest"]["decision"]
@@ -520,6 +538,9 @@ class TestSettings:
             "parameters": {"ema_fast": 9, "ema_slow": 20, "atr_len": 14},
             "stop": ["1 ATR(14) below entry"],
             "holding_period": "12 bars",
+            # the re-entry rule and direction, so the backtest enforces the spec's entry caps
+            "re_entry": {"allowed": False},
+            "direction": "both",
         }
 
     def test_execute_without_settings_is_called_with_the_key_only(self, root):

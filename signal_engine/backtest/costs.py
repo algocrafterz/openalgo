@@ -217,6 +217,13 @@ def decompose_trades(trades, model: CostModel, slippage_mult: float = 1.0) -> pd
     if model.fixed_notional is not None:
         notional = np.full(len(rows), float(model.fixed_notional))
     else:
+        unsized = ~np.isfinite(risk)
+        if unsized.any():
+            first = rows[int(np.argmax(unsized))]
+            raise CostModelUnavailable(
+                f"{first.symbol} has no stop, so it cannot be sized by risk; "
+                "give the cost model a fixed_notional"
+            )
         sized = model.capital * model.risk_per_trade / (risk / entry)
         notional = np.minimum(sized, model.capital * model.leverage)
     buckets = np.maximum(1.0, np.round(notional / _NOTIONAL_BUCKET))

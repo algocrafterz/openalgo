@@ -108,16 +108,18 @@ class TestApplyEligibility:
         for k in frames:
             pd.testing.assert_frame_equal(new[k], frames[k])
 
-    def test_symbol_with_no_eligible_session_is_omitted_but_still_reported(self):
+    def test_symbol_under_the_floor_keeps_only_the_session_it_cannot_test(self):
+        """The first traded session has no previous close to judge, so it is the one session a
+        permanently sub-floor symbol keeps; every later session is dropped."""
         frames = self._frames()
         penny = make_frame(full_sessions(12, bars=4))
         penny[["Open", "High", "Low", "Close"]] = 5.0
         frames["PENNY"] = penny
         cal = derive_calendar(frames)
         new, dropped = apply_eligibility(frames, compute_eligibility(frames, POLICY, cal))
-        assert "PENNY" not in new
+        assert set(new["PENNY"].index.date) == {sorted(set(penny.index.date))[0]}
         assert set(dropped["PENNY"].values()) == {"PRICE_FLOOR"}
-        assert len(dropped["PENNY"]) == 12
+        assert len(dropped["PENNY"]) == 11
 
     def test_only_dates_with_rows_are_reported(self):
         frames = self._frames()
@@ -258,6 +260,12 @@ class _StoreSource:
     def intraday(self, symbols, interval, end, collector=None):
         return self._intraday(symbols=symbols, interval=interval, end=end, collector=collector)
 
+    def daily_price_factors(self, symbols, end):
+        """Raw == loaded in this store: factor 1.0 for every session."""
+        frames = self._daily(symbols=symbols, end=end, collector=None)
+        return {s: dict.fromkeys(sorted({ts.date() for ts in f.index}), 1.0)
+                for s, f in frames.items()}
+
     def session_price_factors(self, symbols, end):
         """Raw == loaded in this store: factor 1.0 for every session."""
         frames = self._intraday(symbols=symbols, interval="5m", end=end, collector=None)
@@ -388,11 +396,12 @@ class TestCollectorWiring:
         assert set(rows["scope"]) == {"symbol_session"} and set(rows["count"]) == {1}
         per_symbol = rows.groupby("symbol").size().to_dict()
         # AAA to DDD are present from the panel start, so listing age does not apply to them.
-        # PENNY loses all twelve sessions to the price floor. LATE lists on day index 8, so its
-        # first two sessions (Jan 9 and Jan 10) are too young.
-        assert per_symbol == {"PENNY": 12, "LATE": 2}
+        # PENNY loses eleven of twelve sessions to the price floor (the first has no previous
+        # close to test). LATE lists on day index 8, so its first two sessions (Jan 9 and Jan 10)
+        # are too young.
+        assert per_symbol == {"PENNY": 11, "LATE": 2}
         reasons = rows[rows["symbol"] == "PENNY"]["detail"].value_counts().to_dict()
-        assert reasons == {"PRICE_FLOOR": 12}
+        assert reasons == {"PRICE_FLOOR": 11}
         assert set(rows[rows["symbol"] == "LATE"]["detail"]) == {"LISTING_AGE"}
         assert rows[rows["symbol"] == "LATE"]["date"].tolist() == [
             dt.date(2025, 1, 9),
@@ -402,7 +411,7 @@ class TestCollectorWiring:
     def test_dropped_sessions_are_absent_from_what_the_engine_sees(self, store):
         exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
         seen = store["frames"]
-        assert sorted(seen) == ["AAA", "BBB", "CCC", "DDD", "LATE"]  # PENNY has none left
+        assert sorted(seen) == ["AAA", "BBB", "CCC", "DDD", "LATE", "PENNY"]  # PENNY keeps one
         gone = {dt.date(2025, 1, 9), dt.date(2025, 1, 10)}
         assert not gone & set(seen["LATE"].index.date)
         assert dt.date(2025, 1, 11) in set(seen["LATE"].index.date)
@@ -458,10 +467,15 @@ class TestCollectorWiring:
             "CCC": 100,
             "DDD": 100,
             "LATE": 100,
+            "PENNY": 75,  # its single retained session is shorter than the warm-up
         }
         for sym, df in store["frames"].items():
             first = exe.ledgers["signals"]
             first = first[first["symbol"] == sym]["bar_time"].min()
+            if len(df) <= 100:
+                # fewer bars than the warm-up: the symbol can never signal
+                assert pd.isna(first)
+                continue
             assert first >= df.index[100]
         assert exe.ledger_problems == []
 
@@ -542,6 +556,22 @@ class TestSwingPath:
         assert int(_by_code(exe, "WARMUP")["count"].sum()) == 5 * 5
         assert exe.ledger_problems == []
         assert exe.membership["survivorship_bias"] is True
+
+    def test_swing_stops_are_snapped_and_checked_on_the_dated_tick_grid(self, swing_store):
+        exe = rr.execute_backtest(
+            "s", settings={**SETTINGS, "tick_grid": "safe_tick"}, dataset=swing_store
+        )
+        assert exe.params["run"]["tick_grid"] == "safe_tick"
+        ev = exe.tick_grid
+        assert ev is not None and ev["engine_tick_grid"] == "safe_tick"
+        assert ev["stops_checked"] == len(exe.trades) > 0 and ev["off_grid"] == 0
+
+    def test_a_swing_run_without_the_setting_keeps_the_legacy_engine_and_is_still_checked(
+        self, swing_store
+    ):
+        exe = rr.execute_backtest("s", settings=SETTINGS, dataset=swing_store)
+        assert exe.params["run"]["tick_grid"] == "none"
+        assert exe.tick_grid is not None and exe.tick_grid["engine_tick_grid"] == "none"
 
 
 class TestBaselinePopulation:

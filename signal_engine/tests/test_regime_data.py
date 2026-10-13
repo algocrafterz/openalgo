@@ -146,3 +146,48 @@ class TestLoadInputs:
         assert inputs.source["nifty_from"] == "2023-12-29"
         assert inputs.source["nifty_to"] == "2024-01-04"
         assert inputs.source["vix_source"] == "yahoo ^INDIAVIX"
+
+
+class TestIndependentInputs:
+    """NIFTY from the broker store only: no Yahoo, no substitute basket, VIX optional."""
+
+    def test_uses_only_the_broker_store(self, db):
+        inputs = rd.load_independent_regime_inputs(db)
+        assert list(inputs.close.index.strftime("%Y-%m-%d")) == ["2024-01-02", "2024-01-03"]
+        assert inputs.close.loc["2024-01-03"] == 21100.0  # the partial session is skipped
+        assert inputs.vix is None
+
+    def test_the_source_record_says_what_it_is_and_what_it_is_not(self, db):
+        source = rd.load_independent_regime_inputs(db).source
+        assert source["nifty_source"].startswith("historify")
+        assert source["external_sources"] == "none"
+        assert source["vix_source"] == "unavailable"
+        assert source["nifty_from"] == "2024-01-02" and source["nifty_to"] == "2024-01-03"
+        assert source["nifty_sessions"] == 2
+
+    def test_the_series_is_pinned_by_a_hash_of_its_values(self, db):
+        a = rd.load_independent_regime_inputs(db).source["nifty_sha256"]
+        b = rd.load_independent_regime_inputs(db).source["nifty_sha256"]
+        assert a == b and len(a) == 64
+
+    def test_no_nifty_in_the_store_is_a_plain_unavailable_error(self, tmp_path):
+        con = duckdb.connect(str(tmp_path / "empty.duckdb"))
+        con.execute(
+            "CREATE TABLE market_data (symbol VARCHAR, exchange VARCHAR, interval VARCHAR, "
+            "timestamp BIGINT, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
+            "volume BIGINT, oi BIGINT)"
+        )
+        con.close()
+        with pytest.raises(rd.RegimeDataUnavailable, match="NIFTY"):
+            rd.load_independent_regime_inputs(tmp_path / "empty.duckdb")
+
+    def test_a_missing_store_is_unavailable_not_a_crash(self, tmp_path):
+        with pytest.raises(rd.RegimeDataUnavailable):
+            rd.load_independent_regime_inputs(tmp_path / "does-not-exist.duckdb")
+
+    def test_no_network_is_touched(self, db, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("the independent loader must not fetch from the network")
+
+        monkeypatch.setattr(rd, "fetch_yahoo_close", boom)
+        rd.load_independent_regime_inputs(db)

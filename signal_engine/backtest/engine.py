@@ -161,7 +161,10 @@ def simulate_steps(
 
     def snapped(stop: float, direction: int, i: int) -> float:
         # The trigger the executor sends: rounded on RAW prices, toward the market.
-        return tickgrid.snap_stop(stop, direction, 1.0 if pf_col is None else float(pf_col[i]))
+        # on the tick grid in force on that bar's date (engine 1.4), not today's
+        return tickgrid.snap_stop(
+            stop, direction, 1.0 if pf_col is None else float(pf_col[i]), days[i]
+        )
 
     # Broker MIS square-off guard: the exit bar must CLOSE margin minutes before the broker's
     # auto square-off, so the latest allowed exit-bar stamp is square-off - margin - bar length.
@@ -362,7 +365,9 @@ def simulate_steps(
                     close_out(reason, close[i], i)
         elif pos is not None:
             d = pos.direction
-            new_stop = strategy.trail(c, i, p, pos)
+            # the stop is a resting order placed before bar i trades, so it may use bars
+            # up to i - 1 only (the same contract as `target`)
+            new_stop = strategy.trail(c, i - 1, p, pos) if i > 0 else None
             if new_stop is not None and not np.isnan(new_stop):
                 if snap_ticks:
                     new_stop = snapped(float(new_stop), d, i)

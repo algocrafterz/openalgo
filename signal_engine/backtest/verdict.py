@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from signal_engine.backtest.gate_semantics import INTEGRITY, gate_class
 from signal_engine.backtest.promotion import (
     DIAGNOSTIC_GATES,
     STAGE_OVERRIDES,
@@ -23,7 +24,7 @@ INCONCLUSIVE = "INCONCLUSIVE"
 #: requirement; G2.7 (track length against the Minimum Track Record Length) is labelled REPORT,
 #: so it is shown as a diagnostic and never decides anything.
 MIN_SAMPLE_GATES = ("G2.1",)
-MIN_SAMPLE_DIAGNOSTIC_GATES = DIAGNOSTIC_GATES
+MIN_SAMPLE_DIAGNOSTIC_GATES = ("G2.7",)
 _NOT_REQUIRED = frozenset({"report", "not_applicable"})
 
 
@@ -90,6 +91,31 @@ def _derive(
 
     rows = evaluation_rows(evaluation)
     by_gate = {str(r["gate"]): r for r in rows}
+
+    # A failed integrity gate (look-ahead, an impossible execution assumption, a silent
+    # exclusion, a stale cost schedule) means the simulation is wrong, not that the strategy
+    # is: no performance number can be trusted, so the run is inconclusive, never no-edge.
+    broken = [
+        r
+        for r in rows
+        if r.get("status") == "fail"
+        and gate_class(str(r["gate"])) == INTEGRITY
+        and stage_of(str(r["gate"])) == "backtest"
+    ]
+    if broken:
+        return _result(
+            INCONCLUSIVE,
+            [
+                _reason(
+                    f"Research integrity failed: {r.get('title') or r['gate']} ({r['gate']}). "
+                    "No performance result can be trusted.",
+                    str(r["gate"]),
+                    status_label(str(r["status"])),
+                )
+                for r in broken
+            ],
+            str(broken[0]["gate"]),
+        )
 
     sample = [
         by_gate[g]
@@ -197,12 +223,19 @@ def derive(
     readiness_missing: Sequence[str],
     code_dirty: bool = False,
     reproducible: bool = True,
+    qualifications: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Apply the verdict rules in order; the first match decides (see `_derive`).
 
     Diagnostic sample-size rows (`MIN_SAMPLE_DIAGNOSTIC_GATES`) are appended to the reasons for
     a run whose performance gates were evaluated. They never change the verdict.
+
+    `readiness_missing` are unverified critical engine capabilities: they hold a clean result
+    at MARGINAL. `qualifications` are scoped research limitations (a survivor-biased universe):
+    they never change the verdict, they narrow what it claims. They are recorded on every
+    verdict, and an EDGE names them so it reads as evidence within the tested universe.
     """
+    quals = [str(q) for q in qualifications]
     result = _derive(
         evaluation,
         validity=validity,
@@ -217,4 +250,11 @@ def derive(
     if performance_evaluated:
         extra = [*_diagnostics(evaluation), *_stage_exceptions(evaluation)]
         result = {**result, "reasons": [*result["reasons"], *extra]}
-    return result
+    if quals and result["run_verdict"] == EDGE:
+        scope = _reason(
+            "Edge within the tested universe and period only, qualified by: "
+            + ", ".join(quals)
+            + ". It does not generalise to every stock historically listed on NSE."
+        )
+        result = {**result, "reasons": [scope, *result["reasons"]]}
+    return {**result, "qualifications": quals}

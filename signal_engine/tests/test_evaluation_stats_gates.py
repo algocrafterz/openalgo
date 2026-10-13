@@ -206,3 +206,132 @@ class TestLeakage:
 
     def test_g35_not_evaluated_without_a_split(self):
         assert _row(_evaluate(self._swing_book()), "G3.5")["status"] == "not_evaluated"
+
+
+class TestSparseBookUsesEverySession:
+    """A strategy that trades one session in three has two idle sessions in between. The daily
+    series behind G2.3, G2.6 and G2.7 must carry them as zero, or the Sharpe and the
+    Newey-West lag structure describe trade-days instead of elapsed time."""
+
+    @staticmethod
+    def _sparse():
+        days = [d.date() for d in pd.bdate_range("2022-01-03", periods=300)]
+        rng = np.random.default_rng(3)
+        book = [_t(d.isoformat(), float(rng.normal(0.2, 1.0))) for d in days[::3]]
+        return book, days
+
+    def test_the_series_is_zero_filled_over_the_calendar(self):
+        from signal_engine.backtest.session import Calendar
+
+        book, days = self._sparse()
+        cal = Calendar(tuple(days), (), "official_nse_calendar", "cal-test")
+        profile = _evaluate(book, calendar=cal)
+        # first to last trade day: days[0] .. days[297]
+        assert "over 298 sessions" in _row(profile, "G2.3")["evidence"]
+        assert "over 298 sessions" in _row(profile, "G2.6")["evidence"]
+        assert "298 sessions observed" in _row(profile, "G2.7")["evidence"]
+
+    def test_exchange_holidays_in_the_calendar_are_not_counted_as_idle_sessions(self):
+        from signal_engine.backtest.session import Calendar
+
+        book, days = self._sparse()
+        open_days = tuple(d for i, d in enumerate(days) if i not in (1, 2, 4))
+        cal = Calendar(open_days, (), "official_nse_calendar", "cal-test")
+        assert "over 295 sessions" in _row(_evaluate(book, calendar=cal), "G2.6")["evidence"]
+
+    def test_without_a_calendar_business_days_between_first_and_last_trade_are_used(self):
+        book, _ = self._sparse()
+        profile = _evaluate(book)
+        evidence = _row(profile, "G2.6")["evidence"]
+        assert "over 298 sessions" in evidence  # first to last trade day, Mon-Fri
+        assert "zero-filled" in evidence
+
+    def test_zero_filling_lowers_the_sharpe_of_a_sparse_book(self):
+        from signal_engine.backtest.session import Calendar
+
+        book, days = self._sparse()
+        cal = Calendar(tuple(days), (), "official_nse_calendar", "cal-test")
+        filled = _row(_evaluate(book, calendar=cal), "G2.3")["evidence"]
+        dense = _row(_evaluate(_noisy_book(100, mean=0.2, seed=3)), "G2.3")["evidence"]
+        sharpe = lambda text: float(text.split("daily Sharpe ")[1].split(" ")[0])  # noqa: E731
+        # same per-trade edge, one third the trading frequency: a third of the trades per session
+        assert sharpe(filled) < sharpe(dense)
+
+
+class TestG22SwingOverlap:
+    """A swing trade held for weeks overlaps the trades entered after it, so the entry-day
+    clustered t treats correlated observations as independent. G2.2 (HARD) must also clear a
+    Newey-West t whose lags cover the holding period."""
+
+    @staticmethod
+    def _slow_book(hold_sessions=20, n=500):
+        days = list(pd.bdate_range("2022-01-03", periods=n + hold_sessions))
+        rng = np.random.default_rng(11)
+        book = []
+        for i in range(n):
+            wave = np.sin(2 * np.pi * i / 60.0)  # a slowly varying edge: neighbours agree
+            r = 0.12 + wave + float(rng.normal(0, 0.05))
+            book.append(
+                _t(days[i].date().isoformat(), r, exit_day=days[i + hold_sessions].date().isoformat())
+            )
+        return book
+
+    def _g22(self, horizon, record_t=3.6):
+        book = self._slow_book()
+        profile = _evaluate(
+            book,
+            horizon=horizon,
+            n_trials=1,
+            metrics={"trades": len(book), "t_stat": record_t, "gross_bps": 60.0, "net_bps": 30.0,
+                     "days": 500},
+        )
+        return _row(profile, "G2.2")
+
+    def test_overlapping_swing_holds_fail_when_the_entry_day_t_alone_would_pass(self):
+        row = self._g22("swing")
+        assert row["status"] == "fail"
+        assert "overlap" in row["evidence"].lower()
+        assert float(row["value"]) < 2.5  # the effective t is the smaller of the two
+
+    def test_the_same_record_on_an_intraday_horizon_is_unchanged(self):
+        row = self._g22("intraday")
+        assert row["status"] == "pass"
+        assert float(row["value"]) == 3.6
+
+    def test_a_swing_book_with_independent_trades_keeps_its_t(self):
+        days = list(pd.bdate_range("2022-01-03", periods=620))
+        rng = np.random.default_rng(5)
+        book = [
+            _t(days[i].date().isoformat(), float(rng.normal(0.25, 1.0)),
+               exit_day=days[i + 5].date().isoformat())
+            for i in range(600)
+        ]
+        profile = _evaluate(
+            book, horizon="swing", n_trials=1,
+            metrics={"trades": 600, "t_stat": 6.0, "gross_bps": 60.0, "net_bps": 30.0, "days": 600},
+        )
+        assert _row(profile, "G2.2")["status"] == "pass"
+
+    def test_tz_aware_ist_exit_times_are_handled(self):
+        """Swing trades carry IST-aware timestamps while the entry day is a plain date."""
+        book = [
+            dataclasses.replace(t, exit_time=t.exit_time.tz_localize("Asia/Kolkata"),
+                                entry_time=t.entry_time.tz_localize("Asia/Kolkata"))
+            for t in self._slow_book()
+        ]
+        profile = _evaluate(
+            book, horizon="swing", n_trials=1,
+            metrics={"trades": len(book), "t_stat": 3.6, "gross_bps": 60.0, "net_bps": 30.0,
+                     "days": 500},
+        )
+        assert _row(profile, "G2.2")["status"] == "fail"
+
+    def test_a_missing_exit_time_does_not_crash_the_overlap_check(self):
+        book = self._slow_book()
+        book[10] = dataclasses.replace(book[10], exit_time=pd.NaT)
+        profile = _evaluate(
+            book, horizon="swing", n_trials=1,
+            metrics={"trades": len(book), "t_stat": 3.6, "gross_bps": 60.0, "net_bps": 30.0,
+                     "days": 500},
+        )
+        assert _row(profile, "G2.2")["status"] == "fail"

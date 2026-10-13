@@ -16,9 +16,9 @@ from signal_engine.backtest.swing_engine import SwingRunConfig, simulate_swing
 from signal_engine.backtest.types import Ctx
 from signal_engine.strategy_core.exits import ExitPlan, Ladder
 from signal_engine.tests.test_backtest_engine import RUN, FireOnce, bars
+from signal_engine.tests.test_backtest_ledgers import SwingScript
 from signal_engine.tests.test_evaluation_stats_gates import _evaluate, _noisy_book, _row
 from signal_engine.tests.test_swing_engine_semantics import frame
-from signal_engine.tests.test_backtest_ledgers import SwingScript
 
 FLAT = (100, 101, 99, 100)
 

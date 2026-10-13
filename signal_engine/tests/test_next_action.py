@@ -10,11 +10,13 @@ from signal_engine.backtest import evaluation as ev
 from signal_engine.backtest import next_action as na
 from signal_engine.backtest import promotion as pr
 from signal_engine.backtest import verdict as vd
-from signal_engine.tests.test_verdict import DQ_OK, OK, make_eval
+from signal_engine.tests.test_verdict import CLEAN_RUN, DQ_OK, OK, make_eval
 
 
 def act(evaluation, code_dirty=False, reproducible=True, primary_gate=None):
-    p = pr.evaluate_promotion(evaluation, code_dirty=code_dirty, reproducible=reproducible)
+    p = pr.evaluate_promotion(
+        evaluation, code_dirty=code_dirty, reproducible=reproducible, **CLEAN_RUN
+    )
     return na.next_action(
         p,
         evaluation,
@@ -120,7 +122,7 @@ def test_does_not_change_verdict():
 
 def test_inputs_not_mutated():
     e = make_eval(G3_2="fail")
-    p = pr.evaluate_promotion(e, code_dirty=False, reproducible=True)
+    p = pr.evaluate_promotion(e, code_dirty=False, reproducible=True, **CLEAN_RUN)
     e0, p0 = copy.deepcopy(e), copy.deepcopy(p)
     na.next_action(p, e, code_dirty=False, reproducible=True)
     assert e == e0 and p == p0
@@ -227,3 +229,32 @@ def test_the_g4_1_failed_wording_is_true_when_the_base_run_is_not_positive():
     out = act(make_eval(G4_1="fail"))
     text = (out["action"] + " " + out["reason"]).lower()
     assert "neighbour" not in text or "base" in text
+
+
+class TestStageReasonsWithoutAnOpenGate:
+    """A stage can be held with every gate evaluated: by validity, or by an unverified capability."""
+
+    @staticmethod
+    def _act(evaluation, **kw):
+        p = pr.evaluate_promotion(
+            evaluation, code_dirty=False, reproducible=True, **{**CLEAN_RUN, **kw}
+        )
+        return na.next_action(p, evaluation, code_dirty=False, reproducible=True)
+
+    def test_an_invalid_run_says_to_fix_validity_not_to_evaluate_gates(self):
+        bad = {"ok": False, "failures": [{"check": "lineage", "detail": "orphan fill"}]}
+        a = self._act(make_eval(), validity=bad)
+        assert "validity" in a["action"].lower()
+        assert "orphan fill" in a["reason"]
+        assert "No gate in this stage has been evaluated" not in a["reason"]
+
+    def test_a_scoped_limitation_alone_holds_nothing(self):
+        a = self._act(make_eval(), readiness_missing=["Point-in-time universe membership"])
+        assert a["action"] == na.ADVANCE_ACTION
+
+    def test_an_unverified_critical_capability_is_named_when_it_is_all_that_is_left(self):
+        a = self._act(make_eval(), readiness_critical=["Run manifest"])
+        assert "capability" in a["action"].lower()
+        assert "Run manifest" in a["reason"]
+        assert "No gate in this stage has been evaluated" not in a["reason"]
+        assert a["gate"] is None

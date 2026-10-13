@@ -94,16 +94,16 @@ def ctxs(**symbols):
 
 
 def caps(**kw) -> lc.LiveCaps:
-    base = dict(
-        max_open_positions=0,
-        max_trades_per_day=0,
-        daily_loss_limit=0.0,
-        weekly_loss_limit=0.0,
-        monthly_loss_limit=0.0,
-        min_entry_price=0.0,
-        max_entry_price=0.0,
-        risk_fraction=F,
-    )
+    base = {
+        "max_open_positions": 0,
+        "max_trades_per_day": 0,
+        "daily_loss_limit": 0.0,
+        "weekly_loss_limit": 0.0,
+        "monthly_loss_limit": 0.0,
+        "min_entry_price": 0.0,
+        "max_entry_price": 0.0,
+        "risk_fraction": F,
+    }
     base.update(kw)
     return lc.LiveCaps(**base)
 
@@ -386,11 +386,11 @@ class TestStageAndEvidence:
             else simulate(Ctx(frames["A"], "A"), Fire({2, 3}), None, RUN)
             + simulate(Ctx(frames["B"], "B"), Fire({2, 3}), None, RUN)
         )
-        args = dict(
-            strategy=Fire({2, 3}), params=None, load_frames=lambda syms: {s: frames[s] for s in syms},
-            symbols=["A", "B"], run=RUN, cost_model=None, headline_trades=head,
-            caps=caps(max_open_positions=1),
-        )
+        args = {
+            "strategy": Fire({2, 3}), "params": None, "load_frames": lambda syms: {s: frames[s] for s in syms},
+            "symbols": ["A", "B"], "run": RUN, "cost_model": None, "headline_trades": head,
+            "caps": caps(max_open_positions=1),
+        }
         args.update(kw)
         return lc.run_stage(**args)
 
@@ -405,9 +405,8 @@ class TestStageAndEvidence:
         assert any("unrealised" in x for x in ev["limitations"])
 
     def test_every_pass_and_the_base_check_carry_the_peak_margin_when_a_cost_model_is_given(self):
-        from signal_engine.tests.cost_fixtures import make_model
-
         from signal_engine.backtest.costs import recost
+        from signal_engine.tests.cost_fixtures import make_model
 
         model = make_model()
         frames = self._frames()

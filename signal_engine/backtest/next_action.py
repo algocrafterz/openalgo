@@ -133,7 +133,8 @@ RULES: dict[str, dict[str, str]] = {
     ),
     "G6.3": _r("Check price band circuits", "Circuit limits can trap an exit"),
     "G6.4": _r(
-        "Verify tick size handling with the broker", "Orders at invalid prices are rejected"
+        "Record the run again so its stop triggers are checked against the dated tick tiers",
+        "Orders at invalid prices are rejected; broker acceptance is a separate pre-live check",
     ),
     "G6.5": _r("Test gap-through stop behaviour", "Stops can fill far from their price"),
     "G6.6": _r(
@@ -169,6 +170,7 @@ RULES: dict[str, dict[str, str]] = {
         "Supply a regime block and check dispersion", "Results should not depend on one regime"
     ),
     "X.3": _r("State and test the regime activation hypothesis", "Regime filters need a reason"),
+    "X.4": _r("Record the matched random-entry baseline", "X.4 needs it; it never blocks"),
 }
 
 
@@ -312,6 +314,22 @@ def next_action(
         }
     if stage is None:
         return {"action": ADVANCE_ACTION, "reason": "Every stage is ready.", "gate": None}
+    reasons = list(stages[stage].get("reasons") or [])
+    invalid = [r for r in reasons if r.startswith(("run is not valid", "data quality problem"))]
+    if invalid:
+        return {
+            "action": "Fix the run's validity problem and record a new run version",
+            "reason": "; ".join(invalid) + ". No performance result can be trusted until then.",
+            "gate": None,
+        }
+    critical = [r for r in reasons if r.startswith("critical engine capability not verified")]
+    if critical:
+        return {
+            "action": "Verify the critical engine capability, then record a new run version",
+            "reason": "; ".join(critical)
+            + ". Every gate has a result; the engine cannot yet be trusted on this capability.",
+            "gate": None,
+        }
     return {
         "action": f"Evaluate the gates for the {stage} stage",
         "reason": "No gate in this stage has been evaluated.",

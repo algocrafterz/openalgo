@@ -128,7 +128,7 @@ def test_execute_on_keeps_an_adjusted_penny_session_with_raw_above_floor(monkeyp
     assert set(ne["detail"]) == {"PRICE_FLOOR"}
     m = exe.membership
     assert m["price_floor_basis"] == "nse_raw_last_bar_close"
-    assert m["eligibility_policy_version"] == 2
+    assert m["eligibility_policy_version"] == 3
     assert m["price_floor_source"]["field"] == "price_factor"
     assert m["price_floor_source"]["daily_version"] == "nse-daily-fake-001"
 
@@ -140,3 +140,21 @@ def test_committed_run_manifests_still_validate():
         manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
         assert mf.validate_manifest(manifest) == [], folder
         assert mf.verify_artifacts(folder) == [], folder
+
+
+def test_daily_price_factors_read_the_open_daily_version(daily):
+    """A swing run's stop snap and tick check read the daily version's own factors."""
+    from signal_engine.backtest.data_readiness.preflight import PublishedSource
+
+    root, git_dir, vid, _ = daily
+    with snapshot.open_version(vid, root=root, git_dir=git_dir, symbols=["AAA"]) as con:
+        out = PublishedSource(con, None).daily_price_factors(["AAA", "ZZZ"], None)
+        bounded = PublishedSource(con, None).daily_price_factors(["AAA"], "2024-10-25 23:59:59")
+    assert out["AAA"] == {
+        BONUS_DAYS[0]: pytest.approx(0.5),
+        BONUS_DAYS[1]: pytest.approx(0.5),
+        BONUS_DAYS[2]: 1.0,
+        BONUS_DAYS[3]: 1.0,
+    }
+    assert out["ZZZ"] == {}
+    assert sorted(bounded["AAA"]) == BONUS_DAYS[:2]

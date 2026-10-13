@@ -135,6 +135,14 @@ class FrameSource:
         return self._cut(self._intraday, symbols, end)
 
 
+    def daily_price_factors(self, symbols, end):
+        """Factor 1.0 for every daily session (raw == loaded), unless `factors` is given."""
+        if self._factors is not None:
+            return {s: dict(self._factors.get(s, {})) for s in symbols}
+        frames = self._cut(self._daily or {}, symbols, end)
+        return {s: dict.fromkeys(sorted({ts.date() for ts in f.index}), 1.0)
+                for s, f in frames.items()}
+
     def session_price_factors(self, symbols, end):
         """Factor 1.0 for every intraday session (raw == loaded), unless `factors` is given."""
         if self._factors is not None:

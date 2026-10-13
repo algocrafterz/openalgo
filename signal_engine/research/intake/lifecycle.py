@@ -69,11 +69,24 @@ def derive_verdict(latest_run: dict[str, Any] | None) -> str:
     return _VERDICTS.get(latest_run.get("run_verdict"), "none")
 
 
+#: Run-record schemas whose flat fields this check understands. Schema 4 (2026-10-05) added
+#: `run_status`; a schema 3 record has none and is judged on its other fields.
+PROMOTABLE_SCHEMAS = (3, 4)
+
+
 def run_blockers(run: dict[str, Any], version: str) -> list[str]:
     """Why `run` cannot promote `version`. An empty list means it qualifies."""
     blockers: list[str] = []
-    if run.get("schema") != 3:
-        blockers.append("is not a schema 3 run")
+    schema = run.get("schema")
+    if schema not in PROMOTABLE_SCHEMAS:
+        blockers.append(f"has schema {schema!r}; promotable schemas are {PROMOTABLE_SCHEMAS}")
+    # Defence in depth: the decision is derived from the same inputs, but a record whose flat
+    # fields disagree with it must not promote. NO_EDGE and INCONCLUSIVE are never promotable.
+    verdict = run.get("run_verdict")
+    if verdict in ("NO_EDGE", "INCONCLUSIVE"):
+        blockers.append(f"has run_verdict {verdict}, which is never promotable")
+    if schema == 4 and run.get("run_status") != "VALID":
+        blockers.append(f"has run_status {run.get('run_status')!r}, not 'VALID'")
     if run.get("reproducible") is not True:
         blockers.append("is not reproducible")
     if run.get("code_dirty") is not False:

@@ -134,20 +134,42 @@ class TestReasons:
         res = el.compute_eligibility({"A": f}, POLICY, CAL)
         assert res.ineligible["A"][DAYS[5]] == "ZERO_VOLUME"
 
-    def test_price_floor_boundary(self):
+    def test_price_floor_boundary_tests_the_previous_session(self):
+        """A session is judged by the close that was known before it opened, never its own."""
         f = _frame(DAYS)
         f.loc[f.index.date == DAYS[4], "Close"] = 9.99
         f.loc[f.index.date == DAYS[5], "Close"] = 10.0
         res = el.compute_eligibility({"A": f}, POLICY, CAL)
-        assert res.ineligible["A"][DAYS[4]] == "PRICE_FLOOR"
-        assert DAYS[5] not in res.ineligible["A"]
+        assert DAYS[4] not in res.ineligible["A"]  # its own 9.99 close was not yet known
+        assert res.ineligible["A"][DAYS[5]] == "PRICE_FLOOR"  # prior close 9.99
+        assert DAYS[6] not in res.ineligible["A"]  # prior close exactly 10.0 is eligible
 
-    def test_session_close_is_last_bar(self):
+    def test_a_low_close_today_never_removes_today(self):
+        f = _frame(DAYS)
+        f.loc[f.index.date == DAYS[5], "Close"] = 1.0
+        res = el.compute_eligibility({"A": f}, POLICY, CAL)
+        assert DAYS[5] not in res.ineligible.get("A", {})
+
+    def test_prior_session_close_is_its_last_bar(self):
         f = _frame(DAYS)
         day = f.index.date == DAYS[5]
         f.loc[f.index[day][-1], "Close"] = 5.0  # last bar low, earlier bar fine
         res = el.compute_eligibility({"A": f}, POLICY, CAL)
-        assert res.ineligible["A"][DAYS[5]] == "PRICE_FLOOR"
+        assert DAYS[5] not in res.ineligible["A"]
+        assert res.ineligible["A"][DAYS[6]] == "PRICE_FLOOR"
+
+    def test_the_first_traded_session_has_no_prior_close_and_is_not_dropped(self):
+        res = el.compute_eligibility({"A": _frame(DAYS, close=5.0)}, POLICY, CAL)
+        assert DAYS[0] not in res.ineligible["A"]
+        assert set(res.ineligible["A"]) == set(DAYS[1:])
+
+    def test_a_liquidity_floor_above_one_uses_the_previous_session(self):
+        policy = el.EligibilityPolicy(min_prior_sessions=3, min_volume=100.0, min_price=10.0)
+        f = _frame(DAYS, volume=500.0)
+        f.loc[f.index.date == DAYS[5], "Volume"] = 5.0  # a thin day
+        res = el.compute_eligibility({"A": f}, policy, CAL)
+        assert DAYS[5] not in res.ineligible.get("A", {})  # today's thin volume is not known yet
+        assert res.ineligible["A"][DAYS[6]] == "ZERO_VOLUME"  # but tomorrow it is
 
     def test_dates_outside_calendar_ignored(self):
         f = _frame([date(2026, 3, 14)] + DAYS)  # a Saturday, not a trading day

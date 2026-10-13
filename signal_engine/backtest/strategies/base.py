@@ -105,7 +105,11 @@ class Strategy(ABC):
         """Called when a signal is accepted. Consume the setup here so it cannot re-arm."""
 
     def trail(self, c: Ctx, i: int, p, pos: Position) -> float | None:
-        """Return a new stop level, or None to leave it. The engine only ever ratchets."""
+        """Return a new stop level, or None to leave it. The engine only ever ratchets.
+
+        `i` is the last COMPLETED bar: the engine passes bar j - 1 while managing bar j, because
+        the stop is a resting order placed before bar j trades. Reading bar i is therefore safe.
+        """
         return None
 
     def target(self, c: Ctx, j: int, p, pos: Position) -> float:

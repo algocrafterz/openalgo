@@ -79,7 +79,7 @@ class TestTheAdapters:
 
     @pytest.mark.parametrize("name", STRATEGIES)
     def test_adapters_do_not_compute_rule_inputs_themselves(self, name):
-        for mode, rel in STRATEGIES[name]["adapters"].items():
+        for rel in STRATEGIES[name]["adapters"].values():
             bad = [m for m in imports(ROOT / rel) if m in RULE_INPUT_MODULES]
             assert bad == [], f"{rel} reads rule-input modules directly: {bad}"
 

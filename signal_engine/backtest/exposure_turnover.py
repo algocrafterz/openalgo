@@ -82,7 +82,7 @@ def _pct(values: np.ndarray) -> dict[str, Any]:
         "n": int(len(values)),
         "mean": _num(values.mean()),
         "max": _num(values.max()),
-        **{f"p{p}": _num(v) for p, v in zip(PERCENTILES, q)},
+        **{f"p{p}": _num(v) for p, v in zip(PERCENTILES, q, strict=True)},
     }
 
 
@@ -159,7 +159,7 @@ def occupancy(trades: pd.DataFrame, notional: float) -> dict[str, Any]:
     net_long_time = dur[active & (n_long > n_short)].sum()
     refs = [
         SimpleNamespace(entry_time=a, exit_time=b, symbol=s)
-        for a, b, s in zip(entry, exit_, trades["symbol"])
+        for a, b, s in zip(entry, exit_, trades["symbol"], strict=True)
     ]
     return {
         "overnight_positions": int(crossing.sum()),
@@ -218,7 +218,7 @@ def turnover(trades: pd.DataFrame, notional: float) -> dict[str, Any]:
     edges = list(range(9 * 60, 16 * 60 + 1, 30))
     buckets = {
         f"{lo // 60:02d}:{lo % 60:02d}": _num(((minutes >= lo) & (minutes < hi)).mean())
-        for lo, hi in zip(edges[:-1], edges[1:])
+        for lo, hi in zip(edges[:-1], edges[1:], strict=True)
     }
     per_year = trades.groupby(entry.dt.year.to_numpy()).size()
     per_symbol_day = trades.groupby([day, trades["symbol"].to_numpy()]).size()

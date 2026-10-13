@@ -1,24 +1,24 @@
 {
  "ema_pullback": {
   "metrics": {
-   "breakeven_cost_bps": 270.8548,
-   "days": 47,
-   "expectancy_r": 1.0906,
-   "gross_bps": 270.8548,
+   "breakeven_cost_bps": 279.356,
+   "days": 48,
+   "expectancy_r": 1.1783,
+   "gross_bps": 279.356,
    "hurdle_t": 1.972,
-   "max_dd_r": 31.9172,
-   "net_bps": 246.8548,
-   "payoff": 8.512,
-   "profit_factor": 2.183,
-   "sharpe": 3.016,
-   "t_stat": 1.272,
-   "total_cost_r": 6.5961,
-   "trades": 49,
-   "win_rate": 0.2041
+   "max_dd_r": 28.9172,
+   "net_bps": 255.356,
+   "payoff": 8.323,
+   "profit_factor": 2.347,
+   "sharpe": 3.147,
+   "t_stat": 1.343,
+   "total_cost_r": 6.751,
+   "trades": 50,
+   "win_rate": 0.22
   },
-  "series_sha": "5b57cd030a2650301707168ae65391fefde639e77a595d086832e64453dedc47",
-  "sha": "1754849097badfe14896a7709cb5d16edb606eaea6368db33c1843405067688c",
-  "trades": 49
+  "series_sha": "b589c483670cfb2d1c91d1d1ea4b9a7c06a3767c543c2619e840335403abd776",
+  "sha": "c890be3bb3cb5a6876039b8c62752eaa243d141ee4f46d479636e3c9cc208622",
+  "trades": 50
  },
  "gap_rsi": {
   "metrics": {

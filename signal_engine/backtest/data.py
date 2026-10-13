@@ -317,15 +317,22 @@ def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
                 args.append(int(pd.Timestamp(start, tz="Asia/Kolkata").timestamp()))
             if end:
                 q += " AND timestamp <= ?"
-                args.append(int(pd.Timestamp(end, tz="Asia/Kolkata").timestamp()))
+                # Inclusive of the whole end date (any time part is ignored), as the
+                # daily loaders are: midnight would silently drop the end session.
+                args.append(
+                    int(pd.Timestamp(str(end)[:10], tz="Asia/Kolkata").timestamp()) + 86399)
             raw = con.execute(q + " ORDER BY timestamp", args).df()
             if raw.empty:
+                if collector is not None:
+                    collector.record_min_sessions(s, 0)
                 continue
             raw.index = (pd.to_datetime(raw.pop("timestamp"), unit="s", utc=True)
                          .dt.tz_convert("Asia/Kolkata"))
             raw.columns = ["Open", "High", "Low", "Close", "Volume"]
             df = _clean_session(raw, collector, s)
             if df.empty:
+                if collector is not None:
+                    collector.record_min_sessions(s, 0)
                 continue
 
             if interval != "1m":
@@ -517,8 +524,11 @@ def from_historify_daily(symbols=None, start=None, end=None, min_sessions: int =
                 q += " AND timestamp >= ?"
                 args.append(int(pd.Timestamp(start, tz="Asia/Kolkata").timestamp()))
             if end:
+                # daily bars are stamped 05:30 IST, so the bound is the END of the end date
                 q += " AND timestamp <= ?"
-                args.append(int(pd.Timestamp(end, tz="Asia/Kolkata").timestamp()))
+                args.append(
+                    int(pd.Timestamp(str(end)[:10], tz="Asia/Kolkata").timestamp()) + 86399
+                )
             raw = con.execute(q + " ORDER BY timestamp", args).df()
             clean = _clean_daily(raw, s, min_sessions, collector)
             if clean is not None:

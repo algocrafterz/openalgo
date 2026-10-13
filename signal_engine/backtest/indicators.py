@@ -151,12 +151,20 @@ def bars_since(flag: pd.Series) -> pd.Series:
 
 
 def add_session_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise the index to IST and attach the session bookkeeping the engine needs."""
+    """Normalise the index to IST and attach the session bookkeeping the engine needs.
+
+    The index must be tz-aware: a naive index cannot be told apart from UTC or IST wall
+    clock, and guessing shifts every bar by 5h30, so it raises ValueError. The caller's
+    frame is not modified.
+    """
     if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC")
-    df.index = df.index.tz_convert(IST)
+        raise ValueError(
+            "add_session_columns needs a tz-aware index (tz-naive is ambiguous between UTC "
+            "and IST); localize it explicitly first"
+        )
     df = df[["Open", "High", "Low", "Close", "Volume"]].dropna(
         subset=["Open", "High", "Low", "Close"]).copy()
+    df.index = df.index.tz_convert(IST)
     day = pd.Series(df.index.date, index=df.index)
     df["day"] = day
     df["mins"] = df.index.hour * 60 + df.index.minute

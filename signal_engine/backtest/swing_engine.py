@@ -29,9 +29,12 @@ split is made on the information the decision was taken with.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date, datetime
 
 import numpy as np
+import pandas as pd
 
+from signal_engine.backtest import tickgrid
 from signal_engine.backtest.ledgers import CODE_INDEX
 from signal_engine.backtest.types import Ctx, Position, Trade
 
@@ -72,7 +75,18 @@ class SwingRunConfig:
     #: WARMUP exclusions). Zero changes nothing.
     warmup_bars: int = 0
 
+    #: Stop-trigger price grid, as `RunConfig.tick_grid`. "none" (the default, and every swing
+    #: run recorded before engine 1.5) fills a stop at the signal's price as is. "safe_tick"
+    #: models the executor's resting order: the stop is rounded toward the market onto the
+    #: exchange grid in force on that bar's date, at entry and each time a trail moves it. Risk
+    #: and `min_sl_pct` still read the signal's own stop, as the live sizing does.
+    tick_grid: str = tickgrid.NONE
+
     def __post_init__(self) -> None:
+        if self.tick_grid not in tickgrid.MODES:
+            raise ValueError(
+                f"tick_grid must be one of {', '.join(tickgrid.MODES)}, got {self.tick_grid!r}"
+            )
         if self.allow_shorts or not self.allow_longs:
             raise ValueError(
                 "swing engine is long-only (allow_longs=True, allow_shorts=False): "
@@ -89,6 +103,16 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
     are three ledger rows stamped at the same bar (the open that triggers the setup)."""
     o, h, low, close = c["Open"], c["High"], c["Low"], c["Close"]
     days, times, n = c["day"], c.index, c.n
+    snap_ticks = run.tick_grid == tickgrid.SAFE_TICK
+    pf_col = c.a.get("price_factor") if snap_ticks else None
+
+    def snapped(stop: float, direction: int, i: int) -> float:
+        # The trigger the executor sends, rounded on RAW prices toward the market, on the grid
+        # in force on that bar's date. A date the tick reference does not cover raises.
+        if not snap_ticks:
+            return stop
+        factor = 1.0 if pf_col is None else float(pf_col[i])
+        return tickgrid.snap_stop(stop, direction, factor, _as_day(days[i]))
 
     trades: list[Trade] = []
     pos: Position | None = None
@@ -216,8 +240,8 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
                     direction=d,
                     entry=fill,
                     signal_price=fill,
-                    sl=float(sig.sl),
-                    sl_eff=float(sig.sl),
+                    sl=snapped(float(sig.sl), d, i),
+                    sl_eff=snapped(float(sig.sl), d, i),
                     tp=float(sig.tp),
                     risk=risk,
                     tag=sig.tag,
@@ -233,8 +257,10 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
         # 2. manage the position against THIS bar - including its own entry bar.
         if pos is not None:
             d = pos.direction
-            new_stop = strategy.trail(c, i, p, pos)
+            # a resting stop placed before bar i trades: bars up to i - 1 only
+            new_stop = strategy.trail(c, i - 1, p, pos) if i > 0 else None
             if new_stop is not None and not np.isnan(new_stop):
+                new_stop = snapped(float(new_stop), d, i)
                 pos.sl_eff = max(pos.sl_eff, new_stop) if d == 1 else min(pos.sl_eff, new_stop)
 
             # a bar that opens beyond the stop fills at the open, except on the entry
@@ -264,3 +290,10 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
     if rec is not None:
         b.finish()
     return trades
+
+
+def _as_day(value) -> date:
+    """A bar's session date as a `datetime.date` (the `day` column may hold numpy dates)."""
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    return pd.Timestamp(value).date()

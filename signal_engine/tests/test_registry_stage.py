@@ -394,7 +394,7 @@ class TestStageEvidence:
         (folder / "runs" / "a.json").write_text(
             json.dumps({**RUN, **V2, "promotion_decision": "READY_FOR_NEXT_STAGE"})
         )
-        with pytest.raises(br.RegistryError, match="schema 3"):
+        with pytest.raises(br.RegistryError, match="promotable schemas"):
             br.load_ideas(tmp_path)
 
     def test_promoted_version_must_be_registered(self, tmp_path):
@@ -423,10 +423,37 @@ class TestEvidenceHelper:
         "code_dirty": False,
         "strategy_version": "v1",
         "promotion_decision": "READY_FOR_NEXT_STAGE",
+        "run_verdict": "MARGINAL",
     }
 
     def test_qualifying_run_has_no_blockers(self):
         assert lifecycle.run_blockers(self.RUN, "v1") == []
+
+    @pytest.mark.parametrize("verdict", ["NO_EDGE", "INCONCLUSIVE"])
+    def test_a_disqualifying_verdict_blocks_even_when_the_decision_says_ready(self, verdict):
+        """Defence in depth: a record whose flat fields disagree must not promote."""
+        run = {**self.RUN, "run_verdict": verdict}
+        assert any(verdict in b for b in lifecycle.run_blockers(run, "v1"))
+
+    @pytest.mark.parametrize("status", ["INVALID_DATA", None, "other"])
+    def test_a_schema_4_run_whose_status_is_not_valid_blocks(self, status):
+        run = {**self.RUN, "schema": 4, "run_status": status}
+        assert any("run_status" in b for b in lifecycle.run_blockers(run, "v1"))
+
+    def test_a_schema_4_run_is_not_rejected_for_its_schema(self):
+        """Runs have been written as schema 4 since 2026-10-05; a schema 3 test would have
+        made every one of them unpromotable."""
+        run = {**self.RUN, "schema": 4, "run_status": "VALID", "run_verdict": "MARGINAL"}
+        assert lifecycle.run_blockers(run, "v1") == []
+
+    def test_an_unknown_schema_is_still_rejected(self):
+        assert any("schema" in b for b in lifecycle.run_blockers({**self.RUN, "schema": 2}, "v1"))
+        assert any("schema" in b for b in lifecycle.run_blockers({**self.RUN, "schema": 5}, "v1"))
+
+    def test_marginal_and_edge_verdicts_do_not_block_on_their_own(self):
+        for verdict in ("MARGINAL", "EDGE"):
+            run = {**self.RUN, "run_verdict": verdict, "run_status": "VALID"}
+            assert lifecycle.run_blockers(run, "v1") == []
 
     def test_blockers_are_listed_together(self):
         run = {**self.RUN, "schema": 2, "reproducible": False, "code_dirty": True}

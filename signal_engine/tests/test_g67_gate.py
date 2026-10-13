@@ -62,8 +62,8 @@ class TestG67ChargesCurrent:
 
 class TestRunDatePropagation:
     def test_the_recorded_run_ages_the_schedule_from_its_own_run_date(self):
-        from signal_engine.tests.test_statutory_headline import _book, _record, _row as record_row
-        from signal_engine.tests.test_statutory_headline import make_model
+        from signal_engine.tests.test_statutory_headline import _book, _record, make_model
+        from signal_engine.tests.test_statutory_headline import _row as record_row
 
         record, _ = _record(_book(), make_model())
         row = record_row(record, "G6.7")

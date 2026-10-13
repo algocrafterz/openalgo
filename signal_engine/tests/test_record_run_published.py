@@ -214,12 +214,11 @@ def test_schema_4_manifest_records_the_dataset_and_preflight(root):
     assert flat["dataset_version"] == d["version_id"]
 
 
-def test_regime_block_is_unavailable_on_published_runs(root):
-    called = []
-    flat = json.loads(_record(root, lambda key, **k: _execution(),
-                              regimes=lambda: called.append(1)).read_text())
-    assert called == []
+def test_regime_block_is_unavailable_unless_requested(root):
+    flat = json.loads(_record(root, lambda key, **k: _execution()).read_text())
+    assert "regimes" not in flat
     assert "regime analysis not available" in flat["notes"].lower()
+    assert "not requested" in flat["notes"]
 
 
 def test_verdict_set_is_unchanged():

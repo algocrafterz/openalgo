@@ -29,9 +29,9 @@ _MIS_TIMES = (
     ("latest_exit_bar_close", "latest_exit_bar_close_min"),
 )
 _MIS_KEYS = tuple(k for k, _ in _MIS_TIMES) + ("exit_convention", "price_grid")
-#: Optional MIS rule: how the executor rounds stop triggers (`backtest.tickgrid.MODES`).
+#: Optional MIS and CNC rule: how the executor rounds stop triggers (`backtest.tickgrid.MODES`).
 _PRICE_GRIDS = ("none", "safe_tick")
-_CNC_KEYS = ("carry_forward",)
+_CNC_KEYS = ("carry_forward", "price_grid")
 PRODUCTS = ("MIS", "CNC")
 
 
@@ -91,12 +91,12 @@ class Profile:
         )
 
     def run_config_fields(self, product: str) -> dict[str, Any]:
-        """RunConfig fields this profile fixes for a product. CNC fixes none."""
+        """Run-config fields this profile fixes for a product. CNC fixes only its price grid."""
         if product not in self.products:
             raise ProfileError(f"profile '{self.name}' does not support product {product}")
         rules = self.products[product]
         if rules.force_flat_min is None:
-            return {}
+            return {} if rules.price_grid is None else {"tick_grid": rules.price_grid}
         fixed: dict[str, Any] = {
             "mis_squareoff_min": rules.force_flat_min,
             "squareoff_margin_min": rules.force_flat_min - rules.latest_exit_bar_close_min,
@@ -152,10 +152,14 @@ def _parse_cnc(block: Mapping[str, Any], problems: list[str]) -> ProductRules | 
         if key not in _CNC_KEYS:
             problems.append(f"CNC: '{key}' does not apply, CNC has no intraday cutoff")
     carry = block.get("carry_forward")
+    grid = block.get("price_grid")
+    if grid is not None and grid not in _PRICE_GRIDS:
+        problems.append(f"CNC: price_grid must be one of {', '.join(_PRICE_GRIDS)}, got {grid!r}")
+        return None
     if not isinstance(carry, bool):
         problems.append("CNC: carry_forward must be declared true or false")
         return None
-    return ProductRules(carry_forward=carry)
+    return ProductRules(carry_forward=carry, price_grid=grid)
 
 
 def _parse_products(raw: Any, problems: list[str]) -> dict[str, ProductRules]:
