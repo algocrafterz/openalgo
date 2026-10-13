@@ -432,10 +432,52 @@ def build_ledger(events: list[dict], fills: dict[str, dict] | None = None) -> li
         if cur is not None:
             positions.append(_finalise(cur))
 
+    _settle_combined_closes(positions, fills, matched_ids)
+
     for oid, f in fills.items():
         if oid not in matched_ids:
             positions.append(_unmatched_position(oid, f))
     return positions
+
+
+_TRACKER_ORDER_ID = "-TRACKER-"
+_RESETTABLE_FLAGS = {FLAG_NO_FILL, FLAG_QTY_MISMATCH, FLAG_OPEN_AT_EOD, FLAG_OVER_EXITED}
+
+
+def _settle_combined_closes(positions: list[Position], fills: dict[str, dict], matched_ids: set[str]) -> None:
+    """Pair '-TRACKER-' exit rows with the one broker order that closed them together.
+
+    The broker nets positions per symbol, so a time exit over two strategies holding the same
+    name goes out as ONE order while trades.db books one '-TRACKER-' row per strategy. The
+    ledger then saw two unfilled exits and a fill nobody sent (2026-10-12 RELIANCE: ORB 41 +
+    WATCHLIST 41, one broker BUY of 82). A fill is only attributed when it is unclaimed, on
+    the same symbol, on the closing side, and its quantity equals the unfilled legs' total -
+    anything that does not add up stays reported.
+    """
+    pending: dict[tuple, list[tuple[Position, Leg]]] = defaultdict(list)
+    for p in positions:
+        if not p.entry.filled:
+            continue
+        for x in p.exits:
+            if x.order_id == _TRACKER_ORDER_ID and x.status == "SUCCESS" and not x.filled:
+                pending[(p.symbol, p.day, p.direction)].append((p, x))
+
+    for (symbol, day, direction), legs in pending.items():
+        closing_side = "BUY" if direction < 0 else "SELL"
+        total = sum(x.order_qty for _, x in legs)
+        for oid, f in fills.items():
+            if oid in matched_ids or f.get("symbol") != symbol or f.get("action") != closing_side:
+                continue
+            fill_day = _parse_ts(f.get("timestamp"))
+            if (fill_day and fill_day.date() != day) or f["qty"] != total:
+                continue
+            for p, x in legs:
+                x.fill_price, x.fill_qty, x.fill_at = f["price"], x.order_qty, f["timestamp"]
+            matched_ids.add(oid)
+            for p in {id(p): p for p, _ in legs}.values():
+                p.flags = [fl for fl in p.flags if fl not in _RESETTABLE_FLAGS]
+                _finalise(p)
+            break
 
 
 def _leg_from_event(e: dict, fills: dict[str, dict]) -> Leg:

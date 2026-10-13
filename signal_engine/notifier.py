@@ -663,6 +663,32 @@ def _save_day_summary_pin_state(state: dict) -> None:
         logger.warning(f"Day summary pin: could not persist pin state: {e}")
 
 
+# Telegram rejects a message over 4096 characters; keep headroom for the phase tag.
+TELEGRAM_SAFE_LEN = 3900
+
+
+def _join_capped(head: list[str], rows: list[str]) -> str:
+    """Join header and per-trade rows, dropping trailing rows so the text fits one Telegram message.
+
+    2026-10-12: a 72-position day built a summary over 4096 characters; Telegram rejected it
+    ("Message was too long") and the day summary was never delivered. Rows arrive best trade
+    first, so the dropped ones are the worst - the header totals still cover every trade.
+    """
+    text = "\n".join(head + rows)
+    if len(text) <= TELEGRAM_SAFE_LEN:
+        return text
+    kept: list[str] = []
+    size = len("\n".join(head))
+    reserve = len("\n... and 999 more trade(s) not shown")
+    for row in rows:
+        if size + 1 + len(row) + reserve > TELEGRAM_SAFE_LEN:
+            break
+        kept.append(row)
+        size += 1 + len(row)
+    dropped = len(rows) - len(kept)
+    return "\n".join(head + kept + [f"... and {dropped} more trade(s) not shown"])
+
+
 async def _send_and_pin_day_summary(text: str) -> bool:
     """Send the day summary exactly like any other notify_event(), then ALSO pin it, replacing
     yesterday's pin in the same channel - so "how did today go" is always one tap away without
@@ -775,7 +801,8 @@ async def notify_day_summary(
     if trade_records:
         lines.append("-" * 36)
         # Best trade first
-        lines += [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
+        rows = [_trade_line(rec) for rec in sorted(trade_records, key=lambda r: r.total_pnl, reverse=True)]
+        return await _send_and_pin_day_summary(_join_capped(lines, rows))
 
     return await _send_and_pin_day_summary("\n".join(lines))
 
@@ -876,9 +903,9 @@ async def _send_per_strategy_day_summaries(
         if best_worst:
             lines.append(best_worst)
         lines.append("-" * 36)
-        lines += [_trade_line(rec) for rec in sorted(records, key=lambda r: r.total_pnl, reverse=True)]
+        rows = [_trade_line(rec) for rec in sorted(records, key=lambda r: r.total_pnl, reverse=True)]
         try:
-            await _client.send_message(channel.id, "\n".join(lines))
+            await _client.send_message(channel.id, _join_capped(lines, rows))
         except Exception as e:
             logger.warning(f"Day summary: could not send {strategy}'s summary: {e}")
 

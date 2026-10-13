@@ -242,3 +242,43 @@ def test_events_before_since_are_excluded(tmp_path):
 def test_missing_database_fails_loudly(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_engine_events(db_path=str(tmp_path / "nope.db"))
+
+
+# ---- one broker order closing several strategies' positions (2026-10-12 RELIANCE) ----
+
+def _reliance_day(tmp_path, close_qty):
+    """ORB and BREAKINGTRADE-WATCHLIST both short 41 RELIANCE; the 14:45 time exit is booked
+    as two '-TRACKER-' rows but the broker netted them into one BUY."""
+    def ev(strategy, direction, oid, at, price=1165.5):
+        e = _ev(direction, symbol="RELIANCE", entry=price, sl=1175.0, tp=0.0, qty=41,
+                oid=oid, at=at)
+        e["strategy"] = strategy
+        return e
+
+    db = _make_db(tmp_path, [
+        ev("ORB", "SHORT", "26101265582777", "2026-10-12T10:35:04+05:30"),
+        ev("BREAKINGTRADE-WATCHLIST", "SHORT", "26101229732654", "2026-10-12T11:02:57+05:30", 1163.7),
+        ev("ORB", "EXIT", "-TRACKER-", "2026-10-12T14:45:18+05:30"),
+        ev("BREAKINGTRADE-WATCHLIST", "EXIT", "-TRACKER-", "2026-10-12T14:45:18+05:30"),
+    ])
+    fills = load_fills([
+        _trade("26101265582777", 41, 1165.5, "RELIANCE", "SELL"),
+        _trade("26101229732654", 41, 1163.7, "RELIANCE", "SELL"),
+        _trade("26101288624098", close_qty, 1154.3, "RELIANCE", "BUY"),
+    ])
+    return build_ledger(load_engine_events(db_path=db), fills)
+
+
+def test_one_combined_broker_close_settles_both_strategies_time_exit_rows(tmp_path):
+    positions = _reliance_day(tmp_path, close_qty=82)
+    assert len(positions) == 2
+    for p in positions:
+        assert p.flags == []
+        assert p.residual_qty == 0
+        assert p.exits[0].fill_price == pytest.approx(1154.3)
+
+
+def test_a_broker_close_that_does_not_add_up_is_still_reported(tmp_path):
+    positions = _reliance_day(tmp_path, close_qty=50)
+    assert any(FLAG_UNMATCHED_FILL in p.flags for p in positions)
+    assert any(FLAG_NO_FILL in p.flags for p in positions if p.strategy)

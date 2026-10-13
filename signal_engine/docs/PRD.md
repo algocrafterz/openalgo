@@ -5964,3 +5964,22 @@ The owner asked to stop expanding the backtester and finish a dependable researc
   (survivorship qualification, data-quality warnings, thin sample), tuning evidence (or "not performed") and
   evidence-linked follow-ups. It reads the run record and `tuning` from the idea endpoint only; it derives no verdict.
 - **Status.** The epic is complete for research use. Live readiness is a separate milestone.
+
+## EOD review fixes: combined time-exit close and over-long day summary (2026-10-13)
+
+Root cause, from the 2026-10-12 EOD report (4 of 11 checks failed):
+
+- Ledger false alarm. ORB and BREAKINGTRADE-WATCHLIST were each short 41 RELIANCE. The 14:45 time exit
+  booked two `-TRACKER-` rows, but the broker nets per symbol and sent ONE BUY of 82. The ledger saw two
+  unfilled exits and one fill nobody sent. `analysis/ledger.py` now pairs unfilled `-TRACKER-` exits with
+  one unclaimed fill on the same symbol and closing side whose quantity equals their total. A fill that does
+  not add up stays reported.
+- Day summary not delivered. 72 positions made the consolidated summary exceed Telegram's 4096 characters
+  ("Message was too long"), so it was never sent. `notifier._join_capped` now drops the worst trade rows to fit
+  and says how many were dropped; the header totals still cover every trade. Applied to the consolidated and
+  the per-strategy summaries.
+- Not fixed here: the PAYTM stop that fired at 15:12 after the time exit was already fixed by
+  dd39289b2 (cancel by order id). The two PAYTM fills still show as "no matching engine order", which is
+  correct: trades.db has no row for that stray stop fill.
+- Not a bug: the 240 app errors were Flattrade websocket drops (08:46, 10:02), history timeouts, and "Invalid
+  openalgo apikey" at 16:49 after market close.
