@@ -282,6 +282,86 @@ class TestCapAndBaselineOnTheCard:
 SPEC_YAML = yaml.safe_dump(GOOD_SPEC)
 
 
+def _tuning_record(folder: Path, tuning_id: str = "2026-10-13-001", **extra) -> Path:
+    def row(fast, net, worst, size, usable=True):
+        return {
+            "values": {"ema_fast": fast},
+            "trades": 40,
+            "net_r": net,
+            "net_bps": net * 10,
+            "usable": usable,
+            "region_worst_net_r": worst,
+            "region_median_net_r": net,
+            "region_size": size,
+            "params_fingerprint": "f" * 64,
+        }
+
+    results = [
+        row(5, 0.9, -0.2, 2),
+        row(9, 0.4, 0.3, 3),
+        row(11, 0.35, 0.3, 2),
+        row(13, 0.0, None, 0, usable=False),
+    ]
+    record = {
+        "tuning_id": tuning_id,
+        "created_ist": "2026-10-13 10:00:00",
+        "objective": "mean net R per trade",
+        "grid": {"ema_fast": [5, 9, 11, 13]},
+        "min_trades": 30,
+        "holdout_fraction": 0.4,
+        "in_sample_end": "2024-03-28",
+        "held_out_from": "2024-04-01",
+        "combinations": 4,
+        "results": results,
+        "selected": {"index": 1, **results[1]},
+        "best_single": {"index": 0, **results[0]},
+        "selected_is_not_the_single_best": True,
+        "pbo": {"value": 0.25, "slices": 16, "role": "diagnostic", "method": "CSCV"},
+        **extra,
+    }
+    out = folder / "tuning" / tuning_id
+    out.mkdir(parents=True)
+    path = out / "tuning.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
+class TestTuningSummary:
+    """The idea response says whether parameter tuning ran and what its record concluded."""
+
+    def _folder(self, root):
+        return root / "research" / "ideas" / "idea-001-sample"
+
+    def test_an_idea_without_tuning_says_so(self, root):
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok and body["tuning"] == []
+
+    def test_a_tuning_record_is_summarised_with_its_stability_evidence(self, root):
+        _tuning_record(self._folder(root))
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok
+        [t] = body["tuning"]
+        assert t["tuning_id"] == "2026-10-13-001"
+        assert (t["combinations"], t["usable"]) == (4, 3)
+        assert t["in_sample_end"] == "2024-03-28" and t["held_out_from"] == "2024-04-01"
+        assert t["selected"]["values"] == {"ema_fast": 9}
+        assert t["selected"]["region_worst_net_r"] == 0.3
+        assert (t["selected"]["region_size"], t["selected"]["region_possible"]) == (3, 3)
+        assert t["best_single"]["values"] == {"ema_fast": 5}
+        assert t["selected_is_not_the_single_best"] is True
+        assert t["pbo"] == {"value": 0.25, "role": "diagnostic"}
+        assert "results" not in t
+
+    def test_an_unreadable_tuning_record_is_reported_not_hidden(self, root):
+        path = _tuning_record(self._folder(root))
+        path.write_text("{not json", encoding="utf-8")
+        ok, body, _ = svc.get_idea_results("IDEA-001", root)
+        assert ok
+        assert body["tuning"] == [
+            {"tuning_id": "2026-10-13-001", "error": "tuning record is not readable"}
+        ]
+
+
 class TestIdeaDetailExtras:
     def test_spec_and_research_notes_are_separate(self, root):
         folder = root / "research" / "ideas" / "idea-001-sample"

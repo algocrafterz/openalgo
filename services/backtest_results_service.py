@@ -322,6 +322,73 @@ def _load_versions(folder: Path, base: Path) -> tuple[list[dict[str, Any]] | Non
         return None, "versions.yaml is not readable"
 
 
+#: Mirrors signal_engine.backtest.tuning (TUNING_DIR, RECORD), not imported because it pulls
+#: the backtest harness into the web process.
+_TUNING_DIR, _TUNING_RECORD = "tuning", "tuning.json"
+_TUNING_KEYS = (
+    "tuning_id",
+    "created_ist",
+    "objective",
+    "grid",
+    "min_trades",
+    "in_sample_end",
+    "held_out_from",
+    "combinations",
+    "selected_is_not_the_single_best",
+)
+_TUNED_ROW_KEYS = (
+    "values",
+    "trades",
+    "net_r",
+    "region_worst_net_r",
+    "region_median_net_r",
+    "region_size",
+)
+
+
+def _region_possible(grid: Any, values: Any) -> int | None:
+    """How many grid points lie within one step of `values` in every parameter (itself included)."""
+    if not isinstance(grid, dict) or not isinstance(values, dict) or not grid:
+        return None
+    total = 1
+    for name, options in grid.items():
+        if not isinstance(options, list) or values.get(name) not in options:
+            return None
+        i = options.index(values[name])
+        total *= len(options[max(0, i - 1) : i + 2])
+    return total
+
+
+def _tuned_row(row: Any, grid: Any) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    out = {k: _jsonable(row.get(k)) for k in _TUNED_ROW_KEYS}
+    out["region_possible"] = _region_possible(grid, row.get("values"))
+    return out
+
+
+def _tuning_summary(path: Path, base: Path) -> dict[str, Any]:
+    """The headline of one tuning record: split, selection, its region and the PBO diagnostic."""
+    record = _read_json(path, base)
+    if not isinstance(record, dict):
+        return {"tuning_id": path.parent.name, "error": "tuning record is not readable"}
+    out = {k: _jsonable(record.get(k)) for k in _TUNING_KEYS}
+    out["tuning_id"] = path.parent.name
+    results = record.get("results") if isinstance(record.get("results"), list) else []
+    out["usable"] = sum(1 for r in results if isinstance(r, dict) and r.get("usable") is True)
+    out["selected"] = _tuned_row(record.get("selected"), record.get("grid"))
+    out["best_single"] = _tuned_row(record.get("best_single"), record.get("grid"))
+    pbo = record.get("pbo") if isinstance(record.get("pbo"), dict) else {}
+    out["pbo"] = {"value": _jsonable(pbo.get("value")), "role": "diagnostic"}
+    return out
+
+
+def _load_tuning(folder: Path, base: Path) -> list[dict[str, Any]]:
+    """Every tuning record of the idea, oldest first. An empty list means no tuning ran."""
+    paths = sorted((folder / _TUNING_DIR).glob(f"*/{_TUNING_RECORD}"))
+    return [_tuning_summary(p, base) for p in paths]
+
+
 def _version_pointers(idea: dict[str, Any]) -> dict[str, str | None]:
     return {k: idea[k] if isinstance(idea.get(k), str) else None for k in _POINTER_KEYS}
 
@@ -363,6 +430,7 @@ def get_idea_results(
             "versions": versions,
             "versions_error": versions_error,
             "version_pointers": _version_pointers(idea),
+            "tuning": _load_tuning(folder, root / "research" / "ideas"),
         },
         200,
     )
