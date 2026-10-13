@@ -40,7 +40,10 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/openalgoctl.log"
 PID_FILE="$PROJECT_DIR/signal_engine/openalgo.pid"
 LOCK_FILE="$PROJECT_DIR/signal_engine/openalgo.lock"
-HEALTH_URL="http://127.0.0.1:5000/"
+# Probe the backend health route, not "/": "/" serves frontend/dist/index.html and answers 503 whenever a
+# frontend build has the dist folder empty for a moment. 2026-10-14: concurrent builds made the probe fail
+# every few minutes, and three failures in a row would have restarted a healthy app mid-session.
+HEALTH_URL="http://127.0.0.1:5000/health/status"
 MAX_WAIT=90
 NET_MAX_WAIT=120
 # Overridable so tests can exercise the "gives up eventually" path in under a

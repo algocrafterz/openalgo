@@ -30,8 +30,14 @@ their stop-losses and their time exit — a halt must never abandon open risk.
 """
 
 import time
+from pathlib import Path
 
 from loguru import logger
+
+#: While this file exists, new entries are refused (exits are not). Lets an operator restart the engine
+#: onto new code and verify it before it takes any signal; deleting the file resumes at once. The file
+#: lives under data/, which is not tracked by git.
+HOLD_FILE = Path(__file__).resolve().parent / "data" / "ENTRY_HOLD"
 
 #: How long a checked mode is trusted. Same value and same reasoning as the caches this
 #: replaces: long enough that a burst of signals doesn't hammer OpenAlgo once per message,
@@ -162,9 +168,21 @@ def clear_feed_halt() -> bool:
     return True
 
 
+def _operator_hold_reason() -> str:
+    """The reason text of the ENTRY_HOLD file, or "" when there is no hold. Read on every call so
+    removing the file lifts the hold without a restart."""
+    try:
+        if not HOLD_FILE.exists():
+            return ""
+        text = HOLD_FILE.read_text().strip()
+    except OSError:
+        return ""
+    return f"operator hold (ENTRY_HOLD): {text}" if text else "operator hold (ENTRY_HOLD file present)"
+
+
 def is_halted() -> bool:
-    return bool(_halted_reason or _feed_down_reason)
+    return bool(_halted_reason or _feed_down_reason or _operator_hold_reason())
 
 
 def halt_reason() -> str:
-    return _halted_reason or _feed_down_reason
+    return _halted_reason or _feed_down_reason or _operator_hold_reason()

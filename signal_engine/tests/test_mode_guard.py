@@ -109,3 +109,38 @@ class TestHaltState:
         assert mode_guard.is_halted() is True
         mode_guard.halt("something else")
         assert mode_guard.halt_reason() == "something happened"
+
+
+class TestOperatorEntryHold:
+    """An ENTRY_HOLD file lets an operator restart the engine onto new code without it taking
+    paper or live signals until they say so. Exits are never held (main._entry_halted is entry-only).
+    Deleting the file resumes at once; no restart needed."""
+
+    @pytest.fixture(autouse=True)
+    def _hold_path(self, tmp_path, monkeypatch):
+        self.hold = tmp_path / "ENTRY_HOLD"
+        monkeypatch.setattr(mode_guard, "HOLD_FILE", self.hold)
+
+    def test_no_file_means_no_hold(self):
+        assert mode_guard.is_halted() is False
+
+    def test_file_present_halts_entries_with_its_text_as_the_reason(self):
+        self.hold.write_text("restart verification, awaiting operator approval")
+        assert mode_guard.is_halted() is True
+        assert "awaiting operator approval" in mode_guard.halt_reason()
+
+    def test_empty_file_still_halts_with_a_default_reason(self):
+        self.hold.write_text("")
+        assert mode_guard.is_halted() is True
+        assert "ENTRY_HOLD" in mode_guard.halt_reason()
+
+    def test_deleting_the_file_resumes_without_a_restart(self):
+        self.hold.write_text("x")
+        assert mode_guard.is_halted() is True
+        self.hold.unlink()
+        assert mode_guard.is_halted() is False
+
+    def test_a_real_halt_keeps_its_own_reason_over_the_hold(self):
+        self.hold.write_text("x")
+        mode_guard.halt("OpenAlgo mode changed")
+        assert mode_guard.halt_reason() == "OpenAlgo mode changed"

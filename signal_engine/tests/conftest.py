@@ -124,3 +124,12 @@ def _published_reproduce_stub(request, monkeypatch):
     from signal_engine.tests.published_fixtures import fake_resolution
 
     monkeypatch.setattr(rp, "_resolution_for", lambda manifest: fake_resolution())
+
+
+@pytest.fixture(autouse=True)
+def _no_operator_entry_hold(tmp_path, monkeypatch):
+    """An operator's real signal_engine/data/ENTRY_HOLD file (placed while the engine is held after a
+    restart) must never change a test's outcome: every test sees no hold unless it sets one."""
+    from signal_engine import mode_guard
+
+    monkeypatch.setattr(mode_guard, "HOLD_FILE", tmp_path / "no-ENTRY_HOLD")
