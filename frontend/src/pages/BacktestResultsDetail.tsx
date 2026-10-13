@@ -12,6 +12,7 @@ import {
 import { BacktestScope } from '@/components/backtest-results/BacktestScope'
 import { CompareView } from '@/components/backtest-results/CompareView'
 import { DataCoverage } from '@/components/backtest-results/DataCoverage'
+import { DecisionBrief } from '@/components/backtest-results/DecisionBrief'
 import { DecisionPanel } from '@/components/backtest-results/DecisionPanel'
 import { DetailSection } from '@/components/backtest-results/DetailSection'
 import { GlossaryDrawer } from '@/components/backtest-results/GlossaryDrawer'
@@ -56,6 +57,20 @@ function RunDetailLoading() {
 
 type IdeaCardLike = NonNullable<Awaited<ReturnType<typeof backtestResultsApi.idea>>['idea']>
 
+/** The researcher's own record, in its original technical wording. */
+function ResearcherConclusion({ idea }: { idea: IdeaCardLike }) {
+  if (!idea.result && !idea.revisit_when) return null
+  return (
+    <div className="max-w-5xl space-y-1 text-sm" data-testid="researcher-conclusion">
+      <div className="text-xs font-medium">Researcher's recorded conclusion</div>
+      {idea.result && <p>{idea.result}</p>}
+      {idea.revisit_when && (
+        <p className="text-muted-foreground">Revisit when: {idea.revisit_when}</p>
+      )}
+    </div>
+  )
+}
+
 function RunDetailBlocks({
   idea,
   run,
@@ -98,13 +113,15 @@ function RunDetailBlocks({
         strategyCategory={idea.strategy_category}
         tags={idea.strategy_tags}
       />
-      {detail.captured && <RunSummary idea={idea} run={run} detail={detail} />}
+      {detail.captured && <DecisionBrief idea={idea} run={run} detail={detail} />}
       {detail.captured ? (
         <DetailSection
           id="decision"
-          title="Verdict reasons, promotion and assessment"
-          summary="every reason behind the verdict, each promotion stage, gate findings, tuning and follow-ups"
+          title="How this decision was reached"
+          summary="the system's verdict, research and promotion statuses, every test result, benchmarks, corrections and the full assessment"
         >
+          <ResearcherConclusion idea={idea} />
+          <RunSummary idea={idea} run={run} detail={detail} />
           {decision}
           <RunAssessment run={run} detail={detail} tuning={tuning} />
         </DetailSection>
@@ -184,6 +201,9 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
   }
   const detail = detailQuery.data?.run
   const detailFailed = detailQuery.isError || detailQuery.data?.status === 'error'
+  // With a captured run the decision brief answers this in plain words, and the record moves
+  // into "How this decision was reached"; otherwise the header keeps it.
+  const recordInHeader = !current || detailFailed || (detail !== undefined && !detail.captured)
 
   return (
     <div className="space-y-6">
@@ -219,8 +239,10 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
           )}
         </div>
         <p className="text-sm max-w-3xl">{idea.summary}</p>
-        {idea.result && <p className="text-sm max-w-3xl">Conclusion: {idea.result}</p>}
-        {idea.revisit_when && (
+        {recordInHeader && idea.result && (
+          <p className="text-sm max-w-3xl">Conclusion: {idea.result}</p>
+        )}
+        {recordInHeader && idea.revisit_when && (
           <p className="text-sm text-muted-foreground max-w-3xl">
             Revisit when: {idea.revisit_when}
           </p>

@@ -179,7 +179,8 @@ describe('BacktestResultsDetail tearsheet', () => {
     expect(
       await screen.findByRole('heading', { name: /IDEA-012: EMA9 x VWAP/ })
     ).toBeInTheDocument()
-    expect(screen.getByText(/Cross follows through less than random/)).toBeInTheDocument()
+    // A legacy run has no decision brief, so the header keeps the record once the run loads.
+    expect(await screen.findByText(/Cross follows through less than random/)).toBeInTheDocument()
     expect(screen.getByText(/Only as a mean-reversion variant/)).toBeInTheDocument()
     expect(screen.getByText('no edge')).toBeInTheDocument()
   })

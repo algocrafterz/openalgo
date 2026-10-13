@@ -197,10 +197,11 @@ function Benchmarks({ s }: { s: RunSummaryModel }) {
       <div className="text-xs font-medium">Against benchmarks</div>
       <ul className="list-disc pl-5 text-sm space-y-1">
         {r && (
-          <li data-testid="summary-random-entry">
+          <li id="random-entry" data-testid="summary-random-entry">
             Matched random entry (same stocks, same holding periods): strategy{' '}
             {fmtSigned(r.strategy_bps, 0)} bps against random {fmtSigned(r.random_bps, 0)} bps net
-            per trade, difference {fmtSigned(r.excess_bps, 0)} bps
+            per trade{r.trades === null ? '' : ` on ${r.trades} matched trades`}, difference{' '}
+            {fmtSigned(r.excess_bps, 0)} bps
             {r.t_stat === null ? '' : ` (t ${fmtNum(r.t_stat)})`}.
           </li>
         )}

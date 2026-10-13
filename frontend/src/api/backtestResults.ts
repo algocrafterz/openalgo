@@ -51,6 +51,9 @@ export interface Baseline {
   trade_net_bps?: number
   excess_net_bps: number
   excess_t_stat?: number
+  /** True when the baseline drew from a sample of `population_trades` trades. */
+  sampled?: boolean
+  population_trades?: number
 }
 
 export interface SplitMetrics {
@@ -658,7 +661,7 @@ export interface RunRecord {
   code_version: string
   data: { source: string; as_of: string; universe: string; bar_size: string }
   period: { start: string; end: string }
-  costs: { model: string; round_trip_bps: number }
+  costs: { model: string; round_trip_bps: number; broker?: { label?: string } }
   metrics: RunMetrics
   params?: Record<string, unknown>
   parent_run_id?: string | null
