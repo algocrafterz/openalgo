@@ -14,6 +14,10 @@ module is the one place that does, under four rules that keep the selection hone
                   tuning runs, and the buffer keeps it clear of the tuning period. The recorded
                   run's in-sample statistics still use those sessions.
                   `separation_failures` makes a recorded run invalid when it does not.
+  PORTFOLIO CAPS  Each combination also runs the G5.2 live-caps stage and is ranked on its
+                  primary capped pass, the policy the recorded run's G5.2 gate judges. If any
+                  combination has no complete capped pass, all are ranked uncapped and the
+                  record is marked not fully constrained (`constraints`), never a mix.
   BOUNDED GRID    At most MAX_COMBINATIONS, each parameter an explicit ascending list of values
                   of the spec's own type. No search heuristic and no random draws: reproducible.
   STABLE REGION   A combination's region is itself and every usable grid neighbour (at most one
@@ -69,8 +73,8 @@ MIN_HOLDOUT, MAX_HOLDOUT = 0.30, 0.50
 MIN_TRADES = 30
 MAX_PBO_SLICES = 16
 PBO_METHOD = (
-    "CSCV (Bailey et al.) over in-sample session net R of the distinct combinations; measures "
-    "picking the single best combination, not the stable-region selection"
+    "CSCV (Bailey et al.) over in-sample session net R of the distinct combinations' uncapped "
+    "trade lists; measures picking the single best combination, not the stable-region selection"
 )
 OBJECTIVE = "mean net R per trade at 1.0x cost (statutory model), in-sample sessions only"
 _GRID_KEYS = ("parameters", "min_trades", "holdout_fraction")
@@ -78,6 +82,40 @@ _GRID_KEYS = ("parameters", "min_trades", "holdout_fraction")
 
 class TuningError(Exception):
     """The grid or the tuning inputs are not acceptable. Nothing is run or written."""
+
+
+#: What a combination is ranked on when every combination has a capped result.
+CAPPED_BASIS = "live caps primary pass (G5.2): portfolio entry limits applied as signals arrive"
+UNCAPPED_BASIS = "unconstrained trade list: portfolio entry limits not applied"
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """One combination's in-sample trades and, when the live-caps stage completed, the metrics
+    of its primary capped pass (`trades`, `net_r`, `net_bps`)."""
+
+    trades: Sequence[Any]
+    capped: Mapping[str, Any] | None = None
+    unconstrained_reason: str | None = None
+    caps: Mapping[str, Any] | None = None
+
+
+def capped_outcome(trades: Sequence[Any], evidence: Mapping[str, Any] | None) -> Outcome:
+    """The outcome of one combination from its G5.2 live-caps evidence (`live_caps.run_stage`).
+
+    Only a complete stage counts: its primary pass is the policy the recorded run's G5.2 gate
+    judges. Anything else leaves the combination unconstrained, with the stage's reason."""
+    if not isinstance(evidence, Mapping):
+        return Outcome(trades, unconstrained_reason="live-caps stage not run")
+    state = evidence.get("state")
+    if state != "complete":
+        return Outcome(trades, unconstrained_reason=f"{state}: {evidence.get('reason', '')}")
+    primary = [p for p in evidence.get("passes") or [] if p.get("primary")]
+    if len(primary) != 1:
+        return Outcome(trades, unconstrained_reason="live-caps stage has no primary pass")
+    p = primary[0]
+    capped = {"trades": p.get("trades"), "net_r": p.get("net_r"), "net_bps": p.get("net_bps")}
+    return Outcome(trades, capped=capped, caps=evidence.get("caps"))
 
 
 @dataclass(frozen=True)
@@ -177,6 +215,20 @@ def score(trades: Sequence[Any], min_trades: int) -> dict[str, Any]:
     }
 
 
+def score_capped(capped: Mapping[str, Any], min_trades: int) -> dict[str, Any]:
+    """The same score from a primary capped pass: its trade count and mean net R per trade."""
+    n = capped.get("trades")
+    n = int(n) if isinstance(n, (int, float)) and math.isfinite(n) else 0
+    net_r = capped.get("net_r")
+    finite = isinstance(net_r, (int, float)) and math.isfinite(net_r)
+    return {
+        "trades": n,
+        "net_r": float(net_r) if finite else None,
+        "net_bps": capped.get("net_bps"),
+        "usable": n >= min_trades and finite,
+    }
+
+
 def neighbourhood(grid: Grid, results: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Each combination's region: itself and its usable neighbours (every combination at most one
     step away in each parameter), summarised by its worst and median net R. None when unusable."""
@@ -258,27 +310,60 @@ def pbo(matrix: np.ndarray) -> dict[str, Any]:
     return {"value": stats.pbo_cscv(distinct, n_slices=slices), "slices": slices, **label}
 
 
+def _as_outcome(result: Any) -> Outcome:
+    if isinstance(result, Outcome):
+        return Outcome(list(result.trades), result.capped, result.unconstrained_reason, result.caps)
+    return Outcome(list(result), unconstrained_reason="the runner applied no portfolio caps")
+
+
+def _row(values: dict[str, Any], o: Outcome, min_trades: int, constrained: bool) -> dict[str, Any]:
+    uncapped = score(o.trades, min_trades)
+    if not constrained:
+        return {"values": values, **uncapped}
+    return {
+        "values": values,
+        **score_capped(o.capped or {}, min_trades),
+        "uncapped_trades": uncapped["trades"],
+        "uncapped_net_r": uncapped["net_r"],
+    }
+
+
 def evaluate_grid(
     grid: Grid,
-    run_combination: Callable[[dict[str, Any]], Sequence[Any]],
+    run_combination: Callable[[dict[str, Any]], Outcome | Sequence[Any]],
     sessions: Iterable[date],
     is_end: date,
 ) -> dict[str, Any]:
     """Run every combination, score it, rank it by region and compute PBO.
 
-    `run_combination(values) -> trades` must read no session after `is_end`; a trade dated after
-    it stops the tuning, because it means the hold-out was read.
+    `run_combination(values)` returns an `Outcome` (or a plain trade list, which is
+    unconstrained) and must read no session after `is_end`; a trade dated after it stops the
+    tuning, because it means the hold-out was read.
+
+    Every row is scored on one basis. When every combination has a primary capped pass, rows
+    are scored on it, the policy the recorded run's G5.2 gate judges. If any combination lacks
+    one, every row is scored on its unconstrained trade list and the result is marked not fully
+    constrained, naming each combination and why: a mix of the two bases would rank unlike
+    things against each other.
     """
     is_sessions = [d for d in sessions if d <= is_end]
-    per_combo, rows = [], []
+    outcomes = []
     for values in grid.combinations():
-        trades = list(run_combination(values))
-        late = [t for t in trades if _day(t.day) > is_end]
+        o = _as_outcome(run_combination(values))
+        late = [t for t in o.trades if _day(t.day) > is_end]
         if late:
             raise TuningError(f"{values}: {len(late)} trades after the in-sample end {is_end}")
-        per_combo.append(trades)
-        rows.append({"values": values, **score(trades, grid.min_trades)})
+        outcomes.append((values, o))
+    unconstrained = [
+        {"values": v, "reason": o.unconstrained_reason or "no capped result"}
+        for v, o in outcomes
+        if o.capped is None
+    ]
+    constrained = not unconstrained
+    rows = [_row(v, o, grid.min_trades, constrained) for v, o in outcomes]
     rows = [{**r, **g} for r, g in zip(rows, neighbourhood(grid, rows), strict=True)]
+    per_combo = [o.trades for _v, o in outcomes]
+    caps = next((o.caps for _v, o in outcomes if o.caps is not None), None)
     chosen = select(rows)
     usable = [i for i, r in enumerate(rows) if r["usable"]]
     best = max(usable, key=lambda i: rows[i]["net_r"]) if usable else None
@@ -287,6 +372,12 @@ def evaluate_grid(
         "selected": None if chosen is None else {"index": chosen, **rows[chosen]},
         "best_single": None if best is None else {"index": best, **rows[best]},
         "selected_is_not_the_single_best": chosen is not None and chosen != best,
+        "constraints": {
+            "fully_constrained": constrained,
+            "basis": CAPPED_BASIS if constrained else UNCAPPED_BASIS,
+            "caps": caps if constrained else None,
+            "unconstrained": unconstrained,
+        },
         "pbo": pbo(session_matrix(per_combo, is_sessions)),
     }
 
@@ -393,16 +484,22 @@ def run_tuning(
     base = rr.frozen_settings(frozen)
     execute = execute or rr.execute_backtest
 
-    def run_combination(values: dict[str, Any]) -> list:
+    def run_combination(values: dict[str, Any]) -> Outcome:
         logger.info("Tuning %s: %s", idea_id, values)
         settings = {
             **base,
             "parameters": {**spec_params, **values},
             rr.PARAMETER_OVERRIDES: dict(values),
         }
-        return execute(
-            key, settings=settings, end=is_end.isoformat(), dataset=resolution, run_truncation=False
-        ).trades
+        execution = execute(
+            key,
+            settings=settings,
+            end=is_end.isoformat(),
+            dataset=resolution,
+            run_truncation=False,
+            run_live_caps=True,
+        )
+        return capped_outcome(execution.trades, getattr(execution, "live_caps", None))
 
     result = evaluate_grid(grid, run_combination, sessions, is_end)
     stamp = now.astimezone(IST)
@@ -431,6 +528,7 @@ def run_tuning(
         "selected": _with_fingerprints(result["selected"], spec_params),
         "best_single": _with_fingerprints(result["best_single"], spec_params),
         "selected_is_not_the_single_best": result["selected_is_not_the_single_best"],
+        "constraints": result["constraints"],
         "pbo": result["pbo"],
     }
     out = Path(folder) / TUNING_DIR / tuning_id
