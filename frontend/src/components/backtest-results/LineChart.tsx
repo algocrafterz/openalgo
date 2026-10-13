@@ -16,10 +16,18 @@ interface LineChartProps {
   height?: number
   /** Zero-or-negative series such as drawdown: explicit sign on the axis and a zero line. */
   signed?: boolean
+  /** Suffix of the axis labels: R multiples by default, `%` for a portfolio in percent. */
+  unit?: string
 }
 
-/** Line chart of one or more R-multiple series, one point per trading day. */
-export function LineChart({ title, series, height = 260, signed = false }: LineChartProps) {
+/** Line chart of one or more series (R multiples unless `unit` says otherwise), one point per day. */
+export function LineChart({
+  title,
+  series,
+  height = 260,
+  signed = false,
+  unit = 'R',
+}: LineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const isDark = useThemeStore((s) => s.mode) === 'dark'
   const hasData = series.some((s) => s.points.length > 0)
@@ -50,7 +58,7 @@ export function LineChart({ title, series, height = 260, signed = false }: LineC
         lineWidth: 2,
         priceFormat: {
           type: 'custom',
-          formatter: (p: number) => `${signed && p > 0 ? '+' : ''}${p.toFixed(1)}R`,
+          formatter: (p: number) => `${signed && p > 0 ? '+' : ''}${p.toFixed(1)}${unit}`,
         },
       })
       if (signed) {
@@ -68,7 +76,7 @@ export function LineChart({ title, series, height = 260, signed = false }: LineC
       window.removeEventListener('resize', handleResize)
       chart.remove()
     }
-  }, [series, isDark, height, hasData, signed])
+  }, [series, isDark, height, hasData, signed, unit])
 
   return (
     <figure className="space-y-2" aria-label={title}>

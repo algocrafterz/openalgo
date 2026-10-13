@@ -154,7 +154,7 @@ function limitations(run: RunRecord, detail: RunDetail): string[] {
     const span =
       typeof run.years === 'number'
         ? `${run.years} years tested`
-        : `${run.metrics.days} trading days`
+        : `trades entered on ${run.metrics.days} sessions`
     out.push(`Short history: ${span}, so annualised ratios are extrapolated.`)
   }
   return out

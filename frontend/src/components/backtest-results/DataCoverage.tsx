@@ -20,7 +20,7 @@ export function DataCoverage({ run }: { run: RunRecord }) {
   const days = run.metrics.days
   const window = [
     `${run.period.start} to ${run.period.end}`,
-    ` (${fmtSpan(run.years)}${days === undefined ? '' : `, ${days} trading days`})`,
+    ` (${fmtSpan(run.years)}${days === undefined ? '' : `; trades entered on ${days} sessions`})`,
   ].join('')
   return (
     <Card data-testid="data-coverage">

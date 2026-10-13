@@ -413,6 +413,105 @@ export interface RunDetail {
   has_trades: boolean
   /** True when the lineage ledgers exist, so a trade can be followed to its signal and fills. */
   has_ledgers: boolean
+  /** Sidecars in `evaluations/<run_id>/`: corrections and derived evidence beside the sealed run. */
+  evaluations?: RunEvaluations
+}
+
+// ---- Evaluation sidecars: corrections and derived evidence beside a sealed run ---------------
+
+export interface GateRowValues {
+  status: GateStatus
+  value: number | string | boolean | null
+  threshold: string
+  evidence: string
+}
+
+/** One gate as the sealed run recorded it and as an evaluator fix re-scored it. */
+export interface GateCorrection {
+  gate: string
+  recorded: GateRowValues
+  corrected: GateRowValues
+  changed_status: boolean
+  file: string
+  evaluated_ist: string | null
+  reason: string | null
+}
+
+export interface PortfolioStats {
+  sessions: number
+  sessions_with_pnl: number
+  sessions_with_position: number
+  first_session: string
+  last_session: string
+  years: number
+  total_return_pct: number
+  annual_return_pct: number | null
+  annual_volatility_pct: number | null
+  sharpe: number | null
+  max_drawdown_pct: number
+  max_drawdown_peak: string
+  max_drawdown_trough: string
+  max_open_positions: number
+  mean_deployed_pct: number
+}
+
+/** The daily marked-to-market book: recorded by the run, or rebuilt from its frozen inputs. */
+export interface PortfolioView {
+  source: 'recorded' | 'reconstructed'
+  unavailable?: string
+  method?: string | null
+  capital_rs?: number | null
+  notional_rs?: number | null
+  slots?: number | null
+  cost_column?: string | null
+  stats?: Partial<PortfolioStats>
+  alternate_cost?: { cost_column: string; stats: Partial<PortfolioStats> } | null
+  reconciliation?: { book_pnl_rs: number; ledger_net_rs: number; difference_rs: number } | null
+  equity_pct?: SeriesPoint[]
+  drawdown_pct?: SeriesPoint[]
+  monthly_pct?: { month: string; return_pct: number }[]
+  session_counts?: {
+    recorded_days?: number
+    recorded_days_meaning?: string
+    entry_sessions?: number
+    test_sessions?: number
+    sessions_with_pnl?: number
+    sessions_with_position?: number
+  }
+  cost_basis?: string | null
+  file?: string | null
+  evaluated_ist?: string | null
+  reason?: string | null
+}
+
+export interface DiagnosticSide {
+  annual_return_pct?: number
+  annual_volatility_pct?: number
+  max_drawdown_pct?: number
+  return_per_volatility?: number
+}
+
+/** A finding recorded elsewhere (idea.md) and cited here; not a gate. */
+export interface CitedDiagnostic {
+  name: string
+  title?: string
+  source?: string
+  reproducible?: boolean
+  reproducibility_note?: string
+  /** Supporting or decisive; a cited diagnostic is never a gate. */
+  evidential_weight?: string
+  script?: { path: string; sha256?: string; command?: string }
+  recorded_ist?: string
+  method?: string
+  strategy?: DiagnosticSide
+  benchmark?: DiagnosticSide
+  monthly_excess?: Record<string, number>
+}
+
+export interface RunEvaluations {
+  corrections: GateCorrection[]
+  portfolio: PortfolioView | null
+  diagnostics: CitedDiagnostic[]
 }
 
 // ---- Evidence, data quality, cost decomposition and trade drill-down (build order 8) ---------
@@ -569,6 +668,8 @@ export interface RunRecord {
   cost_sensitivity?: CostSensitivityPoint[]
   position_caps?: PositionCap[]
   baseline?: Baseline
+  /** Statutory charges plus slippage per trade (G1.1, G1.3). Not the headline cost of a flat run. */
+  cost_model?: { mean_total_bps?: number; net_bps?: number; flat_bps?: number }
   years?: number | null
   data_age_days?: number | null
   split?: { type: string; oos_start: string }

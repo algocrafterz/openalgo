@@ -187,7 +187,7 @@ describe('BacktestResultsDetail tearsheet', () => {
   it('leads with net bps after costs and shows gross beside it', async () => {
     renderPage(ideaResponse([RUN_V1]))
     const tearsheet = await screen.findByTestId('run-tearsheet')
-    const label = within(tearsheet).getByText('Net bps per trade (after costs)')
+    const label = within(tearsheet).getByText('Mean net bps per trade (after costs)')
     const card = label.parentElement as HTMLElement
     expect(within(card).getByText('-1.30')).toHaveClass('text-red-600')
     expect(within(card).getByText(/Gross \+8\.10/)).toBeInTheDocument()
@@ -255,7 +255,7 @@ describe('BacktestResultsDetail tearsheet', () => {
 
   it('shows cost sensitivity with break-even cost', async () => {
     renderPage(ideaResponse([RUN_V1]))
-    expect(await screen.findByText('9.4 (modelled)')).toBeInTheDocument()
+    expect(await screen.findByText('9.4 (modelled, headline)')).toBeInTheDocument()
     expect(screen.getByText('8.10 bps')).toBeInTheDocument()
   })
 
@@ -287,7 +287,7 @@ describe('BacktestResultsDetail tearsheet', () => {
   it('flags fewer than a year of trading days as extrapolated', async () => {
     const short = makeRun({ metrics: { ...RUN_V1.metrics, days: 100 } })
     renderPage(ideaResponse([short]))
-    expect(await screen.findByText(/Only 100 trading days/)).toBeInTheDocument()
+    expect(await screen.findByText(/Trades entered on only 100 sessions/)).toBeInTheDocument()
   })
 
   it('always shows the caveat and no pass/fail wording', async () => {

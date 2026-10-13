@@ -10,8 +10,19 @@ function cellStyle(value: number, maxAbs: number): React.CSSProperties {
   return { backgroundColor: `rgba(${rgb}, ${alpha.toFixed(2)})` }
 }
 
-/** Net R per calendar month. Shows whether a result is spread out or one good month. */
-export function MonthlyGrid({ rows }: { rows: MonthlyRow[] }) {
+/**
+ * One value per calendar month (net R by default). Shows whether a result is spread out or one
+ * good month. `caption` and `cellTitle` name another unit, such as the book's monthly return.
+ */
+export function MonthlyGrid({
+  rows,
+  caption = 'Total net R per month',
+  cellTitle = (row: MonthlyRow) => `${row.n} trades`,
+}: {
+  rows: MonthlyRow[]
+  caption?: string
+  cellTitle?: (row: MonthlyRow) => string
+}) {
   if (rows.length === 0) {
     return <div className="text-sm text-muted-foreground">No monthly breakdown recorded</div>
   }
@@ -22,7 +33,7 @@ export function MonthlyGrid({ rows }: { rows: MonthlyRow[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs border-separate border-spacing-1">
-        <caption className="sr-only">Total net R per month</caption>
+        <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
             <th scope="col" className="text-left font-medium">
@@ -48,7 +59,7 @@ export function MonthlyGrid({ rows }: { rows: MonthlyRow[] }) {
                     key={idx}
                     className="rounded text-center font-mono py-1"
                     style={row ? cellStyle(row.total_r, maxAbs) : undefined}
-                    title={row ? `${row.n} trades` : 'No trades'}
+                    title={row ? cellTitle(row) : 'No trades'}
                   >
                     {row ? fmtSigned(row.total_r, 1) : ''}
                   </td>

@@ -15,7 +15,7 @@ describe('DataCoverage', () => {
     const box = screen.getByTestId('data-coverage')
     expect(within(box).getByText(/2016-10-03 to 2026-09-25/)).toBeInTheDocument()
     expect(within(box).getByText(/10\.0 years/)).toBeInTheDocument()
-    expect(within(box).getByText(/800 trading days/)).toBeInTheDocument()
+    expect(within(box).getByText(/trades entered on 800 sessions/)).toBeInTheDocument()
     expect(within(box).getByText(/2026-09-29/)).toBeInTheDocument()
     expect(within(box).getByText(/same day/)).toBeInTheDocument()
     expect(within(box).getByText('5m')).toBeInTheDocument()

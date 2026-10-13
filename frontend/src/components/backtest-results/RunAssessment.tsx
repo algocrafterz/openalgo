@@ -29,9 +29,13 @@ function KeyMetrics({ run }: { run: RunRecord }) {
       <Metric label="Trades" value={m.trades === undefined ? 'n/a' : String(m.trades)} />
       <Metric label="Max drawdown" value={metricText(m, m.max_dd_r, (v) => `${fmtNum(v, 1)}R`)} />
       <Metric
-        label="Net bps: in / out of sample"
+        label="Mean net bps per trade: in / out of sample"
         value={`${is ? metricText(is, is.net_bps) : 'n/a'} / ${oos ? metricText(oos, oos.net_bps) : 'n/a'}`}
-        hint={run.split?.oos_start ? `hold-out from ${run.split.oos_start}` : 'no hold-out split'}
+        hint={
+          run.split?.oos_start
+            ? `${is?.trades ?? 'n/a'} / ${oos?.trades ?? 'n/a'} trades; hold-out from ${run.split.oos_start}; trades straddling the cut are purged from in-sample`
+            : 'no hold-out split'
+        }
       />
     </div>
   )

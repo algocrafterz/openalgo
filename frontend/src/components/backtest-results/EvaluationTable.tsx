@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import type { EvaluationBlock, GateRow, GateStatus, TradeSubset } from '@/api/backtestResults'
+import type {
+  EvaluationBlock,
+  GateCorrection,
+  GateRow,
+  GateStatus,
+  TradeSubset,
+} from '@/api/backtestResults'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -63,14 +69,33 @@ function isDead(row: GateRow): boolean {
   return DEAD.includes(row.status)
 }
 
+function CorrectedNote({ c }: { c: GateCorrection }) {
+  return (
+    <div
+      className="mt-1 rounded border border-blue-500/40 p-1 text-xs"
+      data-testid={`corrected-${c.gate}`}
+    >
+      Corrected evaluation{c.evaluated_ist ? ` (${c.evaluated_ist.slice(0, 10)})` : ''}:{' '}
+      <span className={STATUS_CLASS[c.corrected.status]}>{STATUS_TEXT[c.corrected.status]}</span>,{' '}
+      {c.corrected.evidence}
+      {c.reason && <div className="text-muted-foreground">Why: {c.reason}</div>}
+      <div className="text-muted-foreground">
+        The text above is the sealed run's original record.
+      </div>
+    </div>
+  )
+}
+
 function DimensionTable({
   name,
   rows,
   onShowTrades,
+  corrections,
 }: {
   name: string
   rows: GateRow[]
   onShowTrades?: (subset: TradeSubset) => void
+  corrections: Map<string, GateCorrection>
 }) {
   return (
     <div className="space-y-1" data-testid={`dimension-${name}`}>
@@ -115,6 +140,12 @@ function DimensionTable({
                 </TableCell>
                 <TableCell className={cn('text-sm', STATUS_CLASS[row.status])}>
                   {STATUS_TEXT[row.status]}
+                  {corrections.has(row.gate) && (
+                    <div className="text-xs text-muted-foreground">
+                      recorded; corrected:{' '}
+                      {STATUS_TEXT[(corrections.get(row.gate) as GateCorrection).corrected.status]}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-right font-mono">{valueText(row.value)}</TableCell>
                 <TableCell className="text-sm whitespace-normal break-words">
@@ -122,6 +153,9 @@ function DimensionTable({
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground whitespace-normal break-words min-w-[14rem]">
                   {row.evidence}
+                  {corrections.has(row.gate) && (
+                    <CorrectedNote c={corrections.get(row.gate) as GateCorrection} />
+                  )}
                 </TableCell>
               </TableRow>
             )
@@ -146,10 +180,14 @@ function hashTargets(gates: string[]): boolean {
 export function EvaluationTable({
   evaluation,
   onShowTrades,
+  corrections = [],
 }: {
   evaluation: EvaluationBlock
   onShowTrades?: (subset: TradeSubset) => void
+  /** Gates re-scored after an evaluator fix, shown beside the recorded row, never instead of it. */
+  corrections?: GateCorrection[]
 }) {
+  const byGate = new Map(corrections.map((c) => [c.gate, c]))
   const failed = evaluation.summary.hard_failed
   const live = evaluation.dimensions
     .map((d) => ({ name: d.name, rows: d.rows.filter((r) => !isDead(r)) }))
@@ -178,6 +216,14 @@ export function EvaluationTable({
       </CardHeader>
       <CardContent className="space-y-4">
         <Counts counts={evaluation.summary.counts} />
+        {corrections.length > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="evaluation-corrections-note">
+            Counts and rows are the sealed run's original record. {corrections.length} gate
+            {corrections.length === 1 ? ' was' : 's were'} re-scored later after an evaluator fix (
+            {corrections.map((c) => c.gate).join(', ')}); each shows its corrected reading beside
+            the recorded one. The current verdict is the recorded one; no correction changed it.
+          </p>
+        )}
         {failed.length > 0 ? (
           <div role="alert" className="rounded-md border border-red-500/50 p-3 text-sm">
             Hard gates failed: {failed.join(', ')}. A failed hard gate stops promotion regardless of
@@ -191,7 +237,13 @@ export function EvaluationTable({
           is not a pass.
         </p>
         {live.map((d) => (
-          <DimensionTable key={d.name} name={d.name} rows={d.rows} onShowTrades={onShowTrades} />
+          <DimensionTable
+            key={d.name}
+            name={d.name}
+            rows={d.rows}
+            onShowTrades={onShowTrades}
+            corrections={byGate}
+          />
         ))}
         {dead.length > 0 && (
           <details

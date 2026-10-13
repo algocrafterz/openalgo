@@ -75,6 +75,9 @@ function CostTable({ run }: { run: RunRecord }) {
     return <div className="text-sm text-muted-foreground">No cost sensitivity recorded</div>
   }
   const known = run.metrics.trades > 0
+  const flat = run.costs.model === 'flat-round-trip-bps'
+  const headline = flat ? 'engine flat cost, headline' : 'modelled, headline'
+  const modelled = flat ? run.cost_model : undefined
   return (
     <div className="space-y-2">
       <Table>
@@ -89,7 +92,7 @@ function CostTable({ run }: { run: RunRecord }) {
             <TableRow key={r.round_trip_bps}>
               <TableCell className="font-mono">
                 {r.round_trip_bps}
-                {r.round_trip_bps === run.costs.round_trip_bps ? ' (modelled)' : ''}
+                {r.round_trip_bps === run.costs.round_trip_bps ? ` (${headline})` : ''}
               </TableCell>
               <TableCell
                 className={cn(
@@ -101,8 +104,25 @@ function CostTable({ run }: { run: RunRecord }) {
               </TableCell>
             </TableRow>
           ))}
+          {modelled?.mean_total_bps !== undefined && modelled.net_bps !== undefined && (
+            <TableRow data-testid="cost-modelled-row">
+              <TableCell className="font-mono">
+                {fmtNum(modelled.mean_total_bps)} (modelled statutory charges plus slippage)
+              </TableCell>
+              <TableCell className="text-right font-mono">
+                {metricText(run.metrics, modelled.net_bps)}
+              </TableCell>
+            </TableRow>
+          )}
         </TableBody>
       </Table>
+      {modelled?.mean_total_bps !== undefined && (
+        <p className="text-xs text-muted-foreground" data-testid="cost-basis-note">
+          This run's headline net uses the engine's flat {fmtNum(run.costs.round_trip_bps, 0)} bps.
+          The modelled cost ({fmtNum(modelled.mean_total_bps)} bps a trade on average) is used by
+          G1.1 and G1.3 only; later runs use the modelled cost as their headline.
+        </p>
+      )}
       <div className="text-sm">
         Break-even cost:{' '}
         <span className="font-mono">

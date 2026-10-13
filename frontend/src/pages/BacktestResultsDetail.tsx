@@ -23,6 +23,7 @@ import { RunAssessment } from '@/components/backtest-results/RunAssessment'
 import { RunEvidence, type TradesDrillState } from '@/components/backtest-results/RunEvidence'
 import { RunHistory } from '@/components/backtest-results/RunHistory'
 import { RunIdentity } from '@/components/backtest-results/RunIdentity'
+import { RunSummary } from '@/components/backtest-results/RunSummary'
 import { RunTearsheet } from '@/components/backtest-results/RunTearsheet'
 import { StrategyDefinition } from '@/components/backtest-results/StrategyDefinition'
 import { StatusBadge, VerdictBadge } from '@/components/backtest-results/VerdictBadge'
@@ -70,6 +71,21 @@ function RunDetailBlocks({
   tuning?: TuningSummary[]
   onShowTrades?: (subset: TradeSubset) => void
 }) {
+  const decision = (
+    <DecisionPanel
+      verdict={detail.verdict}
+      promotion={detail.promotion}
+      nextAction={detail.next_action}
+      researchState={idea.research_state}
+      stage={idea.stage}
+      legacyVerdict={idea.verdict}
+      runVerdict={run.run_verdict ?? null}
+      isLatestRun={isLatestRun}
+      captured={detail.captured}
+      evaluation={run.evaluation ?? null}
+      onShowTrades={onShowTrades}
+    />
+  )
   return (
     <>
       <RunIdentity
@@ -82,20 +98,19 @@ function RunDetailBlocks({
         strategyCategory={idea.strategy_category}
         tags={idea.strategy_tags}
       />
-      <DecisionPanel
-        verdict={detail.verdict}
-        promotion={detail.promotion}
-        nextAction={detail.next_action}
-        researchState={idea.research_state}
-        stage={idea.stage}
-        legacyVerdict={idea.verdict}
-        runVerdict={run.run_verdict ?? null}
-        isLatestRun={isLatestRun}
-        captured={detail.captured}
-        evaluation={run.evaluation ?? null}
-        onShowTrades={onShowTrades}
-      />
-      {detail.captured && <RunAssessment run={run} detail={detail} tuning={tuning} />}
+      {detail.captured && <RunSummary idea={idea} run={run} detail={detail} />}
+      {detail.captured ? (
+        <DetailSection
+          id="decision"
+          title="Verdict reasons, promotion and assessment"
+          summary="every reason behind the verdict, each promotion stage, gate findings, tuning and follow-ups"
+        >
+          {decision}
+          <RunAssessment run={run} detail={detail} tuning={tuning} />
+        </DetailSection>
+      ) : (
+        decision
+      )}
     </>
   )
 }
@@ -261,7 +276,7 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
           <DetailSection
             id="performance"
             title="Performance detail"
-            summary="headline statistics, equity and drawdown, monthly results, full evaluation table, regimes, robustness and assumptions"
+            summary="headline statistics, equity and drawdown, monthly results, all gates with any corrections, regimes, robustness, costs and assumptions"
             // Open only when no summary above stands in for it: a legacy run or failed detail.
             defaultOpen={detailFailed || (detail !== undefined && !detail.captured)}
           >
@@ -270,6 +285,8 @@ function BacktestResultsDetailBody({ ideaId }: { ideaId: string }) {
               ideaId={ideaId}
               assumptions={detail?.captured ? detail.assumptions : undefined}
               onShowTrades={detail?.captured && detail.has_trades ? openTrades : undefined}
+              portfolio={detail?.evaluations?.portfolio}
+              corrections={detail?.evaluations?.corrections}
             />
           </DetailSection>
         )}
