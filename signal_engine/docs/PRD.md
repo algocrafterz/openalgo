@@ -6045,3 +6045,30 @@ confirmed stayed naked, and an entry that filled after a timeout stayed untracke
 - Restart procedure used: place ENTRY_HOLD, `openalgoctl.sh stop restart`, confirm processes and ports are gone, start,
   confirm the new process start time is after the last code change. Do not edit `openalgoctl.sh` while a supervisor
   is running: bash reads a running script by byte offset.
+
+## Duplicate protective stop after an SL timeout, and the 0.30% stop-floor boundary (2026-10-14)
+
+- HINDALCO (EVWAP-EARLY-PY): the 10:36 stop request timed out while the OpenAlgo server was stalled (the same stall
+  that produced the history ReadTimeouts and HTTP 500s). The verify reads found nothing, the retry was sent, then the
+  stalled request landed 6 ms before the retry: two live SELL 319 SL-M orders. The 11:00 exit cancelled only the tracked
+  id; the other fired at 11:16 on a flat position and left a 319 short. Cleaned up in the sandbox the same day (cancel,
+  verify, flatten, confirm zero).
+- `executor.place_sl_order`: an unresolved timeout flags (strategy, symbol, side) in `_UNCONFIRMED_SL`. The next call
+  reads the order book first and adopts a landed order instead of sending. An unreadable book after a timeout stops the
+  retry loop (fail closed; a timeout is not a rejection). After any ambiguous success, `_remove_duplicate_stops` cancels
+  every live protective order of that strategy and symbol except the confirmed one.
+- `executor.cancel_live_protective_orders` / `protective_orders`: select live SL/SL-M orders by symbol, exact strategy
+  tag and protective side (another strategy's stop on the netted symbol is never touched), cancel them, then verify with a
+  fresh read. `StopSweep` reports clear, cancelled, executed (filled while cancelling) and readable.
+- Exit paths: `main._cancel_sl_before_exit` sweeps before the exit order and `_handle_exit_locked` sweeps again after a
+  full exit; `tracker._record_closed_trade` and the no-progress exit sweep as well. A failed or unreadable sweep is logged
+  at ERROR and never blocks an exit (test_failed_sl_cancel_does_not_block_the_exit keeps that rule).
+- Limits of the guarantee: a stop that lands after the last sweep is not seen until the next sweep or the 14:45 time
+  exit. An exit sent in the instant a stop triggers can still race the trigger. The order book is the only evidence; a
+  broker that lags the book can hide a just-placed order for one read.
+- Validator: `_check_sl_distance` compares `sl_pct < floor - 1e-9`. BREAKOUT-PY stops sit at exactly 0.30% of the close,
+  which floats compute a few ULPs below 0.003, so about 3 in 10 valid signals were rejected as "0.3000% below minimum
+  0.3000%" once the floor went from 0.20% to 0.30% (M&M, SHRIRAMFIN, SUNPHARMA on 2026-10-14). See
+  `strategy_library/intraday/orb/STRATEGY-LOG.md`.
+- History timeouts were not changed: the cause is HTTP/2 connection resets on the OpenAlgo server's shared broker client
+  (core, out of scope). The running engine needs a restart to load these changes.

@@ -38,6 +38,7 @@ from signal_engine.db import (
 from signal_engine.executor import (
     build_exit_order,
     build_order,
+    cancel_live_protective_orders,
     place_sl_order,
     send_bracket_legs,
     send_order,
@@ -342,6 +343,17 @@ async def _handle_exit_locked(signal) -> None:
     )
 
     sl_cancelled = await _cancel_sl_before_exit(pos)
+    if pos.stop_filled_in_cancel is True:
+        # A stop executed while it was being cancelled: the position may already be flat, and
+        # a full-size exit would then open a short. Trust the broker's own quantity.
+        pos.stop_filled_in_cancel = False
+        own = await tracker.fetch_own_position(
+            pos.symbol, pos.strategy, pos.exchange or settings.exchange, pos.product or settings.product
+        )
+        if own == 0:
+            logger.warning(f"EXIT: {pos.symbol} stop executed during cancel, broker flat; reconciling, no order sent")
+            await _reconcile_sl_hit(signal, pos)
+            return
     if tp_level == trade_policy.MISSED_STOP_SAFETY and not sl_cancelled:
         await _resolve_failed_missed_stop_cancel(signal, pos)
         return
@@ -352,6 +364,7 @@ async def _handle_exit_locked(signal) -> None:
         if not await _book_exit_result(signal, pos, tp_level, exit_qty, is_full_exit, trade_result):
             return
         if is_full_exit:
+            await _sweep_protective_orders(pos)  # a late-landing stop on a flat position opens a short
             # book_close() (via _finalize_full_exit -> tracker.book_close ->
             # db.save_tracker_exit) already wrote the authoritative EXIT row for this close,
             # with the real computed total_pnl/exit_types in its context. save() below writes
@@ -541,15 +554,55 @@ async def _cancel_sl_before_exit(pos) -> bool:
 
     Indian brokers treat any SELL while SL SELL is active as a new SHORT position
     (FUND LIMIT INSUFFICIENT). SL must be cancelled first, even for partial exits.
+
+    The tracked id is not trusted to be the only stop: a timed-out stop request can land late
+    and leave an untracked twin (HINDALCO 2026-10-14, the twin fired on a flat position and
+    opened a 319 short). Every live protective order of this strategy on the symbol is
+    cancelled and the order book is re-read to verify. An unreadable book cannot prove the
+    stops are gone, but the exit still has to go out: it is logged and the post-exit sweep
+    tries again.
     """
-    if not pos.sl_order_id:
-        return True
-    success = await cancel_order(pos.sl_order_id, pos.strategy)
-    if success:
-        logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
-    else:
-        logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
-    return bool(success)
+    tracked_ok = True
+    if pos.sl_order_id:
+        tracked_ok = bool(await cancel_order(pos.sl_order_id, pos.strategy))
+        if tracked_ok:
+            logger.info(f"EXIT: SL order {pos.sl_order_id} cancelled for {pos.symbol}")
+        else:
+            logger.warning(f"EXIT: failed to cancel SL {pos.sl_order_id} for {pos.symbol}")
+    sweep = await _sweep_protective_orders(pos)
+    if not sweep.readable:
+        return tracked_ok
+    return tracked_ok and sweep.clear
+
+
+async def _sweep_protective_orders(pos):
+    """Cancel every live protective order of pos.strategy on pos.symbol; log what it found."""
+    action = "SELL" if pos.direction == Direction.LONG else "BUY"
+    sweep = await cancel_live_protective_orders(
+        pos.symbol, pos.strategy, action, fetch_book=fetch_orderbook, cancel=cancel_order
+    )
+    if sweep.cancelled:
+        logger.warning(
+            f"EXIT: cancelled live stop order(s) {list(sweep.cancelled)} for {pos.symbol} "
+            f"[{pos.strategy}] (tracked id {pos.sl_order_id or 'none'})"
+        )
+    if sweep.executed:
+        pos.stop_filled_in_cancel = True
+        logger.warning(
+            f"EXIT: stop order(s) {list(sweep.executed)} for {pos.symbol} filled while being "
+            "cancelled; the broker position may differ from the tracked quantity"
+        )
+    if not sweep.readable:
+        logger.error(
+            f"EXIT: order book unreadable, cannot verify {pos.symbol} [{pos.strategy}] has no "
+            "live stop left"
+        )
+    elif not sweep.clear:
+        logger.error(
+            f"EXIT: a live stop for {pos.symbol} [{pos.strategy}] could not be cancelled "
+            f"(attempted {list(sweep.cancelled)})"
+        )
+    return sweep
 
 
 async def _resolve_failed_missed_stop_cancel(signal, pos) -> None:

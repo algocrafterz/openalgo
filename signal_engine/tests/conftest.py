@@ -78,6 +78,25 @@ async def _blocked_post(self, url, *_args, **_kwargs):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_unconfirmed_stop_registry(monkeypatch):
+    """executor._UNCONFIRMED_SL is process-wide state: a test that ends on an unresolved SL
+    timeout would otherwise make the next test for the same key reconcile first.
+
+    Also gives the tracker an empty order book by default: its close paths now sweep for
+    untracked stops, and the real read retries with sleeps (the HTTP call itself is blocked
+    below). A test that cares about the book patches signal_engine.tracker.fetch_orderbook."""
+    from unittest.mock import AsyncMock
+
+    from signal_engine import executor
+
+    monkeypatch.setattr("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=[]))
+    monkeypatch.setattr("signal_engine.main.fetch_orderbook", AsyncMock(return_value=[]))
+    executor._UNCONFIRMED_SL.clear()
+    yield
+    executor._UNCONFIRMED_SL.clear()
+
+
+@pytest.fixture(autouse=True)
 def _block_real_openalgo_api_calls(monkeypatch):
     """Make a real HTTP call to the live OpenAlgo API impossible from a test.
 

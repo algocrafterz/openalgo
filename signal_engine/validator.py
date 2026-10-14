@@ -5,6 +5,12 @@ import time
 from signal_engine.config import has_no_take_profit, settings
 from signal_engine.models import Direction, Signal, ValidationResult, ValidationStatus
 
+# Float noise allowance on the stop-distance ratio. A stop placed at exactly close x floor
+# computes to a ratio a few ULPs below the floor (0.0029999999999999615 for a 0.30% floor), so a
+# strict '<' rejected valid signals as "0.3000% below minimum 0.3000%" (2026-10-14). 1e-9 of the
+# ratio is 0.0001% of the entry price: noise only, far below any real stop distance.
+_SL_FLOOR_EPS = 1e-9
+
 # In-memory duplicate tracker: (strategy, symbol, direction, tp_level or entry) -> timestamp
 _recent_signals: dict[tuple[str, str, str, object], float] = {}
 
@@ -138,7 +144,7 @@ def _check_sl_distance(signal: Signal):
     if floor <= 0:
         return None
     sl_pct = abs(signal.entry - signal.sl) / signal.entry
-    if sl_pct < floor:
+    if sl_pct < floor - _SL_FLOOR_EPS:
         return ValidationResult(
             status=ValidationStatus.IGNORED,
             reason=f"SL distance {sl_pct:.4%} below minimum {floor:.4%}",

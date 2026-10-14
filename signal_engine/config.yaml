@@ -961,8 +961,10 @@ strategy_profiles:
     # tp_levels absent: the runner's ExitDriver sends the exit fraction in each EXIT signal.
     #
     # The validator floor equals the frozen v1.0 floor (spec sl_min_pct 0.003 = strategy_core SL_MIN_PCT).
-    # The core never emits a tighter stop (all 92 entries since 2026-09-25 sit at or above 0.30%), so this
-    # changes no signal today; it stops the validator admitting a 0.20-0.30% stop the spec cannot produce.
+    # The core never emits a tighter stop (all 92 entries since 2026-09-25 sit at or above 0.30%); it stops
+    # the validator admitting a 0.20-0.30% stop the spec cannot produce. CORRECTION 2026-10-14: the core
+    # places the stop at exactly 0.30%, which floats compute as 0.2999999999999996%, so a strict compare
+    # rejected about 30% of valid signals. validator._SL_FLOOR_EPS (1e-9) absorbs that noise only.
     # The Pine BREAKOUT keeps its own 0.20% above (calibrated to Pine's stops, e.g. VEDL 0.2465%).
     min_sl_pct: 0.003
   EVWAP-EARLY-PY:

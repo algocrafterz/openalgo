@@ -239,7 +239,8 @@ class TestSlTimeoutDoesNotStackDuplicates:
         still working through its backlog; the order shows up on a later read. Sending a
         second SL in between is what produced five fills on 2026-10-01."""
         send = AsyncMock(return_value=TIMEOUT)
-        book = AsyncMock(side_effect=[[], [], [_resting_sl()]])
+        # Fourth read: the duplicate sweep that follows every adoption after an ambiguous timeout.
+        book = AsyncMock(side_effect=[[], [], [_resting_sl()], [_resting_sl()]])
         with (
             patch.object(executor, "settings", _sl_settings()),
             patch.object(executor, "send_order", send),

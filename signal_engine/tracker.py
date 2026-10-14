@@ -21,7 +21,12 @@ from signal_engine.api_client import (
     fetch_realised_pnl,
     find_recent_complete_order_id,
 )
-from signal_engine.executor import build_exit_order, place_sl_order, send_order
+from signal_engine.executor import (
+    build_exit_order,
+    cancel_live_protective_orders,
+    place_sl_order,
+    send_order,
+)
 from signal_engine.models import Direction, OrderStatus
 from signal_engine.risk import RiskEngine
 from signal_engine.timeutils import IST
@@ -170,6 +175,7 @@ class TrackedPosition:
     entry_order_id: str = ""
     sl_order_id: str = ""
     exit_pending: bool = False  # True while an exit handler is actively processing this position
+    stop_filled_in_cancel: bool = False  # a stop filled while the exit sweep cancelled it
     fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
     original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
     realized_pnl: float = (
@@ -1249,6 +1255,29 @@ class PositionTracker:
         await self._record_closed_trade(key, pos, age, pnl_delta, _settings)
         return True
 
+    async def _cancel_untracked_stops(self, key: str, pos) -> None:
+        """Cancel any live protective order of this strategy on the symbol, tracked or not.
+
+        A timed-out stop request can land late and leave a twin the tracker never heard of
+        (HINDALCO 2026-10-14: it fired on a flat position and opened a 319 short). Never raises:
+        a sweep failure must not block booking a close or sending an exit.
+        """
+        action = "SELL" if pos.direction == Direction.LONG else "BUY"
+        try:
+            sweep = await cancel_live_protective_orders(
+                pos.symbol, pos.strategy, action, fetch_book=fetch_orderbook, cancel=cancel_order
+            )
+        except Exception:
+            logger.exception(f"{key}: protective order sweep raised")
+            return
+        if sweep.cancelled:
+            logger.warning(f"{key}: cancelled untracked live stop(s) {list(sweep.cancelled)}")
+        if not sweep.clear:
+            logger.error(
+                f"{key}: cannot verify no live stop remains (readable={sweep.readable}, "
+                f"attempted={list(sweep.cancelled)})"
+            )
+
     async def _record_closed_trade(
         self, key: str, pos, age: timedelta, pnl_delta: float, _settings
     ) -> None:
@@ -1280,6 +1309,7 @@ class PositionTracker:
                     f"check_positions: SL {pos.sl_order_id} for {key} was not cancellable "
                     "(already filled/closed, or already gone)"
                 )
+        await self._cancel_untracked_stops(key, pos)
         # Implied exit fill price from the PnL delta — the broker does not report one.
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         if pos.quantity > 0:
@@ -1495,6 +1525,7 @@ class PositionTracker:
                     f"No-progress: failed to cancel SL {pos.sl_order_id} for {pos.symbol}"
                 )
             pos.sl_order_id = ""
+        await self._cancel_untracked_stops(f"{pos.symbol}:{pos.strategy}", pos)
 
         pos.be_stop_applied = True  # prevent re-triggering regardless of path
 
