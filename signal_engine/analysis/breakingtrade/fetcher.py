@@ -38,6 +38,7 @@ from signal_engine.analysis.breakingtrade.extractor import (
     normalize_table,
     parse_captured_at,
 )
+from signal_engine.timeutils import IST
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _SIGNAL_ENGINE_DIR = os.path.dirname(os.path.dirname(_DIR))
@@ -148,12 +149,17 @@ def parse_date_label(label: str) -> datetime | None:
         except ValueError:
             continue
         if "%Y" not in fmt:  # vendor omitted the year - assume the most recent such date
-            today = datetime.today()
+            today = _ist_now()
             parsed = parsed.replace(year=today.year)
             if parsed.date() > today.date():
                 parsed = parsed.replace(year=today.year - 1)
         return parsed.replace(hour=15, minute=30)
     return None
+
+
+def _ist_now() -> datetime:
+    """Current IST wall-clock time, naive, independent of the host timezone."""
+    return datetime.now(IST).replace(tzinfo=None)
 
 
 def session_stamp(now: datetime) -> datetime:
@@ -491,7 +497,7 @@ class ScannerSession:
                     "refusing to stamp a historical snapshot with today's date."
                 )
         else:
-            captured_at = parse_captured_at(frame) or session_stamp(datetime.now())
+            captured_at = parse_captured_at(frame) or session_stamp(_ist_now())
         return normalize_table(frame, captured_at=captured_at)
 
 

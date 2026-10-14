@@ -35,7 +35,7 @@ from signal_engine.pipeline.sink import RecordingSink
 from signal_engine.pipeline.state import RunnerStateStore
 from signal_engine.pipeline.strategies.breakout import BreakoutStrategy
 from signal_engine.pipeline.strategy import Fire, Strategy
-from signal_engine.timeutils import IST
+from signal_engine.timeutils import IST, ist_today
 
 _PRICE_TOL = 1e-6
 
@@ -297,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _parity(args: argparse.Namespace, strategy: Strategy, symbols: list[str]) -> int:
-    end = args.day or dt.date.today() - dt.timedelta(days=1)
+    end = args.day or ist_today() - dt.timedelta(days=1)
     long_start = end - dt.timedelta(days=int(args.long_sessions * 1.5))
     l5, l1 = _load(symbols, long_start, end)
     usable = [s for s in symbols if s in l5 and s in l1]

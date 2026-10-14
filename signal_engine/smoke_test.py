@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 from signal_engine.risk_store import RISK_DB_PATH, RiskStore
+from signal_engine.timeutils import ist_today
 
 
 @dataclass
@@ -227,10 +228,8 @@ def check_risk_engine_state() -> str:
 
 def check_db() -> str:
     """Write and read a test value in risk_store to confirm DB is accessible."""
-    import datetime
-
     store = RiskStore(RISK_DB_PATH)
-    today = datetime.date.today()
+    today = ist_today()
     # Read current value for today
     row = store.load("SMOKE_TEST", "smoke_test", today)
     val_before = row["trades_today"]

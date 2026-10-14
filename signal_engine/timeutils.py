@@ -8,6 +8,13 @@ internal call sites, which historically redefined it independently across five
 modules.
 """
 
+from datetime import date, datetime
+
 from utils.ist import IST
 
-__all__ = ["IST"]
+__all__ = ["IST", "ist_today"]
+
+
+def ist_today() -> date:
+    """Today's date in IST, independent of the host timezone (unlike date.today())."""
+    return datetime.now(IST).date()

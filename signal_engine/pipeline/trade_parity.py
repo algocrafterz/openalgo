@@ -33,7 +33,7 @@ from signal_engine.pipeline.runner import Runner
 from signal_engine.pipeline.sim_sink import SimRules, SimSink
 from signal_engine.pipeline.state import RunnerStateStore
 from signal_engine.pipeline.strategy import Strategy
-from signal_engine.timeutils import IST
+from signal_engine.timeutils import IST, ist_today
 
 PRICE_TOL = 1e-4  # relative to price
 R_TOL = 2e-3
@@ -225,7 +225,7 @@ def cli(args, strategy: Strategy, symbols: list[str], load) -> int:
     from signal_engine.backtest.strategies.breakout import Breakout
     from signal_engine.strategy_core.breakout import BreakoutParams
 
-    end = args.day or dt.date.today() - dt.timedelta(days=1)
+    end = args.day or ist_today() - dt.timedelta(days=1)
     start = end - dt.timedelta(days=int(args.long_sessions * 1.5))
     f5, f1 = load(symbols, start, end)
     usable = [s for s in symbols if s in f5 and s in f1]

@@ -103,6 +103,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from signal_engine.timeutils import IST
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WATCHLIST_FILE = (
     REPO_ROOT
@@ -148,13 +150,13 @@ class ScreenResult:
 
 
 def _today_key(now: datetime | None = None) -> str:
-    return (now or datetime.now()).date().isoformat()
+    return (now or datetime.now(IST)).date().isoformat()
 
 
 def _current_week_key(now: datetime | None = None) -> str:
     """ISO year-week, e.g. "2026-W37" - correctly handles the turn of the year,
     unlike a naive (year, day // 7) computation."""
-    iso = (now or datetime.now()).isocalendar()
+    iso = (now or datetime.now(IST)).isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
 
 

@@ -43,6 +43,7 @@ from signal_engine.analysis.ledger import (
     load_engine_events,
     load_fills,
 )
+from signal_engine.timeutils import ist_today
 
 _REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports")
 
@@ -354,7 +355,7 @@ def main() -> None:
         since = date.fromisoformat(args.since)
         until = date.fromisoformat(args.until)
     else:
-        since, until = _last_completed_week(date.today())
+        since, until = _last_completed_week(ist_today())
 
     report = build_weekly_report(since, until)
     text = render_report(report)

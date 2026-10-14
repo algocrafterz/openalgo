@@ -63,6 +63,7 @@ import httpx
 from dotenv import dotenv_values
 
 from signal_engine.analysis.breakingtrade import review, store
+from signal_engine.timeutils import IST
 
 _SIGNAL_ENGINE_DIR = os.path.dirname(os.path.dirname(store._DB_PATH))
 _ENV_PATH = os.path.join(_SIGNAL_ENGINE_DIR, ".env")
@@ -421,7 +422,9 @@ def record(
             "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, "
             "delivered, message_id, strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                (when or datetime.now()).replace(microsecond=0).isoformat(sep=" "),
+                (when or datetime.now(IST).replace(tzinfo=None))
+                .replace(microsecond=0)
+                .isoformat(sep=" "),
                 kind,
                 symbol,
                 direction,

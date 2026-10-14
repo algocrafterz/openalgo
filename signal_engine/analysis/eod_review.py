@@ -65,6 +65,7 @@ import httpx
 
 from signal_engine.analysis.breakingtrade import review
 from signal_engine.smoke_test import CheckResult, check_config, check_db
+from signal_engine.timeutils import ist_today
 
 _LOG_DIR = "signal_engine/logs"
 _REPORTS_DIR = "signal_engine/reports"
@@ -532,7 +533,7 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="print the report, do not post to Telegram")
     args = ap.parse_args()
 
-    day = args.day or date.today().isoformat()
+    day = args.day or ist_today().isoformat()
     report = asyncio.run(run_eod_review(day))
     report.print()
 

@@ -32,6 +32,7 @@ import httpx
 import pandas as pd
 
 from signal_engine.analysis.breakingtrade import store
+from signal_engine.timeutils import ist_today
 
 STRATEGY = "BREAKINGTRADE"
 _TRADES_DB = store._DB_PATH.replace("breakingtrade.db", "trades.db")
@@ -103,7 +104,7 @@ def trades_on(day: date) -> pd.DataFrame:
 
 
 def report(day: date = None) -> None:
-    day = day or date.today()
+    day = day or ist_today()
     mode, is_analyze = trading_mode()
 
     print(f"INTRADAY PAPER REVIEW - {day:%Y-%m-%d} ({day:%A})")

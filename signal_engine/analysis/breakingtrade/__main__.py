@@ -37,6 +37,19 @@ from signal_engine.analysis.breakingtrade.extractor import (
 )
 from signal_engine.analysis.breakingtrade.scans import run_scans
 from signal_engine.analysis.breakingtrade.scorer import rank
+from signal_engine.timeutils import IST
+
+
+def _ist_now():
+    """Current IST wall-clock time, naive, independent of the host timezone.
+
+    Every poll-window, auto-stop and trading-day comparison in this module is against IST
+    constants, so they must read an IST clock, not the host's.
+    """
+    from datetime import datetime as _dt
+
+    return _dt.now(IST).replace(tzinfo=None)
+
 
 # Poll schedule: (window start, window end, minutes-of-hour to poll on).
 #
@@ -221,7 +234,7 @@ def _within_poll_hours(now: time) -> bool:
 
     for start, end, _marks in POLL_WINDOWS:
         buffered_end = (
-            _dt.combine(_dt.today(), end) + _td(minutes=HEARTBEAT_WINDOW_BUFFER_MINUTES)
+            _dt.combine(_ist_now(), end) + _td(minutes=HEARTBEAT_WINDOW_BUFFER_MINUTES)
         ).time()
         if start <= now <= buffered_end:
             return True
@@ -464,7 +477,7 @@ def _audit(args) -> int:
     """Did the poller actually collect what the schedule promised?"""
     from datetime import datetime as _dt
 
-    day = _dt.strptime(args.audit, "%Y-%m-%d").date() if args.audit else _dt.today().date()
+    day = _dt.strptime(args.audit, "%Y-%m-%d").date() if args.audit else _ist_now().date()
     due = _due_marks(day)
     got = _stored_polls(day)
     missed = [m for m in due if f"{m:%H:%M}" not in got]
@@ -482,15 +495,13 @@ def _audit(args) -> int:
 
 
 def _signals_sent_today() -> int:
-    from datetime import datetime as _dt
-
     from signal_engine.analysis.breakingtrade import store
 
     try:
         with sqlite3.connect(store._DB_PATH) as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE kind = 'trade_signal' AND created_at LIKE ?",
-                (f"{_dt.today():%Y-%m-%d}%",),
+                (f"{_ist_now():%Y-%m-%d}%",),
             ).fetchone()[0]
     except Exception:
         return 0
@@ -589,8 +600,6 @@ def _watch(args) -> int:
       - the browser is rebuilt if it dies, so one bad session does not end the day
       - a stale heartbeat during market hours raises an alert rather than failing silently
     """
-    from datetime import datetime as _dt
-
     from signal_engine.analysis.breakingtrade import alerts, fetcher
 
     # poller.sh stop sends SIGTERM; without this the process dies without running the shutdown
@@ -602,7 +611,7 @@ def _watch(args) -> int:
     for start_t, end_t, minutes in POLL_WINDOWS:
         logger.info(f"  {start_t:%H:%M}-{end_t:%H:%M} on {', '.join(f':{m:02d}' for m in minutes)}")
 
-    already_polls = _stored_polls(_dt.today().date())
+    already_polls = _stored_polls(_ist_now().date())
 
     # The paper phase is only paper if OpenAlgo is in analyze mode. Check at startup and say so
     # in the log AND on Telegram, so a mis-set mode is discovered on day one, not in the P&L.
@@ -636,7 +645,7 @@ def _watch(args) -> int:
 
     try:
         while True:
-            now = _dt.now()
+            now = _ist_now()
             current = now.time()
 
             if current >= AUTO_STOP_TIME:
@@ -677,11 +686,11 @@ def _watch(args) -> int:
                     session = fetcher.ScannerSession(debug_dir=args.debug_dir).__enter__()
 
                 want_volume = args.volume and pending.minute in VOLUME_FETCH_MINUTES
-                started = _dt.now()
+                started = _ist_now()
                 try:
                     _fetch_and_report(args.store, want_volume, args.debug_dir, session=session)
-                    took = (_dt.now() - started).total_seconds()
-                    last_success = _dt.now()
+                    took = (_ist_now() - started).total_seconds()
+                    last_success = _ist_now()
                     logger.info(f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume})")
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
@@ -696,20 +705,20 @@ def _watch(args) -> int:
             # Heartbeat: silence during a SCHEDULED poll window is the failure mode that cost
             # 04-Sep - silence during the 13:00-14:50 gap between windows is just the schedule.
             if _within_poll_hours(current) and last_success is not None:
-                stale = (_dt.now() - last_success).total_seconds() / 60
+                stale = (_ist_now() - last_success).total_seconds() / 60
                 if stale > HEARTBEAT_STALE_MINUTES and (
                     last_heartbeat_alert is None
-                    or (_dt.now() - last_heartbeat_alert).total_seconds() > 3600
+                    or (_ist_now() - last_heartbeat_alert).total_seconds() > 3600
                 ):
                     logger.error(f"no successful poll for {stale:.0f} minutes")
                     alerts.alert_health(f"no successful poll for {stale:.0f} minutes")
-                    last_heartbeat_alert = _dt.now()
+                    last_heartbeat_alert = _ist_now()
 
             sleep(20)
     except KeyboardInterrupt:
         logger.info("poller stopped")
         try:
-            polls = len(_stored_polls(_dt.today().date()))
+            polls = len(_stored_polls(_ist_now().date()))
             alerts.alert_stopped(polls, _signals_sent_today())
         except Exception:
             logger.warning("could not send the shutdown notification")
