@@ -41,6 +41,9 @@ ok() { printf '  OK    %s\n' "$1"; }
 warn() { printf '  WARN  %s\n' "$1"; WARNS=$((WARNS + 1)); }
 fail() { printf '  FAIL  %s\n' "$1"; FAILS=$((FAILS + 1)); }
 section() { printf '\n[%s]\n' "$1"; }
+# Same content, ignoring CRLF vs LF (git's autocrlf stores LF; a checkout or editor may use CRLF).
+# Compares in memory only; neither file is modified.
+same_content() { cmp -s <(tr -d '\r' <"$1") <(tr -d '\r' <"$2"); }
 
 printf 'mode=%s force=%s repo=%s claude_home=%s\n' "$MODE" "$FORCE" "$REPO" "$CLAUDE_HOME"
 
@@ -86,7 +89,7 @@ while IFS= read -r -d '' file; do
     else
       fail "missing $rel"
     fi
-  elif cmp -s "$file" "$dest"; then
+  elif same_content "$file" "$dest"; then
     ok "$rel"
   elif [ "$MODE" = apply ] && [ "$FORCE" -eq 1 ]; then
     mkdir -p "$backup_dir/$(dirname "$rel")" && cp "$dest" "$backup_dir/$rel" \
