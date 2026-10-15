@@ -53,10 +53,6 @@ ALLOWED_NAIVE: dict[tuple[str, str], str] = {
         "save_btst_candidates",
     ): "recorded_at audit column; the trade_day key is passed in by the caller.",
     (
-        "signal_engine/scripts/watchlist_screen.py",
-        "run_weekly_screen",
-    ): "computed_at metadata on the result object; not used as a date key.",
-    (
         "signal_engine/analysis/__main__.py",
         "snapshot",
     ): "Builds a tradebook snapshot file name; never compared as a trading day.",

@@ -112,3 +112,35 @@ class TestAlertDedupDay:
             "btst", "msg", symbol="AAA", deliver=False, when=datetime(2026, 9, 11, 14, 50)
         )
         assert alerts._btst_names_sent_today("2026-09-11") == {"AAA"}
+
+
+class TestWatchlistDisplayedRunTime:
+    """The digest label and the file header say IST, so they must be IST on any host."""
+
+    def _run(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(wls, "STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr(wls, "WATCHLIST_FILE", tmp_path / "watchlist.txt")
+        monkeypatch.setattr(wls, "_beta_vs_nifty", lambda syms: dict.fromkeys(syms, 1.5))
+        monkeypatch.setattr(wls, "datetime", _utc_host(SUNDAY_NIGHT_UTC))
+        daily = wls.DailyScan(
+            qualifying_symbols=["TCS"],
+            universe_size=1,
+            surveillance_fetch_failed=False,
+            data_through="2026-10-16",
+        )
+        return wls.run_weekly_screen(daily)
+
+    def test_computed_at_is_naive_ist_wall_clock(self, monkeypatch, tmp_path):
+        result = self._run(monkeypatch, tmp_path)
+        assert result.computed_at == datetime(2026, 10, 19, 1, 30)
+        assert result.computed_at.tzinfo is None
+
+    def test_digest_week_label_uses_the_ist_date(self, monkeypatch, tmp_path):
+        result = self._run(monkeypatch, tmp_path)
+        assert "week of 19 Oct 2026" in wls.format_digest(result)
+
+    def test_file_header_last_run_matches_its_ist_label(self, monkeypatch, tmp_path):
+        result = self._run(monkeypatch, tmp_path)
+        wls.update_watchlist_file(result)
+        header = (tmp_path / "watchlist.txt").read_text().splitlines()
+        assert "# Last run: 2026-10-19 01:30 IST, data through 2026-10-16" in header

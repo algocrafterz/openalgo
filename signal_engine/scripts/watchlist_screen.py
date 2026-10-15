@@ -365,7 +365,7 @@ def run_weekly_screen(daily: DailyScan) -> ScreenResult:
             "liquidity_atr_rvol_not_surveilled": len(daily.qualifying_symbols),
             "beta_band": len(final),
         },
-        computed_at=datetime.now(),
+        computed_at=datetime.now(IST).replace(tzinfo=None),
         data_through=daily.data_through,
         surveillance_fetch_failed=daily.surveillance_fetch_failed,
         conviction=conviction,
