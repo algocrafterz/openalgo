@@ -35,13 +35,17 @@ class Clock(Protocol):
 
 
 class WallClock:
+    #: Longest single asyncio.sleep. That timer is monotonic and stops while the host is
+    #: suspended, so one long sleep wakes late by the suspended time. Short naps with a wall
+    #: clock re-check after each bound the lateness to this value.
+    MAX_NAP_S = 30.0
+
     def now(self) -> pd.Timestamp:
         return pd.Timestamp.now(tz=IST)
 
     async def sleep_until(self, t: pd.Timestamp) -> None:
-        wait = (t - self.now()).total_seconds()
-        if wait > 0:
-            await asyncio.sleep(wait)
+        while (wait := (t - self.now()).total_seconds()) > 0:
+            await asyncio.sleep(min(wait, self.MAX_NAP_S))
 
 
 class SimClock:

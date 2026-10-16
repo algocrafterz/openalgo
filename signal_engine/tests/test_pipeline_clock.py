@@ -3,6 +3,7 @@
 import asyncio
 
 import pandas as pd
+import pytest
 
 from signal_engine.pipeline.clock import SimClock, WallClock, next_cycle
 
@@ -67,3 +68,53 @@ class TestWallClock:
 
     def test_sleep_until_a_past_time_returns_immediately(self):
         asyncio.run(WallClock().sleep_until(WallClock().now() - pd.Timedelta(seconds=5)))
+
+
+class _FakeWall(WallClock):
+    """WallClock whose now() is a settable value, so a test can jump the wall clock."""
+
+    def __init__(self, start):
+        self.t = start
+
+    def now(self):
+        return self.t
+
+
+class TestWallClockSurvivesSuspend:
+    """asyncio.sleep runs on the monotonic clock, which stops while the host is suspended.
+
+    A single long sleep to the next session would then wake hours late (2026-10-16: the runner
+    slept through the whole trading day). sleep_until must nap in short slices and re-read the
+    wall clock after each.
+    """
+
+    def test_wakes_when_wall_clock_jumps_past_target_during_a_nap(self, monkeypatch):
+        clock = _FakeWall(ts("15:00:00"))
+        target = ts("15:00:00") + pd.Timedelta(hours=18)
+        naps = []
+
+        async def fake_sleep(seconds):
+            naps.append(seconds)
+            clock.t = target + pd.Timedelta(seconds=1)  # host suspended; wall clock leapt ahead
+
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+        asyncio.run(clock.sleep_until(target))
+
+        assert len(naps) == 1
+        assert naps[0] <= WallClock.MAX_NAP_S
+
+    def test_never_naps_longer_than_the_cap_and_ends_at_the_target(self, monkeypatch):
+        clock = _FakeWall(ts("09:00:00"))
+        target = ts("09:00:00") + pd.Timedelta(seconds=100)
+        naps = []
+
+        async def fake_sleep(seconds):
+            naps.append(seconds)
+            clock.t = clock.t + pd.Timedelta(seconds=seconds)
+
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+        asyncio.run(clock.sleep_until(target))
+
+        assert all(n <= WallClock.MAX_NAP_S for n in naps)
+        assert sum(naps) == pytest.approx(100)
+        assert clock.t >= target
