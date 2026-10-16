@@ -6,7 +6,7 @@ import os
 import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from loguru import logger
 
@@ -581,10 +581,10 @@ async def _sweep_protective_orders(pos):
     sweep = await cancel_live_protective_orders(
         pos.symbol, pos.strategy, action, fetch_book=fetch_orderbook, cancel=cancel_order
     )
-    if sweep.cancelled:
+    if sweep.confirmed_cancelled:
         logger.warning(
-            f"EXIT: cancelled live stop order(s) {list(sweep.cancelled)} for {pos.symbol} "
-            f"[{pos.strategy}] (tracked id {pos.sl_order_id or 'none'})"
+            f"EXIT: live stop order(s) {list(sweep.confirmed_cancelled)} for {pos.symbol} "
+            f"[{pos.strategy}] confirmed cancelled by the order book (tracked id {pos.sl_order_id or 'none'})"
         )
     if sweep.executed:
         pos.stop_filled_in_cancel = True
@@ -599,8 +599,8 @@ async def _sweep_protective_orders(pos):
         )
     elif not sweep.clear:
         logger.error(
-            f"EXIT: a live stop for {pos.symbol} [{pos.strategy}] could not be cancelled "
-            f"(attempted {list(sweep.cancelled)})"
+            f"EXIT: a live stop for {pos.symbol} [{pos.strategy}] is not proved cancelled: "
+            f"unresolved={list(sweep.unresolved)} (cancel requested for {list(sweep.cancelled)})"
         )
     return sweep
 
@@ -1307,11 +1307,19 @@ async def _decline(signal, stage: str, reason: str) -> None:
     save_declined(signal, stage=stage, reason=reason)
 
 
+def _entry_token(signal) -> str:
+    """Identity of one in-flight entry, for its position-slot reservation."""
+    return f"{signal.strategy}:{signal.symbol}:{id(signal)}"
+
+
 async def _handle_entry(signal) -> None:
     """Handle a LONG/SHORT entry signal — the existing ORB pipeline.
 
     Pipeline: symbol rules -> risk gates -> capital -> size -> build_order -> send ->
     bracket -> fill check -> track -> save
+
+    The risk gate reserves a position slot for this entry. The reservation is released on
+    every exit, and converted into a recorded trade just before _establish_position.
     """
     if await _entry_halted(signal):
         return
@@ -1322,6 +1330,14 @@ async def _handle_entry(signal) -> None:
     if not await _entry_passes_risk_gates(signal):
         return
 
+    try:
+        await _place_reserved_entry(signal)
+    finally:
+        risk_engine.release_entry(_entry_token(signal))
+
+
+async def _place_reserved_entry(signal) -> None:
+    """Size, send and establish an entry whose position slot is already reserved."""
     if await _entry_held_by_unresolved_order(signal):
         return
 
@@ -1352,6 +1368,9 @@ async def _handle_entry(signal) -> None:
     await _notify_entry_outcome(signal, trade_result, rr)
 
     if trade_result.status == OrderStatus.SUCCESS:
+        # Hand the reservation over to record_trade() with no await in between, so the slot
+        # is never counted twice and never visible as free.
+        risk_engine.release_entry(_entry_token(signal))
         if not await _establish_position(signal, order, quantity, trade_result):
             return
 
@@ -1474,6 +1493,8 @@ async def _entry_passes_risk_gates(signal) -> bool:
         await _decline(signal, stage="risk_gates", reason="sector concentration limit")
         return False
 
+    # No await since the checks above: take the slot now so a concurrent entry sees it.
+    risk_engine.reserve_entry(_entry_token(signal), signal.strategy, signal.symbol)
     return True
 
 
@@ -1780,11 +1801,28 @@ async def _recover_ambiguous_entry_timeout(
             )
     if not last_read_clean:
         return await _hold_uncertain_entry(signal, order, since)
-    logger.info(
-        f"Entry timeout recovery for {signal.symbol}: no matching completed order found "
-        f"after {settings.entry_timeout_recovery_attempts} checks — treating as a genuine failure"
+    # A clean read right after a timeout is not proof the order never lands: NTPC, AXISBANK and
+    # KOTAKBANK 2026-10-15 filled seconds after the checks above and sat unprotected for an hour.
+    # Watch the entry for a bounded window so a late fill is adopted (stop included) and no second
+    # entry is sent meanwhile.
+    order_reconcile.mark_uncertain(
+        order_reconcile.UncertainOrder(
+            strategy=signal.strategy, symbol=signal.symbol, action=order.action.value,
+            quantity=order.quantity, since=since, kind="ENTRY", signal=signal, order=order,
+            watch_until=datetime.now(IST) + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
+        )
+    )
+    logger.warning(
+        f"Entry timeout recovery for {signal.symbol}: no matching completed order after "
+        f"{settings.entry_timeout_recovery_attempts} clean checks - not a confirmed failure; watching for a "
+        f"late fill for {_LATE_FILL_WATCH_SECONDS:.0f}s and holding new entries for this symbol"
     )
     return None
+
+
+#: How long a timed-out entry that a clean read could not find stays watched for a late fill.
+#: A policy candidate: the 2026-10-15 server stalls ran up to ~50s.
+_LATE_FILL_WATCH_SECONDS = 120.0
 
 
 async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
@@ -1830,6 +1868,12 @@ async def _entry_held_by_unresolved_order(signal) -> bool:
         logger.critical(
             f"ENTRY blocked for {signal.symbol} [{signal.strategy}]: an earlier {pending.kind} "
             f"order is still unconfirmed ({result.detail})"
+        )
+        return True
+    if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, datetime.now(IST)):
+        logger.warning(
+            f"ENTRY held for {signal.symbol} [{signal.strategy}]: an earlier entry timed out and may still "
+            "land; waiting out its late-fill watch before allowing another"
         )
         return True
     order_reconcile.clear_uncertain(signal.strategy, signal.symbol)
@@ -1916,6 +1960,12 @@ async def sweep_unresolved_orders() -> None:
                     f"{pending.symbol} [{pending.strategy}] ({result.detail}). Check the broker."
                 )
             continue
+        if (
+            pending.kind == "ENTRY"
+            and result.outcome == order_reconcile.ABSENT
+            and order_reconcile.watch_open(pending, now)
+        ):
+            continue  # still inside the late-fill watch: keep looking, never resend
         order_reconcile.clear_uncertain(pending.strategy, pending.symbol)
         if pending.kind == "ENTRY":
             if result.outcome == order_reconcile.FILLED:

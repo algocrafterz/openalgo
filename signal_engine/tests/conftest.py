@@ -77,6 +77,16 @@ async def _blocked_post(self, url, *_args, **_kwargs):
     )
 
 
+def _wipe_order_reconcile():
+    """order_reconcile's uncertain-order registry is process-wide: an entry-timeout test that ends
+    with a late-fill watch registered would otherwise hold the next test's entry for that symbol."""
+    from signal_engine import order_reconcile
+
+    order_reconcile._uncertain.clear()
+    order_reconcile._last_checked.clear()
+    order_reconcile._last_alerted.clear()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_unconfirmed_stop_registry(monkeypatch):
     """executor._UNCONFIRMED_SL is process-wide state: a test that ends on an unresolved SL
@@ -92,8 +102,16 @@ def _fresh_unconfirmed_stop_registry(monkeypatch):
     monkeypatch.setattr("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=[]))
     monkeypatch.setattr("signal_engine.main.fetch_orderbook", AsyncMock(return_value=[]))
     executor._UNCONFIRMED_SL.clear()
+    executor._PENDING_DUPLICATE_STOPS.clear()
+    executor._LAST_UNKNOWN_SEND.clear()
+    executor._EPISODE_START.clear()
+    _wipe_order_reconcile()
     yield
     executor._UNCONFIRMED_SL.clear()
+    executor._PENDING_DUPLICATE_STOPS.clear()
+    executor._LAST_UNKNOWN_SEND.clear()
+    executor._EPISODE_START.clear()
+    _wipe_order_reconcile()
 
 
 @pytest.fixture(autouse=True)
