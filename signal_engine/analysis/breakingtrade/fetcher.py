@@ -105,7 +105,11 @@ _EXTRACT_TABLES_JS = """
     return parts.join('  ');
   };
   return [...document.querySelectorAll('table')].map(t => {
-    const headCells = [...t.querySelectorAll('thead th, thead td')];
+    // First header row only. The vendor added a per-column filter row ("All", "All", ...) as a
+    // second <thead> row on 2026-10-19; reading every thead cell doubled the header to 30
+    // columns against 15-cell data rows and every poll failed.
+    const headRow = t.querySelector('thead tr');
+    const headCells = headRow ? [...headRow.querySelectorAll('th, td')] : [];
     const bodyRows = [...t.querySelectorAll('tbody tr')];
     const head = headCells.length
       ? headCells.map(text)
