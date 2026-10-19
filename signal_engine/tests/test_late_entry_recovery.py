@@ -17,6 +17,7 @@ Rules under test:
   * Cancellation logs say what the order book proved, not what was merely requested.
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +33,7 @@ from signal_engine.models import (
     Signal,
     TradeResult,
 )
+from signal_engine.tests.risk_fixtures import _engine
 from signal_engine.timeutils import IST
 
 
@@ -395,3 +397,158 @@ class TestCancellationLogsSeparateRequestedFromProven:
         erred = " ".join(str(c.args[0]) for c in err.call_args_list)
         assert "['A']" in warned and "['A', 'B']" not in warned
         assert "unresolved" in erred and "['B']" in erred
+
+
+class TestWatchedEntryKeepsItsSlot:
+    """A late fill adopted after another entry took its slot would leave the account over the cap.
+
+    While an entry is watched (clean-absent window, or unreadable book) its slot stays reserved, so
+    the position cap, daily trade cap and symbol/sector limits still count it; adoption converts the
+    reservation into the recorded trade, and a released watch frees the slot."""
+
+    TIMEOUT = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+
+    def _run(self, engine, books, signals, send_results):
+        sends = []
+        declined = []
+        established = []
+
+        async def send(order):
+            sends.append(order.symbol)
+            return send_results[order.symbol]
+
+        async def establish(signal, order, quantity, trade_result):
+            engine.record_trade(strategy=signal.strategy, symbol=signal.symbol)
+            established.append(signal.symbol)
+            return True
+
+        async def decline(signal, stage, reason):
+            declined.append((signal.symbol, stage))
+
+        async def go():
+            with (
+                patch.object(main, "risk_engine", engine),
+                patch.object(main, "_entry_halted", AsyncMock(return_value=False)),
+                patch.object(
+                    main, "_entry_rejected_by_symbol_rules", AsyncMock(return_value=False)
+                ),
+                patch.object(
+                    main, "_entry_rejected_by_trade_policy", AsyncMock(return_value=False)
+                ),
+                patch.object(main, "_resolve_entry_capital", AsyncMock(return_value=100000.0)),
+                patch.object(
+                    main, "_resolve_entry_quantity", AsyncMock(return_value=(10, True, 10))
+                ),
+                patch.object(main, "_log_entry_sizing", MagicMock(return_value=1.0)),
+                patch.object(
+                    main,
+                    "_build_entry_order",
+                    lambda sig, qty, an: _order(sig.symbol, sig.strategy, qty),
+                ),
+                patch.object(main, "send_order", send),
+                patch.object(main, "_notify_entry_outcome", AsyncMock()),
+                patch.object(main, "_establish_position", establish),
+                patch.object(main, "save", MagicMock()),
+                patch.object(main, "_decline", decline),
+                patch.object(main, "fetch_order_ids_today", MagicMock(return_value=set())),
+                patch.object(main, "fetch_orderbook", books),
+                patch.object(main.notifier, "notify", AsyncMock()),
+                patch.object(main.notifier, "notify_risk_limit_hit", AsyncMock()),
+            ):
+                for sig in signals:
+                    await main._handle_entry(sig)
+                return sends, declined, established
+
+        return go
+
+    @pytest.mark.asyncio
+    async def test_a_clean_absent_watch_holds_its_slot_against_another_entry(self):
+        engine = _engine(max_open_positions=1, max_trades_per_day=10)
+        books = AsyncMock(return_value=[])
+        go = self._run(
+            engine,
+            books,
+            [_signal("NTPC"), _signal("HAL")],
+            {"NTPC": self.TIMEOUT, "HAL": TradeResult(order_id="H1", status=OrderStatus.SUCCESS)},
+        )
+        sends, declined, established = await go()
+        assert sends == ["NTPC"]  # HAL never reached the broker
+        assert declined == [("HAL", "risk_gates")]
+        assert engine.pending_entries_for("BREAKOUT-PY") == 1  # the watch holds the slot
+
+    @pytest.mark.asyncio
+    async def test_a_late_fill_adopted_after_a_competing_signal_does_not_exceed_the_cap(self):
+        engine = _engine(max_open_positions=1, max_trades_per_day=10)
+        books = AsyncMock(return_value=[])
+        go = self._run(
+            engine,
+            books,
+            [_signal("NTPC"), _signal("HAL")],
+            {"NTPC": self.TIMEOUT, "HAL": TradeResult(order_id="H1", status=OrderStatus.SUCCESS)},
+        )
+        _sends, _declined, established = await go()
+        books.return_value = [_filled(qty=10, order_id="LATE")]
+        with (
+            patch.object(main, "risk_engine", engine),
+            patch.object(main, "fetch_orderbook", books),
+            patch.object(
+                main,
+                "_establish_position",
+                AsyncMock(
+                    side_effect=lambda s, o, q, t: (
+                        engine.record_trade(strategy=s.strategy, symbol=s.symbol) or True
+                    )
+                ),
+            ),
+            patch.object(main, "save", MagicMock()),
+            patch.object(main.notifier, "notify", AsyncMock()),
+        ):
+            await main.sweep_unresolved_orders()
+        assert engine.open_positions_for("BREAKOUT-PY") == 1  # not 2
+        assert engine.pending_entries_for("BREAKOUT-PY") == 0  # converted, not counted twice
+
+    @pytest.mark.asyncio
+    async def test_a_watch_that_expires_with_a_clean_book_frees_the_slot(self):
+        engine = _engine(max_open_positions=1, max_trades_per_day=10)
+        books = AsyncMock(return_value=[])
+        go = self._run(engine, books, [_signal("NTPC")], {"NTPC": self.TIMEOUT})
+        await go()
+        assert engine.pending_entries_for("BREAKOUT-PY") == 1
+        object.__setattr__(
+            order_reconcile.get_uncertain("BREAKOUT-PY", "NTPC"),
+            "watch_until",
+            datetime.now(IST) - timedelta(seconds=1),
+        )
+        with (
+            patch.object(main, "risk_engine", engine),
+            patch.object(main, "fetch_orderbook", books),
+        ):
+            await main.sweep_unresolved_orders()
+        assert engine.pending_entries_for("BREAKOUT-PY") == 0
+        assert engine.check_exposure("BREAKOUT-PY")
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_book_hold_also_holds_its_slot(self):
+        engine = _engine(max_open_positions=1, max_trades_per_day=10)
+        go = self._run(
+            engine, AsyncMock(return_value=None), [_signal("NTPC")], {"NTPC": self.TIMEOUT}
+        )
+        await go()
+        assert order_reconcile.get_uncertain("BREAKOUT-PY", "NTPC") is not None
+        assert engine.pending_entries_for("BREAKOUT-PY") == 1
+
+    @pytest.mark.asyncio
+    async def test_a_stale_watch_dropped_at_day_roll_frees_its_slot(self):
+        engine = _engine(max_open_positions=1, max_trades_per_day=10)
+        books = AsyncMock(return_value=[])
+        go = self._run(engine, books, [_signal("NTPC")], {"NTPC": self.TIMEOUT})
+        await go()
+        pending = order_reconcile.get_uncertain("BREAKOUT-PY", "NTPC")
+        object.__setattr__(pending, "since", pending.since - timedelta(days=1))
+        with (
+            patch.object(main, "risk_engine", engine),
+            patch.object(main, "fetch_orderbook", books),
+        ):
+            await main.sweep_unresolved_orders()
+        assert order_reconcile.get_uncertain("BREAKOUT-PY", "NTPC") is None
+        assert engine.pending_entries_for("BREAKOUT-PY") == 0

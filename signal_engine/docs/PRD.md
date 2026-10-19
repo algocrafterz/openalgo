@@ -6099,14 +6099,18 @@ timeouts, duplicate stops, over-cap entries or late fills, so that day neither p
 - `risk.py`, `main.py`: a slot is reserved at the risk gate and released just before `record_trade`; reservations count
   against the position cap, the daily trade cap and the symbol and sector limits.
 - `main.py`, `order_reconcile.py`, `db.py`, `startup.py`: an entry whose timeout reads were clean is watched for 120 s; a
-  fill that lands is adopted with its stop and the entry is never resent. After a restart a broker position explained only
-  by a TIMEOUT entry row (same side and exact quantity) is restored.
+  fill that lands is adopted with its stop and the entry is never resent. While an entry is watched (or held on an
+  unreadable book) its slot stays reserved under a per-strategy/symbol watch token, so a competing entry cannot take it and
+  an adopted late fill cannot leave the account over its cap; the reservation is released when the watch ends and becomes
+  the recorded trade on adoption. After a restart a broker position explained only by a TIMEOUT entry row (same side and
+  exact quantity) is restored; that restore does not re-reserve a slot.
 - Replaced policy tests: `test_executor.py` (was retry-to-exhaustion) and `test_exit_timeout_safety.py` (was "a clean book is
   a genuine failure").
 
 **Known, not fixed.**
 
-- A real fill adopted during the watch is recorded even if another entry took its slot, so the cap can be exceeded.
+- A watched entry holds its slot for up to 120 s (longer on an unreadable book), so a legitimate competing signal in that
+  window can be declined at the cap.
 - A broker stall longer than the reconcile windows can still land stops after the engine gives up.
 - `startup._lookup_entry_legs` and `_lookup_entry_trade` compare `str(Direction)`, which is `"Direction.LONG"` on Python 3.12,
   so the same-side split and quantity scoring never match. Separate bug, left unchanged pending approval.

@@ -1312,6 +1312,30 @@ def _entry_token(signal) -> str:
     return f"{signal.strategy}:{signal.symbol}:{id(signal)}"
 
 
+def _watch_token(strategy: str, symbol: str) -> str:
+    """Identity of a watched (unconfirmed) entry's slot reservation: one per strategy and symbol."""
+    return f"watch:{strategy}:{symbol}"
+
+
+def _hold_watched_entry_slot(signal) -> None:
+    """Keep the slot of an entry whose fate is unknown reserved while it is watched.
+
+    The entry's own reservation is released when the send returns. Without this a competing entry
+    could take the slot, and a late fill adopted afterwards would leave the account over its cap.
+    """
+    risk_engine.reserve_entry(_watch_token(signal.strategy, signal.symbol), signal.strategy, signal.symbol)
+
+
+def _clear_unresolved(strategy: str, symbol: str) -> None:
+    """Drop an unconfirmed order's hold and, for a watched entry, release its reserved slot.
+
+    The release comes first and nothing awaits between it and an adoption's record_trade, so the
+    slot is never visible as free in between.
+    """
+    risk_engine.release_entry(_watch_token(strategy, symbol))
+    order_reconcile.clear_uncertain(strategy, symbol)
+
+
 async def _handle_entry(signal) -> None:
     """Handle a LONG/SHORT entry signal — the existing ORB pipeline.
 
@@ -1812,6 +1836,7 @@ async def _recover_ambiguous_entry_timeout(
             watch_until=datetime.now(IST) + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
         )
     )
+    _hold_watched_entry_slot(signal)
     logger.warning(
         f"Entry timeout recovery for {signal.symbol}: no matching completed order after "
         f"{settings.entry_timeout_recovery_attempts} clean checks - not a confirmed failure; watching for a "
@@ -1837,6 +1862,7 @@ async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
             quantity=order.quantity, since=since, kind="ENTRY", signal=signal, order=order,
         )
     )
+    _hold_watched_entry_slot(signal)
     message = (
         f"UNCERTAIN: {order.action.value} {order.quantity} {signal.symbol} [{signal.strategy}] "
         "entry timed out and the broker order book could not confirm it; no further orders for "
@@ -1876,7 +1902,7 @@ async def _entry_held_by_unresolved_order(signal) -> bool:
             "land; waiting out its late-fill watch before allowing another"
         )
         return True
-    order_reconcile.clear_uncertain(signal.strategy, signal.symbol)
+    _clear_unresolved(signal.strategy, signal.symbol)
     if result.outcome == order_reconcile.FILLED:
         await _adopt_untracked_entry(pending, result.order_id)
         return True  # the symbol now holds a position for this strategy: no second entry
@@ -1941,7 +1967,7 @@ async def sweep_unresolved_orders() -> None:
                 f"Unresolved {pending.kind} order for {pending.symbol} [{pending.strategy}] is from "
                 f"{pending.since.date()}: dropping the hold, verify the broker position by hand"
             )
-            order_reconcile.clear_uncertain(pending.strategy, pending.symbol)
+            _clear_unresolved(pending.strategy, pending.symbol)
             continue
         if not order_reconcile.due(pending, now, _SWEEP_INTERVAL_SECONDS):
             continue
@@ -1966,7 +1992,7 @@ async def sweep_unresolved_orders() -> None:
             and order_reconcile.watch_open(pending, now)
         ):
             continue  # still inside the late-fill watch: keep looking, never resend
-        order_reconcile.clear_uncertain(pending.strategy, pending.symbol)
+        _clear_unresolved(pending.strategy, pending.symbol)
         if pending.kind == "ENTRY":
             if result.outcome == order_reconcile.FILLED:
                 await _adopt_untracked_entry(pending, result.order_id)
