@@ -555,6 +555,37 @@ def _gather_candidate_entries(bsymbol: str) -> list:
     return candidates
 
 
+def _unconfirmed_entry_legs(bsymbol: str, broker_qty: int, is_long: bool) -> list:
+    """A broker position that no confirmed entry explains, matched to an entry whose response timed out.
+
+    NTPC 2026-10-15: the entry timed out, the order filled seconds later, and nothing tracked it.
+    The watch that covers this lives in memory and a restart loses it, so the startup restore
+    accepts a TIMEOUT entry row when it agrees with the broker on side AND exact quantity. The
+    restored position has no stop id, so the poll loop's missing-stop retry places one.
+    """
+    if broker_qty <= 0:
+        return []
+    wanted_direction = "LONG" if is_long else "SHORT"
+    legs = []
+    for strategy in ["ORB", *settings.strategy_profiles.keys()]:
+        if any(strategy.upper() == s.upper() for s, _ in legs):
+            continue
+        row = fetch_last_entry_trade(bsymbol, strategy, include_unconfirmed=True)
+        if (
+            row is not None
+            and str(getattr(row.get("direction"), "value", row.get("direction", ""))).upper() == wanted_direction
+            and int(row.get("quantity", 0) or 0) == int(broker_qty)
+        ):
+            legs.append((strategy, row))
+    if len(legs) == 1:
+        logger.critical(
+            f"Tracker restore [{bsymbol}]: broker holds {wanted_direction} {broker_qty} that only an "
+            f"unconfirmed (timed-out) entry of {legs[0][0]} explains - adopting it; a stop will be placed"
+        )
+        return legs
+    return []  # none, or ambiguous between strategies: never guess
+
+
 def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True):
     """Find today's SINGLE best-matching entry trade for a symbol.
 
@@ -621,7 +652,7 @@ def _lookup_entry_legs(bsymbol: str, broker_qty: int = 0, is_long: bool = True) 
     """
     candidates = _gather_candidate_entries(bsymbol)
     if not candidates:
-        return []
+        return _unconfirmed_entry_legs(bsymbol, broker_qty, is_long)
 
     wanted_direction = "LONG" if is_long else "SHORT"
     same_direction = [

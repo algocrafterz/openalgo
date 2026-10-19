@@ -49,6 +49,11 @@ class UncertainOrder:
     #: For an ENTRY: the signal and order, so a fill found later can be adopted and given its stop.
     signal: object | None = field(default=None, compare=False)
     order: object | None = field(default=None, compare=False)
+    #: For an ENTRY whose last order-book read was CLEAN (nothing on the book) right after a timeout:
+    #: until this moment the order may still land, so the entry stays watched and new entries for
+    #: the strategy and symbol are held. None = no bounded window (the book was unreadable, or the
+    #: order was still working), so only a readable answer releases it.
+    watch_until: datetime | None = field(default=None, compare=False)
 
 
 # (strategy, symbol) -> the unresolved order. Bounded by strategies x symbols; an entry is
@@ -63,6 +68,11 @@ _last_alerted: dict[tuple[str, str], datetime] = {}
 
 def mark_uncertain(order: UncertainOrder) -> None:
     _uncertain[(order.strategy, order.symbol)] = order
+
+
+def watch_open(order: UncertainOrder, now: datetime) -> bool:
+    """True while a clean-absent ENTRY is still inside its late-fill watch window."""
+    return order.watch_until is not None and now < order.watch_until
 
 
 def get_uncertain(strategy: str, symbol: str) -> UncertainOrder | None:

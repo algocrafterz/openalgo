@@ -165,10 +165,19 @@ class TestEntryTimeouts:
         assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is not None
         notify.assert_awaited()
 
-    async def test_clean_book_without_the_order_is_still_a_genuine_failure(self):
+    async def test_clean_book_without_the_order_is_watched_not_written_off(self):
+        """Policy updated 2026-10-17 (was: a clean empty book is "a genuine failure", nothing kept).
+
+        NTPC, AXISBANK and KOTAKBANK 2026-10-15 filled seconds after three clean reads and sat
+        unprotected for an hour. The send still counts as failed (result None) but the entry is
+        watched for a bounded window; adoption, the entry hold, the release after the window and
+        the unreadable-book rule are pinned in test_late_entry_recovery.py.
+        """
         result, _ = await _run_entry_recovery([[], [], []])
         assert result is None
-        assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is None
+        pending = oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL")
+        assert pending is not None and pending.kind == "ENTRY"
+        assert pending.watch_until is not None
 
     async def test_filled_entry_is_still_recovered(self):
         row = _filled_row("E1", "KALYANKJIL", 188, action="BUY")
