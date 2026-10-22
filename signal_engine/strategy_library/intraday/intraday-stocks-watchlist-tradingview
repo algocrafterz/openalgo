@@ -9,26 +9,26 @@
 # Regenerated on the first startup of each ISO week by
 # signal_engine/scripts/watchlist_screen.py - do not hand-edit; change the
 # screen thresholds there instead.
-# Last run: 2026-09-28 13:07 IST, data through 2026-09-28
+# Last run: 2026-10-19 09:26 IST, data through 2026-10-19
 # Trailing (N/10) = daily-scan hits in the last 10 trading days.
 
+CANBK  # 10/10
+UNIONBANK  # 10/10
+AXISBANK  # 10/10
 BANDHANBNK  # 10/10
-IDFCFIRSTB  # 10/10
-CHOLAFIN  # 10/10
+PFC  # 10/10
+PNB  # 10/10
+VEDL  # 10/10
+BAJAJFINSV  # 10/10
 INDUSINDBK  # 10/10
-TMPV  # 10/10
-INDIGO  # 10/10
-ULTRACEMCO  # 10/10
-SUZLON  # 9/10
-DELHIVERY  # 9/10
-LTM  # 9/10
-AXISBANK  # 9/10
-DLF  # 9/10
-M&M  # 9/10
-KOTAKBANK  # 9/10
-SHRIRAMFIN  # 8/10
-BAJFINANCE  # 7/10
-SONACOMS  # 7/10
-INDHOTEL  # 7/10
-BPCL  # 6/10
-RBLBANK  # 5/10
+RECLTD  # 10/10
+HDFCAMC  # 10/10
+GAIL  # 10/10
+SUZLON  # 10/10
+BAJFINANCE  # 10/10
+ASHOKLEY  # 10/10
+MARUTI  # 10/10
+CHOLAFIN  # 10/10
+AUBANK  # 10/10
+SHRIRAMFIN  # 10/10
+SBIN  # 10/10
