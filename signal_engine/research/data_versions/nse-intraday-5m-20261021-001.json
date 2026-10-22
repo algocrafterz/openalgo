@@ -1,0 +1,21 @@
+{
+  "cause": "spec 2 rebuild: P1 timestamp alignment, P2 sparse sessions, P3a closing-window separation, P3b special-day hours, corporate-action checks; history through 2026-10-19",
+  "content_hash": "54fce41c1ee5ca88d749491fe928858fe34a0beed480cf785a4dbff0ace4bc30",
+  "coverage": {
+    "end": "2026-10-19",
+    "rows": 32875444,
+    "sessions_price_valid": 440450,
+    "sessions_requested": 443618,
+    "start": "2017-01-01",
+    "symbols": 213
+  },
+  "created_ist": "2026-10-21 01:21:59",
+  "data_policy_version": "fd896310f1c79a8af9f9789d55c60d33d00b6b8d145f6c1fa49dcda2ce648ffc",
+  "dataset_version": "nse-intraday-5m-20261021-001",
+  "excluded_symbols": [],
+  "frequency": "5m",
+  "parent": "nse-intraday-5m-20261006-001",
+  "readiness_state": "READY_WITH_WARNINGS",
+  "root_hash": "e361928d414e66799f7eb6a581ded493c20f0caa12f01f4fce89e789ebe08b9a",
+  "status": "published"
+}

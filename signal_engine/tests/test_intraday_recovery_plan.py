@@ -215,3 +215,171 @@ def test_void_reopens_empty_answers_recorded_while_the_source_was_down(tmp_path,
     todo = ir.pending(reqs, ir.read_ledger(build))
     assert [r["request_id"] for r, _ in todo] == ["r1"]
     assert any("r1 has no final outcome" in e for e in ir.verify(build))
+
+
+# ---------------------------------------------------------------- carrying a ledger forward
+
+def _old_build(tmp_path, ends):
+    """A previous build whose ledger holds one final line per window end in `ends`."""
+    import json as _json
+
+    from signal_engine.backtest.data_readiness import intraday_recovery as ir
+
+    prev = tmp_path / "build-old"
+    prev.mkdir()
+    landing = tmp_path / "landing-old"
+    landing.mkdir()
+    lines = []
+    for i, end in enumerate(ends):
+        rid = f"r{i}"
+        body = {"request": {"request_id": rid}, "response": {"data": [{"timestamp": 1}]}}
+        path, sha = ir._store(landing, rid, body)
+        lines.append({"request_id": rid, "symbol": "AAA", "start": "2026-01-01", "end": end,
+                      "attempt": 1, "requested_ist": "2026-10-05T19:00:00+05:30",
+                      "outcome": "ok", "message": "", "n_bars": 1, "sessions": ["2026-01-01"],
+                      "path": path, "sha256": sha})
+    (prev / ir.LEDGER).write_text("".join(_json.dumps(x) + "\n" for x in lines))
+    return prev
+
+
+def _new_build(tmp_path, ids):
+    new = tmp_path / "build-new"
+    new.mkdir()
+    pd.DataFrame({"request_id": ids}).to_parquet(new / "requests.parquet")
+    return new
+
+
+def test_carry_forward_copies_only_closed_windows_the_new_plan_still_asks_for(tmp_path):
+    from datetime import date
+
+    from signal_engine.backtest.data_readiness import intraday_recovery as ir
+
+    prev = _old_build(tmp_path, ["2026-03-01", "2026-09-20", "2026-10-30"])   # r0 r1 r2
+    new = _new_build(tmp_path, ["r0", "r2", "r9"])                            # r1 not wanted
+    assert ir.carry_forward(new, prev, closed_before=date(2026, 9, 1)) == 1
+    lines = ir.read_ledger(new)
+    assert list(lines.request_id) == ["r0"] and lines.carried_from.iloc[0] == "build-old"
+    assert lines.sha256.iloc[0] == ir.read_ledger(prev).sha256.iloc[0]       # same bytes, no refetch
+    assert ir.verify(new) == ["request r2 has no final outcome",
+                             "request r9 has no final outcome"]
+
+
+def test_carry_forward_skips_a_line_whose_landing_file_changed_or_is_gone(tmp_path):
+    from datetime import date
+
+    from signal_engine.backtest.data_readiness import intraday_recovery as ir
+
+    prev = _old_build(tmp_path, ["2026-03-01", "2026-03-02"])
+    old = ir.read_ledger(prev)
+    ir._abs(old.path.iloc[0]).write_bytes(b"changed")
+    ir._abs(old.path.iloc[1]).unlink()
+    new = _new_build(tmp_path, ["r0", "r1"])
+    assert ir.carry_forward(new, prev, closed_before=date(2026, 9, 1)) == 0
+
+
+def test_carry_forward_is_idempotent(tmp_path):
+    from datetime import date
+
+    from signal_engine.backtest.data_readiness import intraday_recovery as ir
+
+    prev = _old_build(tmp_path, ["2026-03-01"])
+    new = _new_build(tmp_path, ["r0"])
+    assert ir.carry_forward(new, prev, closed_before=date(2026, 9, 1)) == 1
+    assert ir.carry_forward(new, prev, closed_before=date(2026, 9, 1)) == 0
+    assert len(ir.read_ledger(new)) == 1
+
+
+# ---------------------------------------------------------------- refetching provisional windows
+
+def _ledger_line(rid, end, requested, outcome="ok"):
+    return {"request_id": rid, "symbol": "AAA", "start": "2026-01-01", "end": end, "attempt": 1,
+            "requested_ist": requested, "outcome": outcome, "message": "", "n_bars": 1,
+            "sessions": [], "path": "p", "sha256": "s"}
+
+
+def test_redo_selects_open_windows_fetched_before_the_cutoff_and_nothing_else():
+    from datetime import date
+
+    reqs = pd.DataFrame({"request_id": ["open", "closed", "late"], "symbol": ["AAA"] * 3,
+                         "start": ["2026-09-20"] * 3, "end": ["2026-10-19", "2026-03-01",
+                                                              "2026-10-19"],
+                         "purpose": ["recovery"] * 3})
+    ledger = pd.DataFrame([_ledger_line("open", "2026-10-19", "2026-10-19T17:10:00+05:30"),
+                           _ledger_line("closed", "2026-03-01", "2026-10-19T17:10:00+05:30"),
+                           _ledger_line("late", "2026-10-19", "2026-10-20T13:30:00+05:30")])
+    plain = [r["request_id"] for r, _ in ir.pending(reqs, ledger)]
+    redo = [r["request_id"] for r, _ in ir.pending(
+        reqs, ledger, redo_end_from=date(2026, 9, 20), redo_before="2026-10-20T00:00:00+05:30")]
+    assert plain == [] and redo == ["open"]
+
+
+def test_a_redone_request_is_done_once_its_new_line_is_after_the_cutoff():
+    from datetime import date
+
+    reqs = pd.DataFrame({"request_id": ["open"], "symbol": ["AAA"], "start": ["2026-09-20"],
+                         "end": ["2026-10-19"], "purpose": ["recovery"]})
+    ledger = pd.DataFrame([_ledger_line("open", "2026-10-19", "2026-10-19T17:10:00+05:30"),
+                           _ledger_line("open", "2026-10-19", "2026-10-20T13:30:00+05:30")])
+    assert ir.pending(reqs, ledger, redo_end_from=date(2026, 9, 20),
+                      redo_before="2026-10-20T00:00:00+05:30") == []
+
+
+# ---------------------------------------------------------------- closing window and comparison (P3a)
+
+def _cas_legacy_bars(day=date(2026, 8, 4)):
+    """A legacy session: regular bars to 15:14, then the vendor counter artefacts."""
+    import datetime as _dt
+
+    from signal_engine.timeutils import IST
+
+    def ts(m):
+        return int(_dt.datetime(day.year, day.month, day.day, m // 60, m % 60,
+                                tzinfo=IST).timestamp())
+
+    rows = []
+    for m in range(555, 915):
+        h = 110.0 if m == 600 else 100.0
+        lo = 90.0 if m == 660 else 100.0
+        rows.append((m, 100.0, h, lo, 100.0, 100))
+    rows += [(916, 100.0, 100.0, 100.0, 100.0, 0), (920, 100.0, 100.0, 100.0, 100.0, -9_000_000),
+             (928, 100.0, 100.0, 100.0, 100.0, 51_000), (929, 100.0, 100.0, 100.0, 100.0,
+                                                           9_050_000)]
+    return pd.DataFrame([{"symbol": "AAA", "timestamp": ts(m), "open": o, "high": h, "low": lo,
+                          "close": c, "volume": v} for m, o, h, lo, c, v in rows])
+
+
+def test_a_legacy_post_cas_session_is_assessed_on_its_regular_window():
+    from signal_engine.backtest.data_readiness import intraday_convert as ic
+
+    day = date(2026, 8, 4)
+    ref = pd.DataFrame([{"symbol": "AAA", "session": pd.Timestamp(day), "raw_open": 100.0,
+                         "raw_high": 110.0, "raw_low": 90.0, "raw_close": 100.0,
+                         "raw_volume": 36000.0, "price_factor": 1.0, "volume_factor": 1.0,
+                         "ref_close": 100.0}])
+    ledger, removed = ip.assess_symbol(_cas_legacy_bars(day), ref, ic.TEMPLATES, date(2026, 10, 19))
+    row = ledger.iloc[0]
+    assert row.structure_ok and not row.negative_volume and row.status == ic.CONVERTED
+    assert sorted(removed.rule.unique()) == ["Q1_closing_zone"]
+    assert len(removed) == 4                     # 15:16, 15:20, 15:28 and 15:29 are quarantined
+
+
+def test_every_post_cas_window_is_planned_for_the_source_comparison():
+    classes = pd.DataFrame({
+        "symbol": ["AAA"] * 3,
+        "session": pd.to_datetime(["2026-07-31", "2026-08-04", "2026-10-19"]),
+        "cls": [ip.LEGACY] * 3})
+    req = ip.cas_compare_requests(classes)
+    assert len(req) == 2 and set(req.purpose) == {"cas_compare"}
+    assert all(pd.Timestamp(e) >= pd.Timestamp("2026-08-03") for e in req["end"])
+    full = ip.build_requests(classes)
+    assert full.purpose.str.contains("cas_compare").sum() == 2
+    assert full.request_id.is_unique
+
+
+def test_the_build_folder_names_snapshot_and_spec():
+    from pathlib import Path
+
+    folder = ip.build_folder(Path("/x/legacy-1m-1-ist"), {"root_hash": "ab" * 32}, "2")
+    assert folder == Path("/x/build-abababababab-spec2")
+    assert ip.build_folder(Path("/x/legacy-1m-1-ist"), {"root_hash": "ab" * 32}, "1") == Path(
+        "/x/build-abababababab")

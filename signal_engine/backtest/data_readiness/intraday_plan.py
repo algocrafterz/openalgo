@@ -67,7 +67,8 @@ def muhurat_dates(path: Path = CALENDAR_PATH) -> list[pd.Timestamp]:
 
 # ---------------------------------------------------------------- reference
 
-def load_reference(snapshot_folder: Path, daily_version: str) -> pd.DataFrame:
+def load_reference(snapshot_folder: Path, daily_version: str,
+                   end: date = HISTORY_END) -> pd.DataFrame:
     """NSE values for every expected (symbol, session) of the history range.
 
     The close reference is NSE `last` before the closing auction and the official close from it
@@ -83,7 +84,7 @@ def load_reference(snapshot_folder: Path, daily_version: str) -> pd.DataFrame:
                        for s in index.object_sha256], ignore_index=True)
     daily["session"] = pd.to_datetime(daily.session).dt.normalize()
     daily = daily[(daily.session >= pd.Timestamp(HISTORY_START))
-                  & (daily.session <= pd.Timestamp(HISTORY_END))]
+                  & (daily.session <= pd.Timestamp(end))]
     last = pd.read_parquet(snapshot_folder / "reference" / "nse_last.parquet")
     last["session"] = pd.to_datetime(last.session).dt.normalize()
     ref = daily.merge(last, on=["symbol", "session"], how="left", validate="one_to_one")
@@ -101,14 +102,18 @@ def read_symbol(snapshot_folder: Path, manifest: dict, symbol: str) -> pd.DataFr
     return pd.concat([pd.read_parquet(p) for p in sorted(paths)], ignore_index=True)
 
 
-def assess_symbol(bars: pd.DataFrame, ref: pd.DataFrame,
-                  templates) -> tuple[pd.DataFrame, pd.DataFrame]:
+def assess_symbol(bars: pd.DataFrame, ref: pd.DataFrame, templates,
+                  end: date = HISTORY_END) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(conversion ledger with cleanup flags, removed bars) for one symbol's legacy sessions in
     the history range. Sessions without an NSE row are kept with status excluded:no_nse_row
     (C4: out of scope)."""
     b = ic.with_clock(bars)
-    b = b[(b.session >= pd.Timestamp(HISTORY_START)) & (b.session <= pd.Timestamp(HISTORY_END))]
+    b = b[(b.session >= pd.Timestamp(HISTORY_START)) & (b.session <= pd.Timestamp(end))]
     kept, removed, flags = ic.clean(b)
+    # P3a: the legacy store's closing-window bars (15:15-15:29 from 2026-08-03) are counter
+    # artefacts, not trades: judge the session on its regular window and quarantine them
+    kept, quarantined = ic.split_closing(kept, templates, keep_auction=False)
+    removed = pd.concat([removed, quarantined.assign(rule="Q1_closing_zone")])
     summary = ic.summarise(kept, templates)
     ledger = ic.convert_sessions(summary, ref)
     ledger["structure_ok"] = ic.structure_ok(ledger)
@@ -232,8 +237,27 @@ def provenance_requests(classes: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def cas_compare_requests(classes: pd.DataFrame) -> pd.DataFrame:
+    """Every window holding a post-3-Aug-2026 session, so that Historify and AngelOne can be
+    compared session by session on the regular window (P3a). Most are carried forward."""
+    scope = classes[(classes.session >= pd.Timestamp(CAS_START))
+                    & ~classes.cls.str.startswith("out_of_scope")]
+    rows = [{"symbol": sym, "start": a, "end": b, "purpose": "cas_compare", "stratum": "cas"}
+            for sym, part in scope.groupby("symbol", sort=True) for a, b in windows(part.session)]
+    return pd.DataFrame(rows, columns=["symbol", "start", "end", "purpose", "stratum"])
+
+
+def build_folder(snapshot_folder: Path, manifest: dict, spec: str | None = None) -> Path:
+    """The build folder of a snapshot under a conversion spec. Spec 1 keeps its original name so
+    the published 5m build stays where it is; later specs get their own folder."""
+    spec = spec or ic.CONVERSION_SPEC_VERSION
+    name = f"build-{manifest['root_hash'][:12]}" + ("" if spec == "1" else f"-spec{spec}")
+    return snapshot_folder.parent / name
+
+
 def build_requests(classes: pd.DataFrame, sample: pd.DataFrame | None = None) -> pd.DataFrame:
-    parts = [recovery_requests(classes), provenance_requests(classes)]
+    parts = [recovery_requests(classes), provenance_requests(classes),
+             cas_compare_requests(classes)]
     if sample is not None and len(sample):
         parts.append(irrecoverability_requests(sample))
     req = pd.concat([p for p in parts if len(p)], ignore_index=True)
@@ -279,17 +303,19 @@ def run(snapshot_folder: Path, daily_version: str) -> Path:
     if errors:
         raise fz.FreezeError(f"snapshot does not verify: {errors[:3]}")
     manifest = fz.load(snapshot_folder)
-    out = snapshot_folder.parent / f"build-{manifest['root_hash'][:12]}"
+    out = build_folder(snapshot_folder, manifest)
     out.mkdir(exist_ok=True)
     templates = ic.load_templates()
-    ref = load_reference(snapshot_folder, daily_version)
+    # The history end is the snapshot's own last session, so a refreshed freeze plans to its date.
+    end = date.fromisoformat(manifest["scope"]["last_session"])
+    ref = load_reference(snapshot_folder, daily_version, end)
     ledgers, removed = [], []
     symbols = manifest["scope"]["symbols"]
     for i, sym in enumerate(symbols):
         bars = read_symbol(snapshot_folder, manifest, sym)
         if bars.empty:
             continue
-        led, rem = assess_symbol(bars, ref[ref.symbol == sym], templates)
+        led, rem = assess_symbol(bars, ref[ref.symbol == sym], templates, end)
         ledgers.append(led)
         removed.append(rem)
         if i % 20 == 0:

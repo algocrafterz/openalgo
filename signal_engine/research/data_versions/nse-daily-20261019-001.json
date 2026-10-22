@@ -1,0 +1,24 @@
+{
+  "cause": "refresh through 2026-10-19: NSE bhavcopy 2026-10-02..2026-10-19 and corporate-action feed to 2026-11-15; same two owner-accepted exclusions as nse-daily-20261005-002",
+  "coverage": {
+    "end": "2026-10-19",
+    "rows": 479703,
+    "rows_by_series": {
+      "BE": 1675,
+      "EQ": 478028
+    },
+    "sessions": 2675,
+    "start": "2016-01-01",
+    "symbols": 213
+  },
+  "created_ist": "2026-10-19 16:51:23",
+  "dataset_version": "nse-daily-20261019-001",
+  "excluded_symbols": [
+    "CGPOWER",
+    "FORCEMOT"
+  ],
+  "parent": "nse-daily-20261005-002",
+  "readiness_state": "READY_WITH_WARNINGS",
+  "root_hash": "319a1774021ced2b174b879a0fc9d266fd69cf901056f15442b4007ba69b0fc6",
+  "status": "published"
+}

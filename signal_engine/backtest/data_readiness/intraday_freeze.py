@@ -196,9 +196,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--nse-raw", required=True, type=Path)
     ap.add_argument("--live-db", type=Path, default=_REPO / _data.HISTORIFY_DB)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--last", type=date.fromisoformat, default=LAST_DAY,
+                    help="last IST session to freeze (default: the first published version's)")
     args = ap.parse_args(argv)
     folder = freeze(args.live_db, args.out, daily_symbols(args.daily_version), args.nse_raw,
-                    args.daily_version)
+                    args.daily_version, last=args.last)
     print(folder)
     return 0
 

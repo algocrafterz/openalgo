@@ -1,0 +1,21 @@
+{
+  "cause": "spec 2 build: canonical 1m inputs of the 5m version",
+  "content_hash": "8959971ec8df1f331b08c9a16265d9609d0b00a1c549e6a552471d1c5065c14a",
+  "coverage": {
+    "end": "2026-10-19",
+    "rows": 161093752,
+    "sessions_price_valid": 440450,
+    "sessions_requested": 443618,
+    "start": "2017-01-01",
+    "symbols": 213
+  },
+  "created_ist": "2026-10-21 01:25:32",
+  "data_policy_version": "fd896310f1c79a8af9f9789d55c60d33d00b6b8d145f6c1fa49dcda2ce648ffc",
+  "dataset_version": "nse-intraday-1m-20261021-001",
+  "excluded_symbols": [],
+  "frequency": "1m",
+  "parent": null,
+  "readiness_state": "READY_WITH_WARNINGS",
+  "root_hash": "488d4c51f35cfdf4db261e784c411b85e991a13aaad1f6aa53cce270d709cd82",
+  "status": "published"
+}

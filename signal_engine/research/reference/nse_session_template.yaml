@@ -12,14 +12,46 @@
 # The first template whose date range covers a session applies, so single-day special sessions
 # are listed first. Muhurat sessions have no template: they are out of scope for the intraday
 # dataset (plan section 9).
+#
+# Added 2026-10-20 (conversion spec 2, approvals P3a and P3b):
+#   non_regular_zones  minute ranges whose bars are NEVER regular-session bars: the post-3-Aug
+#                      closing window and, on two special days, the DR-site pre-open, the closing
+#                      session and the re-opening call. A bar there is quarantined and counted
+#                      (closing_noise_bars), not a structure error; its volume never enters the
+#                      regular-session volume. The single auction print stays a separate field.
+#   verification       absent = the hours rest on an NSE circular already in nse_calendar.yaml.
+#                      `partial` = the hours were established from the data (a bar present for at
+#                      least half of the symbols in a minute) and from press reports of the NSE
+#                      announcement; the primary NSE circular text was not retrievable. A bar
+#                      outside every window and zone still fails structure, so a session or symbol
+#                      whose hours are not established is excluded, never inferred.
 
 schema: 1
 templates:
+  - from: 2021-02-24
+    to: 2021-02-24
+    continuous: [["09:15", "11:41"], ["15:44", "16:59"]]
+    closing_auction: null
+    non_regular_zones: [["15:30", "15:43"]]
+    verification: partial
+    source: >-
+      NSE outage day. Press reports (Bloomberg Quint, Angel One, money9, 2021-02-24 and 25): trading
+      halted at 11:40, resumed from 15:30 and hours were extended to 17:00 on NSE, BSE and MSEI.
+      Data, 188 symbols (2026-10-20): at least half of them have a bar in every minute of
+      09:15-11:41 and 15:44-16:59 and in 15:36 only inside 15:30-15:43 (the re-opening call). NSE
+      daily volume reconciles with these windows (all bars / NSE = 0.985, 23.7% of the volume
+      after 15:29).
   - from: 2024-03-02
     to: 2024-03-02
     continuous: [["09:15", "09:59"], ["11:30", "12:29"]]
     closing_auction: null
-    source: NSE special live session with an intraday switch to the DR site (nse_calendar.yaml)
+    non_regular_zones: [["11:15", "11:29"], ["12:30", "12:50"]]
+    verification: partial
+    source: >-
+      NSE special live session with an intraday switch to the DR site (nse_calendar.yaml). The NSE
+      announcement of 2024-02-14, as quoted by Business Standard, Business Today and Zerodha: primary
+      site 09:15-10:00, DR site 11:30-12:30, pre-open of the second session 11:15-11:23 and a closing
+      session 12:40-12:50. Data, 203 symbols: bars at 11:15-11:22 and 12:40-12:49 for most of them.
   - from: 2024-05-18
     to: 2024-05-18
     continuous: [["09:15", "09:59"], ["11:30", "12:29"]]
@@ -34,6 +66,7 @@ templates:
     to: null
     continuous: [["09:15", "15:14"]]
     closing_auction: ["15:28", "15:29"]
+    non_regular_zones: [["15:15", "15:29"]]
     source: >-
       Closing Auction Session, SEBI circular 16 Jan 2026; NSE/CMTR/73362 (18 Mar 2026); live
       3 Aug 2026 (NSE/CMTR/75479). Continuous trading ends 15:15. Print stamps measured on

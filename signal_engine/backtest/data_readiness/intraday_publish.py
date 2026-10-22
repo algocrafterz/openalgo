@@ -36,6 +36,8 @@ logger = get_logger(__name__)
 
 OBJECT_COLS = ["symbol", "exchange", "interval", "timestamp", "session", "open", "high", "low",
                "close", "volume", "n_minutes"]
+#: Where the build writes each frequency's canonical bars.
+BAR_DIR = {"5m": "five", "1m": "one"}
 SOURCE = "AngelOne 1m (legacy Historify store, frozen, plus targeted AngelOne recovery)"
 PRICE_BASIS = ("canonical NSE: each session converted from the vendor basis to NSE raw prices by "
                "a per-session factor, then back-adjusted with the factors of the daily version")
@@ -46,22 +48,34 @@ LIMITATIONS = ("legacy row-level provenance unavailable (sample-verified); divid
 QUALITY_COLS = ["symbol", "session", "cls", "origin", "price_status", "final_defect",
                 "treatment", "price_valid", "volume_valid", "final_bar_valid",
                 "final_bar_convention", "method", "k", "vol_c", "vol_ratio", "missing_minutes",
-                "open_ok", "contained", "timestamp_aligned", "timestamp_basis"]
+                "open_ok", "contained", "timestamp_aligned", "timestamp_basis",
+                # conversion spec 2: sparse sessions, regular window vs closing window, source
+                # choice, special-day hours, corporate-action and price-basis checks
+                "sparse_complete", "closing_noise_bars", "closing_negvol_bars", "auction_price",
+                "auction_volume", "source_choice", "settled", "session_hours_verification",
+                "basis_class", "k_explanation", "daily_reconciled", "ca_unreconciled",
+                "fallback_conversion", "ca_demerger_approx"]
 _TEXT_COLS = ("cls", "origin", "price_status", "final_defect", "treatment",
-              "final_bar_convention", "method", "timestamp_basis")
+              "final_bar_convention", "method", "timestamp_basis", "source_choice",
+              "session_hours_verification", "basis_class", "k_explanation")
 
 
 def _sha_bytes(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def content(build: Path) -> tuple[list[tuple[dict, bytes]], dict[str, bytes]]:
-    """(5m object rows with their parquet bytes, extra objects by name). Pure: writes nothing."""
+def content(build: Path, frequency: str = "5m") -> tuple[list[tuple[dict, bytes]],
+                                                       dict[str, bytes]]:
+    """(bar object rows with their parquet bytes, extra objects by name). Pure: writes nothing."""
     objects = []
-    for path in sorted((build / "five").glob("*/*.parquet")):
-        df = pd.read_parquet(path).assign(exchange="NSE", interval="5m")[OBJECT_COLS]
+    for path in sorted((build / BAR_DIR[frequency]).glob("*/*.parquet")):
+        df = pd.read_parquet(path)
+        if "n_minutes" not in df.columns:
+            df = df.assign(n_minutes=1)                  # a 1m bar is one source minute
+        df = df.assign(exchange="NSE", interval=frequency)[OBJECT_COLS]
         blob = sn._parquet_bytes(df)
-        objects.append(({"interval": "5m", "symbol": path.parent.name, "period": int(path.stem),
+        objects.append(({"interval": frequency, "symbol": path.parent.name,
+                         "period": int(path.stem),
                          "rows": len(df), "first_timestamp": int(df.timestamp.min()),
                          "last_timestamp": int(df.timestamp.max())}, blob))
     ledger = pd.read_parquet(build / "session_ledger.parquet")
@@ -77,14 +91,30 @@ def content(build: Path) -> tuple[list[tuple[dict, bytes]], dict[str, bytes]]:
     }
     if (build / "assessment.yaml").exists():
         extras["assessment"] = (build / "assessment.yaml").read_bytes()
+    if (build / "quarantine.parquet").exists():
+        # the closing-window bars kept out of the regular session, with every original value
+        extras["closing_quarantine"] = sn._parquet_bytes(
+            pd.read_parquet(build / "quarantine.parquet"))
     return objects, extras
 
 
-def contract(build: Path, report: dict, daily: dict) -> dict:
+_ALIGNMENT = {
+    "5m": "fixed 5-minute bins anchored at 09:15 IST, labelled with the bin start; absent bins "
+          "are not filled",
+    "1m": "one bar per traded minute, labelled with the minute start; absent minutes are not "
+          "filled"}
+_AUCTION = {
+    "5m": "from 2026-08-03 the auction print forms its own 15:25 bar",
+    "1m": "from 2026-08-03 the auction print is its own bar stamped 15:28 or 15:29, after "
+          "continuous trading ends at 15:14"}
+
+
+def contract(build: Path, report: dict, daily: dict, frequency: str = "5m",
+             history_end: str = "2026-10-01") -> dict:
     plan = json.loads((build / "plan.json").read_text())
     policy = json.loads((build / "policy.json").read_text())
     return {
-        "frequency": "5m",
+        "frequency": frequency,
         "source": {"primary": "AngelOne historical API (ONE_MINUTE)", "legacy_store": True,
                    "legacy_snapshot_root_hash": report["snapshot_root_hash"],
                    "legacy_row_level_provenance": "unavailable",
@@ -94,11 +124,10 @@ def contract(build: Path, report: dict, daily: dict) -> dict:
         "provenance_statement": report["provenance"]["statement"],
         "recovery": {"source": "AngelOne", "requests": int(plan["requests_total"]),
                      "ledger_lines": len(ir.read_ledger(build))},
-        "history_start": "2017-01-01", "history_end": "2026-10-01",
+        "history_start": "2017-01-01", "history_end": history_end,
         "session_template_sha256": report["template_sha256"],
-        "bar_alignment": "fixed 5-minute bins anchored at 09:15 IST, labelled with the bin start; "
-                         "absent bins are not filled",
-        "closing_auction": "from 2026-08-03 the auction print forms its own 15:25 bar",
+        "bar_alignment": _ALIGNMENT[frequency],
+        "closing_auction": _AUCTION[frequency],
         "price_basis": PRICE_BASIS, "daily_version": daily["dataset_version"],
         "daily_root_hash": daily["root_hash"],
         "conversion_spec_version": ic.CONVERSION_SPEC_VERSION,
@@ -116,7 +145,22 @@ def contract(build: Path, report: dict, daily: dict) -> dict:
                                 "(Part B2); before 2023-06 the final bar usually carries the "
                                 "official close, which is not a traded price",
         "data_policy_version": ic.policy_version(),
-        "usable_range_removals": report["usable_range_removals"],
+        "policies": {
+            "timestamp_alignment_max_seconds": ic.ALIGNMENT["max_seconds_before_minute"],
+            "sparse_policy": "included_with_flag: sparse_complete = more missing minutes than N "
+                             "with price conversion, structure, edges and the NSE volume band "
+                             "all passing",
+            "regular_session": "from 2026-08-03 the regular window is 09:15-15:14 and the "
+                               "closing window 15:15-15:29 is quarantined (closing_quarantine); "
+                               "the single auction print is a separate bar kept only from a "
+                               "recovered source, never part of regular-session volume",
+            "post_cas_source": "per session the source whose regular window is closer to the NSE "
+                               "volume wins when both pass every gate; a tie goes to Historify",
+            "settled_sessions_only": "recovered data is used only when requested after its "
+                                     "session day",
+            "special_day_hours": {"2021-02-24": "verification: partial",
+                                  "2024-03-02": "verification: partial"},
+        },
         "readiness": report["readiness_state"],
     }
 
@@ -129,7 +173,8 @@ def _write_json(path: Path, doc: dict) -> None:
 
 def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
             root: Path = sn.DEFAULT_ROOT, git_dir: Path = sn.DEFAULT_GIT_DIR,
-            dry_run: bool = False) -> dict:
+            dry_run: bool = False, frequency: str = "5m", history_end: str = "2026-10-01",
+            parent: str | None = None) -> dict:
     report = json.loads((build / "report.json").read_text())
     failed = [k for k, v in {**report["criteria"], **report.get("metadata", {})}.items() if not v]
     if report["readiness_state"] == st.NOT_READY or failed:
@@ -138,8 +183,10 @@ def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
             git_dir / f"{version_id}.json").exists():
         raise sn.SnapshotError(f"version {version_id} exists; a published version is never "
                                "rewritten")
+    if parent is not None and not (root / "versions" / f"{parent}.json").is_file():
+        raise sn.SnapshotError(f"parent version {parent} is not published under {root}")
     daily = sn.resolve_version(daily_version, root=root, git_dir=git_dir)
-    objects, extras = content(build)
+    objects, extras = content(build, frequency)
     index = pd.DataFrame([{**row, "object_sha256": _sha_bytes(blob)} for row, blob in objects])
     index = index.sort_values(["interval", "symbol", "period"]).reset_index(drop=True)
     index_blob = sn._parquet_bytes(index)
@@ -151,14 +198,14 @@ def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
                 "rows": int(index.rows.sum()), "readiness_state": report["readiness_state"]}
     sess = report["sessions"]
     body = {
-        "dataset_version": version_id, "parent": None, "status": "published", "cause": cause,
+        "dataset_version": version_id, "parent": parent, "status": "published", "cause": cause,
         "created_ist": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-        "source": SOURCE, "as_of": "2026-10-01", "frequency": "5m",
+        "source": SOURCE, "as_of": history_end, "frequency": frequency,
         "price_basis": PRICE_BASIS, "known_limitations": LIMITATIONS,
         "calendar_version": load_calendar().version,
         "corporate_action_version": daily["corporate_action_version"],
-        "contract": contract(build, report, daily),
-        "coverage": {"start": "2017-01-01", "end": "2026-10-01",
+        "contract": contract(build, report, daily, frequency, history_end),
+        "coverage": {"start": "2017-01-01", "end": history_end,
                      "symbols": int(index.symbol.nunique()), "rows": int(index.rows.sum()),
                      "sessions_price_valid": sess["valid"]["price"],
                      "sessions_requested": sess["requested"]},
@@ -188,9 +235,9 @@ def publish(build: Path, *, version_id: str, daily_version: str, cause: str,
     os.chmod(path, sn._READ_ONLY)
     git_dir.mkdir(parents=True, exist_ok=True)
     _write_json(git_dir / f"{version_id}.json", {
-        "dataset_version": version_id, "root_hash": root_hash, "parent": None,
+        "dataset_version": version_id, "root_hash": root_hash, "parent": parent,
         "status": "published", "cause": cause, "created_ist": body["created_ist"],
-        "frequency": "5m", "coverage": body["coverage"],
+        "frequency": frequency, "coverage": body["coverage"],
         "readiness_state": body["readiness_state"], "content_hash": content_hash,
         "data_policy_version": body["data_policy_version"],
         "excluded_symbols": []})
@@ -206,9 +253,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version-id", required=True)
     ap.add_argument("--cause", default="first intraday 5m dataset (IDEA-029 data dependency)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--frequency", choices=sorted(BAR_DIR), default="5m")
+    ap.add_argument("--history-end", default="2026-10-01",
+                    help="last session the build covers (the freeze's --last)")
+    ap.add_argument("--parent", default=None, help="the published version this one supersedes")
     args = ap.parse_args(argv)
     print(publish(args.build, version_id=args.version_id, daily_version=args.daily_version,
-                  cause=args.cause, dry_run=args.dry_run))
+                  cause=args.cause, dry_run=args.dry_run, frequency=args.frequency,
+                  history_end=args.history_end, parent=args.parent))
     return 0
 
 

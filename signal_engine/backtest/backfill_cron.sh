@@ -77,4 +77,19 @@ for interval in 1m D; do
   fi
 done
 
+# The loop above exits 0 whenever nothing raised, and an empty broker answer is stored as
+# nothing - so a stale symbol looks like a success. --verify compares every symbol's latest
+# bar with the last session the NSE calendar expects and exits 1 if any is behind.
+# COCHINSHIP and GVT&D are named because the symbol master holds two tokens (-EQ and -BE)
+# for each and the 1m endpoint returns nothing for the one the plugin picks (daily works);
+# anything else that is behind is new and must show here.
+echo "--- verify ---"
+for interval in 1m D; do
+  if ! run -m signal_engine.backtest.backfill --interval "$interval" --verify \
+        --tolerate 'COCHINSHIP,GVT&D'; then
+    echo "WARNING: $interval store is behind the last expected session - see list above"
+    status=1
+  fi
+done
+
 exit "$status"

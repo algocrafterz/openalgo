@@ -20,16 +20,26 @@ repairs_allowed:
   - timestamp_alignment               # Part B7: UPL only, exactly the scope below
 
 # Approved 2026-10-06 for one measured source-timestamp defect: AngelOne stamps every UPL bar
-# 1-6 seconds before its minute from 2017 to 2021-03-04 (1,034 sessions; no other symbol or
-# period in 302,765 fetched sessions). Deliberately narrow: it is not a general off-minute fix.
+# before its minute from 2017 to 2021-03-04 (1,034 sessions; no other symbol or period in 302,765
+# fetched sessions). Deliberately narrow: it is not a general off-minute fix.
 # It applies only when EVERY bar of the session is 1..max_seconds_before_minute seconds before a
 # whole minute and moving each stamp up to that minute gives one bar per minute. Prices and
 # volume are never changed; the landing files keep the original stamps.
+#
+# v2, approved 2026-10-20: max_seconds_before_minute 6 -> 59. Scope (UPL, the session range) is
+# unchanged. Measured on all 1,034 off-minute UPL sessions (2026-10-20): the first bar of the day
+# is stamped 09:14:xx in 1,028 sessions and the last 15:28:xx in 1,025, so each bar is stamped
+# before its own minute and moving it UP is the right direction. How early: bar-level median 2 s,
+# 90% within 7 s, 99% within 20 s, 99.9% within 42 s, maximum 59 s; per-session maximum median
+# 18 s, p99 58 s. Aligned, 98.9% of the sessions give one bar per minute and 99.4% have high and
+# low agreeing with NSE on one factor. 11 sessions mix on-the-minute and early bars and are not
+# aligned. Acceptance gate set with the approval: if fewer than 95% of aligned sessions pass the
+# unchanged conversion gates, this change is rejected.
 timestamp_alignment:
   symbols: [UPL]
   first_session: 2017-01-01
   last_session: 2021-03-04
-  max_seconds_before_minute: 6
+  max_seconds_before_minute: 59
 
 # Exclusion rates (excluded requested symbol-sessions / requested symbol-sessions), per field
 # family. Alerts require a written assessment answering the seven questions of A7 with a

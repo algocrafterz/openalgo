@@ -250,6 +250,12 @@ def _frame_json(df: pd.DataFrame) -> dict:
     return json.loads(df.to_json(orient="index"))
 
 
+def missing_minute_gate(pub: pd.DataFrame, n: int) -> pd.Series:
+    """Per published session: within the threshold N, or flagged sparse_complete (P2), which
+    field_validity grants only when volume, structure, edges and price conversion all pass."""
+    return (pub.missing_minutes <= n) | pub.sparse_complete.astype(bool)
+
+
 def _state(criteria: dict, metadata: dict, warnings: bool) -> str:
     if not all(criteria.values()) or not all(metadata.values()):
         return st.NOT_READY
@@ -295,7 +301,7 @@ def build_report(build: Path, daily_version: str) -> dict:
         "9_nse_crosscheck": bool(pub.contained.astype(bool).all()
                                  and req[req.volume_valid].volume_ok.astype(bool).all()
                                  and pub.final_bar_convention.isin(ic.CONVENTIONS).all()),
-        "10_missing_minute_policy": bool((pub.missing_minutes <= policy["N"]).all()),
+        "10_missing_minute_policy": bool(missing_minute_gate(pub, policy["N"]).all()),
         "11_1m_validation": bool(pub.structure_ok.astype(bool).all()),
         "12_5m_aggregation_validation": all(v == 0 for k, v in five.items()
                                             if not k.startswith("10_")),

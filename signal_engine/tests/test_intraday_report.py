@@ -68,3 +68,11 @@ def test_event_sessions_tag_the_ex_date_and_the_session_before():
 def test_basis_class():
     s = pd.DataFrame({"k": [1.0, 0.5, 0.3, None], "price_factor": [0.5, 0.5, 0.5, 0.5]})
     assert list(rp.basis_class(s)) == ["k = 1", "k = NSE factor", "other k", "no k"]
+
+
+def test_missing_minute_gate_accepts_only_dense_or_flagged_sparse_sessions():
+    pub = pd.DataFrame({"missing_minutes": [10, 190, 230, 230],
+                        "sparse_complete": [False, False, True, False]})
+    assert rp.missing_minute_gate(pub, 190).tolist() == [True, True, True, False]
+    assert not rp.missing_minute_gate(pub, 190).all()
+    assert rp.missing_minute_gate(pub.iloc[:3], 190).all()

@@ -17,6 +17,7 @@ research data-quality policy (data_quality_policy.yaml); its sha256 is `policy_v
 from __future__ import annotations
 
 import hashlib
+import itertools
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -41,7 +42,7 @@ def policy_version(path: Path = POLICY_PATH) -> str:
 
 POLICY = load_policy()
 
-CONVERSION_SPEC_VERSION = "1"
+CONVERSION_SPEC_VERSION = "2"      # 2: sparse_complete (P2), closing-window separation (P3), CA checks
 AGREE = 0.001                 # two ratios agree when |a / b - 1| <= AGREE
 K_MAX = 1.01                  # a vendor back-adjustment never raises a past price
 FALLBACK_PAIRS = (("open", "close"), ("high", "open"), ("high", "close"), ("low", "open"),
@@ -69,6 +70,8 @@ class Template:
     end: date | None
     windows: tuple[tuple[int, int], ...]   # continuous windows, [first, last] minute of day
     auction: tuple[int, ...]               # minute stamps of the closing-auction print
+    zones: tuple[tuple[int, int], ...] = ()  # non-regular minute ranges (P3): never regular bars
+    verification: str | None = None        # "partial": hours not confirmed by the NSE circular
 
     @property
     def minutes(self) -> int:
@@ -84,7 +87,10 @@ def load_templates(path: Path = TEMPLATE_PATH) -> tuple[Template, ...]:
     doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     return tuple(Template(start=t["from"], end=t["to"],
                           windows=tuple((_minute(a), _minute(b)) for a, b in t["continuous"]),
-                          auction=tuple(_minute(x) for x in t["closing_auction"] or ()))
+                          auction=tuple(_minute(x) for x in t["closing_auction"] or ()),
+                          zones=tuple((_minute(a), _minute(b))
+                                      for a, b in t.get("non_regular_zones") or ()),
+                          verification=t.get("verification"))
                  for t in doc["templates"])
 
 
@@ -100,6 +106,35 @@ def _template_index(sessions: pd.Series, templates: tuple[Template, ...]) -> pd.
     uniq = {d: templates.index(template_for(pd.Timestamp(d).date(), templates))
             for d in pd.unique(sessions)}
     return sessions.map(uniq)
+
+
+def _zone_masks(b: pd.DataFrame, templates: tuple[Template, ...]) -> tuple[pd.Series, pd.Series]:
+    """(in a non-regular zone, at an auction stamp) per row, by the minute of day alone."""
+    t_index = _template_index(b.session, templates)
+    in_zone = pd.Series(False, index=b.index)
+    at_auction = pd.Series(False, index=b.index)
+    for i, t in enumerate(templates):
+        mine = t_index == i
+        for a, z in t.zones:
+            in_zone |= mine & (b.minute >= a) & (b.minute <= z)
+        if t.auction:
+            at_auction |= mine & b.minute.isin(t.auction)
+    return in_zone, at_auction
+
+
+def split_closing(bars: pd.DataFrame, templates: tuple[Template, ...],
+                  keep_auction: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(regular bars, quarantined bars) by the non-regular zones of the session template (P3).
+
+    The quarantined bars keep every original value; nothing is deleted from the frozen snapshot.
+    `keep_auction` keeps the bars at the auction stamps with the regular bars: true for a source
+    whose closing bar is a real auction print (AngelOne), false for one whose closing-window bars
+    are vendor counter artefacts (the legacy store: a negative volume at 15:20 and the same
+    amount added back at 15:29), where no bar there can be told from noise."""
+    b = bars if "minute" in bars else with_clock(bars)
+    in_zone, at_auction = _zone_masks(b, templates)
+    quarantine = in_zone & ~at_auction if keep_auction else in_zone
+    return b[~quarantine].reset_index(drop=True), b[quarantine].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------- cleanup (section 4)
@@ -154,16 +189,26 @@ def align_timestamps(bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return out, pd.DataFrame(rows, columns=log_cols)
 
 
-def clean(bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+TEMPLATES = load_templates()
+
+
+def clean(bars: pd.DataFrame, templates: tuple[Template, ...] | None = None
+          ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """C1 off-minute and C2 pre-09:15 bars are removed; C3 negative volume flags the session.
+
+    C3 looks at the regular session only (P3): a negative volume inside a non-regular zone (the
+    post-3-Aug closing window) is a counter artefact that `split_closing` quarantines, and does
+    not by itself flag the session.
 
     Returns (kept bars, removed bars with their rule, per-session flags)."""
     b = bars if "minute" in bars else with_clock(bars)
+    in_zone, at_auction = _zone_masks(b, templates or TEMPLATES)
     off = b.second != 0
     pre = ~off & (b.minute < SESSION_OPEN_MIN)
     removed = pd.concat([b[off].assign(rule="C1_off_minute"), b[pre].assign(rule="C2_pre_open")])
     kept = b[~off & ~pre]
-    flags = b.assign(contaminated=off | pre, negative_volume=b.volume < 0).groupby(
+    regular_negative = (b.volume < 0) & ~(in_zone & ~at_auction)
+    flags = b.assign(contaminated=off | pre, negative_volume=regular_negative).groupby(
         ["symbol", "session"]).agg(contaminated=("contaminated", "any"),
                                    negative_volume=("negative_volume", "any"))
     return kept.reset_index(drop=True), removed.reset_index(drop=True), flags.reset_index()
@@ -181,30 +226,43 @@ def summarise(bars: pd.DataFrame, templates: tuple[Template, ...]) -> pd.DataFra
     t_index = _template_index(b.session, templates)
     in_cont = pd.Series(False, index=b.index)
     in_auction = pd.Series(False, index=b.index)
+    in_zone = pd.Series(False, index=b.index)
     for i, t in enumerate(templates):
         mine = t_index == i
         for a, z in t.windows:
             in_cont |= mine & (b.minute >= a) & (b.minute <= z)
+        for a, z in t.zones:
+            in_zone |= mine & (b.minute >= a) & (b.minute <= z)
         if t.auction:
             in_auction |= mine & b.minute.isin(t.auction)
     in_cont &= b.second == 0
     in_auction &= b.second == 0
+    in_zone &= b.second == 0
     b = b.assign(t_minutes=t_index.map(lambda i: templates[i].minutes),
                  t_open=t_index.map(lambda i: templates[i].windows[0][0]),
                  t_close=t_index.map(lambda i: templates[i].windows[-1][1]),
                  has_auction=t_index.map(lambda i: bool(templates[i].auction)))
     prices = b[["open", "high", "low", "close"]]
-    b = b.assign(in_cont=in_cont, in_auction=in_auction, outside=~in_cont & ~in_auction,
+    # closing noise: a bar in a non-regular zone that is not at an auction stamp (P3)
+    b = b.assign(in_cont=in_cont, in_auction=in_auction, noise=in_zone & ~in_auction,
+                 outside=~in_cont & ~in_auction & ~in_zone,
                  bad_ohlc=(b.high < prices.max(axis=1)) | (b.low > prices.min(axis=1)),
                  nonpos=(prices <= 0).any(axis=1), negvol=b.volume < 0)
     keys = ["symbol", "session"]
-    s = b.groupby(keys, sort=True).agg(
-        O=("open", "first"), H=("high", "max"), L=("low", "min"), V=("volume", "sum"),
+    core = b[~b.noise]                               # regular bars, the auction print, strays
+    s = core.groupby(keys, sort=True).agg(
+        O=("open", "first"), H=("high", "max"), L=("low", "min"),
         n_bars=("timestamp", "size"), n_distinct=("timestamp", "nunique"),
         outside=("outside", "sum"), bad_ohlc=("bad_ohlc", "sum"), nonpos=("nonpos", "sum"),
         negvol=("negvol", "sum"), t_minutes=("t_minutes", "first"),
         t_open=("t_open", "first"), t_close=("t_close", "first"),
         has_auction=("has_auction", "first"))
+    # V is the regular-session volume: the auction print and the closing noise are reported apart
+    s["V"] = core[~core.in_auction].groupby(keys).volume.sum()
+    s["V"] = s.V.fillna(0.0)
+    noise = b[b.noise].groupby(keys)
+    s["closing_noise_bars"] = noise.size()
+    s["closing_negvol_bars"] = b[b.noise & b.negvol].groupby(keys).size()
     cont = b[b.in_cont].groupby(keys)
     auc = b[b.in_auction].groupby(keys)
     s["C_cont"] = cont.close.last()
@@ -212,9 +270,14 @@ def summarise(bars: pd.DataFrame, templates: tuple[Template, ...]) -> pd.DataFra
     s["first_cont"] = cont.minute.min()
     s["last_cont"] = cont.minute.max()
     s["C_auction"] = auc.close.last()
+    s["auction_volume"] = auc.volume.sum()
     s["n_auction"] = auc.size()
-    s = s.fillna({"n_cont_minutes": 0, "n_auction": 0})
-    s["C"] = s.C_auction.where(s.has_auction, s.C_cont)
+    s = s.fillna({"n_cont_minutes": 0, "n_auction": 0, "closing_noise_bars": 0,
+                  "closing_negvol_bars": 0})
+    s["auction_price"] = s.C_auction
+    # the reference close is the auction print; without one, the last regular bar (the final bar
+    # is then not the official close, which `final_bar_convention` records as "none")
+    s["C"] = s.C_auction.where(s.has_auction & s.C_auction.notna(), s.C_cont)
     s["missing_minutes"] = (s.t_minutes - s.n_cont_minutes).astype(int)
     s["duplicates"] = s.n_bars - s.n_distinct
     s["edge_ok"] = ((s.first_cont <= s.t_open + EDGE_MINUTES - 1)
@@ -262,7 +325,12 @@ def convert_sessions(summary: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
     conv_h, conv_l = d.H / k * pf, d.L / k * pf
     d["contained"] = (conv_h <= adj_h * (1 + CONTAIN_REL) + CONTAIN_ABS) & (
         conv_l >= adj_l * (1 - CONTAIN_REL) - CONTAIN_ABS)
+    # reconciliation with the published daily reference (an additive check, not a gate): the
+    # canonical session extremes equal the daily dataset's adjusted extremes within AGREE
+    d["daily_reconciled"] = (((conv_h / adj_h - 1).abs() <= AGREE)
+                             & ((conv_l / adj_l - 1).abs() <= AGREE)).fillna(False)
     fb = method.fillna("").str.startswith("fallback:")
+    d["fallback_conversion"] = fb
     high_free = fb & ~method.fillna("").str.contains("high")
     low_free = fb & ~method.fillna("").str.contains("low")
     d["fallback_reach_ok"] = ~((high_free & (conv_h < adj_h * (1 - FALLBACK_REACH)))
@@ -277,8 +345,12 @@ def convert_sessions(summary: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
     rows = np.arange(len(d))
     d["vol_c"], d["vol_ratio"] = cands[rows, pick], ratios[rows, pick]
     d["volume_ok"] = (d.vol_ratio >= VOL_LO) & (d.vol_ratio <= VOL_HI)
-    d["final_bar_convention"] = final_bar_convention(d.C / k, d.ref_close, d.raw_close,
-                                                     d.has_auction.astype(bool))
+    convention = final_bar_convention(d.C / k, d.ref_close, d.raw_close,
+                                      d.has_auction.astype(bool))
+    # in the auction era only the auction print can be the official close: a session without one
+    # has no such bar, even if the last regular bar happens to close at the same price
+    no_print = d.has_auction.astype(bool) & (d.n_auction.fillna(0) < 1)
+    d["final_bar_convention"] = convention.where(~no_print, "none")
     d["open_ok"] = (d.O / k / d.raw_open - 1).abs() <= OPEN_TOL
 
     status = pd.Series(np.where(fb, CONVERTED_FALLBACK, CONVERTED), index=d.index, dtype=object)
@@ -296,6 +368,56 @@ def convert_sessions(summary: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
         decided |= hit
     d["status"] = status
     return d
+
+
+BASIS_TOL = 0.002             # a vendor factor equals 1 or the daily factor within this
+EXPLAIN_TOL = 0.004           # ... or a product of corporate-action events within this
+DIVIDEND_LIKE = (0.90, 1.0)   # a small adjustment no split, bonus, rights or demerger explains
+
+
+def ca_checks(ledger: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    """Corporate-action and price-basis checks, added to a session ledger (spec 2, approved
+    2026-10-20). Additive: no gate is removed or changed.
+
+    basis_class       raw (the vendor series is raw), adjusted_to_daily (it carries the daily
+                      dataset's factor), other_factor, or no_factor (no conversion factor)
+    k_explanation     for other_factor sessions: subset_of_events (the factor equals the product
+                      of some of the symbol's LATER split / bonus / rights / demerger factors),
+                      dividend_like (0.90 <= k < 1.0) or unexplained; empty otherwise
+    ca_demerger_approx  a demerger with a later ex-date: its factor is NSE's ex-date open over
+                      the previous close, an approximation that carries that morning's move
+    non_unit_factor   the daily dataset's factor for the session is not 1; such a session must
+                      reconcile with the daily reference (`daily_reconciled`) or stays flagged
+
+    events: symbol, ex_date, kind, price_factor (the daily version's applied events)."""
+    out = ledger.copy()
+    k, pf = out.k.astype(float), out.price_factor.astype(float)
+    raw = (k - 1).abs() <= BASIS_TOL
+    adjusted = ((pf - 1).abs() > 1e-9) & ((k / pf - 1).abs() <= BASIS_TOL)
+    out["basis_class"] = np.select([k.isna(), raw, adjusted],
+                                   ["no_factor", "raw", "adjusted_to_daily"], "other_factor")
+    out["non_unit_factor"] = (pf - 1).abs() > 1e-9
+    ev = events.assign(ex_date=pd.to_datetime(events.ex_date))
+    by_symbol = {s: g.sort_values("ex_date") for s, g in ev.groupby("symbol")}
+    explanation, demerger = [], []
+    for sym, day, kk, cls in zip(out.symbol, pd.to_datetime(out.session), k, out.basis_class,
+                                 strict=True):
+        later = by_symbol.get(sym)
+        later = later[later.ex_date > day] if later is not None else None
+        demerger.append(bool(later is not None and (later.kind == "demerger").any()))
+        if cls != "other_factor":
+            explanation.append(None)
+            continue
+        factors = [] if later is None else later.price_factor.astype(float).tolist()
+        hit = any(abs(kk / float(np.prod([factors[i] for i in pick])) - 1) <= EXPLAIN_TOL
+                  for r in range(1, len(factors) + 1)
+                  for pick in itertools.combinations(range(len(factors)), r))
+        explanation.append("subset_of_events" if hit else
+                           "dividend_like" if DIVIDEND_LIKE[0] <= kk < DIVIDEND_LIKE[1] else
+                           "unexplained")
+    out["k_explanation"] = explanation
+    out["ca_demerger_approx"] = demerger
+    return out
 
 
 def final_bar_convention(close_raw_equiv: pd.Series, last: pd.Series, official: pd.Series,
@@ -316,17 +438,33 @@ def field_validity(ledger: pd.DataFrame, missing_threshold: int | None = None) -
     """Validity per field family (policy `field_families`) for every session of a ledger.
 
     price      the price conversion is publishable, the structure passes, the session is not
-               PARTIAL (edges present, missing minutes within the threshold when given)
+               PARTIAL (edges present, missing minutes within the threshold when given), or it
+               is SPARSE BUT COMPLETE (P2, spec 2)
     volume     price valid and the volume rule holds
-    final_bar  price valid and the final bar matches a documented NSE close"""
-    price = (ledger.status.isin(PUBLISHABLE) & ledger.structure_ok.fillna(False).astype(bool)
-             & ledger.edge_ok.fillna(False).astype(bool))
-    if missing_threshold is not None:
-        price &= ledger.missing_minutes <= missing_threshold
+    final_bar  price valid and the final bar matches a documented NSE close
+
+    sparse_complete (P2, approved 2026-10-20): a session with more than `missing_threshold`
+    missing minutes is kept, and flagged, only when EVERY other condition holds: the price
+    conversion is publishable, the structure passes, both edges have a bar, and the corrected
+    1m volume is inside the NSE volume band. A thinly traded stock has no bar in a minute
+    without a trade; volume that matches NSE shows nothing was lost. Any failing condition
+    leaves the session excluded as partial. Consumers that need dense bars say so in their
+    contract (`complete_bins`, `min_n_minutes`)."""
+    base = (ledger.status.isin(PUBLISHABLE) & ledger.structure_ok.fillna(False).astype(bool)
+            & ledger.edge_ok.fillna(False).astype(bool))
+    volume_ok = ledger.volume_ok.fillna(False).astype(bool)
+    if missing_threshold is None:
+        price = base
+        sparse = pd.Series(False, index=ledger.index)
+    else:
+        dense = ledger.missing_minutes <= missing_threshold
+        sparse = base & ~dense & volume_ok
+        price = base & (dense | sparse)
     return pd.DataFrame({
         "price_valid": price,
-        "volume_valid": price & ledger.volume_ok.fillna(False).astype(bool),
+        "volume_valid": price & volume_ok,
         "final_bar_valid": price & ledger.final_bar_convention.ne("none"),
+        "sparse_complete": sparse,
     }, index=ledger.index)
 
 

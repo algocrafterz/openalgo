@@ -107,13 +107,17 @@ def test_missing_minute_threshold_is_p99_of_volume_valid_sessions_rounded_up_to_
 
 def test_quality_table_flags_each_field_family_and_treatment():
     s = pd.concat([_ledger_rows([0, 99]), _ledger_rows([0], volume_ok=False),
-                   _ledger_rows([0], status="unresolved")], ignore_index=True)
+                   _ledger_rows([0], status="unresolved"),
+                   _ledger_rows([99], volume_ok=False)], ignore_index=True)
     s.loc[2, "defect_type"] = "volume"
     q = ib.quality_table(s, 98)
-    assert list(q.price_valid) == [True, False, True, False]
-    assert list(q.volume_valid) == [True, False, False, False]
-    assert list(q.price_status) == [ic.CONVERTED, "excluded:partial_session", ic.CONVERTED,
-                                    ic.UNRESOLVED]
+    # row 1 is sparse (99 > N = 98) with complete volume: kept and flagged (P2);
+    # row 4 is sparse with incomplete volume: still excluded as partial
+    assert list(q.price_valid) == [True, True, True, False, False]
+    assert list(q.sparse_complete) == [False, True, False, False, False]
+    assert list(q.volume_valid) == [True, True, False, False, False]
+    assert list(q.price_status) == [ic.CONVERTED, ic.CONVERTED, ic.CONVERTED, ic.UNRESOLVED,
+                                    "excluded:partial_session"]
     assert q.treatment[2] == "unresolved:irrecoverable_at_source"
     assert q.treatment[0] == "accepted"
 
@@ -136,3 +140,147 @@ def test_aligned_upl_session_is_recorded_as_repaired():
     row = q.iloc[0]
     assert row.price_valid and row.timestamp_aligned
     assert row.treatment == ic.ALIGNED_TREATMENT and "58-58" in row.timestamp_basis
+
+
+def test_canonical_bars_are_written_one_file_per_symbol_and_year(tmp_path):
+    from signal_engine.backtest.data_readiness import intraday_build as ib
+
+    bars = pd.DataFrame({
+        "symbol": ["AAA"] * 3,
+        "session": pd.to_datetime(["2023-12-29", "2024-01-02", "2024-01-02"]),
+        "timestamp": [1703841900, 1704167100, 1704167160],
+        "open": [1.0] * 3, "high": [1.0] * 3, "low": [1.0] * 3, "close": [1.0] * 3,
+        "volume": [1.0, 2.0, 3.0]})
+    ib.write_by_year(bars, tmp_path / "one" / "AAA")
+    assert sorted(p.name for p in (tmp_path / "one" / "AAA").iterdir()) == [
+        "2023.parquet", "2024.parquet"]
+    assert len(pd.read_parquet(tmp_path / "one" / "AAA" / "2024.parquet")) == 2
+
+
+# ---------------------------------------------------------------- post-3-Aug source choice (P3a)
+
+CAS1, CAS2 = date(2026, 8, 4), date(2026, 8, 5)
+
+
+def _ts(day, minute, second=0):
+    return int(datetime(day.year, day.month, day.day, minute // 60, minute % 60, second,
+                        tzinfo=IST).timestamp())
+
+
+def _cas(day, vol=100, auction=True, extras=(), symbol="AAA"):
+    """A regular session 09:15-15:14 at the 100 / 110 / 90 pattern, then the closing window."""
+    rows = []
+    for m in range(555, 915):
+        rows.append((m, 100.0, 110.0 if m == 600 else 100.0, 90.0 if m == 660 else 100.0,
+                     100.0, vol))
+    if auction:
+        rows.append((929, 100.0, 100.0, 100.0, 100.0, 5))
+    rows += list(extras)
+    return pd.DataFrame([{"symbol": symbol, "timestamp": _ts(day, m), "open": o, "high": h,
+                          "low": low, "close": c, "volume": v} for m, o, h, low, c, v in rows])
+
+
+def _unify(legacy, fetched, classes, ref, requests=None):
+    return ib._unify("AAA", legacy, classes, fetched, requests or _requests(), ref, T)
+
+
+def _origin(bars, day):
+    return bars[bars.session == pd.Timestamp(day)].origin.iloc[0]
+
+
+def test_both_sources_pass_the_one_closer_to_nse_wins_and_a_tie_goes_to_legacy():
+    ref = _ref(CAS1, CAS2)                         # raw_volume 37,500; 360 bars
+    classes = _classes({CAS1: ip.LEGACY, CAS2: ip.LEGACY})
+    legacy = pd.concat([_cas(CAS1, vol=104), _cas(CAS2, vol=100)])       # 0.9984 and 0.96
+    fetched = ic.with_clock(pd.concat([_cas(CAS1, vol=100), _cas(CAS2, vol=100)]))
+    bars, sess, _, _ = _unify(legacy, fetched, classes, ref)
+    assert _origin(bars, CAS1) == "legacy"          # 0.9984 is closer to 1 than 0.96
+    assert _origin(bars, CAS2) == "legacy"          # an exact tie goes to legacy
+    choice = dict(zip(sess.session.dt.date, sess.source_choice, strict=True))
+    assert choice[CAS1] == "both_pass:legacy_closer" and choice[CAS2] == "both_pass:tie_legacy"
+    closer = _unify(pd.concat([_cas(CAS1, vol=96)]), ic.with_clock(_cas(CAS1, vol=104)),
+                    _classes({CAS1: ip.LEGACY}), _ref(CAS1))
+    assert _origin(closer[0], CAS1) == "recovered"
+
+
+def test_the_source_that_passes_is_used_when_only_one_does():
+    ref, classes = _ref(CAS1, CAS2), _classes({CAS1: ip.LEGACY, CAS2: ip.LEGACY})
+    # CAS1: legacy has a negative volume inside the regular window; CAS2: fetched has two prints
+    bad_legacy = _cas(CAS1, extras=[(700, 100.0, 100.0, 100.0, 100.0, -5)])
+    two_prints = _cas(CAS2, extras=[(928, 100.0, 100.0, 100.0, 100.0, 5)])
+    legacy = pd.concat([bad_legacy, _cas(CAS2)])
+    fetched = ic.with_clock(pd.concat([_cas(CAS1), two_prints]))
+    bars, sess, _, _ = _unify(legacy, fetched, classes, ref)
+    assert _origin(bars, CAS1) == "recovered" and _origin(bars, CAS2) == "legacy"
+    choice = dict(zip(sess.session.dt.date, sess.source_choice, strict=True))
+    assert choice == {CAS1: "recovered_only_passes", CAS2: "legacy_only_passes"}
+
+
+def test_a_replaced_symbol_never_uses_its_legacy_bars():
+    classes = _classes({CAS1: ip.RECOVER_REPLACED})
+    bars, sess, _, _ = _unify(_cas(CAS1), ic.with_clock(_cas(CAS1)), classes, _ref(CAS1))
+    assert _origin(bars, CAS1) == "recovered"
+    assert sess.source_choice.iloc[0] == "single_source:recovered"
+
+
+def test_closing_noise_is_quarantined_with_its_original_values():
+    noise = [(916, 100.0, 100.0, 100.0, 100.0, 0), (920, 100.0, 100.0, 100.0, 100.0, -9_000_000),
+             (928, 100.0, 100.0, 100.0, 100.0, 51_000)]
+    bars, sess, _, quarantine = _unify(_cas(CAS1, extras=noise), pd.DataFrame(), _classes(
+        {CAS1: ip.LEGACY}), _ref(CAS1))
+    assert bars.minute.max() == 914                 # legacy keeps nothing after the regular window
+    assert sorted(quarantine.minute) == [916, 920, 928, 929]
+    assert quarantine[quarantine.minute == 920].volume.item() == -9_000_000
+    assert (quarantine.source == "legacy").all()
+    row = sess.iloc[0]
+    assert row.closing_noise_bars == 0              # already removed before the session summary
+    assert row.structure_ok and row.status == ic.CONVERTED
+
+
+def test_auction_fields_come_only_from_a_recovered_session():
+    classes = _classes({CAS1: ip.RECOVER_REPLACED})
+    _, sess, _, _ = _unify(pd.DataFrame(), ic.with_clock(_cas(CAS1)), classes, _ref(CAS1))
+    row = sess.iloc[0]
+    assert row.auction_price == 100.0 and row.auction_volume == 5
+    _, legacy_sess, _, _ = _unify(_cas(CAS1), pd.DataFrame(), _classes({CAS1: ip.LEGACY}),
+                                  _ref(CAS1))
+    assert pd.isna(legacy_sess.auction_price.iloc[0])
+    assert pd.isna(legacy_sess.auction_volume.iloc[0])
+
+
+def test_a_session_fetched_on_the_day_itself_is_not_settled_and_is_not_used():
+    ref, classes = _ref(CAS1, CAS2), _classes({CAS1: ip.RECOVER_REPLACED, CAS2: ip.LEGACY})
+    fetched = ic.with_clock(pd.concat([_cas(CAS1), _cas(CAS2)]))
+    fetched["requested_ist"] = [
+        datetime(2026, 8, 4, 17, 10, tzinfo=IST).isoformat() if d == pd.Timestamp(CAS1)
+        else datetime(2026, 8, 6, 9, 0, tzinfo=IST).isoformat() for d in fetched.session]
+    bars, sess, _, _ = _unify(_cas(CAS2), fetched, classes, ref)
+    status = dict(zip(sess.session.dt.date, sess.status, strict=True))
+    assert status[CAS1] == "excluded:unsettled"      # same-evening Angel data is provisional
+    assert (bars.session == pd.Timestamp(CAS2)).any() and _origin(bars, CAS2) == "legacy"
+    assert not bool(sess.set_index("session").loc[pd.Timestamp(CAS1), "settled"])
+
+
+def test_a_non_unit_factor_session_that_does_not_reconcile_is_flagged_not_excluded():
+    s = _ledger_rows([0, 0, 0]).assign(non_unit_factor=[True, True, False],
+                                       daily_reconciled=[True, False, False])
+    q = ib.quality_table(s, 98)
+    assert list(q.price_valid) == [True, True, True]          # the existing gates are unchanged
+    assert list(q.ca_unreconciled) == [False, True, False]
+
+
+def test_the_spec_two_columns_exist_and_have_types_without_corporate_action_inputs():
+    q = ib.quality_table(_ledger_rows([0]), 98)
+    for c in ("sparse_complete", "settled", "daily_reconciled", "ca_unreconciled",
+              "fallback_conversion", "ca_demerger_approx"):
+        assert q[c].dtype == bool, c
+    for c in ("closing_noise_bars", "auction_price", "auction_volume"):
+        assert c in q
+
+
+def test_an_unsettled_session_carries_its_own_exclusion_reason():
+    s = _ledger_rows([0]).assign(status="excluded:unsettled", origin=None)
+    q = ib.quality_table(s, 98)
+    assert q.price_status.item() == "excluded:unsettled"
+    assert q.final_defect.item() == "unsettled_session"
+    assert q.treatment.item() == "excluded:unsettled_session"

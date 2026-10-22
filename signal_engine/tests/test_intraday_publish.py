@@ -100,3 +100,44 @@ def test_published_version_verifies_and_is_never_rewritten(tmp_path, store):
     p.write_bytes(b"tampered")
     res = sn.verify("nse-intraday-5m-test-001", root=root, git_dir=git)
     assert "extra object provenance missing or hash mismatch" in res.errors
+
+
+def test_a_refreshed_version_records_its_parent_and_history_end(tmp_path, store):
+    root, git = store
+    build = _build(tmp_path)
+    pub.publish(build, version_id="old-001", daily_version="d1", cause="first", root=root,
+                git_dir=git)
+    pub.publish(build, version_id="new-001", daily_version="d1", cause="refresh", root=root,
+                git_dir=git, parent="old-001", history_end="2026-10-19")
+    m = sn.resolve_version("new-001", root=root, git_dir=git)
+    assert (m["parent"], m["as_of"], m["coverage"]["end"]) == ("old-001", "2026-10-19",
+                                                               "2026-10-19")
+    assert m["contract"]["history_end"] == "2026-10-19"
+    old = sn.resolve_version("old-001", root=root, git_dir=git)
+    assert (old["parent"], old["as_of"]) == (None, "2026-10-01")     # the default is unchanged
+
+
+def test_an_unpublished_parent_is_refused(tmp_path, store):
+    root, git = store
+    with pytest.raises(sn.SnapshotError, match="parent"):
+        pub.publish(_build(tmp_path), version_id="x-001", daily_version="d1", cause="t",
+                    root=root, git_dir=git, parent="never-published")
+
+
+def test_a_one_minute_version_publishes_the_one_minute_bars(tmp_path, store):
+    root, git = store
+    build = _build(tmp_path)
+    (build / "one" / "AAA").mkdir(parents=True)
+    pd.DataFrame({"symbol": ["AAA"] * 2, "session": pd.to_datetime(["2024-01-02"] * 2),
+                  "timestamp": [TS, TS + 60], "open": [1.0] * 2, "high": [1.0] * 2,
+                  "low": [1.0] * 2, "close": [1.0] * 2, "volume": [5.0, 6.0]}
+                 ).to_parquet(build / "one/AAA/2024.parquet")
+    pub.publish(build, version_id="nse-intraday-1m-test-001", daily_version="d1", cause="t",
+                root=root, git_dir=git, frequency="1m")
+    m = sn.resolve_version("nse-intraday-1m-test-001", root=root, git_dir=git)
+    assert m["frequency"] == "1m" and m["contract"]["frequency"] == "1m"
+    assert m["coverage"]["rows"] == 2
+    index = pd.read_parquet(sn._object_path(root, m["index_sha256"]))
+    assert list(index.interval) == ["1m"]
+    bars = pd.read_parquet(sn._object_path(root, index.object_sha256.iloc[0]))
+    assert list(bars.n_minutes) == [1, 1] and list(bars.interval) == ["1m", "1m"]

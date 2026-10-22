@@ -63,7 +63,7 @@ def fetched_sessions(symbol: str, ledger: pd.DataFrame, requests: pd.DataFrame) 
         b = _response_bars(row.path, symbol)
         b = b[~b.session.isin(taken)]
         if len(b):
-            parts.append(b.assign(request_id=row.request_id))
+            parts.append(b.assign(request_id=row.request_id, requested_ist=row.requested_ist))
             taken |= set(b.session)
     if not parts:
         return pd.DataFrame(columns=[*_BAR_COLS, "session", "minute", "second", "request_id"])
@@ -94,23 +94,114 @@ def provenance_rows(symbol: str, legacy: pd.DataFrame, fetched: pd.DataFrame,
 
 # ---------------------------------------------------------------- one symbol
 
+_NO_BARS = pd.DataFrame(columns=[*_BAR_COLS, "session", "minute", "second"])
+
+
+def _regular_ledger(bars: pd.DataFrame, ref: pd.DataFrame, templates) -> pd.DataFrame:
+    """Conversion ledger of a candidate source on its regular window, with a pass flag."""
+    led = ic.convert_sessions(ic.summarise(bars, templates), ref)
+    led["structure_ok"] = ic.structure_ok(led)
+    led["passes"] = (led.status.isin(ic.PUBLISHABLE) & led.structure_ok
+                     & led.edge_ok.fillna(False).astype(bool)
+                     & led.volume_ok.fillna(False).astype(bool))
+    return led.set_index("session")
+
+
+def choose_sources(days, legacy, fetched, replaced: set, ref, templates) -> dict:
+    """P3a: per post-3-Aug session, which source supplies the regular window, and why.
+
+    Both are judged on the regular window alone, against NSE, with the unchanged conversion,
+    structure, edge and volume-band gates. Both pass: the volume ratio closer to 1 wins, a tie
+    goes to Historify. One passes: that one. Neither: Historify if it has bars (the session is
+    then excluded by its own failing gate). A replaced symbol's legacy bars are another security
+    and are never a candidate."""
+    out = {}
+    has_l = set(legacy.session) if len(legacy) else set()
+    has_f = set(fetched.session) if len(fetched) else set()
+    legacy_days = set(days) - set(replaced)
+    led_l = _regular_ledger(legacy[legacy.session.isin(legacy_days)], ref, templates) if (
+        has_l and legacy_days & has_l) else pd.DataFrame()
+    led_f = _regular_ledger(fetched[fetched.session.isin(days)], ref, templates) if has_f else \
+        pd.DataFrame()
+    for d in days:
+        l_ok = d not in replaced and d in has_l and d in led_l.index
+        f_ok = d in has_f and d in led_f.index
+        if l_ok and f_ok:
+            pl, pf = bool(led_l.loc[d, "passes"]), bool(led_f.loc[d, "passes"])
+            dl, df_ = abs(led_l.loc[d, "vol_ratio"] - 1), abs(led_f.loc[d, "vol_ratio"] - 1)
+            if pl and pf:
+                if dl < df_:
+                    out[d] = ("legacy", "both_pass:legacy_closer")
+                elif df_ < dl:
+                    out[d] = ("recovered", "both_pass:recovered_closer")
+                else:
+                    out[d] = ("legacy", "both_pass:tie_legacy")
+            elif pl:
+                out[d] = ("legacy", "legacy_only_passes")
+            elif pf:
+                out[d] = ("recovered", "recovered_only_passes")
+            else:
+                out[d] = ("legacy", "neither_passes")
+        elif l_ok:
+            out[d] = ("legacy", "single_source:legacy")
+        elif f_ok:
+            out[d] = ("recovered", "single_source:recovered")
+    return out
+
+
+def _settled(fetched: pd.DataFrame) -> tuple[pd.DataFrame, set]:
+    """AngelOne data fetched on the evening of its own session is provisional (measured
+    2026-10-19: 370 bars with eight at 15:15-15:27, against 361 once settled). Only sessions
+    requested on a later IST calendar day are used. Returns (settled bars, unsettled sessions)."""
+    if not len(fetched) or "requested_ist" not in fetched:
+        return fetched, set()
+    asked = pd.to_datetime(fetched.requested_ist, utc=True).dt.tz_convert(
+        "Asia/Kolkata").dt.tz_localize(None).dt.normalize()
+    bad = asked <= fetched.session
+    return fetched[~bad], set(fetched[bad].session) - set(fetched[~bad].session)
+
+
 def unify_symbol(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
                  fetched_raw: pd.DataFrame, requests: pd.DataFrame, ref: pd.DataFrame,
                  templates) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """(unified vendor-basis bars with origin, session ledger, provenance rows) for one symbol.
 
     legacy_raw: snapshot bars; fetched_raw: `fetched_sessions` output."""
+    bars, sessions, prov, _ = _unify(symbol, legacy_raw, classes, fetched_raw, requests, ref,
+                                     templates)
+    return bars, sessions, prov
+
+
+def _unify(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
+           fetched_raw: pd.DataFrame, requests: pd.DataFrame, ref: pd.DataFrame,
+           templates) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """`unify_symbol` plus the quarantined closing-window bars of both sources, with every
+    original value and a `source` column (P3a: evidence is kept, nothing is deleted)."""
     cls = classes[classes.symbol == symbol]
-    legacy = ic.clean(ic.with_clock(legacy_raw))[0] if len(legacy_raw) else legacy_raw
+    legacy_all = ic.clean(ic.with_clock(legacy_raw))[0] if len(legacy_raw) else legacy_raw
+    legacy, legacy_q = (ic.split_closing(legacy_all, templates, keep_auction=False)
+                        if len(legacy_all) else (legacy_all, _NO_BARS))
     aligned = pd.DataFrame(columns=["session", "applied", "second_min", "second_max"])
     if len(fetched_raw):
         fetched_raw, aligned = ic.align_timestamps(fetched_raw)
-    fetched = ic.clean(fetched_raw)[0] if len(fetched_raw) else fetched_raw
+    fetched_all = ic.clean(fetched_raw)[0] if len(fetched_raw) else fetched_raw
+    fetched_all, unsettled = _settled(fetched_all)
+    fetched, fetched_q = (ic.split_closing(fetched_all, templates, keep_auction=True)
+                          if len(fetched_all) else (fetched_all, _NO_BARS))
+    quarantine = pd.concat([legacy_q.assign(source="legacy"), fetched_q.assign(source="recovered")],
+                           ignore_index=True)
     prov = provenance_rows(symbol, legacy, fetched, classes, requests)
     replace = set(prov[prov.result.isin(["mismatch", "scaled"])].session)
 
-    keep_legacy = set(cls[cls.cls == ip.LEGACY].session) - replace
-    want_fresh = set(cls[cls.cls.str.startswith("recover:")].session) | replace
+    cas = pd.Timestamp(ip.CAS_START)
+    cas_days = set(cls[(cls.session >= cas) & (cls.cls != ip.OUT_OF_SCOPE_MUHURAT)].session)
+    replaced = set(cls[cls.cls == ip.RECOVER_REPLACED].session)
+    choice = choose_sources(cas_days, legacy, fetched, replaced, ref[ref.symbol == symbol],
+                            templates) if cas_days else {}
+    keep_legacy = ((set(cls[cls.cls == ip.LEGACY].session) - replace - cas_days)
+                   | {d for d, (src, _) in choice.items() if src == "legacy"})
+    want_fresh = ((set(cls[cls.cls.str.startswith("recover:")].session) | replace) - cas_days
+                  | {d for d, (src, _) in choice.items() if src == "recovered"})
     parts = []
     if len(legacy):
         parts.append(legacy[legacy.session.isin(keep_legacy)].assign(origin="legacy"))
@@ -142,7 +233,14 @@ def unify_symbol(symbol: str, legacy_raw: pd.DataFrame, classes: pd.DataFrame,
         sessions.timestamp_aligned, None)
     sessions.loc[sessions.cls == ip.OUT_OF_SCOPE_MUHURAT, "status"] = ip.OUT_OF_SCOPE_MUHURAT
     sessions.loc[sessions.status.isna(), "status"] = "missing"
-    return bars, sessions, prov
+    sessions["source_choice"] = sessions.session.map({d: why for d, (_, why) in choice.items()})
+    # a session whose only candidate was provisional AngelOne data is excluded for that reason
+    unsettled_only = sessions.session.isin(unsettled) & sessions.status.eq("missing")
+    sessions.loc[unsettled_only, "status"] = "excluded:unsettled"
+    sessions["settled"] = ~unsettled_only
+    sessions["session_hours_verification"] = sessions.session.map(
+        lambda d: ic.template_for(pd.Timestamp(d).date(), templates).verification)
+    return bars, sessions, prov, quarantine
 
 
 # ---------------------------------------------------------------- missing-minute policy
@@ -180,6 +278,7 @@ def quality_table(sessions: pd.DataFrame, n: int) -> pd.DataFrame:
     defect = ip.defect_type(s.assign(final_bar_convention=s.final_bar_convention.fillna("none")))
     defect[~s.price_valid & defect.isna()] = "partial_session"
     defect[s.status.eq("missing")] = "missing_session"
+    defect[s.status.eq("excluded:unsettled")] = "unsettled_session"
     defect[scope] = "out_of_scope_session"
     s["final_defect"] = defect
     origin = s.origin.fillna("")
@@ -195,16 +294,52 @@ def quality_table(sessions: pd.DataFrame, n: int) -> pd.DataFrame:
     # An excluded session never reads "accepted": it carries its exclusion.
     excluded = s.treatment.isin(["accepted", "recovered"]) & ~s.price_valid
     s.loc[excluded, "treatment"] = "excluded:" + s.loc[excluded, "final_defect"].astype(str)
+    return _typed_quality(s)
+
+
+#: Spec-2 quality columns and their types. A missing value is False / NaN, never object.
+_BOOL_COLS = ("sparse_complete", "settled", "daily_reconciled", "fallback_conversion",
+              "ca_demerger_approx", "non_unit_factor", "ca_unreconciled")
+_NUM_COLS = ("closing_noise_bars", "closing_negvol_bars", "auction_price", "auction_volume")
+_NEW_TEXT_COLS = ("source_choice", "session_hours_verification", "basis_class", "k_explanation")
+
+
+def _typed_quality(s: pd.DataFrame) -> pd.DataFrame:
+    """Add the spec-2 columns that the ledger lacks and give each its type. A session with a
+    non-unit daily factor that is price-valid but does not reconcile with the daily reference is
+    flagged `ca_unreconciled` (flagged, not excluded: the existing gates are unchanged)."""
+    for c in _BOOL_COLS:
+        if c not in s:
+            s[c] = False
+    for c in _NUM_COLS:
+        if c not in s:
+            s[c] = np.nan
+    for c in _NEW_TEXT_COLS:
+        if c not in s:
+            s[c] = None
+    s["ca_unreconciled"] = (s.non_unit_factor.fillna(False).astype(bool)
+                            & s.price_valid.astype(bool)
+                            & ~s.daily_reconciled.fillna(False).astype(bool))
+    for c in _BOOL_COLS:
+        s[c] = s[c].fillna(False).astype(bool)
     return s
 
 
 # ---------------------------------------------------------------- run
 
+def write_by_year(bars: pd.DataFrame, folder: Path) -> None:
+    """One parquet file per calendar year of `bars.session` in `folder`."""
+    for yr, part in bars.groupby(bars.session.dt.year):
+        out = folder / f"{int(yr)}.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        part.reset_index(drop=True).to_parquet(out, index=False)
+
+
 def run(snapshot_folder: Path) -> Path:
     if fz.verify(snapshot_folder):
         raise fz.FreezeError("snapshot does not verify")
     manifest = fz.load(snapshot_folder)
-    build = snapshot_folder.parent / f"build-{manifest['root_hash'][:12]}"
+    build = ip.build_folder(snapshot_folder, manifest)
     errors = ir.verify(build)
     if errors:
         raise RuntimeError(f"recovery is not complete or verifiable: {errors[:3]}")
@@ -217,19 +352,26 @@ def run(snapshot_folder: Path) -> Path:
     ledger = ir.read_ledger(build)
     unified_dir = build / "unified"
     unified_dir.mkdir(exist_ok=True)
-    ledgers, provs = [], []
+    ledgers, provs, quarantined = [], [], []
     symbols = sorted(classes.symbol.unique())
+    plan_doc = json.loads((build / "plan.json").read_text())
+    daily = _snapshot.resolve_version(plan_doc["daily_version"])
+    events = pd.read_parquet(_snapshot._object_path(_snapshot.DEFAULT_ROOT, daily["events_sha256"]))
     for i, sym in enumerate(symbols):
-        bars, sess, prov = unify_symbol(sym, ip.read_symbol(snapshot_folder, manifest, sym),
-                                        classes, fetched_sessions(sym, ledger, requests),
-                                        requests, ref, templates)
+        bars, sess, prov, quarantine = _unify(
+            sym, ip.read_symbol(snapshot_folder, manifest, sym), classes,
+            fetched_sessions(sym, ledger, requests), requests, ref, templates)
         bars[[*_BAR_COLS, "session", "origin"]].to_parquet(unified_dir / f"{sym}.parquet",
                                                            index=False)
         ledgers.append(sess)
         provs.append(prov)
+        quarantined.append(quarantine)
         if i % 20 == 0:
             logger.info(f"build: unified {i + 1} of {len(symbols)} symbols")
-    sessions = pd.concat(ledgers, ignore_index=True)
+    sessions = ic.ca_checks(pd.concat(ledgers, ignore_index=True), events)
+    pd.concat([q for q in quarantined if len(q)], ignore_index=True)[
+        ["symbol", "timestamp", "open", "high", "low", "close", "volume", "session", "minute",
+         "source"]].to_parquet(build / "quarantine.parquet", index=False)
     policy = missing_minute_threshold(sessions)
     policy["data_policy_version"] = ic.policy_version()
     sessions = quality_table(sessions, policy["N"])
@@ -247,10 +389,10 @@ def run(snapshot_folder: Path) -> Path:
         five = i5.aggregate(one)
         res = i5.validate(one, five, templates, expected[expected.symbol == sym])
         checks.append({"symbol": sym, "bars_1m": len(one), "bars_5m": len(five), **res})
-        for yr, part in five.groupby(five.session.dt.year):
-            out = build / "five" / sym / f"{int(yr)}.parquet"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            part.reset_index(drop=True).to_parquet(out, index=False)
+        write_by_year(five, build / "five" / sym)
+        # The canonical 1m bars the 5m bars are built from: the input of a 1m dataset version
+        # (volume profiles and developing profiles need minute resolution).
+        write_by_year(one, build / "one" / sym)
         if i % 20 == 0:
             logger.info(f"build: 5m {i + 1} of {len(symbols)} symbols")
     pd.DataFrame(checks).to_parquet(build / "checks_5m.parquet", index=False)
@@ -274,7 +416,7 @@ def decide_cells(snapshot_folder: Path) -> dict:
     back identical; its sessions stay legacy (flagged unresolved), except sampled sessions that
     came back different, which are replaced. Other cells are recovered in full."""
     manifest = fz.load(snapshot_folder)
-    build = snapshot_folder.parent / f"build-{manifest['root_hash'][:12]}"
+    build = ip.build_folder(snapshot_folder, manifest)
     sample = pd.read_parquet(build / "irrecoverability_sample.parquet")
     classes = pd.read_parquet(build / "classification.parquet")
     requests = pd.read_parquet(build / "requests.parquet")

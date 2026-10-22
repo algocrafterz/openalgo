@@ -28,7 +28,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -114,10 +114,22 @@ def _priority(purpose: str) -> int:
     return min((i for i, p in enumerate(PRIORITY) if p in str(purpose)), default=len(PRIORITY))
 
 
-def pending(requests: pd.DataFrame, ledger: pd.DataFrame) -> list[tuple[dict, int]]:
-    """Requests still to fetch, with their next attempt number, in PRIORITY order."""
+def pending(requests: pd.DataFrame, ledger: pd.DataFrame, *, redo_end_from: date | None = None,
+            redo_before: str | None = None) -> list[tuple[dict, int]]:
+    """Requests still to fetch, with their next attempt number, in PRIORITY order.
+
+    `redo_end_from` and `redo_before` reopen requests whose window ended on or after that date
+    and whose deciding line was requested before that ISO time. A same-day fetch holds
+    provisional closing bars (measured 2026-10-19: 370 bars, 8 of them at 15:15-15:27, against 361
+    once the day had settled); the new line supersedes the old one, which stays in the ledger."""
     last = latest(ledger)
     done = set(last[last.outcome.isin(FINAL)].request_id)
+    if redo_end_from is not None and len(last):
+        final = last[last.outcome.isin(FINAL)]
+        stale = final[(pd.to_datetime(final["end"]).dt.date >= redo_end_from)
+                      & (pd.to_datetime(final.requested_ist, utc=True)
+                         < pd.Timestamp(redo_before).tz_convert("UTC"))]
+        done -= set(stale.request_id)
     errors = ledger[ledger.outcome == "error"]
     tries = errors.groupby("request_id").size().to_dict() if len(errors) else {}
     out = []
@@ -138,10 +150,12 @@ def source_alive(fetch: Fetch) -> bool:
 
 
 def run(build: Path, fetch: Fetch, *, landing: Path = DEFAULT_LANDING, pause: float = PAUSE_S,
-        limit: int | None = None) -> dict:
+        limit: int | None = None, redo_end_from: date | None = None,
+        redo_before: str | None = None) -> dict:
     landing.mkdir(parents=True, exist_ok=True)
     requests = pd.read_parquet(build / "requests.parquet")
-    todo = pending(requests, read_ledger(build))[:limit]
+    todo = pending(requests, read_ledger(build), redo_end_from=redo_end_from,
+                   redo_before=redo_before)[:limit]
     counts = {"ok": 0, "empty": 0, "error": 0}
     with open(build / LEDGER, "a", encoding="utf-8") as fh:
         for i, (req, attempt) in enumerate(todo):
@@ -230,6 +244,40 @@ def compare_session(legacy: pd.DataFrame, fresh: pd.DataFrame) -> str:
     return "scaled" if one_multiplier and volume_follows else "mismatch"
 
 
+def carry_forward(build: Path, previous: Path, *, closed_before: date) -> int:
+    """Seed this build's ledger with the final lines of an earlier build, for the same requests.
+
+    A request is carried when this plan asks for it, it has no final line here yet, the earlier
+    build ended it with `ok` or `empty`, its window closed before `closed_before` (a window still
+    open when it was fetched holds incomplete bars), and its landing file still hashes to the
+    recorded sha256. The line is copied unchanged, with `carried_from`, and keeps pointing at the
+    earlier build's landing file: nothing is fetched and no earlier file is written. A request
+    that fails any test is simply left for `run` to fetch. Returns the number of lines carried."""
+    wanted = set(pd.read_parquet(build / "requests.parquet").request_id)
+    have = read_ledger(build)
+    if len(have):
+        decided = latest(have)
+        wanted -= set(decided[decided.outcome.isin(FINAL)].request_id)
+    last: dict[str, dict] = {}
+    for text in (previous / LEDGER).read_text(encoding="utf-8").splitlines():
+        line = json.loads(text)
+        last[line["request_id"]] = line
+    carried = 0
+    with open(build / LEDGER, "a", encoding="utf-8") as fh:
+        for rid, line in last.items():
+            if rid not in wanted or line["outcome"] not in FINAL or not line.get("path"):
+                continue
+            if date.fromisoformat(str(line["end"])[:10]) >= closed_before:
+                continue
+            landing = _abs(line["path"])
+            if not landing.exists() or hashlib.sha256(landing.read_bytes()).hexdigest() != line[
+                    "sha256"]:
+                continue
+            fh.write(json.dumps({**line, "carried_from": previous.name}) + "\n")
+            carried += 1
+    return carried
+
+
 def angel_fetch() -> Fetch:
     from services.history_service import get_history_with_auth
     from signal_engine.backtest import broker_login
@@ -252,7 +300,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--void-empty-after", default=None,
                     help="IST timestamp; void empty answers recorded from then (source down)")
     ap.add_argument("--reason", default=None)
+    ap.add_argument("--landing", type=Path, default=DEFAULT_LANDING,
+                    help="where new responses are written; a refreshed build uses a new folder "
+                         "so an earlier build's files are never overwritten")
+    ap.add_argument("--refetch-end-from", type=date.fromisoformat, default=None,
+                    help="refetch requests whose window ended on or after this date ...")
+    ap.add_argument("--refetch-before", default=None,
+                    help="... and whose latest fetch was before this ISO time (needs a new "
+                         "--landing folder, so the superseded files are kept)")
+    ap.add_argument("--carry-from", type=Path, default=None,
+                    help="an earlier build whose final ledger lines are carried forward first")
+    ap.add_argument("--closed-before", type=date.fromisoformat, default=None,
+                    help="with --carry-from: only windows that ended before this date are carried")
     args = ap.parse_args(argv)
+    if args.carry_from:
+        if not args.closed_before:
+            ap.error("--carry-from needs --closed-before")
+        print(carry_forward(args.build, args.carry_from, closed_before=args.closed_before),
+              "ledger lines carried forward")
     if args.void_empty_after:
         if not args.reason:
             ap.error("--void-empty-after needs --reason")
@@ -262,7 +327,10 @@ def main(argv: list[str] | None = None) -> int:
         errors = verify(args.build)
         print("\n".join(errors[:50]) or "recovery ledger verifies")
         return 1 if errors else 0
-    print(run(args.build, angel_fetch(), limit=args.limit))
+    if bool(args.refetch_end_from) != bool(args.refetch_before):
+        ap.error("--refetch-end-from and --refetch-before go together")
+    print(run(args.build, angel_fetch(), landing=args.landing, limit=args.limit,
+              redo_end_from=args.refetch_end_from, redo_before=args.refetch_before))
     return 0
 
 

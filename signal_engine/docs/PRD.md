@@ -6072,3 +6072,88 @@ confirmed stayed naked, and an entry that filled after a timeout stayed untracke
   `strategy_library/intraday/orb/STRATEGY-LOG.md`.
 - History timeouts were not changed: the cause is HTTP/2 connection resets on the OpenAlgo server's shared broker client
   (core, out of scope). The running engine needs a restart to load these changes.
+
+## Python runner slept through 2026-10-16: monotonic sleep across a host suspend, and a blocked 08:50 start (2026-10-17)
+
+**Symptom.** On 2026-10-16 BREAKOUT-PY and EVWAP-EARLY-PY produced no warm-up, no cycles and no orders for the whole
+session, and Pine BREAKOUT alerts were declined because the runner is the configured sole source. ORB was unaffected.
+
+**Cause (two parts).**
+
+- `WallClock.sleep_until` used one `asyncio.sleep(seconds)`. That timer is monotonic and stops while the host is
+  suspended. The host sleeps after market close (events at about 15:52 to 16:09) and wakes at 08:45 from a scheduled
+  wake. The runner's overnight wait to 09:00 therefore ran about 17 hours long and would have fired around 02:00 on the
+  next day.
+- The stale engine was not replaced at 08:50. On 2026-10-15 09:15 the `openAlgoAutoStart` task was launched by hand. The
+  `dailystart` command runs the supervisor in the foreground, so that task instance stayed alive all day.
+  `MultipleInstances=IgnoreNew` then dropped the 2026-10-16 08:50 launch (Task Scheduler event 322, "instance ... of the
+  same task is already running"). This is the confirmed cause of the missed clean start that the 2026-10-06 entry above
+  left "unconfirmed". The engine that crossed the day boundary kept its asleep runner.
+
+**Change.** `pipeline/clock.py`: `WallClock.sleep_until` now sleeps in slices of at most `MAX_NAP_S` (30 s) and re-reads
+the wall clock after each, so a suspend delays a wake-up by at most one slice. Commit `ce07499de`, with two tests in
+`tests/test_pipeline_clock.py` (a wall-clock jump during a nap, and the nap cap). A full suite run on the committed tree
+gave 8677 passed, 1 skipped (a backtest tearsheet test that skips on an empty trade list). No trading rule changed.
+
+**Operations.**
+
+- The stack was started again on 2026-10-16 23:52 on this commit: warm-up 40 ok, 0 failed, both runners started.
+- Host: laptop, sleep timeout "never", wake timers allowed on AC but NOT on battery. Keep the charger connected over
+  the weekend; the wakes that worked on 10-14 to 10-16 were on AC.
+- Do not start the stack by launching `openAlgoAutoStart` by hand. Use `openalgoctl.ps1 start` or the new
+  `scripts/OpenAlgo-Control.bat`, which calls it directly and cannot leave a blocking task instance. The deployed copy
+  lives next to `openalgoctl.ps1` (`C:\Users\Anand\Scripts`); it is not deployed automatically.
+- The Windows copies of `openalgoctl.ps1` and the other task scripts match the repo. The Windows copy of
+  `breakingtradectl.ps1` is older but unused: the BreakingTrade tasks run the repo copy over the WSL path.
+- Other long waits were checked: the time-exit scheduler (5 s poll with a wall-clock check), the tracker poll, the
+  Telegram reconnect backoff and the BreakingTrade poller are not exposed to this bug.
+- First proof across a real suspend is the Monday 2026-10-19 start: expect `Python signal runner started for ...` and
+  `runner warm-up finished: 40 ok` at about 08:52, and the first `pipeline cycle 09:25: evaluated 40` at about 09:25.
+
+**Known, not fixed: protective stop management.** The engine runs the committed behavior. A larger change was written
+and parked, not deployed, because its own lifecycle tests (11 in `test_stop_lifecycle_reconcile.py`) were still failing.
+It is kept, with SHA-256 manifests and reverse-applicable patches, in `/home/anand/openalgo-wip-backup-2026-10-16/`
+(`parked-stop-lifecycle/` and `parked-slot-reservation/`) for a dedicated implementation and review. Open risks:
+
+- Duplicate stops after SL timeouts: five unknown-outcome sends per call can all land (2026-10-15: nine live stops on
+  INFY, five on LICI; 31 timeouts that day).
+- A stop whose re-attempts are exhausted is only alerted, not retried (SBIN missed-stop close aborted three times on
+  2026-10-15).
+- The unconfirmed-stop list is in memory and is lost on restart.
+- The same-cycle position-cap race is not fixed (slot reservation parked; it passed its own tests but has not run live).
+
+**In plain terms:** the computer sleeps every night, and the runner's alarm clock stopped while it slept, so it overslept
+the whole trading day. It now checks the real clock every 30 seconds. A separate mix-up (a hand-started task blocking the
+next morning's automatic start) is understood and avoided by starting through the script instead. The unfinished safety
+work on protective stop orders is set aside, not live, and its known risks are listed above.
+
+## Published Intraday Datasets For Backtesting (2026-10-21)
+
+Two intraday versions are published through the snapshot store and read only through `PublishedSource.intraday`. They are built from the frozen legacy 1m snapshot `legacy-1m-20261019T165800-ist` (sessions through 2026-10-19), the daily reference `nse-daily-20261019-001`, conversion spec 2 and the data-quality policy recorded in each manifest. Both are READY_WITH_WARNINGS. Earlier versions (`nse-intraday-5m-20261006-001`, `-20261021-001`) are kept unchanged; `-001` is superseded by `-002` because only the embedded alert assessment wording differs.
+
+| Version | Frequency | Range | Use |
+| --- | --- | --- | --- |
+| `nse-intraday-5m-20261021-002` | 5m | 2017-01-02 to 2026-10-19 (price) | TPO, Initial Balance, price-based market profile |
+| `nse-intraday-1m-20261021-002` | 1m | 2017-01-02 to 2026-10-19 (price) | Volume profile on `volume_valid` sessions |
+
+Scope: 213 symbols, 443,618 requested symbol-sessions. Valid sessions: price 440,450, volume 435,678, final bar 426,257. Bars cover the regular window 09:15 to 15:14 (the 5m version ends at the 15:10 bar). COCHINSHIP starts 2017-08-14.
+
+Rules consumers must follow:
+
+- Filter on the quality-table validity flag of the field family the strategy uses: `price_valid` for TPO and Initial Balance, `price_valid` and `volume_valid` for volume profile. The contract does this when it declares its field families.
+- A contract that requires every family (including final bar) ends at 2025-12-31, because the final-bar family is removed from 2026 (see below). Declare `price` or `price` and `volume` to read through 2026-10-19.
+- Use the published NSE daily version (`nse-daily-20261019-001`) whenever the official close is needed. Since 2026-08-03 the closing auction print is missing from the minute data in about 93% of sessions, so the final bar is not the official close there.
+- Sparse sessions (`sparse_complete`, 4,258, mostly 2017-2020 and thin names) are kept because their volume matches NSE. A strategy that needs dense bars must say so in its contract (`complete_bins`, `min_n_minutes`).
+- Sessions with a non-unit daily factor that did not reconcile to the daily reference are flagged `ca_unreconciled` (1,585). De-merger sessions are flagged `ca_demerger_approx`. Fallback-converted sessions (2023-06 to 2024-03 mostly) are flagged `fallback_conversion`.
+- Special-day hours (2021-02-24, 2024-03-02) carry `verification: partial`; the primary NSE circulars were not retrievable.
+- Closing-zone bars since 2026-08-03 are quarantined with provenance (`quarantine.parquet`), not deleted, and never enter regular-session volume.
+
+Material limitations (all recorded in the quality table and in the embedded assessment):
+
+- No bars in any source: BDL (1,023 sessions) and PATANJALI (146). BDL price and volume are removed from the usable range.
+- Volume disagrees with NSE on 4,772 price-valid sessions, mostly 2018-2021: about half of the 2018-2019 failures sit near 2.0 times NSE (doubled vendor volume, including 5 to 7 February 2019); the rest, and the 2020 failures, are stable symbol-specific ratios (BSE, NMDC, VBL, MOTHERSON). The cause was not established and no factor is guessed. Volume is removed for BDL, BSE, NMDC and VBL.
+- Final bar is removed for 2026 and for BDL and LTM.
+- Late official-close prints on 2018-11-05 and 2019-10-25 (P3c) are not used; the rule is disabled and stays so unless a planned strategy needs it.
+- The 2027 NSE trading calendar is not loaded. The backfill stops with an explicit message until the official holiday circular is available. Angel One top-ups for COCHINSHIP and GVT&D are manual.
+
+Verification before commit: `signal_engine/scripts/run_full_tests.sh` passed (8,750 passed, 1 skipped); `snapshot verify` is OK for all intraday versions, and both `-002` versions read back correctly through `PublishedSource.intraday`.
