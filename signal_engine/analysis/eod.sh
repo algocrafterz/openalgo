@@ -74,7 +74,7 @@ run() { PYTHONPATH="$REPO" "$UV" run python "$@"; }
 
 echo "=== EOD $DAY ==="
 snapshot_ok=1
-if ! run -m signal_engine.analysis --snapshot; then
+if ! run -m signal_engine.analysis --snapshot --day "$DAY"; then
   snapshot_ok=0
   echo "WARNING: tradebook snapshot failed — is OpenAlgo running? Fill prices and slippage"
   echo "         will be missing from this report. Re-run before OpenAlgo is stopped."
