@@ -260,8 +260,13 @@ async def start(
     historify_symbols: Callable[[], list[str]] | None = None,
     state: RunnerStateStore | None = None,
     broker_qty=None,
+    alert: Callable[[str], Awaitable] | None = None,
 ) -> RunnerService | None:
-    """Build and launch the runner for this process. None when disabled or a check fails."""
+    """Build and launch the runner for this process. None when disabled or a check fails.
+
+    `alert` receives one message a day naming symbols the warm-up excluded for stale or
+    incomplete history (see HistorifyLoader); it is not used with an injected `loader`.
+    """
     if not cfg.enabled:
         logger.info("Python signal runner: disabled")
         return None
@@ -293,7 +298,9 @@ async def start(
     logger.info(
         f"Python signal runner: {len(symbols)} symbol(s), strategies {list(cfg.strategies)}"
     )
-    loader = loader or HistorifyLoader()
+    loader = loader or HistorifyLoader(
+        on_rejected=warmup_reporter(alert, asyncio.get_running_loop())
+    )
     now = clock.now()
 
     first_tag = next(iter(cfg.strategies))
@@ -327,6 +334,25 @@ async def start(
         service.tasks.append(asyncio.create_task(run_days(make, clock), name=f"runner-{tag}"))
         logger.info(f"Python signal runner started for {tag} ({cfg.strategies[tag].signal_source})")
     return service
+
+
+def warmup_reporter(alert, loop):
+    """HistorifyLoader's on_rejected callback: it runs in the warm-up's worker thread, so the
+    alert coroutine is handed to the event loop. None when no alert is configured."""
+    if alert is None:
+        return None
+
+    def report(day: dt.date, rejected: dict[str, str]) -> None:
+        lines = [f"{s}: {why}" for s, why in sorted(rejected.items())]
+        shown = "\n".join(lines[:15]) + (f"\n... and {len(lines) - 15} more" if len(lines) > 15 else "")
+        text = (
+            f"RUNNER WARM-UP {day}: {len(rejected)} symbol(s) excluded for the day because their "
+            "stored history is stale or incomplete. No signals are generated for them today.\n"
+            f"{shown}\nCheck signal_engine/logs/backfill_cron.log."
+        )
+        asyncio.run_coroutine_threadsafe(alert(text), loop)
+
+    return report
 
 
 def _without_live_paper_only(cfg: RunnerSettings, trade_mode: str) -> RunnerSettings:

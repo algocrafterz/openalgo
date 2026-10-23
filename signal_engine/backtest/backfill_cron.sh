@@ -22,8 +22,16 @@
 #     older comments in this repo assume).
 # That leaves 15:30-16:00. Scheduled at 15:35 for a 5-minute buffer after close (in case
 # the broker takes a moment to finalize/publish the last bar) and a 25-minute buffer
-# before AutoStop - 214 symbols x 2 intervals, mostly skipped by extend_existing's
-# min_stale=2 gate on any given day, finishes in well under a minute of API calls.
+# before AutoStop.
+#
+# DAILY, NOT EVERY OTHER DAY (2026-10-23). Without --daily, extend_existing skips a symbol that
+# is one calendar day stale (min_stale=2), so this run fetched the bulk of the store only every
+# other trading day. The Python runner warms up from this store each morning and needs the
+# previous session: on the mornings in between it used the session before that (2026-10-14 PFC
+# traded on 10-12's value area). --daily fetches every symbol behind the NSE calendar's session
+# (today, from 15:30) and verifies against the same session, so a symbol whose fetch failed
+# today is reported today. About 214 symbols x 2 intervals; the 2026-10-21 log suggests roughly
+# 0.7 s per symbol, so about 5 minutes, inside the window.
 #
 # USAGE
 #   ./signal_engine/backtest/backfill_cron.sh
@@ -71,7 +79,7 @@ echo "=== backfill $DAY ==="
 status=0
 for interval in 1m D; do
   echo "--- extend_existing interval=$interval ---"
-  if ! run -m signal_engine.backtest.backfill --interval "$interval"; then
+  if ! run -m signal_engine.backtest.backfill --interval "$interval" --daily; then
     echo "WARNING: $interval extend failed - see output above (broker session down?)"
     status=1
   fi
@@ -85,7 +93,7 @@ done
 # anything else that is behind is new and must show here.
 echo "--- verify ---"
 for interval in 1m D; do
-  if ! run -m signal_engine.backtest.backfill --interval "$interval" --verify \
+  if ! run -m signal_engine.backtest.backfill --interval "$interval" --verify --daily \
         --tolerate 'COCHINSHIP,GVT&D'; then
     echo "WARNING: $interval store is behind the last expected session - see list above"
     status=1

@@ -155,8 +155,10 @@ class TestHistorifyLoader:
         from signal_engine.backtest import data
         from signal_engine.pipeline.context import HistorifyLoader
 
-        five = pd.concat([day_bars(f"2026-09-{d}") for d in (25, 28, 29)])
-        one = pd.concat([day_bars(f"2026-09-{d}", n=30, freq="1min") for d in (25, 28, 29)])
+        # Full sessions: the loader now rejects a previous session with too few continuous bars
+        # (tests/test_runner_warmup_freshness.py), so a 30-bar stub would be refused as incomplete.
+        five = pd.concat([day_bars(f"2026-09-{d}", n=75) for d in (25, 28, 29)])
+        one = pd.concat([day_bars(f"2026-09-{d}", n=375, freq="1min") for d in (25, 28, 29)])
         calls = []
 
         def fake(interval, **kw):

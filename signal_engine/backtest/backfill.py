@@ -75,6 +75,16 @@ CALENDAR_ENDED_MESSAGE = (
 #: of day the latest expected session is still the previous one.
 SESSION_COMPLETE_IST = dt.time(15, 40)
 
+#: --daily: from the cash close the scheduled run fetches TODAY's session. A bar that lands after
+#: the run (the closing-auction print) is rewritten by the next run, which starts one day before
+#: each symbol's last bar. The runner's warm-up needs the previous session every morning, so the
+#: 15:35 run must not wait for SESSION_COMPLETE_IST and leave today to the day after tomorrow.
+MARKET_CLOSE_IST = dt.time(15, 30)
+
+
+def _now() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="Asia/Kolkata")
+
 
 @dataclass
 class SymbolResult:
@@ -321,11 +331,16 @@ def backfill(symbols: list[str], start: str, end: str | None = None, *,
 
 
 def extend_existing(interval: str = "1m", *, min_stale: int = 2,
-                    historify_db: str = "db/historify.duckdb", **kw) -> list[SymbolResult]:
+                    historify_db: str = "db/historify.duckdb",
+                    through: dt.date | None = None, **kw) -> list[SymbolResult]:
     """Bring every symbol already in the store up to today.
 
     Starts each symbol one day before its own last bar, so a partially-downloaded final
     session is completed rather than left with a hole in the middle of it.
+
+    `through` (a calendar session, see daily_target) fetches every symbol whose last bar is older
+    than it. Without it, `min_stale` calendar days decide, which skips a symbol one day behind:
+    run daily, that fetched the bulk of the store only every other trading day.
 
     A symbol is also retried when it lags the store-wide latest bar, even if it is under
     `min_stale`. Without this, a symbol whose write failed today (e.g. a DuckDB lock
@@ -335,7 +350,8 @@ def extend_existing(interval: str = "1m", *, min_stale: int = 2,
     cov = coverage(interval, historify_db)
     if cov.empty:
         return []
-    todo = cov[(cov.stale_days >= min_stale) | (cov["last"] < cov["last"].max())]
+    behind = cov["last"] < through if through is not None else cov.stale_days >= min_stale
+    todo = cov[behind | (cov["last"] < cov["last"].max())]
     out = []
     for row in todo.itertuples():
         start = (pd.Timestamp(row.last) - pd.Timedelta(days=1)).date().isoformat()
@@ -355,13 +371,21 @@ def _expected_sessions() -> Callable[[dt.date, dt.date], Iterable[dt.date]]:
 
 
 def expected_last_session(expected: Callable[[dt.date, dt.date], Iterable[dt.date]],
-                          now: pd.Timestamp) -> dt.date | None:
+                          now: pd.Timestamp,
+                          complete_at: dt.time = SESSION_COMPLETE_IST) -> dt.date | None:
     """The latest session whose bars should be in the store at `now` (an IST timestamp)."""
     day = now.date()
-    if now.time() < SESSION_COMPLETE_IST:
+    if now.time() < complete_at:
         day -= dt.timedelta(days=1)
     sessions = list(expected(day - dt.timedelta(days=15), day))
     return sessions[-1] if sessions else None
+
+
+def daily_target(expected: Callable[[dt.date, dt.date], Iterable[dt.date]],
+                 now: pd.Timestamp) -> dt.date | None:
+    """The session a --daily run brings the store up to: today once the cash market has closed,
+    otherwise the last session before today. Holidays and weekends resolve to the last session."""
+    return expected_last_session(expected, now, complete_at=MARKET_CLOSE_IST)
 
 
 def _split_run(run: list[dt.date], max_days: int) -> list[tuple[dt.date, dt.date]]:
@@ -526,6 +550,9 @@ def main() -> None:
                          "session; also counts interior gaps")
     ap.add_argument("--tolerate", default="",
                     help="with --verify: comma-separated symbols already known to be unservable")
+    ap.add_argument("--daily", action="store_true",
+                    help="the scheduled run: extend every symbol behind the calendar's latest "
+                         "session (today once the cash market has closed), and verify against it")
     args = ap.parse_args()
 
     logging.getLogger().setLevel(logging.WARNING)
@@ -551,7 +578,7 @@ def main() -> None:
     elif args.symbols:
         syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     else:
-        res = extend_existing(args.interval, dry_run=args.dry_run)
+        res = extend_existing(args.interval, dry_run=args.dry_run, **_extend_gate(args))
         print(pd.DataFrame([vars(r) for r in res]).to_string(index=False))
         return
 
@@ -561,6 +588,22 @@ def main() -> None:
     print(pd.DataFrame([vars(r) for r in res]).to_string(index=False))
 
 
+def _extend_gate(args) -> dict:
+    """extend_existing's gate for this run. --daily targets the calendar session; when the
+    calendar cannot answer it falls back to every symbol not updated today, so the store keeps
+    moving and verify (exit 3) reports the calendar."""
+    if not args.daily:
+        return {}
+    from signal_engine.backtest.data_readiness.calendar import CalendarError
+
+    try:
+        return {"through": daily_target(_expected_sessions(), _now())}
+    except CalendarError as exc:
+        print(f"WARNING: calendar cannot give today's target ({exc}); extending every symbol "
+              "not updated today instead")
+        return {"min_stale": 1}
+
+
 def _main_calendar_modes(args) -> bool:
     """--verify and --repair-gaps: the modes that need the NSE calendar. True when one ran (verify
     exits through `sys.exit`); `main` turns a `CalendarError` into the calendar-ended message."""
@@ -568,7 +611,7 @@ def _main_calendar_modes(args) -> bool:
 
     if args.verify:
         expected = _expected_sessions()
-        last = expected_last_session(expected, pd.Timestamp.now(tz="Asia/Kolkata"))
+        last = (daily_target if args.daily else expected_last_session)(expected, _now())
         tolerate = {s.strip().upper() for s in args.tolerate.split(",") if s.strip()}
         bad = verify_current(args.interval, expected_last=last, tolerate=tolerate)
         depth = INTRADAY_DEPTH_DAYS if args.interval == "1m" else None

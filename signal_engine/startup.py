@@ -747,10 +747,17 @@ async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
             halted=mode_guard.is_halted,
             stale_limit_s=settings.stale_signal_seconds,
             product=settings.product,
+            alert=_runner_warmup_alert,
         )
     except (service.RunnerStartError, single_source.SingleSourceError):
         logger.exception("Python signal runner could not start")
         return None
+
+
+async def _runner_warmup_alert(text: str) -> None:
+    """Symbols the runner excluded for stale or incomplete history. Not in notifier.EVENT_LEVELS,
+    so it is delivered at every notify_level, like every other failure alert."""
+    await notifier.notify_event("runner_warmup_rejected", text)
 
 
 def start_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> None:

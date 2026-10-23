@@ -328,3 +328,59 @@ class TestStart:
         asyncio.run(go())
         logger.remove(hid)
         assert any("no dispatcher" in ln for ln in lines)
+
+
+class TestWarmupReporter:
+    """Symbols excluded at warm-up for stale or incomplete history reach the operator."""
+
+    def test_the_report_is_sent_from_the_warm_up_thread_to_the_loop(self):
+        sent = []
+
+        async def alert(text):
+            sent.append(text)
+
+        async def go():
+            loop = asyncio.get_running_loop()
+            report = service.warmup_reporter(alert, loop)
+            rejected = {"PFC": "stale: newest stored session 2026-10-12, previous session 2026-10-13"}
+            await loop.run_in_executor(None, report, dt.date(2026, 10, 14), rejected)
+            await asyncio.sleep(0.05)
+
+        asyncio.run(go())
+        assert len(sent) == 1
+        assert "RUNNER WARM-UP 2026-10-14" in sent[0] and "PFC" in sent[0] and "2026-10-12" in sent[0]
+
+    def test_no_alert_configured_is_a_no_op(self):
+        assert service.warmup_reporter(None, None) is None
+
+    def test_every_stock_stale_at_start_keeps_the_runner_off_and_alerts_once(self, tmp_path, monkeypatch):
+        """All runner stocks rejected at start-up: service.start returns None (runner not started,
+        CRITICAL "NOT started"), the operator gets one alert, and the engine itself carries on."""
+        from signal_engine.tests.test_runner_warmup_freshness import _store
+
+        # cfg() fixes this module's universe to TCS and INFY: one stale, one with no bars at all.
+        _store(monkeypatch, {"TCS": [("2026-10-12", 3333.0)]})
+        sent, lines = [], []
+        hid = logger.add(lambda m: lines.append(str(m)), level="CRITICAL")
+
+        async def alert(text):
+            sent.append(text)
+
+        args = start_args(
+            tmp_path, loader=None, historify_symbols=lambda: ["TCS", "INFY"],
+            clock=SimClock(pd.Timestamp("2026-10-14 09:00", tz=IST)), alert=alert,
+        )
+
+        async def go():
+            started = await service.start(cfg(), **args)
+            await asyncio.sleep(0.05)  # the alert is handed to the loop from the warm-up thread
+            return started
+
+        try:
+            assert asyncio.run(go()) is None
+        finally:
+            logger.remove(hid)
+            args["state"].close()
+        assert any("NOT started" in ln and "no symbol warmed up" in ln for ln in lines)
+        assert len(sent) == 1 and "2 symbol(s) excluded" in sent[0]
+        assert "TCS: stale" in sent[0] and "INFY: no stored bars" in sent[0]

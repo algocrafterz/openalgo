@@ -272,3 +272,82 @@ def test_a_calendar_that_does_not_cover_today_stops_verify_and_repair_with_an_ex
     assert "official NSE" in out and "nse_calendar.yaml" in out
     assert "no sessions were guessed" in out and "2027-01-04" in out
     assert requested == []                      # no broker request, no false gap repair
+
+
+# ---- daily extend (2026-10-23) -----------------------------------------------------------------
+# With min_stale=2 the 15:35 run skipped every symbol that was only one day stale, so the bulk fetch
+# ran every other trading day and the runner's warm-up lacked the previous session on the mornings in
+# between (2026-10-14 PFC traded on 10-12's value area). --daily targets the NSE calendar's session:
+# today once the cash market has closed.
+
+def _ist(ts):
+    return pd.Timestamp(ts, tz="Asia/Kolkata")
+
+
+def test_daily_target_is_today_once_the_cash_market_has_closed():
+    expected = bf._expected_sessions()
+    assert bf.daily_target(expected, _ist("2026-10-22 15:35")) == D(2026, 10, 22)
+    assert bf.daily_target(expected, _ist("2026-10-22 15:29")) == D(2026, 10, 21)
+
+
+def test_daily_target_on_a_holiday_and_a_weekend_is_the_last_session():
+    expected = bf._expected_sessions()
+    assert bf.daily_target(expected, _ist("2026-10-20 15:35")) == D(2026, 10, 19)  # NSE holiday
+    assert bf.daily_target(expected, _ist("2026-10-24 15:35")) == D(2026, 10, 23)  # Saturday
+
+
+def test_extend_through_a_session_fetches_every_symbol_behind_it(store, monkeypatch):
+    path, put = store
+    put("BEHIND", "NSE", [D(2026, 10, 21)])
+    put("CURRENT", "NSE", [D(2026, 10, 22)])
+    calls = []
+    monkeypatch.setattr(bf, "backfill", lambda syms, start, **k: calls.append((syms[0], start)) or [])
+    bf.extend_existing("1m", through=D(2026, 10, 22), historify_db=path)
+    assert calls == [("BEHIND", "2026-10-20")]  # one day before its last bar, through today
+
+
+def test_extend_through_on_a_holiday_fetches_nothing_new(store, monkeypatch):
+    path, put = store
+    put("A", "NSE", [D(2026, 10, 19)])
+    calls = []
+    monkeypatch.setattr(bf, "backfill", lambda syms, start, **k: calls.append(syms[0]) or [])
+    bf.extend_existing("1m", through=D(2026, 10, 19), historify_db=path)
+    assert calls == []
+
+
+def _run_main(monkeypatch, argv, now):
+    monkeypatch.setattr(bf, "_now", lambda: _ist(now))
+    monkeypatch.setattr("sys.argv", ["backfill", *argv])
+    bf.main()
+
+
+def test_the_daily_flag_extends_through_todays_session(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(bf, "extend_existing", lambda interval, **k: seen.update(k, interval=interval) or [])
+    _run_main(monkeypatch, ["--interval", "1m", "--daily"], "2026-10-22 15:35")
+    assert seen["interval"] == "1m" and seen["through"] == D(2026, 10, 22)
+
+
+def test_daily_verify_flags_a_symbol_whose_fetch_failed_today(store, monkeypatch, tmp_path):
+    import shutil
+
+    path, put = store
+    put("FETCHED", "NSE", [D(2026, 10, 22)])
+    put("FAILED", "NSE", [D(2026, 10, 21)])
+    (tmp_path / "db").mkdir()
+    shutil.copy(path, tmp_path / "db" / "historify.duckdb")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(bf, "find_gaps", lambda *a, **k: {})
+    with pytest.raises(SystemExit) as stop:
+        _run_main(monkeypatch, ["--interval", "1m", "--verify", "--daily"], "2026-10-22 15:36")
+    assert stop.value.code == 1
+
+
+def test_without_a_calendar_daily_extend_falls_back_to_anything_not_updated_today(monkeypatch, capsys):
+    _calendar_ended(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(bf, "extend_existing", lambda interval, **k: seen.update(k) or [])
+    _run_main(monkeypatch, ["--interval", "1m", "--daily"], "2027-01-04 15:35")
+    assert seen.get("min_stale") == 1 and "through" not in seen
+    assert "calendar" in capsys.readouterr().out
+

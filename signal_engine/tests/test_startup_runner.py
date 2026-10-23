@@ -83,6 +83,22 @@ class TestStartRunnerService:
         assert kw["time_exit"] == (14, 45) and kw["stale_limit_s"] == 60 and kw["product"] == "MIS"
 
     @pytest.mark.asyncio
+    async def test_warm_up_exclusions_are_alerted_through_the_notifier(self):
+        st = SimpleNamespace(
+            runner=runner_cfg(enabled=True), time_exit_hour=14, time_exit_minute=45,
+            stale_signal_seconds=60, product="MIS",
+        )
+        with (
+            patch.object(startup, "settings", st),
+            patch.object(service, "start", AsyncMock(return_value=object())) as start,
+            patch.object(startup.notifier, "notify_event", AsyncMock()) as notify_event,
+        ):
+            await startup._start_runner_service(MagicMock(), "analyze", AsyncMock())
+            await start.await_args.kwargs["alert"]("RUNNER WARM-UP 2026-10-14: 1 symbol(s) excluded")
+        notify_event.assert_awaited_once()
+        assert notify_event.await_args.args[0] == "runner_warmup_rejected"
+
+    @pytest.mark.asyncio
     async def test_start_errors_are_contained_and_logged(self):
         st = SimpleNamespace(
             runner=runner_cfg(enabled=True),
