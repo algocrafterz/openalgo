@@ -103,8 +103,8 @@ from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
-from blueprints.strategy_pnl import strategy_pnl_bp  # Per-strategy P&L page
 from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
+from blueprints.strategy_pnl import strategy_pnl_bp  # Per-strategy P&L page
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
