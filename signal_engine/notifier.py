@@ -165,7 +165,9 @@ EVENT_LEVELS = {
     "day_summary": "quiet",
 }
 
-_LEVEL_RANK = {"quiet": 0, "normal": 1, "verbose": 2}
+#: `alerts` (2026-10-23) sits below quiet: every event in EVENT_LEVELS is dropped, so only
+#: failures and unclassified events go out. Outcomes and the day summary are on the OpenAlgo GUI.
+_LEVEL_RANK = {"alerts": -1, "quiet": 0, "normal": 1, "verbose": 2}
 
 
 def should_notify(event: str, level: str) -> bool:
@@ -181,6 +183,11 @@ def should_notify(event: str, level: str) -> bool:
     if configured is None:
         return True
     return configured >= _LEVEL_RANK[required]
+
+
+def day_summary_enabled() -> bool:
+    """Whether the configured notify_level sends the day summary (`alerts` does not)."""
+    return should_notify("day_summary", getattr(settings, "notify_level", "normal"))
 
 
 #: Events mirrored into the strategy's OWN channel as well as the admin one.
@@ -212,6 +219,8 @@ async def _mirror_to_strategy(event: str, text: str, strategy: str) -> None:
     """Best-effort copy into the strategy's own channel. Never raises, and never affects
     whether the admin copy is considered delivered."""
     if event not in _MIRRORED_TO_STRATEGY or not strategy or _client is None:
+        return
+    if not should_notify(event, getattr(settings, "notify_level", "normal")):
         return
     phase = await _current_phase()
     channel = _channel_for_strategy(strategy, phase)

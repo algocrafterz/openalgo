@@ -610,17 +610,23 @@ class PositionTracker:
         strategy_capital = {
             r.strategy: self._risk_engine.last_known_capital_for(r.strategy) for r in records
         }
-        sent = await notifier.notify_day_summary(
-            trades=counts["trades"],
-            wins=counts["wins"],
-            losses=counts["losses"],
-            net_pnl=counts["net_pnl"],
-            capital=capital,
-            time_exits=counts["time_exits"],
-            trade_records=records,
-            strategy_capital=strategy_capital,
-            degraded=degraded,
-        )
+        if notifier.day_summary_enabled():
+            sent = await notifier.notify_day_summary(
+                trades=counts["trades"],
+                wins=counts["wins"],
+                losses=counts["losses"],
+                net_pnl=counts["net_pnl"],
+                capital=capital,
+                time_exits=counts["time_exits"],
+                trade_records=records,
+                strategy_capital=strategy_capital,
+                degraded=degraded,
+            )
+        else:
+            # notify_level `alerts`: the summary is on the GUI. The day is still marked and the
+            # reconciliation canary below still runs; a False here would be retried all day.
+            logger.info("Day summary not sent: notify_level suppresses it")
+            sent = True
         if not sent:
             # 2026-09-09: this used to mark itself done unconditionally, so a Telegram
             # client that wasn't ready yet (transient - the client connects moments after
