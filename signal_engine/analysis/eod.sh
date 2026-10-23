@@ -48,20 +48,26 @@ fi
 # verification to an unknown hung process before it cleared on its own by 2026-09-21 (see
 # docs/PRD.md). A run this script performs takes seconds to at most a couple of minutes; nothing
 # legitimate should ever hold this lock anywhere near STALE_LOCK_SECONDS, so a lock older than
-# that is abandoned, not active - remove it before trying to acquire a fresh one.
+# that is abandoned, not active - take the lock over from it.
+#
+# The age test runs only when the lock is actually HELD. The file itself outlives every run
+# (flock never deletes it), so testing the file's age alone flagged yesterday's finished run
+# as "abandoned" every day.
 STALE_LOCK_SECONDS=$((2 * 3600))
-if [ -f "$LOCK" ]; then
-  lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || echo 0) ))
-  if [ "$lock_age" -gt "$STALE_LOCK_SECONDS" ]; then
-    echo "WARNING: $LOCK is ${lock_age}s old (> ${STALE_LOCK_SECONDS}s) - treating as abandoned, not a live run. Removing."
-    rm -f "$LOCK"
-  fi
-fi
-exec 9>"$LOCK"
+lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || date +%s) ))
+exec 9>>"$LOCK"
 if ! flock -n 9; then
-  echo "FATAL: another EOD run is in progress ($LOCK)"
-  exit 1
+  if [ "$lock_age" -le "$STALE_LOCK_SECONDS" ]; then
+    echo "FATAL: another EOD run is in progress ($LOCK)"
+    exit 1
+  fi
+  echo "WARNING: $LOCK held for ${lock_age}s (> ${STALE_LOCK_SECONDS}s) - treating the holder as hung. Taking over."
+  exec 9>&-
+  rm -f "$LOCK"
+  exec 9>>"$LOCK"
+  flock -n 9 || { echo "FATAL: cannot take over $LOCK"; exit 1; }
 fi
+touch "$LOCK"
 
 UV="$(command -v uv || echo /usr/local/bin/uv)"
 run() { PYTHONPATH="$REPO" "$UV" run python "$@"; }

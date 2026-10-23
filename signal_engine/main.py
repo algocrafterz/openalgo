@@ -1543,6 +1543,7 @@ async def _resolve_entry_quantity(
             msg = f"Insufficient capital after margin check — {signal.symbol} requires more margin than available (capital={capital:,.0f})"
             logger.warning(msg)
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+            await _decline(signal, stage="margin", reason=msg)
             return None
 
     # Apply test qty cap if configured (for minimal exposure live testing)

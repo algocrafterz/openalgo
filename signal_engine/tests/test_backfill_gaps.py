@@ -201,6 +201,19 @@ def test_verify_lists_symbols_behind_the_last_expected_session(store):
     assert list(tolerated.symbol) == ["NIFTY"]
 
 
+def test_verify_reports_a_symbol_the_interval_has_never_stored(store):
+    """verify only looked at symbols already in that interval's store, so one that was never
+    backfilled for it (M&M had 1m history and no daily bars at all) was invisible to it."""
+    path, put = store
+    put("OK", "NSE", [D(2026, 10, 19)], interval="1m")
+    put("OK", "NSE", [D(2026, 10, 19)], interval="D")
+    put("M&M", "NSE", [D(2026, 10, 19)], interval="1m")
+    bad = bf.verify_current("D", expected_last=D(2026, 10, 19), historify_db=path)
+    assert list(bad.symbol) == ["M&M"]
+    assert bf.verify_current("D", expected_last=D(2026, 10, 19), historify_db=path,
+                             tolerate={"M&M"}).empty
+
+
 def test_expected_last_session_waits_for_the_close_and_skips_holidays():
     def expected(a, b):
         return [s for s in _weekdays(a, b) if s != D(2026, 10, 2)]
@@ -260,7 +273,16 @@ def _calendar_ended(monkeypatch):
 
 @pytest.mark.parametrize("flag", ["--verify", "--repair-gaps"])
 def test_a_calendar_that_does_not_cover_today_stops_verify_and_repair_with_an_explanation(
-        monkeypatch, capsys, flag):
+        monkeypatch, capsys, flag, store, tmp_path):
+    # main() reads the relative default db/historify.duckdb; without this the test opened the
+    # machine's real store, and failed where none exists (a fresh worktree).
+    import shutil
+
+    path, put = store
+    put("OK", "NSE", [D(2026, 10, 19)])
+    (tmp_path / "db").mkdir()
+    shutil.copy(path, tmp_path / "db" / "historify.duckdb")
+    monkeypatch.chdir(tmp_path)
     _calendar_ended(monkeypatch)
     requested = []
     monkeypatch.setattr(bf, "backfill", lambda *a, **k: requested.append(a) or [])

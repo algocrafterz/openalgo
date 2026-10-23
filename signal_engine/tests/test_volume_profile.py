@@ -149,3 +149,21 @@ def test_all_sessions_skipped_yields_real_nan_not_none():
     ppoc, pval, pvah = vp.prev_session_value_area(df, day)
     assert ppoc.dtype == np.float64
     assert not np.isfinite(ppoc.iloc[0])
+
+
+def test_the_closing_auction_print_does_not_set_the_poc():
+    """Since 2026-08-03 NSE's closing auction shows as one bar stamped about 15:28 holding about
+    half the day's volume at the close. Profiles use the continuous market only (bars before
+    15:15, features/session.py), so that print must not become the POC."""
+    continuous = _session("2026-10-21", [100.0] * 2 + [101.0] * 10 + [102.0] * 2,
+                          [100] * 2 + [1000] * 10 + [100] * 2)
+    auction_at = pd.Timestamp("2026-10-21 15:28", tz=IST)
+    auction = pd.DataFrame({"Open": [104.0], "High": [104.05], "Low": [103.95],
+                            "Close": [104.0], "Volume": [50_000]}, index=[auction_at])
+    df = pd.concat([continuous, auction]).sort_index()
+    day = pd.Series(df.index.date, index=df.index)
+
+    out = vp.session_value_area(df, day, value_area_pct=70.0)
+
+    assert out.iloc[0]["poc"] == 101.0
+    assert out.iloc[0]["vah"] < 104.0

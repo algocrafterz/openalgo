@@ -8,7 +8,7 @@ import pytest
 from signal_engine.api_client import (
     cancel_order,
     fetch_available_capital,
-    fetch_open_position,
+    fetch_net_position,
     fetch_order_status,
     fetch_positionbook,
     fetch_realised_pnl,
@@ -63,38 +63,45 @@ class TestFetchAvailableCapital:
             assert result == 0.0
 
 
-class TestFetchOpenPosition:
+class TestFetchNetPosition:
     @pytest.mark.asyncio
     async def test_position_open(self):
         data = {"status": "success", "quantity": 50}
         with patch("httpx.AsyncClient", return_value=_mock_client(data)):
-            result = await fetch_open_position("RELIANCE", "ORB", "NSE", "MIS")
+            result = await fetch_net_position("RELIANCE", "ORB", "NSE", "MIS")
             assert result == 50
 
     @pytest.mark.asyncio
     async def test_position_closed(self):
         data = {"status": "success", "quantity": 0}
         with patch("httpx.AsyncClient", return_value=_mock_client(data)):
-            result = await fetch_open_position("RELIANCE", "ORB", "NSE", "MIS")
+            result = await fetch_net_position("RELIANCE", "ORB", "NSE", "MIS")
             assert result == 0
 
     @pytest.mark.asyncio
-    async def test_api_error_returns_negative_one(self):
-        data = {"status": "error"}
+    async def test_a_one_share_short_is_a_quantity_not_an_error(self):
+        data = {"status": "success", "quantity": -1}
         with patch("httpx.AsyncClient", return_value=_mock_client(data)):
-            result = await fetch_open_position("RELIANCE", "ORB", "NSE", "MIS")
+            result = await fetch_net_position("RELIANCE", "ORB", "NSE", "MIS")
             assert result == -1
 
     @pytest.mark.asyncio
-    async def test_network_error_returns_negative_one(self):
+    async def test_api_error_returns_none(self):
+        data = {"status": "error"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            result = await fetch_net_position("RELIANCE", "ORB", "NSE", "MIS")
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_none(self):
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=ConnectionError("fail"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await fetch_open_position("RELIANCE", "ORB", "NSE", "MIS")
-            assert result == -1
+            result = await fetch_net_position("RELIANCE", "ORB", "NSE", "MIS")
+            assert result is None
 
 
 class TestFetchRealisedPnl:

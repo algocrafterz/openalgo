@@ -583,7 +583,7 @@ def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True)
 
     def _sort_key(item):
         _strategy, row = item
-        direction_ok = str(row.get("direction", "")).upper() == wanted_direction
+        direction_ok = _direction_name(row.get("direction")) == wanted_direction
         qty_ok = broker_qty > 0 and int(row.get("quantity", 0) or 0) == int(broker_qty)
         tier = 0 if (direction_ok and qty_ok) else (1 if direction_ok else 2)
         return (tier, _invert_timestamp(row.get("executed_at")))
@@ -625,7 +625,7 @@ def _lookup_entry_legs(bsymbol: str, broker_qty: int = 0, is_long: bool = True) 
 
     wanted_direction = "LONG" if is_long else "SHORT"
     same_direction = [
-        (s, r) for s, r in candidates if str(r.get("direction", "")).upper() == wanted_direction
+        (s, r) for s, r in candidates if _direction_name(r.get("direction")) == wanted_direction
     ]
     if (
         len(same_direction) > 1
@@ -644,6 +644,17 @@ def _lookup_entry_legs(bsymbol: str, broker_qty: int = 0, is_long: bool = True) 
 
     row, strategy = _lookup_entry_trade(bsymbol, broker_qty=broker_qty, is_long=is_long)
     return [(strategy, row)] if row is not None else []
+
+
+def _direction_name(direction) -> str:
+    """"LONG"/"SHORT" for a Direction member or a plain string.
+
+    fetch_last_entry_trade returns a Direction, and str() of a (str, Enum) member is
+    "Direction.LONG" on Python 3.11+, so comparing str(direction) never matched a side.
+    """
+    if isinstance(direction, Direction):
+        return direction.value
+    return str(direction or "").upper()
 
 
 def _invert_timestamp(executed_at) -> tuple:

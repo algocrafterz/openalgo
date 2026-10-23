@@ -516,13 +516,35 @@ def verify_current(interval: str = "1m", *, expected_last: dt.date,
     """Symbols whose latest bar is older than `expected_last`, minus the `tolerate`d ones.
 
     A run that exits 0 proves only that nothing raised: an empty broker answer is stored as
-    nothing and reported as success. This is the check that the store is actually current."""
+    nothing and reported as success. This is the check that the store is actually current.
+
+    A symbol stored under another interval but never under this one is reported too, with no
+    `last` and no `behind_days`: coverage() only sees what this interval holds, so M&M (1m
+    history, no daily bars at all) was invisible here."""
+    tolerate = set(tolerate)
     cov = coverage(interval, historify_db)
-    if cov.empty:
-        return cov
-    bad = cov[(cov["last"] < expected_last) & ~cov["symbol"].isin(set(tolerate))]
-    return bad.assign(behind_days=[(expected_last - d).days for d in bad["last"]]
-                      ).reset_index(drop=True)
+    bad = cov[(cov["last"] < expected_last) & ~cov["symbol"].isin(tolerate)] if not cov.empty else cov
+    bad = bad.assign(behind_days=[(expected_last - d).days for d in bad["last"]])
+    held = set(zip(cov["symbol"], cov["exchange"], strict=True)) if not cov.empty else set()
+    missing = sorted(p for p in _stored_pairs(historify_db) - held if p[0] not in tolerate)
+    if missing:
+        absent = pd.DataFrame({"symbol": [s for s, _ in missing],
+                               "exchange": [e for _, e in missing],
+                               "last": None, "behind_days": None})
+        bad = absent if bad.empty else pd.concat([bad, absent], ignore_index=True)
+    return bad.reset_index(drop=True)
+
+
+def _stored_pairs(db_path: str) -> set[tuple[str, str]]:
+    """Every (symbol, exchange) the store holds under any interval."""
+    import duckdb
+
+    con = duckdb.connect(db_path, read_only=True)
+    try:
+        rows = con.execute("SELECT DISTINCT symbol, exchange FROM market_data").fetchall()
+    finally:
+        con.close()
+    return {(s, e) for s, e in rows}
 
 
 def main() -> None:

@@ -640,6 +640,21 @@ class TestEntryMargin:
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_margin_floor_rejection_leaves_a_declined_row(self):
+        """Every other pre-order refusal writes a DECLINED row; this one used to leave none."""
+        h = harness()
+        h.risk.get_sizing_capital.return_value = 100000.0
+        h.risk.calculate_quantity.return_value = 10
+        with h.stack:
+            with (
+                patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=0)),
+                patch("signal_engine.main._decline", new=AsyncMock()) as decline,
+            ):
+                await _handle_entry(_entry_signal())
+        decline.assert_awaited_once()
+        assert decline.call_args.kwargs["stage"] == "margin"
+
+    @pytest.mark.asyncio
     async def test_analyze_mode_skips_margin_check_entirely(self):
         h = harness(fetch_trading_mode=AsyncMock(return_value=("analyze", True)))
         h.risk.get_sizing_capital.return_value = 100000.0

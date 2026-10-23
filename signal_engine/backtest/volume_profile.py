@@ -18,8 +18,7 @@ WHAT THIS IS NOT
     a terminal-grade Market Profile.
 
 BUCKET SIZING
-    NSE's exchange tick is a flat Rs 0.05 regardless of price. Slicing a session at
-    that raw tick on a Rs 3,850 stock (TCS) with a Rs 50-80 daily range produces
+    Slicing a session at a raw Rs 0.05 step on a Rs 3,850 stock (TCS) with a Rs 50-80 daily range produces
     ~1,000 nearly-empty buckets - too fine to summarize a distribution. `_prices_per_row`
     instead sizes the bucket so each session gets roughly `TARGET_ROWS` buckets,
     regardless of the stock's absolute price - the standard practice for volume
@@ -39,7 +38,10 @@ import numpy as np
 import pandas as pd
 from market_profile import MarketProfile
 
-#: NSE equity tick size - uniform regardless of price.
+from signal_engine.features.session import continuous_session
+
+#: Base unit for bucket sizing only (buckets are about 1/TARGET_ROWS of the session range).
+#: Not the exchange tick: NSE ticks are tiered by price.
 TICK_SIZE = 0.05
 
 #: Buckets to aim for per session. 25-40 is the usual range quoted for volume
@@ -69,7 +71,13 @@ def session_value_area(df: pd.DataFrame, day: pd.Series,
     run through `indicators.add_session_columns`). `day` is that function's own `day`
     column - passed separately, as every other indicator here does, rather than
     re-derived.
+
+    Only the continuous market (bars before 15:15) is profiled, as in features/value_area.py:
+    from 2026-08-03 NSE's closing auction prints about half the day's volume in one bar at the
+    close, which would otherwise pin the POC there.
     """
+    df = continuous_session(df)
+    day = day.loc[df.index]
     rows: dict = {}
     for d, idx in df.groupby(day).groups.items():
         sub = df.loc[idx]
