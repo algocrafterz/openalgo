@@ -8,6 +8,7 @@ hole. That keeps the Python slot index identical to the one the Pine script accu
 from __future__ import annotations
 
 import datetime as dt
+import functools
 
 import pandas as pd
 
@@ -20,6 +21,27 @@ import pandas as pd
 #: trading, so they use bars before 15:15 in every era; this keeps old and new sessions
 #: comparable and stops one auction print from pinning the POC to the close.
 CONTINUOUS_END = dt.time(15, 15)
+
+
+@functools.cache
+def special_sessions() -> frozenset[dt.date]:
+    """The NSE calendar's special (Muhurat) session dates.
+
+    Policy (2026-10-23): a special session is not trading history. It is about an hour long
+    (2025-10-21: a median 72 one-minute bars, about 22% of a regular day's volume), so its value
+    area, volume baseline and day levels are not comparable with a regular session's.
+    """
+    from signal_engine.backtest.data_readiness.calendar import load_calendar
+
+    return frozenset(load_calendar().specials)
+
+
+def drop_special_sessions(df: pd.DataFrame) -> pd.DataFrame:
+    """Bars of regular sessions only (IST index required). The store itself keeps the bars."""
+    specials = special_sessions()
+    if df.empty or not specials:
+        return df
+    return df[~pd.Index(df.index.date).isin(specials)]
 
 
 def continuous_session(df: pd.DataFrame) -> pd.DataFrame:

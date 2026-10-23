@@ -27,6 +27,7 @@ import pandas as pd
 from signal_engine.backtest.data_readiness import intraday_convert as ic
 from signal_engine.backtest.data_readiness import snapshot
 from signal_engine.backtest.data_readiness import state as st
+from signal_engine.features.session import special_sessions
 from signal_engine.timeutils import IST
 from utils.logging import get_logger
 
@@ -331,6 +332,10 @@ def read_bars(con, manifest: dict, contract, symbols, interval: str, end,
     avail = availability(load_quality(manifest, root), required_families(contract),
                          manifest.get("usable_range_removals") or [], end=stop)
     avail = apply_data_exclusions(con, contract, avail, symbols)
+    # Special (Muhurat) sessions are not trading history (features.session.special_sessions),
+    # the same rule data.from_historify applies. Dropped from `avail`, not from the loaded bars,
+    # so the collector does not report them as sessions with no data.
+    avail = avail[~avail.session.dt.date.isin(special_sessions())]
     has_n = "n_minutes" in {r[0] for r in con.execute("DESCRIBE market_data").fetchall()}
     names = ["Open", "High", "Low", "Close", "Volume"] + (["n_minutes"] if has_n else [])
     out: dict[str, pd.DataFrame] = {}

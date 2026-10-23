@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from signal_engine.features.session import drop_special_sessions
+
 CACHE = Path(os.environ.get("BACKTEST_CACHE", Path(__file__).parent / ".cache"))
 
 #: NSE F&O stock universe - the correct backtest population for an intraday system.
@@ -250,7 +252,9 @@ def _clean_session(df: pd.DataFrame, collector=None, symbol: str | None = None) 
     n_raw = len(df)
     df = df[~df.index.duplicated(keep="last")].sort_index()
     n_dedup = len(df)
-    df = df.between_time(SESSION_OPEN, SESSION_CLOSE)
+    # A special (Muhurat) session is not trading history (features.session.special_sessions);
+    # its bars count as outside hours, so the collector's fields stay the same.
+    df = drop_special_sessions(df).between_time(SESSION_OPEN, SESSION_CLOSE)
     n_hours = len(df)
     o, h, lo_, c = df["Open"], df["High"], df["Low"], df["Close"]
     sane = (h >= lo_) & (h >= o) & (h >= c) & (lo_ <= o) & (lo_ <= c) & (lo_ > 0)

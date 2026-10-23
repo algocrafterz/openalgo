@@ -40,9 +40,11 @@ class HistorifyLoader:
 
       * its newest session is not the calendar's previous session (stale store), or
       * that session is incomplete: fewer than MIN_CONTINUOUS_BARS continuous 1m bars, or none at
-        or after LAST_CONTINUOUS_BAR (a backfill cut off early). Special sessions are exempt.
+        or after LAST_CONTINUOUS_BAR (a backfill cut off early).
 
-    Bars on a day that is not a session (a stray weekend print) are dropped first. If the calendar
+    Only regular sessions count: bars on a day that is not a session (a stray weekend print) or
+    on a special (Muhurat) session are dropped first, so the previous session is the last
+    regular one (features.session.special_sessions has the policy). If the calendar
     cannot answer, every symbol is rejected: no signal is better than one on unknown history.
     """
 
@@ -50,7 +52,6 @@ class HistorifyLoader:
         self._db_path = db_path
         self._calendar = calendar
         self._on_rejected = on_rejected
-        self._specials: set[dt.date] = set()
         self._reported: set[dt.date] = set()
         self._lock = threading.Lock()
         self.rejected: dict[str, str] = {}
@@ -97,20 +98,22 @@ class HistorifyLoader:
 
         try:
             cal = self._calendar or load_calendar()
-            sessions = tuple(cal.expected_sessions(start, day - dt.timedelta(days=1)))
+            specials = set(getattr(cal, "specials", {}) or {})
+            # Regular sessions only: a special (Muhurat) session is not trading history
+            # (features.session.special_sessions), so "previous" skips it.
+            sessions = tuple(
+                d for d in cal.expected_sessions(start, day - dt.timedelta(days=1)) if d not in specials
+            )
         except CalendarError as e:
             return (), f"calendar cannot confirm the previous session ({e})"
         if not sessions:
             return (), f"calendar has no session in {start}..{day - dt.timedelta(days=1)}"
-        self._specials = set(getattr(cal, "specials", {}) or {})
         return sessions, ""
 
     def _problem(self, one: pd.DataFrame, five: pd.DataFrame, previous: dt.date) -> str:
         newest = max(set(one.index.date) & set(five.index.date), default=None)
         if newest != previous:
             return f"stale: newest stored session {newest}, previous session {previous}"
-        if previous in self._specials:
-            return ""
         cont = continuous_session(one[pd.Index(one.index.date) == previous])
         if len(cont) < MIN_CONTINUOUS_BARS or cont.index[-1].time() < LAST_CONTINUOUS_BAR:
             last = cont.index[-1].strftime("%H:%M") if len(cont) else "none"
