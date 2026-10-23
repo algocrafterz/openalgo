@@ -211,10 +211,19 @@ async function chooseExchange(exchange: string) {
   fireEvent.click(await screen.findByRole('option', { name: exchange }))
 }
 
+/**
+ * How long a wait gets before it is called a failure.
+ *
+ * The default is one second, which is enough on a developer's machine and is
+ * not enough on a loaded runner under coverage instrumentation: the Greeks tab
+ * appears once a strategy's legs have been priced, and `npm run test:coverage`
+ * on the slowest of the three Node versions in CI has taken longer than that.
+ * The symptom is a green suite that fails roughly one run in several, always on
+ * a different test, which reads as a regression in whatever pull request
+ * happened to be open.
+ */
 const ASYNC_READY_TIMEOUT = 5_000
 const SLOW_INTEGRATION_TEST_TIMEOUT = 15_000
-// Every test here renders the whole builder: 1-4.3 s each in isolation, against a 5 s default.
-vi.setConfig({ testTimeout: SLOW_INTEGRATION_TEST_TIMEOUT })
 
 async function waitForAddButton() {
   const add = await screen.findByRole('button', { name: /Add Buy/ })
@@ -490,7 +499,7 @@ describe('StrategyBuilder live request orchestration', () => {
     }
     mocks.getOptionChain.mockResolvedValue(farChain)
     renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
+    await screen.findByText('NIFTY13AUG2624600CE')
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
@@ -526,7 +535,7 @@ describe('StrategyBuilder live request orchestration', () => {
     })
 
     renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
+    await screen.findByText('NIFTY13AUG2624600CE')
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
@@ -553,7 +562,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
     expect(screen.queryByText('₹225.00')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
     const rows = await screen.findAllByRole('row')
     const row = rows.find((item) => item.textContent?.includes('24600CE'))
     expect(row).toBeDefined()
@@ -585,7 +594,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.marketAuthenticated = true
     mocks.marketConnectionEpoch = 1
     const view = renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
+    await screen.findByText('NIFTY13AUG2624600CE')
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
@@ -620,7 +629,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.marketAuthenticated = true
     mocks.marketConnectionEpoch = 1
     const view = renderBuilder()
-    await screen.findByText('NIFTY13AUG2624600CE', {}, { timeout: ASYNC_READY_TIMEOUT })
+    await screen.findByText('NIFTY13AUG2624600CE')
     expect(mocks.getOptionChain).not.toHaveBeenCalled()
 
     mocks.marketData = new Map([
@@ -870,9 +879,15 @@ describe('StrategyBuilder live request orchestration', () => {
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
   })
@@ -911,7 +926,7 @@ describe('StrategyBuilder live request orchestration', () => {
 
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
     const greekRows = await screen.findAllByRole('row')
     const positionRow = greekRows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
     expect(positionRow).toBeDefined()
@@ -993,7 +1008,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('18AUG26').length).toBeGreaterThan(0)
     expect(screen.getAllByText('₹225.00').length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
     const greekRows = await screen.findAllByRole('row')
     const farGreekRow = greekRows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farGreekRow).toBeDefined()
@@ -1046,7 +1061,7 @@ describe('StrategyBuilder live request orchestration', () => {
         { withGreeks: true }
       )
 
-      await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+      await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
       let rows = await screen.findAllByRole('row')
       let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
       const nearRow = rows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
@@ -1097,9 +1112,15 @@ describe('StrategyBuilder live request orchestration', () => {
       farIv = 53
       farDelta = 0.61
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
 
       await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(4))
       rows = await screen.findAllByRole('row')
@@ -1147,7 +1168,7 @@ describe('StrategyBuilder live request orchestration', () => {
         expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
       )
 
-      await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+      await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
       let rows = await screen.findAllByRole('row')
       let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
       const initialGreeks = within(farRow as HTMLElement)
@@ -1304,7 +1325,7 @@ describe('StrategyBuilder live request orchestration', () => {
       fireEvent.click(await screen.findByRole('option', { name: 'PE' }))
       await user.click(within(dialog).getByRole('button', { name: 'Modify' }))
 
-      await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+      await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
       const rows = await screen.findAllByRole('row')
       const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
       expect(editedRow).toBeDefined()
@@ -1451,59 +1472,81 @@ describe('StrategyBuilder identity orchestration', () => {
     SLOW_INTEGRATION_TEST_TIMEOUT
   )
 
-  it('does not let an in-flight margin response repopulate state after an identity reset', async () => {
-    const staleMargin = deferred<{
-      status: number
-      data: { status: string; data: { total_margin_required: number } }
-    }>()
-    let marginRequestCount = 0
-    mocks.apiPost.mockImplementation(async (url: string) => {
-      if (url === '/margin') {
-        marginRequestCount += 1
-        if (marginRequestCount === 1) return staleMargin.promise
-        return {
+  it(
+    'does not let an in-flight margin response repopulate state after an identity reset',
+    async () => {
+      const staleMargin = deferred<{
+        status: number
+        data: { status: string; data: { total_margin_required: number } }
+      }>()
+      // The post-reset request is deferred too, so the assertion below is not
+      // racing it. Returning an immediate 20,000 here made the tile appear on its
+      // own once the margin effect's 400ms debounce fired, which is what the
+      // slower `vitest --coverage` run was losing to.
+      const freshMargin = deferred<{
+        status: number
+        data: { status: string; data: { total_margin_required: number } }
+      }>()
+      let marginRequestCount = 0
+      mocks.apiPost.mockImplementation(async (url: string) => {
+        if (url === '/margin') {
+          marginRequestCount += 1
+          if (marginRequestCount === 1) return staleMargin.promise
+          return freshMargin.promise
+        }
+        if (url === '/optiongreeks') {
+          return { status: 200, data: { status: 'success', implied_volatility: 12 } }
+        }
+        if (url === '/syntheticfuture') {
+          return { status: 200, data: { status: 'success', synthetic_future_price: 24_620 } }
+        }
+        return { status: 200, data: { status: 'success' } }
+      })
+
+      renderBuilder()
+      await addOneLeg()
+      await waitFor(
+        () => expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
+        { timeout: 2_000 }
+      )
+
+      await chooseUnderlying('BANKNIFTY')
+      fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
+      await waitFor(() =>
+        expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
+      )
+
+      await act(async () => {
+        staleMargin.resolve({
+          status: 200,
+          data: { status: 'success', data: { total_margin_required: 10_000 } },
+        })
+        await staleMargin.promise
+      })
+
+      await addOneLeg()
+
+      // With the post-reset request still in flight, nothing legitimate can
+      // populate this tile: its presence could only mean the stale in-flight
+      // response repopulated state after the identity reset.
+      expect(screen.queryByText('Margin Req.')).not.toBeInTheDocument()
+
+      // Non-vacuity: the tile is absent because the stale response was discarded,
+      // not because nothing is able to render it. Let the fresh request land and
+      // the fresh figure appears - never the stale 10,000.
+      await act(async () => {
+        freshMargin.resolve({
           status: 200,
           data: { status: 'success', data: { total_margin_required: 20_000 } },
-        }
-      }
-      if (url === '/optiongreeks') {
-        return { status: 200, data: { status: 'success', implied_volatility: 12 } }
-      }
-      if (url === '/syntheticfuture') {
-        return { status: 200, data: { status: 'success', synthetic_future_price: 24_620 } }
-      }
-      return { status: 200, data: { status: 'success' } }
-    })
-
-    renderBuilder()
-    await addOneLeg()
-    await waitFor(
-      () => expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
-      { timeout: 2_000 }
-    )
-
-    await chooseUnderlying('BANKNIFTY')
-    fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
-    await waitFor(() =>
-      expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
-    )
-
-    await act(async () => {
-      staleMargin.resolve({
-        status: 200,
-        data: { status: 'success', data: { total_margin_required: 10_000 } },
+        })
+        await freshMargin.promise
       })
-      await staleMargin.promise
-    })
-
-    await addOneLeg()
-    // The new identity's own margin request (20,000) may land at any time; the stale response
-    // (10,000) must never surface. Asserting the tile is absent raced the fresh request.
-    await waitFor(() => expect(screen.getByText(/20,000/)).toBeInTheDocument(), {
-      timeout: 2_000,
-    })
-    expect(screen.queryByText(/10,000/)).not.toBeInTheDocument()
-  })
+      const marginTile = (await screen.findByText('Margin Req.')).closest('div')
+      await waitFor(() => expect(marginTile).toHaveTextContent('₹20,000.00'))
+      expect(marginTile).not.toHaveTextContent('₹10,000.00')
+    },
+    SLOW_INTEGRATION_TEST_TIMEOUT
+  )
 
   it('hydrates a saved non-default identity and legs before defaulting or fetch effects run', async () => {
     const portfolio = deferred<PortfolioEntry>()
@@ -1704,9 +1747,15 @@ describe('StrategyBuilder identity orchestration', () => {
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
     expect(

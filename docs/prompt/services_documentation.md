@@ -12,10 +12,12 @@ classes, and singleton accessors directly instead of making HTTP calls back into
 the same OpenAlgo process. The document does not replace request schemas in
 [`docs/api`](../api/README.md) when a service also has a public endpoint.
 
-The current service layer contains 71 Python modules under `services/`. Some
-services back REST endpoints, while others run internal workflows, schedulers,
-streaming, analytics, alerts, or risk management. Do not assume that every
-service:
+The current tree contains 80 direct `services/*.py` modules and 103 Python
+modules recursively under `services/`. The direct count is the inventory used
+by this page; subpackages such as `services/strategy_module/` have their own
+reference. Some services back REST endpoints, while others run internal
+workflows, schedulers, streaming, analytics, alerts, or risk management. Do not
+assume that every service:
 
 - has a public REST endpoint;
 - accepts the same arguments as the OpenAlgo SDK;
@@ -41,7 +43,21 @@ Related references:
 - [EventBus design](../design/53-event-bus/README.md)
 - [Order constants](order-constants.md)
 - [Symbol format](symbol-format.md)
+- [Strategy module and RMS](strategy_rms_documentation.md)
 - [Flow import format](flow-import-format.md)
+
+The strategy subpackage is intentionally documented separately. This page
+defines the account-service boundary it reuses; do not copy its engine, state,
+recovery or risk contracts here. Its broker-backed book views call the existing
+authenticated orderbook, tradebook and positionbook services with internal
+credentials: `services/strategy_module/views.py` exposes `strategy_orderbook`,
+`strategy_tradebook` and `strategy_positions`, which reuse
+`get_orderbook_with_auth`, `get_tradebook_with_auth` and
+`get_positionbook_with_auth` for live runs (and the matching sandbox book
+services for sandbox runs). The run's own mode selects live versus sandbox; the platform-wide
+analyzer toggle cannot divert a live strategy, and sandbox never reads the real
+account. Broker rows are narrowed by durable strategy order ids/contracts and
+the browser labels recorded order rows as local audit rather than broker truth.
 
 ## Architecture
 
@@ -275,7 +291,7 @@ place_gtt_order(order_data, api_key=None, auth_token=None, broker=None)
 modify_gtt_order(order_data, api_key=None, auth_token=None, broker=None)
 cancel_gtt_order(trigger_id, api_key=None, auth_token=None, broker=None,
                  strategy=None)
-get_gtt_orderbook(api_key=None, auth_token=None, broker=None)
+get_gtt_orderbook(api_key=None, auth_token=None, broker=None, status="active")  # status: "active" | "all"
 ```
 
 ### Order and account queries
@@ -440,6 +456,15 @@ order facade.
 
 See [Flow import format](flow-import-format.md) for supported node JSON.
 
+Flow records the username and broker that own each successful subscription.
+`release_workflow_subscriptions(workflow_id)` retains failed releases for retry
+and removes successful releases only if their ownership version still matches.
+A subscription shared by another Flow workflow remains subscribed. Delete and
+deactivate hold the workflow execution lock through cleanup: a running workflow
+returns HTTP 409, and a failed release returns HTTP 503 without deleting or
+deactivating the workflow. Retry the operation after the run or proxy recovers;
+an already-inactive workflow also retries pending subscription cleanup.
+
 Primary internal entry points:
 
 ```python
@@ -572,6 +597,14 @@ HistorifyScheduler.delete_schedule(schedule_id)
 Initialize Historify and its scheduler through application startup. Feature
 code should retrieve the initialized scheduler rather than creating a second
 instance.
+
+Historify database mutations are serialized as complete operations. Under
+eventlet their lock is cooperative, and native thread callers enter through
+`real_threading.run_on_hub`; never hold a real bookkeeping lock across a
+database retry or green sleep. Job registry locks protect claims and signals
+only: release them before writing status or calling cleanup, which acquires
+the registry lock itself. A cancellation that loses the processor's terminal
+claim returns 409 rather than overwriting a completed job with `cancelled`.
 
 ### Streaming and market-data state
 
@@ -709,9 +742,8 @@ inside a feature blueprint.
 | `whatsapp_alert_service.py` | Formats and dispatches WhatsApp order/broadcast alerts. |
 | `whatsapp_bot_service.py` | Active WhatsApp pairing state, commands, and synchronous sends. |
 
-`telegram_bot_service_fixed.py` and `telegram_bot_service_v2.py` are not the
-active imports used by `app.py`, the REST namespace, or the Telegram blueprint.
-Do not select them for new integrations.
+The older copies `telegram_bot_service_fixed.py` and `telegram_bot_service_v2.py`
+have been deleted. `telegram_bot_service.py` is the only Telegram bot service.
 
 Alert-service entry points:
 

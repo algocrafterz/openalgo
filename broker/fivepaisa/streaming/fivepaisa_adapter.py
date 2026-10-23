@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 import sys
@@ -12,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from broker.fivepaisa.streaming.fivepaisa_websocket import FivePaisaWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -47,7 +47,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("fivepaisa_websocket")
+        self.logger = get_logger("fivepaisa_websocket")
         self.ws_client = None
         self.user_id = None
         self.client_code = None
@@ -269,6 +269,14 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._stop_event.set()
         with self.lock:
             self.pending_subscriptions.clear()
+            # Held prices belong to the session that is ending. Keeping them
+            # would both hold memory for an adapter nobody is using and let a
+            # price from before the daily token rollover be merged into a tick
+            # after it. Deliberately NOT cleared on an ordinary reconnect: the
+            # snapshot exists to carry LastRate onto depth frames that lack it
+            # (see _methods_for_mode), and dropping it there would reopen the
+            # 0.00 window it was added to close.
+            self.last_snapshot.clear()
 
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
@@ -569,6 +577,23 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # stream) for the same scrip.
             still_needed = self._methods_still_needed(token)
             to_unsubscribe = [m for m in methods if m not in still_needed]
+
+            # Release this token's held-last-value snapshot. Nothing used to
+            # remove these, so the dict grew for the life of the worker - one
+            # entry per (token, mode) that ever ticked, in a process that never
+            # restarts. The staleness matters as much as the size: _apply_snapshot
+            # merges a remembered non-zero value over any field the current tick
+            # reports as 0, so an entry left behind by an unsubscribe can surface
+            # hours later on a re-subscribe as a price that never traded.
+            #
+            # Keyed by (token, mode), and another mode on the same scrip keeps
+            # its own entry - so check for a remaining subscription on this exact
+            # pair rather than on the token alone.
+            if not any(
+                str(sub["token"]) == str(token) and sub["mode"] == mode
+                for sub in self.subscriptions.values()
+            ):
+                self.last_snapshot.pop(f"{token}_{mode}", None)
 
             if self.pending_subscriptions:
                 targets = {(m, tuple(sorted(scrip_data[0].items()))) for m in to_unsubscribe}

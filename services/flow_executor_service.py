@@ -23,7 +23,20 @@ from database.flow_db import (
     get_workflow,
     update_execution_status,
 )
+from services.flow_node_contracts import (
+    EXPIRY_DATE_PATTERN as _EXPIRY_DATE_PATTERN,
+)
+from services.flow_node_contracts import (
+    OPTION_OFFSET_PATTERN as _OPTION_OFFSET_PATTERN,
+)
+from services.flow_node_contracts import (
+    VALID_EXPIRY_TYPES,
+    VALID_LEG_STRIKE_MODES,
+    default_product_for_exchange,
+    select_expiry,
+)
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
+from utils import real_threading as _real_threading
 from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -35,6 +48,16 @@ MAX_NODE_VISITS = 500
 # Logic gates combine the boolean results of their inputs. Wires into these
 # nodes are data edges, not control edges — see the edge filter below.
 GATE_NODE_TYPES = ("andGate", "orGate", "notGate")
+# Nodes that fan out into a TRUE and a FALSE branch. Like a gate, each is
+# combinational: one result per run, however many paths reach it.
+BRANCHING_NODE_TYPES = (
+    "priceCondition",
+    "timeCondition",
+    "timeWindow",
+    "positionCheck",
+    "fundCheck",
+    "varCondition",
+)
 
 # Nodes that place, change or cancel something at the broker. An unresolved
 # {{variable}} in one of their order-defining fields is treated as a failure
@@ -88,9 +111,83 @@ ORDER_CRITICAL_FIELDS = frozenset(
 # What an unresolved reference looks like after interpolation: WorkflowContext
 # returns the original {{...}} text when a path does not resolve.
 _UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
-_EXPIRY_DATE_PATTERN = re.compile(r"\d{2}[A-Z]{3}\d{2}")
-_OPTION_OFFSET_PATTERN = re.compile(r"(?:ATM|(?:ITM|OTM)(?:[1-9]|[1-4]\d|50))")
 _MISSING_ORDER_VALUE = object()
+
+
+#: MCX products that list options in the master contract.
+#:
+#: MCX has no spot instrument, so an option's ATM reference is the near-month
+#: future rather than an index level, and there is no separate derivatives
+#: segment the way NFO is to NSE -- the future, the option and the quote all
+#: live on MCX. option_symbol_service resolves that future itself for every
+#: exchange in its NO_SPOT_EXCHANGES set.
+MCX_OPTION_UNDERLYINGS = (
+    "GOLD",
+    "GOLDM",
+    "SILVER",
+    "SILVERM",
+    "CRUDEOIL",
+    "CRUDEOILM",
+    "NATURALGAS",
+    "NATGASMINI",
+    "COPPER",
+    "ZINC",
+    "MCXBULLDEX",
+)
+
+#: underlying -> (exchange to quote for the ATM reference, exchange the option
+#: trades on). Anything absent is an NSE underlying, which is the overwhelming
+#: majority and keeps this table to the exceptions.
+OPTION_UNDERLYING_EXCHANGES: dict[str, tuple[str, str]] = {
+    "SENSEX": ("BSE_INDEX", "BFO"),
+    "BANKEX": ("BSE_INDEX", "BFO"),
+    "SENSEX50": ("BSE_INDEX", "BFO"),
+    **dict.fromkeys(MCX_OPTION_UNDERLYINGS, ("MCX", "MCX")),
+}
+
+DEFAULT_OPTION_EXCHANGES = ("NSE_INDEX", "NFO")
+
+#: Exchange the author may have declared on the node -> the same pair. Only
+#: consulted for an underlying the table above does not name, so a stored
+#: workflow whose `exchange` still holds the node default cannot reroute a
+#: known index.
+DECLARED_OPTION_EXCHANGES: dict[str, tuple[str, str]] = {
+    "BFO": ("BSE_INDEX", "BFO"),
+    "BSE": ("BSE_INDEX", "BFO"),
+    "BSE_INDEX": ("BSE_INDEX", "BFO"),
+    "NFO": ("NSE_INDEX", "NFO"),
+    "NSE": ("NSE_INDEX", "NFO"),
+    "NSE_INDEX": ("NSE_INDEX", "NFO"),
+    # No-spot exchanges quote and trade on themselves.
+    "MCX": ("MCX", "MCX"),
+    "CDS": ("CDS", "CDS"),
+    "BCD": ("BCD", "BCD"),
+    "NCDEX": ("NCDEX", "NCDEX"),
+    "NCO": ("NCO", "NCO"),
+}
+
+
+def resolve_option_exchanges(underlying: str, declared: str = "") -> tuple[str, str]:
+    """The quote exchange and the option exchange for an options underlying.
+
+    Both options nodes need this pair, and keeping it in one place is what
+    stops them drifting apart -- they already carried two copies of a hardcoded
+    BSE list, and adding MCX to only one of them would have left the multi-leg
+    node placing commodity legs on NFO.
+
+    A named underlying decides on its own. `declared` -- the node's `exchange`
+    field -- is the fallback for anything unnamed, which is how an imported
+    workflow reaches a commodity or a stock option this table does not list.
+    Name first, because the node default ships "NSE_INDEX" and is left untouched
+    unless the author changes the dropdown: trusting it would have sent every
+    imported SENSEX order to NFO.
+    """
+    name = (underlying or "").strip().upper()
+    if name in OPTION_UNDERLYING_EXCHANGES:
+        return OPTION_UNDERLYING_EXCHANGES[name]
+    return DECLARED_OPTION_EXCHANGES.get(
+        (declared or "").strip().upper(), DEFAULT_OPTION_EXCHANGES
+    )
 
 
 def symbol_prefix_filter(column, prefix: str):
@@ -121,6 +218,166 @@ _workflow_locks: "weakref.WeakValueDictionary[int, threading.Lock]" = (
     weakref.WeakValueDictionary()
 )
 _locks_mutex = threading.Lock()
+
+
+# Symbols each workflow has an open market-data subscription for, as
+# {workflow_id: {(symbol, exchange, mode), ...}}.
+#
+# The subscribe nodes open a broker-side subscription and nothing ever closed
+# it: the websocket client is a process-wide singleton whose subscription set
+# outlives every run, so a workflow reading `{{webhook.symbol}}` accumulated one
+# per distinct symbol until the adapter ceiling (1000 x 3) was reached, after
+# which new subscriptions from /trading, the sandbox engine and the API began
+# failing. Deactivating or deleting the workflow now gives them back.
+_workflow_subscriptions: dict[int, set[tuple[str, str, str]]] = {}
+_workflow_subscriptions_lock = threading.Lock()
+# A subscription may be recorded again while a previous release waits for
+# the proxy. Versions prevent that older release from forgetting the new owner.
+_workflow_subscription_versions: dict[int, dict[tuple[str, str, str], int]] = {}
+_workflow_subscription_owners: dict[int, dict[tuple[str, str, str], tuple[str, str]]] = {}
+_workflow_subscription_version = 0
+
+
+def record_workflow_subscription(
+    workflow_id: int | None, symbol: str, exchange: str, mode: str,
+    username: str | None = None, broker: str | None = None,
+) -> None:
+    """Remember a subscription so it can be released with the workflow."""
+    if workflow_id is None:
+        return
+    global _workflow_subscription_version
+    entry = (symbol, exchange, mode)
+    with _workflow_subscriptions_lock:
+        _workflow_subscription_version += 1
+        _workflow_subscriptions.setdefault(workflow_id, set()).add(entry)
+        _workflow_subscription_versions.setdefault(workflow_id, {})[entry] = (
+            _workflow_subscription_version
+        )
+        if username:
+            _workflow_subscription_owners.setdefault(workflow_id, {})[entry] = (
+                username, broker or "unknown"
+            )
+
+
+def has_workflow_subscriptions(workflow_id: int) -> bool:
+    """Whether an unsubscribe still needs a retry before cleanup can finish."""
+    with _workflow_subscriptions_lock:
+        return bool(_workflow_subscriptions.get(workflow_id))
+
+
+def _forget_released_subscription(workflow_id: int, entry, version: int) -> None:
+    """Forget only the admission this unsubscribe actually released."""
+    with _workflow_subscriptions_lock:
+        versions = _workflow_subscription_versions.get(workflow_id, {})
+        if versions.get(entry) != version:
+            return
+        entries = _workflow_subscriptions.get(workflow_id)
+        if entries is None:
+            return
+        entries.discard(entry)
+        versions.pop(entry, None)
+        _workflow_subscription_owners.get(workflow_id, {}).pop(entry, None)
+        if not entries:
+            _workflow_subscriptions.pop(workflow_id, None)
+            _workflow_subscription_versions.pop(workflow_id, None)
+            _workflow_subscription_owners.pop(workflow_id, None)
+
+
+def _release_shared_workflow_owner(workflow_id: int, entry, version: int, username: str) -> bool:
+    """Drop this owner's claim without touching a feed another Flow still uses."""
+    with _workflow_subscriptions_lock:
+        if _workflow_subscription_versions.get(workflow_id, {}).get(entry) != version:
+            # A new subscribe for this same workflow took over the key while
+            # release was in progress; it must remain subscribed.
+            return True
+        shared = any(
+            other_id != workflow_id
+            and entry in other_entries
+            and (
+                _workflow_subscription_owners.get(other_id, {}).get(entry, (username, ""))[0]
+                == username
+            )
+            for other_id, other_entries in _workflow_subscriptions.items()
+        )
+        if not shared:
+            return False
+        entries = _workflow_subscriptions[workflow_id]
+        entries.discard(entry)
+        _workflow_subscription_versions[workflow_id].pop(entry, None)
+        _workflow_subscription_owners.get(workflow_id, {}).pop(entry, None)
+        if not entries:
+            _workflow_subscriptions.pop(workflow_id, None)
+            _workflow_subscription_versions.pop(workflow_id, None)
+            _workflow_subscription_owners.pop(workflow_id, None)
+        return True
+
+
+def release_workflow_subscriptions(workflow_id: int) -> int:
+    """Release subscriptions, retaining failures for a later retry.
+
+    Called when a workflow is deactivated or deleted. Safe to call for a
+    workflow that never subscribed, and safe to call twice.
+    """
+    with _workflow_subscriptions_lock:
+        entries = list(_workflow_subscriptions.get(workflow_id, ()))
+        versions = dict(_workflow_subscription_versions.get(workflow_id, {}))
+        owners = dict(_workflow_subscription_owners.get(workflow_id, {}))
+    if not entries:
+        return 0
+
+    try:
+        from services.websocket_service import unsubscribe_from_symbols
+    except Exception:
+        logger.exception("Cannot release subscriptions: websocket service unavailable")
+        return 0
+
+    # Legacy records lack a captured owner. Resolve only once for those; new
+    # records keep their owner even if the workflow's API key later changes.
+    fallback_owner = _subscription_owner(workflow_id) if len(owners) < len(entries) else (None, "")
+
+    released = 0
+    for entry in entries:
+        symbol, exchange, mode = entry
+        username, broker = owners.get(entry, fallback_owner)
+        if not username:
+            # Legacy unowned bookkeeping from a lost session has no client to
+            # unsubscribe. Do not keep an unretryable workflow entry forever.
+            _forget_released_subscription(workflow_id, entry, versions.get(entry, 0))
+            logger.warning(
+                f"Workflow {workflow_id} subscription {exchange}:{symbol} has no "
+                "resolvable session to release it from"
+            )
+            continue
+        if _release_shared_workflow_owner(workflow_id, entry, versions.get(entry, 0), username):
+            released += 1
+            continue
+        try:
+            ok, _result, _ = unsubscribe_from_symbols(
+                username, broker, [{"symbol": symbol, "exchange": exchange}], mode
+            )
+            if ok:
+                released += 1
+                _forget_released_subscription(workflow_id, entry, versions.get(entry, 0))
+        except Exception:
+            # One symbol failing must not strand the rest.
+            logger.exception(f"Failed to release {mode} on {exchange}:{symbol}")
+    logger.info(f"Released {released}/{len(entries)} subscription(s) for workflow {workflow_id}")
+    return released
+
+
+def _subscription_owner(workflow_id: int) -> tuple[str | None, str]:
+    """The username and broker whose session holds this workflow's subscriptions."""
+    from database.auth_db import get_broker_name, get_username_by_apikey
+    from database.flow_db import get_workflow_api_key
+
+    try:
+        api_key = get_workflow_api_key(workflow_id)
+        if not api_key:
+            return None, "unknown"
+        return get_username_by_apikey(api_key), get_broker_name(api_key) or "unknown"
+    except Exception:
+        logger.exception(f"Cannot resolve subscription owner for workflow {workflow_id}")
+        return None, "unknown"
 
 
 def get_workflow_lock(workflow_id: int) -> threading.Lock:
@@ -167,9 +424,12 @@ def parse_time_string(
 class WorkflowContext:
     """Context for storing variables during workflow execution"""
 
-    def __init__(self):
+    def __init__(self, workflow_id: int | None = None):
         self.variables: dict[str, Any] = {}
         self.condition_results: dict[str, bool] = {}
+        # Which workflow this run belongs to, so a subscription it opens can be
+        # released when that workflow is deactivated or deleted.
+        self.workflow_id = workflow_id
 
     def set_variable(self, name: str, value: Any):
         """Store a variable"""
@@ -410,6 +670,21 @@ class RuntimeOrderResolver:
         return int(number)
 
 
+def _optional_leg_text(resolver: RuntimeOrderResolver, key: str) -> str:
+    """Read a leg field that may be absent or blank, but must be text if given.
+
+    ``RuntimeOrderResolver.text`` rejects a blank value, which is right for a
+    required field and wrong for an optional override - an omitted per-leg
+    expiry has to mean "inherit the node's", not "reject the leg".
+    """
+    value = resolver.value(key, default="")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must resolve to text, got {value!r}")
+    return value.strip()
+
+
 class NodeExecutor:
     """Executes individual workflow nodes"""
 
@@ -569,13 +844,27 @@ class NodeExecutor:
         """Resolve the fields shared by regular, smart, and split orders."""
         values = RuntimeOrderResolver(self.context, node_data, label)
         quantity_minimum = 0 if allow_zero_quantity else 1
+        # The exchange decides the product default, so it is read out before the
+        # dict is built -- a node whose author never touched Product sends NRML
+        # on a derivative segment and MIS on cash. Symbol is still resolved
+        # first, so a node with several problems reports the same one it always
+        # did.
+        # Upper-cased for the same reason every enum field is: an alert does not
+        # control its own casing. TradingView sends whatever the chart's ticker
+        # carries, and the symbol lookup is exact, so 'reliance' fails with
+        # "Symbol not found" while 'RELIANCE' resolves. Every OpenAlgo symbol is
+        # upper case, so this cannot collide with a real one.
+        symbol = values.text("symbol").upper()
+        exchange = values.enum("exchange", VALID_EXCHANGES, default="NSE")
         resolved = {
-            "symbol": values.text("symbol"),
-            "exchange": values.enum("exchange", VALID_EXCHANGES, default="NSE"),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": values.enum("action", VALID_ACTIONS, default="BUY"),
             "quantity": values.integer("quantity", default=1, minimum=quantity_minimum),
             "price_type": values.enum("priceType", VALID_PRICE_TYPES, default="MARKET"),
-            "product": values.enum("product", VALID_PRODUCT_TYPES, default="MIS"),
+            "product": values.enum(
+                "product", VALID_PRODUCT_TYPES, default=default_product_for_exchange(exchange)
+            ),
             "price": values.number("price", default=0.0),
             "trigger_price": values.number("triggerPrice", default=0.0),
         }
@@ -779,6 +1068,32 @@ class NodeExecutor:
             values = RuntimeOrderResolver(self.context, node_data, "Options order")
             underlying = values.text("underlying", default="NIFTY").upper()
             expiry_type = values.text("expiryType", default="current_week").lower()
+            # A leg has always been able to name its own date; the node could
+            # only pick one of the four relative types, so a webhook naming a
+            # far contract had no way to say so. An explicit date wins, and the
+            # relative type stays the default for the common case.
+            # `_optional_leg_text`, not `text`: `text` rejects a blank value, which
+            # is right for a required field and wrong for an optional override. It
+            # raises on its own default, so `text("expiryDate", default="")` failed
+            # every options order whose author had not set one -- which is all of
+            # them, since neither the panel nor the node defaults write the key.
+            expiry_date_input = _optional_leg_text(values, "expiryDate").upper()
+            # The editor offers a single Expiry control that holds either form,
+            # so a DDMMMYY value arriving under expiryType is an explicit date
+            # rather than a relative type. The separate expiryDate key stays
+            # available for callers that would rather send the two apart.
+            if not expiry_date_input and _EXPIRY_DATE_PATTERN.fullmatch(expiry_type.upper()):
+                expiry_date_input = expiry_type.upper()
+            if expiry_date_input and not _EXPIRY_DATE_PATTERN.fullmatch(expiry_date_input):
+                raise ValueError(
+                    "expiryDate must be in DDMMMYY format such as 28OCT25, "
+                    f"got {expiry_date_input!r}"
+                )
+            if not expiry_date_input and expiry_type not in VALID_EXPIRY_TYPES:
+                raise ValueError(
+                    "expiryType must be one of "
+                    f"{', '.join(sorted(VALID_EXPIRY_TYPES))}, got {expiry_type!r}"
+                )
             quantity = values.integer("quantity", default=1, minimum=1)
             offset = values.text("offset", default="ATM").upper()
             if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
@@ -802,13 +1117,9 @@ class NodeExecutor:
 
         self.log(f"Placing options order: {underlying} {option_type} {offset}")
 
-        # Get the underlying exchange for index
-        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
-            underlying_exchange = "BSE_INDEX"
-            fo_exchange = "BFO"
-        else:
-            underlying_exchange = "NSE_INDEX"
-            fo_exchange = "NFO"
+        underlying_exchange, fo_exchange = resolve_option_exchanges(
+            underlying, self.get_str(node_data, "exchange", "")
+        )
 
         try:
             lot_size = self._resolve_lot_size(underlying, fo_exchange)
@@ -819,8 +1130,10 @@ class NodeExecutor:
         total_quantity = quantity * lot_size
         self.log(f"Lot size for {underlying}: {lot_size} -> {quantity} lot(s) = {total_quantity}")
 
-        # Resolve expiry date from expiry type
-        expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
+        # An explicit date is used as given; only a relative type is looked up.
+        expiry_date = expiry_date_input or self._resolve_expiry_date(
+            underlying, fo_exchange, expiry_type
+        )
         if not expiry_date:
             error_result = {
                 "status": "error",
@@ -829,7 +1142,9 @@ class NodeExecutor:
             self.log(f"Options order failed: {error_result['message']}", "error")
             return error_result
 
-        self.log(f"Resolved expiry: {expiry_type} -> {expiry_date}")
+        self.log(
+            f"Resolved expiry: {expiry_date_input or expiry_type} -> {expiry_date}"
+        )
 
         result = self.client.options_order(
             underlying=underlying,
@@ -862,13 +1177,37 @@ class NodeExecutor:
             values = RuntimeOrderResolver(self.context, node_data, "Options multi-order")
             underlying = values.text("underlying", default="NIFTY").upper()
             expiry_type = values.text("expiryType", default="current_week").lower()
+            # As on the single-leg node: an explicit DDMMMYY date wins, the
+            # relative type remains the default. A leg may still override both.
+            # `_optional_leg_text`, not `text`: `text` rejects a blank value, which
+            # is right for a required field and wrong for an optional override. It
+            # raises on its own default, so `text("expiryDate", default="")` failed
+            # every options order whose author had not set one -- which is all of
+            # them, since neither the panel nor the node defaults write the key.
+            expiry_date_input = _optional_leg_text(values, "expiryDate").upper()
+            # The editor offers a single Expiry control that holds either form,
+            # so a DDMMMYY value arriving under expiryType is an explicit date
+            # rather than a relative type. The separate expiryDate key stays
+            # available for callers that would rather send the two apart.
+            if not expiry_date_input and _EXPIRY_DATE_PATTERN.fullmatch(expiry_type.upper()):
+                expiry_date_input = expiry_type.upper()
+            if expiry_date_input and not _EXPIRY_DATE_PATTERN.fullmatch(expiry_date_input):
+                raise ValueError(
+                    "expiryDate must be in DDMMMYY format such as 28OCT25, "
+                    f"got {expiry_date_input!r}"
+                )
+            if not expiry_date_input and expiry_type not in VALID_EXPIRY_TYPES:
+                raise ValueError(
+                    "expiryType must be one of "
+                    f"{', '.join(sorted(VALID_EXPIRY_TYPES))}, got {expiry_type!r}"
+                )
             # Frontend uses ``strategy``; ``strategyType`` is a legacy alias.
             strategy_type = values.text(
                 "strategy", default="custom", aliases=("strategyType",)
             ).lower()
             action = values.enum("action", VALID_ACTIONS, default="SELL")
             quantity_lots = values.integer("quantity", default=1, minimum=1)
-            product = values.enum("product", VALID_PRODUCT_TYPES, default="MIS")
+            product = values.enum("product", VALID_PRODUCT_TYPES, default="NRML")
             strangle_width = values.text("strangleWidth", default="OTM2").upper()
             if not _OPTION_OFFSET_PATTERN.fullmatch(strangle_width):
                 raise ValueError(
@@ -910,11 +1249,51 @@ class NodeExecutor:
                         self.context, leg, f"Options multi-order leg {index}"
                     )
                     try:
-                        offset = leg_values.text("offset").upper()
-                        if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                        # A leg picks its strike one of two ways. An offset is
+                        # re-resolved against the live underlying on every run,
+                        # which is what a repeating workflow wants. An absolute
+                        # strike names one contract and is used as given, which
+                        # suits a one-shot or manually built spread.
+                        strike_mode = leg_values.enum(
+                            "strikeMode",
+                            VALID_LEG_STRIKE_MODES,
+                            default="OFFSET",
+                        )
+                        offset: str | None = None
+                        strike: float | None = None
+                        if strike_mode == "STRIKE":
+                            strike = leg_values.number("strike")
+                            if strike <= 0:
+                                raise ValueError(
+                                    f"strike must be a positive number, got {strike}"
+                                )
+                        else:
+                            offset = leg_values.text("offset").upper()
+                            if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                                raise ValueError(
+                                    "offset must be ATM, ITM1-ITM50, or "
+                                    f"OTM1-OTM50, got {offset!r}"
+                                )
+                        # A leg may override the node expiry, which is what
+                        # makes a calendar or diagonal spread expressible.
+                        # Either an explicit DDMMMYY date or a relative type;
+                        # the date is resolved once the exchange is known.
+                        leg_expiry_date = _optional_leg_text(leg_values, "expiry").upper()
+                        if leg_expiry_date and not _EXPIRY_DATE_PATTERN.fullmatch(
+                            leg_expiry_date
+                        ):
                             raise ValueError(
-                                "offset must be ATM, ITM1-ITM50, or "
-                                f"OTM1-OTM50, got {offset!r}"
+                                "expiry must be in DDMMMYY format such as 28OCT25, "
+                                f"got {leg_expiry_date!r}"
+                            )
+                        leg_expiry_type = _optional_leg_text(
+                            leg_values, "expiryType"
+                        ).lower()
+                        if leg_expiry_type and leg_expiry_type not in VALID_EXPIRY_TYPES:
+                            raise ValueError(
+                                "expiryType must be one of "
+                                f"{', '.join(sorted(VALID_EXPIRY_TYPES))}, "
+                                f"got {leg_expiry_type!r}"
                             )
                         option_type = leg_values.enum(
                             "optionType", frozenset({"CE", "PE"})
@@ -949,6 +1328,9 @@ class NodeExecutor:
                     normalized_custom_legs.append(
                         {
                             "offset": offset,
+                            "strike": strike,
+                            "expiry_date": leg_expiry_date,
+                            "expiry_type": leg_expiry_type,
                             "option_type": option_type,
                             "action": leg_action,
                             "quantity_lots": leg_quantity,
@@ -966,13 +1348,9 @@ class NodeExecutor:
             f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}"
         )
 
-        # Get the underlying exchange for index
-        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
-            underlying_exchange = "BSE_INDEX"
-            fo_exchange = "BFO"
-        else:
-            underlying_exchange = "NSE_INDEX"
-            fo_exchange = "NFO"
+        underlying_exchange, fo_exchange = resolve_option_exchanges(
+            underlying, self.get_str(node_data, "exchange", "")
+        )
 
         # Same master-contract lookup the single-leg options node uses. A second
         # hardcoded table here drifted the same way the first one had: it still
@@ -989,7 +1367,10 @@ class NodeExecutor:
         )
 
         # Resolve expiry date
-        expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
+        # An explicit date is used as given; only a relative type is looked up.
+        expiry_date = expiry_date_input or self._resolve_expiry_date(
+            underlying, fo_exchange, expiry_type
+        )
         if not expiry_date:
             error_result = {
                 "status": "error",
@@ -998,20 +1379,52 @@ class NodeExecutor:
             self.log(f"Options multi-order failed: {error_result['message']}", "error")
             return error_result
 
-        self.log(f"Resolved expiry: {expiry_type} -> {expiry_date}")
+        self.log(
+            f"Resolved expiry: {expiry_date_input or expiry_type} -> {expiry_date}"
+        )
 
         # Generate legs based on strategy type if no custom legs provided
         legs = []
         if normalized_custom_legs is not None:
-            for leg in normalized_custom_legs:
-                legs.append(
-                    {
-                        key: value
-                        for key, value in leg.items()
-                        if key != "quantity_lots"
-                    }
-                    | {"quantity": leg["quantity_lots"] * lot_size}
-                )
+            # A relative per-leg expiry costs a master-contract lookup, so legs
+            # sharing one expiry type resolve it once.
+            leg_expiry_cache: dict[str, str] = {}
+            for index, leg in enumerate(normalized_custom_legs, start=1):
+                leg_expiry = leg["expiry_date"]
+                expiry_type_override = leg["expiry_type"]
+                if not leg_expiry and expiry_type_override:
+                    leg_expiry = leg_expiry_cache.get(expiry_type_override, "")
+                    if not leg_expiry:
+                        resolved = self._resolve_expiry_date(
+                            underlying, fo_exchange, expiry_type_override
+                        )
+                        if not resolved:
+                            message = (
+                                f"leg {index}: could not resolve expiry for "
+                                f"{expiry_type_override}"
+                            )
+                            self.log(f"Options multi-order failed: {message}", "error")
+                            return {"status": "error", "message": message}
+                        leg_expiry_cache[expiry_type_override] = resolved
+                        leg_expiry = resolved
+
+                prepared = {
+                    key: value
+                    for key, value in leg.items()
+                    if key not in ("quantity_lots", "expiry_date", "expiry_type")
+                }
+                prepared["quantity"] = leg["quantity_lots"] * lot_size
+                # Only send an expiry that differs from the node's; the service
+                # falls back to the common expiry when the key is absent.
+                if leg_expiry:
+                    prepared["expiry_date"] = leg_expiry
+                # Send exactly one strike selector so the service's branch is
+                # unambiguous rather than relying on precedence.
+                if prepared.get("strike") is None:
+                    prepared.pop("strike", None)
+                else:
+                    prepared.pop("offset", None)
+                legs.append(prepared)
         else:
             # Generate legs from predefined strategy type
             # A generated strategy shares one price type across its legs. Its
@@ -1053,8 +1466,15 @@ class NodeExecutor:
 
         self.log(f"Placing options multi-order: {underlying} {strategy_type} with {len(legs)} legs")
         for i, leg in enumerate(legs):
+            # A manually built leg carries a strike instead of an offset, and
+            # may carry its own expiry.
+            selector = (
+                f"{leg['strike']:g}" if leg.get("strike") is not None else leg.get("offset")
+            )
+            expiry_note = f" {leg['expiry_date']}" if leg.get("expiry_date") else ""
             self.log(
-                f"  Leg {i + 1}: {leg['offset']} {leg['option_type']} {leg['action']} qty={leg['quantity']}"
+                f"  Leg {i + 1}: {selector}{expiry_note} {leg['option_type']} "
+                f"{leg['action']} qty={leg['quantity']}"
             )
 
         result = self.client.options_multi_order(
@@ -1141,7 +1561,13 @@ class NodeExecutor:
         return legs
 
     def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> str | None:
-        """Resolve expiry type to actual expiry date"""
+        """The date a relative expiry type resolves to, in DDMMMYY.
+
+        The selection rule itself lives in flow_node_contracts.select_expiry so
+        the editor's expiry picker resolves it identically -- the panel shows
+        the author which date a leg will actually use, and a second copy of the
+        rule here would let that promise drift out of date.
+        """
         try:
             response = self.client.get_expiry(
                 symbol=symbol, exchange=exchange, instrumenttype="options"
@@ -1155,69 +1581,14 @@ class NodeExecutor:
                 self.log(f"No expiry dates found for {symbol} on {exchange}", "error")
                 return None
 
-            # Parse and sort expiry dates
-            def parse_expiry(exp_str: str) -> datetime | None:
-                """Parse expiry date string"""
-                if not exp_str or not isinstance(exp_str, str):
-                    return None
-                for fmt in ["%d-%b-%y", "%d%b%y", "%d-%B-%Y", "%d%B%Y"]:
-                    try:
-                        return datetime.strptime(exp_str.upper(), fmt)
-                    except ValueError:
-                        continue
-                return None
-
-            # Filter and sort expiries
-            valid_expiries = []
-            for exp_str in expiry_list:
-                parsed = parse_expiry(exp_str)
-                if parsed is not None:
-                    valid_expiries.append((exp_str, parsed))
-
-            if not valid_expiries:
-                self.log(f"No valid expiry dates found for {symbol}", "error")
-                return None
-
-            # Sort by parsed date
-            valid_expiries.sort(key=lambda x: x[1])
-            sorted_expiries = [exp[0] for exp in valid_expiries]
-            now = datetime.now()
-            current_month = now.month
-            current_year = now.year
-
-            # Calculate next month
-            if current_month == 12:
-                next_month, next_year = 1, current_year + 1
-            else:
-                next_month, next_year = current_month + 1, current_year
-
-            if expiry_type == "current_week":
-                if sorted_expiries:
-                    return self._format_expiry_for_api(sorted_expiries[0])
-                return None
-            elif expiry_type == "next_week":
-                if len(sorted_expiries) > 1:
-                    return self._format_expiry_for_api(sorted_expiries[1])
-                return None
-            elif expiry_type == "current_month":
-                result = None
-                for exp_str, exp_date in valid_expiries:
-                    if exp_date.month == current_month and exp_date.year == current_year:
-                        result = exp_str
-                if result:
-                    return self._format_expiry_for_api(result)
-                return None
-            elif expiry_type == "next_month":
-                result = None
-                for exp_str, exp_date in valid_expiries:
-                    if exp_date.month == next_month and exp_date.year == next_year:
-                        result = exp_str
-                if result:
-                    return self._format_expiry_for_api(result)
-                return None
-
-            self.log(f"Unknown expiry type: {expiry_type}", "error")
-            return None
+            selected = select_expiry(expiry_list, expiry_type)
+            if not selected:
+                self.log(
+                    f"No expiry matches {expiry_type} for {symbol} on {exchange} "
+                    f"among {len(expiry_list)} listed contract(s)",
+                    "error",
+                )
+            return selected
         except Exception as e:
             self.log(f"Error resolving expiry: {e}", "error")
             return None
@@ -1262,7 +1633,7 @@ class NodeExecutor:
         if existing.get("status") != "success" or not existing.get("data"):
             message = (
                 f"Could not read order {order_id} to modify it: "
-                f"{existing.get('message', 'order not found')}"
+                f"{existing.get('message') or existing.get('error') or 'order not found'}"
             )
             self.log(f"Modify order aborted: {message}", "error")
             return {"status": "error", "message": message}
@@ -1392,7 +1763,7 @@ class NodeExecutor:
             return result
 
         exchange = self._supplied(node_data, "exchange") or "NSE"
-        product = self._supplied(node_data, "product") or "MIS"
+        product = self._supplied(node_data, "product") or default_product_for_exchange(exchange)
         self.log(f"Closing position: {symbol}@{exchange} ({product})")
         result = self.client.close_position(
             symbol=symbol,
@@ -1455,11 +1826,21 @@ class NodeExecutor:
             return {"status": "error", "message": message}
 
         try:
-            common_product = required_text(common_value("product", "MIS"), "product").upper()
+            # One basket can mix segments, so a node that names no product lets
+            # every row fall back to its own exchange's default -- NSE rows MIS,
+            # NFO rows NRML -- instead of one blanket choice. A product that is
+            # present but blank stays an error, as before.
+            unset = object()
+            common_product_raw = common_value("product", unset)
+            common_product = (
+                ""
+                if common_product_raw is unset
+                else required_text(common_product_raw, "product").upper()
+            )
             common_price_type = required_text(
                 common_value("priceType", "MARKET"), "priceType"
             ).upper()
-            if common_product not in VALID_PRODUCT_TYPES:
+            if common_product and common_product not in VALID_PRODUCT_TYPES:
                 raise ValueError(f"invalid product {common_product!r}")
             if common_price_type not in VALID_PRICE_TYPES:
                 raise ValueError(f"invalid pricetype {common_price_type!r}")
@@ -1527,7 +1908,8 @@ class NodeExecutor:
                     raise ValueError(f"quantity must be positive, got {quantity}")
 
                 product = required_text(
-                    row_value("product", common_product), "product"
+                    row_value("product", common_product or default_product_for_exchange(exchange)),
+                    "product",
                 ).upper()
                 price_type = required_text(
                     row_value("pricetype", common_price_type, "priceType"), "pricetype"
@@ -1643,7 +2025,7 @@ class NodeExecutor:
         """Execute Open Position node"""
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
+        product = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         self.log(f"Getting open position for: {symbol}")
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
@@ -2121,7 +2503,10 @@ class NodeExecutor:
 
     def execute_multi_quotes(self, node_data: dict) -> dict:
         """Execute Multi Quotes node - get quotes for multiple symbols"""
-        raw_symbols = node_data.get("symbols", "")
+        # Interpolated like every sibling field. Left raw, `symbols` sent the
+        # literal "{{sym.symbol}}" to the symbol validator, which failed with a
+        # "not found" naming the brace text.
+        raw_symbols = self.get_str(node_data, "symbols", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         # Convert comma-separated string to list of dicts expected by service
         if isinstance(raw_symbols, str):
@@ -2279,7 +2664,7 @@ class NodeExecutor:
         for index, position in enumerate(raw, start=1):
             values = RuntimeOrderResolver(self.context, position, f"Margin position {index}")
             try:
-                symbol = values.text("symbol")
+                symbol = values.text("symbol").upper()
                 exchange = values.enum("exchange", VALID_EXCHANGES)
                 action = values.enum("action", VALID_ACTIONS)
                 quantity = values.integer("quantity", minimum=1)
@@ -2332,7 +2717,7 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         quantity = self.get_int(node_data, "quantity", 1)
         price = self.get_float(node_data, "price", 0)
-        product_type = self.get_str(node_data, "product", "MIS")
+        product_type = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         action = self.get_str(node_data, "action", "BUY")
         price_type = self.get_str(node_data, "priceType", "MARKET")
         if positions:
@@ -2475,6 +2860,13 @@ class NodeExecutor:
 
     # Longest a delay node may block. Anything longer belongs in a schedule.
     DELAY_MAX_SECONDS = 300
+    # Wait Until sleeps inside the per-workflow lock and inside the HTTP request
+    # that triggered the run, exactly as Delay does, so it needs the same kind
+    # of bound. It is looser because waiting a few minutes for a square-off is
+    # the point of the node; a wait measured in hours is a schedule, and saying
+    # so is more useful than pinning a worker until the afternoon and answering
+    # `already_running` to every trigger in between.
+    WAIT_UNTIL_MAX_SECONDS = 1800
 
     def execute_delay(self, node_data: dict) -> dict:
         """Execute Delay node"""
@@ -2524,6 +2916,18 @@ class NodeExecutor:
             return {"status": "success", "waited": False}
 
         wait_seconds = target_seconds - now_seconds
+        if wait_seconds > self.WAIT_UNTIL_MAX_SECONDS:
+            message = (
+                f"Wait Until {target_time_str} is {wait_seconds}s away, over the "
+                f"{self.WAIT_UNTIL_MAX_SECONDS}s limit. The wait holds this workflow's "
+                f"lock and the request that triggered it, so every trigger in between "
+                f"is answered 'already running'. Use a schedule trigger at "
+                f"{target_time_str} instead, or split the square-off into its own "
+                f"workflow."
+            )
+            self.log(f"Wait Until aborted: {message}", "error")
+            return {"status": "error", "message": message}
+
         self.log(f"Waiting until {target_time_str} (~{wait_seconds}s)")
         time_module.sleep(wait_seconds)
         return {"status": "success", "waited": True}
@@ -2751,7 +3155,15 @@ class NodeExecutor:
         import httpx
 
         method = self.get_str(node_data, "method", "GET").upper()
-        url = self.get_str(node_data, "url", "")
+        # Read raw and interpolate exactly once, below. `get_str` interpolates,
+        # and the second pass that used to follow it expanded any `{{...}}` a
+        # payload had substituted into the first: an author writing
+        # `/report/{{webhook.path}}` let the caller send
+        # `{{funds.data.availablecash}}` and read a workflow variable back out
+        # through the outbound URL.
+        url = node_data.get("url", "")
+        if not isinstance(url, str):
+            url = str(url)
         headers_raw = node_data.get("headers", {})
         body = node_data.get("body", "")
 
@@ -2766,9 +3178,14 @@ class NodeExecutor:
         # The editor writes this field as a JSON string; only a dict was ever
         # read, so every header a user typed was silently dropped and requests
         # meant to be authenticated went out bare.
+        # Parsed before its values are interpolated, never after. Interpolating
+        # the JSON text first let a substituted value carry a quote and become
+        # structure: `x", "X-Injected": "yes` closed the string and added a
+        # header the author never wrote, sent to their authenticated endpoint.
+        # A payload holding a bare quote also broke the parse outright.
         headers = {}
         if isinstance(headers_raw, str):
-            text = self.context.interpolate(headers_raw).strip()
+            text = headers_raw.strip()
             if text:
                 try:
                     headers_raw = json.loads(text)
@@ -2858,7 +3275,7 @@ class NodeExecutor:
         """
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
+        product = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         condition = self.get_str(node_data, "condition", "exists")
         threshold = self.get_float(node_data, "threshold", 0.0)
 
@@ -2874,7 +3291,16 @@ class NodeExecutor:
         self.log(f"Checking position for: {symbol}")
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
-        )
+)
+        # A failed read is not an answer. The client returns its failure under
+        # "error" with no "data", so reading straight through gave 0 and the
+        # node reported success: a broker session that had expired made
+        # "the position" evaluate on zeroes and route a branch on nothing.
+        # `priceAlert` has always checked this; these did not.
+        if result.get("status") != "success":
+            message = result.get("error") or result.get("message") or "the position lookup failed"
+            self.log(f"Position check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
         quantity = int(result.get("quantity", 0) or 0)
         pnl = float(result.get("pnl", 0) or 0)
 
@@ -2959,6 +3385,15 @@ class NodeExecutor:
 
         self.log("Checking funds")
         result = self.client.funds()
+        # A failed read is not an answer. The client returns its failure under
+        # "error" with no "data", so reading straight through gave 0 and the
+        # node reported success: a broker session that had expired made
+        # "the funds" evaluate on zeroes and route a branch on nothing.
+        # `priceAlert` has always checked this; these did not.
+        if result.get("status") != "success":
+            message = result.get("error") or result.get("message") or "the funds lookup failed"
+            self.log(f"Fund check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
         data = result.get("data", {}) or {}
         available = float(data.get("availablecash", 0) or 0)
         condition_met = available >= min_available
@@ -3012,6 +3447,15 @@ class NodeExecutor:
 
         self.log(f"Checking price for: {symbol}")
         result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+        # A failed read is not an answer. The client returns its failure under
+        # "error" with no "data", so reading straight through gave 0 and the
+        # node reported success: a broker session that had expired made
+        # "the price" evaluate on zeroes and route a branch on nothing.
+        # `priceAlert` has always checked this; these did not.
+        if result.get("status") != "success":
+            message = result.get("error") or result.get("message") or "the price lookup failed"
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
         data = result.get("data", {}) or {}
 
         if field == "change_percent":
@@ -3158,7 +3602,15 @@ class NodeExecutor:
         start_time = time(start_h, start_m)
         end_time = time(end_h, end_m)
 
-        in_window = start_time <= now <= end_time
+        # A window whose end is before its start crosses midnight, so the two
+        # halves are tested separately. The single chained comparison made
+        # 22:00-02:00 unsatisfiable: always False, and always True once the
+        # "trigger outside window" toggle inverted it, turning an overnight
+        # MCX or crypto guard into an always-on gate.
+        if start_time <= end_time:
+            in_window = start_time <= now <= end_time
+        else:
+            in_window = now >= start_time or now <= end_time
         condition_met = (not in_window) if invert else in_window
         self.log(
             f"Time window: {start_time_str}-{end_time_str}, in_window={in_window}, "
@@ -3347,7 +3799,12 @@ class NodeExecutor:
 
             # Thread-safe container for captured data
             captured_data = {"data": None}
-            data_event = threading.Event()
+            # Real, not green: on_market_data() sets this from the websocket
+            # client's thread, not the one waiting on it (a greenlet under
+            # eventlet, a request or pool thread under gthread). A green Event
+            # set from a real thread never wakes its waiter, so the node sat
+            # out its whole timeout. See utils/real_threading.
+            data_event = _real_threading.Event()
 
             def on_market_data(data):
                 """Callback to capture data with matching mode and symbol"""
@@ -3390,13 +3847,17 @@ class NodeExecutor:
                 # Subscribe to symbol
                 symbols = [{"symbol": symbol, "exchange": exchange}]
                 sub_success, sub_result, _ = subscribe_to_symbols(username, broker, symbols, mode)
+                if sub_success:
+                    record_workflow_subscription(
+                        self.context.workflow_id, symbol, exchange, mode, username, broker
+                    )
 
                 if not sub_success:
                     self.log(f"WebSocket subscribe failed: {sub_result.get('message')}", "warning")
                     return None
 
                 # Wait for data with the correct mode (using event instead of polling)
-                if data_event.wait(timeout=timeout):
+                if _real_threading.wait_for(data_event, timeout):
                     return captured_data["data"]
                 else:
                     return None  # Timeout
@@ -3800,10 +4261,23 @@ class NodeExecutor:
             # Map stream_type to mode
             mode_map = {"ltp": "LTP", "quote": "Quote", "depth": "Depth"}
 
-            if stream_type.lower() == "all" or not symbol:
-                # Unsubscribe from all
+            # `unsubscribe_all` clears the process-wide client's entire
+            # subscription set, which the Sandbox engine shares: it is what
+            # feeds pending SL and LIMIT triggers. Reaching it because a
+            # specific mode happened to have no symbol tore that down on a node
+            # whose author had asked only for LTP. Only an explicit "all" gets
+            # there now; an under-specified request is refused instead.
+            if stream_type.lower() == "all":
                 unsub_success, unsub_result, _ = unsubscribe_all(username, broker)
                 self.log("Unsubscribed from all streams")
+            elif not symbol:
+                message = (
+                    f"Unsubscribe is set to '{stream_type}' with no symbol. Name a "
+                    f"symbol, or set Stream Type to 'all' if you really mean every "
+                    f"subscription on this instance, including the Sandbox engine's."
+                )
+                self.log(f"Unsubscribe aborted: {message}", "error")
+                return {"status": "error", "type": "unsubscribe", "message": message}
             else:
                 # Unsubscribe from specific symbol/mode
                 mode = mode_map.get(stream_type.lower(), "Quote")
@@ -3812,6 +4286,18 @@ class NodeExecutor:
                     username, broker, symbols, mode
                 )
                 self.log(f"Unsubscribed from {stream_type} for {symbol}")
+
+            # `unsub_success` was assigned by both branches and then never read,
+            # so a rejected unsubscribe still returned success and a run that
+            # had leaked its subscriptions was recorded as clean.
+            if not unsub_success:
+                message = (
+                    unsub_result.get("message")
+                    if isinstance(unsub_result, dict)
+                    else str(unsub_result)
+                ) or "unsubscribe was rejected"
+                self.log(f"Unsubscribe failed: {message}", "error")
+                return {"status": "error", "type": "unsubscribe", "message": message}
 
             return {
                 "status": "success",
@@ -3886,6 +4372,15 @@ def execute_node_chain(
     node_type = node.get("type")
     node_data = node.get("data", {})
     result = None
+
+    # A condition reachable by more than one path evaluated once per path, and
+    # each evaluation followed its branch again: a diamond where two upstream
+    # nodes both lead to one condition placed two orders from a single trigger.
+    # Gates already carried this guard; conditions did not, though they are
+    # combinational in exactly the same way. The first traversal has already
+    # followed the branch, so returning here is not a skipped step.
+    if node_type in BRANCHING_NODE_TYPES and context.get_condition_result(node_id) is not None:
+        return
 
     # An order node whose order-defining fields still contain {{...}} must not
     # reach the broker with those references replaced by field defaults.
@@ -4049,6 +4544,21 @@ def execute_node_chain(
         if pending:
             executor.log(f"{node_type}: waiting for {pending} more input(s) before evaluating")
             return
+        # `inputCount` is what the author configured and what the node renders
+        # slots for; the wiring is what they actually connected. Firing on the
+        # wires alone meant a deleted third edge silently downgraded
+        # "A AND B AND in-window" to "A AND B", with the graph still showing
+        # three slots and import validation raising nothing.
+        declared = node_data.get("inputCount")
+        if isinstance(declared, int) and declared > len(incoming_edges):
+            message = (
+                f"{node_type} is configured for {declared} inputs but only "
+                f"{len(incoming_edges)} are wired. Wire the rest, or lower the "
+                f"input count, rather than evaluating on part of the condition."
+            )
+            executor.log(message, "error")
+            executor.errors.append({"node": node_id, "type": node_type, "message": message})
+            return
         if node_type == "andGate":
             result = executor.execute_and_gate(node_data, input_results)
         elif node_type == "orGate":
@@ -4062,7 +4572,12 @@ def execute_node_chain(
     # this, a rejected entry order still let the hedge leg place and the "trade
     # placed" alert fire, leaving a naked position and a run marked completed.
     if isinstance(result, dict) and result.get("status") == "error":
-        message = result.get("message", "node failed")
+        # `FlowOpenAlgoClient._handle_response` reports a broker or service
+        # failure under "error"; nodes that build their own failure dict use
+        # "message". Reading only one of them turned every broker rejection --
+        # insufficient funds, RMS block, market closed -- into the literal
+        # string "node failed", in the run record and in the webhook reply.
+        message = result.get("message") or result.get("error") or "node failed"
         executor.errors.append({"node": node_id, "type": node_type, "message": message})
         if "condition" in result:
             # A condition that could not be evaluated takes neither branch, so
@@ -4086,7 +4601,16 @@ def execute_node_chain(
     # so all condition forks are honored regardless of which node produced them.
     if result and "condition" in result:
         condition_met = result.get("condition", False)
-        context.set_condition_result(node_id, condition_met)
+        # Only a condition that actually evaluated is recorded. A gate treats
+        # `get_condition_result(source) is not None` as "this input is settled",
+        # so storing the placeholder False of an errored condition made the gate
+        # fire on it: an AND gate whose other input was True computed
+        # [False, True] -> False and drove its FALSE branch to a real order. The
+        # run was marked failed afterwards, by which point the order had been
+        # sent. Leaving it unset keeps the gate pending, which is what the
+        # branch-suppression below already assumes.
+        if result.get("status") != "error":
+            context.set_condition_result(node_id, condition_met)
         TRUE_HANDLES = {"yes", "true"}
         FALSE_HANDLES = {"no", "false"}
         # A condition that could not be evaluated (e.g. an operand that did
@@ -4148,6 +4672,15 @@ def execute_node_chain(
             )
 
 
+def _already_running(workflow_id: int) -> dict:
+    logger.warning(f"Workflow {workflow_id} is already running")
+    return {
+        "status": "error",
+        "message": "Workflow is already running",
+        "already_running": True,
+    }
+
+
 def execute_workflow(
     workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
 ) -> dict:
@@ -4159,137 +4692,378 @@ def execute_workflow(
     # whole workflow again the moment the winner finished, duplicating every
     # order instead of returning already_running.
     if not lock.acquire(blocking=False):
-        logger.warning(f"Workflow {workflow_id} is already running")
-        return {
-            "status": "error",
-            "message": "Workflow is already running",
-            "already_running": True,
-        }
+        return _already_running(workflow_id)
 
     try:
-        workflow = get_workflow(workflow_id)
-        if not workflow:
-            return {"status": "error", "message": "Workflow not found"}
-
-        # Every trigger converges here - schedules, price alerts, order updates,
-        # webhooks and Run Now - so this is the only place that can guarantee an
-        # incomplete graph never reaches the broker. Guarding the HTTP routes
-        # alone left the background triggers unchecked, and saving deliberately
-        # accepts a half-built graph. Checked before the execution record exists,
-        # so a rejected run is not logged as one that started.
-        from services.flow_workflow_validator import validate_workflow
-
-        validation_errors = validate_workflow(
-            {
-                "name": workflow.name,
-                "nodes": workflow.nodes or [],
-                "edges": workflow.edges or [],
-            },
-            strict=True,
-        )
-        if validation_errors:
-            message = validation_errors[0]["message"]
-            logger.error(
-                f"Workflow {workflow_id} ({workflow.name}) is not runnable: {message}"
-            )
-            return {
-                "status": "error",
-                "message": f"Workflow cannot be executed: {message}",
-                "errors": validation_errors,
-            }
-
-        execution = create_execution(workflow_id, status="running")
-        if not execution:
-            return {"status": "error", "message": "Failed to create execution record"}
-
-        logs = []
-        context = WorkflowContext()
-
-        if webhook_data:
-            context.set_variable("webhook", webhook_data)
-            logger.info(f"Webhook data injected: {webhook_data}")
-
-        try:
-            if not api_key:
-                raise Exception("API key required for workflow execution")
-
-            client = get_flow_client(api_key)
-            executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
-            logger.info(f"Starting workflow: {workflow.name}")
-            executor.log(f"Starting workflow: {workflow.name}")
-
-            nodes = workflow.nodes or []
-            edges = workflow.edges or []
-
-            # Find trigger node
-            trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
-            start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
-            if not start_node:
-                raise Exception("No trigger node found")
-
-            # Build edge maps
-            edge_map: dict[str, list[dict]] = {}
-            incoming_edge_map: dict[str, list[dict]] = {}
-            for edge in edges:
-                source = edge["source"]
-                target = edge["target"]
-                if source not in edge_map:
-                    edge_map[source] = []
-                edge_map[source].append(edge)
-                if target not in incoming_edge_map:
-                    incoming_edge_map[target] = []
-                incoming_edge_map[target].append(edge)
-
-            visited_count: dict[str, int] = {}
-
-            execute_node_chain(
-                start_node["id"],
-                nodes,
-                edge_map,
-                incoming_edge_map,
-                executor,
-                context,
-                visited_count,
-                depth=0,
-            )
-
-            if executor.errors:
-                summary = "; ".join(f"{e['type']}: {e['message']}" for e in executor.errors)
-                update_execution_status(execution.id, "failed", error=summary, logs=logs)
-                return {
-                    "status": "error",
-                    "message": (
-                        f"{len(executor.errors)} node(s) failed: {summary}"
-                    ),
-                    "execution_id": execution.id,
-                    "errors": executor.errors,
-                    "logs": logs,
-                }
-
-            update_execution_status(execution.id, "completed", logs=logs)
-            return {
-                "status": "success",
-                "message": "Workflow executed successfully",
-                "execution_id": execution.id,
-                "logs": logs,
-            }
-
-        except Exception as e:
-            logger.exception(f"Workflow execution failed: {e}")
-            logs.append(
-                {
-                    "time": datetime.now().isoformat(),
-                    "message": f"Error: {str(e)}",
-                    "level": "error",
-                }
-            )
-            update_execution_status(execution.id, "failed", error=str(e), logs=logs)
-            return {
-                "status": "error",
-                "message": str(e),
-                "execution_id": execution.id,
-                "logs": logs,
-            }
-
+        return _execute_workflow_locked(workflow_id, webhook_data, api_key)
     finally:
         lock.release()
+
+
+# === Workflows that wait, under the gthread worker ===
+#
+# A Delay node sleeps up to DELAY_MAX_SECONDS and a Wait Until node up to
+# WAIT_UNTIL_MAX_SECONDS, and a webhook or Run Now executes the workflow on the
+# request that triggered it. Under eventlet a sleeping greenlet costs nothing.
+# Under the gthread worker it holds one of a fixed number of request threads for
+# minutes, and a handful of waiting workflows starve every other request, order
+# routes included. So under gthread (and only there) a workflow that can wait
+# longer than FLOW_INLINE_WAIT_SECONDS runs on a shared pool instead, and the
+# trigger is answered at once. A shorter wait still runs on its request, as it
+# does everywhere else. Scheduler, price-alert and order-update triggers already
+# run on pools of their own and are unchanged.
+#
+# The constants below are module constants, not settings: the gthread worker
+# adds exactly one configuration key, and its 64 request threads are fixed.
+
+#: A workflow whose waits add up to no more than this still runs on its
+#: request: a few seconds of one request thread costs less than a refused
+#: signal, and the caller still gets the broker's answer.
+FLOW_INLINE_WAIT_SECONDS = 10
+
+#: Workflows waiting on Delay nodes that may be running at once in the
+#: background: a quarter of the gthread worker's 64 request threads.
+FLOW_WAITING_WORKERS = 16
+
+#: Workflows with a Wait Until node that may be waiting at once. A pool of their
+#: own, so waits of up to half an hour cannot take every slot from short delays.
+FLOW_WAIT_UNTIL_WORKERS = 4
+
+#: The node types that sleep inside the run.
+WAITING_NODE_TYPES = frozenset({"delay", "waitUntil"})
+
+#: What the caller reads when every waiting slot is taken.
+FLOW_WAITING_BUSY_MESSAGE = (
+    "Too many workflows are waiting on a Delay or Wait Until step right now, so "
+    "this one was not started. Try again shortly."
+)
+
+#: What the workflow's execution history records for a trigger refused that way.
+FLOW_WAITING_REFUSED_RECORD = (
+    "Not started: too many workflows were already waiting on a Delay or Wait "
+    "Until step, so this trigger was refused and placed no orders."
+)
+
+#: What the caller reads when the workflow was started in the background.
+FLOW_STARTED_IN_BACKGROUND_MESSAGE = (
+    "Workflow started. It waits on a Delay or Wait Until step, so it finishes in "
+    "the background; its result appears in the workflow's execution history."
+)
+
+# Held from the moment a waiting workflow is accepted until it finishes, so a
+# pool's queue can never hold more than it can run. Taken by request threads
+# and released by pool threads; only used under gthread, where both are real.
+_waiting_slots = threading.BoundedSemaphore(FLOW_WAITING_WORKERS)
+_wait_until_slots = threading.BoundedSemaphore(FLOW_WAIT_UNTIL_WORKERS)
+
+
+def workflow_waits(nodes: list[dict] | None) -> bool:
+    """Whether a workflow's graph contains a Delay or Wait Until node."""
+    return any(
+        isinstance(node, dict) and node.get("type") in WAITING_NODE_TYPES for node in (nodes or [])
+    )
+
+
+def _delay_node_seconds(node_data: dict) -> float:
+    """How long a Delay node sleeps, worked out as NodeExecutor.execute_delay does."""
+    try:
+        delay_value = node_data.get("delayValue")
+        if delay_value is not None:
+            unit = {"minutes": 60, "hours": 3600}.get(node_data.get("delayUnit", "seconds"), 1)
+            seconds = float(int(delay_value) * unit)
+        else:
+            seconds = int(node_data.get("delayMs", 1000)) / 1000
+    except (TypeError, ValueError):
+        # The node itself would fail on this; count it as long, never as short.
+        return float(NodeExecutor.DELAY_MAX_SECONDS)
+    return max(0.0, min(seconds, float(NodeExecutor.DELAY_MAX_SECONDS)))
+
+
+def _wait_until_node_seconds(node_data: dict, now: datetime) -> float:
+    """How long a Wait Until node would sleep if it ran at ``now``."""
+    target_hour, target_minute, target_second = parse_time_string(
+        node_data.get("targetTime", "09:30"), 9, 30
+    )
+    now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+    target_seconds = target_hour * 3600 + target_minute * 60 + target_second
+    wait = max(0, target_seconds - now_seconds)
+    return float(min(wait, NodeExecutor.WAIT_UNTIL_MAX_SECONDS))
+
+
+def workflow_wait_seconds(
+    nodes: list[dict] | None, now: datetime | None = None
+) -> tuple[float, float]:
+    """The longest a run of this workflow can sleep, from its saved graph.
+
+    Args:
+        nodes: The workflow's nodes.
+        now: The moment to measure Wait Until targets from; defaults to now.
+
+    Returns:
+        ``(delays, wait_until)``: every Delay node added up at its configured
+        length, capped as the node caps it, and the furthest Wait Until target
+        from ``now``. A value that cannot be read counts as the node's maximum,
+        so a doubtful workflow is treated as a long one.
+    """
+    now = now or datetime.now()
+    delays = 0.0
+    wait_until = 0.0
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data") or {}
+        if node.get("type") == "delay":
+            delays += _delay_node_seconds(data)
+        elif node.get("type") == "waitUntil":
+            wait_until = max(wait_until, _wait_until_node_seconds(data, now))
+    return delays, wait_until
+
+
+def workflow_runs_in_background(nodes: list[dict] | None) -> bool:
+    """Whether a triggered workflow can wait too long to hold a gthread request thread."""
+    delays, wait_until = workflow_wait_seconds(nodes)
+    return delays + wait_until > FLOW_INLINE_WAIT_SECONDS
+
+
+def _record_refused_run(workflow_id: int) -> None:
+    """Leave a failed run in the history for a trigger refused before it started.
+
+    Without it the refusal existed only as a log line and the answer to the
+    caller, which for a TradingView or Chartink alert nobody reads.
+    """
+    try:
+        execution = create_execution(workflow_id, status="running")
+        if execution:
+            update_execution_status(
+                execution.id,
+                "failed",
+                error=FLOW_WAITING_REFUSED_RECORD,
+                logs=[
+                    {
+                        "time": datetime.now().isoformat(),
+                        "message": FLOW_WAITING_REFUSED_RECORD,
+                        "level": "error",
+                    }
+                ],
+            )
+    except Exception:
+        logger.exception(f"Could not record the refused run of workflow {workflow_id}")
+
+
+def start_workflow_in_background(
+    workflow_id: int,
+    webhook_data: dict[str, Any] | None = None,
+    api_key: str = None,
+    *,
+    nodes: list[dict] | None = None,
+) -> dict:
+    """Start a workflow that waits on a shared pool and return at once.
+
+    Used under the gthread worker only (see the note above). The workflow's
+    lock is taken here, on the caller's thread, so a second trigger still gets
+    ``already_running`` straight away, and it is handed to the pool thread,
+    which releases it when the run ends.
+
+    Args:
+        workflow_id: The workflow to start.
+        webhook_data: The trigger's payload, if any.
+        api_key: The key the run places orders with.
+        nodes: The workflow's nodes. One whose Wait Until still has time to
+            wait goes to the Wait Until pool; any other, and one whose nodes
+            are not given, to the Delay pool.
+
+    Returns:
+        ``{"status": "accepted", "accepted": True, ...}`` once started;
+        ``already_running`` as execute_workflow reports it; or
+        ``{"status": "error", "busy": True, ...}`` when every slot of its pool
+        is taken, in which case nothing was started and the refusal is written
+        to the workflow's execution history.
+    """
+    from utils.shared_executors import get_executor
+
+    if nodes is not None and workflow_wait_seconds(nodes)[1] > FLOW_INLINE_WAIT_SECONDS:
+        slots, pool_name, pool_size = _wait_until_slots, "flow-wait-until", FLOW_WAIT_UNTIL_WORKERS
+    else:
+        slots, pool_name, pool_size = _waiting_slots, "flow-waiting", FLOW_WAITING_WORKERS
+
+    lock = get_workflow_lock(workflow_id)
+    if not lock.acquire(blocking=False):
+        return _already_running(workflow_id)
+    if not slots.acquire(blocking=False):
+        lock.release()
+        logger.warning(f"Workflow {workflow_id} not started: every waiting slot is taken")
+        _record_refused_run(workflow_id)
+        return {"status": "error", "message": FLOW_WAITING_BUSY_MESSAGE, "busy": True}
+    try:
+        get_executor(pool_name, pool_size).submit(
+            _run_waiting_workflow, lock, slots, workflow_id, webhook_data, api_key
+        )
+    except Exception:
+        slots.release()
+        lock.release()
+        logger.exception(f"Workflow {workflow_id} could not be started in the background")
+        return {
+            "status": "error",
+            "message": "The workflow could not be started. Try again shortly.",
+        }
+    logger.info(f"Workflow {workflow_id} started in the background (it waits)")
+    return {
+        "status": "accepted",
+        "message": FLOW_STARTED_IN_BACKGROUND_MESSAGE,
+        "accepted": True,
+    }
+
+
+def _run_waiting_workflow(
+    lock: threading.Lock,
+    slots: threading.BoundedSemaphore,
+    workflow_id: int,
+    webhook_data: dict[str, Any] | None,
+    api_key: str | None,
+) -> None:
+    """Run one accepted workflow on the pool, then give back its lock and slot."""
+    try:
+        result = _execute_workflow_locked(workflow_id, webhook_data, api_key)
+        if isinstance(result, dict) and result.get("status") != "success":
+            logger.warning(f"Background workflow {workflow_id} ended: {result.get('message')}")
+    except Exception:
+        logger.exception(f"Background workflow {workflow_id} failed")
+    finally:
+        lock.release()
+        slots.release()
+        # A pool thread has no Flask teardown to release its sessions.
+        try:
+            from utils.db_sessions import remove_all_scoped_sessions
+
+            remove_all_scoped_sessions()
+        except Exception:
+            logger.exception("Could not release sessions after a background workflow")
+
+
+def _execute_workflow_locked(
+    workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
+) -> dict:
+    """The body of execute_workflow. The caller holds the workflow's lock."""
+    workflow = get_workflow(workflow_id)
+    if not workflow:
+        return {"status": "error", "message": "Workflow not found"}
+
+    # Every trigger converges here - schedules, price alerts, order updates,
+    # webhooks and Run Now - so this is the only place that can guarantee an
+    # incomplete graph never reaches the broker. Guarding the HTTP routes
+    # alone left the background triggers unchecked, and saving deliberately
+    # accepts a half-built graph. Checked before the execution record exists,
+    # so a rejected run is not logged as one that started.
+    from services.flow_workflow_validator import validate_workflow
+
+    validation_errors = validate_workflow(
+        {
+            "name": workflow.name,
+            "nodes": workflow.nodes or [],
+            "edges": workflow.edges or [],
+        },
+        strict=True,
+    )
+    if validation_errors:
+        message = validation_errors[0]["message"]
+        logger.error(
+            f"Workflow {workflow_id} ({workflow.name}) is not runnable: {message}"
+        )
+        return {
+            "status": "error",
+            "message": f"Workflow cannot be executed: {message}",
+            "errors": validation_errors,
+        }
+
+    execution = create_execution(workflow_id, status="running")
+    if not execution:
+        return {"status": "error", "message": "Failed to create execution record"}
+
+    logs = []
+    context = WorkflowContext(workflow_id=workflow_id)
+
+    if webhook_data:
+        context.set_variable("webhook", webhook_data)
+        logger.info(f"Webhook data injected: {webhook_data}")
+
+    try:
+        if not api_key:
+            raise Exception("API key required for workflow execution")
+
+        client = get_flow_client(api_key)
+        executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
+        logger.info(f"Starting workflow: {workflow.name}")
+        executor.log(f"Starting workflow: {workflow.name}")
+
+        nodes = workflow.nodes or []
+        edges = workflow.edges or []
+
+        # Find trigger node
+        trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
+        start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
+        if not start_node:
+            raise Exception("No trigger node found")
+
+        # Build edge maps
+        edge_map: dict[str, list[dict]] = {}
+        incoming_edge_map: dict[str, list[dict]] = {}
+        for edge in edges:
+            source = edge["source"]
+            target = edge["target"]
+            if source not in edge_map:
+                edge_map[source] = []
+            edge_map[source].append(edge)
+            if target not in incoming_edge_map:
+                incoming_edge_map[target] = []
+            incoming_edge_map[target].append(edge)
+
+        visited_count: dict[str, int] = {}
+
+        execute_node_chain(
+            start_node["id"],
+            nodes,
+            edge_map,
+            incoming_edge_map,
+            executor,
+            context,
+            visited_count,
+            depth=0,
+        )
+
+        if executor.errors:
+            summary = "; ".join(f"{e['type']}: {e['message']}" for e in executor.errors)
+            update_execution_status(execution.id, "failed", error=summary, logs=logs)
+            return {
+                "status": "error",
+                "message": (
+                    f"{len(executor.errors)} node(s) failed: {summary}"
+                ),
+                "execution_id": execution.id,
+                "errors": executor.errors,
+                "logs": logs,
+            }
+
+        update_execution_status(execution.id, "completed", logs=logs)
+        return {
+            "status": "success",
+            "message": "Workflow executed successfully",
+            "execution_id": execution.id,
+            "logs": logs,
+        }
+
+    except Exception as e:
+        logger.exception(f"Workflow execution failed: {e}")
+        logs.append(
+            {
+                "time": datetime.now().isoformat(),
+                "message": f"Error: {str(e)}",
+                "level": "error",
+            }
+        )
+        update_execution_status(execution.id, "failed", error=str(e), logs=logs)
+        return {
+            "status": "error",
+            "message": str(e),
+            "execution_id": execution.id,
+            "logs": logs,
+        }
