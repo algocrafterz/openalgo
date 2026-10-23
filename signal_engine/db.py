@@ -267,11 +267,11 @@ def save_declined(signal: Signal, stage: str, reason: str) -> None:
         logger.error(f"Failed to save declined signal for {signal.symbol}: {e}")
 
 
-def save(signal: Signal, order: Order, result: TradeResult) -> None:
-    """Persist a completed trade to the audit trail."""
+def save(signal: Signal, order: Order, result: TradeResult) -> int | None:
+    """Persist a completed trade to the audit trail. Returns the row id, or None on failure."""
     try:
         conn = _get_connection()
-        conn.execute(
+        cur = conn.execute(
             _INSERT,
             (
                 signal.strategy,
@@ -295,8 +295,26 @@ def save(signal: Signal, order: Order, result: TradeResult) -> None:
             ),
         )
         conn.commit()
+        return cur.lastrowid
     except Exception as e:
         logger.error(f"Failed to save trade: {e}")
+        return None
+
+
+def update_entry_fill(row_id: int | None, fill_price: float | None) -> None:
+    """Record the fill price on an entry row written when the broker accepted the order.
+
+    The row is saved before the stop, the fill lookup and the bad-fill guard run, so a crash in
+    between still leaves it; this fills in what was only known afterwards. Never raises.
+    """
+    if row_id is None or fill_price is None:
+        return
+    try:
+        conn = _get_connection()
+        conn.execute("UPDATE trades SET fill_price = ? WHERE id = ?", (fill_price, row_id))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to record the entry fill for trades row {row_id}: {e}")
 
 
 def sig_id_exists(sig_id: str) -> bool:

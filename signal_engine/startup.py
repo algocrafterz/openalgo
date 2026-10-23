@@ -377,9 +377,11 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
             )
 
     sl_orders = await _recover_sl_order_ids(open_broker_positions)
+    unmatched: list = []
     restored = _restore_tracker_positions(
-        tracker, open_broker_positions, configured_product, sl_orders
+        tracker, open_broker_positions, configured_product, sl_orders, unmatched=unmatched
     )
+    await _alert_unmatched_positions(unmatched)
     if restored > 0:
         logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
 
@@ -456,7 +458,8 @@ def _match_open_sl_orders(orderbook) -> dict:
 
 
 def _restore_tracker_positions(
-    tracker, open_broker_positions, configured_product, sl_orders: dict = None
+    tracker, open_broker_positions, configured_product, sl_orders: dict = None,
+    unmatched: list | None = None,
 ) -> int:
     """Rebuild tracker entries from trades.db so exit paths see real entry/sl/tp values.
 
@@ -486,10 +489,12 @@ def _restore_tracker_positions(
 
         legs = _lookup_entry_legs(bsymbol, broker_qty=bqty, is_long=(bdir == Direction.LONG))
         if not legs:
-            logger.warning(
-                f"Tracker restore [{bsymbol}]: no entry trade in trades.db today "
-                "— skipping (TP/SL alerts will use fallback path)"
+            logger.critical(
+                f"Tracker restore [{bsymbol}]: broker holds {int(bp.get('quantity', 0))} but there is "
+                "no entry trade in trades.db today - not tracked, no time exit from the engine"
             )
+            if unmatched is not None:
+                unmatched.append((bsymbol, int(bp.get("quantity", 0))))
             continue
 
         recovered_sl = sl_orders.get(bsymbol.upper(), "")
@@ -534,6 +539,22 @@ def _restore_tracker_positions(
                 f"entry={found['entry']} sl={found['sl']} tp={found['tp']}{sl_note}"
             )
     return restored
+
+
+async def _alert_unmatched_positions(unmatched: list) -> None:
+    """One alert for broker positions the restart could not match to an entry row.
+
+    The entry row is written when the broker accepts the order, so an engine position should
+    always match; one that does not is a manual trade or a lost record, and nothing manages it.
+    """
+    if not unmatched:
+        return
+    listed = ", ".join(f"{sym} {qty:+d}" for sym, qty in unmatched)
+    await notifier.notify_event(
+        "untracked_broker_position",
+        f"RESTART: broker positions with no entry trade in trades.db today: {listed}. "
+        "The engine does not track them (no stop management, no time exit). Check the broker now.",
+    )
 
 
 def _gather_candidate_entries(bsymbol: str) -> list:
