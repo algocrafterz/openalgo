@@ -59,18 +59,26 @@ async def _fetch_tradebook() -> list[dict]:
 def snapshot(day: date | None = None) -> str | None:
     """Save today's broker tradebook, merged into what is already saved for today.
 
-    The broker tradebook holds today's fills only, so a `day` other than today (IST) is refused
-    and no file is touched: `eod.sh 2026-10-21` run on 10-22 used to overwrite 10-22's file.
-    Fills are merged by trade id and the first-seen copy is kept, so a re-run that returns fewer
-    fills never shrinks the file. A failed tradebook call raises before anything is written.
+    The broker tradebook holds today's fills only, so a `day` other than today (IST) is never
+    fetched and no file is touched: `eod.sh 2026-10-21` run on 10-22 used to overwrite 10-22's
+    file. That day's saved snapshot is returned when there is one, and None when there is not,
+    which the CLI turns into a failure so eod.sh reports the missing snapshot.
+    Only fills dated today (IST) are saved. Fills are merged by trade id and the first-seen copy
+    is kept, so a re-run that returns fewer fills never shrinks the file. A failed tradebook call
+    raises before anything is written.
     """
     today = ist_today()
     if day is not None and day != today:
-        print(f"snapshot skipped for {day}: the broker tradebook holds only today's fills "
-              f"({today}); the saved snapshot for {day} is kept as it is")
+        saved_path = os.path.join(SNAP_DIR, f"tradebook_{day.isoformat()}.json")
+        if os.path.exists(saved_path):
+            print(f"snapshot not taken for {day}: the broker tradebook holds only today's fills "
+                  f"({today}); using the snapshot saved that day -> {saved_path}")
+            return saved_path
+        print(f"snapshot not taken for {day}: the broker tradebook holds only today's fills "
+              f"({today}), and no snapshot was saved that day")
         return None
     os.makedirs(SNAP_DIR, exist_ok=True)
-    fetched = asyncio.run(_fetch_tradebook())
+    fetched = _todays_fills(asyncio.run(_fetch_tradebook()), today)
     path = os.path.join(SNAP_DIR, f"tradebook_{today.isoformat()}.json")
     saved = _read_saved_snapshot(path)
     merged = _merge_fills(saved, fetched)
@@ -81,6 +89,40 @@ def snapshot(day: date | None = None) -> str | None:
     print(f"saved {len(merged)} broker trades ({len(merged) - len(saved)} new, "
           f"{len(saved)} already saved) -> {path}")
     return path
+
+
+#: Tradebook fill times, IST wall clock: OpenAlgo's sandbox, then Noren's norentm (Flattrade).
+_FILL_TIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%H:%M:%S %d-%m-%Y")
+
+
+def _fill_day(fill: dict) -> date | None:
+    """The IST date a fill is stamped with, or None when its time is in no known format."""
+    stamp = str(fill.get("timestamp") or "").strip()
+    for fmt in _FILL_TIME_FORMATS:
+        try:
+            return datetime.strptime(stamp, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _todays_fills(fetched: list[dict], today: date) -> list[dict]:
+    """The fills dated `today`. A fill whose time cannot be read is kept and reported."""
+    kept, other_day, unreadable = [], 0, 0
+    for fill in fetched:
+        day = _fill_day(fill)
+        if day is None:
+            unreadable += 1
+            kept.append(fill)
+        elif day == today:
+            kept.append(fill)
+        else:
+            other_day += 1
+    if other_day:
+        print(f"left out {other_day} fill(s) dated another day than {today}")
+    if unreadable:
+        print(f"kept {unreadable} fill(s) with an unreadable time; check their dates by hand")
+    return kept
 
 
 def _fill_key(fill: dict) -> tuple:
@@ -302,7 +344,8 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.snapshot:
-        snapshot(datetime.strptime(args.day, "%Y-%m-%d").date() if args.day else None)
+        if snapshot(datetime.strptime(args.day, "%Y-%m-%d").date() if args.day else None) is None:
+            raise SystemExit(1)
         return
 
     since = datetime.strptime(args.since, "%Y-%m-%d").date() if args.since else None
