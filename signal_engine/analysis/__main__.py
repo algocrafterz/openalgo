@@ -56,6 +56,15 @@ async def _fetch_tradebook() -> list[dict]:
     return list(data.get("data") or [])
 
 
+class UnverifiedFills(RuntimeError):
+    """The snapshot was saved, but some fetched fills had no readable time and were set aside."""
+
+    def __init__(self, count: int, path: str) -> None:
+        super().__init__(f"{count} fill(s) with no readable time set aside in {path}")
+        self.count = count
+        self.path = path
+
+
 def snapshot(day: date | None = None) -> str | None:
     """Save today's broker tradebook, merged into what is already saved for today.
 
@@ -63,9 +72,11 @@ def snapshot(day: date | None = None) -> str | None:
     fetched and no file is touched: `eod.sh 2026-10-21` run on 10-22 used to overwrite 10-22's
     file. That day's saved snapshot is returned when there is one, and None when there is not,
     which the CLI turns into a failure so eod.sh reports the missing snapshot.
-    Only fills dated today (IST) are saved. Fills are merged by trade id and the first-seen copy
-    is kept, so a re-run that returns fewer fills never shrinks the file. A failed tradebook call
-    raises before anything is written.
+    Only fills dated today (IST) are saved. A fill whose time cannot be read may be another day's,
+    so it is never saved as today's: it goes to `unverified_tradebook_<today>.json`, which no
+    reader treats as a day's fills, and UnverifiedFills is raised after today's file is written.
+    Fills are merged by trade id and the first-seen copy is kept, so a re-run that returns fewer
+    fills never shrinks a file. A failed tradebook call raises before anything is written.
     """
     today = ist_today()
     if day is not None and day != today:
@@ -78,17 +89,29 @@ def snapshot(day: date | None = None) -> str | None:
               f"({today}), and no snapshot was saved that day")
         return None
     os.makedirs(SNAP_DIR, exist_ok=True)
-    fetched = _todays_fills(asyncio.run(_fetch_tradebook()), today)
+    fetched, undated = _todays_fills(asyncio.run(_fetch_tradebook()), today)
     path = os.path.join(SNAP_DIR, f"tradebook_{today.isoformat()}.json")
+    saved, merged = _save_merged(path, fetched)
+    print(f"saved {len(merged)} broker trades ({len(merged) - len(saved)} new, "
+          f"{len(saved)} already saved) -> {path}")
+    if undated:
+        aside = os.path.join(SNAP_DIR, f"unverified_tradebook_{today.isoformat()}.json")
+        _save_merged(aside, undated)
+        print(f"set aside {len(undated)} fill(s) with no readable time -> {aside}; they are NOT "
+              "in today's snapshot or any report until their date is checked by hand")
+        raise UnverifiedFills(len(undated), aside)
+    return path
+
+
+def _save_merged(path: str, fills: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Merge `fills` into the file at `path` (never shrinking it); return (before, after)."""
     saved = _read_saved_snapshot(path)
-    merged = _merge_fills(saved, fetched)
+    merged = _merge_fills(saved, fills)
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(merged, fh, indent=1)
     os.replace(tmp, path)
-    print(f"saved {len(merged)} broker trades ({len(merged) - len(saved)} new, "
-          f"{len(saved)} already saved) -> {path}")
-    return path
+    return saved, merged
 
 
 #: Tradebook fill times, IST wall clock: OpenAlgo's sandbox, then Noren's norentm (Flattrade).
@@ -106,23 +129,20 @@ def _fill_day(fill: dict) -> date | None:
     return None
 
 
-def _todays_fills(fetched: list[dict], today: date) -> list[dict]:
-    """The fills dated `today`. A fill whose time cannot be read is kept and reported."""
-    kept, other_day, unreadable = [], 0, 0
+def _todays_fills(fetched: list[dict], today: date) -> tuple[list[dict], list[dict]]:
+    """(fills dated `today`, fills whose time cannot be read). Other days' fills are left out."""
+    kept, undated, other_day = [], [], 0
     for fill in fetched:
         day = _fill_day(fill)
         if day is None:
-            unreadable += 1
-            kept.append(fill)
+            undated.append(fill)
         elif day == today:
             kept.append(fill)
         else:
             other_day += 1
     if other_day:
         print(f"left out {other_day} fill(s) dated another day than {today}")
-    if unreadable:
-        print(f"kept {unreadable} fill(s) with an unreadable time; check their dates by hand")
-    return kept
+    return kept, undated
 
 
 def _fill_key(fill: dict) -> tuple:
@@ -344,7 +364,11 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.snapshot:
-        if snapshot(datetime.strptime(args.day, "%Y-%m-%d").date() if args.day else None) is None:
+        try:
+            path = snapshot(datetime.strptime(args.day, "%Y-%m-%d").date() if args.day else None)
+        except UnverifiedFills:
+            raise SystemExit(3) from None
+        if path is None:
             raise SystemExit(1)
         return
 

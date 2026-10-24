@@ -73,9 +73,12 @@ UV="$(command -v uv || echo /usr/local/bin/uv)"
 run() { PYTHONPATH="$REPO" "$UV" run python "$@"; }
 
 echo "=== EOD $DAY ==="
-snapshot_ok=1
-if ! run -m signal_engine.analysis --snapshot --day "$DAY"; then
-  snapshot_ok=0
+snapshot_rc=0
+run -m signal_engine.analysis --snapshot --day "$DAY" || snapshot_rc=$?
+if [ "$snapshot_rc" -eq 3 ]; then
+  echo "WARNING: tradebook snapshot saved, but some fills had no readable time and were set aside"
+  echo "         in unverified_tradebook_$DAY.json. They are not in this report; check their dates."
+elif [ "$snapshot_rc" -ne 0 ]; then
   echo "WARNING: tradebook snapshot failed — is OpenAlgo running? Fill prices and slippage"
   echo "         will be missing from this report. Re-run before OpenAlgo is stopped."
 fi
@@ -84,7 +87,11 @@ fi
   echo "# EOD review — $DAY"
   echo
   echo "Generated $(date '+%Y-%m-%d %H:%M %Z') by \`signal_engine/analysis/eod.sh\`."
-  if [ "$snapshot_ok" -eq 0 ]; then
+  if [ "$snapshot_rc" -eq 3 ]; then
+    echo
+    echo "> **Broker tradebook snapshot INCOMPLETE.** Fills with no readable time were set aside in"
+    echo "> \`signal_engine/data/tradebook/unverified_tradebook_$DAY.json\` and are missing below."
+  elif [ "$snapshot_rc" -ne 0 ]; then
     echo
     echo "> **Broker tradebook snapshot FAILED.** Every number below is signal-side only:"
     echo "> no fill prices, no slippage, no NO_FILL detection. Re-run this script while"
@@ -139,4 +146,4 @@ for line in open('$LOGS/errors_$DAY.jsonl'):
 } > "$REPORT"
 
 echo "report -> $REPORT"
-[ "$snapshot_ok" -eq 1 ] || exit 2
+[ "$snapshot_rc" -eq 0 ] || exit 2
