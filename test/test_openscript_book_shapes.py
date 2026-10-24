@@ -132,6 +132,16 @@ def test_the_positionbook_reads_a_bare_list_and_answers_one(monkeypatch):
 
     monkeypatch.setattr(books, "_fetch", fetch)
 
+    # This test is about the rows; the per strategy total has its own tests below. Pin the
+    # strategy book to unreadable so the outcome does not depend on whether an earlier test
+    # in the same run created its tables.
+    import database.strategy_book_db as book_db
+
+    def unreadable(user_id=None, strategy=None):
+        raise RuntimeError("the strategy book is not there")
+
+    monkeypatch.setattr(book_db, "get_strategy_legs", unreadable)
+
     out = books.positions("probe.oscript", "key", "sandbox")
 
     assert isinstance(out["data"], list)
