@@ -86,6 +86,39 @@ def _candle_number(candle: dict, key: str) -> float | None:
     return number if math.isfinite(number) else None
 
 
+#: Where TPSeries' closing-session counter switch makes 'intv' negative (see get_history).
+_CLOSING_SESSION_EXCHANGES = ("NSE", "BSE", "NFO", "BFO")
+_CLOSING_SESSION_START = dt_time(15, 15)
+
+
+def _report_floored_volume(symbol, exchange, interval, floored):
+    """Say which bars get_history floored to zero volume; the floor itself stays silent otherwise.
+
+    A negative bar volume inside the NSE/BSE closing session is the known counter switch, so it is
+    logged at debug. Anywhere else it is a feed fault that a reader of the floored history cannot
+    see any more (signal_engine's intraday rule C3 flags exactly this), so it is a warning.
+    """
+    if not floored:
+        return
+    closing = [
+        t
+        for t in floored
+        if exchange in _CLOSING_SESSION_EXCHANGES and t.time() >= _CLOSING_SESSION_START
+    ]
+    regular = [t for t in floored if t not in closing]
+    if regular:
+        logger.warning(
+            f"Flattrade history {symbol} {exchange} {interval}: {len(regular)} bar(s) outside the "
+            f"closing session had negative volume, floored to 0 "
+            f"(first {regular[0]:%Y-%m-%d %H:%M}, last {regular[-1]:%Y-%m-%d %H:%M})"
+        )
+    if closing:
+        logger.debug(
+            f"Flattrade history {symbol} {exchange} {interval}: {len(closing)} closing-session "
+            f"bar(s) had negative volume, floored to 0"
+        )
+
+
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
     """
     Common function to make API calls to Flattrade using httpx with connection pooling.
@@ -720,6 +753,7 @@ class BrokerData:
 
             # Convert response to DataFrame
             data = []
+            floored = []
             for candle in response:
                 if isinstance(candle, str):
                     candle = json.loads(candle)
@@ -786,6 +820,8 @@ class BrokerData:
                         if op == 0 and hi == 0 and lo == 0 and cl == 0:
                             continue
 
+                        if volume < 0:
+                            floored.append(candle_dt)
                         data.append(
                             {
                                 "timestamp": timestamp,
@@ -807,6 +843,7 @@ class BrokerData:
                 except (KeyError, TypeError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
+            _report_floored_volume(symbol, exchange, interval, sorted(floored))
             df = pd.DataFrame(data)
             if df.empty:
                 df = pd.DataFrame(

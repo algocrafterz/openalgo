@@ -451,6 +451,17 @@ def test_clean_flags_negative_volume_only_outside_the_closing_zone():
     assert ic.clean(before)[2].negative_volume.item()
 
 
+def test_a_source_that_floors_negative_volume_is_invisible_to_c3():
+    """Known limitation: from OpenAlgo 2.0.2.8 Flattrade history floors a negative bar volume to 0
+    before it reaches the store, so C3 sees an ordinary zero-volume bar. The broker parser warns
+    for each floored bar outside the closing session instead (broker/flattrade/api/data.py
+    `_report_floored_volume`); this pins that C3 itself cannot catch it."""
+    raw = _bars(CAS, [(555, 1, 1, 1, 1, 5), (700, 1, 1, 1, 1, -9)])
+    floored = _bars(CAS, [(555, 1, 1, 1, 1, 5), (700, 1, 1, 1, 1, 0)])
+    assert ic.clean(raw)[2].negative_volume.item()
+    assert not ic.clean(floored)[2].negative_volume.item()
+
+
 def test_split_closing_quarantines_by_origin_and_keeps_the_original_values():
     b = _cas_session([(916, 1, 2, 0.5, 1, 7), (920, 1, 1, 1, 1, -500), (928, 99, 99, 99, 99, 3)])
     legacy_kept, legacy_q = ic.split_closing(ic.with_clock(b), T, keep_auction=False)
