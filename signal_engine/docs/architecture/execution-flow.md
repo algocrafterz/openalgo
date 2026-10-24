@@ -164,10 +164,10 @@ flowchart TD
 flowchart TD
     A["TimeExitScheduler loop (5 s)"] --> B{"time reached, not fired today?"}
     B --> C["_fire (audit fix: exception logged, TIME EXIT ERROR alert, loop survives)"]
-    C --> D["time_exit_all: MIS only, CNC kept"]
-    D --> E["_square_off_strategies: cancel_all_orders, close_all_positions"]
+    C --> D["time_exit_all: selects tracked MIS positions<br/>(CNC kept in the tracker only; see gaps G15)"]
+    D --> E["_square_off_strategies: cancel_all_orders, close_all_positions<br/>both ACCOUNT-WIDE: every order, every position, every product"]
     E --> F["_verify_positions_closed: fetch_net_position, up to 3 attempts"]
-    F -->|"non-zero incl. -1 (audit fix)"| F1["retry cancel + close; after 3: TIME EXIT FAILED alert"]
+    F -->|"non-zero incl. -1 (audit fix)"| F1["retry cancel + close (account-wide again);<br/>after 3: TIME EXIT FAILED alert"]
     F -->|"None, unreadable (audit fix)"| F2["treated as closed (unchanged policy) + TIME EXIT UNVERIFIED alert"]
     F --> G["_confirm_orders_cancelled: order book, cancel by id, CRITICAL alert if still working"]
     G --> H["_book_time_exit_trades: per-leg P&L, TIME rows, risk.record_close"]
