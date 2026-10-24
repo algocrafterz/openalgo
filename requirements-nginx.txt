@@ -169,3 +169,15 @@ ddgs>=9.16.0
 # greenlet>=1.0 with no upper bound.
 gunicorn>=25.0,<26
 eventlet==0.41.2
+
+# signal_engine and the fork's backtest/research tools (pyproject.toml lists them;
+# test_requirements_parity keeps every pyproject dependency installable from here too).
+loguru>=0.7.3
+marketprofile>=0.2.0
+openpyxl>=3.1.5
+playwright>=1.62.0
+pytest-asyncio>=1.3.0
+pytest-cov>=7.0.0
+quantstats>=0.0.81
+telethon>=1.42.0
+vectorbt>=0.28.4

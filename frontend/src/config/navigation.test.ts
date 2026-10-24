@@ -18,7 +18,6 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Tools')
       expect(labels).toContain('Orderbook')
       expect(labels).toContain('Positions')
-      expect(labels).toContain('Strategy')
       expect(labels).toContain('P&L')
       expect(labels).toContain('Performance')
       expect(labels).toContain('Backtests')

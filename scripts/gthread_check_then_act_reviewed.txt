@@ -33,3 +33,5 @@ utils/logging.py::SensitiveDataFilter.filter::record.stack_info  # benign: each 
 upgrade/migrate_smtp_simple.py::setup_unicode_output::sys.stdout  # benign: a one-shot command line migration, single threaded
 
 # --- Real races, fixes owned elsewhere --------------------------------------
+portfolio/broker_fees.py::fees_for::_warned  # benign: a warn-once set; a race can only log the same missing-schedule warning twice
+services/strategy_trade_enrichment.py::_engine_for::_engines  # benign: a race builds a second NullPool engine for the same trades.db path, which holds no idle connection; the key space is that one path

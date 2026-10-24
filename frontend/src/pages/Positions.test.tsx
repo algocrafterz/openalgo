@@ -139,7 +139,8 @@ describe('Positions close button', () => {
     // Symbol, exchange, product, quantity - the fourth cell of the row.
     const row = screen.getByText(CLOSED_POSITION.symbol).closest('tr')
     expect(row).not.toBeNull()
-    const quantityCell = within(row as HTMLElement).getAllByRole('cell')[3]
+    // Symbol, Exchange, Product, Strategy (fork column), then Qty.
+    const quantityCell = within(row as HTMLElement).getAllByRole('cell')[4]
 
     expect(quantityCell).toHaveTextContent('0')
     expect(quantityCell.className).toContain('text-muted-foreground')
