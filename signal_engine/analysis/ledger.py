@@ -486,6 +486,14 @@ def _leg_from_event(e: dict, fills: dict[str, dict]) -> Leg:
     f = fills.get(oid)
     is_entry = e.get("direction") in ("LONG", "SHORT")
     reason = str(ctx.get("reason") or ctx.get("tplevel") or "").strip()
+    # A tracker close records its reason only as exit_types (NO-PROGRESS, TRAILING_STOP, ...),
+    # none of which the keyword scan below knows, so those exits read as "?". The list is the
+    # position's cumulative history (2026-10-01 RELIANCE: ["TP1"], ["TP2"], then the close
+    # ["TP1", "TP2", "TP3"]), so this leg's own reason is its last entry.
+    raw_types = ctx.get("exit_types")
+    exit_types = [str(x).strip() for x in raw_types if str(x).strip()] if isinstance(raw_types, list) else []
+    if not reason and not is_entry and exit_types:
+        reason = exit_types[-1]
     if not reason and not is_entry:
         head = (e.get("raw_message") or "").split("\n", 1)[0].upper()
         for k in ("TP1.5", "TP1", "TP2", "TP3", "SL", "TIME"):

@@ -81,6 +81,21 @@ _FILL_WAIT = "wait"  # status still unresolved — retry on the next poll
 _FILL_ORPHANED = "orphaned"  # order never traded — slot released, no trade recorded
 
 
+def _poll_close_exit_types(exit_types: list) -> list:
+    """Labels for a close the poll found on the broker: the stop, unless another path claimed it.
+
+    Only assume an SL hit when no other path has already claimed this exit: a no-progress market
+    exit tags NO-PROGRESS before the close is detected (all four of 2026-09-11's closes were
+    no-progress exits reported as "SL"). A TP label is not a claim: it is a completed partial leg
+    (main._finalize_partial_exit), so the remainder's close is still the stop's (2026-10-06
+    RELIANCE ORB was booked "Closed by tracker (TP1)" after its stop closed the second half).
+    """
+    labels = list(exit_types or [])
+    if not labels or labels[-1].upper().startswith("TP"):
+        labels.append("SL")
+    return labels
+
+
 def _break_even_base(pos) -> float:
     """Break-even reference price: the actual fill when known, else the signal entry."""
     return pos.fill_price if pos.fill_price > 0 else pos.entry_price
@@ -1325,10 +1340,7 @@ class PositionTracker:
             pos,
             pnl_delta=pnl_delta,
             exit_price=exit_price,
-            # Only assume an SL hit when no other path has already claimed this exit. A
-            # no-progress market exit sets pos.exit_types before the close is detected; all
-            # four of 2026-09-11's closes were no-progress exits reported as "SL".
-            exit_types=pos.exit_types[:] if pos.exit_types else ["SL"],
+            exit_types=_poll_close_exit_types(pos.exit_types),
             hold_minutes=int(age.total_seconds() / 60),
             max_trades=_settings.max_trades_per_day,
         )
