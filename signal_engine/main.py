@@ -694,11 +694,14 @@ async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
         fetch_orderbook=fetch_orderbook,
         attempts=settings.entry_timeout_recovery_attempts,
         delay=settings.entry_timeout_recovery_delay_seconds,
+        strategy=pos.strategy,
     )
+    if result.outcome == order_reconcile.ABSENT:
+        result = await _watch_exit_for_late_fill(exit_order, pos, since)
     if result.outcome == order_reconcile.FILLED:
         order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
         if result.duplicate_ids:
-            await _alert_duplicate_fills(exit_order, pos, result)
+            await _handle_duplicate_exit_fills(pos, exit_order.action.value, exit_order.quantity, result)
         return TradeResult(
             order_id=result.order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
         )
@@ -709,9 +712,38 @@ async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
         order_reconcile.UncertainOrder(
             strategy=pos.strategy, symbol=pos.symbol, action=exit_order.action.value,
             quantity=exit_order.quantity, since=since, kind="EXIT",
+            watch_until=since + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
         )
     )
     return await _hold_uncertain_exit(exit_order, pos, result.detail)
+
+
+async def _watch_exit_for_late_fill(exit_order, pos, since: datetime):
+    """Keep reading the book until the late-fill window after `since` has run out.
+
+    A clean read seconds after a timeout is not proof the order never lands: 2026-10-23 SUNPHARMA
+    read clean after ~6 s, was resent, and the first copy filled ~14 s after it was sent, so the
+    resend opened a long nothing tracked (TVSMOTOR 2026-10-22 the same). Only a book that is still
+    clean when the window ends makes a resend safe. The position's stop is already cancelled, so
+    the cost of waiting is up to the window without protection.
+    """
+    remaining = _LATE_FILL_WATCH_SECONDS - (datetime.now(IST) - since).total_seconds()
+    if remaining <= 0:
+        return order_reconcile.Reconciliation(order_reconcile.ABSENT, detail="late-fill window over")
+    logger.warning(
+        f"EXIT {exit_order.action.value} {exit_order.quantity} {pos.symbol} [{pos.strategy}] timed out "
+        f"and the book is clean: watching {remaining:.0f}s for a late fill before any resend"
+    )
+    return await order_reconcile.reconcile_timed_out_order(
+        symbol=exit_order.symbol,
+        action=exit_order.action.value,
+        quantity=exit_order.quantity,
+        since=since,
+        fetch_orderbook=fetch_orderbook,
+        attempts=max(1, math.ceil(remaining / _EXIT_WATCH_POLL_SECONDS)),
+        delay=_EXIT_WATCH_POLL_SECONDS,
+        strategy=pos.strategy,
+    )
 
 
 async def _hold_uncertain_exit(exit_order, pos, detail: str) -> TradeResult:
@@ -727,16 +759,64 @@ async def _hold_uncertain_exit(exit_order, pos, detail: str) -> TradeResult:
     return TradeResult(status=OrderStatus.TIMEOUT, message=message)
 
 
-async def _alert_duplicate_fills(exit_order, pos, result) -> None:
+async def _handle_duplicate_exit_fills(pos, action: str, quantity: int, result) -> None:
+    """Alert on extra completed copies of one exit, and flatten what they opened on proof.
+
+    The extras open a position the engine does not track (2026-10-23 SUNPHARMA: an unplanned long
+    of 174 until the 14:45 close). It is closed with ONE opposite MARKET order, and only when the
+    broker shows this strategy holding exactly what a correct exit plus the extras would leave.
+    Anything else (unreadable, already changed) is alerted for a person. The close is never resent.
+    """
     ids = ", ".join(result.duplicate_ids)
+    extra = len(result.duplicate_ids) * quantity
+    what = f"{pos.symbol} [{pos.strategy}] {action} {quantity}" if pos else f"{action} {quantity}"
     logger.critical(
-        f"EXIT {pos.symbol} [{pos.strategy}]: the broker holds extra completed copies of "
-        f"{exit_order.action.value} {exit_order.quantity} (adopted {result.order_id}, extra: {ids})"
+        f"EXIT {what}: the broker holds extra completed copies (adopted {result.order_id}, extra: {ids})"
     )
+    own = expected = None
+    proven_ours = False
+    if pos is not None:
+        # An untagged row (a live broker's book) could be another strategy's own same-size
+        # exit, so only copies the book tags with THIS strategy are closed automatically.
+        book = await fetch_orderbook() or []
+        tags = {
+            str(r.get("orderid") or r.get("order_id") or ""): str(r.get("strategy") or "").strip().upper()
+            for r in book
+            if isinstance(r, dict)
+        }
+        proven_ours = all(tags.get(oid) == pos.strategy.upper() for oid in result.duplicate_ids)
+        sign = 1 if pos.direction == Direction.LONG else -1
+        expected = sign * (pos.quantity - quantity) - sign * extra
+        own = await tracker.fetch_own_position(pos.symbol, pos.strategy, pos.exchange, pos.product)
+    if not proven_ours or own is None or own != expected:
+        reason = (
+            f"broker position {own}, expected {expected}"
+            if proven_ours
+            else "the order book does not tag every extra copy with this strategy"
+        )
+        await notifier.notify(
+            f"DUPLICATE FILLS: {what} filled more than once (adopted {result.order_id}, extra: {ids}). "
+            f"Not closed automatically ({reason}): check the broker now."
+        )
+        return
+    opposite = Direction.SHORT if pos.direction == Direction.LONG else Direction.LONG
+    close = build_exit_order(
+        symbol=pos.symbol, exchange=pos.exchange, quantity=extra, product=pos.product,
+        strategy_tag=pos.strategy, direction=opposite,
+    )
+    outcome = await send_order(close)
+    if outcome.status == OrderStatus.SUCCESS:
+        logger.critical(f"EXIT {what}: closed the duplicate {extra} with {close.action.value} id={outcome.order_id}")
+        await notifier.notify(
+            f"DUPLICATE CLOSED: {what} filled more than once (extra: {ids}); the extra {extra} was "
+            f"closed with {close.action.value} {extra} (id {outcome.order_id})."
+        )
+        return
+    logger.critical(f"EXIT {what}: closing the duplicate {extra} failed: {outcome.message}")
     await notifier.notify(
-        f"DUPLICATE FILLS: {pos.symbol} [{pos.strategy}] {exit_order.action.value} "
-        f"{exit_order.quantity} filled more than once (adopted {result.order_id}, extra: {ids}). "
-        "The extras opened a position the engine does not track: check the broker now."
+        f"DUPLICATE NOT CLOSED: {what} filled more than once (extra: {ids}); the close "
+        f"{close.action.value} {extra} returned {outcome.status.value} ({outcome.message}). "
+        "Not resent: check the broker now."
     )
 
 
@@ -757,9 +837,14 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
         fetch_orderbook=fetch_orderbook,
         attempts=settings.entry_timeout_recovery_attempts,
         delay=settings.entry_timeout_recovery_delay_seconds,
+        strategy=pending.strategy,
     )
     if result.outcome == order_reconcile.UNCERTAIN:
         return await _hold_uncertain_exit(exit_order, pos, result.detail)
+    if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, datetime.now(IST)):
+        return await _hold_uncertain_exit(
+            exit_order, pos, "the earlier copy may still land: inside its late-fill window"
+        )
     if result.outcome == order_reconcile.ABSENT:
         order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
         logger.warning(f"EXIT {pos.symbol}: earlier unconfirmed exit is not on the broker; exiting afresh")
@@ -772,7 +857,7 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
         )
     order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
     if result.duplicate_ids:
-        await _alert_duplicate_fills(exit_order, pos, result)
+        await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
     return TradeResult(order_id=result.order_id, status=OrderStatus.SUCCESS, message="recovered after timeout")
 
 
@@ -1848,6 +1933,8 @@ async def _recover_ambiguous_entry_timeout(
 #: How long a timed-out entry that a clean read could not find stays watched for a late fill.
 #: A policy candidate: the 2026-10-15 server stalls ran up to ~50s.
 _LATE_FILL_WATCH_SECONDS = 120.0
+#: How often a timed-out EXIT's late-fill watch re-reads the order book (the server is already slow).
+_EXIT_WATCH_POLL_SECONDS = 5.0
 
 
 async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
@@ -1889,6 +1976,7 @@ async def _entry_held_by_unresolved_order(signal) -> bool:
         since=pending.since, fetch_orderbook=fetch_orderbook,
         attempts=settings.entry_timeout_recovery_attempts,
         delay=settings.entry_timeout_recovery_delay_seconds,
+        strategy=pending.strategy,
     )
     if result.outcome == order_reconcile.UNCERTAIN:
         logger.critical(
@@ -1974,6 +2062,7 @@ async def sweep_unresolved_orders() -> None:
         result = await order_reconcile.reconcile_timed_out_order(
             symbol=pending.symbol, action=pending.action, quantity=pending.quantity,
             since=pending.since, fetch_orderbook=fetch_orderbook, attempts=1, delay=0.0,
+            strategy=pending.strategy,
         )
         if result.outcome == order_reconcile.UNCERTAIN:
             if order_reconcile.alert_due(pending, now, _UNRESOLVED_ALERT_SECONDS):
@@ -1986,12 +2075,8 @@ async def sweep_unresolved_orders() -> None:
                     f"{pending.symbol} [{pending.strategy}] ({result.detail}). Check the broker."
                 )
             continue
-        if (
-            pending.kind == "ENTRY"
-            and result.outcome == order_reconcile.ABSENT
-            and order_reconcile.watch_open(pending, now)
-        ):
-            continue  # still inside the late-fill watch: keep looking, never resend
+        if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, now):
+            continue  # still inside the late-fill watch: keep looking, never resend or re-protect
         _clear_unresolved(pending.strategy, pending.symbol)
         if pending.kind == "ENTRY":
             if result.outcome == order_reconcile.FILLED:
@@ -2004,6 +2089,9 @@ async def sweep_unresolved_orders() -> None:
                 f"EXIT {pending.symbol} [{pending.strategy}] order {result.order_id} completed at the broker; "
                 "the tracker poll books the close"
             )
+            if result.duplicate_ids:
+                pos = tracker.find_position(pending.symbol, pending.strategy)
+                await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
             continue
         await _restore_stop_after_absent_exit(pending)
 

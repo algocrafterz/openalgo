@@ -121,15 +121,24 @@ def _placed_at_or_after(row: dict, since: datetime) -> bool:
 
 
 def classify_book(
-    book: list, symbol: str, action: str, quantity: int, since: datetime
+    book: list, symbol: str, action: str, quantity: int, since: datetime, strategy: str = ""
 ) -> tuple[list[str], int]:
-    """(completed order ids, count of still-working copies) for this symbol, side and size."""
+    """(completed order ids, count of still-working copies) for this symbol, side and size.
+
+    With `strategy`, a row tagged for a DIFFERENT strategy is not a copy of this order: two
+    strategies on one symbol can send the same size within seconds (BREAKINGTRADE and
+    BREAKINGTRADE-WATCHLIST shared 49 positions 2026-09-30 to 10-23). Untagged rows (a live
+    broker's book carries no strategy) still match, as before.
+    """
     complete: list[str] = []
     working = 0
     for row in book:
         if not isinstance(row, dict):
             continue
         if str(row.get("symbol", "")).upper() != symbol.upper():
+            continue
+        tag = str(row.get("strategy") or "").strip()
+        if strategy and tag and tag.upper() != strategy.upper():
             continue
         if str(row.get("action", "")).upper() != action.upper():
             continue
@@ -162,6 +171,7 @@ async def reconcile_timed_out_order(
     attempts: int,
     delay: float,
     exclude: frozenset[str] = frozenset(),
+    strategy: str = "",
 ) -> Reconciliation:
     """Poll the order book until the order is seen, or the answer is as settled as it can be.
 
@@ -180,7 +190,7 @@ async def reconcile_timed_out_order(
             last_readable_clean = False
             detail = f"order book unreadable on attempt {attempt}/{attempts}"
             continue
-        complete, working = classify_book(book, symbol, action, quantity, since)
+        complete, working = classify_book(book, symbol, action, quantity, since, strategy)
         complete = [oid for oid in complete if oid not in exclude]
         if complete:
             return Reconciliation(FILLED, complete[0], tuple(complete[1:]), "completed on broker")
