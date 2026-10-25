@@ -473,6 +473,20 @@ def _stored_polls(day) -> set:
     return {r[0][11:16] for r in rows}
 
 
+def _mark_stored(mark, stored: set) -> bool:
+    """True when a stored poll falls inside `mark`'s catch-up grace.
+
+    A snapshot is stamped with the vendor's own table time, not the scheduled mark, so the 12:16
+    poll is usually stored as 12:17. Matching the exact mark minute never found it, and on
+    2026-10-23 the 12:16 mark was fetched four times before the grace ran out.
+    """
+    from datetime import timedelta as _td
+
+    return any(
+        f"{mark + _td(minutes=m):%H:%M}" in stored for m in range(CATCH_UP_GRACE_MINUTES + 1)
+    )
+
+
 def _audit(args) -> int:
     """Did the poller actually collect what the schedule promised?"""
     from datetime import datetime as _dt
@@ -607,6 +621,16 @@ def _watch(args) -> int:
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     logger = _setup_logging()
+
+    # The Windows watchdog runs `poller.sh start` every 5 minutes, also after the auto-stop. A
+    # start with nothing left on today's schedule must exit quietly: on 2026-10-20 and 10-22
+    # each of those starts sent a STARTED and a stopped Telegram message, 30-44 a day.
+    if _ist_now().time() >= AUTO_STOP_TIME:
+        logger.info(
+            f"started after {AUTO_STOP_TIME:%H:%M}, nothing left on today's schedule - exiting"
+        )
+        return 0
+
     logger.info("poller starting; schedule:")
     for start_t, end_t, minutes in POLL_WINDOWS:
         logger.info(f"  {start_t:%H:%M}-{end_t:%H:%M} on {', '.join(f':{m:02d}' for m in minutes)}")
@@ -642,6 +666,9 @@ def _watch(args) -> int:
     last_success = None
     last_heartbeat_alert = None
     session = None
+    # Marks this process fetched successfully. The stored-poll check alone is not enough: the
+    # vendor stamp can also fall BEFORE the mark, or the snapshot can be skipped as a duplicate.
+    done_marks = set()
 
     try:
         while True:
@@ -674,8 +701,10 @@ def _watch(args) -> int:
             pending = None
             for mark in _due_marks(now.date()):
                 age = (now - mark).total_seconds() / 60
-                if 0 <= age <= CATCH_UP_GRACE_MINUTES and f"{mark:%H:%M}" not in _stored_polls(
-                    now.date()
+                if (
+                    0 <= age <= CATCH_UP_GRACE_MINUTES
+                    and mark not in done_marks
+                    and not _mark_stored(mark, _stored_polls(now.date()))
                 ):
                     pending = mark
                     break
@@ -691,6 +720,7 @@ def _watch(args) -> int:
                     _fetch_and_report(args.store, want_volume, args.debug_dir, session=session)
                     took = (_ist_now() - started).total_seconds()
                     last_success = _ist_now()
+                    done_marks.add(pending)
                     logger.info(f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume})")
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
