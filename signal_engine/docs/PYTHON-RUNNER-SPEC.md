@@ -122,8 +122,11 @@ Map one `compute_signals` row to `Signal`:
 
 ### 4.6 `runner.py`: scheduler and lifecycle
 - Bar clock aligned to IST 5-minute boundaries with a configurable `bar_delay_seconds` (about 3) and a hard
-  per-cycle deadline; skip the cycle (log by name) if data is late beyond the validator's stale-signal window
-  (`risk.stale_signal_seconds`).
+  per-cycle deadline; take no entry (log by name) if data is late beyond the validator's stale-signal window
+  (`risk.stale_signal_seconds`). Open positions are still stepped on a stale bar: the Ladder does not replay
+  a skipped bar, so a target or stop that traded in it would otherwise be lost.
+- A warm-up or cycle that raises is logged and skipped; the next bar runs as usual. The first failure of a
+  session is alerted (`runner_cycle_failed`), later ones are logged only.
 - Runs only inside the strategy window (BREAKOUT: 09:45 to 11:45 for entries) but keeps stepping open
   positions until they close. Stops entry evaluation at the time exit.
 - Skips a symbol for the day when ineligible (log by name): price outside `min_entry_price..max_entry_price`,
@@ -266,8 +269,10 @@ history endpoint is unreachable or no symbol warms up it logs at critical level 
 - **After the entry window** the runner keeps cycling, but only for symbols the tracker still holds, until the
   time exit (`Runner(manage_until_min=...)`, config time_exit). Live stops one bar before the 14:45 time exit
   (the tracker takes over); the replay runs the time-exit bar so the close matches the engine.
-- **Halt.** A halted cycle (mode guard) steps nothing, exits included: the tracker, the broker SL-M and the
-  time exit still protect open positions, and sending orders in a mismatched mode is the worse risk.
+- **Halt.** Any halt (`mode_guard.is_halted`: operator ENTRY_HOLD, signal-feed outage, degraded listener,
+  mode flip) stops entries. Only a mode flip (`mode_guard.mode_halted`) also stops exits: then the tracker,
+  the broker SL-M and the time exit protect open positions, and sending orders in a mismatched mode is the
+  worse risk. The other halts do not touch the runner's own bars, so its exits keep running.
 - **Not handled:** exchange holidays (the session loop skips weekends only; a holiday cycle logs "bar late"
   per symbol until the deadline), and a Ladder rebuilt after a restart for a multi-leg plan (above).
 
