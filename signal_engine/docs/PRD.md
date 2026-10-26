@@ -6157,3 +6157,48 @@ Material limitations (all recorded in the quality table and in the embedded asse
 - The 2027 NSE trading calendar is not loaded. The backfill stops with an explicit message until the official holiday circular is available. Angel One top-ups for COCHINSHIP and GVT&D are manual.
 
 Verification before commit: `signal_engine/scripts/run_full_tests.sh` passed (8,750 passed, 1 skipped); `snapshot verify` is OK for all intraday versions, and both `-002` versions read back correctly through `PublishedSource.intraday`.
+## Stop lifecycle, entry slot reservation and late entry fills: parked on a branch (2026-10-19)
+
+**Status.** Committed on branch `wip/stop-lifecycle-slot-cap-late-entry` (not merged, not deployed). The running engine
+uses the committed behavior of its own branch. Evidence so far is unit and mocked tests only; no live incident has
+exercised these fixes. On 2026-10-19 all 18 order timeouts were resolved by the existing reconciliation, with no stop
+timeouts, duplicate stops, over-cap entries or late fills, so that day neither proves nor disproves the fixes.
+
+**Causes (2026-10-15 paper run).**
+
+- 09:47: a server stall made INFY and LICI stop submissions time out client-side; nine and five SL-M orders then landed
+  late. The cleanup cancels also timed out, the log still said "cancelled", and nothing looked again.
+- 09:51: two BREAKOUT-PY entries in one cycle both passed a cap of 1 because the slot was taken only after the order round trip.
+- 11:16 and later: NTPC, AXISBANK and KOTAKBANK entries filled after the three timeout reads (about 6 s) found a clean
+  book and wrote the entry off, so they were never tracked or protected.
+
+**Change.**
+
+- `executor.py`: `StopSweep` reports `confirmed_cancelled` (a fresh book read shows it) and `unresolved`; `cancelled` means
+  "request sent" only. Unproven duplicates stay on a retried pending list with escalation; the tracker audits the book for
+  exact-twin stops so a restart finds them; the last live stop is never removed; adopting one stop removes its twins; a stop
+  that already fired is adopted; submissions are serialised per strategy/symbol/side; timeouts are capped at 2 unknown
+  sends per cycle with a reconcile-first hold (25 s), and an exhausted position is reconciled and retried every 5 minutes.
+  Confirmed failures still retry to exhaustion. These numbers are untuned constants.
+- `risk.py`, `main.py`: a slot is reserved at the risk gate and released just before `record_trade`; reservations count
+  against the position cap, the daily trade cap and the symbol and sector limits.
+- `main.py`, `order_reconcile.py`, `db.py`, `startup.py`: an entry whose timeout reads were clean is watched for 120 s; a
+  fill that lands is adopted with its stop and the entry is never resent. While an entry is watched (or held on an
+  unreadable book) its slot stays reserved under a per-strategy/symbol watch token, so a competing entry cannot take it and
+  an adopted late fill cannot leave the account over its cap; the reservation is released when the watch ends and becomes
+  the recorded trade on adoption. After a restart a broker position explained only by a TIMEOUT entry row (same side and
+  exact quantity) is restored; that restore does not re-reserve a slot.
+- Replaced policy tests: `test_executor.py` (was retry-to-exhaustion) and `test_exit_timeout_safety.py` (was "a clean book is
+  a genuine failure").
+
+**Known, not fixed.**
+
+- A watched entry holds its slot for up to 120 s (longer on an unreadable book), so a legitimate competing signal in that
+  window can be declined at the cap.
+- A broker stall longer than the reconcile windows can still land stops after the engine gives up.
+- `startup._lookup_entry_legs` and `_lookup_entry_trade` compare `str(Direction)`, which is `"Direction.LONG"` on Python 3.12,
+  so the same-side split and quantity scoring never match. Separate bug, left unchanged pending approval.
+
+**In plain terms:** when the broker is slow, the engine now checks what the broker really holds before sending another stop
+or entry, never removes the last stop on a position, and keeps looking for an entry that fills late. It is saved on a
+side branch and not running.

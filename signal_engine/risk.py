@@ -194,6 +194,9 @@ class RiskEngine:
         # and isolate in ANALYZE, exactly like every other counter. See module docstring.
         self._positions_by_symbol: dict[tuple, int] = defaultdict(int)
         self._positions_by_sector: dict[tuple, int] = defaultdict(int)
+        # Entries that passed the exposure gate and have not yet become a recorded trade:
+        # token -> (the strategy's counter bucket, concentration key, symbol). See reserve_entry().
+        self._pending_entries: dict[str, tuple[object, str, str]] = {}
 
         self._restore()
 
@@ -645,12 +648,13 @@ class RiskEngine:
         # max_positions_per_symbol/sector, min_capital_for_entry and test_qty_cap.
         # -1 = dynamic, computed fresh from `capital` above — see _dynamic_max_open_positions.
         effective_max = self._effective_max_open_positions(capital, strategy)
-        if effective_max > 0 and state.open_positions >= effective_max:
+        pending = self._pending_for_state(state)
+        if effective_max > 0 and state.open_positions + pending >= effective_max:
             logger.warning(f"[{strategy}] Max open positions reached")
             return False
 
         trades_cap = self._limit(strategy, "max_trades_per_day")
-        if trades_cap > 0 and state.trades_today >= trades_cap:
+        if trades_cap > 0 and state.trades_today + pending >= trades_cap:
             logger.warning(f"[{strategy}] Max trades per day reached")
             return False
 
@@ -678,12 +682,50 @@ class RiskEngine:
                     f"{monthly:,.0f})"
                 )
         effective_max = self._effective_max_open_positions(capital, strategy)
-        if effective_max > 0 and state.open_positions >= effective_max:
-            return f"Max positions ({state.open_positions}/{effective_max})"
+        pending = self._pending_for_state(state)
+        if effective_max > 0 and state.open_positions + pending >= effective_max:
+            return f"Max positions ({state.open_positions + pending}/{effective_max})"
         trades_cap = self._limit(strategy, "max_trades_per_day")
-        if trades_cap > 0 and state.trades_today >= trades_cap:
-            return f"Max trades/day ({state.trades_today}/{trades_cap})"
+        if trades_cap > 0 and state.trades_today + pending >= trades_cap:
+            return f"Max trades/day ({state.trades_today + pending}/{trades_cap})"
         return "Unknown"
+
+    def _pending_for_state(self, state) -> int:
+        return sum(1 for bucket, _key, _symbol in self._pending_entries.values() if bucket is state)
+
+    def reserve_entry(self, token: str, strategy: str, symbol: str = "") -> None:
+        """Hold one slot for an entry that passed the risk gates and is about to be sent.
+
+        Call it in the same synchronous step as the gates, with no await between them, so two
+        concurrent entries cannot both take the last slot (BREAKOUT-PY 2026-10-15 09:51: HAL and
+        ADANIPORTS both passed a cap of 1 because the slot was only taken after the order round
+        trip). The reservation counts against the position cap, the daily trade cap and, when a
+        symbol is given, the symbol and sector concentration limits. Release it with
+        release_entry() immediately before record_trade() or on any path that ends without a
+        position. Re-reserving a token is a no-op.
+        """
+        self._pending_entries.setdefault(
+            token, (self._state(strategy), self._concentration_key(strategy), symbol)
+        )
+
+    def release_entry(self, token: str) -> None:
+        """Drop a reservation. Idempotent: an unknown or already-released token is ignored."""
+        self._pending_entries.pop(token, None)
+
+    def pending_entries_for(self, strategy: str) -> int:
+        return self._pending_for_state(self._state(strategy))
+
+    def _pending_in_symbol(self, strategy: str, symbol: str) -> int:
+        key = self._concentration_key(strategy)
+        return sum(1 for _b, k, sym in self._pending_entries.values() if k == key and sym == symbol)
+
+    def _pending_in_sector(self, strategy: str, sector: str) -> int:
+        key = self._concentration_key(strategy)
+        return sum(
+            1
+            for _b, k, sym in self._pending_entries.values()
+            if k == key and sym and self._symbol_to_sector.get(sym) == sector
+        )
 
     def capacity_status(self, strategy: str) -> str:
         """Return a formatted capacity summary string for this strategy."""
@@ -739,7 +781,7 @@ class RiskEngine:
         if self.max_positions_per_symbol == 0:
             return True
         held = self._positions_by_symbol.get((self._concentration_key(strategy), symbol), 0)
-        return held < self.max_positions_per_symbol
+        return held + self._pending_in_symbol(strategy, symbol) < self.max_positions_per_symbol
 
     def can_trade_sector(self, symbol: str, strategy: str) -> bool:
         """Return True if opening another position in this symbol's sector is allowed.
@@ -752,7 +794,7 @@ class RiskEngine:
         if sector is None:
             return True
         held = self._positions_by_sector.get((self._concentration_key(strategy), sector), 0)
-        return held < self.max_positions_per_sector
+        return held + self._pending_in_sector(strategy, sector) < self.max_positions_per_sector
 
     def _adjust_concentration(self, strategy: str, symbol: str, delta: int) -> None:
         """Move this STRATEGY's symbol/sector position counts by delta, never below zero."""

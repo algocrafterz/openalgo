@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -22,9 +23,14 @@ from signal_engine.api_client import (
     find_recent_complete_order_id,
 )
 from signal_engine.executor import (
+    HOLD_MESSAGE,
+    adopt_resting_stop,
     build_exit_order,
     cancel_live_protective_orders,
+    escalations,
+    flag_duplicate_stop_groups,
     place_sl_order,
+    resolve_pending_duplicate_stops,
     send_order,
 )
 from signal_engine.models import Direction, OrderStatus
@@ -203,6 +209,14 @@ class TrackedPosition:
     last_sl_retry_at: datetime | None = None
 
 
+#: Twin-stop audit of the order book: at most this often (one extra order-book read).
+_STOP_AUDIT_INTERVAL_S = 120.0
+
+#: After the poll-loop SL re-attempts are exhausted, an unprotected position is reconciled and
+#: tried again on this slow cycle for as long as it stays open and unprotected.
+_UNPROTECTED_SLOW_CYCLE_S = 300.0
+
+
 #: Remembers which date's day summary has already gone out. A file rather than in-memory
 #: state because the watchdog restarts the engine every 5 minutes until 15:25, and the
 #: scheduler's catch-up branch fires time_exit_all() on any start after 14:45 — against
@@ -281,6 +295,7 @@ class PositionTracker:
         self._last_realised_pnl: float = 0.0
         self._pnl_lock: asyncio.Lock = asyncio.Lock()  # serialise _last_realised_pnl updates
         self._time_exit_active: bool = False  # True while time_exit_all() is in progress
+        self._last_stop_audit: float | None = None  # time.monotonic() of the last twin-stop audit
         # Day summary counters (reset at midnight via TimeExitScheduler)
         self._day_trades: int = 0
         self._day_wins: int = 0
@@ -889,6 +904,8 @@ class PositionTracker:
         except Exception:  # noqa: BLE001 - the sweep must never break the poll
             logger.exception("Sweep of unresolved orders failed")
 
+        await self._reconcile_stops()
+
         book = await fetch_positionbook()
         if book is None:
             await self._note_positionbook_failure()
@@ -923,6 +940,44 @@ class PositionTracker:
         ):
             await self._check_no_progress(book_data)
 
+    async def _reconcile_stops(self) -> None:
+        """Duplicate protective stops: audit the book, retry unresolved cleanup, escalate.
+
+        The pending list lives in memory, so a restart forgets it. The audit rebuilds it from the
+        order book (exact-twin stops only), at most once per _STOP_AUDIT_INTERVAL_S. Never raises:
+        reconciliation trouble must not stop the poll that books closes and places exits.
+        """
+        try:
+            await self._audit_duplicate_stops()
+            await resolve_pending_duplicate_stops()
+            for strategy, symbol, _action in escalations():
+                logger.error(f"Duplicate stop cleanup for {symbol} [{strategy}] failed repeatedly")
+                await notifier.notify_sl_failed(
+                    symbol,
+                    "duplicate protective stop cleanup is unresolved after repeated attempts; "
+                    "more than one live stop may exist - check the order book",
+                    strategy=strategy,
+                )
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.exception("Protective stop reconciliation failed")
+
+    async def _audit_duplicate_stops(self) -> None:
+        now = time.monotonic()
+        if self._last_stop_audit is not None and now - self._last_stop_audit < _STOP_AUDIT_INTERVAL_S:
+            return
+        self._last_stop_audit = now
+        book = await fetch_orderbook()
+        if book is None:
+            return
+        tracked = {
+            (pos.strategy.upper(), pos.symbol.upper(), "SELL" if pos.direction == Direction.LONG else "BUY"):
+                pos.sl_order_id
+            for pos in self._positions.values()
+            if pos.sl_order_id
+        }
+        for key in flag_duplicate_stop_groups(book, keep_ids=tracked):
+            logger.warning(f"Duplicate protective stops found on the order book for {key[1]} [{key[0]}]")
+
     async def _retry_missing_sl(self, book_data: dict, _settings) -> None:
         """Re-attempt SL placement for positions whose initial bracket exhausted.
 
@@ -946,19 +1001,30 @@ class PositionTracker:
             entry = book_data.get(pos.symbol)
             if entry is None or entry.quantity == 0:
                 continue  # not confirmed open yet, or already closed — nothing to protect
-            if pos.sl_retry_count >= _settings.bracket_max_sl_reretries:
-                continue  # already exhausted and alerted below
+            exhausted = pos.sl_retry_count >= _settings.bracket_max_sl_reretries
             if pos.last_sl_retry_at is not None:
                 elapsed = (now - pos.last_sl_retry_at).total_seconds()
-                if elapsed < _settings.bracket_sl_reretry_interval_seconds:
+                interval = (
+                    _UNPROTECTED_SLOW_CYCLE_S if exhausted else _settings.bracket_sl_reretry_interval_seconds
+                )
+                if elapsed < interval:
                     continue
 
-            pos.sl_retry_count += 1
-            pos.last_sl_retry_at = now
+            if exhausted:
+                # Retries are exhausted but the position is still open and unprotected: it stays
+                # under watch. Reconcile first (a late submission may have landed), then run one
+                # more bounded cycle, alerting each time it is still unprotected.
+                pos.last_sl_retry_at = now
+                if await self._adopt_late_stop(key, pos):
+                    continue
+            else:
+                pos.sl_retry_count += 1
+                pos.last_sl_retry_at = now
             with logger.contextualize(symbol=pos.symbol):
                 logger.info(
                     f"Retrying missing SL for {key} "
-                    f"(re-attempt {pos.sl_retry_count}/{_settings.bracket_max_sl_reretries})"
+                    f"(re-attempt {pos.sl_retry_count}/{_settings.bracket_max_sl_reretries}"
+                    f"{', slow cycle' if exhausted else ''})"
                 )
                 result = await place_sl_order(
                     symbol=pos.symbol,
@@ -978,16 +1044,48 @@ class PositionTracker:
                         strategy=pos.strategy,
                         sl_price=pos.sl,
                     )
+                elif result.message == HOLD_MESSAGE:
+                    # Nothing was sent: an earlier submission is still unresolved. That is not a
+                    # failed re-attempt, so it must not use one up.
+                    if not exhausted:
+                        pos.sl_retry_count -= 1
                 elif pos.sl_retry_count >= _settings.bracket_max_sl_reretries:
                     logger.error(
                         f"SL re-retry exhausted for {key} after "
                         f"{pos.sl_retry_count} attempts — still unprotected"
                     )
-                    await notifier.notify_sl_failed(
-                        pos.symbol,
-                        f"re-retry exhausted after {pos.sl_retry_count} attempts: {result.message}",
-                        strategy=pos.strategy,
+                    reason = (
+                        f"re-retry exhausted after {pos.sl_retry_count} attempts: {result.message}"
+                        if not exhausted
+                        else f"STILL UNPROTECTED after {pos.sl_retry_count} attempts, "
+                        f"retrying every {_UNPROTECTED_SLOW_CYCLE_S:.0f}s: {result.message}"
                     )
+                    await notifier.notify_sl_failed(pos.symbol, reason, strategy=pos.strategy)
+
+    async def _adopt_late_stop(self, key: str, pos) -> bool:
+        """Reconcile only: adopt a stop that landed after every submission looked unresolved."""
+        try:
+            found = await adopt_resting_stop(
+                symbol=pos.symbol,
+                exchange=pos.exchange,
+                direction=pos.direction,
+                quantity=pos.quantity,
+                sl_price=pos.sl,
+                product=pos.product,
+                strategy_tag=pos.strategy,
+                fetch_book=fetch_orderbook,
+            )
+        except Exception:  # noqa: BLE001 - recovery must never break the poll
+            logger.exception(f"{key}: reconcile-only stop adoption failed")
+            return False
+        if found is None:
+            return False
+        pos.sl_order_id = found.order_id
+        logger.info(f"SL adopted for {key}: id={found.order_id}")
+        await notifier.notify_sl_placed(
+            pos.symbol, found.order_id, strategy=pos.strategy, sl_price=pos.sl
+        )
+        return True
 
     async def _check_one_position(self, key: str, pos, book_data: dict, _settings) -> bool:
         """Evaluate one tracked position. True if its tracker entry should be removed."""
@@ -1270,12 +1368,15 @@ class PositionTracker:
         except Exception:
             logger.exception(f"{key}: protective order sweep raised")
             return
-        if sweep.cancelled:
-            logger.warning(f"{key}: cancelled untracked live stop(s) {list(sweep.cancelled)}")
+        if sweep.confirmed_cancelled:
+            logger.warning(
+                f"{key}: untracked live stop(s) {list(sweep.confirmed_cancelled)} confirmed cancelled "
+                "by the order book"
+            )
         if not sweep.clear:
             logger.error(
                 f"{key}: cannot verify no live stop remains (readable={sweep.readable}, "
-                f"attempted={list(sweep.cancelled)})"
+                f"unresolved={list(sweep.unresolved)}, cancel requested for {list(sweep.cancelled)})"
             )
 
     async def _record_closed_trade(
