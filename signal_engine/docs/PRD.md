@@ -5689,7 +5689,7 @@ not a validated edge (IDEA-032 measured the same entry with a zero-cross exit at
 
 - Gap: the engine booked exit P&L from the account-wide realised delta and the alert's target price. Against the sandbox's real fills, BREAKOUT-PY's day total was +5,682 booked vs +3,113 real (PY RELIANCE trade 2: +1,871 vs +1,362); Pine's was +1,865 vs +2,626. The Strategy P&L and Performance pages (core `strategy_closed_trades`) were already fill-based and correct.
 - Fix: `main._book_exit_result` and `_reconcile_sl_hit` price the leg from `fetch_order_fill_price` of the exit/stop order (`tracker.leg_pnl`); `PositionTracker._book_broker_close` prefers the stop order's own fill over the shared per-symbol ltp; `_time_exit_leg_pnls` prices each time-exited position from the closed position's price instead of splitting the delta equally. The old delta remains as a logged fallback when no fill can be read.
-- Data: `signal_engine/reports/reconciled-2026-10-01/` holds the reconciled ledger and `fix_strategy_book.py`, which zeroed two phantom open legs (Pine TCS -32, PY ADANIPORTS 855) stray orders left in the strategy book. Backup: `db/openalgo.db.bak-reconcile-20261001`.
+- Data: `signal_engine/reports/reconciled-2026-10-01/` holds the reconciled ledger and `fix_strategy_book.py`, which zeroed two phantom open legs (Pine TCS -32, PY ADANIPORTS 855) stray orders left in the strategy book. Backup `db/openalgo.db.bak-reconcile-20261001` was deleted on 2026-10-24 during disk cleanup.
 - Not changed: engine trades.db rows already written for earlier days keep their old P&L; the pages do not read them except through the one-time 2026-09-25 backfill.
 
 
@@ -5702,7 +5702,7 @@ not a validated edge (IDEA-032 measured the same entry with a zero-cross exit at
 - Limits: it proves the pages equal the fills, not that the fills are realistic; live mode needs the tradebook snapshot taken before OpenAlgo stops; P&L is before brokerage and taxes.
 
 - Whole-account view (added the same day): `pages_vs_fills` also rebuilds the account's realised P&L from every fill and lists, per symbol, the gap to the strategy pages, labelled with the reviewed exemption or UNEXPLAINED. It prints the Positions page (sum of sandbox per-position today_realized_pnl) and the Dashboard (sandbox_funds.today_realized_pnl) beside it, and flags the funds total when it drifts from the positions total (Rs 275.20 on 2026-10-01). Informational; it does not fail the check.
-- 2026-10-01 data correction: `reports/reconciled-2026-10-01/fix_sandbox_totals.py` set the sandbox's stored totals (Positions -17,661.28, Dashboard -17,936.48) to the strategy pages' +6,861.77, moving realized_pnl, available_balance and total_pnl by the same amount. The trade and order history was not edited, so the stray orders remain as the audit trail. Backup: `db/sandbox.db.bak-reconcile-20261001`.
+- 2026-10-01 data correction: `reports/reconciled-2026-10-01/fix_sandbox_totals.py` set the sandbox's stored totals (Positions -17,661.28, Dashboard -17,936.48) to the strategy pages' +6,861.77, moving realized_pnl, available_balance and total_pnl by the same amount. The trade and order history was not edited, so the stray orders remain as the audit trail. Backup `db/sandbox.db.bak-reconcile-20261001` was deleted on 2026-10-24 during disk cleanup.
 
 
 ## Charges Verified and Charge Drag Surfaced (2026-10-01)

@@ -91,8 +91,9 @@ corruption, but it needs a human to reconcile rather than a blind
   migration 012. Idempotent, `--status` support, rebuilds `strategy_positions`
   (SQLite can't alter a UNIQUE constraint in place) following the existing
   `upgrade/migrate_sandbox_trigger_pending.py` pattern. Already applied to the
-  live database on 2026-09-24 23:57 IST — pre-migration backup kept at
-  `db/openalgo.db.pre-strategy-mode-migration-20260924-235551.bak`.
+  live database on 2026-09-24 23:57 IST — the pre-migration backup
+  `db/openalgo.db.pre-strategy-mode-migration-20260924-235551.bak` was deleted
+  on 2026-10-24 during disk cleanup (the migration was verified long before).
 - `database/strategy_book_db.py` (2026-09-28) — added
   `close_all_legs_for_position(user_id, symbol, exchange, product, mode,
   exit_price, book_today_pnl)`, a force-close helper for legs that went flat
