@@ -708,13 +708,12 @@ def _filled_since(row: dict, since: datetime) -> bool:
     Stricter than api_client.find_recent_complete_order_id: an unparseable stamp does NOT match
     here, because adopting an unrelated old fill would leave the position without a stop.
     """
-    raw = row.get("timestamp") or row.get("order_timestamp")
-    if not raw:
-        return False
-    try:
-        return datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST) >= since
-    except ValueError:
-        return False
+    # The shared parser reads the sandbox stamp and Flattrade's day-first stamps (and ISO with an
+    # offset, converted to IST); a sandbox-only parse rejected every live Flattrade row.
+    from signal_engine.order_reconcile import parse_broker_stamp
+
+    stamp = parse_broker_stamp(row.get("timestamp") or row.get("order_timestamp"))
+    return stamp is not None and stamp >= since
 
 
 async def _scan_resting_sl_order(
