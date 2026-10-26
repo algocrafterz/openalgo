@@ -13,7 +13,6 @@ from signal_engine.api_client import (
     cancel_order,
     close_all_positions,
     fetch_net_position,
-    fetch_open_position,
     fetch_order_fill_price,
     fetch_order_status,
     fetch_orderbook,
@@ -611,17 +610,23 @@ class PositionTracker:
         strategy_capital = {
             r.strategy: self._risk_engine.last_known_capital_for(r.strategy) for r in records
         }
-        sent = await notifier.notify_day_summary(
-            trades=counts["trades"],
-            wins=counts["wins"],
-            losses=counts["losses"],
-            net_pnl=counts["net_pnl"],
-            capital=capital,
-            time_exits=counts["time_exits"],
-            trade_records=records,
-            strategy_capital=strategy_capital,
-            degraded=degraded,
-        )
+        if notifier.day_summary_enabled():
+            sent = await notifier.notify_day_summary(
+                trades=counts["trades"],
+                wins=counts["wins"],
+                losses=counts["losses"],
+                net_pnl=counts["net_pnl"],
+                capital=capital,
+                time_exits=counts["time_exits"],
+                trade_records=records,
+                strategy_capital=strategy_capital,
+                degraded=degraded,
+            )
+        else:
+            # notify_level `alerts`: the summary is on the GUI. The day is still marked and the
+            # reconciliation canary below still runs; a False here would be retried all day.
+            logger.info("Day summary not sent: notify_level suppresses it")
+            sent = True
         if not sent:
             # 2026-09-09: this used to mark itself done unconditionally, so a Telegram
             # client that wasn't ready yet (transient - the client connects moments after
@@ -1838,6 +1843,10 @@ class PositionTracker:
         """Confirm the broker actually closed everything; retry cancel+close if not.
 
         Returns the keys of positions the broker still holds after the last attempt.
+
+        A position whose quantity cannot be read is not retried and does not block cleanup, as
+        before, but it is reported: an unread position is not a confirmed close. The reading is
+        fetch_net_position's None, not -1, because -1 is also a one-share short.
         """
         _MAX_CLOSE_ATTEMPTS = 3
         _VERIFY_WAIT = 3  # seconds per attempt
@@ -1846,12 +1855,18 @@ class PositionTracker:
         for attempt in range(1, _MAX_CLOSE_ATTEMPTS + 1):
             await asyncio.sleep(_VERIFY_WAIT)
             still_open = []
+            unread = []
             for k, pos in pending:
-                qty = await fetch_open_position(
+                qty = await fetch_net_position(
                     pos.symbol, pos.strategy, pos.exchange or "NSE", pos.product
                 )
-                if qty != 0 and qty != -1:
+                if qty is None:
+                    unread.append(pos)
+                elif qty != 0:
                     still_open.append((k, pos))
+
+            if unread:
+                await self._report_unverified_close(unread)
 
             if not still_open:
                 logger.info(
@@ -1882,6 +1897,18 @@ class PositionTracker:
             f"Close manually before 15:20!"
         )
         return {k for k, _ in pending}
+
+    @staticmethod
+    async def _report_unverified_close(positions: list) -> None:
+        symbols_str = ", ".join(pos.symbol for pos in positions)
+        logger.error(
+            f"Time exit: could not read the broker position for {symbols_str}; "
+            "treated as closed, not confirmed"
+        )
+        await notifier.notify(
+            f"TIME EXIT UNVERIFIED: could not read the broker position for {symbols_str}. "
+            "It is treated as closed but this is not confirmed - check the position book now."
+        )
 
     async def _book_time_exit_trades(
         self, mis_positions: dict, _settings, started: datetime, still_open: set = frozenset()
@@ -2093,7 +2120,7 @@ class TimeExitScheduler:
                     f"Time exit triggered at {now.strftime('%H:%M')} IST "
                     f"(configured: {self._hour:02d}:{self._minute:02d})"
                 )
-                await self._tracker.time_exit_all()
+                await self._fire()
                 self._fired_today = True
 
             # Also fire if past the configured time (in case scheduler started late)
@@ -2111,10 +2138,29 @@ class TimeExitScheduler:
                     )
                 else:
                     logger.info("Time exit: past configured time, firing catch-up exit")
-                await self._tracker.time_exit_all()
+                await self._fire()
                 self._fired_today = True
 
             await asyncio.sleep(5)
+
+    async def _fire(self) -> None:
+        """Run the time exit once. A failure is logged and alerted, never raised.
+
+        This loop runs as an unawaited task, so a raised exception would end it silently. The
+        exit is not retried here: positions it did not close are left to the 14:55
+        openAlgoSquareOff task and the broker's own square-off.
+        """
+        try:
+            await self._tracker.time_exit_all()
+        except Exception as e:  # noqa: BLE001 - the scheduler must outlive one failed exit
+            logger.exception("Time exit failed")
+            try:
+                await notifier.notify(
+                    f"TIME EXIT ERROR: the scheduled time exit failed ({type(e).__name__}: {e}). "
+                    "Positions and stop orders may still be open - check the position book now."
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Time exit: could not send the failure alert")
 
     def stop(self) -> None:
         self._running = False

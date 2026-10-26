@@ -223,7 +223,9 @@ class TestCloseOrderFailureNeverLeavesAnUntrackedPosition:
         mocks.notifier.notify_exit_failed.assert_awaited_once()
         mocks.tracker.register.assert_called_once()
         assert mocks.tracker.register.call_args.args[0].sl_order_id == "SL-2"
-        assert _rows() == []  # nothing is booked as closed
+        # Nothing is booked as closed. The entry row itself exists from the start (2026-10-23:
+        # it is written when the broker accepts the order, before the guard runs).
+        assert [(r[1], r[3]) for r in _rows()] == [("LONG", "ENTRY-1")]
         assert mocks.risk.record_close.call_count == 0
 
     async def test_when_the_stop_cancel_failed_no_second_stop_is_placed(self):

@@ -160,6 +160,9 @@ telegram:
       id: -1003965775886
 
   # [tune] How much routine traffic reaches notify_channel.
+  #   alerts  - failures and operational alerts only; no outcomes, no day summary (both are on
+  #             the OpenAlgo Strategy P&L pages). Also stops outcome mirrors to strategy channels.
+  #             Inbound signals are unaffected. Staged 2026-10-23, not yet switched on.
   #   quiet   - outcomes only: fills, closes, time exits, the day summary
   #   normal  - the above plus order-placed / SL-placed / partial-exit steps  (default)
   #   verbose - everything, including "exit signal received" acknowledgements

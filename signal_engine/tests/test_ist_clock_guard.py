@@ -52,10 +52,6 @@ ALLOWED_NAIVE: dict[tuple[str, str], str] = {
         "signal_engine/analysis/breakingtrade/store.py",
         "save_btst_candidates",
     ): "recorded_at audit column; the trade_day key is passed in by the caller.",
-    (
-        "signal_engine/analysis/__main__.py",
-        "snapshot",
-    ): "Builds a tradebook snapshot file name; never compared as a trading day.",
     # --- retention and housekeeping: a few hours of skew changes nothing ---
     (
         "signal_engine/analysis/breakingtrade/maintenance.py",

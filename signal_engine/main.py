@@ -34,6 +34,7 @@ from signal_engine.db import (
     save,
     save_declined,
     save_execution_exit,
+    update_entry_fill,
 )
 from signal_engine.executor import (
     build_exit_order,
@@ -1349,12 +1350,15 @@ async def _handle_entry(signal) -> None:
         recovered = await _recover_ambiguous_entry_timeout(signal, order, sent_at)
         if recovered is not None:
             trade_result = recovered
-    await _notify_entry_outcome(signal, trade_result, rr)
-
     if trade_result.status == OrderStatus.SUCCESS:
-        if not await _establish_position(signal, order, quantity, trade_result):
-            return
+        # Written the moment the broker accepted the order: a crash in the notice, the stop, the
+        # fill lookup or the bad-fill guard below must still leave a row a restart can restore.
+        entry_row_id = save(signal, order, trade_result)
+        await _notify_entry_outcome(signal, trade_result, rr)
+        await _establish_position(signal, order, quantity, trade_result, entry_row_id=entry_row_id)
+        return
 
+    await _notify_entry_outcome(signal, trade_result, rr)
     save(signal, order, trade_result)
 
 
@@ -1543,6 +1547,7 @@ async def _resolve_entry_quantity(
             msg = f"Insufficient capital after margin check — {signal.symbol} requires more margin than available (capital={capital:,.0f})"
             logger.warning(msg)
             await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+            await _decline(signal, stage="margin", reason=msg)
             return None
 
     # Apply test qty cap if configured (for minimal exposure live testing)
@@ -1863,8 +1868,7 @@ async def _adopt_untracked_entry(pending, order_id: str) -> None:
         "adopting it and placing its stop"
     )
     try:
-        if await _establish_position(signal, order, order.quantity, trade_result):
-            save(signal, order, trade_result)
+        await _establish_position(signal, order, order.quantity, trade_result)  # saves the entry
     except Exception:  # noqa: BLE001 - alert instead of losing the position silently
         logger.exception(f"Adopting untracked entry {pending.symbol} [{pending.strategy}] failed")
         await notifier.notify(
@@ -1986,15 +1990,32 @@ async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
         )
 
 
-async def _establish_position(signal, order, quantity: int, trade_result) -> bool:
+async def _establish_position(signal, order, quantity: int, trade_result, entry_row_id=None) -> bool:
     """Record the trade, protect it with an SL, and register it for tracking.
 
-    Returns False when the execution guard closed the position (a bad fill). The entry row
-    and the guard's exit row are then already saved here, entry first so the entry never reads
-    as an open position, and the caller must skip its own save. If the guard's close order
-    failed and the position is still open, the stop is restored and this carries on as a
-    normal tracked entry.
+    `entry_row_id` is the entry row the caller saved when the broker accepted the order; its fill
+    price is filled in here. Without one, the entry row is saved first thing, before any network
+    call, so a crash below still leaves it. The caller never saves the entry again.
+
+    Returns False when the execution guard closed the position (a bad fill); the guard's exit
+    row is then saved after the entry row, so the entry never reads as an open position. If the
+    guard's close order failed and the position is still open, the stop is restored and this
+    carries on as a normal tracked entry.
     """
+    if entry_row_id is None:  # a caller that did not persist the entry yet, or whose write failed
+        entry_row_id = save(signal, order, trade_result)
+        if entry_row_id is None:
+            # The broker holds the position but trades.db has no row: it is still protected and
+            # tracked for this session, but a restart cannot restore it. Say so now.
+            logger.critical(
+                f"ENTRY NOT RECORDED: {signal.symbol} [{signal.strategy}] order {trade_result.order_id} "
+                "is open at the broker but could not be written to trades.db"
+            )
+            await notifier.notify(
+                f"ENTRY NOT RECORDED: {signal.symbol} [{signal.strategy}] order {trade_result.order_id} "
+                "is open at the broker but trades.db could not record it. It is managed until the "
+                "engine stops; after a restart it will not be tracked. Check trades.db now."
+            )
     risk_engine.record_trade(strategy=signal.strategy, symbol=signal.symbol)
     logger.info(f"Capacity: {risk_engine.capacity_status(signal.strategy)}")
 
@@ -2004,12 +2025,12 @@ async def _establish_position(signal, order, quantity: int, trade_result) -> boo
     # price is cheaply knowable: the broker tradebook is wiped daily, so a number not
     # captured here is gone for good and slippage becomes unmeasurable after the fact.
     trade_result.fill_price = entry_fill_price
+    update_entry_fill(entry_row_id, entry_fill_price)
 
     guard = await _auto_close_on_bad_fill(
         signal, quantity, entry_fill_price, sl_order_id, trade_result.order_id
     )
     if guard is not None and guard.closed:
-        save(signal, order, trade_result)
         _save_bad_fill_exit(signal, quantity, trade_result.order_id, entry_fill_price, guard)
         return False
     if guard is not None:

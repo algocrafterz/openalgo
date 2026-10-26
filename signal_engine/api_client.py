@@ -203,29 +203,13 @@ async def fetch_realised_pnl() -> float:
 # Positions
 # ---------------------------------------------------------------------------
 
-async def fetch_open_position(symbol: str, strategy: str, exchange: str, product: str) -> int:
-    """Fetch open position quantity for a specific symbol+strategy.
-
-    Returns quantity (0 means position closed). Returns -1 on API error.
-    """
-    payload = _auth(strategy=strategy, symbol=symbol, exchange=exchange, product=product)
-    try:
-        data = await _post_json("openposition", payload)
-        if data.get("status") != "success":
-            return -1
-        return int(data.get("quantity", 0))
-    except Exception as e:
-        logger.error(f"Failed to fetch position for {symbol}: {e}")
-        return -1
-
-
 async def fetch_net_position(symbol: str, strategy: str, exchange: str, product: str):
     """Signed NET broker quantity for a symbol, or None when the API call failed.
 
     OpenAlgo's openposition nets by symbol and product across every strategy tag, so this is
     the combined position, not one strategy's. Use PositionTracker.fetch_own_position to get
-    the caller's share. Unlike fetch_open_position, a failure is None rather than -1, so a
-    one-share short (-1) is not mistaken for an error.
+    the caller's share. A failure is None, never -1, so a one-share short (-1) is not
+    mistaken for an error (the removed fetch_open_position used -1 for both).
     """
     payload = _auth(strategy=strategy, symbol=symbol, exchange=exchange, product=product)
     try:

@@ -151,14 +151,17 @@ class TestFailedOrPartialBackfill:
         _loader, (_h5, _h1, failed) = _load(D(2026, 10, 14), symbols=("PFC", "NTPC"))
         assert failed == ["PFC"]
 
-    def test_a_short_special_session_is_not_called_incomplete(self, monkeypatch):
-        # 2026-11-08 (Sunday) is a listed special (Muhurat) session with unknown windows.
+    def test_a_special_session_is_skipped_and_the_last_regular_session_is_previous(self, monkeypatch):
+        # 2026-11-08 (Sunday) is a listed special (Muhurat) session: not trading history, so
+        # Monday 11-09 reads Friday 11-06 (tests/test_muhurat_session_policy.py has the policy).
         _store(
             monkeypatch,
             {"PFC": [("2026-11-06", 330.0), ("2026-11-08", 331.0)]},
             partial={("PFC", "2026-11-08"): ("18:15", "19:15")},
         )
-        assert _load(D(2026, 11, 9))[1][2] == []
+        _loader, (_h5, h1, failed) = _load(D(2026, 11, 9))
+        assert failed == []
+        assert max(h1["PFC"].index.date) == D(2026, 11, 6)
 
 
 class TestFailClosedAndReported:

@@ -31,6 +31,7 @@ from signal_engine.analysis.ledger import (
     load_engine_events,
     load_fills,
 )
+from signal_engine.timeutils import IST, ist_today
 
 SNAP_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tradebook"
@@ -55,15 +56,68 @@ async def _fetch_tradebook() -> list[dict]:
     return list(data.get("data") or [])
 
 
-def snapshot() -> str:
-    """Save today's broker tradebook. Idempotent - re-running overwrites the same day."""
+def snapshot(day: date | None = None) -> str | None:
+    """Save today's broker tradebook, merged into what is already saved for today.
+
+    The broker tradebook holds today's fills only, so a `day` other than today (IST) is refused
+    and no file is touched: `eod.sh 2026-10-21` run on 10-22 used to overwrite 10-22's file.
+    Fills are merged by trade id and the first-seen copy is kept, so a re-run that returns fewer
+    fills never shrinks the file. A failed tradebook call raises before anything is written.
+    """
+    today = ist_today()
+    if day is not None and day != today:
+        print(f"snapshot skipped for {day}: the broker tradebook holds only today's fills "
+              f"({today}); the saved snapshot for {day} is kept as it is")
+        return None
     os.makedirs(SNAP_DIR, exist_ok=True)
-    trades = asyncio.run(_fetch_tradebook())
-    path = os.path.join(SNAP_DIR, f"tradebook_{date.today().isoformat()}.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(trades, fh, indent=1)
-    print(f"saved {len(trades)} broker trades -> {path}")
+    fetched = asyncio.run(_fetch_tradebook())
+    path = os.path.join(SNAP_DIR, f"tradebook_{today.isoformat()}.json")
+    saved = _read_saved_snapshot(path)
+    merged = _merge_fills(saved, fetched)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(merged, fh, indent=1)
+    os.replace(tmp, path)
+    print(f"saved {len(merged)} broker trades ({len(merged) - len(saved)} new, "
+          f"{len(saved)} already saved) -> {path}")
     return path
+
+
+def _fill_key(fill: dict) -> tuple:
+    """A fill's identity: the broker trade id, or its other fields when the id is missing."""
+    tradeid = str(fill.get("tradeid") or "").strip()
+    if tradeid:
+        return ("tradeid", tradeid)
+    return tuple(str(fill.get(k)) for k in
+                 ("orderid", "timestamp", "symbol", "action", "quantity", "average_price"))
+
+
+def _merge_fills(saved: list[dict], fetched: list[dict]) -> list[dict]:
+    merged = list(saved)
+    seen = {_fill_key(f) for f in saved}
+    for fill in fetched:
+        key = _fill_key(fill)
+        if key not in seen:
+            seen.add(key)
+            merged.append(fill)
+    return merged
+
+
+def _read_saved_snapshot(path: str) -> list[dict]:
+    """Today's saved fills. An unreadable file is renamed aside, never overwritten."""
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        if isinstance(saved, list):
+            return saved
+    except json.JSONDecodeError:
+        pass
+    aside = f"{path}.unreadable-{datetime.now(IST).strftime('%H%M%S')}"
+    os.replace(path, aside)
+    print(f"WARNING: {path} was unreadable; kept as {aside}")
+    return []
 
 
 def load_snapshots() -> list[dict]:
@@ -237,6 +291,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="signal_engine.analysis")
     ap.add_argument("--snapshot", action="store_true",
                     help="capture today's broker tradebook and exit (run after the close)")
+    ap.add_argument("--day", default=None,
+                    help="YYYY-MM-DD with --snapshot: the day being reviewed; a past day is "
+                         "refused because the broker tradebook holds today's fills only")
     ap.add_argument("--since", default=None, help="YYYY-MM-DD, filter the ledger")
     ap.add_argument("--positions", action="store_true", help="print every position")
     ap.add_argument("--db", default=None, help="path to trades.db")
@@ -245,7 +302,7 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.snapshot:
-        snapshot()
+        snapshot(datetime.strptime(args.day, "%Y-%m-%d").date() if args.day else None)
         return
 
     since = datetime.strptime(args.since, "%Y-%m-%d").date() if args.since else None

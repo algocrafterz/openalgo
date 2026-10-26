@@ -377,9 +377,11 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
             )
 
     sl_orders = await _recover_sl_order_ids(open_broker_positions)
+    unmatched: list = []
     restored = _restore_tracker_positions(
-        tracker, open_broker_positions, configured_product, sl_orders
+        tracker, open_broker_positions, configured_product, sl_orders, unmatched=unmatched
     )
+    await _alert_unmatched_positions(unmatched)
     if restored > 0:
         logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
 
@@ -456,7 +458,8 @@ def _match_open_sl_orders(orderbook) -> dict:
 
 
 def _restore_tracker_positions(
-    tracker, open_broker_positions, configured_product, sl_orders: dict = None
+    tracker, open_broker_positions, configured_product, sl_orders: dict = None,
+    unmatched: list | None = None,
 ) -> int:
     """Rebuild tracker entries from trades.db so exit paths see real entry/sl/tp values.
 
@@ -486,10 +489,12 @@ def _restore_tracker_positions(
 
         legs = _lookup_entry_legs(bsymbol, broker_qty=bqty, is_long=(bdir == Direction.LONG))
         if not legs:
-            logger.warning(
-                f"Tracker restore [{bsymbol}]: no entry trade in trades.db today "
-                "— skipping (TP/SL alerts will use fallback path)"
+            logger.critical(
+                f"Tracker restore [{bsymbol}]: broker holds {int(bp.get('quantity', 0))} but there is "
+                "no entry trade in trades.db today - not tracked, no time exit from the engine"
             )
+            if unmatched is not None:
+                unmatched.append((bsymbol, int(bp.get("quantity", 0))))
             continue
 
         recovered_sl = sl_orders.get(bsymbol.upper(), "")
@@ -534,6 +539,22 @@ def _restore_tracker_positions(
                 f"entry={found['entry']} sl={found['sl']} tp={found['tp']}{sl_note}"
             )
     return restored
+
+
+async def _alert_unmatched_positions(unmatched: list) -> None:
+    """One alert for broker positions the restart could not match to an entry row.
+
+    The entry row is written when the broker accepts the order, so an engine position should
+    always match; one that does not is a manual trade or a lost record, and nothing manages it.
+    """
+    if not unmatched:
+        return
+    listed = ", ".join(f"{sym} {qty:+d}" for sym, qty in unmatched)
+    await notifier.notify_event(
+        "untracked_broker_position",
+        f"RESTART: broker positions with no entry trade in trades.db today: {listed}. "
+        "The engine does not track them (no stop management, no time exit). Check the broker now.",
+    )
 
 
 def _gather_candidate_entries(bsymbol: str) -> list:
@@ -583,7 +604,7 @@ def _lookup_entry_trade(bsymbol: str, broker_qty: int = 0, is_long: bool = True)
 
     def _sort_key(item):
         _strategy, row = item
-        direction_ok = str(row.get("direction", "")).upper() == wanted_direction
+        direction_ok = _direction_name(row.get("direction")) == wanted_direction
         qty_ok = broker_qty > 0 and int(row.get("quantity", 0) or 0) == int(broker_qty)
         tier = 0 if (direction_ok and qty_ok) else (1 if direction_ok else 2)
         return (tier, _invert_timestamp(row.get("executed_at")))
@@ -625,7 +646,7 @@ def _lookup_entry_legs(bsymbol: str, broker_qty: int = 0, is_long: bool = True) 
 
     wanted_direction = "LONG" if is_long else "SHORT"
     same_direction = [
-        (s, r) for s, r in candidates if str(r.get("direction", "")).upper() == wanted_direction
+        (s, r) for s, r in candidates if _direction_name(r.get("direction")) == wanted_direction
     ]
     if (
         len(same_direction) > 1
@@ -644,6 +665,17 @@ def _lookup_entry_legs(bsymbol: str, broker_qty: int = 0, is_long: bool = True) 
 
     row, strategy = _lookup_entry_trade(bsymbol, broker_qty=broker_qty, is_long=is_long)
     return [(strategy, row)] if row is not None else []
+
+
+def _direction_name(direction) -> str:
+    """"LONG"/"SHORT" for a Direction member or a plain string.
+
+    fetch_last_entry_trade returns a Direction, and str() of a (str, Enum) member is
+    "Direction.LONG" on Python 3.11+, so comparing str(direction) never matched a side.
+    """
+    if isinstance(direction, Direction):
+        return direction.value
+    return str(direction or "").upper()
 
 
 def _invert_timestamp(executed_at) -> tuple:

@@ -58,19 +58,23 @@ fi
 # Overlap guard, same rationale as eod.sh: a hand-run and the cron run must never
 # write db/historify.duckdb at the same time, and a genuinely hung process should not
 # wedge every future run either.
+# The age test runs only when the lock is actually HELD: the file outlives every run, so its
+# age alone would call yesterday's finished run abandoned every day.
 STALE_LOCK_SECONDS=$((2 * 3600))
-if [ -f "$LOCK" ]; then
-  lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || echo 0) ))
-  if [ "$lock_age" -gt "$STALE_LOCK_SECONDS" ]; then
-    echo "WARNING: $LOCK is ${lock_age}s old (> ${STALE_LOCK_SECONDS}s) - treating as abandoned, not a live run. Removing."
-    rm -f "$LOCK"
-  fi
-fi
-exec 9>"$LOCK"
+lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || date +%s) ))
+exec 9>>"$LOCK"
 if ! flock -n 9; then
-  echo "FATAL: another backfill run is in progress ($LOCK)"
-  exit 1
+  if [ "$lock_age" -le "$STALE_LOCK_SECONDS" ]; then
+    echo "FATAL: another backfill run is in progress ($LOCK)"
+    exit 1
+  fi
+  echo "WARNING: $LOCK held for ${lock_age}s (> ${STALE_LOCK_SECONDS}s) - treating the holder as hung. Taking over."
+  exec 9>&-
+  rm -f "$LOCK"
+  exec 9>>"$LOCK"
+  flock -n 9 || { echo "FATAL: cannot take over $LOCK"; exit 1; }
 fi
+touch "$LOCK"
 
 UV="$(command -v uv || echo /usr/local/bin/uv)"
 run() { PYTHONPATH="$REPO" "$UV" run python "$@"; }
@@ -99,5 +103,15 @@ for interval in 1m D; do
     status=1
   fi
 done
+
+# A failure used to reach only this log file. The alert goes through the stateless Bot API
+# (eod_review.send_to_admin_channel), never the Telethon session the running engine holds.
+if [ "$status" -ne 0 ]; then
+  run -c 'import sys
+from signal_engine.analysis.eod_review import send_to_admin_channel
+sys.exit(0 if send_to_admin_channel(sys.argv[1], "analyze") else 1)' \
+    "BACKFILL $DAY: extend or verify failed - backtest data may be stale or incomplete. See signal_engine/logs/backfill_cron.log." \
+    || echo "WARNING: backfill failure alert not delivered"
+fi
 
 exit "$status"

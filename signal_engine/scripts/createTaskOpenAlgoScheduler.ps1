@@ -143,7 +143,10 @@ $watchdogXml = @"
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>false</StartWhenAvailable>
+    <!-- true: when the PC wakes after the first trigger of the day, Task Scheduler marks
+         EVERY repetition of that day as missed (event 153) and the task never runs. Seen on
+         2026-10-19, 10-20 and 10-22 (woke 09:23, 12:36, 10:19). IgnoreNew prevents a pile-up. -->
+    <StartWhenAvailable>true</StartWhenAvailable>
     <!-- Was PT3M. A normal boot (network wait + NTP-sync wait for WSL2 clock
          drift + broker login) can legitimately run past 3 minutes; hard-killing
          it mid-boot just to retry 5 minutes later produced the exact
@@ -251,7 +254,10 @@ $heartbeatXml = @"
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>false</StartWhenAvailable>
+    <!-- true: when the PC wakes after the first trigger of the day, Task Scheduler marks
+         EVERY repetition of that day as missed (event 153) and the task never runs. Seen on
+         2026-10-19, 10-20 and 10-22 (woke 09:23, 12:36, 10:19). IgnoreNew prevents a pile-up. -->
+    <StartWhenAvailable>true</StartWhenAvailable>
     <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
     <Enabled>true</Enabled>
   </Settings>

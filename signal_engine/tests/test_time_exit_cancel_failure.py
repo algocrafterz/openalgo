@@ -54,7 +54,7 @@ async def _time_exit(cancel_results, books, broker_qty=0):
         patch("signal_engine.tracker.cancel_order", cancel_one),
         patch("signal_engine.tracker.close_all_positions", close),
         patch(
-            "signal_engine.tracker.fetch_open_position",
+            "signal_engine.tracker.fetch_net_position",
             new_callable=AsyncMock,
             return_value=broker_qty,
         ),
@@ -161,7 +161,7 @@ class TestCancelAllSkipsTriggerPending:
                 return_value=True,
             ),
             patch(
-                "signal_engine.tracker.fetch_open_position", new_callable=AsyncMock, return_value=0
+                "signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0
             ),
             patch("signal_engine.tracker.fetch_orderbook", side_effect=fetch_book),
             patch(

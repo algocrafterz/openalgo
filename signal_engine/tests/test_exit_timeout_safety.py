@@ -307,7 +307,10 @@ class TestSweeper:
             await sweep_unresolved_orders()
         establish.assert_awaited_once()
         assert establish.await_args.args[3].order_id == "E1"
-        save.assert_called_once()
+        # 2026-10-23: _establish_position writes the entry row itself when given no row id, so the
+        # adoption does not save a second copy (one row: test_entry_persist_on_accept.py).
+        assert establish.await_args.kwargs.get("entry_row_id") is None
+        save.assert_not_called()
         assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is None
 
     async def test_entry_not_on_the_broker_just_releases_the_hold(self):
