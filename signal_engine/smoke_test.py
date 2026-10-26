@@ -281,9 +281,10 @@ async def dry_run_entry_pipeline() -> str:
     if capital <= 0:
         raise RuntimeError("Cannot fetch capital from OpenAlgo")
 
-    # Real sizing
-    store = RiskStore(RISK_DB_PATH)
-    engine = build_risk_engine(store)
+    # Real sizing, without a store: this engine is built in the default "live" mode before
+    # the broker's mode is known, so persisting its day-start capital would seed the live
+    # pooled bucket that a later LIVE session sizes from.
+    engine = build_risk_engine(None)
     sizing_capital = engine.get_sizing_capital(capital, signal.strategy)
     quantity = engine.calculate_quantity(signal, capital=sizing_capital)
 

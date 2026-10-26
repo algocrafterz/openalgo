@@ -6293,3 +6293,18 @@ read. And when a TP1 partial was followed by the stop closing the remainder, the
 
 **In plain terms:** the trade reports now say why each trade closed, including when the stop closed the second half
 after the first target. through `PublishedSource.intraday`.
+
+## Dry-run sizing check no longer writes the live risk store (2026-10-26)
+
+**Symptom.** `smoke_test.py --dry-run` sized its synthetic ORB signal on an engine built with
+`build_risk_engine()`'s default "live" mode and a real `RiskStore`, before the broker's mode was known.
+`get_sizing_capital()` then persisted the fetched capital as the day-start capital of the live pooled bucket
+(PORTFOLIO/live), even with the broker in ANALYZE. The sandbox capital of 100,000 was written there on
+2026-10-05 and 2026-10-14, and a LIVE session later that day would size every trade off it.
+
+**Change.** `dry_run_entry_pipeline()` builds its engine with no store (`build_risk_engine(None)`). The dry run
+sizes off the freshly fetched capital and neither reads nor changes a day-start capital already cached today.
+Tests: `tests/test_dry_run_risk_isolation.py`.
+
+**In plain terms:** the pre-market self-check can no longer leave behind a wrong account size that live trading
+would later use to decide how many shares to buy.
