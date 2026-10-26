@@ -18,6 +18,7 @@ import httpx
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine.order_reconcile import parse_broker_stamp
 from signal_engine.timeutils import IST
 
 
@@ -184,19 +185,22 @@ async def fetch_funds_available() -> float | None:
         return None
 
 
-async def fetch_realised_pnl() -> float:
+async def fetch_realised_pnl() -> float | None:
     """Fetch day's realised P&L from funds endpoint.
 
-    Returns m2mrealized value or 0.0 on failure.
+    Returns m2mrealized value, or None when it cannot be read. A failed read is unknown, not
+    zero: booking 0.0 resets the realised baseline, and the next good read then books the whole
+    day's realised P&L as a single close.
     """
     try:
         data = await _post_json("funds", _auth())
         if data.get("status") != "success":
-            return 0.0
+            logger.error(f"Failed to fetch realised PnL: funds returned {data.get('status')!r}")
+            return None
         return float(data.get("data", {}).get("m2mrealized", 0))
     except Exception as e:
         logger.error(f"Failed to fetch realised PnL: {e}")
-        return 0.0
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -322,14 +326,10 @@ def find_recent_complete_order_id(
         status = str(o.get("order_status") or o.get("status") or "").lower()
         if status != "complete":
             continue
-        ts_raw = o.get("timestamp") or o.get("order_timestamp")
-        if ts_raw:
-            try:
-                ts = datetime.strptime(str(ts_raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
-                if ts < since:
-                    continue
-            except ValueError:
-                pass  # unparseable timestamp - fall through rather than discard a real match
+        # Sandbox and Flattrade (day-first) stamps; an unknown one does not discard a match.
+        ts = parse_broker_stamp(o.get("timestamp") or o.get("order_timestamp"))
+        if ts is not None and ts < since:
+            continue
         order_id = str(o.get("orderid") or o.get("order_id") or "")
         if order_id and order_id not in exclude:
             return order_id

@@ -298,7 +298,10 @@ class TestNoProgressExitAndSignalExitDoNotCollide:
             from signal_engine.timeutils import IST
 
             with (
-                patch("signal_engine.tracker.send_order", send),
+                patch("signal_engine.main.send_order", send),
+                # The harness fails every tracker cancel; a stop that refuses its cancel now
+                # blocks the market exit (test_tracker_no_progress_stop_guard), so let it go.
+                patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)),
                 patch.object(PositionTracker, "_should_market_exit", return_value=True),
             ):
                 await h.tracker._apply_no_progress_action(

@@ -106,7 +106,8 @@ class TestFetchRealisedPnl:
             assert result == 1500.75
 
     @pytest.mark.asyncio
-    async def test_error_returns_zero(self):
+    async def test_error_returns_none(self):
+        """A failed read is unknown, not zero: a 0.0 here resets the day's realised baseline."""
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=Exception("fail"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -114,7 +115,13 @@ class TestFetchRealisedPnl:
 
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await fetch_realised_pnl()
-            assert result == 0.0
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_non_success_returns_none(self):
+        data = {"status": "error", "message": "funds unavailable"}
+        with patch("httpx.AsyncClient", return_value=_mock_client(data)):
+            assert await fetch_realised_pnl() is None
 
 
 class TestFetchTradingMode:

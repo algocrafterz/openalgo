@@ -95,3 +95,18 @@ class TestTheMainHelperStillBehavesTheSame:
         for book in (None, []):
             with patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=book)):
                 assert await _find_recent_market_exit_fill(_sell_order(), SINCE) is None
+
+
+class TestFlattradeDayFirstStamps:
+    """Flattrade stamps are day-first; a sandbox-only parse let every earlier same-size fill match."""
+
+    def test_an_earlier_day_first_fill_is_skipped(self):
+        assert _find([_order(timestamp="14:40:00 07-10-2026")]) == ""
+
+    def test_a_day_first_fill_after_the_send_is_found(self):
+        assert _find([_order(timestamp="14:55:04 07-10-2026")]) == "OID-1"
+
+    def test_only_the_current_fill_matches_beside_an_earlier_one(self):
+        book = [_order(orderid="OLD", timestamp="07-10-2026 14:40:00"),
+                _order(orderid="NEW", timestamp="07-10-2026 14:55:05")]
+        assert _find(book) == "NEW"

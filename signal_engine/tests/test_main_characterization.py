@@ -416,10 +416,18 @@ class TestSlHitReconcile:
 class TestExitOrderPlacement:
     @pytest.mark.asyncio
     async def test_failed_sl_cancel_does_not_block_the_exit(self):
-        """Losing the SL cancel is logged but the exit MUST still be attempted."""
+        """Losing the SL cancel is logged but the exit MUST still be attempted.
+
+        The stop is still working (not filled); a filled stop is covered by
+        test_main_exit_stop_sweep.TestTrackedStopAlreadyFilled.
+        """
         tracker = _real_tracker()
         tracker.register(_position())
-        h = harness(tracker=tracker, cancel_order=AsyncMock(return_value=False))
+        h = harness(
+            tracker=tracker,
+            cancel_order=AsyncMock(return_value=False),
+            fetch_order_status=AsyncMock(return_value="trigger pending"),
+        )
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
             h.send_order.assert_awaited_once()

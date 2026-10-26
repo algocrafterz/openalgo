@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
@@ -47,6 +47,8 @@ class Runner:
         executor: ThreadPoolExecutor | None = None,
         exits: ExitDriver | None = None,
         manage_until_min: int | None = None,
+        exits_halted: Callable[[], bool] | None = None,
+        failure_alert: Callable[[str], Awaitable] | None = None,
     ) -> None:
         self.clock = clock
         self.sink = sink
@@ -57,6 +59,8 @@ class Runner:
         self.reports: list[CycleReport] = []
         self._executor = executor
         self._manage_until_min = manage_until_min
+        self._failure_alert = failure_alert
+        self._failure_alerted = False
         self._deps = CycleDeps(
             strategy=strategy,
             source=source,
@@ -73,11 +77,16 @@ class Runner:
             price_band=price_band,
             executor=executor,
             exits=exits,
+            exits_halted=exits_halted,
         )
 
     async def run(self, day: dt.date) -> None:
         single_source.assert_can_dispatch(self.cfg, self.strategy.name, self.sink.dispatches)
-        await self._warm(day)
+        try:
+            await self._warm(day)
+        except Exception as exc:  # noqa: BLE001 - each cycle retries the warm-up
+            logger.exception(f"runner warm-up for {day} failed; the next cycle retries it")
+            await self._report_failure(f"warm-up failed ({exc}); the next cycle retries it")
         start, cutoff = self.strategy.entry_window_min
         interval = self.strategy.interval_min
         while True:
@@ -94,10 +103,29 @@ class Runner:
             await self.clock.sleep_until(run_at)
             if minutes < start:
                 continue
-            report = await run_cycle(bar_close, self._deps)
+            try:
+                report = await run_cycle(bar_close, self._deps)
+            except Exception as exc:  # noqa: BLE001 - one bad bar must not end the day
+                logger.exception(f"runner cycle {bar_close:%H:%M} failed; the next bar runs as usual")
+                await self._report_failure(f"cycle {bar_close:%H:%M} failed ({exc}); the next bar runs as usual")
+                continue
             self.reports.append(report)
             self.fires.extend(report.fires)
         logger.info(f"runner finished for {day}: {len(self.reports)} cycle(s)")
+
+    async def _report_failure(self, what: str) -> None:
+        """Alert the first failure of the session; later ones are only logged."""
+        if self._failure_alerted or self._failure_alert is None:
+            return
+        self._failure_alerted = True
+        text = (
+            f"Python runner {self.strategy.name}: {what}. Open positions keep the broker stop "
+            "and the time exit. Further failures today are logged only."
+        )
+        try:
+            await self._failure_alert(text)
+        except Exception:  # noqa: BLE001 - an alert failure must not stop the runner
+            logger.exception("runner failure alert could not be sent")
 
     async def _warm(self, day: dt.date) -> None:
         loop = asyncio.get_running_loop()

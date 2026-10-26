@@ -31,7 +31,6 @@ from signal_engine.executor import (
     flag_duplicate_stop_groups,
     place_sl_order,
     resolve_pending_duplicate_stops,
-    send_order,
 )
 from signal_engine.models import Direction, OrderStatus
 from signal_engine.risk import RiskEngine
@@ -278,6 +277,8 @@ def _mark_summary_sent(trade_count: int) -> None:
 
 #: Order statuses that mean the order can still execute (as executor._find_resting_sl_order).
 _WORKING_ORDER_STATUSES = ("trigger pending", "open", "pending")
+_BASELINE_READ_ATTEMPTS = 3  # startup reads of the day's realised P&L before giving up
+_BASELINE_RETRY_SECONDS = 2.0
 
 
 class PositionTracker:
@@ -1260,9 +1261,7 @@ class PositionTracker:
             # to avoid double record_close / phantom zero-PnL trade record.
             if self._positions.get(key) is not pos:
                 return False
-            current_realised = await fetch_realised_pnl()
-            portfolio_delta = current_realised - self._last_realised_pnl
-            self._last_realised_pnl = current_realised
+            portfolio_delta, current_realised = await self._advance_realised_baseline()
 
         per_symbol = book_entry.realised if book_entry is not None else None
         ltp = book_entry.ltp if book_entry is not None else None
@@ -1353,12 +1352,13 @@ class PositionTracker:
         await self._record_closed_trade(key, pos, age, pnl_delta, _settings)
         return True
 
-    async def _cancel_untracked_stops(self, key: str, pos) -> None:
+    async def _cancel_untracked_stops(self, key: str, pos):
         """Cancel any live protective order of this strategy on the symbol, tracked or not.
 
         A timed-out stop request can land late and leave a twin the tracker never heard of
         (HINDALCO 2026-10-14: it fired on a flat position and opened a 319 short). Never raises:
-        a sweep failure must not block booking a close or sending an exit.
+        a sweep failure must not block booking a close or sending an exit. Returns the sweep,
+        or None when it raised.
         """
         action = "SELL" if pos.direction == Direction.LONG else "BUY"
         try:
@@ -1367,7 +1367,7 @@ class PositionTracker:
             )
         except Exception:
             logger.exception(f"{key}: protective order sweep raised")
-            return
+            return None
         if sweep.confirmed_cancelled:
             logger.warning(
                 f"{key}: untracked live stop(s) {list(sweep.confirmed_cancelled)} confirmed cancelled "
@@ -1378,6 +1378,7 @@ class PositionTracker:
                 f"{key}: cannot verify no live stop remains (readable={sweep.readable}, "
                 f"unresolved={list(sweep.unresolved)}, cancel requested for {list(sweep.cancelled)})"
             )
+        return sweep
 
     async def _record_closed_trade(
         self, key: str, pos, age: timedelta, pnl_delta: float, _settings
@@ -1625,15 +1626,47 @@ class PositionTracker:
                 logger.warning(
                     f"No-progress: failed to cancel SL {pos.sl_order_id} for {pos.symbol}"
                 )
+                if not await self._stop_gone_after_failed_cancel(pos):
+                    pos.be_stop_applied = True
+                    return
             pos.sl_order_id = ""
-        await self._cancel_untracked_stops(f"{pos.symbol}:{pos.strategy}", pos)
+        sweep = await self._cancel_untracked_stops(f"{pos.symbol}:{pos.strategy}", pos)
 
         pos.be_stop_applied = True  # prevent re-triggering regardless of path
 
         if use_market_exit:
             await self._no_progress_market_exit(pos, age, ltp, base_entry, progress)
+        elif sweep is not None and sweep.readable and not sweep.clear:
+            # A live twin still protects the position; a new stop beside it would leave two.
+            logger.error(
+                f"No-progress [{pos.symbol}]: a stop is still live after the sweep; "
+                "break-even stop not placed"
+            )
         else:
             await self._no_progress_break_even(pos, age, ltp, base_entry, be_price, progress)
+
+    async def _stop_gone_after_failed_cancel(self, pos) -> bool:
+        """True when a stop that refused its cancel is no longer working at the broker.
+
+        A filled stop cannot be cancelled: selling again opens a naked short, and the next
+        poll books the close. A stop that is still working (or unreadable) keeps protecting
+        the position; an exit would be a new short at the broker and a break-even stop
+        would stack beside it. Only a stop already cancelled or rejected lets the action go on.
+        """
+        status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+        if status in ("cancelled", "cancel", "rejected"):
+            return True
+        if status in ("complete", "partially filled"):
+            logger.warning(
+                f"No-progress [{pos.symbol}]: SL {pos.sl_order_id} already {status}; "
+                "no exit sent, the poll books the close"
+            )
+        else:
+            logger.error(
+                f"No-progress [{pos.symbol}]: SL {pos.sl_order_id} still working "
+                f"(status={status or 'unreadable'}); no exit or new stop placed"
+            )
+        return False
 
     @staticmethod
     def _should_market_exit(now, age, progress: float, _settings) -> bool:
@@ -1674,12 +1707,27 @@ class PositionTracker:
             strategy_tag=pos.strategy,
             direction=pos.direction,
         )
-        result = await send_order(exit_order)
+        # The same sender as a signal exit: a timed-out order is reconciled against the order book
+        # (adopted if it filled, resent only when the book is proven clean, otherwise held as
+        # uncertain so _retry_missing_sl adds no stop beside an exit that may still land).
+        # Imported here: main imports tracker, not the reverse.
+        from signal_engine.main import _send_exit_with_retries
+
+        result = await _send_exit_with_retries(exit_order, pos)
+        if result.status == OrderStatus.TIMEOUT:
+            logger.critical(
+                f"No-progress market exit for {pos.symbol} is unconfirmed ({result.message}); "
+                "held until the order book settles it, no stop placed meanwhile"
+            )
+            return
         if result.status != OrderStatus.SUCCESS:
             logger.error(f"No-progress market exit failed for {pos.symbol}: {result.message}")
+            restored = await self._restore_stop_after_failed_exit(pos)
             await notifier.notify_sl_failed(
                 pos.symbol,
-                f"No-progress market exit failed after {age.total_seconds() / 60:.0f}min: {result.message}",
+                f"No-progress market exit failed after {age.total_seconds() / 60:.0f}min: "
+                f"{result.message}. "
+                + ("Stop restored." if restored else "Stop NOT restored - position unprotected."),
                 strategy=pos.strategy,
             )
             return
@@ -1724,8 +1772,7 @@ class PositionTracker:
         async with self._pnl_lock:
             if self._positions.get(self._key(pos.symbol, pos.strategy)) is not pos:
                 return  # a concurrent path already closed and unregistered this position
-            current_realised = await fetch_realised_pnl()
-            self._last_realised_pnl = current_realised
+            _, current_realised = await self._advance_realised_baseline()
 
         from signal_engine.config import settings as _settings
 
@@ -1741,6 +1788,31 @@ class PositionTracker:
         )
         self.unregister(pos.symbol, pos.strategy)
         await self.maybe_send_day_summary()
+
+    async def _restore_stop_after_failed_exit(self, pos) -> bool:
+        """Put back the stop cancelled for a market exit the broker definitely did not take.
+
+        The exit was rejected, or a clean order book showed no copy of it, so the position is
+        still open with no protection. The stop goes back at the level it had (pos.sl).
+        """
+        sl_result = await place_sl_order(
+            symbol=pos.symbol,
+            exchange=pos.exchange,
+            direction=pos.direction,
+            quantity=pos.quantity,
+            sl_price=pos.sl,
+            product=pos.product,
+            strategy_tag=pos.strategy,
+        )
+        if sl_result.status != OrderStatus.SUCCESS:
+            logger.critical(
+                f"No-progress [{pos.symbol}]: exit failed and the stop could not be restored "
+                f"({sl_result.message}); the position is unprotected"
+            )
+            return False
+        pos.sl_order_id = sl_result.order_id
+        logger.warning(f"No-progress [{pos.symbol}]: exit failed, stop restored at {pos.sl:.2f}")
+        return True
 
     async def _no_progress_break_even(self, pos, age, ltp, base_entry, be_price, progress) -> None:
         """Move the stop to break-even (or the profit-lock price) on a stalled position."""
@@ -1811,12 +1883,15 @@ class PositionTracker:
         # signal can book or act on a position the square-off is closing.
         self._time_exit_active = True
         try:
-            uncancelled = await self._square_off_strategies(
-                {pos.strategy for pos in mis_positions.values()}
-            )
-            still_open = await self._verify_positions_closed(mis_positions)
-            await self._confirm_orders_cancelled(mis_positions, uncancelled)
-            await self._book_time_exit_trades(mis_positions, _settings, started, still_open)
+            uncancelled, skipped = await self._square_off_strategies(mis_positions)
+            still_open = await self._verify_positions_closed(mis_positions, skipped)
+            # A skipped strategy was not closed and keeps its stop: the sweep below would cancel
+            # the order protecting it, and a booked close would claim one that never happened.
+            # It stays tracked, so the poll books the stop or the broker square-off.
+            closed = {k: p for k, p in mis_positions.items() if p.strategy not in skipped}
+            if closed:
+                await self._confirm_orders_cancelled(closed, uncancelled - skipped)
+                await self._book_time_exit_trades(closed, _settings, started, still_open)
         finally:
             self._time_exit_active = False
 
@@ -1824,26 +1899,50 @@ class PositionTracker:
         await self.send_day_summary()
         self._reset_day_counters()
 
-    async def _square_off_strategies(self, strategies: set[str]) -> set[str]:
-        """Cancel pending orders then close all positions, per strategy.
+    async def _square_off_strategies(self, mis_positions: dict) -> tuple[set[str], set[str]]:
+        """Cancel pending orders, confirm the cancel from the order book, then close, per strategy.
 
-        Returns the strategies whose cancel could not be confirmed. The close is position-based
-        (it reads each live net quantity), so it never over-closes; a stop left WORKING after the
-        flatten could later open a reversed position, which _confirm_orders_cancelled prevents.
+        Returns (strategies whose cancel API did not acknowledge, strategies NOT closed). The close
+        is position-based (it reads each live net quantity), so it never over-closes. It goes out
+        only once the order book shows no working order of the strategy: a stop still working
+        beside the close can fire afterwards and open a reversed position.
         """
         uncancelled: set[str] = set()
-        for strategy in strategies:
+        skipped: set[str] = set()
+        for strategy in sorted({pos.strategy for pos in mis_positions.values()}):
             # Cancel all pending orders first (SL-M + TP LIMIT legs); one retry before the close
             logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
             if not await cancel_all_orders(strategy):
                 logger.warning(f"Time exit: cancel failed for strategy={strategy}, retrying once")
                 if not await cancel_all_orders(strategy):
                     uncancelled.add(strategy)
+            symbols = {p.symbol for p in mis_positions.values() if p.strategy == strategy}
+            if not await self._close_after_confirmed_cancel(strategy, symbols):
+                skipped.add(strategy)
+        return uncancelled, skipped
 
-            # Close all open positions
-            logger.info(f"Time exit: closing all positions for strategy={strategy}")
-            await close_all_positions(strategy)
-        return uncancelled
+    async def _close_after_confirmed_cancel(self, strategy: str, symbols: set[str]) -> bool:
+        """Close the strategy's positions once no order of it is working. False = not closed.
+
+        When the cancel cannot be confirmed, the engine cannot know what the stop will leave
+        open, so it does not close (owner decision 2026-10-25): the position keeps its stop and
+        a CRITICAL alert asks for a manual close before the broker square-off.
+        """
+        cleared, detail = await self._clear_working_orders({strategy}, symbols)
+        if not cleared:
+            logger.critical(
+                f"Time exit SKIPPED for {strategy} ({', '.join(sorted(symbols))}): pending orders "
+                f"not confirmed cancelled ({detail}); positions left open with their stop"
+            )
+            await notifier.notify(
+                f"TIME EXIT SKIPPED for {strategy} ({', '.join(sorted(symbols))}): pending orders "
+                f"not confirmed cancelled ({detail}). The position was NOT closed and keeps its "
+                "stop. Check the order book and close it by hand before the broker square-off."
+            )
+            return False
+        logger.info(f"Time exit: closing all positions for strategy={strategy}")
+        await close_all_positions(strategy)
+        return True
 
     @staticmethod
     def _working_orders(book, strategies: set[str], symbols: set[str]) -> list[dict]:
@@ -1878,21 +1977,40 @@ class PositionTracker:
         positions are flat: a stop left working on a flat position can later open a reversed one.
         Cancels only: this never places an order.
         """
-        _CANCEL_RETRIES = 3
-        _CANCEL_WAIT = 2  # seconds
         strategies = {pos.strategy for pos in mis_positions.values()}
         symbols = {pos.symbol for pos in mis_positions.values()}
         if uncancelled:
             logger.warning(f"Time exit: cancel not acknowledged for {', '.join(sorted(uncancelled))}")
+        cleared, detail = await self._clear_working_orders(strategies, symbols)
+        if cleared:
+            return
+        logger.critical(
+            f"Time exit: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
+            f"({detail}); a stop order may still be working and could open a new position"
+        )
+        await notifier.notify(
+            f"TIME EXIT: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
+            f"({detail}). A stop order may still be working and could open a new position - "
+            "check the order book now."
+        )
+
+    async def _clear_working_orders(self, strategies: set[str], symbols: set[str]) -> tuple[bool, str]:
+        """Re-cancel until the order book shows no working order of `strategies` on `symbols`.
+
+        (True, "") once a readable book is clean; otherwise (False, what is still in doubt). A
+        cancel API "success" is not taken as proof. Cancels only: this never places an order.
+        """
+        _CANCEL_RETRIES = 3
+        _CANCEL_WAIT = 2  # seconds
         working: list[dict] = []
         book = None
         for attempt in range(_CANCEL_RETRIES + 1):
             book = await fetch_orderbook()
             working = self._working_orders(book, strategies, symbols)
             if book is not None and not working:
-                if attempt or uncancelled:
-                    logger.info("Time exit: no working orders left for the squared-off strategies")
-                return
+                if attempt:
+                    logger.info(f"Time exit: no working orders left for {', '.join(sorted(strategies))}")
+                return True, ""
             if attempt == _CANCEL_RETRIES:
                 break
             retry = {str(o.get("strategy") or "").strip() for o in working} & strategies or strategies
@@ -1918,31 +2036,26 @@ class PositionTracker:
             await asyncio.sleep(_CANCEL_WAIT)
 
         if book is None:
-            detail = "the order book could not be read to confirm the cancel"
-        else:
-            detail = "still working: " + ", ".join(
-                f"{o.get('symbol')} {o.get('action')} {o.get('pricetype') or o.get('price_type') or ''} "
-                f"id={o.get('orderid') or o.get('order_id')}".strip()
-                for o in working
-            )
-        logger.critical(
-            f"Time exit: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
-            f"({detail}); a stop order may still be working and could open a new position"
-        )
-        await notifier.notify(
-            f"TIME EXIT: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
-            f"({detail}). A stop order may still be working and could open a new position - "
-            "check the order book now."
+            return False, "the order book could not be read to confirm the cancel"
+        return False, "still working: " + ", ".join(
+            f"{o.get('symbol')} {o.get('action')} {o.get('pricetype') or o.get('price_type') or ''} "
+            f"id={o.get('orderid') or o.get('order_id')}".strip()
+            for o in working
         )
 
-    async def _verify_positions_closed(self, mis_positions: dict) -> set:
+    async def _verify_positions_closed(self, mis_positions: dict, skipped: set[str]) -> set:
         """Confirm the broker actually closed everything; retry cancel+close if not.
 
-        Returns the keys of positions the broker still holds after the last attempt.
+        Returns the keys of positions the broker still holds after the last attempt, including
+        every position of a skipped strategy. A re-close also waits for a confirmed cancel; a
+        strategy that fails it is added to `skipped` and not closed.
         """
         _MAX_CLOSE_ATTEMPTS = 3
         _VERIFY_WAIT = 3  # seconds per attempt
-        pending = list(mis_positions.items())  # [(key, pos), ...]
+        left_open = {k for k, p in mis_positions.items() if p.strategy in skipped}
+        pending = [(k, p) for k, p in mis_positions.items() if p.strategy not in skipped]
+        if not pending:
+            return left_open
 
         for attempt in range(1, _MAX_CLOSE_ATTEMPTS + 1):
             await asyncio.sleep(_VERIFY_WAIT)
@@ -1956,10 +2069,10 @@ class PositionTracker:
 
             if not still_open:
                 logger.info(
-                    f"Time exit: {len(mis_positions)} position(s) confirmed closed at broker "
+                    f"Time exit: {len(pending)} position(s) confirmed closed at broker "
                     f"(attempt {attempt})"
                 )
-                return set()
+                return left_open
 
             pending = still_open
             logger.warning(
@@ -1968,9 +2081,11 @@ class PositionTracker:
                 + ", ".join(pos.symbol for _, pos in still_open)
             )
             if attempt < _MAX_CLOSE_ATTEMPTS:
-                for strategy in {pos.strategy for _, pos in still_open}:
+                for strategy in sorted({pos.strategy for _, pos in still_open} - skipped):
                     await cancel_all_orders(strategy)
-                    await close_all_positions(strategy)
+                    symbols = {pos.symbol for _, pos in still_open if pos.strategy == strategy}
+                    if not await self._close_after_confirmed_cancel(strategy, symbols):
+                        skipped.add(strategy)
 
         # All retries exhausted and positions still open
         symbols_str = ", ".join(pos.symbol for _, pos in pending)
@@ -1982,15 +2097,13 @@ class PositionTracker:
             f"TIME EXIT FAILED: {symbols_str} not closed after {_MAX_CLOSE_ATTEMPTS} attempts. "
             f"Close manually before 15:20!"
         )
-        return {k for k, _ in pending}
+        return left_open | {k for k, _ in pending}
 
     async def _book_time_exit_trades(
         self, mis_positions: dict, _settings, started: datetime, still_open: set = frozenset()
     ) -> None:
         """Distribute the time-exit P&L across MIS positions and clear them."""
-        current_realised = await fetch_realised_pnl()
-        time_exit_pnl = current_realised - self._last_realised_pnl
-        self._last_realised_pnl = current_realised
+        time_exit_pnl, current_realised = await self._advance_realised_baseline()
         if time_exit_pnl != 0:
             self._day_pnl += time_exit_pnl
             logger.info(f"Time exit PnL captured: {time_exit_pnl:,.2f}")
@@ -2142,11 +2255,42 @@ class PositionTracker:
         # zeroed summary contradicting the first. The date itself is what ends the day.
         self._completed_trades = []
 
+    async def _advance_realised_baseline(self) -> tuple[float, float]:
+        """(delta since the last snapshot, the new snapshot) of the broker's realised P&L.
+
+        A failed read books no delta and keeps the last good baseline, so the close it missed
+        is picked up by the next good read instead of the whole day's figure.
+        """
+        current = await fetch_realised_pnl()
+        if current is None:
+            logger.warning(
+                f"Realised P&L unreadable; booking no portfolio delta, baseline stays "
+                f"{self._last_realised_pnl:,.2f}"
+            )
+            return 0.0, self._last_realised_pnl
+        delta = current - self._last_realised_pnl
+        self._last_realised_pnl = current
+        return delta, current
+
+    async def _load_realised_baseline(self) -> None:
+        """Snapshot the day's starting realised P&L, retrying a failed read."""
+        for attempt in range(_BASELINE_READ_ATTEMPTS):
+            current = await fetch_realised_pnl()
+            if current is not None:
+                self._last_realised_pnl = current
+                return
+            if attempt + 1 < _BASELINE_READ_ATTEMPTS:
+                await asyncio.sleep(_BASELINE_RETRY_SECONDS)
+        logger.error(
+            f"Realised P&L unreadable at startup after {_BASELINE_READ_ATTEMPTS} attempts; "
+            f"baseline stays {self._last_realised_pnl:,.2f} - the first portfolio-delta close "
+            "may include earlier realised P&L"
+        )
+
     async def start(self) -> None:
         """Start the polling loop. Runs until stop() is called."""
         self._running = True
-        # Snapshot starting realised PnL
-        self._last_realised_pnl = await fetch_realised_pnl()
+        await self._load_realised_baseline()
         logger.info(f"Position tracker started (poll every {self._poll_interval}s)")
 
         while self._running:

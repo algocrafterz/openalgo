@@ -60,14 +60,20 @@ _halted_reason: str = ""
 #: flip does not, and clearing one must never clear the other.
 _feed_down_reason: str = ""
 
+#: Set only by a mode flip. Every other halt stops new entries; a mode flip also stops the
+#: Python runner's exits, because orders sent in a mismatched mode are the worse risk
+#: (PYTHON-RUNNER-SPEC "Halt"). The broker SL-M, the tracker and the time exit still protect.
+_mode_flipped: bool = False
+
 
 def reset() -> None:
     """Clear all state. Tests only — the engine never un-halts itself."""
-    global _startup_phase, _halted_reason, _feed_down_reason
+    global _startup_phase, _halted_reason, _feed_down_reason, _mode_flipped
     _cache.update({"phase": "analyze", "checked_at": 0.0, "known": False})
     _startup_phase = None
     _halted_reason = ""
     _feed_down_reason = ""
+    _mode_flipped = False
 
 
 def prime(phase: str) -> None:
@@ -116,11 +122,12 @@ async def check_for_flip() -> str | None:
     None otherwise — including when the mode is simply unreadable, which must never be
     mistaken for a change (that would halt the engine on a transient network blip).
     """
-    global _halted_reason
+    global _halted_reason, _mode_flipped
 
-    if _startup_phase is None or _halted_reason:
-        # Nothing to compare against, or already halted — report the flip once, not on
-        # every poll for the rest of the session.
+    if _startup_phase is None or _mode_flipped:
+        # Nothing to compare against, or the flip is already reported — once, not on every
+        # poll for the rest of the session. Another halt (a degraded listener) still checks:
+        # a flip on top of it must also stop the runner's exits.
         if _startup_phase is None:
             await current_phase()
         return None
@@ -129,6 +136,7 @@ async def check_for_flip() -> str | None:
     if phase == _startup_phase:
         return None
 
+    _mode_flipped = True
     halt(
         f"OpenAlgo mode changed from {_startup_phase.upper()} to {phase.upper()} while the "
         f"engine was running. Risk limits, counter isolation, trades.db/risk.db labels and "
@@ -182,6 +190,11 @@ def _operator_hold_reason() -> str:
 
 def is_halted() -> bool:
     return bool(_halted_reason or _feed_down_reason or _operator_hold_reason())
+
+
+def mode_halted() -> bool:
+    """True after a mode flip: the only halt that also stops the Python runner's exits."""
+    return _mode_flipped
 
 
 def halt_reason() -> str:

@@ -102,6 +102,54 @@ class TestAutoCloseOnBadFill:
         send_order.assert_not_awaited()
 
 
+async def _run_guard_with_stop(stop_status, stop_fill=None):
+    """A bad fill whose stop refuses the cancel; returns (outcome, send_order, notifier, risk)."""
+    settings = SimpleNamespace(exchange="NSE", product="MIS", max_entry_slippage_r=0.5)
+    send_order = AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
+    notifier = MagicMock()
+    notifier.notify_order_rejected = AsyncMock()
+    notifier.notify_exit_failed = AsyncMock()
+    risk = MagicMock()
+    with (
+        patch("signal_engine.main.settings", settings),
+        patch("signal_engine.main.send_order", send_order),
+        patch("signal_engine.main.cancel_order", AsyncMock(return_value=False)),
+        patch("signal_engine.main.fetch_order_status", AsyncMock(return_value=stop_status)),
+        patch("signal_engine.main.notifier", notifier),
+        patch("signal_engine.main.risk_engine", risk),
+        patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=stop_fill)),
+        patch("signal_engine.main._book_realised_pnl_delta", AsyncMock(return_value=(0.0, 0.0))),
+    ):
+        outcome = await _auto_close_on_bad_fill(_signal(), 147, 2091.0, "SL1")
+    return outcome, send_order, notifier, risk
+
+
+@pytest.mark.asyncio
+class TestBadFillStopCancelFails:
+    """The stop could not be cancelled: the close must not sell into it or past it."""
+
+    async def test_filled_stop_is_booked_as_the_close_and_nothing_is_sent(self):
+        outcome, send_order, _, risk = await _run_guard_with_stop("complete", stop_fill=2079.0)
+        send_order.assert_not_awaited()
+        assert outcome.closed is True
+        assert outcome.close_order_id == "SL1"
+        assert outcome.exit_fill_price == 2079.0
+        assert outcome.pnl == pytest.approx((2079.0 - 2091.0) * 147)
+        risk.record_close.assert_called_once()
+
+    async def test_working_stop_keeps_the_position_tracked_under_it(self):
+        outcome, send_order, notifier, _ = await _run_guard_with_stop("trigger pending")
+        send_order.assert_not_awaited()
+        assert outcome.closed is False
+        assert outcome.replacement_sl_order_id == "SL1"
+        notifier.notify_exit_failed.assert_awaited_once()
+
+    async def test_stop_already_cancelled_still_closes(self):
+        outcome, send_order, _, _ = await _run_guard_with_stop("cancelled")
+        send_order.assert_awaited_once()
+        assert outcome.closed is True
+
+
 class TestStopBreachedFill:
     """Owner decision 2026-10-08: a long filled at or below its stop is a bad fill of its own kind."""
 

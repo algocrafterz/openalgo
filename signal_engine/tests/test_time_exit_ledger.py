@@ -143,8 +143,10 @@ class TestTimeExitWritesTheLedgerRow:
         assert len(trades) == 1 and trades[0]["total_pnl"] == pytest.approx(572.40)
 
     async def test_without_an_orderbook_match_the_row_still_exists_with_the_position_price(self):
+        # A readable book with no matching order. An UNREADABLE book is a different case: the
+        # stops cannot be confirmed cancelled, so the time exit does not close at all.
         tracker, _ = _tracker_with(_position())
-        await _run_time_exit(tracker, orderbook=None, fill=None, book=_closed_book(ltp=2510.0))
+        await _run_time_exit(tracker, orderbook=[], fill=None, book=_closed_book(ltp=2510.0))
         rows = _exit_rows()
         assert len(rows) == 1
         assert rows[0][4] == "-TRACKER-"  # no order id knowable

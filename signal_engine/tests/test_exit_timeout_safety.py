@@ -570,3 +570,42 @@ class TestSweepRunsDuringAPositionbookOutage:
         ):
             await t.check_positions()
         t._note_positionbook_failure.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+class TestTimedOutExitIgnoresOtherFills:
+    """Same symbol, side and size as the timed-out exit, but not ITS copy: never adopted.
+
+    Adopting one books a close that was never sent and leaves the position open with no stop.
+    The send then has to be retried once the book is proven clean.
+    """
+
+    @staticmethod
+    def _flattrade_stamp(dt):
+        return dt.strftime("%H:%M:%S %d-%m-%Y")
+
+    async def _run(self, book, booked=frozenset()):
+        ok = TradeResult(status=OrderStatus.SUCCESS, order_id="RESENT")
+        with patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set(booked))):
+            return await _run_exit([TIMEOUT, ok], [book] * 6)
+
+    async def test_an_earlier_day_first_fill_is_not_adopted(self):
+        from datetime import timedelta
+
+        earlier = {**_filled_row("OLD"), "timestamp": self._flattrade_stamp(datetime.now(IST) - timedelta(hours=1))}
+        result, send, _ = await self._run([earlier])
+        assert send.await_count == 2 and result.order_id == "RESENT"
+
+    async def test_a_fill_already_booked_today_is_not_adopted(self):
+        result, send, _ = await self._run([_filled_row("BOOKED")], booked={"BOOKED"})
+        assert send.await_count == 2 and result.order_id == "RESENT"
+
+    async def test_another_strategys_fill_is_not_adopted(self):
+        theirs = {**_filled_row("THEIRS"), "strategy": "ORB"}
+        result, send, _ = await self._run([theirs])
+        assert send.await_count == 2 and result.order_id == "RESENT"
+
+    async def test_its_own_day_first_fill_is_still_adopted(self):
+        mine = {**_filled_row("MINE"), "timestamp": self._flattrade_stamp(datetime.now(IST))}
+        result, send, _ = await self._run([mine])
+        assert send.await_count == 1 and result.order_id == "MINE"

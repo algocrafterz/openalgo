@@ -65,6 +65,9 @@ class CycleDeps:
     exits: ExitDriver | None = (
         None  # steps the shared Ladder for open positions; None = entries only
     )
+    #: Stops exits too. `halted` alone (an operator ENTRY_HOLD, a signal-feed outage) stops only
+    #: entries; a mode flip stops both (PYTHON-RUNNER-SPEC "Halt"). None = same as `halted`.
+    exits_halted: Callable[[], bool] | None = None
 
 
 @dataclass
@@ -116,10 +119,15 @@ async def run_cycle(bar_close: pd.Timestamp, deps: CycleDeps) -> CycleReport:
     bar_open = bar_close - pd.Timedelta(minutes=deps.strategy.interval_min)
     day = bar_open.date()
 
-    if deps.halted():
+    manage_only = deps.halted()
+    if manage_only:
         report.halted = True
-        logger.warning(f"pipeline cycle {bar_close:%H:%M} skipped: engine halted")
-        return report
+        if deps.exits is None or _exits_halted(deps):
+            logger.warning(f"pipeline cycle {bar_close:%H:%M} skipped: engine halted")
+            return report
+        logger.warning(
+            f"pipeline cycle {bar_close:%H:%M}: entries halted, stepping open positions only"
+        )
 
     loop = asyncio.get_running_loop()
     pool = deps.executor or shared_executor()
@@ -129,12 +137,11 @@ async def run_cycle(bar_close: pd.Timestamp, deps: CycleDeps) -> CycleReport:
         if s in deps.context.failed:
             _skip(report, bar_open, s, "warm-up failed", deps)
     active = [s for s in deps.symbols if s in deps.context.warmed]
-    if (
-        deps.exits is not None
-        and bar_open.hour * 60 + bar_open.minute >= deps.strategy.entry_window_min[1]
+    if deps.exits is not None and (
+        manage_only or bar_open.hour * 60 + bar_open.minute >= deps.strategy.entry_window_min[1]
     ):
-        # Entries have closed; only open positions and orders still to fill need bars.
-        active = [s for s in active if deps.exits.holds(s) or deps.sink.has_pending(s)]
+        # Entries are closed or halted; only open positions and orders still to fill need bars.
+        active = [s for s in active if _has_open_business(s, deps)]
         if not active:
             return report
 
@@ -165,11 +172,19 @@ async def run_cycle(bar_close: pd.Timestamp, deps: CycleDeps) -> CycleReport:
                     day, deps.strategy.name, s, bar_open, "skip",
                     reason=f"cycle stale ({lag:.0f}s after the bar closed)",
                 )
-        return report
+        if deps.exits is None or _exits_halted(deps):
+            return report
+        # Too late to enter, but the bar still happened: the Ladder never replays a skipped bar,
+        # so a target or stop traded in it would be lost. Step open positions only.
+        manage_only = True
+        frames = {s: df for s, df in frames.items() if _has_open_business(s, deps)}
 
     async def one(symbol: str) -> None:
         try:
-            await _process(symbol, frames[symbol], bar_open, day, deps, pool, loop, report)
+            await _process(
+                symbol, frames[symbol], bar_open, day, deps, pool, loop, report,
+                entries=not manage_only,
+            )
         except Exception:  # noqa: BLE001 - isolate one symbol; the batch must continue
             logger.exception(f"pipeline {symbol} bar {bar_open:%H:%M}: evaluate failed")
             report.skipped[symbol] = "evaluate error"
@@ -184,7 +199,16 @@ async def run_cycle(bar_close: pd.Timestamp, deps: CycleDeps) -> CycleReport:
     return report
 
 
-async def _process(symbol, df, bar_open, day, deps, pool, loop, report) -> None:
+def _exits_halted(deps: CycleDeps) -> bool:
+    return (deps.exits_halted or deps.halted)()
+
+
+def _has_open_business(symbol: str, deps: CycleDeps) -> bool:
+    """True when the symbol has a position to step or an order still to fill."""
+    return deps.exits.holds(symbol) or deps.sink.has_pending(symbol)
+
+
+async def _process(symbol, df, bar_open, day, deps, pool, loop, report, entries=True) -> None:
     strategy = deps.strategy.name
     last = deps.state.last_bar(deps.mode, day, strategy, symbol)
     if last is not None and last >= bar_open:
@@ -192,6 +216,9 @@ async def _process(symbol, df, bar_open, day, deps, pool, loop, report) -> None:
         return
 
     if not await _manage_open_position(symbol, df, bar_open, deps, report):
+        return
+    if not entries:
+        deps.state.mark(deps.mode, day, strategy, symbol, bar_open)
         return
 
     fires = await loop.run_in_executor(pool, deps.context.evaluate, symbol, df, None)

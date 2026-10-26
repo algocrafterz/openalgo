@@ -143,6 +143,57 @@ class TestExits:
         run(deps)
         assert deps.sink.signals == [] and deps.sink.seen == []
 
+    def test_entry_hold_still_steps_exits_but_takes_no_entry(self, make):
+        """An operator ENTRY_HOLD or a signal-feed outage halts entries, not the runner's exits.
+
+        Only a mode flip (exits_halted) stops exits too: see PYTHON-RUNNER-SPEC "Halt".
+        """
+        frames = {"AAA": bars(ALL_TIMES)}
+        frames["AAA"].loc[t("10:00"), "High"] = 102.0  # through TP1 at 101.5
+        deps = make({"AAA": [fire(at="10:00")]}, frames=frames, halted=True)
+        deps.exits_halted = lambda: False
+        deps.exits = driver(held())
+        deps.sink = BarSink()
+        rep = run(deps)
+        exits = [s for s in deps.sink.signals if s.direction == Direction.EXIT]
+        entries = [s for s in deps.sink.signals if s.direction != Direction.EXIT]
+        assert [(s.symbol, s.tp_level) for s in exits] == [("AAA", "TP1")]
+        assert entries == [] and rep.halted is True and rep.evaluated == 0
+
+    def test_entry_hold_skips_symbols_with_nothing_open(self, make):
+        frames = {s: bars(ALL_TIMES) for s in ("AAA", "BBB")}
+        deps = make({}, symbols=("AAA", "BBB"), frames=frames, halted=True)
+        deps.exits_halted = lambda: False
+        deps.exits = driver(held("AAA"))
+        deps.sink = BarSink()
+        run(deps)
+        assert [s[0] for s in deps.sink.seen] == ["AAA"]
+
+    def test_stale_cycle_still_steps_open_positions(self, make):
+        """Late data still says the target traded; the Ladder never replays a skipped bar."""
+        frames = {s: bars(ALL_TIMES) for s in ("AAA", "BBB")}
+        frames["AAA"].loc[t("10:00"), "High"] = 102.0
+        deps = make(
+            {"BBB": [fire(symbol="BBB", at="10:00")]},
+            symbols=("AAA", "BBB"), frames=frames, now="10:07:00", stale=60.0,
+        )
+        deps.exits = driver(held())
+        deps.sink = BarSink()
+        rep = run(deps)
+        exits = [s for s in deps.sink.signals if s.direction == Direction.EXIT]
+        entries = [s for s in deps.sink.signals if s.direction != Direction.EXIT]
+        assert [(s.symbol, s.tp_level) for s in exits] == [("AAA", "TP1")]
+        assert entries == [] and rep.stale is True
+
+    def test_mode_halt_on_a_stale_cycle_still_steps_nothing(self, make):
+        frames = {"AAA": bars(ALL_TIMES)}
+        frames["AAA"].loc[t("10:00"), "High"] = 102.0
+        deps = make({}, frames=frames, now="10:07:00", stale=60.0, halted=True)
+        deps.exits = driver(held())
+        deps.sink = BarSink()
+        run(deps)
+        assert deps.sink.signals == [] and deps.sink.seen == []
+
     def test_exit_submit_failure_is_reported_not_swallowed(self, make, logs):
         frames = {"AAA": bars(ALL_TIMES)}
         frames["AAA"].loc[t("10:00"), "High"] = 102.0

@@ -144,3 +144,42 @@ class TestOperatorEntryHold:
         self.hold.write_text("x")
         mode_guard.halt("OpenAlgo mode changed")
         assert mode_guard.halt_reason() == "OpenAlgo mode changed"
+
+
+class TestModeHalted:
+    """Only a mode flip stops the Python runner's exits; other halts stop entries only."""
+
+    @pytest.mark.asyncio
+    async def test_a_mode_flip_halts_exits_too(self):
+        mode_guard.set_startup_phase("analyze")
+        mode_guard.prime("analyze")
+        with patch("signal_engine.api_client.fetch_trading_mode", _fetch("live")):
+            mode_guard._cache["checked_at"] = 0.0
+            await mode_guard.check_for_flip()
+        assert mode_guard.mode_halted() is True
+
+    def test_degraded_listener_halts_entries_not_exits(self):
+        mode_guard.halt("Telegram listener stopped")
+        assert mode_guard.is_halted() is True
+        assert mode_guard.mode_halted() is False
+
+    def test_feed_down_halts_entries_not_exits(self):
+        mode_guard.halt_feed("Telegram disconnected")
+        assert mode_guard.is_halted() is True
+        assert mode_guard.mode_halted() is False
+
+    def test_reset_clears_the_mode_halt(self):
+        mode_guard._mode_flipped = True
+        mode_guard.reset()
+        assert mode_guard.mode_halted() is False
+
+    @pytest.mark.asyncio
+    async def test_a_flip_after_a_degraded_halt_still_halts_exits(self):
+        mode_guard.set_startup_phase("analyze")
+        mode_guard.prime("analyze")
+        mode_guard.halt("Telegram listener stopped")
+        with patch("signal_engine.api_client.fetch_trading_mode", _fetch("live")):
+            mode_guard._cache["checked_at"] = 0.0
+            assert await mode_guard.check_for_flip() == "live"
+        assert mode_guard.mode_halted() is True
+        assert "telegram" in mode_guard.halt_reason().lower()  # the first reason is kept

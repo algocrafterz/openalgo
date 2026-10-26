@@ -254,6 +254,8 @@ async def start(
     halted: Callable[[], bool],
     stale_limit_s: float,
     product: str,
+    exits_halted: Callable[[], bool] | None = None,
+    failure_alert: Callable[[str], Awaitable] | None = None,
     clock: Clock | None = None,
     source: BarSource | None = None,
     loader=None,
@@ -330,6 +332,8 @@ async def start(
             stale_limit_s,
             product,
             clock,
+            exits_halted=exits_halted,
+            failure_alert=failure_alert,
         )
         service.tasks.append(asyncio.create_task(run_days(make, clock), name=f"runner-{tag}"))
         logger.info(f"Python signal runner started for {tag} ({cfg.strategies[tag].signal_source})")
@@ -405,6 +409,8 @@ def _session_factory(
     stale_limit_s,
     product,
     clock,
+    exits_halted=None,
+    failure_alert=None,
 ):
     def make(day: dt.date) -> Runner:
         strategy = STRATEGY_FACTORIES[tag]()
@@ -427,6 +433,8 @@ def _session_factory(
                 cfg, tag, tracker, exit_qty, strategy, context, manage_until_min(*time_exit)
             ),
             manage_until_min=manage_until_min(*time_exit),
+            exits_halted=exits_halted,
+            failure_alert=failure_alert,
         )
 
     return make

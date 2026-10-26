@@ -10,13 +10,16 @@ Rule enforced here: an order is only resent when the broker's order book was REA
 live or completed copy of it. If the book cannot be read, or the order is still working, the
 outcome is UNCERTAIN: nothing more is sent for that position until a later reconcile settles it.
 
-Pure logic plus a small registry; the caller owns logging and alerts.
+Pure logic plus a small registry; the caller owns logging and alerts. The one exception is an
+order-book timestamp this module cannot read, which only it can see.
 """
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+
+from loguru import logger
 
 from signal_engine.timeutils import IST
 
@@ -110,14 +113,37 @@ def alert_due(order: UncertainOrder, now: datetime, interval_seconds: float) -> 
     return True
 
 
+#: Order-book stamps as brokers send them, all IST: the sandbox's ISO form, and Flattrade (Noren)
+#: day-first forms - "norentm" is time-first ("13:56:46 13-10-2026"), its history is date-first.
+_BROKER_STAMP_FORMATS = ("%Y-%m-%d %H:%M:%S", "%H:%M:%S %d-%m-%Y", "%d-%m-%Y %H:%M:%S")
+
+
+def parse_broker_stamp(raw) -> datetime | None:
+    """An order-book timestamp as an IST datetime, or None when it is missing or unrecognised."""
+    if not raw:
+        return None
+    text = str(raw).strip()
+    for fmt in _BROKER_STAMP_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
+
+
 def _placed_at_or_after(row: dict, since: datetime) -> bool:
     raw = row.get("timestamp") or row.get("order_timestamp")
-    if not raw:
+    stamp = parse_broker_stamp(raw)
+    if stamp is None:
+        # Kept as a match: discarding a real fill would resend it, the duplicate this module
+        # exists to stop. Logged, because an unknown format also disables the time filter.
+        if raw:
+            logger.warning(
+                f"order book timestamp {raw!r} for order {row.get('orderid') or row.get('order_id')} "
+                "is in an unknown format; treating the order as placed after the send"
+            )
         return True
-    try:
-        return datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST) >= since
-    except ValueError:
-        return True  # an unparseable stamp must not discard a real match
+    return stamp >= since
 
 
 def classify_book(

@@ -124,3 +124,90 @@ class TestSingleSourceGuard:
         runner, st = make_runner(tmp_path, {}, sink=self.DispatchingSink())
         asyncio.run(runner.run(DAY))
         st.close()
+
+
+class FlakyLoader(Loader):
+    """History store that fails its first load (a DuckDB lock, say), then recovers."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def load(self, symbols, day, s5, s1):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("historify locked")
+        return super().load(symbols, day, s5, s1)
+
+
+class TestOneFailureDoesNotEndTheDay:
+    """One unexpected error used to end Runner.run; run_days then slept until tomorrow, leaving
+    entries and the Ladder stopped for the day with only a log line to show for it."""
+
+    def test_a_failed_first_warm_up_is_retried_by_the_next_cycle(self, tmp_path):
+        script = {"AAA": [fire(at="09:55")]}
+        runner, st = make_runner(tmp_path, script)
+        runner._deps.context = RollingContext(runner.strategy, FlakyLoader())
+        alerts = []
+
+        async def alert(text):
+            alerts.append(text)
+
+        runner._failure_alert = alert
+        asyncio.run(runner.run(DAY))
+        st.close()
+        assert [s.sig_id for s in runner.sink.signals] == ["AAA-20260930-0955"]
+        assert len(alerts) == 1 and "warm-up" in alerts[0]
+
+    def test_a_failed_cycle_is_skipped_and_the_day_goes_on(self, tmp_path):
+        script = {"AAA": [fire(at="10:20", price=101.0)]}
+        runner, st = make_runner(tmp_path, script)
+
+        calls = []
+
+        async def boom_once(bar_close, deps):
+            calls.append(bar_close)
+            if len(calls) == 2:
+                raise RuntimeError("server disconnected")
+            return await real_run_cycle(bar_close, deps)
+
+        from signal_engine.pipeline import runner as runner_mod
+
+        real_run_cycle = runner_mod.run_cycle
+        alerts = []
+
+        async def alert(text):
+            alerts.append(text)
+
+        runner._failure_alert = alert
+        runner_mod.run_cycle = boom_once
+        try:
+            asyncio.run(runner.run(DAY))
+        finally:
+            runner_mod.run_cycle = real_run_cycle
+            st.close()
+        assert [s.sig_id for s in runner.sink.signals] == ["AAA-20260930-1020"]
+        assert len(alerts) == 1 and "cycle" in alerts[0]
+
+    def test_only_the_first_failure_of_the_day_is_alerted(self, tmp_path):
+        runner, st = make_runner(tmp_path, {})
+
+        async def always_boom(bar_close, deps):
+            raise RuntimeError("server disconnected")
+
+        from signal_engine.pipeline import runner as runner_mod
+
+        real_run_cycle = runner_mod.run_cycle
+        alerts = []
+
+        async def alert(text):
+            alerts.append(text)
+
+        runner._failure_alert = alert
+        runner_mod.run_cycle = always_boom
+        try:
+            asyncio.run(runner.run(DAY))
+        finally:
+            runner_mod.run_cycle = real_run_cycle
+            st.close()
+        assert len(alerts) == 1

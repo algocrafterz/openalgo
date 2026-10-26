@@ -776,6 +776,8 @@ async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
             trade_mode=trade_mode,
             time_exit=(settings.time_exit_hour, settings.time_exit_minute),
             halted=mode_guard.is_halted,
+            exits_halted=mode_guard.mode_halted,
+            failure_alert=_runner_failure_alert,
             stale_limit_s=settings.stale_signal_seconds,
             product=settings.product,
             alert=_runner_warmup_alert,
@@ -783,6 +785,12 @@ async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
     except (service.RunnerStartError, single_source.SingleSourceError):
         logger.exception("Python signal runner could not start")
         return None
+
+
+async def _runner_failure_alert(text: str) -> None:
+    """The first runner warm-up or cycle failure of a session. Not in notifier.EVENT_LEVELS, so
+    it is delivered at every notify_level."""
+    await notifier.notify_event("runner_cycle_failed", text)
 
 
 async def _runner_warmup_alert(text: str) -> None:
