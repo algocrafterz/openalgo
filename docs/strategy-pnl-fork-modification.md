@@ -443,6 +443,25 @@ nothing today (`today_realized` is 0).
   change to reach the served page. A browser tab that was already open needs a
   hard reload.
 
+## Sandbox place_order stage timing (diagnostic, added 2026-10-26)
+
+Owner-approved core change, logging only, no behaviour change. On 2026-10-15/22/23, 18-22% of
+sandbox MARKET orders took longer than the signal engine's 5 s client timeout (up to 125 s); the
+time was spent before the order insert (around the Flattrade quote call), but which stage is not
+proven.
+
+- `sandbox/order_manager.py` — `place_order` is now a thin wrapper around the unchanged body
+  (`_place_order_impl`) with a per-call `_StageTimer`. A call slower than
+  `_STAGE_LOG_THRESHOLD_MS` (2000 ms) logs one WARNING line, "Slow sandbox place_order ...",
+  with the time per stage (validate, position_lookup, price, margin, insert, execute, rest)
+  and each live quote fetch. Return values and exceptions are unchanged.
+- `test/sandbox/test_place_order_stage_timing.py` (new) — slow call logs its stages, fast call
+  logs nothing, an exception still propagates.
+
+Merge risk: low. An upstream change to `place_order`'s body applies to `_place_order_impl`; the
+`timer.mark(...)` lines are single inserts at stage boundaries. Remove the wrapper once the cause
+of the delay is known.
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump

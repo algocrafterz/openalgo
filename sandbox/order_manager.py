@@ -32,6 +32,36 @@ from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
 
+#: A place_order call slower than this logs how long each stage took. Diagnostic only: on
+#: 2026-10-15/22/23 18-22% of MARKET orders took longer than the signal engine's 5 s client
+#: timeout (up to 125 s), and the stage that spends the time is not yet proven.
+_STAGE_LOG_THRESHOLD_MS = 2000.0
+
+
+class _StageTimer:
+    """Wall-clock time per place_order stage, plus every live quote fetch it made."""
+
+    def __init__(self):
+        self.start = self._last = time.perf_counter()
+        self.stages = []
+        self.quote_ms = []
+
+    def mark(self, stage):
+        now = time.perf_counter()
+        self.stages.append((stage, (now - self._last) * 1000))
+        self._last = now
+
+    def quote(self, started):
+        self.quote_ms.append((time.perf_counter() - started) * 1000)
+
+    def total_ms(self):
+        return (time.perf_counter() - self.start) * 1000
+
+    def summary(self):
+        parts = " ".join(f"{name}={ms:.0f}ms" for name, ms in self.stages)
+        quotes = ",".join(f"{ms:.0f}" for ms in self.quote_ms) or "none"
+        return f"{parts} quote_calls_ms=[{quotes}]"
+
 
 class OrderManager:
     """Manages sandbox orders for sandbox mode"""
@@ -41,6 +71,20 @@ class OrderManager:
         self.fund_manager = FundManager(user_id)
 
     def place_order(self, order_data, prefetched_quote=None):
+        """Place a sandbox order; see _place_order_impl. Logs stage timings when slow."""
+        timer = _StageTimer()
+        try:
+            return self._place_order_impl(order_data, prefetched_quote, timer)
+        finally:
+            total = timer.total_ms()
+            if total >= _STAGE_LOG_THRESHOLD_MS:
+                timer.mark("rest")
+                logger.warning(
+                    f"Slow sandbox place_order {order_data.get('symbol')} "
+                    f"{order_data.get('price_type')}: total={total:.0f}ms {timer.summary()}"
+                )
+
+    def _place_order_impl(self, order_data, prefetched_quote, timer):
         """
         Place a new order in sandbox mode
 
@@ -238,10 +282,12 @@ class OrderManager:
             cached_quote = None  # Cache quote for reuse in immediate execution
             trigger_price_met = False  # Set below for SL/SL-M; decides initial order_status
 
+            timer.mark("validate")
             # Check for existing position early (needed for fallback pricing)
             temp_existing_position = SandboxPositions.query.filter_by(
                 user_id=self.user_id, symbol=symbol, exchange=exchange, product=product
             ).first()
+            timer.mark("position_lookup")
 
             if price_type == "MARKET":
                 # For MARKET orders, fetch current LTP for margin calculation
@@ -269,7 +315,9 @@ class OrderManager:
                             from sandbox.execution_engine import ExecutionEngine
 
                             engine = ExecutionEngine()
+                            quote_started = time.perf_counter()
                             quote = engine._fetch_quote(symbol, exchange)
+                            timer.quote(quote_started)
                             if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
                                 margin_calculation_price = Decimal(str(quote["ltp"]))
                                 cached_quote = quote  # Cache for immediate execution
@@ -465,6 +513,7 @@ class OrderManager:
                     400,
                 )
 
+            timer.mark("price")
             # Calculate required margin using the appropriate price
             margin_required, margin_msg = self.fund_manager.calculate_margin_required(
                 symbol, exchange, product, quantity, margin_calculation_price, action
@@ -581,6 +630,7 @@ class OrderManager:
                 actual_margin_to_block = Decimal("0")
 
             # Generate unique order ID
+            timer.mark("margin")
             orderid = self._generate_order_id()
 
             # Check if order should be rejected (CNC SELL validation failed)
@@ -679,6 +729,7 @@ class OrderManager:
 
             db_session.add(order)
             db_session.commit()
+            timer.mark("insert")
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
@@ -762,6 +813,7 @@ class OrderManager:
             # immediately above). This prevents the WebSocket engine from
             # re-executing an already completed order, while still tick-monitoring
             # trigger-pending SL/SL-M orders for their trigger price.
+            timer.mark("execute")
             db_session.refresh(order)
             if order.order_status in ("open", "trigger pending"):
                 try:
