@@ -402,12 +402,20 @@ def _mark_exit(symbol="LAURUSLABS", qty=74, since=None):
         "BREAKOUT-PY", symbol, "SELL", qty, since or datetime.now(IST).replace(microsecond=0), "EXIT"))
 
 
-async def _sweep(books, *, position=None, sl_status="canceled"):
+_TRACKED = object()  # default broker position: exactly the tracked one
+
+
+async def _sweep(books, *, position=None, sl_status="canceled", own_qty=_TRACKED):
     from signal_engine.main import sweep_unresolved_orders
 
     notify = AsyncMock()
     tracker = MagicMock()
     tracker.find_position = MagicMock(return_value=position)
+    if own_qty is _TRACKED:
+        own_qty = position.quantity if position is not None else 0
+    tracker.fetch_own_position = AsyncMock(return_value=own_qty)
+    tracker.book_close = AsyncMock()
+    _sweep.tracker = tracker
     with (
         patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
         patch("signal_engine.main.fetch_order_status", AsyncMock(return_value=sl_status)),
@@ -807,3 +815,76 @@ class TestEntryRecoveryFailSafeMatching:
         later = (datetime.now(IST) + timedelta(seconds=3)).strftime("%H:%M:%S %d-%m-%Y")
         result, _ = await _run_entry_recovery([[], [_entry_fill("E1", later)], [_entry_fill("E1", later)]])
         assert result is not None and result.order_id == "E1"
+
+
+@pytest.mark.asyncio
+class TestAbsentExitRestoresOnlyOnPositionProof:
+    """Owner decision 2026-10-26: after the late-fill watch, a stop comes back only when the close
+    is proven absent AND the broker holds exactly the tracked position (same side, full size)."""
+
+    @staticmethod
+    def _expired_exit():
+        from dataclasses import replace
+
+        _mark_exit()
+        pending = oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS")
+        oc.mark_uncertain(replace(pending, watch_until=datetime(2000, 1, 1, tzinfo=IST)))
+
+    async def test_full_position_open_restores_the_stop(self):
+        pos = _tracked()
+        self._expired_exit()
+        notify = await _sweep([[]], position=pos, own_qty=74)
+        assert pos.sl_order_id == "" and oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+        assert "STOP RESTORING" in str(notify.await_args_list)
+
+    async def test_reversed_position_keeps_the_hold_and_places_no_stop(self):
+        pos = _tracked()
+        self._expired_exit()
+        notify = await _sweep([[]], position=pos, own_qty=-74)
+        assert pos.sl_order_id == "SL-1"  # untouched: no stop of the wrong side
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+        alert = str(notify.await_args_list)
+        assert "Stop NOT restored" in alert and "UNPROTECTED" in alert and "-74" in alert
+
+    async def test_partial_position_keeps_the_hold_and_places_no_stop(self):
+        pos = _tracked()
+        self._expired_exit()
+        notify = await _sweep([[]], position=pos, own_qty=30)
+        assert pos.sl_order_id == "SL-1"
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+        assert "Stop NOT restored" in str(notify.await_args_list)
+
+    async def test_unreadable_position_keeps_the_hold(self):
+        pos = _tracked()
+        self._expired_exit()
+        notify = await _sweep([[]], position=pos, own_qty=None)
+        assert pos.sl_order_id == "SL-1"
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+        assert "cannot be read" in str(notify.await_args_list)
+
+    async def test_flat_position_releases_the_hold_with_no_stop_and_no_booking(self):
+        pos = _tracked()
+        self._expired_exit()
+        await _sweep([[]], position=pos, own_qty=0)
+        assert pos.sl_order_id == "SL-1"  # no restore
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+        _sweep.tracker.book_close.assert_not_awaited()  # the poll books it, not the sweeper
+
+    async def test_late_fill_inside_the_watch_is_found_and_no_stop_placed(self):
+        from dataclasses import replace
+        from datetime import timedelta
+
+        pos = _tracked()
+        _mark_exit()
+        pending = oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS")
+        oc.mark_uncertain(replace(pending, watch_until=datetime.now(IST) + timedelta(seconds=60)))
+        await _sweep([[_filled_row("LATE1")]], position=pos, own_qty=0)
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+        assert pos.sl_order_id == "SL-1"
+
+    async def test_late_fill_seen_at_the_first_read_after_the_watch_is_not_reprotected(self):
+        pos = _tracked()
+        self._expired_exit()
+        await _sweep([[_filled_row("LATE2")]], position=pos, own_qty=0)
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+        assert pos.sl_order_id == "SL-1"  # FILLED path: no stop restored

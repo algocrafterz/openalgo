@@ -977,12 +977,16 @@ async def _find_recent_market_exit_fill(order, since: datetime) -> TradeResult |
 
     SUCCESS: a DEFINITE copy (readable stamp at or after `since`, not already booked today).
     TIMEOUT with no order id: only AMBIGUOUS copies exist (unreadable stamp, or one a few
-    seconds before `since`), named in the message; the caller must hold, not adopt or resend.
-    None: no copy at all, or the book could not be read.
+    seconds before `since`), named in the message, or the book could not be read ("order book
+    unreadable"); the caller must hold, not adopt or resend.
+    None: the book was read and holds no copy.
     """
     from signal_engine.api_client import fetch_orderbook, match_recent_complete_order
 
     book = await fetch_orderbook()
+    if book is None:
+        # Not the same as an empty book: only a book that was read can show the close absent.
+        return TradeResult(order_id="", status=OrderStatus.TIMEOUT, message="order book unreadable")
     if not book:
         return None
     match = match_recent_complete_order(
@@ -2196,6 +2200,13 @@ async def sweep_unresolved_orders() -> None:
             continue
         if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, now):
             continue  # still inside the late-fill watch: keep looking, never resend or re-protect
+        decision = ""
+        if pending.kind != "ENTRY" and result.outcome == order_reconcile.ABSENT:
+            # The exit is proven absent; the stop comes back only on the broker's own proof that
+            # the tracked position is still open in full (same side, same size).
+            decision = await _absent_exit_decision(pending, now)
+            if decision == "hold":
+                continue
         _clear_unresolved(pending.strategy, pending.symbol)
         if pending.kind == "ENTRY":
             if result.outcome == order_reconcile.FILLED:
@@ -2212,8 +2223,51 @@ async def sweep_unresolved_orders() -> None:
                 pos = tracker.find_position(pending.symbol, pending.strategy)
                 await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
             continue
+        if decision == "flat":
+            logger.critical(
+                f"EXIT {pending.symbol} [{pending.strategy}] is not on the broker yet the position is "
+                "flat there: hold released, no stop placed; the tracker poll books the close"
+            )
+            continue
         await _restore_stop_after_absent_exit(pending)
     await _sweep_late_duplicates(now)
+
+
+async def _absent_exit_decision(pending, now: datetime) -> str:
+    """What a held exit that the book shows absent after its watch may do: restore | flat | hold.
+
+    "restore": the broker holds exactly the tracked position (same side, full quantity), so its
+    stop may come back. "flat": the broker shows nothing, so no stop is placed and the poll books
+    the close. "hold": the position cannot be read, or it is reversed, partial or larger than
+    tracked - a stop of the tracked side and size would be wrong, so none is placed and the hold
+    stays, alerted. With nothing tracked, the hold is released as before (nothing to protect).
+    """
+    pos = tracker.find_position(pending.symbol, pending.strategy)
+    exchange = getattr(pos, "exchange", "") or settings.exchange
+    product = getattr(pos, "product", "") or settings.product
+    own = await tracker.fetch_own_position(pending.symbol, pending.strategy, exchange, product)
+    if pos is None:
+        logger.warning(
+            f"EXIT {pending.symbol} [{pending.strategy}]: absent after the watch and nothing is "
+            f"tracked (broker position {own}); hold released"
+        )
+        return "restore"  # _restore_stop_after_absent_exit is a no-op without a tracked position
+    if own == 0:
+        return "flat"
+    expected = pos.quantity if pos.direction == Direction.LONG else -pos.quantity
+    if own is not None and own == expected:
+        return "restore"
+    if order_reconcile.alert_due(pending, now, _UNRESOLVED_ALERT_SECONDS):
+        seen = "cannot be read" if own is None else f"is {own}"
+        message = (
+            f"EXIT {pending.action} {pending.quantity} {pending.symbol} [{pending.strategy}] is not on "
+            f"the broker, but the broker position {seen}, not the tracked {expected}. Stop NOT "
+            "restored; the position is UNPROTECTED. Check the broker position and protect or close "
+            "it by hand."
+        )
+        logger.critical(message)
+        await notifier.notify(message)
+    return "hold"
 
 
 async def _sweep_late_duplicates(now: datetime) -> None:
@@ -2526,18 +2580,26 @@ async def _auto_close_on_bad_fill(
         # A close the broker accepted may not have filled yet when the position is read back,
         # which would read as "still open". The orderbook shows it, and gives the ledger the
         # real order id.
-        close_result = await _find_recent_market_exit_fill(close_order, close_started) or close_result
-        if close_result.status == OrderStatus.TIMEOUT and close_result.message.startswith("ambiguous"):
-            # Only copies that can neither be adopted nor ruled out: a restored stop could reverse
-            # a close that has filled, and a resend could double it. The broker position decides.
+        found = await _find_recent_market_exit_fill(close_order, close_started)
+        if found is not None and found.status == OrderStatus.SUCCESS:
+            close_result = found
+        else:
+            # No definite copy. A close that timed out can still fill: a stop restored now could
+            # reverse it, and a resend could double it. Only a flat broker position settles it
+            # here; otherwise the close is held - watched for a late fill when the book was read
+            # clean, held with no end when the book was unreadable or showed ambiguous copies.
             own = await tracker.fetch_own_position(
                 signal.symbol, signal.strategy, close_order.exchange, close_order.product
             )
             if own != 0:
+                read_clean = found is None
                 return await _hold_unconfirmed_bad_fill_close(
-                    signal, quantity, close_order, close_started, close_result, exit_type,
-                    reason, slippage_r, own,
+                    signal, quantity, close_order, close_started,
+                    found.message if found is not None else "the order book shows no copy of it",
+                    exit_type, reason, slippage_r, own, watch=read_clean,
                 )
+            if found is not None:
+                close_result = found
     if close_result.status != OrderStatus.SUCCESS and await _position_still_open(signal, close_order):
         return await _restore_protection_after_failed_close(
             signal, quantity, entry_order_id, close_result, exit_type, reason, slippage_r,
@@ -2606,26 +2668,34 @@ async def _bad_fill_close_blocked_by_stop(
 
 
 async def _hold_unconfirmed_bad_fill_close(
-    signal, quantity: int, close_order, since: datetime, close_result, exit_type: str,
-    reason: str, slippage_r: float, own,
+    signal, quantity: int, close_order, since: datetime, detail: str, exit_type: str,
+    reason: str, slippage_r: float, own, *, watch: bool,
 ) -> BadFillClose:
-    """The guard's close timed out and the book holds only ambiguous copies of it.
+    """The guard's close timed out with no definite copy on the book and the position not flat.
 
     Neither adopted nor resent, and no stop is restored: the close may yet show as filled. The
     order is held as unconfirmed (kind EXIT), which keeps the stop retry and any new exit or
     entry off this position until the order-book sweeper settles it. The position stays tracked.
+    With `watch` (the book was read clean) the hold carries the late-fill window; the sweeper
+    restores the stop only after it, on a clean read with the full position still open. An
+    unreadable book or ambiguous copies get no window: nothing but evidence ends the hold.
     """
+    watch_until = since + timedelta(seconds=_LATE_FILL_WATCH_SECONDS) if watch else None
     order_reconcile.mark_uncertain(
         order_reconcile.UncertainOrder(
             strategy=signal.strategy, symbol=signal.symbol, action=close_order.action.value,
-            quantity=quantity, since=since, kind="EXIT",
+            quantity=quantity, since=since, kind="EXIT", watch_until=watch_until,
         )
     )
     position = "unknown (broker unreachable)" if own is None else f"{own}"
+    waiting = (
+        f"watching {_LATE_FILL_WATCH_SECONDS:.0f} s for a late fill before any stop is restored"
+        if watch else "held until the broker order book settles it"
+    )
     message = (
         f"Bad-fill close for {signal.symbol} [{signal.strategy}] {close_order.action.value} {quantity} "
-        f"UNCONFIRMED: {close_result.message}. Broker position: {position}. The stop was cancelled, "
-        "so the position may be UNPROTECTED. No order was resent and no stop placed. Check the "
+        f"UNCONFIRMED: {detail}. Broker position: {position}. The stop was cancelled, so the "
+        f"position is UNPROTECTED; {waiting}. No order was resent and no stop placed. Check the "
         "broker order book and position now; close or protect it by hand."
     )
     logger.critical(message)

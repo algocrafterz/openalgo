@@ -242,7 +242,31 @@ class TestBadFillCloseTimeout:
         outcome, _, _, _, held = await _run_close_timeout([_close_row(_now_stamp(2))], own_qty=0)
         assert outcome.closed is True and outcome.close_order_id == "C9" and held is None
 
-    async def test_no_copy_with_the_position_open_restores_the_stop(self):
-        outcome, bracket, _, _, held = await _run_close_timeout([], own_qty=147)
-        assert outcome.closed is False and held is None
-        bracket.assert_awaited_once()  # unchanged: a proven-absent close gets its stop back
+    async def test_no_copy_with_the_position_open_is_watched_not_reprotected(self):
+        """Owner decision 2026-10-26 (was: the stop came back after one clean read). The close may
+        still land: hold it for the late-fill watch, no stop, alert UNPROTECTED at once."""
+        outcome, bracket, notifier, _, held = await _run_close_timeout([], own_qty=147)
+        assert outcome.closed is False and outcome.replacement_sl_order_id == ""
+        bracket.assert_not_awaited()
+        assert held is not None and held.kind == "EXIT" and held.watch_until is not None
+        alert = " ".join(str(c.args[0]) for c in notifier.notify.await_args_list)
+        assert "UNPROTECTED" in alert and "late fill" in alert
+
+    async def test_no_copy_with_the_broker_flat_is_booked_closed(self):
+        outcome, bracket, _, risk, held = await _run_close_timeout([], own_qty=0)
+        assert outcome.closed is True and held is None
+        bracket.assert_not_awaited()
+
+    async def test_no_copy_with_the_broker_unreachable_is_watched(self):
+        outcome, bracket, _, _, held = await _run_close_timeout([], own_qty=None)
+        assert outcome.closed is False and held is not None
+        bracket.assert_not_awaited()
+
+    async def test_an_unreadable_book_is_held_without_a_watch_end(self):
+        """An unreadable book is no evidence either way: held with no window to run out."""
+        outcome, bracket, notifier, _, held = await _run_close_timeout(None, own_qty=147)
+        assert outcome.closed is False
+        bracket.assert_not_awaited()
+        assert held is not None and held.watch_until is None
+        alert = " ".join(str(c.args[0]) for c in notifier.notify.await_args_list)
+        assert "unreadable" in alert and "UNPROTECTED" in alert

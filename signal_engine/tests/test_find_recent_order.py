@@ -91,12 +91,21 @@ class TestTheMainHelperStillBehavesTheSame:
         assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "OID-1")
         assert result.message == "recovered after timeout"
 
-    async def test_it_returns_none_when_the_book_is_empty_or_unreadable(self):
+    async def test_it_returns_none_when_the_book_is_read_and_empty(self):
         from signal_engine.main import _find_recent_market_exit_fill
 
-        for book in (None, []):
-            with patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=book)):
-                assert await _find_recent_market_exit_fill(_sell_order(), SINCE) is None
+        with patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=[])):
+            assert await _find_recent_market_exit_fill(_sell_order(), SINCE) is None
+
+    async def test_an_unreadable_book_is_reported_not_taken_as_absent(self):
+        """2026-10-26: None (unreadable) used to read the same as [] (no copy). Only a read book
+        can show the close absent; an unreadable one must hold."""
+        from signal_engine.main import _find_recent_market_exit_fill
+
+        with patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=None)):
+            result = await _find_recent_market_exit_fill(_sell_order(), SINCE)
+        assert result is not None and result.status == OrderStatus.TIMEOUT
+        assert "unreadable" in result.message
 
 
 class TestFlattradeDayFirstStamps:
