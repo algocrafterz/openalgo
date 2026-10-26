@@ -25,7 +25,6 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 import yaml

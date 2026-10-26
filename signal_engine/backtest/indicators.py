@@ -4,6 +4,9 @@ Each mirrors the PineScript builtin it is named after, including the smoothing
 Pine actually uses (Wilder's RMA for atr/rsi/dmi, not a simple mean). Anything that
 reads a completed higher-timeframe or previous-day value is shifted so it can never
 see the future - the single most common way a backtest invents an edge.
+
+rma, ema, true_range, atr and adx are re-exported from features/price.py (the
+strategy_core implementations), so both layers compute them one way.
 """
 
 from __future__ import annotations
@@ -11,43 +14,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from signal_engine.features.price import adx, atr, ema, rma, true_range
+
 IST = "Asia/Kolkata"
-
-
-def ema(s: pd.Series, n: int) -> pd.Series:
-    return s.ewm(span=n, adjust=False).mean()
-
-
-def rma(s: pd.Series, n: int) -> pd.Series:
-    """Wilder's smoothing - what ta.atr, ta.rsi and ta.dmi use internally."""
-    return s.ewm(alpha=1.0 / n, adjust=False).mean()
-
-
-def true_range(df: pd.DataFrame) -> pd.Series:
-    pc = df["Close"].shift(1)
-    return pd.concat([df["High"] - df["Low"],
-                      (df["High"] - pc).abs(),
-                      (df["Low"] - pc).abs()], axis=1).max(axis=1)
-
-
-def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    return rma(true_range(df), n)
 
 
 def rsi(s: pd.Series, n: int = 14) -> pd.Series:
     d = s.diff()
     down = rma((-d).clip(lower=0), n).replace(0, np.nan)
     return 100 - 100 / (1 + rma(d.clip(lower=0), n) / down)
-
-
-def adx(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    up, dn = df["High"].diff(), -df["Low"].diff()
-    plus = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=df.index)
-    minus = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=df.index)
-    a = rma(true_range(df), n).replace(0, np.nan)
-    pdi, mdi = 100 * rma(plus, n) / a, 100 * rma(minus, n) / a
-    dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
-    return rma(dx, n)
 
 
 def session_vwap(df: pd.DataFrame, day: pd.Series) -> pd.Series:

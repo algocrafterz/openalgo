@@ -3,7 +3,7 @@
 import asyncio
 import random
 from collections.abc import Callable, Coroutine
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 
 from loguru import logger
 

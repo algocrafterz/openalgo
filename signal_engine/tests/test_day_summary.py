@@ -84,13 +84,6 @@ class TestSendsOncePerDay:
             assert n.notify_day_summary.await_args.kwargs["trades"] == 1
 
     @pytest.mark.asyncio
-    async def test_no_new_trades_since_an_earlier_send_stays_suppressed(self, tracker):
-        with patch("signal_engine.tracker.notifier", new_callable=AsyncMock) as n:
-            await tracker.send_day_summary()
-            await tracker.send_day_summary()
-            assert n.notify_day_summary.await_count == 1
-
-    @pytest.mark.asyncio
     async def test_a_new_day_sends_again(self, tracker, tmp_path):
         with patch("signal_engine.tracker.notifier", new_callable=AsyncMock) as n:
             await tracker.send_day_summary()

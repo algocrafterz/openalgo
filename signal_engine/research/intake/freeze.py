@@ -29,7 +29,7 @@ from signal_engine.research.intake import (
     ledger as ledger_mod,
 )
 from signal_engine.research.intake.profiles import load_profile
-from signal_engine.research.intake.spec import SpecError, load_spec, validate_spec
+from signal_engine.research.intake.spec import SpecError, load_spec
 
 
 class FreezeError(Exception):

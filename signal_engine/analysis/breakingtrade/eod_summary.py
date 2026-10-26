@@ -27,7 +27,7 @@ from datetime import datetime
 
 import httpx
 
-from signal_engine.analysis.breakingtrade import alerts, store
+from signal_engine.analysis.breakingtrade import alerts
 
 _QUOTES_TIMEOUT = 10
 

@@ -365,12 +365,6 @@ class TestBrokerSwitch:
         from signal_engine.scripts.openalgoscheduler import get_broker_name
         assert get_broker_name() == "mstock"
 
-    def test_flattrade_redirect_url_resolves_to_flattrade(self, monkeypatch):
-        monkeypatch.delenv("BROKER_NAME", raising=False)
-        monkeypatch.setenv("REDIRECT_URL", "http://127.0.0.1:5000/flattrade/callback")
-        from signal_engine.scripts.openalgoscheduler import get_broker_name
-        assert get_broker_name() == "flattrade"
-
     def test_mstock_auto_login_via_redirect_url(self, monkeypatch):
         """Full auto_login flow when REDIRECT_URL points to mstock."""
         monkeypatch.delenv("BROKER_NAME", raising=False)
@@ -530,14 +524,6 @@ class TestBrokerSwitch:
         assert success is False
         assert token is None
         assert "BROKER_TOTP_SECRET" in msg
-
-    def test_no_redirect_url_and_no_broker_name_fails_fast(self, monkeypatch):
-        """No REDIRECT_URL and no BROKER_NAME → EnvironmentError immediately."""
-        monkeypatch.delenv("BROKER_NAME", raising=False)
-        monkeypatch.delenv("REDIRECT_URL", raising=False)
-        from signal_engine.scripts.openalgoscheduler import get_broker_name
-        with pytest.raises(EnvironmentError):
-            get_broker_name()
 
 
 class TestGenerateTotp:

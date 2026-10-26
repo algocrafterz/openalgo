@@ -33,7 +33,6 @@ This produces a WATCHLIST, not a trade signal - see the package docstring.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import pandas as pd
 

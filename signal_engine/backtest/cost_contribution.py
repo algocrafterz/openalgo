@@ -221,6 +221,19 @@ def seal(body: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def sealed_report_problems(evidence: dict[str, Any], schema: str) -> list[str]:
+    """Schema, seal and report-only checks every sealed post-run diagnostic shares."""
+    problems = []
+    if evidence.get("schema") != schema:
+        problems.append(f"schema is {evidence.get('schema')!r}, expected {schema!r}")
+    body = {k: v for k, v in evidence.items() if k != "content_sha256"}
+    if evidence.get("content_sha256") != seal(body):
+        problems.append("content_sha256 does not match the payload")
+    if evidence.get("report_only") is not True or evidence.get("diagnostic_not_trials") is not True:
+        problems.append("report_only and diagnostic_not_trials must both be true")
+    return problems
+
+
 def build_evidence(trades: pd.DataFrame, source: dict[str, Any]) -> dict[str, Any]:
     """The sealed `evidence/cost_stress.json` payload. `source` names the run it came from."""
     body = {

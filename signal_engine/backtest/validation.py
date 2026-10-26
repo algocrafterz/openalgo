@@ -43,7 +43,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from signal_engine.backtest import data, metrics
+from signal_engine.backtest import data
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.portfolio import PortfolioBacktest, PortfolioConfig, build_factor
 from signal_engine.backtest.strategies.base import Strategy

@@ -12,6 +12,50 @@ by the test suite.
 
 ---
 
+## 2026-10-17 - duplicate-logic sweep
+
+Behaviour-preserving. No trading, sizing, order, risk or config change.
+
+### Duplication removed
+- `backtest/indicators.py`: `rma`, `ema`, `true_range`, `atr`, `adx` were identical copies of
+  `features/price.py`; now re-exported from there. Outputs checked bit-identical on synthetic
+  OHLCV with gaps and flat bars.
+- `backtest/cost_contribution.sealed_report_problems`: the schema, seal and report-only check
+  that `exposure_turnover`, `market_benchmark`, `trade_excursion`, `sector_exposure` and
+  `monte_carlo` each copied. Messages unchanged. `cost_contribution.validate_evidence` keeps its
+  own, differently worded checks.
+- `analysis/eod_review.py`: `_time_check` / `_atime_check` now come from `smoke_test`, which it
+  already imported from.
+- Three tests that were exact copies of another test in the same file (two in
+  `test_openalgoscheduler.py`, one in `test_day_summary.py`).
+- Unused imports in 13 modules.
+
+### Deliberately not done
+- No edit to `executor`, `main`, `tracker`, `risk`, `startup`, `db`, `order_reconcile` or
+  `tests/conftest.py`: the parked branch `wip/stop-lifecycle-slot-cap-late-entry` changes all of
+  them. After it merges: `executor.round_to_tick` can delegate to
+  `features.instruments.round_to_safe_tick` (identical today, kept equal by a parity test).
+- The `ts.tz_localize(IST) if ... else ts.tz_convert(IST)` helper is repeated in about 8 modules,
+  but with different `IST` objects (the `"Asia/Kolkata"` string vs `utils.ist.IST`); merging
+  could change the timezone type on returned timestamps. Left as is.
+- No document deleted: closed reviews and plans are linked from `PRD.md`, and several plans still
+  carry open items.
+- `data_readiness/intraday_5m.bar_count_distribution` has no caller although its docstring says
+  plan 8.2 item 7 reports it. Kept: deleting it would hide a reporting gap.
+
+### Found, not fixed
+- `smoke_test.dry_run_entry_pipeline` (`main --dry-run`) sizes on a risk engine built in the
+  default `live` mode against the real `data/risk.db`, so it persists the fetched capital under
+  `PORTFOLIO`/`live` even when the broker is in ANALYZE. A LIVE session later that day restores
+  that figure as its day-start capital. This is the source of the four `PORTFOLIO`/`live` rows
+  (sandbox override 100000.0) in the live `risk.db`; the test suite is not (a full run wrote no
+  row). Separately, importing `signal_engine.main` opens the real `data/risk.db`, and
+  `tests/conftest.py` redirects `trades.db` but not `risk.db`.
+- `tests/test_flattrade_transform.py::TestMppFallback::test_sl_m_without_auth_token` reads the
+  real `symtoken` table, so it passes only against a populated `db/openalgo.db`.
+
+---
+
 ## 2026-09-29 - content reorganised by function; research registry added
 
 Behaviour-preserving. No runtime module moved or renamed; `signal_engine.<module>`

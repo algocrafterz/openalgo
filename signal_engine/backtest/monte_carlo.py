@@ -44,7 +44,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from signal_engine.backtest.cost_contribution import seal
+from signal_engine.backtest.cost_contribution import seal, sealed_report_problems
 from signal_engine.backtest.exposure_turnover import occupancy
 from signal_engine.timeutils import IST
 
@@ -392,14 +392,7 @@ def build_evidence(trades: pd.DataFrame, source: dict[str, Any], **kw: Any) -> d
 
 
 def validate_evidence(evidence: dict[str, Any]) -> list[str]:
-    problems = []
-    if evidence.get("schema") != SCHEMA:
-        problems.append(f"schema is {evidence.get('schema')!r}, expected {SCHEMA!r}")
-    body = {k: v for k, v in evidence.items() if k != "content_sha256"}
-    if evidence.get("content_sha256") != seal(body):
-        problems.append("content_sha256 does not match the payload")
-    if evidence.get("report_only") is not True or evidence.get("diagnostic_not_trials") is not True:
-        problems.append("report_only and diagnostic_not_trials must both be true")
+    problems = sealed_report_problems(evidence, SCHEMA)
     if "ruin" not in evidence.get("report", {}).get("definitions", {}):
         problems.append("the ruin definition is not recorded")
     return problems

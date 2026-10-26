@@ -21,7 +21,6 @@ The normalizer handles:
 """
 
 import re
-from typing import Optional
 
 from signal_engine.strategies import ORB as _DEFAULT_STRATEGY
 

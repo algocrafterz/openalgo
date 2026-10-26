@@ -57,14 +57,19 @@ import asyncio
 import json
 import os
 import sqlite3
-import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import datetime
 
 import httpx
 
 from signal_engine.analysis.breakingtrade import review
-from signal_engine.smoke_test import CheckResult, check_config, check_db
+from signal_engine.smoke_test import (
+    CheckResult,
+    _atime_check,
+    _time_check,
+    check_config,
+    check_db,
+)
 from signal_engine.timeutils import ist_today
 
 _LOG_DIR = "signal_engine/logs"
@@ -92,24 +97,6 @@ _RESOURCE_LEAK_PATTERNS = (
     "database is locked",
     "ResourceWarning",
 )
-
-
-def _time_check(name: str, fn) -> CheckResult:
-    t0 = time.monotonic()
-    try:
-        msg = fn()
-        return CheckResult(name=name, passed=True, message=msg, duration_ms=(time.monotonic() - t0) * 1000)
-    except Exception as e:  # noqa: BLE001
-        return CheckResult(name=name, passed=False, message=str(e), duration_ms=(time.monotonic() - t0) * 1000)
-
-
-async def _atime_check(name: str, coro) -> CheckResult:
-    t0 = time.monotonic()
-    try:
-        msg = await coro
-        return CheckResult(name=name, passed=True, message=msg, duration_ms=(time.monotonic() - t0) * 1000)
-    except Exception as e:  # noqa: BLE001
-        return CheckResult(name=name, passed=False, message=str(e), duration_ms=(time.monotonic() - t0) * 1000)
 
 
 # ── TRADE ────────────────────────────────────────────────────────────────────

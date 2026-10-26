@@ -43,7 +43,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from signal_engine.backtest.cost_contribution import seal
+from signal_engine.backtest.cost_contribution import seal, sealed_report_problems
 from signal_engine.timeutils import IST
 
 SCHEMA = "market_benchmark/1"
@@ -315,15 +315,7 @@ def build_evidence(
 
 
 def validate_evidence(evidence: dict[str, Any]) -> list[str]:
-    problems = []
-    if evidence.get("schema") != SCHEMA:
-        problems.append(f"schema is {evidence.get('schema')!r}, expected {SCHEMA!r}")
-    body = {k: v for k, v in evidence.items() if k != "content_sha256"}
-    if evidence.get("content_sha256") != seal(body):
-        problems.append("content_sha256 does not match the payload")
-    if evidence.get("report_only") is not True or evidence.get("diagnostic_not_trials") is not True:
-        problems.append("report_only and diagnostic_not_trials must both be true")
-    return problems
+    return sealed_report_problems(evidence, SCHEMA)
 
 
 def evidence_for_run(run_dir: str | Path, bars: Mapping[str, pd.DataFrame]) -> dict[str, Any]:

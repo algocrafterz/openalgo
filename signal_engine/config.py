@@ -9,7 +9,6 @@ Missing keys or sections cause a ConfigError at startup.
 
 import os
 from dataclasses import dataclass
-from typing import Union
 
 import yaml
 from dotenv import dotenv_values
