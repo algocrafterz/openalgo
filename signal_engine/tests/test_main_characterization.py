@@ -737,12 +737,18 @@ class TestEntryPostFill:
             order_id="", status=OrderStatus.TIMEOUT, message="Request timed out"
         )
         # build_order is globally stubbed to _order_stub(): symbol=RELIANCE, action=SELL, qty=1.
+        from datetime import datetime, timedelta
+
+        from signal_engine.timeutils import IST
+
         matching_order = {
             "symbol": "RELIANCE",
             "action": "SELL",
             "quantity": 1,
             "order_status": "complete",
             "orderid": "RECOVERED1",
+            # A readable stamp just after the send: required since 2026-10-26.
+            "timestamp": (datetime.now(IST) + timedelta(seconds=2)).strftime("%Y-%m-%d %H:%M:%S"),
         }
         h = harness(
             tracker=tracker,

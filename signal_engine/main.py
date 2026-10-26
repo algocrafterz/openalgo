@@ -973,26 +973,32 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
 
 async def _find_recent_market_exit_fill(order, since: datetime) -> TradeResult | None:
     """Look for a MARKET exit that actually filled on the broker despite a
-    client-side TIMEOUT, before _send_exit_with_retries resends and double-books
-    the exit (see the TIMEOUT branch above for why this matters).
+    client-side TIMEOUT, before anything resends and double-books the exit.
 
-    Matches on symbol + action + quantity among COMPLETE orders timestamped at or
-    after `since` (when this exit attempt sequence started); see
-    api_client.find_recent_complete_order_id for why recency is the only safe filter.
+    SUCCESS: a DEFINITE copy (readable stamp at or after `since`, not already booked today).
+    TIMEOUT with no order id: only AMBIGUOUS copies exist (unreadable stamp, or one a few
+    seconds before `since`), named in the message; the caller must hold, not adopt or resend.
+    None: no copy at all, or the book could not be read.
     """
-    from signal_engine.api_client import fetch_orderbook, find_recent_complete_order_id
+    from signal_engine.api_client import fetch_orderbook, match_recent_complete_order
 
     book = await fetch_orderbook()
     if not book:
         return None
-    order_id = find_recent_complete_order_id(
-        book, order.symbol, order.action.value, order.quantity, since
+    match = match_recent_complete_order(
+        book, order.symbol, order.action.value, order.quantity, since,
+        exclude=_booked_ids_today(order.symbol), strategy=order.strategy_tag,
     )
-    if not order_id:
-        return None
-    return TradeResult(
-        order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
-    )
+    if match.complete:
+        return TradeResult(
+            order_id=match.complete[0], status=OrderStatus.SUCCESS, message="recovered after timeout"
+        )
+    if match.ambiguous:
+        return TradeResult(
+            order_id="", status=OrderStatus.TIMEOUT,
+            message=f"ambiguous copies on the broker, not adopted: {', '.join(match.ambiguous)}",
+        )
+    return None
 
 
 async def _book_realised_pnl_delta() -> tuple[float, float]:
@@ -1970,10 +1976,11 @@ async def _recover_ambiguous_entry_timeout(
     conceding the entry genuinely never happened.
 
     Matches on symbol + action + quantity + order_status=complete, skipping order ids this
-    engine already booked today and rows tagged for another strategy. The triple alone is
-    NOT unique: a same-day re-entry at the same size (ADANIPORTS 10:50 then 11:20,
-    2026-10-01) matches the earlier, closed fill. Orderbook rows don't carry a timestamp
-    consistent enough across brokers to filter on instead.
+    engine already booked today or tracks, and rows tagged for another strategy. The triple
+    alone is NOT unique: a same-day re-entry at the same size (ADANIPORTS 10:50 then 11:20,
+    2026-10-01) matches the earlier, closed fill. The order's own stamp must also be readable
+    and at or after the send (sandbox and Flattrade formats); an unreadable or borderline stamp
+    holds the entry as unconfirmed instead of adopting it.
     """
     action = order.action.value
     # Orders already booked today for this symbol (an earlier entry that has since closed
@@ -1988,34 +1995,17 @@ async def _recover_ambiguous_entry_timeout(
         if orderbook is None:
             last_read_clean = False
             continue
-        last_read_clean = True
-        for o in orderbook:
-            if not isinstance(o, dict):
-                continue
-            if str(o.get("symbol", "")).upper() != signal.symbol.upper():
-                continue
-            if str(o.get("action", "")).upper() != action:
-                continue
-            try:
-                if int(o.get("quantity", 0)) != order.quantity:
-                    continue
-            except (TypeError, ValueError):
-                continue
-            status = str(o.get("order_status") or o.get("status") or "").lower()
-            if status not in ("complete", "filled"):
-                if status not in ("rejected", "cancelled", "canceled", "expired"):
-                    last_read_clean = False  # still working or partly filled: not a clean "no"
-                continue
-            order_id = str(o.get("orderid") or o.get("order_id") or "")
-            if not order_id:
-                continue
-            if order_id in booked_ids:
-                continue  # already booked earlier today — an old fill, not this signal's
-            row_strategy = str(o.get("strategy") or "")
-            if row_strategy and row_strategy.upper() != str(signal.strategy).upper():
-                continue  # another strategy's order on the same symbol
-            if any(p.entry_order_id == order_id for p in tracker._positions.values()):
-                continue  # already tracked under some other signal — not this one's fill
+        # Only a DEFINITE copy (readable stamp at or after the send) identifies this entry. A copy
+        # whose stamp is unreadable or a few seconds before the send is AMBIGUOUS: it may be an
+        # earlier untracked fill of the same size, so it is held, never adopted (owner rule
+        # 2026-10-26). Ids already booked today or tracked under another signal are not copies.
+        tracked = {p.entry_order_id for p in tracker._positions.values() if p.entry_order_id}
+        match = order_reconcile.classify_book_detail(
+            orderbook, signal.symbol, action, order.quantity, since,
+            strategy=signal.strategy, exclude=frozenset(booked_ids) | tracked,
+        )
+        if match.complete:
+            order_id = match.complete[0]
             logger.warning(
                 f"Entry order timeout for {signal.symbol} was ambiguous — order DID fill on "
                 f"the broker (id={order_id}, attempt {attempt}/"
@@ -2025,6 +2015,13 @@ async def _recover_ambiguous_entry_timeout(
             return TradeResult(
                 order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
             )
+        if match.ambiguous:
+            logger.critical(
+                f"Entry order timeout for {signal.symbol} [{signal.strategy}]: ambiguous broker "
+                f"copies {', '.join(match.ambiguous)} can neither be adopted nor ruled out"
+            )
+        # Still working, or only ambiguous copies: not a clean "no".
+        last_read_clean = not (match.working or match.ambiguous)
     if not last_read_clean:
         return await _hold_uncertain_entry(signal, order, since)
     # A clean read right after a timeout is not proof the order never lands: NTPC, AXISBANK and
@@ -2530,6 +2527,17 @@ async def _auto_close_on_bad_fill(
         # which would read as "still open". The orderbook shows it, and gives the ledger the
         # real order id.
         close_result = await _find_recent_market_exit_fill(close_order, close_started) or close_result
+        if close_result.status == OrderStatus.TIMEOUT and close_result.message.startswith("ambiguous"):
+            # Only copies that can neither be adopted nor ruled out: a restored stop could reverse
+            # a close that has filled, and a resend could double it. The broker position decides.
+            own = await tracker.fetch_own_position(
+                signal.symbol, signal.strategy, close_order.exchange, close_order.product
+            )
+            if own != 0:
+                return await _hold_unconfirmed_bad_fill_close(
+                    signal, quantity, close_order, close_started, close_result, exit_type,
+                    reason, slippage_r, own,
+                )
     if close_result.status != OrderStatus.SUCCESS and await _position_still_open(signal, close_order):
         return await _restore_protection_after_failed_close(
             signal, quantity, entry_order_id, close_result, exit_type, reason, slippage_r,
@@ -2595,6 +2603,34 @@ async def _bad_fill_close_blocked_by_stop(
         signal, quantity, entry_order_id, blocked, exit_type, reason, slippage_r,
         sl_order_id, sl_cancelled=False,
     )
+
+
+async def _hold_unconfirmed_bad_fill_close(
+    signal, quantity: int, close_order, since: datetime, close_result, exit_type: str,
+    reason: str, slippage_r: float, own,
+) -> BadFillClose:
+    """The guard's close timed out and the book holds only ambiguous copies of it.
+
+    Neither adopted nor resent, and no stop is restored: the close may yet show as filled. The
+    order is held as unconfirmed (kind EXIT), which keeps the stop retry and any new exit or
+    entry off this position until the order-book sweeper settles it. The position stays tracked.
+    """
+    order_reconcile.mark_uncertain(
+        order_reconcile.UncertainOrder(
+            strategy=signal.strategy, symbol=signal.symbol, action=close_order.action.value,
+            quantity=quantity, since=since, kind="EXIT",
+        )
+    )
+    position = "unknown (broker unreachable)" if own is None else f"{own}"
+    message = (
+        f"Bad-fill close for {signal.symbol} [{signal.strategy}] {close_order.action.value} {quantity} "
+        f"UNCONFIRMED: {close_result.message}. Broker position: {position}. The stop was cancelled, "
+        "so the position may be UNPROTECTED. No order was resent and no stop placed. Check the "
+        "broker order book and position now; close or protect it by hand."
+    )
+    logger.critical(message)
+    await notifier.notify(message)
+    return BadFillClose(closed=False, exit_type=exit_type, reason=reason, slippage_r=slippage_r)
 
 
 async def _position_still_open(signal, close_order) -> bool:

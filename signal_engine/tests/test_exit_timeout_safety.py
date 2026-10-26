@@ -760,3 +760,50 @@ class TestLateDuplicateAfterAResend:
         not, or a partial exit's remaining shares would sit without a stop for ten minutes."""
         await self._resend()
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+
+
+def _entry_fill(oid, stamp, strategy="BREAKOUT-PY"):
+    return {"orderid": oid, "symbol": "KALYANKJIL", "action": "BUY", "quantity": 188,
+            "order_status": "complete", "timestamp": stamp, "strategy": strategy}
+
+
+async def _run_entry_recovery_booked(books, booked):
+    notify = AsyncMock()
+    with (
+        patch("signal_engine.main.settings", SETTINGS),
+        patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
+        patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set(booked))),
+        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
+        patch("signal_engine.main.tracker", MagicMock(_positions={})),
+    ):
+        return await _recover_ambiguous_entry_timeout(_entry_signal(), _entry_order()), notify
+
+
+@pytest.mark.asyncio
+class TestEntryRecoveryFailSafeMatching:
+    """Owner rule 2026-10-26: an unreadable or ambiguous stamp never identifies a timed-out
+    entry; it is held unconfirmed and alerted, never adopted (a wrong adoption places a stop on
+    a position that does not exist, or leaves a real one untracked)."""
+
+    async def test_a_malformed_stamp_holds_the_entry_unconfirmed(self):
+        result, notify = await _run_entry_recovery([[_entry_fill("E1", "garbage")]] * 3)
+        assert result is not None and result.status == OrderStatus.TIMEOUT
+        assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is not None
+        notify.assert_awaited()
+
+    async def test_a_previously_booked_fill_is_not_adopted(self):
+        stamp = datetime.now(IST).strftime("%H:%M:%S %d-%m-%Y")
+        result, _ = await _run_entry_recovery_booked([[_entry_fill("OLD", stamp)]] * 3, {"OLD"})
+        assert result is None or result.order_id != "OLD"
+
+    async def test_another_strategys_same_size_buy_is_not_adopted(self):
+        stamp = datetime.now(IST).strftime("%H:%M:%S %d-%m-%Y")
+        result, _ = await _run_entry_recovery([[_entry_fill("THEIRS", stamp, strategy="ORB")]] * 3)
+        assert result is None or result.order_id != "THEIRS"
+
+    async def test_a_delayed_flattrade_fill_after_the_send_is_adopted(self):
+        from datetime import timedelta
+
+        later = (datetime.now(IST) + timedelta(seconds=3)).strftime("%H:%M:%S %d-%m-%Y")
+        result, _ = await _run_entry_recovery([[], [_entry_fill("E1", later)], [_entry_fill("E1", later)]])
+        assert result is not None and result.order_id == "E1"
