@@ -54,7 +54,16 @@ def _filled_row(oid, symbol="LAURUSLABS", qty=74, status="complete", action="SEL
 WATCH_SECONDS, WATCH_POLL_SECONDS = 10.0, 5.0
 
 
-async def _run_exit(send_results, books, *, order=None, pos=None, own_qty=None):
+#: own_qty default: the broker shows exactly one correct exit of this order (the position proof
+#: an adoption needs since 2026-10-25). Tests of an unproven or reversed position pass their own.
+EXIT_SHOWN = object()
+
+
+async def _run_exit(send_results, books, *, order=None, pos=None, own_qty=EXIT_SHOWN):
+    order, pos = order or _exit_order(), pos or _pos()
+    if own_qty is EXIT_SHOWN:
+        sign = 1 if pos.direction == Direction.LONG else -1
+        own_qty = sign * (pos.quantity - order.quantity)
     send = AsyncMock(side_effect=send_results)
     fetch = AsyncMock(side_effect=books)
     notify = AsyncMock()
@@ -69,7 +78,7 @@ async def _run_exit(send_results, books, *, order=None, pos=None, own_qty=None):
         patch("signal_engine.main._EXIT_WATCH_POLL_SECONDS", WATCH_POLL_SECONDS),
         patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=AsyncMock())),
     ):
-        result = await _send_exit_with_retries(order or _exit_order(), pos or _pos())
+        result = await _send_exit_with_retries(order, pos)
     return result, send, notify
 
 
@@ -101,11 +110,14 @@ class TestExitTimeouts:
         result, send, _ = await _run_exit([TIMEOUT], [[], [], [_filled_row("F1")]])
         assert send.await_count == 1 and result.order_id == "F1"
 
-    async def test_duplicate_fills_are_adopted_once_and_alerted(self):
+    async def test_duplicate_fills_with_an_unknown_position_hold_and_name_every_copy(self):
+        """Policy updated 2026-10-25 (was: adopt F1 and alert, whatever the broker position).
+        An order is adopted as the confirmed exit only when the broker position shows it."""
         book = [_filled_row("F1"), _filled_row("F2"), _filled_row("F3")]
-        result, send, notify = await _run_exit([TIMEOUT], [book, book])
-        assert send.await_count == 1 and result.order_id == "F1"
-        assert "F2" in str(notify.await_args_list) and "F3" in str(notify.await_args_list)
+        result, send, notify = await _run_exit([TIMEOUT], [book, book], own_qty=None)
+        assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
+        alerts = str(notify.await_args_list)
+        assert all(oid in alerts for oid in ("F1", "F2", "F3")) and "UNPROTECTED" in alerts
 
     async def test_partial_fill_in_flight_is_not_resent(self):
         book = [_filled_row("P1", status="partially filled")]
@@ -234,7 +246,8 @@ class TestDuplicateExitIsClosed:
         theirs = _filled_row("W1")
         theirs["strategy"] = "BREAKINGTRADE-WATCHLIST"
         mine = _filled_row("F1")
-        result, send, notify = await _run_exit([TIMEOUT], [[theirs, mine]], own_qty=-74)
+        # one correct exit of this strategy's 74 leaves its share at 0 (W1 is the other strategy's)
+        result, send, notify = await _run_exit([TIMEOUT], [[theirs, mine]])
         assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "F1")
         assert send.await_count == 1 and "DUPLICATE" not in str(notify.await_args_list)
 
@@ -246,10 +259,12 @@ class TestDuplicateExitIsClosed:
 
     @pytest.mark.parametrize("own_qty", [None, 0, -100])
     async def test_a_position_that_does_not_prove_the_excess_is_alerted_not_traded(self, own_qty):
+        """Policy updated 2026-10-25: a position that does not show the fills also means the exit is
+        not adopted - it is held and alerted, and nothing more is sent."""
         book = [_filled_row("F1"), _filled_row("F2")]
         result, send, notify = await _run_exit([TIMEOUT], [book, book], own_qty=own_qty)
-        assert send.await_count == 1
-        assert "DUPLICATE FILLS" in str(notify.await_args_list)
+        assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
+        assert "F2" in str(notify.await_args_list)
 
     async def test_a_close_that_times_out_is_never_resent(self):
         book = [_filled_row("F1"), _filled_row("F2")]
@@ -609,3 +624,139 @@ class TestTimedOutExitIgnoresOtherFills:
         mine = {**_filled_row("MINE"), "timestamp": self._flattrade_stamp(datetime.now(IST))}
         result, send, _ = await self._run([mine])
         assert send.await_count == 1 and result.order_id == "MINE"
+
+
+@pytest.fixture(autouse=True)
+def _clean_late_duplicate_watches():
+    getattr(oc, "_late_duplicates", {}).clear()
+    yield
+    getattr(oc, "_late_duplicates", {}).clear()
+
+
+@pytest.mark.asyncio
+class TestAdoptionNeedsThePositionToShowTheExit:
+    """2026-10-25 owner rule: before an order is adopted as the confirmed exit, the broker position
+    (this strategy's share) must show it. Otherwise the exit is held, nothing is resent, and the
+    alert says the position is unprotected and names the candidate orders."""
+
+    async def test_a_filled_copy_with_the_position_unchanged_is_held(self):
+        result, send, notify = await _run_exit([TIMEOUT], [[_filled_row("F1")]], own_qty=74)
+        assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+        alerts = str(notify.await_args_list)
+        assert "F1" in alerts and "UNPROTECTED" in alerts
+
+    async def test_an_unreachable_broker_position_is_held(self):
+        result, send, _ = await _run_exit([TIMEOUT], [[_filled_row("F1")]], own_qty=None)
+        assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
+
+    async def test_one_ambiguous_fill_is_adopted_when_the_position_shows_the_exit(self):
+        odd = {**_filled_row("ODD"), "timestamp": "garbage"}
+        result, send, notify = await _run_exit([TIMEOUT], [[odd]] * 3)
+        assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "ODD")
+        assert send.await_count == 1
+
+    async def test_an_ambiguous_fill_with_an_unchanged_position_is_held_never_resent(self):
+        odd = {**_filled_row("ODD"), "timestamp": "garbage"}
+        result, send, notify = await _run_exit([TIMEOUT], [[odd]] * 3, own_qty=74)
+        assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
+        alerts = str(notify.await_args_list)
+        assert "ODD" in alerts and "UNPROTECTED" in alerts
+
+    async def test_two_ambiguous_fills_are_never_adopted(self):
+        odd = [{**_filled_row("ODD1"), "timestamp": "garbage"}, {**_filled_row("ODD2"), "timestamp": "x"}]
+        result, send, _ = await _run_exit([TIMEOUT], [odd] * 3)
+        assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
+
+    async def test_a_held_exit_adopts_on_a_later_attempt_only_with_the_position(self):
+        await _run_exit([TIMEOUT], [None] * 3)
+        result, send, _ = await _run_exit([], [[_filled_row("F1")]] * 3, own_qty=74)
+        assert send.await_count == 0 and result.status == OrderStatus.TIMEOUT
+        result, send, _ = await _run_exit([], [[_filled_row("F1")]] * 3)
+        assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "F1")
+
+
+async def _sweep_late(book, *, own_qty, position=None, booked=frozenset(), send_result=None):
+    from signal_engine.main import sweep_unresolved_orders
+
+    send = AsyncMock(return_value=send_result or TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
+    notify = AsyncMock()
+    tracker = MagicMock(find_position=MagicMock(return_value=position),
+                        fetch_own_position=AsyncMock(return_value=own_qty))
+    with (
+        patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=book)),
+        patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set(booked))),
+        patch("signal_engine.main.send_order", send),
+        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
+        patch("signal_engine.main.tracker", tracker),
+    ):
+        await sweep_unresolved_orders()
+    return send, notify
+
+
+@pytest.mark.asyncio
+class TestLateDuplicateAfterAResend:
+    """The original lands AFTER the 120 s watch and after the resend (a sandbox MARKET order can
+    keep the server busy for ~6 minutes: three quote attempts on a 120 s client timeout). The exit
+    path has already returned, so the sweeper watches for it and treats it as a duplicate."""
+
+    async def _resend(self):
+        ok = TradeResult(status=OrderStatus.SUCCESS, order_id="RESENT")
+        return await _run_exit([TIMEOUT, ok], [[]] * 5)
+
+    async def test_a_resend_after_a_clean_watch_starts_a_late_duplicate_watch(self):
+        result, send, _ = await self._resend()
+        assert send.await_count == 2 and result.order_id == "RESENT"
+        watch = oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS")
+        assert watch is not None and "RESENT" in watch.known_ids
+        assert (watch.action, watch.quantity, watch.pre_exit_quantity) == ("SELL", 74, 74)
+
+    async def test_an_adopted_exit_starts_no_late_duplicate_watch(self):
+        await _run_exit([TIMEOUT], [[_filled_row("F1")]])
+        assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is None
+
+    async def test_the_late_original_is_closed_when_tagged_and_the_position_shows_it(self):
+        await self._resend()
+        # long 74 exited twice: the strategy's share is -74
+        send, notify = await _sweep_late([_filled_row("RESENT"), _filled_row("LATE")], own_qty=-74)
+        sent = send.await_args.args[0]
+        assert (sent.action, sent.quantity, sent.strategy_tag) == (Action.BUY, 74, "BREAKOUT-PY")
+        assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is None
+        assert "LATE" in str(notify.await_args_list)
+
+    async def test_only_the_resent_order_on_the_book_sends_nothing_and_keeps_watching(self):
+        await self._resend()
+        send, _ = await _sweep_late([_filled_row("RESENT")], own_qty=0)
+        send.assert_not_awaited()
+        assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is not None
+
+    async def test_an_untagged_late_original_is_alerted_not_traded(self):
+        await self._resend()
+        late = {**_filled_row("LATE"), "strategy": ""}
+        send, notify = await _sweep_late([_filled_row("RESENT"), late], own_qty=-74)
+        send.assert_not_awaited()
+        assert "LATE" in str(notify.await_args_list)
+
+    async def test_an_ambiguous_late_copy_is_alerted_and_still_watched(self):
+        await self._resend()
+        odd = {**_filled_row("ODD"), "timestamp": "garbage"}
+        send, notify = await _sweep_late([_filled_row("RESENT"), odd], own_qty=-74)
+        send.assert_not_awaited()
+        assert "ODD" in str(notify.await_args_list)
+        assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is not None
+
+    async def test_an_expired_watch_is_dropped_without_a_book_read(self):
+        from dataclasses import replace
+
+        await self._resend()
+        w = oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS")
+        oc.watch_late_duplicate(replace(w, until=datetime(2000, 1, 1, tzinfo=IST)))
+        send, _ = await _sweep_late([_filled_row("RESENT"), _filled_row("LATE")], own_qty=-74)
+        send.assert_not_awaited()
+        assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is None
+
+    async def test_the_watch_never_blocks_a_stop_or_a_new_entry(self):
+        """A held order blocks the tracker's missing-stop retry and new entries; this watch must
+        not, or a partial exit's remaining shares would sit without a stop for ten minutes."""
+        await self._resend()
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None

@@ -57,9 +57,12 @@ _MAIN_SETTINGS = SimpleNamespace(
 )
 
 
-async def _run(*, market_exit, cancel_ok, stop_status="", book=None, sends=None, exit_book=None):
+async def _run(*, market_exit, cancel_ok, stop_status="", book=None, sends=None, exit_book=None, own_qty=0):
     """sends: results of main.send_order in turn (default one SUCCESS). exit_book: what the
-    exit reconcile reads from the order book (None = unreadable)."""
+    exit reconcile reads from the order book (None = unreadable). own_qty: this strategy's broker
+    position after the exit, which an adopted exit must show (default 0: the full exit filled)."""
+    from signal_engine import main as main_module
+
     tracker = PositionTracker(_make_engine())
     pos = _make_position(
         entry_price=541.80,
@@ -83,6 +86,7 @@ async def _run(*, market_exit, cancel_ok, stop_status="", book=None, sends=None,
         enter(patch("signal_engine.main.settings", _MAIN_SETTINGS))
         enter(patch("signal_engine.main.notifier", AsyncMock()))
         enter(patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set())))
+        enter(patch.object(main_module.tracker, "fetch_own_position", AsyncMock(return_value=own_qty)))
         enter(patch("signal_engine.main._LATE_FILL_WATCH_SECONDS", 0.0))
         enter(patch("signal_engine.order_reconcile.asyncio.sleep", AsyncMock()))
         place = enter(patch("signal_engine.tracker.place_sl_order", new_callable=AsyncMock, return_value=ok))

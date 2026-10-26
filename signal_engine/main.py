@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from loguru import logger
 
@@ -676,9 +677,12 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
         return held
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
     attempt_started = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
+    resent_after_absent = False  # a timed-out copy was proven absent and the exit went out again
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
         trade_result = await send_order(exit_order)
         if trade_result.status == OrderStatus.SUCCESS:
+            if resent_after_absent:
+                _watch_for_late_duplicate(exit_order, pos, attempt_started, trade_result.order_id)
             break
         logger.warning(
             f"EXIT attempt {_attempt}/{settings.bracket_tp_exit_retries} failed for "
@@ -691,12 +695,37 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
                     f"EXIT for {pos.symbol} confirmed live on the broker despite client "
                     f"timeout: id={outcome.order_id} (attempt {_attempt})"
                 )
+                if resent_after_absent:
+                    _watch_for_late_duplicate(exit_order, pos, attempt_started, outcome.order_id)
                 return outcome
             if outcome.status == OrderStatus.TIMEOUT:
                 return outcome
+            resent_after_absent = True  # the book stayed clean for the whole watch: resend
         if _attempt < settings.bracket_tp_exit_retries:
             await asyncio.sleep(settings.bracket_retry_delay)
     return trade_result
+
+
+def _watch_for_late_duplicate(exit_order, pos, since: datetime, order_id: str) -> None:
+    """After a resend, keep watching for the timed-out original: it can still land.
+
+    The 120 s late-fill watch does not bound the server: a sandbox MARKET order makes up to three
+    quote attempts on a client with a 120 s timeout, so a copy can complete minutes after it was
+    sent. If it does, the sweeper treats it as a duplicate of this exit (see _sweep_late_duplicates).
+    """
+    order_reconcile.watch_late_duplicate(
+        order_reconcile.LateDuplicateWatch(
+            strategy=pos.strategy, symbol=pos.symbol, exchange=pos.exchange, product=pos.product,
+            action=exit_order.action.value, quantity=exit_order.quantity, since=since,
+            until=datetime.now(IST) + timedelta(seconds=_LATE_DUPLICATE_WATCH_SECONDS),
+            known_ids=frozenset({order_id}) if order_id else frozenset(),
+            direction=pos.direction, pre_exit_quantity=pos.quantity,
+        )
+    )
+    logger.warning(
+        f"EXIT {exit_order.action.value} {exit_order.quantity} {pos.symbol} [{pos.strategy}] was resent "
+        f"(id={order_id}) after a timeout: watching {_LATE_DUPLICATE_WATCH_SECONDS:.0f}s for the original"
+    )
 
 
 def _booked_ids_today(symbol: str) -> frozenset[str]:
@@ -730,16 +759,12 @@ async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
     )
     if result.outcome == order_reconcile.ABSENT:
         result = await _watch_exit_for_late_fill(exit_order, pos, since)
-    if result.outcome == order_reconcile.FILLED:
-        order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
-        if result.duplicate_ids:
-            await _handle_duplicate_exit_fills(pos, exit_order.action.value, exit_order.quantity, result)
-        return TradeResult(
-            order_id=result.order_id, status=OrderStatus.SUCCESS, message="recovered after timeout"
-        )
     if result.outcome == order_reconcile.ABSENT:
         order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
         return TradeResult(status=OrderStatus.ERROR, message="timed out; no copy on the broker")
+    adopted, why = await _adopt_if_proven(pos, exit_order.action.value, exit_order.quantity, result)
+    if adopted is not None:
+        return adopted
     order_reconcile.mark_uncertain(
         order_reconcile.UncertainOrder(
             strategy=pos.strategy, symbol=pos.symbol, action=exit_order.action.value,
@@ -747,7 +772,55 @@ async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
             watch_until=since + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
         )
     )
-    return await _hold_uncertain_exit(exit_order, pos, result.detail)
+    return await _hold_uncertain_exit(exit_order, pos, why, _candidate_ids(result))
+
+
+def _candidate_ids(result) -> tuple[str, ...]:
+    """Every order the book showed that might be this exit, for the alert and the manual check."""
+    ids = ((result.order_id,) if result.order_id else ()) + tuple(result.duplicate_ids)
+    return ids + tuple(i for i in result.ambiguous_ids if i not in ids)
+
+
+async def _position_shows_exit(pos, quantity: int, copies: int) -> tuple[bool, int | None, int]:
+    """Does the broker show this strategy's share where `copies` fills of the exit would leave it?
+
+    None from the broker (unreachable) is never a proof.
+    """
+    sign = 1 if pos.direction == Direction.LONG else -1
+    expected = sign * (pos.quantity - quantity * copies)
+    own = await tracker.fetch_own_position(pos.symbol, pos.strategy, pos.exchange, pos.product)
+    return own is not None and own == expected, own, expected
+
+
+async def _adopt_if_proven(pos, action: str, quantity: int, result):
+    """Adopt an order as the confirmed exit only when the broker position shows it.
+
+    (TradeResult, "") when adopted; (None, why) when the exit must stay held. A completed copy is
+    adopted with its duplicates counted; one completed copy whose stamp could not be read is adopted
+    only when the position shows exactly one exit. Anything else is held: adopting an order that is
+    not this exit books a close that was never sent and leaves the position open with no stop.
+    """
+    if result.outcome == order_reconcile.FILLED:
+        candidate, copies, how = result.order_id, 1 + len(result.duplicate_ids), "recovered after timeout"
+    elif (
+        result.outcome == order_reconcile.UNCERTAIN
+        and len(result.ambiguous_ids) == 1
+        and len(result.ambiguous_complete_ids) == 1
+    ):
+        candidate, copies = result.ambiguous_complete_ids[0], 1
+        how = "recovered after timeout (order time unreadable; adopted on the broker position)"
+    else:
+        return None, result.detail
+    shown, own, expected = await _position_shows_exit(pos, quantity, copies)
+    if not shown:
+        return None, (
+            f"order(s) {list(_candidate_ids(result))} on the book, but the broker position "
+            f"{own} does not show the exit (expected {expected})"
+        )
+    order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
+    if result.duplicate_ids:
+        await _handle_duplicate_exit_fills(pos, action, quantity, result)
+    return TradeResult(order_id=candidate, status=OrderStatus.SUCCESS, message=how), ""
 
 
 async def _watch_exit_for_late_fill(exit_order, pos, since: datetime):
@@ -779,15 +852,18 @@ async def _watch_exit_for_late_fill(exit_order, pos, since: datetime):
     )
 
 
-async def _hold_uncertain_exit(exit_order, pos, detail: str) -> TradeResult:
+async def _hold_uncertain_exit(exit_order, pos, detail: str, order_ids: tuple = ()) -> TradeResult:
     message = (
         f"UNCERTAIN: {exit_order.action.value} {exit_order.quantity} {pos.symbol} "
         f"[{pos.strategy}] timed out and could not be confirmed ({detail}); not resent"
     )
-    logger.critical(f"EXIT {message}")
+    candidates = ", ".join(order_ids) if order_ids else "none found on the book"
+    logger.critical(f"EXIT {message}; candidate orders: {candidates}")
     await notifier.notify(
-        f"ORDER UNCONFIRMED: {message}. No further orders go out for this position until the "
-        "broker order book confirms it. Its stop may already be cancelled: check the broker now."
+        f"ORDER UNCONFIRMED: {message}. The stop was cancelled for this exit, so the position is "
+        f"UNPROTECTED. Candidate orders: {candidates}. No further orders go out for it until the "
+        f"order book confirms the exit. Check the broker order book and the {pos.symbol} position "
+        "now: if the exit filled, do nothing; if it did not, exit or place a stop by hand."
     )
     return TradeResult(status=OrderStatus.TIMEOUT, message=message)
 
@@ -873,8 +949,6 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
         strategy=pending.strategy,
         exclude=_booked_ids_today(pending.symbol),
     )
-    if result.outcome == order_reconcile.UNCERTAIN:
-        return await _hold_uncertain_exit(exit_order, pos, result.detail)
     if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, datetime.now(IST)):
         return await _hold_uncertain_exit(
             exit_order, pos, "the earlier copy may still land: inside its late-fill window"
@@ -883,16 +957,18 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
         order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
         logger.warning(f"EXIT {pos.symbol}: earlier unconfirmed exit is not on the broker; exiting afresh")
         return None
-    if pending.quantity != exit_order.quantity:
+    if pending.quantity != exit_order.quantity and _candidate_ids(result):
         # The earlier order closed a different size than this exit wants: booking it as this
         # exit would misstate the position. Keep the hold for a person.
         return await _hold_uncertain_exit(
-            exit_order, pos, f"earlier order {result.order_id} filled {pending.quantity}, not {exit_order.quantity}"
+            exit_order, pos,
+            f"earlier order {result.order_id or '?'} filled {pending.quantity}, not {exit_order.quantity}",
+            _candidate_ids(result),
         )
-    order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
-    if result.duplicate_ids:
-        await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
-    return TradeResult(order_id=result.order_id, status=OrderStatus.SUCCESS, message="recovered after timeout")
+    adopted, why = await _adopt_if_proven(pos, pending.action, pending.quantity, result)
+    if adopted is not None:
+        return adopted
+    return await _hold_uncertain_exit(exit_order, pos, why, _candidate_ids(result))
 
 
 async def _find_recent_market_exit_fill(order, since: datetime) -> TradeResult | None:
@@ -1974,6 +2050,9 @@ async def _recover_ambiguous_entry_timeout(
 #: How long a timed-out entry that a clean read could not find stays watched for a late fill.
 #: A policy candidate: the 2026-10-15 server stalls ran up to ~50s.
 _LATE_FILL_WATCH_SECONDS = 120.0
+#: How long, after an exit is resent, the timed-out original is still watched for (see
+#: _watch_for_late_duplicate): the server can take ~6 minutes on a sandbox MARKET order.
+_LATE_DUPLICATE_WATCH_SECONDS = 600.0
 #: How often a timed-out EXIT's late-fill watch re-reads the order book (the server is already slow).
 _EXIT_WATCH_POLL_SECONDS = 5.0
 
@@ -2137,6 +2216,54 @@ async def sweep_unresolved_orders() -> None:
                 await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
             continue
         await _restore_stop_after_absent_exit(pending)
+    await _sweep_late_duplicates(now)
+
+
+async def _sweep_late_duplicates(now: datetime) -> None:
+    """Look for a timed-out exit's original that landed after the exit was resent.
+
+    Found and DEFINITE (a readable stamp at or after the original send, not an order this engine
+    booked, not the resend): it is a duplicate of the exit, handled like any other (closed only
+    when the book tags it with this strategy and the broker position shows it). AMBIGUOUS (stamp
+    unreadable): alerted, never traded, and still watched. The watch ends after its window.
+    """
+    for w in order_reconcile.all_late_duplicate_watches():
+        if now >= w.until or w.since.date() != now.date():
+            logger.info(f"EXIT {w.symbol} [{w.strategy}]: late-duplicate watch ended, no late copy found")
+            order_reconcile.clear_late_duplicate_watch(w.strategy, w.symbol)
+            continue
+        if not order_reconcile.late_due(w, now, _SWEEP_INTERVAL_SECONDS):
+            continue
+        result = await order_reconcile.reconcile_timed_out_order(
+            symbol=w.symbol, action=w.action, quantity=w.quantity, since=w.since,
+            fetch_orderbook=fetch_orderbook, attempts=1, delay=0.0, strategy=w.strategy,
+            exclude=_booked_ids_today(w.symbol) | w.known_ids,
+        )
+        if result.outcome == order_reconcile.FILLED:
+            order_reconcile.clear_late_duplicate_watch(w.strategy, w.symbol)
+            snapshot = SimpleNamespace(
+                symbol=w.symbol, strategy=w.strategy, exchange=w.exchange, product=w.product,
+                direction=w.direction, quantity=w.pre_exit_quantity,
+            )
+            late = order_reconcile.Reconciliation(
+                order_reconcile.FILLED,
+                order_id=next(iter(w.known_ids), "?"),
+                duplicate_ids=(result.order_id, *result.duplicate_ids),
+                detail="the timed-out original landed after the resend",
+            )
+            await _handle_duplicate_exit_fills(snapshot, w.action, w.quantity, late)
+            continue
+        if result.ambiguous_ids and order_reconcile.late_alert_due(w, now, _UNRESOLVED_ALERT_SECONDS):
+            ids = ", ".join(result.ambiguous_ids)
+            logger.critical(
+                f"EXIT {w.symbol} [{w.strategy}]: possible late copy of the resent {w.action} {w.quantity}: "
+                f"{ids} (order time unreadable or at the send); not traded"
+            )
+            await notifier.notify(
+                f"POSSIBLE LATE DUPLICATE: {w.symbol} [{w.strategy}] {w.action} {w.quantity} was resent "
+                f"after a timeout and the book shows {ids}, whose time cannot prove it is the original. "
+                "Nothing was sent. Check the broker position now."
+            )
 
 
 async def _restore_stop_after_absent_exit(pending) -> None:

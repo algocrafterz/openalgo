@@ -6231,3 +6231,42 @@ the 2026-10-14 fix.
 
 **In plain terms:** when the broker is slow to confirm an exit, the engine waits up to two minutes for the first order
 instead of sending a second one, and closes an accidental extra fill only when it can prove the fill is its own.
+
+## Fail-safe order matching, position proof and late duplicates for timed-out exits (2026-10-25)
+
+**Symptom.** On a live Flattrade book the order-time filter did not work: `norentm` is "HH:MM:SS DD-MM-YYYY", and an
+unreadable stamp counted as "placed after the send", so any same-size order of the day could be adopted as a timed-out
+exit. A broker clock slightly behind ours could also stamp our own order a moment before the send. And the 120 s watch
+does not bound the server: a sandbox MARKET order can take minutes, so an original landing after a resend was caught
+only at EOD.
+
+**Change.**
+
+- `order_reconcile.py`: `parse_broker_stamp` also reads ISO stamps with a "T" or an offset (converted to IST).
+  `classify_book_detail` returns a `BookMatch` that splits matching rows into DEFINITE (readable stamp at or after the
+  send), AMBIGUOUS (stamp unreadable, or within `_SKEW_SECONDS` = 5 s before the send) and not ours; orders already
+  booked today and dead orders are skipped first. Any AMBIGUOUS row makes `reconcile_timed_out_order` return UNCERTAIN:
+  no resend, no adoption, logged. `Reconciliation` gains `ambiguous_ids` and `ambiguous_complete_ids`.
+- `main.py` `_adopt_if_proven` / `_position_shows_exit`: an order is adopted as the confirmed exit only when
+  `tracker.fetch_own_position` shows the strategy's share where the exit (and any duplicates) would leave it; an
+  unreachable broker is not a proof. One ambiguous completed copy may be adopted on that proof. Otherwise the exit is
+  held, and the alert says the position is UNPROTECTED and names every candidate order and the manual action.
+- `main.py` `_watch_for_late_duplicate` / `_sweep_late_duplicates`: after any resend that followed a proven-absent
+  timeout, the original is watched for 600 s (`_LATE_DUPLICATE_WATCH_SECONDS`) in its own registry, which never blocks
+  the stop retry or new entries. A definite late original is handled as a duplicate (closed only with the strategy tag
+  and the position proof); an ambiguous one is alerted and never traded.
+- Tests: `test_order_reconcile.py` (stamp formats, skew, unreadable stamps, the live Flattrade defect),
+  `test_exit_timeout_safety.py` (position proof, the late-duplicate lifecycle), `test_tracker_no_progress_stop_guard.py`
+  (its helper now stubs the broker position the proof reads).
+
+**Known, not fixed.**
+
+- The stop is still cancelled before the exit is sent, so a genuinely failed exit is unprotected for up to 120 s.
+  Converting the resting stop to a market order is not validated on the sandbox (no price-type change in
+  `modify_order`) or on Flattrade.
+- With a broker whose stamps are always unreadable, every timed-out exit or entry on a symbol stays held for the day,
+  alerted. That is the fail-safe direction, not a fix.
+
+**In plain terms:** when the engine cannot tell from the order's time whether an order is its own, it no longer guesses;
+it only accepts an order as its exit when the broker's position agrees, and it keeps watching for a slow first order
+after it resends one.
