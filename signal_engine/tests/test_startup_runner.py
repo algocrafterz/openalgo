@@ -81,6 +81,10 @@ class TestStartRunnerService:
         kw = start.await_args.kwargs
         assert kw["dispatch"] is dispatch and kw["trade_mode"] == "analyze"
         assert kw["time_exit"] == (14, 45) and kw["stale_limit_s"] == 60 and kw["product"] == "MIS"
+        # Entries stop on any halt; the runner's exits stop only on a mode flip.
+        assert kw["halted"] is startup.mode_guard.is_halted
+        assert kw["exits_halted"] is startup.mode_guard.mode_halted
+        assert kw["failure_alert"] is startup._runner_failure_alert
 
     @pytest.mark.asyncio
     async def test_warm_up_exclusions_are_alerted_through_the_notifier(self):

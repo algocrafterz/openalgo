@@ -868,8 +868,14 @@ def fetch_strategy_closes(strategy: str, trade_mode: str, day: str) -> dict[str,
     return out
 
 
-def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
+def fetch_last_entry_trade(
+    symbol: str, strategy: str, include_unconfirmed: bool = False
+) -> dict | None:
     """Look up the most recent SUCCESS entry trade for symbol+strategy on today (IST).
+
+    With include_unconfirmed, a TIMEOUT entry row is returned when there is no SUCCESS row: an
+    entry whose response never arrived may still have filled (NTPC 2026-10-15), and a restarted
+    engine that finds a broker position nothing else explains must be able to adopt it.
 
     Used by the engine-restart recovery path to recover entry/SL/TP context
     when the in-memory tracker has been wiped. Only returns LONG/SHORT entries
@@ -886,13 +892,13 @@ def fetch_last_entry_trade(symbol: str, strategy: str) -> dict | None:
             FROM trades
             WHERE upper(symbol) = upper(?)
               AND upper(strategy) = upper(?)
-              AND status = 'SUCCESS'
+              AND (status = 'SUCCESS' OR (? = 1 AND status = 'TIMEOUT'))
               AND direction IN ('LONG', 'SHORT')
               AND date(executed_at) = ?
-            ORDER BY id DESC
+            ORDER BY (status = 'SUCCESS') DESC, id DESC
             LIMIT 1
             """,
-            (symbol, strategy, today),
+            (symbol, strategy, 1 if include_unconfirmed else 0, today),
         )
         row = cur.fetchone()
         if not row:

@@ -1,5 +1,6 @@
 """Tests for signal parser — RED phase first."""
 
+import pytest
 
 from signal_engine.parser import parse
 
@@ -116,6 +117,20 @@ class TestParseValidSignals:
 
 
 class TestParseInvalidSignals:
+    @pytest.mark.parametrize(
+        "entry,sl,tp",
+        [
+            ("nan", "nan", "nan"),
+            ("NaN", "99", "110"),
+            ("100", "99", "inf"),
+            ("100", "-inf", "110"),
+            ("Infinity", "99", "110"),
+        ],
+    )
+    def test_non_finite_price_rejected(self, entry, sl, tp):
+        text = f"ORB LONG\nSymbol: SBIN\nEntry: {entry}\nSL: {sl}\nTP: {tp}"
+        assert parse(text) is None
+
     def test_missing_symbol(self):
         text = "ORB LONG\nEntry: 2500\nSL: 2480\nTP: 2540"
         assert parse(text) is None

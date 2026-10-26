@@ -96,6 +96,34 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-25 13:38 — Exit safety: no selling into a fired stop, safer timeouts and time exit
+- **What changed:** Before it sells, the engine now checks with the broker whether the protective
+  stop has already sold some or all of the shares, and sells only what is still held. When a
+  network timeout hides an order's confirmation, the engine now matches it only to that exact
+  order, never to an earlier order of the same size. At the 14:45 time exit it first proves from
+  the broker's order list that the stops are cancelled, and only then closes.
+- **Entry:** Not affected.
+- **Exit (SL):** A stop is never left working beside an exit. If the time exit cannot prove a
+  stop is cancelled, it does not close that position: the stop stays in place and an urgent alert
+  asks for a manual close before the broker's own 15:00 square-off. If a "no-progress" exit (the
+  early close of a trade that is going nowhere) is rejected, the stop is put back at once.
+- **Exit (TP):** A target exit that arrives after the stop already fired sends nothing, or only
+  the shares still held. An exit whose confirmation timed out is never sent a second time.
+- **Consideration:** A skipped time exit can leave a position open after 14:45 until it is closed
+  by hand or by the broker (broker charges apply). Watch for "TIME EXIT SKIPPED" alerts. Profit
+  and loss is no longer distorted by a failed balance read.
+
+NOTE: `main._cancel_sl_before_exit` reads the stop's status when its cancel fails and flags a fill;
+the exit then uses the broker's own quantity (flat: book the stop, partly filled: exit the rest).
+`order_reconcile.parse_broker_stamp` reads sandbox and Flattrade (day-first) stamps, and every
+reconcile passes the strategy and today's booked order ids (`main._reconcile_scope`).
+`tracker._close_after_confirmed_cancel` gates each time-exit close on `_clear_working_orders`; a
+skipped strategy is neither swept nor booked and stays tracked. The no-progress market exit sends
+through `main._send_exit_with_retries` and restores the stop on a definite failure. A failed
+`fetch_realised_pnl` returns None and keeps the realised baseline. Built on the stop-lifecycle and
+exit-watch branches; their slot reservation enforces the open-position cap.
+
+
 ### 2026-09-18 02:02 — Fixed a duplicate watchlist call when a stock flickers off and back on a scan
 
 **What changed:** A stock could get flagged as a fresh watchlist call twice in one day if it

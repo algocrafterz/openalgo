@@ -1,5 +1,6 @@
 """Generic signal parser — converts raw Telegram text to Signal objects."""
 
+import math
 import re
 from typing import Optional
 
@@ -94,6 +95,10 @@ def _parse_fields(body_lines) -> dict | None:
         try:
             fields[field] = float(fields[field])
         except (ValueError, TypeError):
+            return None
+        # float() accepts "nan"/"inf"; every validator comparison is False for NaN,
+        # so a non-finite price would otherwise pass as a VALID signal.
+        if not math.isfinite(fields[field]):
             return None
     return fields
 

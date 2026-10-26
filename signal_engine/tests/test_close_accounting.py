@@ -390,7 +390,7 @@ class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
         tracker.register(pos)
         from signal_engine.models import OrderStatus, TradeResult
         with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
-             patch("signal_engine.tracker.send_order",
+             patch("signal_engine.main.send_order",
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
              patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)), \
              patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()):
@@ -465,7 +465,7 @@ class TestNoProgressExitBooksItsOwnFill:
         from signal_engine.models import OrderStatus, TradeResult
 
         with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
-             patch("signal_engine.tracker.send_order",
+             patch("signal_engine.main.send_order",
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
              patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=1024.40)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=281.00)), \
@@ -496,7 +496,7 @@ class TestNoProgressExitBooksItsOwnFill:
         from signal_engine.models import OrderStatus, TradeResult
 
         with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
-             patch("signal_engine.tracker.send_order",
+             patch("signal_engine.main.send_order",
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
              patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)), \
              patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()), \

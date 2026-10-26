@@ -29,6 +29,16 @@ from signal_engine.tests.test_main_characterization import (
 TIMEOUT = TradeResult(order_id="", status=OrderStatus.TIMEOUT, message="Request timed out")
 
 
+def _after_the_send(seconds=2):
+    """A broker stamp just after the entry's send: a real fill always carries one, and since
+    2026-10-26 only a readable stamp at or after the send identifies a timed-out entry."""
+    from datetime import datetime, timedelta
+
+    from signal_engine.timeutils import IST
+
+    return (datetime.now(IST) + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _entry_order(order_id, strategy="BREAKOUT-PY", **extra):
     return {
         "symbol": "RELIANCE",
@@ -37,6 +47,7 @@ def _entry_order(order_id, strategy="BREAKOUT-PY", **extra):
         "order_status": "complete",
         "orderid": order_id,
         "strategy": strategy,
+        "timestamp": _after_the_send(),
         **extra,
     }
 
@@ -105,6 +116,22 @@ class TestEntryTimeoutRecoveryIgnoresStaleOrders:
         with h.stack, _sized(h):
             await _handle_entry(_entry_signal(strategy="BREAKOUT-PY"))
         assert tracker.find_position("RELIANCE", "BREAKOUT-PY") is not None
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_timestamp_is_held_not_adopted(self):
+        """Owner rule 2026-10-26: without a readable stamp the row may be an earlier untracked
+        fill of the same size; the entry is held unconfirmed, not adopted."""
+        from signal_engine import order_reconcile
+
+        row = _entry_order("NOSTAMP", timestamp=None)
+        tracker, h = _timeout_harness([row])
+        try:
+            with h.stack, _sized(h):
+                await _handle_entry(_entry_signal(strategy="BREAKOUT-PY"))
+            assert tracker.find_position("RELIANCE", "BREAKOUT-PY") is None
+            assert order_reconcile.get_uncertain("BREAKOUT-PY", "RELIANCE") is not None
+        finally:
+            order_reconcile.clear_uncertain("BREAKOUT-PY", "RELIANCE")
 
 
 class TestRestartFallbackDoesNotTakeAnotherStrategysPosition:

@@ -100,7 +100,15 @@ class TestMissedStopSafetyExit:
         reconcile.assert_not_awaited()
 
     @pytest.mark.parametrize("label", ["TRAILING_STOP", None, "TP1"])
-    async def test_other_exits_are_unchanged_when_the_cancel_fails(self, label):
-        _, placed, reconcile = await _run(label, cancel_ok=False, broker_own=0)
-        placed.assert_awaited_once()  # existing behaviour: the exit is still sent
+    async def test_other_exits_still_go_out_when_the_cancel_fails_and_the_broker_holds(self, label):
+        _, placed, reconcile = await _run(label, cancel_ok=False, broker_own=-436)
+        placed.assert_awaited_once()  # the position is still open: the exit is sent
         reconcile.assert_not_awaited()
+
+    @pytest.mark.parametrize("label", ["TRAILING_STOP", None, "TP1"])
+    async def test_other_exits_send_nothing_when_the_cancel_fails_and_the_broker_is_flat(self, label):
+        """The stop's status is unknown and the broker is flat: the stop already closed it, and
+        an exit would open a reversed position. (2026-10-25: this used to send the exit.)"""
+        _, placed, reconcile = await _run(label, cancel_ok=False, broker_own=0)
+        placed.assert_not_awaited()
+        reconcile.assert_awaited_once()

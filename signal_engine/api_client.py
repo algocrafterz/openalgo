@@ -18,6 +18,7 @@ import httpx
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine.order_reconcile import BookMatch, classify_book_detail
 from signal_engine.timeutils import IST
 
 
@@ -184,19 +185,22 @@ async def fetch_funds_available() -> float | None:
         return None
 
 
-async def fetch_realised_pnl() -> float:
+async def fetch_realised_pnl() -> float | None:
     """Fetch day's realised P&L from funds endpoint.
 
-    Returns m2mrealized value or 0.0 on failure.
+    Returns m2mrealized value, or None when it cannot be read. A failed read is unknown, not
+    zero: booking 0.0 resets the realised baseline, and the next good read then books the whole
+    day's realised P&L as a single close.
     """
     try:
         data = await _post_json("funds", _auth())
         if data.get("status") != "success":
-            return 0.0
+            logger.error(f"Failed to fetch realised PnL: funds returned {data.get('status')!r}")
+            return None
         return float(data.get("data", {}).get("m2mrealized", 0))
     except Exception as e:
         logger.error(f"Failed to fetch realised PnL: {e}")
-        return 0.0
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -277,47 +281,36 @@ async def fetch_orderbook():
     return None
 
 
+def match_recent_complete_order(
+    book: list, symbol: str, action: str, quantity: int, since: datetime,
+    exclude: frozenset = frozenset(), strategy: str = "",
+) -> BookMatch:
+    """This symbol's same-side, same-size orders, split by how sure the match to a send is.
+
+    Only `complete` (a readable stamp at or after `since`) identifies the order. `ambiguous`
+    holds copies whose stamp is unreadable or a few seconds before `since`: they can neither be
+    adopted nor ruled out, so a caller holds the order as unconfirmed rather than adopting or
+    resending (owner rule 2026-10-26). Ids in `exclude` (already booked) are skipped, and with
+    `strategy` an order tagged for another strategy is not a copy.
+    """
+    return classify_book_detail(book, symbol, action, quantity, since, strategy, exclude)
+
+
 def find_recent_complete_order_id(
     book: list, symbol: str, action: str, quantity: int, since: datetime,
     exclude: frozenset = frozenset(),
 ) -> str:
-    """Id of the first COMPLETE order on `symbol` with this action and quantity placed at or
-    after `since`, or "" when there is none.
+    """Id of the first COMPLETE order on `symbol` with this action and quantity that is a
+    DEFINITE match (readable stamp at or after `since`), or "" when there is none.
 
     A filled MARKET order shows "complete" immediately, so recency is the only way to avoid
     adopting an unrelated earlier fill of the same symbol, action and size. `since` should
     carry no sub-second part: broker timestamps are whole seconds, so a fill stamped in the
-    same second as the send would otherwise read as older and be skipped. An unparseable
-    timestamp does not discard a match. Ids in `exclude` are skipped, so two positions with the
-    same symbol, side and size cannot both adopt one order.
+    same second as the send would otherwise read as older and be skipped. An unreadable stamp
+    never identifies the order; use match_recent_complete_order to see such copies.
     """
-    for o in book:
-        if not isinstance(o, dict):
-            continue
-        if str(o.get("symbol", "")).upper() != symbol.upper():
-            continue
-        if str(o.get("action", "")).upper() != action:
-            continue
-        try:
-            if int(o.get("quantity", 0)) != quantity:
-                continue
-        except (TypeError, ValueError):
-            continue
-        status = str(o.get("order_status") or o.get("status") or "").lower()
-        if status != "complete":
-            continue
-        ts_raw = o.get("timestamp") or o.get("order_timestamp")
-        if ts_raw:
-            try:
-                ts = datetime.strptime(str(ts_raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
-                if ts < since:
-                    continue
-            except ValueError:
-                pass  # unparseable timestamp - fall through rather than discard a real match
-        order_id = str(o.get("orderid") or o.get("order_id") or "")
-        if order_id and order_id not in exclude:
-            return order_id
-    return ""
+    match = match_recent_complete_order(book, symbol, action, quantity, since, exclude)
+    return match.complete[0] if match.complete else ""
 
 
 async def close_all_positions(strategy: str) -> bool:

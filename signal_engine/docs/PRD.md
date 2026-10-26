@@ -6157,3 +6157,116 @@ Material limitations (all recorded in the quality table and in the embedded asse
 - The 2027 NSE trading calendar is not loaded. The backfill stops with an explicit message until the official holiday circular is available. Angel One top-ups for COCHINSHIP and GVT&D are manual.
 
 Verification before commit: `signal_engine/scripts/run_full_tests.sh` passed (8,750 passed, 1 skipped); `snapshot verify` is OK for all intraday versions, and both `-002` versions read back correctly through `PublishedSource.intraday`.
+## Stop lifecycle, entry slot reservation and late entry fills: parked on a branch (2026-10-19)
+
+**Status.** Committed on branch `wip/stop-lifecycle-slot-cap-late-entry` (not merged, not deployed). The running engine
+uses the committed behavior of its own branch. Evidence so far is unit and mocked tests only; no live incident has
+exercised these fixes. On 2026-10-19 all 18 order timeouts were resolved by the existing reconciliation, with no stop
+timeouts, duplicate stops, over-cap entries or late fills, so that day neither proves nor disproves the fixes.
+
+**Causes (2026-10-15 paper run).**
+
+- 09:47: a server stall made INFY and LICI stop submissions time out client-side; nine and five SL-M orders then landed
+  late. The cleanup cancels also timed out, the log still said "cancelled", and nothing looked again.
+- 09:51: two BREAKOUT-PY entries in one cycle both passed a cap of 1 because the slot was taken only after the order round trip.
+- 11:16 and later: NTPC, AXISBANK and KOTAKBANK entries filled after the three timeout reads (about 6 s) found a clean
+  book and wrote the entry off, so they were never tracked or protected.
+
+**Change.**
+
+- `executor.py`: `StopSweep` reports `confirmed_cancelled` (a fresh book read shows it) and `unresolved`; `cancelled` means
+  "request sent" only. Unproven duplicates stay on a retried pending list with escalation; the tracker audits the book for
+  exact-twin stops so a restart finds them; the last live stop is never removed; adopting one stop removes its twins; a stop
+  that already fired is adopted; submissions are serialised per strategy/symbol/side; timeouts are capped at 2 unknown
+  sends per cycle with a reconcile-first hold (25 s), and an exhausted position is reconciled and retried every 5 minutes.
+  Confirmed failures still retry to exhaustion. These numbers are untuned constants.
+- `risk.py`, `main.py`: a slot is reserved at the risk gate and released just before `record_trade`; reservations count
+  against the position cap, the daily trade cap and the symbol and sector limits.
+- `main.py`, `order_reconcile.py`, `db.py`, `startup.py`: an entry whose timeout reads were clean is watched for 120 s; a
+  fill that lands is adopted with its stop and the entry is never resent. While an entry is watched (or held on an
+  unreadable book) its slot stays reserved under a per-strategy/symbol watch token, so a competing entry cannot take it and
+  an adopted late fill cannot leave the account over its cap; the reservation is released when the watch ends and becomes
+  the recorded trade on adoption. After a restart a broker position explained only by a TIMEOUT entry row (same side and
+  exact quantity) is restored; that restore does not re-reserve a slot.
+- Replaced policy tests: `test_executor.py` (was retry-to-exhaustion) and `test_exit_timeout_safety.py` (was "a clean book is
+  a genuine failure").
+
+**Known, not fixed.**
+
+- A watched entry holds its slot for up to 120 s (longer on an unreadable book), so a legitimate competing signal in that
+  window can be declined at the cap.
+- A broker stall longer than the reconcile windows can still land stops after the engine gives up.
+- `startup._lookup_entry_legs` and `_lookup_entry_trade` compare `str(Direction)`, which is `"Direction.LONG"` on Python 3.12,
+  so the same-side split and quantity scoring never match. Separate bug, left unchanged pending approval.
+
+**In plain terms:** when the broker is slow, the engine now checks what the broker really holds before sending another stop
+or entry, never removes the last stop on a position, and keeps looking for an entry that fills late. It is saved on a
+side branch and not running.
+
+## Timed-out exits: 120 s late-fill watch and duplicate close (2026-10-25)
+
+**Symptom.** An exit that timed out client-side was resent after about 6 s of clean order-book reads, while the server was
+still processing the first copy (sandbox MARKET orders took 10 to 125 s). Both filled and the extra opened a reverse
+position nothing tracked: 8 cases on 6 sessions 2026-10-01 to 10-23, including TVSMOTOR 10-22 and SUNPHARMA 10-23 after
+the 2026-10-14 fix.
+
+**Change.**
+
+- `main.py` `_reconcile_exit` / `_watch_exit_for_late_fill`: a clean book after a timeout is read every 5 s until 120 s
+  after the send. A copy that lands is adopted; only a book still clean at the end allows a resend. A held exit carries
+  `watch_until`, and `_settle_prior_uncertain_exit` and `sweep_unresolved_orders` hold while it is open.
+- `main.py` `_handle_duplicate_exit_fills` (replaces `_alert_duplicate_fills`): extra completed copies are closed with one
+  opposite MARKET order, never resent, only when the book tags every copy with this strategy and the broker position shows
+  exactly the excess. Live books carry no strategy tag, so live only alerts. The sweeper now handles duplicates too.
+- `order_reconcile.py` `classify_book` / `reconcile_timed_out_order` take `strategy=`: a row tagged for another strategy is
+  neither adopted nor counted as a duplicate (BREAKINGTRADE and -WATCHLIST shared 49 positions). All exit and entry
+  reconcile calls pass it.
+
+**Known, not fixed.**
+
+- The stop is cancelled before the exit is sent, so an exit that genuinely failed is unprotected for up to 120 s (alerted).
+- The watch does not bound the server: an original landing after a resend is caught only at EOD. A follow-up
+  (fail-safe matching, position proof, 600 s late-duplicate watch) is pending on a later branch.
+- On a live Flattrade book the order-time filter cannot read `norentm` ("HH:MM:SS DD-MM-YYYY"); fixed on a later branch.
+
+**In plain terms:** when the broker is slow to confirm an exit, the engine waits up to two minutes for the first order
+instead of sending a second one, and closes an accidental extra fill only when it can prove the fill is its own.
+
+## Fail-safe order matching, position proof and late duplicates for timed-out exits (2026-10-25)
+
+**Symptom.** On a live Flattrade book the order-time filter did not work: `norentm` is "HH:MM:SS DD-MM-YYYY", and an
+unreadable stamp counted as "placed after the send", so any same-size order of the day could be adopted as a timed-out
+exit. A broker clock slightly behind ours could also stamp our own order a moment before the send. And the 120 s watch
+does not bound the server: a sandbox MARKET order can take minutes, so an original landing after a resend was caught
+only at EOD.
+
+**Change.**
+
+- `order_reconcile.py`: `parse_broker_stamp` also reads ISO stamps with a "T" or an offset (converted to IST).
+  `classify_book_detail` returns a `BookMatch` that splits matching rows into DEFINITE (readable stamp at or after the
+  send), AMBIGUOUS (stamp unreadable, or within `_SKEW_SECONDS` = 5 s before the send) and not ours; orders already
+  booked today and dead orders are skipped first. Any AMBIGUOUS row makes `reconcile_timed_out_order` return UNCERTAIN:
+  no resend, no adoption, logged. `Reconciliation` gains `ambiguous_ids` and `ambiguous_complete_ids`.
+- `main.py` `_adopt_if_proven` / `_position_shows_exit`: an order is adopted as the confirmed exit only when
+  `tracker.fetch_own_position` shows the strategy's share where the exit (and any duplicates) would leave it; an
+  unreachable broker is not a proof. One ambiguous completed copy may be adopted on that proof. Otherwise the exit is
+  held, and the alert says the position is UNPROTECTED and names every candidate order and the manual action.
+- `main.py` `_watch_for_late_duplicate` / `_sweep_late_duplicates`: after any resend that followed a proven-absent
+  timeout, the original is watched for 600 s (`_LATE_DUPLICATE_WATCH_SECONDS`) in its own registry, which never blocks
+  the stop retry or new entries. A definite late original is handled as a duplicate (closed only with the strategy tag
+  and the position proof); an ambiguous one is alerted and never traded.
+- Tests: `test_order_reconcile.py` (stamp formats, skew, unreadable stamps, the live Flattrade defect),
+  `test_exit_timeout_safety.py` (position proof, the late-duplicate lifecycle), `test_tracker_no_progress_stop_guard.py`
+  (its helper now stubs the broker position the proof reads).
+
+**Known, not fixed.**
+
+- The stop is still cancelled before the exit is sent, so a genuinely failed exit is unprotected for up to 120 s.
+  Converting the resting stop to a market order is not validated on the sandbox (no price-type change in
+  `modify_order`) or on Flattrade.
+- With a broker whose stamps are always unreadable, every timed-out exit or entry on a symbol stays held for the day,
+  alerted. That is the fail-safe direction, not a fix.
+
+**In plain terms:** when the engine cannot tell from the order's time whether an order is its own, it no longer guesses;
+it only accepts an order as its exit when the broker's position agrees, and it keeps watching for a slow first order
+after it resends one.

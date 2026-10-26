@@ -311,8 +311,19 @@ class TestPlaceSlOrderAmbiguousTimeout:
         send_mock.assert_awaited_once()  # recovered on the first TIMEOUT — no further retries
 
     @pytest.mark.asyncio
-    async def test_timeout_with_no_matching_order_still_exhausts_retries(self):
-        """No resting order found -> unchanged behaviour: retry to exhaustion, then fail."""
+    async def test_timeout_with_no_matching_order_stops_after_the_unknown_send_cap(self):
+        """Policy updated 2026-10-15 (was: retry a timed-out stop to exhaustion).
+
+        A timeout is an UNKNOWN outcome, not a failure: INFY ended with nine live stops because
+        five unknown sends per call were each followed by more. Now one cycle sends at most
+        _MAX_UNKNOWN_SENDS of them, leaves the key flagged so the next cycle reconciles with the
+        order book BEFORE any resend, and keeps the key on the watch list. The guarantee that a
+        position is not abandoned is pinned in test_stop_pending_duplicates.py: confirmed
+        failures still retry to exhaustion, the next cycle sends again after the grace window,
+        and the tracker keeps recovering an exhausted position (test_tracker_stop_recovery.py).
+        """
+        from signal_engine import executor
+
         timeout_result = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
         send_mock = AsyncMock(return_value=timeout_result)
         test_settings = dataclasses.replace(
@@ -333,7 +344,9 @@ class TestPlaceSlOrderAmbiguousTimeout:
                 strategy_tag="ORB",
             )
         assert result.status == OrderStatus.TIMEOUT
-        assert send_mock.await_count == 3
+        assert send_mock.await_count == executor._MAX_UNKNOWN_SENDS
+        assert ("ORB", "RELIANCE", "SELL") in executor._UNCONFIRMED_SL
+        assert ("ORB", "RELIANCE", "SELL") in executor._PENDING_DUPLICATE_STOPS
 
     @pytest.mark.asyncio
     async def test_orderbook_match_requires_same_quantity(self):

@@ -102,6 +102,54 @@ class TestAutoCloseOnBadFill:
         send_order.assert_not_awaited()
 
 
+async def _run_guard_with_stop(stop_status, stop_fill=None):
+    """A bad fill whose stop refuses the cancel; returns (outcome, send_order, notifier, risk)."""
+    settings = SimpleNamespace(exchange="NSE", product="MIS", max_entry_slippage_r=0.5)
+    send_order = AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
+    notifier = MagicMock()
+    notifier.notify_order_rejected = AsyncMock()
+    notifier.notify_exit_failed = AsyncMock()
+    risk = MagicMock()
+    with (
+        patch("signal_engine.main.settings", settings),
+        patch("signal_engine.main.send_order", send_order),
+        patch("signal_engine.main.cancel_order", AsyncMock(return_value=False)),
+        patch("signal_engine.main.fetch_order_status", AsyncMock(return_value=stop_status)),
+        patch("signal_engine.main.notifier", notifier),
+        patch("signal_engine.main.risk_engine", risk),
+        patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=stop_fill)),
+        patch("signal_engine.main._book_realised_pnl_delta", AsyncMock(return_value=(0.0, 0.0))),
+    ):
+        outcome = await _auto_close_on_bad_fill(_signal(), 147, 2091.0, "SL1")
+    return outcome, send_order, notifier, risk
+
+
+@pytest.mark.asyncio
+class TestBadFillStopCancelFails:
+    """The stop could not be cancelled: the close must not sell into it or past it."""
+
+    async def test_filled_stop_is_booked_as_the_close_and_nothing_is_sent(self):
+        outcome, send_order, _, risk = await _run_guard_with_stop("complete", stop_fill=2079.0)
+        send_order.assert_not_awaited()
+        assert outcome.closed is True
+        assert outcome.close_order_id == "SL1"
+        assert outcome.exit_fill_price == 2079.0
+        assert outcome.pnl == pytest.approx((2079.0 - 2091.0) * 147)
+        risk.record_close.assert_called_once()
+
+    async def test_working_stop_keeps_the_position_tracked_under_it(self):
+        outcome, send_order, notifier, _ = await _run_guard_with_stop("trigger pending")
+        send_order.assert_not_awaited()
+        assert outcome.closed is False
+        assert outcome.replacement_sl_order_id == "SL1"
+        notifier.notify_exit_failed.assert_awaited_once()
+
+    async def test_stop_already_cancelled_still_closes(self):
+        outcome, send_order, _, _ = await _run_guard_with_stop("cancelled")
+        send_order.assert_awaited_once()
+        assert outcome.closed is True
+
+
 class TestStopBreachedFill:
     """Owner decision 2026-10-08: a long filled at or below its stop is a bad fill of its own kind."""
 
@@ -113,3 +161,112 @@ class TestStopBreachedFill:
         verdict = main_mod.trade_policy.bad_fill(1, sig.entry, sig.sl, sig.tp, sig.sl - 0.5, 0.5)
         assert verdict.violated and verdict.kind == main_mod.trade_policy.STOP_BREACHED
         assert main_mod.EXIT_ENTRY_REJECTED_STOP_BREACHED == "ENTRY_REJECTED_STOP_BREACHED"
+
+
+# --------------------------------------------------------------------------
+# Bad-fill close that times out: only a definite copy is adopted (owner rule 2026-10-26)
+# --------------------------------------------------------------------------
+
+
+def _close_row(stamp, order_id="C9"):
+    return {"orderid": order_id, "symbol": "TCS", "action": "SELL", "quantity": 147,
+            "order_status": "complete", "timestamp": stamp, "strategy": "BREAKOUT"}
+
+
+async def _run_close_timeout(book, own_qty):
+    """A bad fill whose close order times out; the order book and broker position are as given."""
+    from signal_engine import order_reconcile
+
+    order_reconcile.clear_uncertain("BREAKOUT", "TCS")
+    settings = SimpleNamespace(exchange="NSE", product="MIS", max_entry_slippage_r=0.5)
+    notifier = MagicMock()
+    notifier.notify = AsyncMock()
+    notifier.notify_order_rejected = AsyncMock()
+    notifier.notify_exit_failed = AsyncMock()
+    risk = MagicMock()
+    tracker = MagicMock()
+    tracker.fetch_own_position = AsyncMock(return_value=own_qty)
+    bracket = AsyncMock(return_value="SL-NEW")
+    timeout = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+    with (
+        patch("signal_engine.main.settings", settings),
+        patch("signal_engine.main.send_order", AsyncMock(return_value=timeout)),
+        patch("signal_engine.main.cancel_order", AsyncMock(return_value=True)),
+        patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=book)),
+        patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set())),
+        patch("signal_engine.main.tracker", tracker),
+        patch("signal_engine.main.notifier", notifier),
+        patch("signal_engine.main.risk_engine", risk),
+        patch("signal_engine.main._place_entry_bracket", bracket),
+        patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=None)),
+        patch("signal_engine.main._book_realised_pnl_delta", AsyncMock(return_value=(0.0, 0.0))),
+    ):
+        outcome = await _auto_close_on_bad_fill(_signal(), 147, 2091.0, "SL1", "E1")
+    held = order_reconcile.get_uncertain("BREAKOUT", "TCS")
+    order_reconcile.clear_uncertain("BREAKOUT", "TCS")
+    return outcome, bracket, notifier, risk, held
+
+
+def _now_stamp(seconds=0.0):
+    from datetime import datetime, timedelta
+
+    from signal_engine.timeutils import IST
+
+    return (datetime.now(IST) + timedelta(seconds=seconds)).strftime("%H:%M:%S %d-%m-%Y")
+
+
+@pytest.mark.asyncio
+class TestBadFillCloseTimeout:
+    async def test_an_ambiguous_copy_with_the_position_open_is_held_not_reprotected(self):
+        outcome, bracket, notifier, _, held = await _run_close_timeout(
+            [_close_row("not a time")], own_qty=147
+        )
+        assert outcome.closed is False and outcome.replacement_sl_order_id == ""
+        bracket.assert_not_awaited()  # a stop beside a close that may land would reverse it
+        assert held is not None and held.kind == "EXIT" and held.quantity == 147
+        alert = " ".join(str(c.args[0]) for c in notifier.notify.await_args_list)
+        assert "UNPROTECTED" in alert and "C9" in alert
+
+    async def test_an_ambiguous_copy_with_the_broker_unreachable_is_held(self):
+        outcome, bracket, _, _, held = await _run_close_timeout([_close_row("not a time")], own_qty=None)
+        assert outcome.closed is False and held is not None
+        bracket.assert_not_awaited()
+
+    async def test_an_ambiguous_copy_with_the_broker_flat_is_booked_closed(self):
+        outcome, bracket, _, risk, held = await _run_close_timeout([_close_row("not a time")], own_qty=0)
+        assert outcome.closed is True and held is None
+        risk.record_close.assert_called_once()
+        bracket.assert_not_awaited()
+
+    async def test_a_definite_flattrade_copy_is_adopted(self):
+        outcome, _, _, _, held = await _run_close_timeout([_close_row(_now_stamp(2))], own_qty=0)
+        assert outcome.closed is True and outcome.close_order_id == "C9" and held is None
+
+    async def test_no_copy_with_the_position_open_is_watched_not_reprotected(self):
+        """Owner decision 2026-10-26 (was: the stop came back after one clean read). The close may
+        still land: hold it for the late-fill watch, no stop, alert UNPROTECTED at once."""
+        outcome, bracket, notifier, _, held = await _run_close_timeout([], own_qty=147)
+        assert outcome.closed is False and outcome.replacement_sl_order_id == ""
+        bracket.assert_not_awaited()
+        assert held is not None and held.kind == "EXIT" and held.watch_until is not None
+        alert = " ".join(str(c.args[0]) for c in notifier.notify.await_args_list)
+        assert "UNPROTECTED" in alert and "late fill" in alert
+
+    async def test_no_copy_with_the_broker_flat_is_booked_closed(self):
+        outcome, bracket, _, risk, held = await _run_close_timeout([], own_qty=0)
+        assert outcome.closed is True and held is None
+        bracket.assert_not_awaited()
+
+    async def test_no_copy_with_the_broker_unreachable_is_watched(self):
+        outcome, bracket, _, _, held = await _run_close_timeout([], own_qty=None)
+        assert outcome.closed is False and held is not None
+        bracket.assert_not_awaited()
+
+    async def test_an_unreadable_book_is_held_without_a_watch_end(self):
+        """An unreadable book is no evidence either way: held with no window to run out."""
+        outcome, bracket, notifier, _, held = await _run_close_timeout(None, own_qty=147)
+        assert outcome.closed is False
+        bracket.assert_not_awaited()
+        assert held is not None and held.watch_until is None
+        alert = " ".join(str(c.args[0]) for c in notifier.notify.await_args_list)
+        assert "unreadable" in alert and "UNPROTECTED" in alert
