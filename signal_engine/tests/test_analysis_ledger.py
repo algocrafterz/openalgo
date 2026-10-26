@@ -282,3 +282,42 @@ def test_a_broker_close_that_does_not_add_up_is_still_reported(tmp_path):
     positions = _reliance_day(tmp_path, close_qty=50)
     assert any(FLAG_UNMATCHED_FILL in p.flags for p in positions)
     assert any(FLAG_NO_FILL in p.flags for p in positions if p.strategy)
+
+
+@pytest.mark.parametrize("exit_type", ["NO-PROGRESS", "TRAILING_STOP", "INITIAL_STOP_SAFETY"])
+def test_tracker_close_reason_comes_from_its_exit_types(tmp_path, exit_type):
+    """2026-10-24 review: tracker closes carry their reason only in context.exit_types, so
+    NO-PROGRESS and TRAILING_STOP exits (most ORB, BREAKINGTRADE and EVWAP-EARLY-PY exits)
+    reported as '?' and every exit-reason breakdown hid them."""
+    tracker_close = _ev("EXIT", oid="-TRACKER-", at="2026-08-28T11:20:00+05:30", fill=101.0)
+    tracker_close["raw_message"] = f"tracker close: {exit_type}"
+    tracker_close["context"] = json.dumps({"pnl": 10.0, "exit_types": [exit_type]})
+    db = _make_db(tmp_path, [_ev("LONG", oid="E1", fill=100.0), tracker_close])
+    (p,) = build_ledger(load_engine_events(db_path=db), {})
+    assert p.exit_reasons == exit_type
+
+
+def test_cumulative_exit_types_name_each_leg_once(tmp_path):
+    """The closing row repeats the position's history (2026-10-01 RELIANCE BREAKOUT)."""
+
+    def leg(oid, at, qty, types):
+        e = _ev("EXIT", oid=oid, at=at, qty=qty, fill=104.0)
+        e["context"] = json.dumps({"exit_types": types})
+        return e
+
+    db = _make_db(tmp_path, [
+        _ev("LONG", qty=30, oid="E1", fill=100.0),
+        leg("X1", "2026-08-28T10:00:00+05:30", 10, ["TP1"]),
+        leg("X2", "2026-08-28T10:30:00+05:30", 10, ["TP2"]),
+        leg("-TRACKER-", "2026-08-28T11:00:00+05:30", 10, ["TP1", "TP2", "TP3"]),
+    ])
+    (p,) = build_ledger(load_engine_events(db_path=db), {})
+    assert p.exit_reasons == "TP1+TP2+TP3"
+
+
+def test_an_explicit_reason_still_wins_over_exit_types(tmp_path):
+    close = _ev("EXIT", oid="X1", at="2026-08-28T10:30:00+05:30", reason="TP1", fill=104.0)
+    close["context"] = json.dumps({"reason": "TP1", "exit_types": ["TIME"]})
+    db = _make_db(tmp_path, [_ev("LONG", oid="E1", fill=100.0), close])
+    (p,) = build_ledger(load_engine_events(db_path=db), {})
+    assert p.exit_reasons == "TP1"

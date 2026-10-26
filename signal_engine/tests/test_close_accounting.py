@@ -528,3 +528,32 @@ class TestExitTypeNamesTheRealCause:
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
             await tracker.check_positions()
         assert notify.await_args.kwargs["exit_types"] == ["NO-PROGRESS"]
+
+    async def _flat_close(self, exit_types):
+        risk = MagicMock()
+        tracker = PositionTracker(risk)
+        pos = _pos("SBIN", 10, 800.0)
+        pos.exit_types = list(exit_types)
+        tracker.register(pos)
+        book = [{"symbol": "SBIN", "quantity": 0, "ltp": 800.0, "today_realized_pnl": 0.0}]
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
+             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=0.0)), \
+             patch("signal_engine.notifier.notify_position_closed", AsyncMock()) as notify, \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch.object(tracker, "_position_too_young", return_value=False), \
+             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
+            await tracker.check_positions()
+        return notify.await_args.kwargs["exit_types"]
+
+    @pytest.mark.asyncio
+    async def test_a_stop_after_a_tp1_partial_is_labelled_sl_not_tp1(self):
+        """2026-10-06 RELIANCE ORB: TP1 sold 28, the stop closed the other 29, and the close was
+        booked "Closed by tracker (TP1)". A TP label is a completed partial leg, not a claim on
+        this close, so the stop that closed the remainder is named."""
+        assert await self._flat_close(["TP1"]) == ["TP1", "SL"]
+        assert await self._flat_close(["TP1", "TP1.5"]) == ["TP1", "TP1.5", "SL"]
+
+    @pytest.mark.asyncio
+    async def test_a_claimed_close_after_a_partial_keeps_its_claim(self):
+        assert await self._flat_close(["TP1", "NO-PROGRESS"]) == ["TP1", "NO-PROGRESS"]
+        assert await self._flat_close([]) == ["SL"]

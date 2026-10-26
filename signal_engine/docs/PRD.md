@@ -6270,3 +6270,26 @@ only at EOD.
 **In plain terms:** when the engine cannot tell from the order's time whether an order is its own, it no longer guesses;
 it only accepts an order as its exit when the broker's position agrees, and it keeps watching for a slow first order
 after it resends one.
+
+Verification before commit: `signal_engine/scripts/run_full_tests.sh` passed (8,750 passed, 1 skipped); `snapshot verify` is OK for all intraday versions, and both `-002` versions read back correctly
+
+## Exit reasons: the stop after a TP partial, and tracker closes in the ledger (2026-10-25)
+
+**Symptom.** The 2026-10-24 paper review found 523 positions whose exit reason read "?" in the ledger (most ORB,
+BREAKINGTRADE and EVWAP-EARLY-PY exits) and 4 to 10 per strategy labelled "TP1+TP1". A tracker close records its reason
+only in `context.exit_types` (NO-PROGRESS, TRAILING_STOP, INITIAL_STOP_SAFETY), which the ledger's keyword scan did not
+read. And when a TP1 partial was followed by the stop closing the remainder, the poll booked the close as "TP1"
+(2026-10-06 RELIANCE ORB: TP1 sold 28, the stop closed 29, booked "Closed by tracker (TP1)").
+
+**Change.**
+
+- `analysis/ledger.py` `_leg_from_event`: with no explicit reason, an exit leg takes the last entry of
+  `context.exit_types` (the list is the position's cumulative history: ["TP1"], ["TP2"], then ["TP1", "TP2", "TP3"]).
+- `tracker.py` `_poll_close_exit_types`: a close the poll finds on the broker is labelled "SL" unless another path claimed
+  it. A TP label is a completed partial leg, not a claim, so TP1 then the stop is "TP1+SL". NO-PROGRESS stays as is.
+  Visible change: the Telegram close message for that case shows [SL] instead of [TP1].
+
+**Known, not fixed.** An exit confirmed only by the unresolved-order sweeper is still labelled by the last recorded type.
+
+**In plain terms:** the trade reports now say why each trade closed, including when the stop closed the second half
+after the first target. through `PublishedSource.intraday`.
