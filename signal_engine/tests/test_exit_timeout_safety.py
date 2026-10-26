@@ -6,7 +6,7 @@ opened shorts of 148 and 472. KALYANKJIL's entry (BUY 188) timed out, was treate
 sat on the broker untracked until the 14:45 close-out.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,23 +42,43 @@ def _pos(symbol="LAURUSLABS", qty=74):
 
 
 def _filled_row(oid, symbol="LAURUSLABS", qty=74, status="complete", action="SELL"):
-    stamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    # A broker stamps a fill after the send. Stamping "now" at whole seconds while the row is
+    # built made it read as older than the attempt's `since` whenever a second boundary fell in
+    # between, so the row was filtered out and the test flaked.
+    stamp = (datetime.now(IST) + timedelta(seconds=2)).strftime("%Y-%m-%d %H:%M:%S")
     return {"orderid": oid, "symbol": symbol, "action": action, "quantity": qty,
             "order_status": status, "timestamp": stamp, "strategy": "BREAKOUT-PY"}
 
 
-async def _run_exit(send_results, books, *, order=None, pos=None):
+#: Test watch: 10 s window read every 5 s = 2 reads after the 3 normal ones (the sleeps are stubbed).
+WATCH_SECONDS, WATCH_POLL_SECONDS = 10.0, 5.0
+
+
+async def _run_exit(send_results, books, *, order=None, pos=None, own_qty=None):
     send = AsyncMock(side_effect=send_results)
     fetch = AsyncMock(side_effect=books)
     notify = AsyncMock()
+    tracker = MagicMock(fetch_own_position=AsyncMock(return_value=own_qty))
     with (
         patch("signal_engine.main.settings", SETTINGS),
         patch("signal_engine.main.send_order", send),
         patch("signal_engine.main.fetch_orderbook", fetch),
         patch("signal_engine.main.notifier", MagicMock(notify=notify)),
+        patch("signal_engine.main.tracker", tracker),
+        patch("signal_engine.main._LATE_FILL_WATCH_SECONDS", WATCH_SECONDS),
+        patch("signal_engine.main._EXIT_WATCH_POLL_SECONDS", WATCH_POLL_SECONDS),
+        patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=AsyncMock())),
     ):
         result = await _send_exit_with_retries(order or _exit_order(), pos or _pos())
     return result, send, notify
+
+
+def _expire_watch(symbol="LAURUSLABS"):
+    """Move a held order's late-fill watch into the past, as if its window had run out."""
+    from dataclasses import replace
+
+    pending = oc.get_uncertain("BREAKOUT-PY", symbol)
+    oc.mark_uncertain(replace(pending, watch_until=datetime(2000, 1, 1, tzinfo=IST)))
 
 
 @pytest.mark.asyncio
@@ -83,7 +103,7 @@ class TestExitTimeouts:
 
     async def test_duplicate_fills_are_adopted_once_and_alerted(self):
         book = [_filled_row("F1"), _filled_row("F2"), _filled_row("F3")]
-        result, send, notify = await _run_exit([TIMEOUT], [book])
+        result, send, notify = await _run_exit([TIMEOUT], [book, book])
         assert send.await_count == 1 and result.order_id == "F1"
         assert "F2" in str(notify.await_args_list) and "F3" in str(notify.await_args_list)
 
@@ -92,9 +112,15 @@ class TestExitTimeouts:
         result, send, _ = await _run_exit([TIMEOUT], [book, book, book])
         assert send.await_count == 1 and "UNCERTAIN" in result.message
 
-    async def test_book_read_and_clean_still_retries_as_before(self):
+    async def test_book_clean_for_the_whole_watch_then_resends_once(self):
+        """Policy updated 2026-10-25 (was: resend straight after three clean reads, ~6 s).
+
+        2026-10-23 SUNPHARMA: three clean reads, a resend, and the first copy filled anyway
+        ~14 s after it was sent; the extra BUY 174 opened a long nothing tracked. A clean book
+        now means "keep watching" until the late-fill window has run out.
+        """
         ok = TradeResult(status=OrderStatus.SUCCESS, order_id="N1")
-        result, send, _ = await _run_exit([TIMEOUT, ok], [[], [], []])
+        result, send, _ = await _run_exit([TIMEOUT, ok], [[]] * 5)
         assert send.await_count == 2 and result.order_id == "N1"
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
 
@@ -120,6 +146,7 @@ class TestRecovery:
 
     async def test_connection_back_and_no_order_releases_the_hold_and_exits_normally(self):
         await _run_exit([TIMEOUT], [None] * 3)
+        _expire_watch()  # an exit still inside its late-fill window is held: TestExitLateFillWatch
         ok = TradeResult(status=OrderStatus.SUCCESS, order_id="N1")
         result, send, _ = await _run_exit([ok], [[], [], []])
         assert send.await_count == 1 and result.order_id == "N1"
@@ -132,6 +159,122 @@ class TestRecovery:
             [ok], [], order=_exit_order("SUNPHARMA", 236), pos=_pos("SUNPHARMA", 236)
         )
         assert send.await_count == 1 and result.order_id == "S1"
+
+
+@pytest.mark.asyncio
+class TestExitLateFillWatch:
+    """2026-10-22 TVSMOTOR and 2026-10-23 SUNPHARMA: an exit that read clean ~6 s after its
+    timeout filled anyway (14 s, server overloaded); the resend filled too and opened a reverse
+    position. A clean book inside the late-fill window is not proof the order never lands."""
+
+    async def test_a_fill_that_lands_during_the_watch_is_adopted_without_a_resend(self):
+        books = [[], [], [], [], [_filled_row("F1")]]
+        result, send, _ = await _run_exit([TIMEOUT], books)
+        assert send.await_count == 1
+        assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "F1")
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+
+    async def test_book_unreadable_at_the_end_of_the_watch_holds_and_never_resends(self):
+        result, send, _ = await _run_exit([TIMEOUT], [[], [], [], [], None])
+        assert send.await_count == 1 and "UNCERTAIN" in result.message
+        pending = oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS")
+        assert pending is not None and pending.watch_until is not None
+
+    async def test_a_held_exit_inside_its_window_is_not_resent_on_a_clean_read(self):
+        await _run_exit([TIMEOUT], [None] * 3)  # held, window open
+        result, send, _ = await _run_exit([], [[], [], []])
+        assert send.await_count == 0 and result.status == OrderStatus.TIMEOUT
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+
+    async def test_sweeper_keeps_a_clean_exit_inside_its_window_and_restores_no_stop(self):
+        pos = _tracked()
+        oc.mark_uncertain(oc.UncertainOrder(
+            "BREAKOUT-PY", "LAURUSLABS", "SELL", 74, datetime.now(IST).replace(microsecond=0),
+            "EXIT", watch_until=datetime(2100, 1, 1, tzinfo=IST)))
+        await _sweep([[]], position=pos)
+        assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
+        assert pos.sl_order_id == "SL-1"
+
+
+@pytest.mark.asyncio
+class TestDuplicateExitIsClosed:
+    """The broker filled one exit more than once: flatten exactly what the extras opened, and
+    only when the broker position proves that size."""
+
+    async def test_one_extra_copy_is_closed_with_one_opposite_order(self):
+        close = TradeResult(status=OrderStatus.SUCCESS, order_id="C1")
+        book = [_filled_row("F1", "SUNPHARMA", 174), _filled_row("F2", "SUNPHARMA", 174)]
+        result, send, notify = await _run_exit(
+            [TIMEOUT, close], [book, book], order=_exit_order("SUNPHARMA", 174),
+            pos=_pos("SUNPHARMA", 174), own_qty=-174)
+        assert result.order_id == "F1" and send.await_count == 2
+        sent = send.await_args_list[1].args[0]
+        assert (sent.action, sent.quantity, sent.strategy_tag) == (Action.BUY, 174, "BREAKOUT-PY")
+        assert "DUPLICATE CLOSED" in str(notify.await_args_list)
+
+    async def test_two_extra_copies_after_a_partial_exit_close_their_total(self):
+        close = TradeResult(status=OrderStatus.SUCCESS, order_id="C1")
+        book = [_filled_row("F1"), _filled_row("F2"), _filled_row("F3")]
+        # long 100, exit 74: a correct exit leaves +26; two extras leave 26 - 148 = -122
+        result, send, _ = await _run_exit(
+            [TIMEOUT, close], [book, book], pos=_pos(qty=100), own_qty=-122)
+        sent = send.await_args_list[1].args[0]
+        assert (sent.action, sent.quantity) == (Action.BUY, 148)
+
+    async def test_an_untagged_extra_copy_is_alerted_not_traded(self):
+        """A live broker order book carries no strategy tag, so an 'extra' same-size order could be
+        another strategy's own exit (BREAKINGTRADE and -WATCHLIST shared 49 positions)."""
+        book = [_filled_row("F1"), _filled_row("F2")]
+        untagged = [dict(r, strategy="") for r in book]
+        result, send, notify = await _run_exit([TIMEOUT], [book, untagged], own_qty=-74)
+        assert send.await_count == 1
+        assert "DUPLICATE FILLS" in str(notify.await_args_list)
+
+    async def test_another_strategys_same_size_order_is_neither_adopted_nor_a_duplicate(self):
+        theirs = _filled_row("W1")
+        theirs["strategy"] = "BREAKINGTRADE-WATCHLIST"
+        mine = _filled_row("F1")
+        result, send, notify = await _run_exit([TIMEOUT], [[theirs, mine]], own_qty=-74)
+        assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "F1")
+        assert send.await_count == 1 and "DUPLICATE" not in str(notify.await_args_list)
+
+    async def test_another_strategys_order_alone_is_not_adopted(self):
+        theirs = _filled_row("W1")
+        theirs["strategy"] = "BREAKINGTRADE-WATCHLIST"
+        result, send, _ = await _run_exit([TIMEOUT], [[theirs]] * 3 + [None, None])
+        assert result.order_id != "W1" and send.await_count == 1
+
+    @pytest.mark.parametrize("own_qty", [None, 0, -100])
+    async def test_a_position_that_does_not_prove_the_excess_is_alerted_not_traded(self, own_qty):
+        book = [_filled_row("F1"), _filled_row("F2")]
+        result, send, notify = await _run_exit([TIMEOUT], [book, book], own_qty=own_qty)
+        assert send.await_count == 1
+        assert "DUPLICATE FILLS" in str(notify.await_args_list)
+
+    async def test_a_close_that_times_out_is_never_resent(self):
+        book = [_filled_row("F1"), _filled_row("F2")]
+        result, send, notify = await _run_exit([TIMEOUT, TIMEOUT], [book, book], own_qty=-74)
+        assert send.await_count == 2
+        assert "DUPLICATE NOT CLOSED" in str(notify.await_args_list)
+
+    async def test_sweeper_closes_the_excess_of_an_exit_it_finds_filled_twice(self):
+        from signal_engine.main import sweep_unresolved_orders
+
+        pos = _tracked()
+        _mark_exit()
+        send = AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
+        tracker = MagicMock(find_position=MagicMock(return_value=pos),
+                            fetch_own_position=AsyncMock(return_value=-74))
+        with (
+            patch("signal_engine.main.fetch_orderbook",
+                  AsyncMock(return_value=[_filled_row("F1"), _filled_row("F2")])),  # read twice
+            patch("signal_engine.main.send_order", send),
+            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
+            patch("signal_engine.main.tracker", tracker),
+        ):
+            await sweep_unresolved_orders()
+        sent = send.await_args.args[0]
+        assert (sent.action, sent.quantity) == (Action.BUY, 74)
 
 
 def _entry_signal():

@@ -6202,3 +6202,32 @@ timeouts, duplicate stops, over-cap entries or late fills, so that day neither p
 **In plain terms:** when the broker is slow, the engine now checks what the broker really holds before sending another stop
 or entry, never removes the last stop on a position, and keeps looking for an entry that fills late. It is saved on a
 side branch and not running.
+
+## Timed-out exits: 120 s late-fill watch and duplicate close (2026-10-25)
+
+**Symptom.** An exit that timed out client-side was resent after about 6 s of clean order-book reads, while the server was
+still processing the first copy (sandbox MARKET orders took 10 to 125 s). Both filled and the extra opened a reverse
+position nothing tracked: 8 cases on 6 sessions 2026-10-01 to 10-23, including TVSMOTOR 10-22 and SUNPHARMA 10-23 after
+the 2026-10-14 fix.
+
+**Change.**
+
+- `main.py` `_reconcile_exit` / `_watch_exit_for_late_fill`: a clean book after a timeout is read every 5 s until 120 s
+  after the send. A copy that lands is adopted; only a book still clean at the end allows a resend. A held exit carries
+  `watch_until`, and `_settle_prior_uncertain_exit` and `sweep_unresolved_orders` hold while it is open.
+- `main.py` `_handle_duplicate_exit_fills` (replaces `_alert_duplicate_fills`): extra completed copies are closed with one
+  opposite MARKET order, never resent, only when the book tags every copy with this strategy and the broker position shows
+  exactly the excess. Live books carry no strategy tag, so live only alerts. The sweeper now handles duplicates too.
+- `order_reconcile.py` `classify_book` / `reconcile_timed_out_order` take `strategy=`: a row tagged for another strategy is
+  neither adopted nor counted as a duplicate (BREAKINGTRADE and -WATCHLIST shared 49 positions). All exit and entry
+  reconcile calls pass it.
+
+**Known, not fixed.**
+
+- The stop is cancelled before the exit is sent, so an exit that genuinely failed is unprotected for up to 120 s (alerted).
+- The watch does not bound the server: an original landing after a resend is caught only at EOD. A follow-up
+  (fail-safe matching, position proof, 600 s late-duplicate watch) is pending on a later branch.
+- On a live Flattrade book the order-time filter cannot read `norentm` ("HH:MM:SS DD-MM-YYYY"); fixed on a later branch.
+
+**In plain terms:** when the broker is slow to confirm an exit, the engine waits up to two minutes for the first order
+instead of sending a second one, and closes an accidental extra fill only when it can prove the fill is its own.
