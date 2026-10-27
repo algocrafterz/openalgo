@@ -60,9 +60,14 @@ telegram:
     # live before 2026-09-06, so its own scrollback has a few real fills mixed into what is now
     # paper history; the actual trade record lives in trades.db, not the channel, so this is
     # cosmetic only). New -live channel below for when ORB is next promoted.
+    #
+    # PAPER EXECUTION STOPPED 2026-10-28: no gross edge over 10 years (87,279 backtest trades,
+    # net negative in every year 2017-2026); see strategy_library/intraday/orb/STRATEGY-ANALYSIS.md
+    # "Paper retirement and 10-year verdict - 2026-10-28". Code, profile, blacklist and trade
+    # history are kept. The notes above are unchanged history.
     - name: "intraday-orb-analyze"
       id: -1003518225740
-      enabled: true
+      enabled: false
 
     - name: "intraday-orb-live"
       id: -1004333530764

@@ -864,3 +864,93 @@ respect. **Slippage, not the strategy, is the thing left to fix.**
 
 Keep running small to accumulate forward data. Do not scale, do not expect monthly income.
 The Pine edits have NOT been compiled on TradingView.
+
+# Paper retirement and 10-year verdict — 2026-10-28
+
+The 2026-08-28 verdict above stands as written. This section adds what was learned since.
+
+### 2026-10-28 01:36 — Paper execution stopped
+- **What changed:** ORB stopped taking paper trades. The engine no longer listens to its channel.
+  The Pine file, its settings history, its trade records and this analysis are all kept.
+- **Entry:** No new trades open.
+- **Exit (SL):** Not affected. Nothing was open when the change was made.
+- **Exit (TP):** Not affected.
+- **Consideration:** The paper month made money only because the market fell and ORB's short
+  trades benefited. Over ten years of history the same rules lost money after costs in every
+  single year, with either version of the settings. A revival needs a new, separately
+  specified idea in `research/`, not a parameter change.
+
+## Paper record, 2026-09-22 to 2026-10-27
+
+67 closed trades over 19 days, sandbox fills. Gross +Rs 5,632 (+0.092R/trade, t 2.00); net of
+the Flattrade MIS statutory schedule +Rs 4,528 (t 1.61), with 2 bps slippage per side +Rs 3,282
+(t 1.16). Longs -0.02R (n 40), shorts +0.26R (n 27). NIFTY fell about 2.8% over the window and
+closed down on 15 of 24 days. 48 of 67 trades closed by the tracker's no-progress rule; 2 hit
+the stop.
+
+## The alerts came from the pre-fix script
+
+Every one of the 68 paper alerts carried `R 1:0.8`, a stop about 2% away (median 1.97%) and
+entries from 09:55. That is the script before commit c2a127d4a: ORB15, target floored at 0.8R,
+stop pushed past the ORB edge. The repository default (ORB60, `tp1MinRR` 1.5,
+`useOrbStopFloor` off, ATR x3, time-of-day volume) was never compiled on TradingView, as the
+verdict above already says. The paper record measured the old settings.
+
+## The no-progress exit, replayed
+
+Each paper trade was replayed on Historify 1-minute bars from its real fill. The replay costs
+each trade on the Flattrade schedule, adds slippage to every market leg (target exits are
+limit orders), fills a stop that gaps through at the bar open, counts the stop first when one
+bar touches both levels, and tests a one-minute delay. It reproduces the six real time exits to
+within about 0.05R.
+
+| Slippage per side | Actual (no-progress on) | Hold to 0.8R / stop / 14:45 | Difference [95% bootstrap CI] |
+|---|---|---|---|
+| 2 bps | +0.051R | +0.129R | +0.079 [-0.020, +0.175] |
+| 5 bps | +0.020R | +0.103R | +0.083 [-0.016, +0.180] |
+| 10 bps | -0.032R | +0.058R | +0.089 [-0.011, +0.188] |
+
+Every interval includes zero, and two days carry nearly half the difference. Limits: sandbox
+fills, a full exit at TP1 instead of the 50/50 TP1/TP1.5 split, possible one-minute bar offset,
+67 trades in one market regime. The backtest engine cannot model the no-progress or loss-cut
+exits. No exit change was made, because the held version has no edge over ten years either.
+
+## 10-year backtest
+
+Exploratory, no run record, no trial counted. Dataset `nse-intraday-5m-20261021-002`,
+2017-01-02 to 2026-10-19, 206 symbols, IS/OOS cut 2023-11-08, adapter
+`backtest/strategies/orb.py`. One entry per symbol per day, 14:45 time exit, exits held to
+target, stop or time. The NIFTY index vote is off: its source is a 60-day Yahoo series, and an
+index has no volume for a VWAP. Cost per trade: Flattrade MIS statutory schedule at Rs 900 risk,
+plus slippage on market legs. The adapter reproduced 35 of 42 paper trades in 2026-09-22 to
+10-19 (same symbol, day and side), and over that window gave longs -0.06R, shorts +0.14R, as in
+paper.
+
+| | Trades | Gross R | Net R, 2 bps | Net R, 5 bps | t (net 2 bps, clustered by day) |
+|---|---|---|---|---|---|
+| Pre-fix settings (what TradingView ran), 0.5% minimum stop | 87,279 | -0.000 | -0.035 | -0.062 | -12.6 |
+| Longs | 46,915 | -0.028 | -0.063 | -0.089 | |
+| Shorts | 40,364 | +0.031 | -0.004 | -0.030 | |
+| OOS (from 2023-11-08) | 29,141 | +0.010 | -0.025 | -0.052 | |
+| Repository settings, 0.2% minimum stop | 26,157 | +0.003 | -0.074 | -0.132 | -8.6 |
+
+- Net negative in every year 2017 to 2026, under both settings.
+- Shorts are positive before costs but negative after 2 bps per side, and positive after costs in
+  only 5 of 10 years. Shorts-only is not supported.
+- Results follow the same day's market direction (shorts +0.18R on down days, -0.19R on up days),
+  which cannot be known at entry. The prior 50-day trend and the volatility regime do not make
+  either side profitable. Trend labels are missing before 2021, where Historify daily history
+  is thin.
+- The repository settings cut the stop to about 1%, which raises the cost per trade in R and
+  makes the net result worse, not better.
+
+## Decision
+
+Paper execution stopped on 2026-10-28: `intraday-orb-analyze` is `enabled: false` in
+`config.yaml`. The TradingView alerts stay active because other members use them, so alert
+messages still reach `intraday-orb-analyze`; the engine no longer subscribes to it and places
+nothing. Nothing was tuned, the exit
+rules were not changed, the TradingView script was not replaced and no shorts-only rule was
+added. `strategy_profiles.ORB` and `blacklist.ORB` stay so that startup restore and the history
+remain intact. Guarded by `tests/test_config_validation.py::TestShippedOrbRetirement`. Rollback:
+set `enabled: true` again; it takes effect at the next engine start.

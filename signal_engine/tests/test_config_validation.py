@@ -5,7 +5,7 @@ with an -analyze channel also had the -live one it will need on promotion. A dup
 silently made _channel_for_strategy() pick the first; a duplicated id double-subscribed.
 """
 
-from signal_engine.config import TelegramChannel, validate_channels
+from signal_engine.config import TelegramChannel, settings, validate_channels
 
 
 def _ch(name, cid, enabled=True):
@@ -49,3 +49,21 @@ class TestBothPhasesEnabledIsRefused:
         problems = validate_channels((_ch("intraday-orb-analyze", -1),
                                       _ch("intraday-orb-live", -2)))
         assert any("both phases enabled" in p.lower() for p in problems)
+
+
+class TestShippedOrbRetirement:
+    """ORB paper execution stopped 2026-10-28. Its channels, profile and history stay."""
+
+    def _orb_channels(self):
+        return [ch for ch in settings.telegram_channels if ch.name.startswith("intraday-orb-")]
+
+    def test_both_orb_channels_are_kept_and_disabled(self):
+        channels = {ch.name: ch for ch in self._orb_channels()}
+        assert set(channels) == {"intraday-orb-analyze", "intraday-orb-live"}
+        assert not any(ch.enabled for ch in channels.values())
+
+    def test_the_orb_pair_still_validates(self):
+        assert validate_channels(tuple(self._orb_channels())) == []
+
+    def test_the_orb_profile_is_kept_for_startup_restore(self):
+        assert "ORB" in settings.strategy_profiles
