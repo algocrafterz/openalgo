@@ -108,6 +108,27 @@ class TradePlan:
         return round(abs(self.targets[0] - self.entry) / self.risk_per_share, 2)
 
     @property
+    def entry_vs_ib(self) -> float | None:
+        """How far the entry sits beyond the IB edge in the trade's direction, in IB ranges.
+
+        Negative means the entry is still inside the IB. None without a usable IB.
+        """
+        ib_range = self.ib_high - self.ib_low
+        if ib_range <= 0:
+            return None
+        beyond = self.entry - self.ib_high if self.direction == "up" else self.ib_low - self.entry
+        return round(beyond / ib_range, 3)
+
+    @property
+    def range_integrity(self) -> bool | None:
+        """The E1+E7 rule (STRATEGY-LOG 2026-10-28): the trigger bar starts once the IB is
+        complete (10:15) and the entry is beyond the IB edge. None when either is unknown."""
+        location = self.entry_vs_ib
+        if self.triggered_at is None or location is None:
+            return None
+        return self.triggered_at.time() >= IB_END and location > 0
+
+    @property
     def reward_risk_runner(self) -> float | None:
         """R:R to the FINAL target - what the plan would be worth IF the staged ladder were
         wired through and the runner ran. None when there is no ladder beyond the first
@@ -204,6 +225,91 @@ def plan_trade(
         return None
 
     notes = []
+    if day_type in RUNNER_DAY_TYPES:
+        notes.append("trend day: most of the position rides the runner, trail rather than book")
+    if risk_per_share > 2 * atr:
+        notes.append("stop is wider than 2 ATR - the IB is far away, so size will be small")
+
+    return TradePlan(
+        symbol=symbol,
+        direction=direction,
+        day_type=day_type,
+        entry=round(entry, 2),
+        stop=round(stop, 2),
+        targets=target_levels(entry, ib_range, direction),
+        split=target_split(day_type),
+        ib_high=round(ib_high, 2),
+        ib_low=round(ib_low, 2),
+        atr=round(atr, 2),
+        risk_per_share=round(risk_per_share, 2),
+        triggered_at=triggered_at,
+        notes=notes,
+    )
+
+
+def range_integrity_trigger(
+    bars: pd.DataFrame, signal_time: datetime, direction: str, ib_high: float, ib_low: float
+) -> tuple:
+    """BREAKINGTRADE-RI's confirmation: the first bar after the signal bar that STARTS at or
+    after IB_END and CLOSES beyond both the signal bar's extreme and the IB edge in the trade's
+    direction. (price, bar_time) or (None, None).
+
+    entry_trigger() alone accepts a close beyond the signal bar while price is still inside the
+    IB, and before the IB has finished. Replayed on past picks, those entries were the losing
+    ones (STRATEGY-LOG 2026-10-28); this version waits for a real range extension instead.
+    """
+    stamps = pd.to_datetime(bars["timestamp"])
+    before = bars[stamps <= signal_time]
+    after = bars[stamps > signal_time]
+    if before.empty or after.empty:
+        return None, None
+
+    signal_bar = before.iloc[-1]
+    up = direction == "up"
+    level = float(signal_bar["high"]) if up else float(signal_bar["low"])
+    edge = ib_high if up else ib_low
+
+    for bar in after.itertuples():
+        bar_time = pd.to_datetime(bar.timestamp)
+        if bar_time.time() < IB_END:
+            continue
+        close = float(bar.close)
+        if (up and close > level and close > edge) or (not up and close < level and close < edge):
+            return close, bar_time.to_pydatetime()
+    return None, None
+
+
+def plan_trade_range_integrity(
+    symbol: str,
+    direction: str,
+    day_type: str | None,
+    bars: pd.DataFrame,
+    signal_time: datetime,
+    atr: float,
+) -> TradePlan | None:
+    """BREAKINGTRADE-RI's plan: plan_trade() with range_integrity_trigger() as the entry.
+
+    Stop, targets and split are plan_trade()'s own functions, unchanged, so the two versions
+    differ in when they enter and nothing else.
+    """
+    ib_high, ib_low = initial_balance(bars)
+    if ib_high is None or not atr:
+        return None
+
+    ib_range = ib_high - ib_low
+    if ib_range <= 0:
+        return None
+
+    entry, triggered_at = range_integrity_trigger(bars, signal_time, direction, ib_high, ib_low)
+    if entry is None:
+        return None
+
+    stop = stop_level(direction, ib_high, ib_low, atr)
+    risk_per_share = abs(entry - stop)
+    if risk_per_share <= 0:
+        return None
+
+    notes = ["range integrity: entered only after a close beyond the completed IB"]
     if day_type in RUNNER_DAY_TYPES:
         notes.append("trend day: most of the position rides the runner, trail rather than book")
     if risk_per_share > 2 * atr:

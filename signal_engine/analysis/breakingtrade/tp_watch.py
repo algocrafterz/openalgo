@@ -53,6 +53,8 @@ from signal_engine.analysis.breakingtrade import alerts, eod_summary, flip_watch
 _WATCHED_STRATEGIES = (
     ("BREAKINGTRADE", "trade_signal"),
     ("BREAKINGTRADE-WATCHLIST", "trade_signal_watchlist"),
+    # 2026-10-28: the range-integrity version, same staged exits as BREAKINGTRADE.
+    ("BREAKINGTRADE-RI", "trade_signal_ri"),
 )
 
 # Same R-multiples as main.py's _TP_LEVEL_R_MULTIPLIERS (TP1/TP1.5/TP2 subset - BreakingTrade's

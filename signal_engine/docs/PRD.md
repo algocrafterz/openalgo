@@ -6323,3 +6323,20 @@ three proposed changes to the confirmed variant (none adopted) are in the strate
 
 **In plain terms:** the version that entered without waiting for confirmation lost money on paper, so it no longer
 trades or sends messages. It can be switched back on with one setting.
+
+## BREAKINGTRADE-RI paper version and signal tracking fields (2026-10-28)
+
+**Change.** A second BreakingTrade version, `BREAKINGTRADE-RI`, is paper traded beside `BREAKINGTRADE` on the same
+scanner picks. It enters only once a 5m bar starting at or after 10:15 closes beyond the IB edge
+(`trigger.plan_trade_range_integrity`); stop, targets and exits are BREAKINGTRADE's. It has its own tag, channel
+(`intraday-breakingtrade-ri-{analyze,live}`, the retired watchlist chat ids), strategy profile, blacklist entry,
+card, staged-TP watching and per-version recheck state in `entry_watch`. `alerts.ri_enabled()` gates it on the
+channel's `enabled` flag. BREAKINGTRADE's behaviour is unchanged.
+
+**Tracking.** `trade_signal` rows in breakingtrade.db now store the real scan name in `scan` (it held the strategy
+name), the tag in `strategy`, and two new columns, `range_integrity` and `entry_vs_ib`. Paper results by strategy,
+by flag and by scan, net of charges and a slippage allowance:
+`uv run python -m signal_engine.analysis.breakingtrade.shadow --since 2026-10-28`.
+
+**In plain terms:** a stricter copy of the BreakingTrade strategy now trades on paper next to the original, so the
+two can be compared day by day, and every signal records which scan found the stock.

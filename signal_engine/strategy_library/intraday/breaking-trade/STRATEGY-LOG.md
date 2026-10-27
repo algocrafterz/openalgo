@@ -96,6 +96,67 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-28 02:50 — The scanner's picks arrive after the move, not before it
+- **What changed:** Nothing in the strategy. A check of the stock selection alone, with no
+  entry, stop or target rule, over 680 picks on 35 days (2026-08-18 to 2026-10-27). By the time
+  a stock is picked it has already moved about 1.2% in the picked direction since the open.
+  From the pick onward it moves no further than the average F&O stock over the same minutes.
+- **Entry:** Not affected.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** This is why no entry or exit setting has turned the strategy profitable:
+  the picks carry about 0 to 4 basis points of extra move, and a round trip costs about 10 to 12.
+  The short trades' gains in October were the market falling, not the selection. Improving the
+  strategy needs a selection that is early, not a better exit.
+
+NOTE: `experiments/2026-10-amt-replay/selection_check.py`. Signed return in the pick's direction
+from the first scanner poll after the pick (1m open), minus the same-direction mean return of
+every NSE stock in Historify over the same minutes ("excess"):
+
+| Horizon | All 680: raw | All: excess (t) | Long 331: excess | Short 349: excess |
+|---|---|---|---|---|
+| +30 min | +1.3 bps | +0.1 (0.08) | -2.0 | +2.2 |
+| +60 min | +1.6 bps | +0.1 (0.08) | -2.6 | +2.8 |
+| +120 min | +4.6 bps | -0.7 (-0.27) | 0.0 | -1.4 |
+| to 14:45 | +13.1 bps | +4.2 (1.35) | +5.1 | +3.3 |
+
+Move already made from the day's open to the pick: +124.5 bps (long +102.7, short +145.2).
+Raw short returns to 14:45 were +28.2 bps (t 6.30) but only +3.3 beyond the market. "Live Print
+in Formation Up" (56 picks) went the other way after the pick: -13.0 bps excess at 30 minutes
+(t -2.47). The vendor's columns describe the day so far (day type, tails, position against
+value); they are filled in by the move itself, which is why the picks come late. One regime,
+equal-weighted benchmark, Historify as of 2026-10-27.
+
+### 2026-10-28 02:31 — Second version BREAKINGTRADE-RI paper traded beside BREAKINGTRADE
+- **What changed:** A second version runs on paper from today next to the current one, on the
+  same scanner picks, so the two can be compared on live paper data. BREAKINGTRADE itself is
+  unchanged. Every signal now also records which scan picked the stock and whether it would
+  pass the range-integrity rule, so results can be split both ways.
+- **Entry:** For BREAKINGTRADE-RI only: it enters only after 10:15, and only when a 5-minute
+  bar closes outside the first hour's range (above it for a buy, below it for a sell) as well
+  as beyond the signal bar. BREAKINGTRADE still enters on the first close beyond the signal bar.
+- **Exit (SL):** Not affected. Both versions use the same stop rule.
+- **Exit (TP):** Not affected. Both versions use the same targets, staged exits, stalled-trade
+  check and 14:45 time exit.
+- **Consideration:** RI often trades a stock BREAKINGTRADE already holds, a little later, so
+  the paper account carries a larger position in those names. The replay says RI is better than
+  today's rules but not profitable after costs; judge it on several weeks of paper results, not
+  on a few days. It uses the retired watchlist Telegram channels, renamed.
+
+NOTE: Tag `BREAKINGTRADE-RI`; channel `intraday-breakingtrade-ri-{analyze,live}` in config.yaml
+(the retired watchlist chat ids; analyze enabled, live disabled). Code: `trigger.py`
+`range_integrity_trigger` / `plan_trade_range_integrity` (reuse `stop_level`, `target_levels`,
+`target_split`); `alerts.py` kind `trade_signal_ri`, `ri_enabled()`; `__main__._emit_trade_signals`
+and `entry_watch.check` (per-version "already confirmed" state, one bars fetch per symbol per
+poll); `tp_watch._WATCHED_STRATEGIES`; `strategies.REGISTRY`; `strategy_cards.CARDS`; config
+`strategy_profiles` and `blacklist` copied from BREAKINGTRADE; `tracker._dedupe_breakingtrade_overlap`
+drops the RI leg from the day summary on a symbol BREAKINGTRADE also traded, because the broker
+nets the two into one position (trades.db keeps both). Tracking: trade_signal rows now carry the
+real `scan`, `strategy`, `range_integrity` (`TradePlan.range_integrity`) and `entry_vs_ib`. Compare
+with `uv run python -m signal_engine.analysis.breakingtrade.shadow --since 2026-10-28`. The replay
+rule E17 is the same rule; the live trigger also sees the bar still forming at a poll, as
+BREAKINGTRADE's always has. Tests: `test_breakingtrade_ri.py`, `test_breakingtrade_shadow_tracking.py`.
+
 ### 2026-10-28 02:10 — Range-integrity candidate (E1+E7) validated on past data; still not adopted
 - **What changed:** Nothing in the strategy. The candidate from the entry below was tested as one
   unit: take a trade only after 10:15, once the first hour's range is complete, and only when

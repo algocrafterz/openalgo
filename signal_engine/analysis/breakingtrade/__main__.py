@@ -564,9 +564,13 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
     # The watchlist outcome runs only while its channel is enabled in config.yaml; it was
     # retired on 2026-10-27 (see alerts.watchlist_enabled()).
     watchlist_on = alerts.watchlist_enabled()
+    # BREAKINGTRADE-RI (2026-10-28) trades the same picks with the range-integrity entry, on
+    # its own channel, while that channel is enabled (alerts.ri_enabled()).
+    ri_on = alerts.ri_enabled()
 
     confirmed_emitted = 0
     watchlist_emitted = 0
+    ri_emitted = 0
     for symbol, direction in directions.items():
         scan_name = scan_names.get(symbol)
         try:
@@ -581,6 +585,17 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
             if confirmed_plan is not None:
                 alerts.alert_trade_signal(confirmed_plan, scan_name=scan_name)
                 confirmed_emitted += 1
+
+            if ri_on:
+                ri_plan = trigger.plan_trade_range_integrity(
+                    symbol, direction, day_type, bars, captured_at, atr
+                )
+                if ri_plan is not None:
+                    alerts.alert_trade_signal(
+                        ri_plan, strategy="BREAKINGTRADE-RI", scan_name=scan_name,
+                        kind="trade_signal_ri",
+                    )
+                    ri_emitted += 1
 
             price = prices.get(symbol)
             if watchlist_on and price:
@@ -601,7 +616,9 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
         print(f"  emitted {confirmed_emitted} confirmed trade signal(s)")
     if watchlist_emitted:
         print(f"  emitted {watchlist_emitted} watchlist trade signal(s)")
-    return confirmed_emitted + watchlist_emitted
+    if ri_emitted:
+        print(f"  emitted {ri_emitted} range-integrity trade signal(s)")
+    return confirmed_emitted + watchlist_emitted + ri_emitted
 
 
 def _is_bearish(scan_name: str) -> bool:

@@ -98,6 +98,11 @@ _ADDED_COLUMNS = (
     # state would collide. Nullable: existing rows and any alert kind that isn't per-strategy
     # (health, btst, ...) simply leave it unset.
     ("strategy", "TEXT"),
+    # 2026-10-28: tracking fields on trade_signal rows, so paper results can be split by them
+    # (shadow.py). range_integrity is TradePlan.range_integrity as 0/1; entry_vs_ib is the
+    # entry's distance beyond the IB edge in IB ranges. NULL on older rows and other kinds.
+    ("range_integrity", "INTEGER"),
+    ("entry_vs_ib", "REAL"),
 )
 
 
@@ -203,6 +208,9 @@ _CHANNEL_GROUP_BY_KIND = {
     # "trade_signal" above - see config.yaml's intraday-breakingtrade-watchlist channel and
     # __main__.py's _emit_trade_signals() for why the two are kept apart end to end.
     "trade_signal_watchlist": "watchlist",
+    # BREAKINGTRADE-RI (2026-10-28): the range-integrity version, its own channel like the
+    # watchlist outcome before it, so its entries and TP-hit exits never mix with BREAKINGTRADE.
+    "trade_signal_ri": "ri",
 }
 _DEFAULT_CHANNEL_GROUP = "intraday"
 
@@ -212,6 +220,7 @@ _DEFAULT_CHANNEL_GROUP = "intraday"
 _CHANNEL_NAME_BY_GROUP = {
     "intraday": "intraday-breakingtrade",
     "watchlist": "intraday-breakingtrade-watchlist",
+    "ri": "intraday-breakingtrade-ri",
 }
 
 # How long a checked OpenAlgo mode is trusted before re-checking. Long enough that a burst of
@@ -313,9 +322,22 @@ def watchlist_enabled() -> bool:
     config.yaml (see STRATEGY-LOG.md): a disabled or missing channel means no plan, no alert
     row and no Telegram message, while the implementation stays in place to be re-enabled.
     """
+    return _group_enabled("watchlist")
+
+
+def ri_enabled() -> bool:
+    """Whether BREAKINGTRADE-RI's channel is enabled for the CURRENT OpenAlgo mode.
+
+    The scanner builds and sends RI signals only while this is True, the same gate as
+    watchlist_enabled(): a disabled or missing channel means no plan, row or message.
+    """
+    return _group_enabled("ri")
+
+
+def _group_enabled(group: str) -> bool:
     from signal_engine.config import settings
 
-    name = f"{_CHANNEL_NAME_BY_GROUP['watchlist']}-{_current_phase()}"
+    name = f"{_CHANNEL_NAME_BY_GROUP[group]}-{_current_phase()}"
     channel = next((ch for ch in settings.telegram_channels if ch.name == name), None)
     return bool(channel is not None and channel.enabled)
 
@@ -410,6 +432,8 @@ def record(
     delivered: bool = False,
     message_id: int | None = None,
     when: datetime | None = None,
+    range_integrity: int | None = None,
+    entry_vs_ib: float | None = None,
 ) -> bool:
     """Persist an alert row, optionally delivering it.
 
@@ -435,7 +459,8 @@ def record(
     with _connect() as conn:
         conn.execute(
             "INSERT INTO alerts (created_at, kind, symbol, direction, scan, message, "
-            "delivered, message_id, strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "delivered, message_id, strategy, range_integrity, entry_vs_ib) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 (when or datetime.now(IST).replace(tzinfo=None))
                 .replace(microsecond=0)
@@ -448,6 +473,8 @@ def record(
                 int(delivered),
                 message_id,
                 strategy,
+                range_integrity,
+                entry_vs_ib,
             ),
         )
     return delivered
@@ -680,7 +707,19 @@ def alert_trade_signal(
     same message stream be recorded, read and scored long before it is allowed to touch money.
     """
     message = build_trade_signal_message(plan, strategy, scan_name)
-    return record(kind, message, symbol=plan.symbol, direction=plan.direction, scan=strategy)
+    flag = getattr(plan, "range_integrity", None)
+    return record(
+        kind,
+        message,
+        symbol=plan.symbol,
+        direction=plan.direction,
+        # The scan that picked the name; this column held the strategy until 2026-10-28, which
+        # is still the value when no scan is known.
+        scan=scan_name or strategy,
+        strategy=strategy,
+        range_integrity=None if flag is None else int(flag),
+        entry_vs_ib=getattr(plan, "entry_vs_ib", None),
+    )
 
 
 def build_trade_signal_message(plan, strategy: str = "BREAKINGTRADE", scan_name: str = None) -> str:

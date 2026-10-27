@@ -25,6 +25,7 @@ class TestCardsRegistry:
             "intraday-breakout",
             "intraday-breakingtrade",
             "intraday-breakingtrade-watchlist",
+            "intraday-breakingtrade-ri",
         ):
             assert name in strategy_cards.CARDS
 

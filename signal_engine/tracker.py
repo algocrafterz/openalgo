@@ -59,10 +59,16 @@ def _dedupe_breakingtrade_overlap(records: list) -> list:
         r
         for r in records
         if not (
-            r.strategy.upper() == "BREAKINGTRADE-WATCHLIST"
+            r.strategy.upper() in _BREAKINGTRADE_SECONDARY
             and r.symbol.upper() in confirmed_symbols
         )
     ]
+
+
+#: Strategies that share BREAKINGTRADE's scanner and so its symbols (see
+#: _dedupe_breakingtrade_overlap). BREAKINGTRADE-RI joined 2026-10-28; its own per-trade P&L
+#: stays in trades.db, which is what analysis/breakingtrade/shadow.py compares.
+_BREAKINGTRADE_SECONDARY = {"BREAKINGTRADE-WATCHLIST", "BREAKINGTRADE-RI"}
 
 
 def leg_pnl(direction, entry_fill: float, exit_fill: float, qty: int) -> float:

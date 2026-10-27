@@ -56,6 +56,13 @@ class TestDedupeBreakingtradeOverlapUnit:
         result = _dedupe_breakingtrade_overlap(records)
         assert [r.strategy for r in result] == ["BREAKINGTRADE"]
 
+    def test_ri_leg_dropped_when_breakingtrade_traded_the_same_symbol(self):
+        records = [_record("SBIN", "BREAKINGTRADE", 200.0), _record("SBIN", "BREAKINGTRADE-RI", 150.0),
+                   _record("TCS", "BREAKINGTRADE-RI", 90.0)]
+        result = _dedupe_breakingtrade_overlap(records)
+        assert [(r.symbol, r.strategy) for r in result] == [("SBIN", "BREAKINGTRADE"),
+                                                            ("TCS", "BREAKINGTRADE-RI")]
+
     def test_watchlist_only_symbol_is_kept(self):
         records = [_record("INDHOTEL", "BREAKINGTRADE-WATCHLIST", -688.80)]
         result = _dedupe_breakingtrade_overlap(records)

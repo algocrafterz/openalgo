@@ -149,16 +149,22 @@ telegram:
     # Same ANALYZE/LIVE split as intraday-breakingtrade above.
     #
     # RETIRED 2026-10-27 after the paper comparison from 2026-09-24 (see breaking-trade's
-    # STRATEGY-LOG.md): the confirmed entry kept more after costs on half the trades. With this
-    # false the engine does not subscribe, and the scanner builds and sends no watchlist signal
-    # at all (alerts.watchlist_enabled()). Code, tag, tests and history are kept; set true to
-    # bring it back.
-    - name: "intraday-breakingtrade-watchlist-analyze"
+    # STRATEGY-LOG.md): the confirmed entry kept more after costs on half the trades. Code, tag,
+    # tests and history are kept. Its channel pair below was REASSIGNED 2026-10-28 to
+    # BREAKINGTRADE-RI (same chat ids, renamed in Telegram), so it has no channel entry: the
+    # scanner builds and sends no watchlist signal (alerts.watchlist_enabled() finds none). To
+    # bring it back it needs a channel pair of its own.
+    #
+    # BREAKINGTRADE-RI (2026-10-28): the range-integrity version of BREAKINGTRADE, paper traded
+    # beside it on the same picks. It enters only once a 5m bar starting at or after 10:15
+    # closes beyond the IB edge (trigger.plan_trade_range_integrity); stop, targets and exits are
+    # BREAKINGTRADE's. alerts.ri_enabled() reads this flag: false stops the scanner building its
+    # signals at all. Same two-gate rule: the -live entry stays false until promoted.
+    - name: "intraday-breakingtrade-ri-analyze"
       id: -1003902599946
-      enabled: false
+      enabled: true
 
-    # LIVE counterpart - same two-gate rule as intraday-breakingtrade-live above.
-    - name: "intraday-breakingtrade-watchlist-live"
+    - name: "intraday-breakingtrade-ri-live"
       id: -1004467829402
       enabled: false
 
@@ -457,6 +463,12 @@ blacklist:
     soft_multiplier: 0.5
 
   BREAKINGTRADE-WATCHLIST:
+    # Same scanner, same daily-changing universe as BREAKINGTRADE above - same reasoning.
+    hard: []
+    soft: []
+    soft_multiplier: 0.5
+
+  BREAKINGTRADE-RI:
     # Same scanner, same daily-changing universe as BREAKINGTRADE above - same reasoning.
     hard: []
     soft: []
@@ -1053,6 +1065,13 @@ strategy_profiles:
     # Same min_sl_pct/price-band reasoning as BREAKINGTRADE directly above: identical
     # trigger.stop_level() math (just fed the scan-hit price as entry instead of a confirmed
     # close - see trigger.plan_trade_watchlist()), same daily-changing NSE F&O universe.
+    min_sl_pct: 0.002
+    min_entry_price: 0
+    max_entry_price: 0
+  BREAKINGTRADE-RI:
+    product: MIS
+    # Identical to BREAKINGTRADE above on purpose: the two versions differ only in when they
+    # enter (trigger.plan_trade_range_integrity), so every engine-side setting matches.
     min_sl_pct: 0.002
     min_entry_price: 0
     max_entry_price: 0

@@ -95,10 +95,31 @@ CARDS: dict[str, StrategyCard] = {
             "the engine acts on it automatically, same as ORB/BREAKOUT. This is the CONFIRMED "
             "outcome: the system keeps re-checking a flagged stock for up to 2 hours after "
             "it's first flagged, so a watchlist entry can still turn into a real trade signal "
-            "well after you first saw it. See intraday-breakingtrade-watchlist for the other "
-            "outcome of the same scanner."
+            "well after you first saw it. See intraday-breakingtrade-ri for the range-integrity "
+            "version of the same scanner, paper traded beside this one."
         ),
-        updated="2026-09-10",
+        updated="2026-10-28",
+    ),
+    "intraday-breakingtrade-ri": StrategyCard(
+        title="BREAKINGTRADE-RI - Breakouts Beyond the First Hour's Range",
+        what=(
+            "The SAME Python scanner and the same picks as intraday-breakingtrade, with one "
+            "change: it enters only after 10:15, once a 5-minute bar closes outside the first "
+            "hour's range. BREAKINGTRADE also buys breakouts that are still inside that range; "
+            "this version waits for a real one. Stop, targets and exits are identical, and both "
+            "are paper traded side by side so they can be compared."
+        ),
+        when=(
+            "Scans 09:20-10:30 (every 5 min), 10:30-13:00 (every 15 min), then OFF "
+            "13:00-14:50 by design. Entries only from 10:15 onward."
+        ),
+        action=(
+            "A BREAKINGTRADE-RI LONG/SHORT message with Entry/SL/TP is a real trade - the engine "
+            "acts on it automatically. It often names a stock BREAKINGTRADE already holds, a "
+            "little later. Nothing for you to do but watch. Paper only; see the BreakingTrade "
+            "STRATEGY-LOG.md for why it exists and how it is being judged."
+        ),
+        updated="2026-10-28",
     ),
     "intraday-breakingtrade-watchlist": StrategyCard(
         title="BREAKINGTRADE-WATCHLIST - Immediate Scanner Entries",

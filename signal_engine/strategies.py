@@ -61,6 +61,12 @@ EVWAP_EARLY_PY = "EVWAP-EARLY-PY"
 # Its own tag, channel and risk slots so paper P&L can compare the two entry philosophies.
 BREAKINGTRADE_WATCHLIST = "BREAKINGTRADE-WATCHLIST"
 
+# Range-integrity version of BREAKINGTRADE (2026-10-28): the same scanner picks, entered only
+# once a 5m bar starting at or after 10:15 closes beyond the IB edge
+# (trigger.plan_trade_range_integrity). Its own tag, channel and risk slots, paper traded beside
+# BREAKINGTRADE so the two can be compared. It reuses the retired watchlist channel ids.
+BREAKINGTRADE_RI = "BREAKINGTRADE-RI"
+
 
 @dataclass(frozen=True)
 class StrategyMeta:
@@ -96,8 +102,11 @@ REGISTRY: dict[str, StrategyMeta] = {
     ),
     BREAKINGTRADE: StrategyMeta(BREAKINGTRADE, "intraday-breakingtrade", True),
     BREAKINGTRADE_WATCHLIST: StrategyMeta(
-        BREAKINGTRADE_WATCHLIST, "intraday-breakingtrade-watchlist", True
+        BREAKINGTRADE_WATCHLIST, "intraday-breakingtrade-watchlist", True,
+        "Retired 2026-10-28: its channel entries are gone from config.yaml (the ids now carry "
+        "BREAKINGTRADE-RI), so the scanner emits nothing for it.",
     ),
+    BREAKINGTRADE_RI: StrategyMeta(BREAKINGTRADE_RI, "intraday-breakingtrade-ri", True),
     RSI_TP_MR: StrategyMeta(
         RSI_TP_MR, None, False,
         "Swing mean reversion (2-7 day CNC). Has a strategy_profiles entry but no engine "

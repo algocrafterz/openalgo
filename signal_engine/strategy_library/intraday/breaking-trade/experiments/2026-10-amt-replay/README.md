@@ -8,6 +8,7 @@ nothing here changes the running paper strategy. Findings and decisions are in
 |---|---|
 | `bt_replay.py` | Replays each EXECUTED paper trade (trades.db) on Historify 1m bars under the engine's exits; stop and no-progress variants |
 | `amt_replay.py` | Rebuilds entries from the scanner's picks (breakingtrade.db `scan_hits`) and tests one Market Profile change at a time (B, E1-E7, E17) |
+| `selection_check.py` | The scanner's picks alone: move in the pick's direction after the pick, against the average F&O stock over the same minutes (`uv run python $D/selection_check.py`) |
 | `results/` | Per-trade CSVs written by the two scripts. Gitignored like every CSV in the repo, so they exist only on the machine that ran them; rerun the commands below to regenerate |
 
 ## Inputs (read-only)

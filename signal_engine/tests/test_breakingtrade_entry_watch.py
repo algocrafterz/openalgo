@@ -20,6 +20,9 @@ from signal_engine.analysis.breakingtrade import alerts, entry_watch, store, tri
 def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
     monkeypatch.setattr(alerts, "send", lambda text, kind=None, monospace=False: (True, 999))
+    # These tests cover BREAKINGTRADE's own recheck; BREAKINGTRADE-RI's is tested in
+    # test_breakingtrade_ri.py, so it is held off here rather than read from the real config.
+    monkeypatch.setattr(alerts, "ri_enabled", lambda: False)
 
 
 def _record_hit(symbol, direction, scan, captured_at, is_new=1):

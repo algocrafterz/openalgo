@@ -48,24 +48,31 @@ from signal_engine.analysis.breakingtrade import alerts, store, trigger, validat
 CONFIRMATION_WINDOW = timedelta(hours=2)
 
 
-def _already_confirmed(symbol: str, since: str) -> bool:
-    """Whether a trade_signal has already fired for this symbol from this pick onward.
+#: (alert kind, strategy tag, planner) per version the scanner trades. BREAKINGTRADE-RI is
+#: added by check() only while its channel is enabled (alerts.ri_enabled()). Each version keeps
+#: its own "already confirmed" state, so one confirming never stops the other from confirming.
+_BASELINE = ("trade_signal", "BREAKINGTRADE", "plan_trade")
+_RANGE_INTEGRITY = ("trade_signal_ri", "BREAKINGTRADE-RI", "plan_trade_range_integrity")
+
+
+def _already_confirmed(symbol: str, since: str, kind: str = "trade_signal") -> bool:
+    """Whether a signal of `kind` has already fired for this symbol from this pick onward.
 
     Mirrors tp_watch.py's `_last_level_hit` - a direct query against alerts' own connection
     rather than a new helper, matching that module's existing convention.
     """
     with alerts._connect() as conn:
         row = conn.execute(
-            f"SELECT 1 FROM alerts WHERE kind = 'trade_signal' AND symbol = ? "
+            f"SELECT 1 FROM alerts WHERE kind = ? AND symbol = ? "
             f"AND {alerts.SINCE_CLAUSE} LIMIT 1",
-            (symbol, since),
+            (kind, symbol, since),
         ).fetchone()
     return row is not None
 
 
-def _pending_picks(captured_at: datetime) -> list[tuple]:
+def _pending_picks(captured_at: datetime, kind: str = "trade_signal") -> list[tuple]:
     """(symbol, direction, scan, first_seen) for today's scan hits still inside the
-    confirmation window that have not yet produced a trade_signal.
+    confirmation window that have not yet produced a signal of `kind`.
 
     Reads scan_hits (already recorded for every hit, new or not, by store.record_hits) rather
     than adding a new state table - the "is this pick still worth checking" question is fully
@@ -89,38 +96,43 @@ def _pending_picks(captured_at: datetime) -> list[tuple]:
         first_seen_dt = datetime.strptime(first_seen, "%Y-%m-%d %H:%M:%S")
         if first_seen_dt < cutoff:
             continue  # expired - not chasing a call from hours ago
-        if _already_confirmed(symbol, first_seen):
+        if _already_confirmed(symbol, first_seen, kind):
             continue
         picks.append((symbol, direction, scan, first_seen_dt))
     return picks
 
 
 def check(captured_at: datetime, snapshot=None) -> int:
-    """Re-run entry confirmation for every still-pending scan pick. Returns how many new
-    trade_signal alerts were emitted this poll."""
-    picks = _pending_picks(captured_at)
-    if not picks:
+    """Re-run entry confirmation for every still-pending scan pick, per version. Returns how
+    many new trade signals were emitted this poll."""
+    versions = [_BASELINE] + ([_RANGE_INTEGRITY] if alerts.ri_enabled() else [])
+    work = [(v, pick) for v in versions for pick in _pending_picks(captured_at, v[0])]
+    if not work:
         return 0
 
     day_types = {}
     if snapshot is not None and "day_type" in snapshot.columns:
         day_types = dict(zip(snapshot["symbol"], snapshot["day_type"], strict=False))
 
+    bars_cache: dict = {}  # one history fetch per symbol per poll, whatever the versions
     emitted = 0
-    for symbol, direction, scan, first_seen in picks:
+    for (kind, strategy, planner), (symbol, direction, scan, first_seen) in work:
         try:
-            bars = validate.fetch_bars(symbol, captured_at)
+            if symbol not in bars_cache:
+                bars_cache[symbol] = validate.fetch_bars(symbol, captured_at)
+            bars = bars_cache[symbol]
             if bars.empty:
                 continue
             before = bars[pd.to_datetime(bars["timestamp"]) <= captured_at]
             atr = validate.average_true_range(before) if not before.empty else None
-            plan = trigger.plan_trade(
+            plan = getattr(trigger, planner)(
                 symbol, direction, day_types.get(symbol), bars, first_seen, atr
             )
             if plan is None:
                 continue
-            alerts.alert_trade_signal(plan, scan_name=scan)
+            alerts.alert_trade_signal(plan, strategy=strategy, scan_name=scan, kind=kind)
             emitted += 1
         except Exception as exc:
+            bars_cache[symbol] = pd.DataFrame()  # a failed fetch is not retried this poll
             print(f"  entry recheck for {symbol} skipped: {type(exc).__name__}: {exc}")
     return emitted
