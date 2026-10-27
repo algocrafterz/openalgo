@@ -96,6 +96,134 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-28 02:10 — Range-integrity candidate (E1+E7) validated on past data; still not adopted
+- **What changed:** Nothing in the strategy. The candidate from the entry below was tested as one
+  unit: take a trade only after 10:15, once the first hour's range is complete, and only when
+  the confirming 5-minute bar closes outside that range. Checks confirmed that the replay applies
+  both rules to every trade and never uses a price from after the moment of the decision.
+- **Entry:** Not affected yet. The candidate would skip about 3 in 10 of today's entries.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** The candidate loses less than today's rules in both periods tested, but it
+  is not profitable after realistic costs: about breakeven in the test month and a small loss in
+  the earlier month. The earlier month was not used to choose the rule, but the strategy itself
+  was built during it. Any further check has to come from new data, on paper.
+
+NOTE: Code and commands: `experiments/2026-10-amt-replay/` (`amt_replay.py`, variants B, E1, E7,
+E17). E1 alone measures the IB from bars before the trigger bar opened, so before 10:15 it uses
+the IB still forming; E7 alone skips trigger bars starting before 10:15; E17 is both. Checks run on
+every variant: each accepted decision is recomputed from bars strictly before the order minute
+and must match exactly (poll, signal price, stop, TP, trigger bar); for E17 every trade is also
+asserted to have a trigger bar starting at or after 10:15, a close beyond the complete IB edge in
+its direction, and an order poll at or after that bar's close. All passed. The rebuilt E17 is
+identical, trade for trade, to the "E1 as run" rows below.
+
+After Flattrade charges and 4 bps slippage per side (8 bps in brackets); R = planned risk:
+
+| Period | Variant | Trades | Exp. R | t | PF | Max DD | Long R (n) | Short R (n) |
+|---|---|---|---|---|---|---|---|---|
+| Test 09-24..10-27 | B | 96 | -0.047 (-0.095) | -1.21 | 0.71 | -Rs 3,025 | -0.141 (56) | +0.083 (40) |
+| | E1 | 67 | +0.015 (-0.024) | 0.37 | 1.13 | -Rs 1,413 | -0.021 (32) | +0.048 (35) |
+| | E7 | 94 | -0.042 (-0.090) | -1.06 | 0.73 | -Rs 2,320 | -0.135 (54) | +0.083 (40) |
+| | **E17** | 67 | **+0.004 (-0.035)** | 0.10 | 1.03 | -Rs 1,413 | -0.044 (32) | +0.048 (35) |
+| Holdout 08-18..09-23 | B | 55 | -0.099 (-0.172) | -1.56 | 0.58 | -Rs 4,264 | -0.088 (46) | -0.160 (9) |
+| | E1 | 34 | -0.021 (-0.075) | -0.35 | 0.78 | -Rs 1,758 | +0.012 (28) | -0.172 (6) |
+| | E7 | 54 | -0.052 (-0.124) | -0.72 | 0.77 | -Rs 4,032 | -0.056 (46) | -0.033 (8) |
+| | **E17** | 32 | **-0.026 (-0.078)** | -0.39 | 0.76 | -Rs 1,837 | +0.014 (27) | -0.238 (5) |
+
+Both periods together: B 151 trades at about -0.066R, E17 99 trades at about -0.006R. By NIFTY
+direction at entry, E17 against B: test up -0.001 vs -0.058, down +0.009 vs -0.036; holdout up
++0.032 vs -0.066, down -0.135 vs -0.142. Rupee figures are not comparable across the two periods:
+the holdout has no executed trades to estimate day capital from, so it sizes from the median.
+
+Is the holdout clean?
+- For choosing E1 and E7, yes. Both rules came from the test month (the entry-location analysis
+  of the executed trades). No variant was run on 2026-08-18..2026-09-23 before the choice, and
+  only B, E1, E7 and E17 were run there afterwards. Nothing was changed after seeing those results.
+- For the strategy as a whole, no. The scanner's scans, its filters and the 2-hour confirmation
+  window were designed and tuned on data from late August and early September, inside this
+  period, so the baseline's own parameters are partly fitted to it.
+- The scan list and vendor columns may also have differed in those weeks; picks are used exactly
+  as the scanner recorded them. 16 holdout picks and 32 test picks had no 1m bars.
+- The holdout has now been looked at. It cannot confirm any further change; only new data can.
+
+Same assumptions across variants: every variant reads the same picks, the same Historify bars
+(as of 2026-10-27 20:31 IST), the same poll schedule, the same exit simulator, the same sizing
+rule and the same cost model. A variant changes only its own rule; where that rule moves the stop
+or target (E3, E4, E5), position size follows the new stop as live sizing would.
+
+### 2026-10-28 01:28 — Market Profile entry rules tested on past data; one candidate, nothing adopted
+- **What changed:** Nothing in the strategy. Seven Market Profile (auction market theory) changes
+  to how a trade is entered, stopped or targeted were tested one at a time on past scanner picks.
+  Only one passed the rule set before testing: take a breakout only once price is actually
+  outside the first hour's range. It also helped on an earlier month kept aside as a check.
+- **Entry:** Not affected yet. The candidate would skip about 3 in 10 of today's entries: those
+  where the "breakout" was bought while price was still inside the first hour's range.
+- **Exit (SL):** Not affected. Moving the stop to just inside the broken range made results no
+  better per unit of risk and the worst losing run five times deeper.
+- **Exit (TP):** Not affected. Targets at the nearest prior-day or range-extension level left so
+  little room that most trades were refused, and the rest lost.
+- **Consideration:** Even with the candidate, the strategy roughly breaks even after realistic
+  costs on the test month (+0.004 of risk per trade) and still loses slightly on the earlier
+  month (-0.026). It is an improvement, not a profitable strategy. The Performance page shows a
+  profit because sandbox fills include no slippage; about 2.7 bps of slippage per side erases it.
+
+NOTE: Replay rebuilt from `scan_hits` (picks), not from executed trades, so a change of entry
+rule changes which trades exist. It reproduces the live path: first capture per (symbol, scan);
+signal bar = last 5m bar stamped at or before it; trigger = first completed 5m close beyond that
+bar's extreme, seen at a scanner poll (`__main__.POLL_WINDOWS`) within 2 h; order at that poll's
+1m open; IB, ATR (14 x 5m) and gates from what the poll could see. Exits, sizing and costs as in
+the entry below (staged ladder, 90 min gate, Flattrade charges, 4 bps per side). Calibration on
+2026-09-24 to 2026-10-27: 79 of 83 paper entries reproduced with the same side, stop and target,
+90% within 5 minutes of the real order; the 17 extra trades are signals the engine refused for
+reasons outside the strategy (T2T symbols, a capital fetch failure, order timeouts).
+
+Decision rule fixed before running: against the baseline after costs, expectancy up by at least
+0.03R, profit factor up, drawdown no worse, at least 30 trades, and the gain holding on both
+sides or in both NIFTY directions at entry.
+
+Test month, 2026-09-24 to 2026-10-27, after charges and 4 bps per side:
+
+| Variant | Trades | Net | Exp. R | t | PF | Max DD | Long R | Short R | Rule |
+|---|---|---|---|---|---|---|---|---|---|
+| B: today's rules, rebuilt | 96 | -Rs 3,925 | -0.047 | -1.21 | 0.71 | -Rs 3,025 | -0.141 | +0.083 | |
+| E1 as run (included E7's 10:15 rule, so E1+E7) | 67 | Rs 240 | +0.004 | 0.10 | 1.03 | -Rs 1,413 | -0.044 | +0.048 | pass |
+| E2: 30-min period close beyond the IB edge | 100 | -Rs 3,845 | -0.041 | -1.12 | 0.72 | -Rs 4,156 | -0.114 | +0.023 | fail |
+| E3: stop just inside the broken IB edge | 212 | Rs 531 | -0.042 | -0.60 | 1.01 | -Rs 14,060 | -0.367 | +0.176 | fail |
+| E4: TP1 at the nearest AMT reference | 22 | -Rs 5,415 | -0.293 | -2.92 | 0.14 | -Rs 4,009 | -0.375 | +0.079 | fail |
+| E5: Gap-Down Rescue as a gap-fill trade | 61 | -Rs 678 | -0.013 | -0.28 | 0.91 | -Rs 701 | -0.197 | +0.083 | fail |
+| E6: scan time windows enforced | 57 | -Rs 6,359 | -0.131 | -2.48 | 0.38 | -Rs 4,363 | -0.158 | +0.012 | fail |
+| E7: no trigger before the IB completes | 94 | -Rs 3,453 | -0.042 | -1.06 | 0.73 | -Rs 2,320 | -0.135 | +0.083 | fail |
+
+Holdout, 2026-08-18 to 2026-09-23 (picks not used to form any rule):
+
+| Variant | Trades | Net | Exp. R | t | PF | Max DD | Long R | Short R |
+|---|---|---|---|---|---|---|---|---|
+| B | 55 | -Rs 4,138 | -0.099 | -1.56 | 0.58 | -Rs 4,264 | -0.088 | -0.160 |
+| E1 as run (E1+E7) | 32 | -Rs 809 | -0.026 | -0.39 | 0.76 | -Rs 1,837 | +0.014 | -0.238 (5) |
+
+The first E1 run skipped any trigger bar starting before 10:15, which is E7's rule, so the rows
+above labelled E1 are E1 and E7 together. E1 alone, E7 alone and the pair are separated in the
+2026-10-28 02:10 entry.
+
+- E1. The gain is the removal of entries still inside the IB (29 trades at -0.203R in the test
+  month); on the trades both keep, E1 is no better. It beat B in 5 of 6 weeks and in both NIFTY
+  directions at entry, and in the holdout it improved by +0.073R with half the drawdown. The idea
+  came from looking at the test month, which is why the holdout exists; 32 holdout trades is thin.
+- E2. Waiting for a 30-minute close beyond the IB adds trades and does not improve them.
+- E3. More trades pass the R:R gate with a tighter stop and size grows; the net in rupees is
+  positive only through size, the expectancy is unchanged and the worst run is -Rs 14,060.
+- E4. Prior-day value-area edges, POC, PDH/PDL and 1.5x/2x IB extensions usually sit close to
+  entry, so R:R falls under 0.75 and 249 signals are refused; the 22 left lost.
+- E5. Treating Gap-Down Rescue as a gap-fill trade (stop under the rescue low, target the prior
+  close) made its longs worse (-0.197R); the small overall gain is only from skipping 23 picks
+  whose gap had already filled.
+- E6. "Neutral Day Resolution" is defined for 14:00 onward, but the scanner does not poll from
+  13:00 to 14:50 and the time exit is 14:45, so enforcing its window removes it entirely. It was
+  the best scan only while firing outside its definition. The other scans' windows also hurt.
+- E7. Only 2 trades change; neutral. It is still the correct rule: an entry before 10:15 sizes
+  from an IB that has not finished.
+
 ### 2026-10-27 23:58 — Watchlist variant retired; replay of three proposed changes (none adopted)
 - **What changed:** The watchlist variant (enter at the scan price, no confirming close) is
   switched off: it no longer trades, sends messages or records alerts. Its code, tag, tests and
