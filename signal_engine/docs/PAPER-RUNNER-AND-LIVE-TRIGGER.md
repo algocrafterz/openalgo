@@ -79,6 +79,70 @@ For BREAKOUT, the trigger for a live trade is one event: **a 5-minute bar closes
 5. **Other strategies are unaffected.** ORB, EMA9 and the rest keep using Pine alerts until each is
    ported the same way.
 
+## 4a. Live-broker checks for the order path (DEFERRED — LIVE TRADING NOT YET APPROVED)
+
+The order-path safety work (`fix/order-path-safety`, in the active branch since 2026-10-26) was
+validated against real Flattrade data read-only and offline only. The checks below need a live
+order or a live position and are deferred until live-readiness validation is approved. Until then
+nothing here is run, OpenAlgo stays in ANALYZE, and no live order is placed.
+
+**Already done (2026-10-26, read-only, no orders):** Flattrade's order, trade and position books
+were captured through its query endpoints only (other URLs blocked in the capture), redacted,
+and stored in `signal_engine/data/validation-20261026/` (gitignored). Findings: `norentm` is
+`HH:MM:SS DD-MM-YYYY` and exchange/fill times `DD-MM-YYYY HH:MM:SS`, all parsed by
+`order_reconcile.parse_broker_stamp`; statuses map to `complete` / `cancelled` / `open`
+(`TRIGGER_PENDING`) and `SL-MKT` to `SL-M`; broker clock within 1.12 s of ours over 5,271 logged
+responses (inside the 5 s ambiguous window); the flat position reads 0. The captured rows replayed
+offline through the timeout, late-fill, sweeper and bad-fill logic, with every send mocked:
+17/17 passed.
+
+1. **Flattrade strategy tagging of engine stops.**
+   - Why: live order rows carry no strategy; OpenAlgo adds it by order id from its strategy book
+     (`services/strategy_tag_enrichment.attach_strategy`, documented as display-only, empty on any
+     failure). `executor.protective_orders` selects only stops tagged with the strategy, so if the
+     tag is missing the stray-stop sweep cannot see an engine stop (it still cancels the tracked
+     stop by id).
+   - Procedure: with one share open, place the engine stop with `place_sl_order`; read
+     `/api/v1/orderbook`.
+   - Expected: the SL-M row carries the engine's strategy tag, and `protective_orders` returns it.
+   - Complete when: an engine-placed stop is returned by `protective_orders` on the live book, and
+     a manual stop on the same symbol is not.
+2. **Cancelling a dead order.**
+   - Why: after a failed stop cancel the exit path reads the stop's status to decide whether the
+     stop already sold; that relies on how the broker answers a cancel of a completed or
+     cancelled order.
+   - Procedure: cancel a stop, confirm it in the book, then cancel the same order id again.
+   - Expected: an error response (not success), and the status still reads `cancelled`.
+   - Complete when: the broker's reply to a second cancel is recorded and the exit path's handling
+     of it is confirmed by test.
+3. **Position side and quantity.**
+   - Why: the sweeper restores a stop only when the broker position equals the tracked one (same
+     side, full size); a reversed or partial reading must hold instead.
+   - Procedure: hold one share long; read `fetch_net_position` and the position book.
+   - Expected: `+1` (and `-1` for a short), matching `netqty`.
+   - Complete when: a non-zero live position reads with the correct sign and quantity.
+4. **Live order reconciliation.**
+   - Why: every timed-out order is matched by symbol, side, size and timestamp. Known limitation:
+     for a filled order the timestamp is the FILL time, not the placement time, so a resting order
+     of the same side and size filled after a timed-out send matches as that order (for example
+     the position's own stop filling just after a timed-out exit; it books a real close).
+   - Procedure: one-share entry and exit; reconcile each against the live book from its send time,
+     with and without its own id excluded.
+   - Expected: each order is matched DEFINITE from its own send time; excluded, it is ABSENT; an
+     earlier same-size order never matches.
+   - Complete when: both orders reconcile as expected on the live book and the fill-time
+     limitation is accepted or addressed.
+5. **Timeout and protective-stop recovery.**
+   - Why: the core safety claims (no duplicate sell, no unintended short, no stop left beside a
+     close) are proven only by tests and replay so far.
+   - Procedure: the one-share round trip with the stop cancelled and replaced; the timeout paths
+     themselves stay offline replays of the live books captured during it (a live timeout cannot be
+     forced safely). A close sent beside a live stop (the broker's handling of a SELL while a SELL
+     SL-M is live) stays unverified unless separately approved.
+   - Expected: no duplicate sell, no short, and a flat position with no working orders at the end.
+   - Complete when: the round trip ends flat with no working orders, the engine's position state
+     matches the broker, and the replays pass on the new captures.
+
 ## 5. What the runner achieves, and what it does not
 
 **Achieves:** backtest and live become the same code path; real slippage, fill-timing and rejection data
