@@ -196,7 +196,9 @@ describe('BacktestResultsDetail evidence blocks', () => {
 
   it('opens the drill-down on the mapped subset from a gate and scrolls to it', async () => {
     const scroll = vi.fn()
-    Element.prototype.scrollIntoView = scroll
+    // On HTMLElement, where test/setup.ts installs its own stub: one on Element
+    // is shadowed by that stub and never sees the page's call.
+    HTMLElement.prototype.scrollIntoView = scroll
     const user = userEvent.setup()
     renderPage(detail())
     await screen.findByTestId('integrity-checks')

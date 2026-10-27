@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 import pytest
 import pytz
+from sqlalchemy import null
 
 from database.sandbox_db import SandboxOrders, db_session
 from sandbox.execution_engine import ExecutionEngine
@@ -41,6 +42,10 @@ def offline_engine(monkeypatch):
 
 
 def _seed_order(*, price_type, age_seconds, order_status="open"):
+    # SQL NULL is the sandbox's "reserved nothing" value (2.0.2.8, #2207), written with null() as
+    # place_order does, since the column's Python default would turn None into 0. A literal 0
+    # now means a legacy row whose margin is recalculated on cancel, and this test account has
+    # no reservation to release, so 0 would make the cancel refuse for an unrelated reason.
     order_id = uuid.uuid4().hex[:14]
     placed_at = datetime.now(IST) - timedelta(seconds=age_seconds)
     db_session.add(
@@ -59,7 +64,7 @@ def _seed_order(*, price_type, age_seconds, order_status="open"):
             average_price=None,
             filled_quantity=0,
             pending_quantity=1,
-            margin_blocked=0,
+            margin_blocked=null(),
             strategy="stale-order-test",
             order_timestamp=placed_at,
             update_timestamp=placed_at,

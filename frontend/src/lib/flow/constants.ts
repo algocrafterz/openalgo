@@ -39,6 +39,38 @@ export const PRODUCT_TYPES = [
   { value: 'NRML', label: 'NRML', description: 'Normal for futures and options' },
 ] as const
 
+/**
+ * Segments that trade contracts carried on margin rather than cash-settled
+ * holdings. A position in one of these is normally taken NRML, so that is what
+ * a node defaults to when its author never picked a product. Index
+ * pseudo-exchanges are absent because no order is ever placed on them.
+ *
+ * The backend keeps the same rule in services/flow_node_contracts.py; both
+ * sides must agree or the panel would promise a product the run does not send.
+ */
+export const DERIVATIVE_EXCHANGES = new Set<string>([
+  'NFO',
+  'BFO',
+  'CDS',
+  'BCD',
+  'MCX',
+  'NCDEX',
+  'NCO',
+])
+
+/**
+ * The product a node on `exchange` uses when its author picked none.
+ *
+ * A *default*, never an override: once a product is chosen it is stored on the
+ * node and wins, so a deliberately intraday NFO order stays MIS.
+ */
+export function defaultProductForExchange(exchange: string | undefined | null): 'MIS' | 'NRML' {
+  return DERIVATIVE_EXCHANGES.has((exchange || '').trim().toUpperCase()) ? 'NRML' : 'MIS'
+}
+
+/** Options nodes trade an option whatever their underlying's exchange reads. */
+export const OPTION_NODE_PRODUCT = 'NRML' as const
+
 export const PRICE_TYPES = [
   { value: 'MARKET', label: 'Market', description: 'Execute at current market price' },
   { value: 'LIMIT', label: 'Limit', description: 'Execute at specified price or better' },
@@ -60,24 +92,61 @@ export const OPTION_TYPES = [
   { value: 'PE', label: 'Put (PE)', description: 'Put Option' },
 ] as const
 
-export const STRIKE_OFFSETS = [
+/**
+ * How far out the offset dropdowns count, in either direction.
+ *
+ * Matched to OPTION_STRIKE_WINDOW in blueprints/flow.py, which is the number
+ * of strikes either side of ATM the chain endpoint returns. The two controls
+ * sit next to each other on the same leg - pick "Offset" or pick "Strike" -
+ * and offering an offset further out than the strike picker will show you is
+ * offering a contract this panel cannot then confirm exists.
+ *
+ * Deliberately narrower than the executor's own limit, which is ITM1-ITM50 and
+ * OTM1-OTM50 (OPTION_OFFSET_PATTERN in services/flow_node_contracts.py,
+ * mirrored by OFFSET_PATTERN in ./customLegs.ts). A leg already storing
+ * something beyond this window is still valid and still runs; strikeOffsetOptions
+ * keeps it selectable rather than blanking the control. The dropdowns used to
+ * stop at ITM5 and OTM10 with no such fallback, which is how an imported OTM12
+ * leg rendered empty and lost its strike to the next value picked.
+ */
+export const MAX_STRIKE_OFFSET = 25
+
+const strikeOffset = (kind: 'ITM' | 'OTM', n: number) => ({
+  value: `${kind}${n}`,
+  label: `${kind}${n}`,
+  description: `${n} ${n === 1 ? 'strike' : 'strikes'} ${
+    kind === 'ITM' ? 'In The Money' : 'Out of The Money'
+  }`,
+})
+
+const strikeOffsetRange = (kind: 'ITM' | 'OTM') =>
+  Array.from({ length: MAX_STRIKE_OFFSET }, (_, i) => strikeOffset(kind, i + 1))
+
+export const STRIKE_OFFSETS: ReadonlyArray<{
+  value: string
+  label: string
+  description: string
+}> = [
   { value: 'ATM', label: 'ATM', description: 'At The Money' },
-  { value: 'ITM1', label: 'ITM1', description: '1 strike In The Money' },
-  { value: 'ITM2', label: 'ITM2', description: '2 strikes In The Money' },
-  { value: 'ITM3', label: 'ITM3', description: '3 strikes In The Money' },
-  { value: 'ITM4', label: 'ITM4', description: '4 strikes In The Money' },
-  { value: 'ITM5', label: 'ITM5', description: '5 strikes In The Money' },
-  { value: 'OTM1', label: 'OTM1', description: '1 strike Out of The Money' },
-  { value: 'OTM2', label: 'OTM2', description: '2 strikes Out of The Money' },
-  { value: 'OTM3', label: 'OTM3', description: '3 strikes Out of The Money' },
-  { value: 'OTM4', label: 'OTM4', description: '4 strikes Out of The Money' },
-  { value: 'OTM5', label: 'OTM5', description: '5 strikes Out of The Money' },
-  { value: 'OTM6', label: 'OTM6', description: '6 strikes Out of The Money' },
-  { value: 'OTM7', label: 'OTM7', description: '7 strikes Out of The Money' },
-  { value: 'OTM8', label: 'OTM8', description: '8 strikes Out of The Money' },
-  { value: 'OTM9', label: 'OTM9', description: '9 strikes Out of The Money' },
-  { value: 'OTM10', label: 'OTM10', description: '10 strikes Out of The Money' },
-] as const
+  ...strikeOffsetRange('ITM'),
+  ...strikeOffsetRange('OTM'),
+]
+
+/**
+ * The offset list with ``current`` guaranteed to be in it.
+ *
+ * A stored value the list does not carry renders as an empty control, and the
+ * next thing the author picks silently replaces a strike they never chose.
+ * That is the same reason the leg editor's expiry keeps an unlisted date
+ * selectable. Anything reaches this - a legacy value, a hand-written offset, an
+ * offset past the window that the executor still accepts - so it is shown
+ * as-is rather than corrected.
+ */
+export function strikeOffsetOptions(current: unknown) {
+  const value = typeof current === 'string' ? current.trim() : ''
+  if (!value || STRIKE_OFFSETS.some((offset) => offset.value === value)) return STRIKE_OFFSETS
+  return [{ value, label: value, description: 'Stored on this node' }, ...STRIKE_OFFSETS]
+}
 
 export const OPTION_STRATEGIES = [
   {
@@ -131,6 +200,19 @@ export const INDEX_SYMBOLS = [
   { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO' },
   { value: 'BANKEX', label: 'BANKEX', exchange: 'BFO' },
   { value: 'SENSEX50', label: 'SENSEX50', exchange: 'BFO' },
+  // MCX commodities. Options trade on MCX itself, so the underlying exchange
+  // and the option exchange are the same value.
+  { value: 'GOLD', label: 'GOLD', exchange: 'MCX' },
+  { value: 'GOLDM', label: 'GOLDM', exchange: 'MCX' },
+  { value: 'SILVER', label: 'SILVER', exchange: 'MCX' },
+  { value: 'SILVERM', label: 'SILVERM', exchange: 'MCX' },
+  { value: 'CRUDEOIL', label: 'CRUDEOIL', exchange: 'MCX' },
+  { value: 'CRUDEOILM', label: 'CRUDEOILM', exchange: 'MCX' },
+  { value: 'NATURALGAS', label: 'NATURALGAS', exchange: 'MCX' },
+  { value: 'NATGASMINI', label: 'NATGASMINI', exchange: 'MCX' },
+  { value: 'COPPER', label: 'COPPER', exchange: 'MCX' },
+  { value: 'ZINC', label: 'ZINC', exchange: 'MCX' },
+  { value: 'MCXBULLDEX', label: 'MCXBULLDEX', exchange: 'MCX' },
 ] as const
 
 // =============================================================================
@@ -1117,7 +1199,13 @@ export const DEFAULT_NODE_DATA = {
   start: {
     scheduleType: 'daily' as const,
     time: '09:15',
+    // The scheduler has always read these; only the switch had a default, so a
+    // workflow inherited the exchange's full session unless someone edited the
+    // JSON by hand. 15:15 leaves room to square off before the 15:30 close.
     marketHoursOnly: true,
+    marketHoursStart: '09:15',
+    marketHoursEnd: '15:15',
+    marketHoursExchange: 'NSE',
   },
   priceAlert: {
     symbol: '',
@@ -1139,9 +1227,10 @@ export const DEFAULT_NODE_DATA = {
     trigger: 'once' as const,
   },
   webhookTrigger: {
+    // No symbol or exchange: the request carries them. Downstream nodes read
+    // `{{webhook.symbol}}` and friends, so a copy stored on the trigger would
+    // be a second source of truth that the executor never looks at.
     label: '',
-    symbol: '',
-    exchange: 'NSE',
   },
   placeOrder: {
     symbol: '',
@@ -1149,7 +1238,9 @@ export const DEFAULT_NODE_DATA = {
     action: 'BUY' as const,
     quantity: 1,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     price: 0,
     triggerPrice: 0,
   },
@@ -1160,7 +1251,9 @@ export const DEFAULT_NODE_DATA = {
     quantity: 1,
     positionSize: 0,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     price: 0,
     triggerPrice: 0,
   },
@@ -1198,7 +1291,9 @@ export const DEFAULT_NODE_DATA = {
     action: 'BUY' as const,
     quantity: 1,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // An option is a derivative contract whatever its underlying's exchange
+    // reads, so this defaults to NRML rather than following that field.
+    product: 'NRML' as const,
     price: 0,
     triggerPrice: 0,
   },
@@ -1214,7 +1309,9 @@ export const DEFAULT_NODE_DATA = {
     strangleWidth: 'OTM2' as const,
     priceType: 'MARKET' as const,
     price: 0,
-    product: 'MIS' as const,
+    // An option is a derivative contract whatever its underlying's exchange
+    // reads, so this defaults to NRML rather than following that field.
+    product: 'NRML' as const,
   },
   cancelOrder: {
     orderId: '',
@@ -1223,7 +1320,9 @@ export const DEFAULT_NODE_DATA = {
   closePositions: {
     symbol: '',
     exchange: 'NSE',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
   },
   modifyOrder: {
     // Only the order id. symbol/exchange/action/product/priceType are read back
@@ -1236,7 +1335,9 @@ export const DEFAULT_NODE_DATA = {
   },
   basketOrder: {
     orders: '',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     priceType: 'MARKET' as const,
     price: 0,
     triggerPrice: 0,
@@ -1248,14 +1349,18 @@ export const DEFAULT_NODE_DATA = {
     quantity: 100,
     splitSize: 50,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     price: 0,
     triggerPrice: 0,
   },
   positionCheck: {
     symbol: '',
     exchange: 'NSE',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     condition: 'exists' as const,
     threshold: 0,
   },
@@ -1348,7 +1453,9 @@ export const DEFAULT_NODE_DATA = {
   openPosition: {
     symbol: '',
     exchange: 'NSE',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     outputVariable: '',
   },
   // The config panel renders this name as its input's fallback value, so the
@@ -1487,7 +1594,9 @@ export const DEFAULT_NODE_DATA = {
     exchange: 'NSE',
     quantity: 1,
     price: 0,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     action: 'BUY' as const,
     priceType: 'MARKET' as const,
     outputVariable: 'marginResult',

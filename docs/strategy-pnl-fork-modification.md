@@ -173,6 +173,15 @@ automation config, nothing to do with the free-text `strategy` tag on
 - `blueprints/orders.py` (2026-10-12) — `_cancel_all_ui_payload`: "No open orders to cancel" only when
   nothing was cancelled and nothing failed (every-cancel-failed used to be answered that way).
   Test: `test/test_cancel_all_ui_payload.py`.
+- `broker/flattrade/api/data.py` (2026-10-24, commit `973442303`, not P&L) — `_report_floored_volume`:
+  OpenAlgo 2.0.2.8 floors a negative TPSeries bar volume (`intv`) to 0 in `get_history`, which hides
+  a feed fault from `signal_engine`'s intraday dataset rule C3. The returned frame is unchanged; each
+  history request now logs its floored bars, a warning outside the NSE/BSE closing session (from
+  15:15) and a debug line inside it, where a negative volume is the documented counter switch. Tests:
+  `test/test_flattrade_history_floored_volume.py`, and
+  `signal_engine/tests/test_intraday_convert.py::test_a_source_that_floors_negative_volume_is_invisible_to_c3`
+  for the limitation that remains. On an upstream merge, keep the report and the unchanged floor;
+  drop it only if upstream itself starts reporting floored bars.
 
 ## Deliberate design decisions
 

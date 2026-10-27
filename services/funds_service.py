@@ -1,7 +1,8 @@
 import importlib
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 from database.auth_db import get_auth_token_broker, get_username_by_apikey
+from services.broker_busy import BrokerBusyError, broker_busy_result
 from utils.logging import get_logger
 from utils.session_manager import refresh_broker_session
 
@@ -93,6 +94,8 @@ def get_funds_with_auth(
                     )
 
         return True, {"status": "success", "data": funds}, 200
+    except BrokerBusyError as e:
+        return broker_busy_result(e, "Funds request")
     except Exception as e:
         logger.exception(f"Error in broker_module.get_margin_data: {e}")
         return False, {"status": "error", "message": str(e)}, 500

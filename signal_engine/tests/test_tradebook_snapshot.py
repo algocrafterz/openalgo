@@ -148,3 +148,117 @@ def test_eod_sh_snapshots_the_day_it_reviews():
     with open(script, encoding="utf-8") as fh:
         text = fh.read()
     assert re.search(r'-m signal_engine\.analysis --snapshot --day "\$DAY"', text)
+
+
+def test_a_past_day_with_a_saved_snapshot_returns_it_without_fetching(snap, monkeypatch):
+    """A re-run for a reviewed day reuses that day's file; the broker is not asked."""
+    run, stored, tmp = snap
+    past = dt.date(2026, 10, 21)
+    (tmp / "tradebook_2026-10-21.json").write_text(json.dumps([_fill("P1")]), encoding="utf-8")
+
+    async def _must_not_fetch():
+        raise AssertionError("the broker tradebook was fetched for a past day")
+
+    monkeypatch.setattr(analysis, "_fetch_tradebook", _must_not_fetch)
+    path = analysis.snapshot(past)
+    assert os.path.basename(path) == "tradebook_2026-10-21.json"
+    assert [f["tradeid"] for f in stored(past)] == ["P1"]
+
+
+def _cli(monkeypatch, *argv):
+    monkeypatch.setattr("sys.argv", ["signal_engine.analysis", *argv])
+    analysis.main()
+
+
+def test_the_cli_fails_for_a_past_day_with_no_saved_snapshot(snap, monkeypatch):
+    """eod.sh reads a non-zero exit as a missing snapshot and says so in the report."""
+    with pytest.raises(SystemExit) as exc:
+        _cli(monkeypatch, "--snapshot", "--day", "2026-10-21")
+    assert exc.value.code != 0
+
+
+def test_the_cli_succeeds_for_a_past_day_with_a_saved_snapshot(snap, monkeypatch):
+    _run, _stored, tmp = snap
+    (tmp / "tradebook_2026-10-21.json").write_text(json.dumps([_fill("P1")]), encoding="utf-8")
+    _cli(monkeypatch, "--snapshot", "--day", "2026-10-21")  # returns, no SystemExit
+
+
+def test_fills_dated_another_ist_day_are_not_saved_as_todays(snap, capsys):
+    run, stored, _ = snap
+    yesterday = dict(_fill("Y1"), timestamp="2026-10-21 15:10:00")
+    run([yesterday, _fill("T1")])
+    assert [f["tradeid"] for f in stored()] == ["T1"]
+    assert "1 fill(s) dated another day" in capsys.readouterr().out
+
+
+def test_the_flattrade_tradebook_time_format_is_read(snap):
+    """Noren's norentm is 'HH:MM:SS DD-MM-YYYY', IST wall clock."""
+    run, stored, _ = snap
+    today = dict(_fill("F1"), timestamp="10:05:01 22-10-2026")
+    yesterday = dict(_fill("F0", orderid="O0"), timestamp="15:10:00 21-10-2026")
+    run([today, yesterday])
+    assert [f["tradeid"] for f in stored()] == ["F1"]
+
+
+def _set_aside(tmp, day=TODAY):
+    path = tmp / f"unverified_tradebook_{day.isoformat()}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+@pytest.mark.parametrize("stamp", ["", "22/10/2026 10:05", None])
+def test_a_fill_without_a_readable_time_is_set_aside_not_saved_as_todays(snap, stamp, capsys):
+    """A fill that cannot be dated may be another day's: it never enters today's snapshot."""
+    run, stored, tmp = snap
+    odd = dict(_fill("U1"), timestamp=stamp)
+    if stamp is None:
+        del odd["timestamp"]
+    with pytest.raises(analysis.UnverifiedFills) as exc:
+        run([odd, _fill("T1", orderid="O2")])
+    assert [f["tradeid"] for f in stored()] == ["T1"]          # today's file is still written
+    assert [f["tradeid"] for f in _set_aside(tmp)] == ["U1"]
+    assert exc.value.count == 1
+    assert "1 fill(s) with no readable time" in capsys.readouterr().out
+
+
+def test_set_aside_fills_are_never_read_back_as_a_days_fills(snap):
+    run, _stored, _tmp = snap
+    with pytest.raises(analysis.UnverifiedFills):
+        run([dict(_fill("U1"), timestamp=""), _fill("T1", orderid="O2")])
+    assert [f["tradeid"] for f in analysis.load_snapshots()] == ["T1"]
+
+
+def test_set_aside_fills_are_merged_without_duplicates(snap):
+    run, _stored, tmp = snap
+    for _ in range(2):
+        with pytest.raises(analysis.UnverifiedFills):
+            run([dict(_fill("U1"), timestamp="")])
+    assert [f["tradeid"] for f in _set_aside(tmp)] == ["U1"]
+
+
+def test_fills_dated_another_day_are_neither_saved_nor_set_aside(snap):
+    run, stored, tmp = snap
+    run([dict(_fill("Y1"), timestamp="2026-10-21 15:10:00"), _fill("T1")])
+    assert [f["tradeid"] for f in stored()] == ["T1"]
+    assert _set_aside(tmp) == []
+
+
+def test_the_cli_exits_3_when_fills_were_set_aside(snap, monkeypatch):
+    run, stored, _tmp = snap
+
+    async def _fetch():
+        return [dict(_fill("U1"), timestamp=""), _fill("T1", orderid="O2")]
+
+    monkeypatch.setattr(analysis, "_fetch_tradebook", _fetch)
+    with pytest.raises(SystemExit) as exc:
+        _cli(monkeypatch, "--snapshot")
+    assert exc.value.code == 3
+    assert [f["tradeid"] for f in stored()] == ["T1"]
+
+
+def test_eod_sh_reports_set_aside_fills_and_fails_the_run():
+    script = os.path.join(os.path.dirname(analysis.__file__), "eod.sh")
+    with open(script, encoding="utf-8") as fh:
+        text = fh.read()
+    assert re.search(r'snapshot_rc" -eq 3', text)
+    assert "unverified_tradebook_" in text
+    assert re.search(r'\[ "\$snapshot_rc" -eq 0 \] \|\| exit 2', text)

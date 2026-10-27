@@ -3,6 +3,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime
 
 import pandas as pd
@@ -10,16 +11,39 @@ import pandas as pd
 from broker.tradesmart.api.baseurl import parse_auth, post, resolve_uid
 from broker.tradesmart.api.rate_limiter import (
     MAX_RETRIES,
-    TRADESMART_MAX_PER_SECOND,
+    TRADESMART_QUOTE_MAX_PER_SECOND,
     apply_rate_limit,
     is_rate_limit_error,
     retry_delay,
 )
 from database.token_db import get_br_symbol, get_token
 from utils.ist import IST_OFFSET
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
 logger = get_logger(__name__)
+
+# Under the gthread worker the REST quote fallback uses one process-wide pool of
+# this size instead of up to 90 new threads per request: those are real OS
+# threads there, outside the request pool, all competing for the shared httpx
+# connections that order placement also uses.
+_REST_QUOTE_SHARED_WORKERS = 16
+
+
+def _rest_quote_pool(pending: int):
+    """The executor for one REST quote fan-out, as a context manager.
+
+    Under eventlet and the dev server this is a pool of its own per call,
+    exactly as before. Under gthread it is the shared pool, which the ``with``
+    block must not shut down.
+    """
+    if runtime.gthread_active():
+        return nullcontext(get_executor("tradesmart-rest-quotes", _REST_QUOTE_SHARED_WORKERS))
+    # Sized to the quote budget (100/sec), not the general one: threads are
+    # spawned lazily, so a short list still costs only len(pending) threads.
+    return ThreadPoolExecutor(max_workers=min(TRADESMART_QUOTE_MAX_PER_SECOND, pending))
 
 
 def _as_float(value, default=0.0):
@@ -50,8 +74,9 @@ def _normalize_data_exchange(exchange):
 def _get_api_response(endpoint, auth, payload, retry_count=0):
     """Rate-limited POST returning parsed JSON (dict or list).
 
-    Paced by the shared per-user gate (see broker.tradesmart.api.rate_limiter):
-    every endpoint bills against the same 10/sec + 120/min budget.
+    Paced by the gates in broker.tradesmart.api.rate_limiter: quote endpoints
+    against their own 100/sec budget, every other endpoint against the shared
+    10/sec + 120/min per-user budget.
 
     Retries with exponential backoff when TradeSmart reports a rate-limit hit,
     so a burst of quote requests (e.g. a 90+ symbol option chain or the OI
@@ -78,13 +103,12 @@ def _get_api_response(endpoint, auth, payload, retry_count=0):
 # WebSocket-backed bulk quotes
 #
 # Why this exists:
-# TradeSmart caps REST at 10 requests/sec and 120/min *per user* (see
-# ``broker.tradesmart.api.rate_limiter``), and Noren exposes no batch-quote
-# endpoint -- ``/GetQuotes`` takes exactly one token. An option chain of 41
-# strikes is 82 legs, so the REST path costs 82 calls: about 10 seconds against
-# the per-second gate, and 164 calls/minute against a 110/minute budget once the
-# UI refreshes every 30 seconds. It cannot be tuned into working; there is no
-# pacing of 82 calls that fits a 120/minute ceiling twice a minute.
+# Noren exposes no batch-quote endpoint -- ``/GetQuotes`` takes exactly one
+# token. An option chain of 41 strikes is 82 legs, so the REST path costs 82
+# separate round trips per refresh. Quotes are metered at 100/sec (see
+# ``broker.tradesmart.api.rate_limiter``), so the pacing gate no longer blocks
+# that, but 82 sequential HTTP requests every 30 seconds is still 82 requests'
+# worth of latency and connection overhead for data one subscribe delivers.
 #
 # The streaming API has no such problem. One subscribe message carries every
 # token::
@@ -465,6 +489,9 @@ class BrokerData:
                     f"Error from TradeSmart API: {response.get('emsg', 'Unknown error')}"
                 )
             return self._quote_dict(response)
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}") from e
 
@@ -517,7 +544,7 @@ class BrokerData:
             return results
 
         logger.info(f"Fetching {len(pending)} TradeSmart quotes over REST")
-        with ThreadPoolExecutor(max_workers=TRADESMART_MAX_PER_SECOND) as executor:
+        with _rest_quote_pool(len(pending)) as executor:
             future_map = {executor.submit(self._fetch_single_quote, item): item for item in pending}
             for future in as_completed(future_map):
                 item = future_map[future]
@@ -631,6 +658,9 @@ class BrokerData:
                 "volume": int(float(response.get("v", 0))),
                 "oi": int(float(response.get("oi", 0))),
             }
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}") from e
 
@@ -790,6 +820,9 @@ class BrokerData:
             df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
             return df
 
+        except BrokerBusyError:
+            # Refused by the pacer (gthread only): keep its sentence and type.
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}") from e
 
