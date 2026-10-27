@@ -79,11 +79,22 @@ touch "$LOCK"
 UV="$(command -v uv || echo /usr/local/bin/uv)"
 run() { PYTHONPATH="$REPO" "$UV" run python "$@"; }
 
+# Symbols the broker never serves on an interval. The symbol master holds two tokens (-EQ and -BE)
+# for COCHINSHIP and GVT&D and the 1m endpoint returns nothing for the one the plugin picks (daily
+# works): fetching them only logged an ERROR traceback per symbol every day.
+# NIFTY: the broker publishes the index's daily bar a session late (2026-10-27 fetched 10-26, not
+# 10-27), so the daily verify would alert every day. Its 1m store is still verified.
+SKIP_1m='COCHINSHIP,GVT&D'
+SKIP_D=''
+TOLERATE_1m='COCHINSHIP,GVT&D'
+TOLERATE_D='COCHINSHIP,GVT&D,NIFTY'
+
 echo "=== backfill $DAY ==="
 status=0
 for interval in 1m D; do
   echo "--- extend_existing interval=$interval ---"
-  if ! run -m signal_engine.backtest.backfill --interval "$interval" --daily; then
+  skip_var="SKIP_$interval"
+  if ! run -m signal_engine.backtest.backfill --interval "$interval" --daily --skip "${!skip_var}"; then
     echo "WARNING: $interval extend failed - see output above (broker session down?)"
     status=1
   fi
@@ -92,13 +103,13 @@ done
 # The loop above exits 0 whenever nothing raised, and an empty broker answer is stored as
 # nothing - so a stale symbol looks like a success. --verify compares every symbol's latest
 # bar with the last session the NSE calendar expects and exits 1 if any is behind.
-# COCHINSHIP and GVT&D are named because the symbol master holds two tokens (-EQ and -BE)
-# for each and the 1m endpoint returns nothing for the one the plugin picks (daily works);
-# anything else that is behind is new and must show here.
+# The TOLERATE lists above name the known cases; anything else that is behind is new and must
+# show here.
 echo "--- verify ---"
 for interval in 1m D; do
+  tolerate_var="TOLERATE_$interval"
   if ! run -m signal_engine.backtest.backfill --interval "$interval" --verify --daily \
-        --tolerate 'COCHINSHIP,GVT&D'; then
+        --tolerate "${!tolerate_var}"; then
     echo "WARNING: $interval store is behind the last expected session - see list above"
     status=1
   fi

@@ -33,3 +33,17 @@ def test_all_current_or_all_one_day_behind_is_untouched(monkeypatch):
 
 def test_stale_symbol_still_extended(monkeypatch):
     assert _run(monkeypatch, [("OK", 0), ("OLD", 5)]) == ["OLD"]
+
+
+def test_skipped_symbols_are_not_fetched(monkeypatch):
+    # COCHINSHIP and GVT&D 1m: the broker answers "no data" every day, and each request logs an
+    # ERROR traceback in the scheduled run's log.
+    assert _run(monkeypatch, [("OK", 0), ("GVT&D", 5), ("OLD", 5)], skip={"GVT&D"}) == ["OLD"]
+
+
+def test_main_passes_skip_to_the_extend(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(bf, "extend_existing", lambda interval, **k: seen.update(k) or [])
+    monkeypatch.setattr("sys.argv", ["backfill", "--interval", "1m", "--skip", "cochinship, GVT&D"])
+    bf.main()
+    assert seen["skip"] == {"COCHINSHIP", "GVT&D"}

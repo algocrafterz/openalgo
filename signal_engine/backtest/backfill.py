@@ -332,7 +332,8 @@ def backfill(symbols: list[str], start: str, end: str | None = None, *,
 
 def extend_existing(interval: str = "1m", *, min_stale: int = 2,
                     historify_db: str = "db/historify.duckdb",
-                    through: dt.date | None = None, **kw) -> list[SymbolResult]:
+                    through: dt.date | None = None, skip: Iterable[str] = (),
+                    **kw) -> list[SymbolResult]:
     """Bring every symbol already in the store up to today.
 
     Starts each symbol one day before its own last bar, so a partially-downloaded final
@@ -346,12 +347,14 @@ def extend_existing(interval: str = "1m", *, min_stale: int = 2,
     `min_stale`. Without this, a symbol whose write failed today (e.g. a DuckDB lock
     conflict) sits one day behind and is skipped by `min_stale` until it is 2 days stale.
     On a market holiday nothing lags, so nothing is fetched.
+
+    `skip` names symbols the broker is known not to serve on this interval; they are not fetched.
     """
     cov = coverage(interval, historify_db)
     if cov.empty:
         return []
     behind = cov["last"] < through if through is not None else cov.stale_days >= min_stale
-    todo = cov[behind | (cov["last"] < cov["last"].max())]
+    todo = cov[(behind | (cov["last"] < cov["last"].max())) & ~cov["symbol"].isin(set(skip))]
     out = []
     for row in todo.itertuples():
         start = (pd.Timestamp(row.last) - pd.Timedelta(days=1)).date().isoformat()
@@ -572,6 +575,9 @@ def main() -> None:
                          "session; also counts interior gaps")
     ap.add_argument("--tolerate", default="",
                     help="with --verify: comma-separated symbols already known to be unservable")
+    ap.add_argument("--skip", default="",
+                    help="extend: comma-separated symbols not to fetch (the broker never serves them "
+                         "on this interval)")
     ap.add_argument("--daily", action="store_true",
                     help="the scheduled run: extend every symbol behind the calendar's latest "
                          "session (today once the cash market has closed), and verify against it")
@@ -600,7 +606,8 @@ def main() -> None:
     elif args.symbols:
         syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     else:
-        res = extend_existing(args.interval, dry_run=args.dry_run, **_extend_gate(args))
+        skip = {s.strip().upper() for s in args.skip.split(",") if s.strip()}
+        res = extend_existing(args.interval, dry_run=args.dry_run, skip=skip, **_extend_gate(args))
         print(pd.DataFrame([vars(r) for r in res]).to_string(index=False))
         return
 
