@@ -3,6 +3,32 @@
 Key-level breakout. Python runner (BREAKOUT-PY) is canonical, the Pine BREAKOUT is the oracle.
 Rules: `BREAKOUT-SPEC.md`, `strategy_core/breakout.py`. Paper only.
 
+### 2026-10-28 01:36 — Paper run retired (BREAKOUT-PY and Pine BREAKOUT)
+- **What changed:** Both versions of this strategy stopped taking trades. The Python runner no
+  longer runs BREAKOUT-PY, and the engine no longer listens to the Pine BREAKOUT channel. Code,
+  settings history, trade records and research files are all kept.
+- **Entry:** No new trades open from either version.
+- **Exit (SL):** Not affected. Nothing was open when the change was made.
+- **Exit (TP):** Not affected.
+- **Consideration:** The strategy makes a small profit before costs and a clear loss after them.
+  Its stop sits only 0.30% from entry, so each trade needs a very large position for its risk,
+  and brokerage, taxes and slippage take more than the edge. A revival needs a new, separately
+  specified idea, not a parameter change.
+
+NOTE: Evidence, paper (sandbox, 2026-10-01 to 2026-10-27, 97 closed BREAKOUT-PY trades): gross
++Rs 3,300 (+0.038R/trade, t 0.30); net of the Flattrade MIS statutory schedule -Rs 6,624
+(-0.075R), with 2 bps slippage per side -Rs 17,813 (-0.203R). Median notional is 333x the rupee
+risk (ORB: 51x), so statutory cost alone is 0.11R per trade. Longs -0.45R gross (n 42), shorts
++0.41R (n 55) in a month NIFTY fell about 2.8%. The Pine BREAKOUT (61 trades, 2026-09-21 to 10-14)
+was -Rs 16,333 gross. This agrees with the 2026-09-30 full-universe backtest of the shared core
+(-0.48R net). Config: `runner.strategies.BREAKOUT-PY` is commented out, kept for rollback, and
+`intraday-breakout-analyze` is `enabled: false`. The two go back together: the runner block's
+`supersedes_pine_tag` is what declines Pine BREAKOUT entries, so restoring only the channel would
+let them trade. Guarded by `tests/test_pipeline_config.py::TestRealConfig::test_shipped_pine_breakout_cannot_trade`.
+The TradingView alerts stay active because other members use them, so alert messages still reach
+`intraday-breakout-analyze`; the engine no longer subscribes to it and places nothing. IDEA-031
+keeps its research state (no v1.0 run was ever recorded).
+
 ### 2026-10-25 13:38 — Exit safety: no selling into a fired stop, safer timeouts and time exit
 - **What changed:** Before it sells, the engine now checks with the broker whether the protective
   stop has already sold some or all of the shares, and sells only what is still held. When a

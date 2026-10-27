@@ -35,6 +35,23 @@ class TestRealConfig:
             if entry.signal_source == "python":
                 assert entry.paper_only is True, tag
 
+    def test_shipped_breakout_py_is_retired_from_the_runner(self):
+        # Retired 2026-10-28: cost-dominated in paper and in the full-universe backtest.
+        assert "BREAKOUT-PY" not in settings.runner.strategies
+
+    def test_shipped_evwap_early_py_still_runs_after_the_breakout_retirement(self):
+        assert settings.runner.enabled is True
+        assert settings.runner.strategies["EVWAP-EARLY-PY"].signal_source == "python"
+
+    def test_shipped_pine_breakout_cannot_trade(self):
+        # With BREAKOUT-PY gone nothing supersedes the Pine tag, so its alerts would trade
+        # again unless the engine stops listening to its channel. One of the two must hold.
+        channel = {ch.name: ch for ch in settings.telegram_channels}["intraday-breakout-analyze"]
+        superseded = any(
+            e.supersedes_pine_tag == "BREAKOUT" for e in settings.runner.strategies.values()
+        )
+        assert superseded or channel.enabled is False
+
     def test_shipped_shadow_universe_is_an_explicit_unique_list(self):
         universe = settings.runner.universe
         assert isinstance(universe, tuple) and len(universe) == len(set(universe)) == 40
@@ -136,15 +153,6 @@ class TestLoad:
             c["strategies"]["BREAKOUT"]["supersedes_pine_tag"] = "orb"
 
         assert load(tmp_path, monkeypatch, mut).runner.strategies["BREAKOUT"].supersedes_pine_tag == "ORB"
-
-    def test_shipped_breakout_py_supersedes_pine_breakout(self):
-        assert settings.runner.strategies["BREAKOUT-PY"].supersedes_pine_tag == "BREAKOUT"
-
-    def test_shipped_breakout_py_uses_the_live_limits_in_paper(self):
-        assert settings.runner.strategies["BREAKOUT-PY"].paper_limits == "live"
-
-    def test_shipped_breakout_py_cap_is_two(self):
-        assert settings.runner.strategies["BREAKOUT-PY"].max_entries_per_direction_per_day == 2
 
     def test_explicit_universe_list(self, tmp_path, monkeypatch):
         r = load(tmp_path, monkeypatch, lambda c: c.update(universe=["TCS", "INFY"])).runner

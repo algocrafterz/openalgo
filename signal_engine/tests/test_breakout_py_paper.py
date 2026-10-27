@@ -5,6 +5,7 @@ OpenAlgo's ANALYZE (sandbox) mode and is refused, loudly, anywhere else.
 """
 
 import asyncio
+import dataclasses
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock
 
@@ -35,6 +36,24 @@ from signal_engine.tests.test_pipeline_cycle import (
 from signal_engine.timeutils import IST
 
 PY = "BREAKOUT-PY"
+
+#: The BREAKOUT-PY runner entry as config.yaml shipped it until the paper run was retired on
+#: 2026-10-28. The block is kept there commented out for rollback, so the wiring it relies on
+#: stays covered here against this copy.
+ARCHIVED_BREAKOUT_PY = RunnerStrategy(
+    signal_source="python",
+    exit_plan="tp1_only",
+    exit_owner="ladder",
+    paper_only=True,
+    max_entries_per_direction_per_day=2,
+    paper_limits="live",
+    supersedes_pine_tag="BREAKOUT",
+)
+
+
+def with_archived_breakout_py(runner: RunnerSettings) -> RunnerSettings:
+    """`runner` with the archived BREAKOUT-PY entry restored, as a rollback would restore it."""
+    return dataclasses.replace(runner, strategies={**runner.strategies, PY: ARCHIVED_BREAKOUT_PY})
 
 
 @pytest.fixture
@@ -316,9 +335,10 @@ class TestShippedConfig:
     runner = settings.runner
 
     def test_python_tag_is_python_sourced_ladder_managed_and_paper_only(self):
-        entry = self.runner.strategies[PY]
+        entry = with_archived_breakout_py(self.runner).strategies[PY]
         assert (entry.signal_source, entry.exit_plan) == ("python", "tp1_only")
         assert (entry.exit_owner, entry.paper_only) == ("ladder", True)
+        single_source.check_consistency(with_archived_breakout_py(self.runner), REGISTRY.keys())
 
     def test_pine_tag_is_never_python_sourced_or_ladder_managed(self):
         entry = self.runner.strategies.get("BREAKOUT")
@@ -326,7 +346,7 @@ class TestShippedConfig:
         assert not single_source.should_drop_alert(self.runner, "BREAKOUT")
 
     def test_pine_alerts_for_the_python_tag_would_be_dropped(self):
-        assert single_source.should_drop_alert(self.runner, PY)
+        assert single_source.should_drop_alert(with_archived_breakout_py(self.runner), PY)
 
     def test_shipped_config_is_coherent(self):
         single_source.check_consistency(self.runner, REGISTRY.keys())
@@ -357,8 +377,9 @@ class TestShippedConfig:
     def test_only_the_python_tag_is_ladder_owned(self):
         from signal_engine.tracker import _ladder_owns_exits
 
-        assert _ladder_owns_exits(settings, PY) is True
-        assert _ladder_owns_exits(settings, "BREAKOUT") is False  # Pine exits stay with the tracker
+        restored = dataclasses.replace(settings, runner=with_archived_breakout_py(settings.runner))
+        assert _ladder_owns_exits(restored, PY) is True
+        assert _ladder_owns_exits(restored, "BREAKOUT") is False  # Pine exits stay with the tracker
 
     def test_both_tags_trade_the_same_price_band(self):
         from signal_engine.pipeline import pretrade

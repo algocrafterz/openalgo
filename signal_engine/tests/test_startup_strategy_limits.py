@@ -4,19 +4,34 @@ main.py builds the risk engine at import time, in "live" mode, before the tradin
 startup._run_engine then calls runtime.apply_trade_mode. These tests drive that sequence with the real
 config.yaml. The earlier unit tests built the engine directly in analyze mode and so never saw that
 apply_trade_mode left the overrides empty.
+
+BREAKOUT-PY was retired from config.yaml on 2026-10-28 and is the only strategy that asked for the live
+limits, so these tests restore its archived runner entry on top of the real settings.
 """
 
 import asyncio
+import dataclasses
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from signal_engine import runtime, startup
 from signal_engine.risk_store import RiskStore
 from signal_engine.runtime import build_risk_engine
+from signal_engine.tests.test_breakout_py_paper import with_archived_breakout_py
 from signal_engine.tests.test_startup_runner import _engine_patches
 
 PY = "BREAKOUT-PY"
 OTHER = "ORB"
+
+
+@pytest.fixture(autouse=True)
+def _archived_breakout_py(monkeypatch):
+    real = runtime.settings
+    monkeypatch.setattr(
+        runtime, "settings", dataclasses.replace(real, runner=with_archived_breakout_py(real.runner))
+    )
 
 
 def engine_after_startup(tmp_path, mode="analyze"):

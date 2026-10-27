@@ -83,9 +83,15 @@ telegram:
     # 2026-09-06 before flipping to paper on 2026-09-07, so early scrollback predates the
     # paper phase; see the ORB note above on why that's cosmetic, not a data problem). New
     # -live channel below for when BREAKOUT is next promoted.
+    #
+    # RETIRED 2026-10-28: BREAKOUT-PY and the Pine BREAKOUT stopped (cost-dominated, see
+    # strategy_library/intraday/orb/STRATEGY-LOG.md). Entry kept so the -analyze/-live pair
+    # stays valid and the retirement is a statement in the file. Re-enable only together with
+    # runner.strategies.BREAKOUT-PY below, or Pine BREAKOUT entry alerts trade again: that block's
+    # supersedes_pine_tag is what declines them.
     - name: "intraday-breakout-analyze"
       id: -1004450500772
-      enabled: true
+      enabled: false
 
     - name: "intraday-breakout-live"
       id: -1004357947389
@@ -520,6 +526,8 @@ time_exit:
 # acceptance gates in docs/STRATEGY-ACCEPTANCE-CRITERIA.md (net -0.48R per trade); this is paper
 # evidence gathering, not a promotion. Compare its signals with Pine's using
 #   uv run python -m signal_engine.pipeline.shadow_report --day YYYY-MM-DD --runner-strategy BREAKOUT-PY
+# 2026-10-28: BREAKOUT-PY RETIRED. Its runner block below is commented out, kept for rollback, and
+# the Pine BREAKOUT channel is disabled. The runner stays enabled for EVWAP-EARLY-PY.
 #
 # signal_source is EXACTLY ONE of pine | python per strategy. Two active sources means duplicate
 # orders, so the engine drops the other source's alerts and refuses to start on a mismatch.
@@ -587,25 +595,27 @@ runner:
   # evaluation, already 9-20 s of a 25 s deadline. The comparison against Pine's rows now reads
   # BREAKOUT-PY's own signal and skip events: shadow_report --runner-strategy BREAKOUT-PY.)
   strategies:
-    BREAKOUT-PY:
-      signal_source: python      # pine | python
-      exit_plan: tp1_only        # tp1_only | ladder_30_35_35
-      exit_owner: ladder         # tracker | ladder. ladder = the shared Ladder owns the stop and the
-                                 # tracker skips no-progress / profit-lock; needs signal_source python
-      paper_only: true           # required. true = dispatched only into OpenAlgo ANALYZE mode; refused
-                                 # (logged critical) in live mode, per signal. A python strategy must
-                                 # be paper_only until it passes STRATEGY-ACCEPTANCE-CRITERIA.md
-      supersedes_pine_tag: BREAKOUT   # required (null = none). While the runner is enabled, ENTRY alerts of
-                                 # this Pine tag for the symbols this strategy covers are not traded: the
-                                 # Python strategy is the sole execution source (spec v1.0 item 17), and the
-                                 # Pine alert is kept as a declined row for the parity comparison. EXIT
-                                 # alerts are never suppressed.
-      paper_limits: live         # required. mode = the mode_profiles.analyze limits (loose); live = the
-                                 # mode_profiles.live numbers applied to THIS strategy's own paper book
-                                 # (per strategy, not pooled: BREAKOUT spec v1.0 item 16).
-      max_entries_per_direction_per_day: 2   # required. BREAKOUT spec v1.0 item 15: at most 2 filled
-                                 # entries per symbol and direction per day (LONG, exit, LONG is the
-                                 # second). null = no cap. Enforced in main._handle_entry.
+    # RETIRED 2026-10-28 (paper run stopped, block kept for rollback). Restore it together with
+    # telegram.channels intraday-breakout-analyze enabled: true - see the note on that channel.
+    # BREAKOUT-PY:
+    #   signal_source: python      # pine | python
+    #   exit_plan: tp1_only        # tp1_only | ladder_30_35_35
+    #   exit_owner: ladder         # tracker | ladder. ladder = the shared Ladder owns the stop and the
+    #                              # tracker skips no-progress / profit-lock; needs signal_source python
+    #   paper_only: true           # required. true = dispatched only into OpenAlgo ANALYZE mode; refused
+    #                              # (logged critical) in live mode, per signal. A python strategy must
+    #                              # be paper_only until it passes STRATEGY-ACCEPTANCE-CRITERIA.md
+    #   supersedes_pine_tag: BREAKOUT   # required (null = none). While the runner is enabled, ENTRY alerts of
+    #                              # this Pine tag for the symbols this strategy covers are not traded: the
+    #                              # Python strategy is the sole execution source (spec v1.0 item 17), and the
+    #                              # Pine alert is kept as a declined row for the parity comparison. EXIT
+    #                              # alerts are never suppressed.
+    #   paper_limits: live         # required. mode = the mode_profiles.analyze limits (loose); live = the
+    #                              # mode_profiles.live numbers applied to THIS strategy's own paper book
+    #                              # (per strategy, not pooled: BREAKOUT spec v1.0 item 16).
+    #   max_entries_per_direction_per_day: 2   # required. BREAKOUT spec v1.0 item 15: at most 2 filled
+    #                              # entries per symbol and direction per day (LONG, exit, LONG is the
+    #                              # second). null = no cap. Enforced in main._handle_entry.
     # 2026-10-09: EMA/VWAP/ATR early displacement, PAPER ONLY. Enters when (EMA9 - VWAP) / ATR14
     # crosses back through -0.50 (long) / +0.50 (short), before the EMA/VWAP crossover. No
     # take-profit: the broker SL-M holds the initial swing stop, and pipeline.trail_driver trails

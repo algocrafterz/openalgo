@@ -87,3 +87,13 @@ sessions. The accounting fixes (one close, one ledger row) are already in the wo
 
 v1.1 retest fix (break at least one bar before the retest), a gap gate if evidence supports it,
 afternoon window, other exit plans. Each is a separate trial.
+
+## 2026-10-28: paper run retired
+
+The BREAKOUT-PY paper run was stopped on 2026-10-28, and the engine stopped trading Pine BREAKOUT
+alerts (the alerts themselves stay active in TradingView for other members). Paper evidence
+(97 closed BREAKOUT-PY trades, 2026-10-01 to 2026-10-27): gross +0.038R per trade, net -0.075R on
+statutory cost alone and -0.203R with 2 bps slippage per side; the 0.30% stop makes cost about
+0.11R per trade before slippage. This is paper evidence, not a recorded v1.0 run, so the research
+state above is unchanged. Details: `strategy_library/intraday/orb/STRATEGY-LOG.md`, entry
+2026-10-28 01:36.

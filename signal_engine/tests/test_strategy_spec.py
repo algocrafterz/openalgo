@@ -101,9 +101,15 @@ class TestRunConfigMatchesTheSpec:
         )
 
     def test_the_shipped_config_matches_the_spec(self, spec):
-        entry = settings.runner.strategies["BREAKOUT-PY"]
+        # BREAKOUT-PY was retired from the shipped runner on 2026-10-28, so today no spec-bound
+        # tag is configured and this binds again only if its archived block is restored. The
+        # archived values are checked against the spec by TestStartupCheck (GOOD).
+        from signal_engine.pipeline.service import SPEC_BOUND_TAGS
+
         time_exit = (settings.time_exit_hour, settings.time_exit_minute)
-        assert ss.check_runner(spec, "BREAKOUT-PY", entry, time_exit) == []
+        for tag, entry in settings.runner.strategies.items():
+            if tag in SPEC_BOUND_TAGS:
+                assert ss.check_runner(spec, tag, entry, time_exit) == [], tag
 
 
 GOOD = RunnerStrategy("python", "tp1_only", "ladder", True, 2, "live", "BREAKOUT")
