@@ -305,6 +305,21 @@ def chat_id_for(kind: str) -> str | None:
     return next((str(ch.id) for ch in settings.telegram_channels if ch.name == name), None)
 
 
+def watchlist_enabled() -> bool:
+    """Whether the WATCHLIST outcome's channel is enabled for the CURRENT OpenAlgo mode.
+
+    The scanner builds and sends a watchlist signal only while this is True. BREAKINGTRADE-
+    WATCHLIST was retired on 2026-10-27 by setting its channel's `enabled: false` in
+    config.yaml (see STRATEGY-LOG.md): a disabled or missing channel means no plan, no alert
+    row and no Telegram message, while the implementation stays in place to be re-enabled.
+    """
+    from signal_engine.config import settings
+
+    name = f"{_CHANNEL_NAME_BY_GROUP['watchlist']}-{_current_phase()}"
+    channel = next((ch for ch in settings.telegram_channels if ch.name == name), None)
+    return bool(channel is not None and channel.enabled)
+
+
 def _credentials(kind: str = None) -> tuple:
     env = _env()
     token = _clean_token(env.get("BREAKINGTRADE_BOT_TOKEN"))

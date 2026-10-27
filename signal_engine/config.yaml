@@ -136,9 +136,15 @@ telegram:
     # channel + live mode = real orders on a strategy with ZERO scored samples yet.
     #
     # Same ANALYZE/LIVE split as intraday-breakingtrade above.
+    #
+    # RETIRED 2026-10-27 after the paper comparison from 2026-09-24 (see breaking-trade's
+    # STRATEGY-LOG.md): the confirmed entry kept more after costs on half the trades. With this
+    # false the engine does not subscribe, and the scanner builds and sends no watchlist signal
+    # at all (alerts.watchlist_enabled()). Code, tag, tests and history are kept; set true to
+    # bring it back.
     - name: "intraday-breakingtrade-watchlist-analyze"
       id: -1003902599946
-      enabled: true
+      enabled: false
 
     # LIVE counterpart - same two-gate rule as intraday-breakingtrade-live above.
     - name: "intraday-breakingtrade-watchlist-live"

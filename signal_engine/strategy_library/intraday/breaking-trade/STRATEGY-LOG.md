@@ -96,6 +96,93 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-27 23:58 — Watchlist variant retired; replay of three proposed changes (none adopted)
+- **What changed:** The watchlist variant (enter at the scan price, no confirming close) is
+  switched off: it no longer trades, sends messages or records alerts. Its code, tag, tests and
+  past trades are kept. Over 20 paper days it lost Rs 976 before costs on 168 trades, while the
+  confirmed variant made Rs 3,195 on 83. Three possible improvements to the confirmed variant
+  were tested on past data only, and none is adopted.
+- **Entry:** Not affected for the confirmed variant. The watchlist variant no longer enters.
+- **Exit (SL):** Not affected. A tighter stop at the inner edge of the tail made the same trades
+  worse; a stop just beyond the tail turned out to be the stop already in use.
+- **Exit (TP):** Not affected. Checking stalled trades after 60 minutes instead of 90 made
+  results worse, so 90 stays.
+- **Consideration:** These results are not proof of an edge. After realistic charges and
+  slippage the confirmed variant loses about 0.05 of its risk per trade in the replay, all long
+  trades together lose, and the short trades' gains came in a falling month. The "Gap-Down
+  Rescue" scan accounts for most long losses; it is flagged for a separate test, not removed.
+
+NOTE: Retirement. `config.yaml` `intraday-breakingtrade-watchlist-analyze` is `enabled: false`,
+and `__main__._emit_trade_signals` builds the watchlist plan only while
+`alerts.watchlist_enabled()` is true (that channel enabled for the current mode). Tested by
+`tests/test_breakingtrade_watchlist_retired.py`.
+
+Paper comparison, 2026-09-24 to 2026-10-27 (sandbox, trades.db, before charges). The final EXIT
+row of a partly exited position already includes its earlier legs (`db.py`, `includes_leg_pnl`),
+so a trade's P&L is its last row, not the sum of its rows. Summing rows overstated the confirmed
+variant at Rs 5,715 and the watchlist at Rs 4,288.
+
+| | Confirmed | Watchlist |
+|---|---|---|
+| Trades (symbol-days) | 83 | 168 |
+| P&L before charges | Rs 3,195 | -Rs 976 |
+| Win rate / profit factor | 54% / 1.38 | 49% / 0.96 |
+| Largest drawdown | -Rs 1,380 | -Rs 4,811 |
+| Green days | 12 of 20 | 9 of 21 |
+
+On the 76 calls both took, the watchlist's earlier entry did better, but the 92 calls that never
+confirmed lost money: the confirming close works as a filter.
+
+Replay method (isolated; read-only on trades.db, breakingtrade.db and Historify 1m bars; the
+script and CSVs were in the session scratchpad and are not part of the repo). Each executed paper
+signal is re-entered at its order time and fill price, then exited as the engine does: SL-M at
+the planned stop; staged targets 50/30/20 at 1.0/1.5/2.0 x the TP1 distance (`tp_watch`), with
+the runner stop moved to each level minus 0.3 x its R (`main._replace_runner_sl`, extended tiers
+on); loss cut at 20 min below -80% progress; no-progress gate below 20% progress (market exit if
+the pace cannot reach TP by 14:45, else stop to the fill); time exit 14:45. Gates are evaluated
+at a 1m bar close and acted on at the next open; a stop and a target in the same bar count as the
+stop. Sizing is 1% of an estimated day capital over the stop distance with the 0.10 slippage
+factor. Costs: Flattrade statutory charges (`portfolio.costs.india_intraday`) plus 4 bps slippage
+per side (8 bps as stress). Calibration against the paper results on 81 matched symbol-days:
+correlation 0.92, same sign 91%, median gap Rs 21; the replay is about Rs 8 per trade more
+conservative than the paper fills. 5 trades had no 1m bars.
+
+Results after charges and 4 bps per side (expectancy in R of planned risk):
+
+| Variant | Trades | Net | Exp. R | t | PF | Max DD |
+|---|---|---|---|---|---|---|
+| Baseline (90 min gate, IB stop) | 81 | -Rs 3,060 | -0.045 | -1.14 | 0.72 | -Rs 2,593 |
+| No-progress gate at 60 min | 81 | -Rs 3,454 | -0.050 | -1.49 | 0.63 | -Rs 2,874 |
+| Tail stop, beyond the tail extreme | 81 | identical to baseline | | | | |
+| Tail stop, at the tail's inner edge | 123 | -Rs 4,285 | -0.043 | -0.95 | 0.80 | -Rs 3,680 |
+| - same 81 trades only | 81 | -Rs 5,898 | -0.086 | -1.46 | 0.66 | -Rs 3,648 |
+| - 42 signals it newly admits | 42 | Rs 1,613 | +0.042 | 0.66 | 1.35 | -Rs 2,228 |
+
+Before charges the baseline is +0.020R per trade (Rs 1,613). Baseline by side: long 46 trades,
+-0.129R (t -2.37); short 35 trades, +0.064R (t 1.17). By NIFTY direction, from open to the entry
+minute: down -0.033R (41), up -0.058R (40). By NIFTY's full-day close (known only afterwards):
+down -0.042R (58), up -0.053R (23). NIFTY fell 3.0% over the window, with 13 down days of 21.
+
+- Tail stop. The scanner stores only a tail flag, never a price, so the tail is rebuilt from bars
+  before the decision: the stretch at the day's extreme traded by only one completed 30-minute
+  period, used only when the vendor's flag at or before the decision agrees with the trade's
+  side. In all 55 trades with such a tail, the extreme was the IB extreme, so "just beyond the
+  tail" is the stop `stop_level()` already places. The design note's claim that a tail stop "sits
+  closer than the IB extreme" holds only for the inner edge, and that version made the same trades
+  worse (-0.086R against -0.045R). Its total looks better only because 42 refused signals now pass
+  the 0.75 R:R gate, 33 of them shorts in a falling month.
+- No-progress 60 min. Worse on every measure; 90 stays.
+- Gap-Down Rescue. 40 of the 46 long trades came from this scan: -0.147R (t -2.66, PF 0.30),
+  negative whether NIFTY was rising or falling at entry. The other 6 longs were flat. All other
+  scans: +0.054R (t 1.00, PF 1.58). One month, one regime, five tests on the same 81 trades: a
+  candidate for a forward test, not a rule. Scan names are matched by the stock's first scan hit
+  of the day, because signal rows do not store their scan.
+
+Known limits. One-minute bars, against the engine's ~20 s polling. Same-day capital is estimated
+from the day's own executed trades (affects rupees, not R). Newly admitted signals are entered at
+the signal price at decision time, a fill the paper never had. No variant approaches the t >= 3.0
+acceptance gate; at the baseline's spread that needs roughly 500 trades.
+
 ### 2026-10-25 13:38 — Exit safety: no selling into a fired stop, safer timeouts and time exit
 - **What changed:** Before it sells, the engine now checks with the broker whether the protective
   stop has already sold some or all of the shares, and sells only what is still held. When a

@@ -561,6 +561,10 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
         if "price" in snapshot.columns:
             prices = dict(zip(snapshot["symbol"], snapshot["price"], strict=False))
 
+    # The watchlist outcome runs only while its channel is enabled in config.yaml; it was
+    # retired on 2026-10-27 (see alerts.watchlist_enabled()).
+    watchlist_on = alerts.watchlist_enabled()
+
     confirmed_emitted = 0
     watchlist_emitted = 0
     for symbol, direction in directions.items():
@@ -579,7 +583,7 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
                 confirmed_emitted += 1
 
             price = prices.get(symbol)
-            if price:
+            if watchlist_on and price:
                 watchlist_plan = trigger.plan_trade_watchlist(
                     symbol, direction, day_type, bars, captured_at, atr, price
                 )

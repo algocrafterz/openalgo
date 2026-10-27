@@ -6308,3 +6308,18 @@ Tests: `tests/test_dry_run_risk_isolation.py`.
 
 **In plain terms:** the pre-market self-check can no longer leave behind a wrong account size that live trading
 would later use to decide how many shares to buy.
+
+## BreakingTrade watchlist variant retired (2026-10-27)
+
+**Decision.** BREAKINGTRADE-WATCHLIST (entry at the scan-hit price, no confirming close) is switched off after
+its paper run beside BREAKINGTRADE from 2026-09-24. Over 20 days it lost Rs 976 before charges on 168 trades,
+while the confirmed variant made Rs 3,195 on 83. Its code, strategy tag, tests and trade history are kept.
+
+**Change.** `config.yaml` sets `intraday-breakingtrade-watchlist-analyze` to `enabled: false`, so the engine does
+not subscribe to it. `analysis/breakingtrade/__main__.py` `_emit_trade_signals` builds the watchlist plan only
+while `alerts.watchlist_enabled()` is true (that channel enabled for the current mode), so no plan, alert row or
+Telegram message is produced. Tests: `tests/test_breakingtrade_watchlist_retired.py`. Findings and the replay of
+three proposed changes to the confirmed variant (none adopted) are in the strategy's `STRATEGY-LOG.md`.
+
+**In plain terms:** the version that entered without waiting for confirmation lost money on paper, so it no longer
+trades or sends messages. It can be switched back on with one setting.
