@@ -78,4 +78,7 @@ def test_both_fill_paths_consult_the_guard():
     assert "quote_looks_stale" in inspect.getsource(
         execution_engine.ExecutionEngine._process_order
     )
-    assert "quote_looks_stale" in inspect.getsource(order_manager.OrderManager.place_order)
+    # The fork wraps placement in a stage timer: place_order delegates to _place_order_impl,
+    # which holds the body that fills the order.
+    assert "_place_order_impl" in inspect.getsource(order_manager.OrderManager.place_order)
+    assert "quote_looks_stale" in inspect.getsource(order_manager.OrderManager._place_order_impl)
