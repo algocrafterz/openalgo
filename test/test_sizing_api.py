@@ -29,20 +29,14 @@ def _stub_sandbox_modules():
     those real dependencies.
     """
     import sys
+    from pathlib import Path
 
-    sandbox_submodules = [
-        "sandbox",
-        "sandbox.fund_manager",
-        "sandbox.holdings_manager",
-        "sandbox.order_manager",
-        "sandbox.position_manager",
-        "sandbox.catch_up_processor",
-        "sandbox.execution_engine",
-        "sandbox.execution_thread",
-        "sandbox.squareoff_manager",
-        "sandbox.squareoff_thread",
-        "sandbox.websocket_execution_engine",
-    ]
+    # Every module in the real package, so a new sandbox module (2.0.2.8 added
+    # position_locks, imported by services.sandbox_service) is stubbed too.
+    sandbox_dir = Path(__file__).resolve().parents[1] / "sandbox"
+    sandbox_submodules = ["sandbox"] + sorted(
+        f"sandbox.{path.stem}" for path in sandbox_dir.glob("*.py") if path.stem != "__init__"
+    )
 
     # Only stub if not already a real module
     real_sandbox = sys.modules.get("sandbox")

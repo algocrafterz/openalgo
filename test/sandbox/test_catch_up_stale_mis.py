@@ -19,6 +19,9 @@ USER_ID = "catchup-test-user"
 
 
 def _make_position(symbol, qty):
+    # Untouched for a week: catch-up keys on updated_at (last session boundary,
+    # upstream #1794) as well as on created_at, so both must be in the past.
+    week_ago = datetime.now() - timedelta(days=7)
     db_session.add(
         SandboxPositions(
             user_id=USER_ID,
@@ -28,7 +31,8 @@ def _make_position(symbol, qty):
             quantity=qty,
             average_price=100,
             ltp=100,
-            created_at=datetime.now() - timedelta(days=7),
+            created_at=week_ago,
+            updated_at=week_ago,
         )
     )
     db_session.commit()

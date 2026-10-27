@@ -4,17 +4,25 @@ Flow Blueprint - Visual Workflow Automation
 Provides routes for managing and executing workflows
 """
 
+import json
 import logging
+import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, session
 
 from database.auth_db import get_api_key_for_tradingview
+from limiter import limiter
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
 
 flow_bp = Blueprint("flow", __name__, url_prefix="/flow")
+
+# The same variable and default the /chartink webhook reads, and the legacy
+# /strategy webhook read before it was removed. Flow inherits the budget an
+# operator has already configured rather than introducing a second knob.
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
 
 
 def get_current_api_key():
@@ -190,9 +198,38 @@ def _execution_status_code(result: dict) -> int:
         return 200
     if result.get("already_running"):
         return 409
+    # Only a workflow started in the background (gthread only) carries these.
+    if result.get("accepted"):
+        return 202
+    if result.get("busy"):
+        return 429
     if result.get("status") == "error":
         return 502 if result.get("errors") else 500
     return 200
+
+
+def _run_or_start(workflow, **kwargs):
+    """Execute a triggered workflow, on this request or, if it waits, on the pool.
+
+    A Delay or Wait Until node can sleep for minutes inside the run. Under the
+    gthread worker that would hold one of a fixed number of request threads
+    for the whole wait, so there (and only there) a workflow whose waits add up
+    to more than FLOW_INLINE_WAIT_SECONDS is started on a Flow pool and the
+    trigger is answered at once with 202. Under eventlet and the development
+    server a sleeping request costs nothing, and every workflow runs on its
+    request exactly as before, so TradingView still gets the broker's answer.
+    A workflow with no wait, or a short one, always runs on its request.
+    """
+    from services.flow_executor_service import (
+        execute_workflow,
+        start_workflow_in_background,
+        workflow_runs_in_background,
+    )
+    from utils.runtime import gthread_active
+
+    if gthread_active() and workflow_runs_in_background(workflow.nodes):
+        return start_workflow_in_background(workflow.id, nodes=workflow.nodes, **kwargs)
+    return execute_workflow(workflow.id, **kwargs)
 
 
 def _existing_for_trigger_check(workflow_id):
@@ -327,7 +364,24 @@ def update_workflow(workflow_id):
 @check_session_validity
 def delete_workflow(workflow_id):
     """Delete a workflow"""
+    from services.flow_executor_service import get_workflow_lock
+
+    lock = get_workflow_lock(workflow_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "This workflow is still running. Try again when it finishes."}), 409
+    try:
+        return _delete_workflow_locked(workflow_id)
+    finally:
+        lock.release()
+
+
+def _delete_workflow_locked(workflow_id):
+    """Release resources and delete while no run can add another subscription."""
     from database.flow_db import delete_workflow, get_workflow
+    from services.flow_executor_service import (
+        has_workflow_subscriptions,
+        release_workflow_subscriptions,
+    )
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -335,6 +389,13 @@ def delete_workflow(workflow_id):
     workflow = get_workflow(workflow_id)
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
+
+    # A failed proxy unsubscribe retains ownership so the same delete request
+    # can retry later. Deleting the row now would lose its API key and leave
+    # the feed subscribed for the life of the shared websocket client.
+    release_workflow_subscriptions(workflow_id)
+    if has_workflow_subscriptions(workflow_id):
+        return jsonify({"error": "The workflow feed is still connected. Try again shortly."}), 503
 
     # Deactivate if active. Every in-memory registration must be torn down
     # here too - deleting the row alone would strand the watch/alert, which
@@ -571,8 +632,25 @@ def activate_workflow(workflow_id):
 @check_session_validity
 def deactivate_workflow(workflow_id):
     """Deactivate a workflow"""
+    from services.flow_executor_service import get_workflow_lock
+
+    lock = get_workflow_lock(workflow_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "This workflow is still running. Try again when it finishes."}), 409
+    try:
+        return _deactivate_workflow_locked(workflow_id)
+    finally:
+        lock.release()
+
+
+def _deactivate_workflow_locked(workflow_id):
+    """Deactivate while no run can add another subscription."""
     from database.flow_db import deactivate_workflow as db_deactivate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_executor_service import (
+        has_workflow_subscriptions,
+        release_workflow_subscriptions,
+    )
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -582,9 +660,19 @@ def deactivate_workflow(workflow_id):
         return jsonify({"error": "Workflow not found"}), 404
 
     if not workflow.is_active:
+        release_workflow_subscriptions(workflow_id)
+        if has_workflow_subscriptions(workflow_id):
+            return jsonify({"error": "The workflow feed is still connected. Try again shortly."}), 503
         return jsonify({"status": "already_inactive", "message": "Workflow is already inactive"})
 
     try:
+        # Keep active triggers running when the shared websocket has not
+        # confirmed release. The workflow can then be retried without losing
+        # its schedule or price/order monitors.
+        release_workflow_subscriptions(workflow_id)
+        if has_workflow_subscriptions(workflow_id):
+            return jsonify({"error": "The workflow feed is still connected. Try again shortly."}), 503
+
         # Removed by workflow id, not by the stored schedule_job_id. The id is
         # derived deterministically, so this still finds the job when the stored
         # pointer was never written or was cleared -- the case that used to skip
@@ -654,7 +742,6 @@ def _execution_blocked(workflow):
 def execute_workflow_now(workflow_id):
     """Execute a workflow immediately"""
     from database.flow_db import get_workflow
-    from services.flow_executor_service import execute_workflow
 
     workflow = get_workflow(workflow_id)
     if not workflow:
@@ -669,7 +756,7 @@ def execute_workflow_now(workflow_id):
         return jsonify(blocked), 400
 
     try:
-        result = execute_workflow(workflow_id, api_key=api_key)
+        result = _run_or_start(workflow, api_key=api_key)
         return jsonify(result), _execution_status_code(result)
     except Exception as e:
         logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
@@ -711,8 +798,6 @@ def get_workflow_executions(workflow_id):
 
 def get_webhook_base_url():
     """Get the base URL for webhooks based on server configuration"""
-    import os
-
     # Use HOST_SERVER from .env or default to localhost
     host = os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
     # Ensure no trailing slash
@@ -885,13 +970,109 @@ def set_webhook_auth(workflow_id):
 # === Webhook Trigger Routes (CSRF Exempt) ===
 
 
+def _webhook_token_key():
+    """Rate-limit key naming the workflow instead of the caller."""
+    token = (request.view_args or {}).get("token") or ""
+    return f"flow-webhook:{token}"
+
+
+# Two limits at the same budget, because they bound different things and neither
+# subsumes the other.
+#
+# By caller address: the only key that can stop someone walking the token space.
+# Every guess carries a different token, so a token-keyed limit would score each
+# one against an empty bucket and never fire, while each miss still costs a
+# database lookup. This is also exactly what /chartink enforces, so Flow is not
+# weaker than the surface it replaces.
+#
+# By token: bounds what one leaked token can do to the broker account no matter
+# how many addresses replay it. The token is the credential here (the payload
+# secret is optional), so this is the limit that caps real order flow.
+#
+# Both are shared scopes so /webhook/<token> and /webhook/<token>/<symbol> draw
+# on one budget. Per-endpoint buckets would hand the same workflow twice the
+# configured rate simply for alternating between two spellings of itself.
+_webhook_caller_limit = limiter.shared_limit(WEBHOOK_RATE_LIMIT, scope="flow_webhook_caller")
+_webhook_workflow_limit = limiter.shared_limit(
+    WEBHOOK_RATE_LIMIT, scope="flow_webhook_workflow", key_func=_webhook_token_key
+)
+
+
+@flow_bp.errorhandler(429)
+def _rate_limited(error):
+    """Answer an over-limit caller with 429 JSON rather than the app-wide redirect.
+
+    app.py's 429 handler returns JSON only for paths under `/api/` and redirects
+    everything else to the React `/rate-limited` page. A browser reads that; an
+    automated caller does not. TradingView would follow the redirect, receive
+    HTML and 200, and record the alert as delivered, so a throttled workflow
+    would be indistinguishable from a working one and nothing would surface the
+    loss. A blueprint handler is consulted ahead of the application one, so this
+    corrects the answer for Flow without changing it for the rest of the product.
+    """
+    retry_after = 60
+    breached = getattr(error, "limit", None)
+    try:
+        retry_after = int(breached.limit.get_expiry())
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    response = jsonify(
+        {
+            "status": "error",
+            "message": "Rate limit exceeded. Please slow down your requests.",
+            "limit": getattr(error, "description", None),
+            "retry_after": retry_after,
+        }
+    )
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+def _read_webhook_payload():
+    """Read a webhook body whatever shape the sender used.
+
+    `request.get_json()` refuses anything not declared `application/json` and
+    Flask answers 415 before the handler runs. External platforms are exactly
+    the callers that cannot set a header: a TradingView alert left on its
+    default plain-text message never reached the workflow at all, and neither
+    did a form-encoded post.
+
+    Order matters. The body is parsed as JSON first regardless of what the
+    sender declared, because a sender that cannot set a Content-Type still
+    posts JSON far more often than not. Only a body that is not JSON falls
+    through to form fields, then to raw text under `message`.
+    """
+    raw = request.get_data(as_text=True) or ""
+    text = raw.strip()
+
+    if text:
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+        if parsed is not None:
+            # Valid JSON that is not an object: a list, a bare string or number.
+            # Keep the decoded value, and the raw text so a template can read
+            # either without the workflow having to know which arrived.
+            return {"message": text, "payload": parsed}
+
+    # Form-encoded (ChartInk and friends). `request.form` is empty for the
+    # content types handled above, so this cannot shadow a JSON body.
+    if request.form:
+        return dict(request.form)
+
+    return {"message": text} if text else {}
+
+
 def _execute_webhook(token, webhook_data=None, url_secret=None):
     """Internal function to execute webhook"""
     import hmac
-    import os
 
     from database.flow_db import get_workflow_by_webhook_token
-    from services.flow_executor_service import execute_workflow
 
     workflow = get_workflow_by_webhook_token(token)
     if not workflow:
@@ -919,9 +1100,20 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
         else:
             # Secret expected in payload (default)
             provided_secret = data.pop("secret", "") or ""
+            # A secret carried in the payload requires a payload with fields,
+            # so plain text is not accepted on this path. It is not that the
+            # text could not be parsed: it is that an unauthenticated body must
+            # not reach the workflow, and text has nowhere to put the secret.
+            # Send JSON, or switch the workflow to URL auth.
             if not provided_secret:
                 return jsonify(
-                    {"error": "Missing webhook secret in payload. Add 'secret' field to JSON body"}
+                    {
+                        "error": (
+                            "Missing webhook secret in payload. Send JSON with a 'secret' "
+                            "field. Plain text cannot carry one: switch the webhook to URL "
+                            "auth to authenticate with ?secret=... instead."
+                        )
+                    }
                 ), 401
             if not hmac.compare_digest(provided_secret, workflow.webhook_secret):
                 return jsonify({"error": "Invalid webhook secret"}), 401
@@ -953,7 +1145,7 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
 
     try:
         logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")
-        result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
+        result = _run_or_start(workflow, webhook_data=data, api_key=api_key)
         status = result.get("status", "success")
         # On failure, report the run's own message. Overwriting it left a caller
         # such as TradingView with HTTP 200 and the text "Workflow 'X' triggered"
@@ -976,6 +1168,8 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
 
 
 @flow_bp.route("/webhook/<token>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_workflow_limit
 def trigger_webhook(token):
     """
     Trigger a workflow via webhook (CSRF exempt)
@@ -985,11 +1179,13 @@ def trigger_webhook(token):
     2. Payload field: {"secret": "your_secret", ...} (for TradingView, etc.)
     """
     url_secret = request.args.get("secret")
-    payload = request.get_json() or {}
+    payload = _read_webhook_payload()
     return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 
 
 @flow_bp.route("/webhook/<token>/<symbol>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_workflow_limit
 def trigger_webhook_with_symbol(token, symbol):
     """
     Trigger a workflow via webhook with symbol in URL path (CSRF exempt)
@@ -997,7 +1193,7 @@ def trigger_webhook_with_symbol(token, symbol):
     The symbol is automatically injected into the webhook data.
     """
     url_secret = request.args.get("secret")
-    payload = request.get_json() or {}
+    payload = _read_webhook_payload()
     payload["symbol"] = symbol
     return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 
@@ -1220,13 +1416,20 @@ def replace_workflow(workflow_id):
 @flow_bp.route("/api/index-symbols", methods=["GET"])
 @check_session_validity
 def get_index_symbols_lot_sizes():
-    """
-    Get lot sizes for index symbols from master contract database.
-    Returns lot sizes for NSE and BSE index options (NIFTY, BANKNIFTY, etc.)
+    """Lot sizes for every underlying the options nodes offer.
+
+    Named for the index options it originally covered; it now also answers for
+    the MCX commodities, which the Options Order and Multi-Leg nodes list
+    alongside them. The route name is left alone because the frontend caches
+    against it.
+
+    An underlying with no usable lot size is omitted rather than returned with a
+    null, so the dropdown never offers something the executor would then refuse
+    to size.
     """
     from database.symbol import SymToken, db_session
     from database.token_db_enhanced import extract_underlying_from_symbol
-    from services.flow_executor_service import symbol_prefix_filter
+    from services.flow_executor_service import MCX_OPTION_UNDERLYINGS, symbol_prefix_filter
 
     # Define index symbols to look up
     nse_indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
@@ -1278,9 +1481,13 @@ def get_index_symbols_lot_sizes():
     results = []
 
     try:
-        for index_name, exchange in [(n, "NFO") for n in nse_indices] + [
-            (n, "BFO") for n in bse_indices
-        ]:
+        for index_name, exchange in (
+            [(n, "NFO") for n in nse_indices]
+            + [(n, "BFO") for n in bse_indices]
+            # MCX options trade on MCX itself, so the lot size is read from the
+            # same exchange the option is listed on.
+            + [(n, "MCX") for n in MCX_OPTION_UNDERLYINGS]
+        ):
             lot_size = _lot_size(index_name, exchange)
             if lot_size:
                 results.append(
@@ -1384,3 +1591,180 @@ def get_symbol_lot_sizes():
     except Exception as e:
         logger.exception(f"Error fetching lot sizes for {len(pairs)} pair(s): {e}")
         return jsonify({"status": "error", "message": "Failed to fetch lot sizes"}), 500
+
+
+def _sorted_expiry_codes(raw_dates: list) -> list[str]:
+    """Normalize broker expiry strings to DDMMMYY and sort them chronologically.
+
+    Brokers return expiries in several formats and in no guaranteed order, but
+    a symbol is built from the DDMMMYY code and the builder offers "nearest
+    first". An unparseable entry is kept, sorted last, rather than dropped -
+    hiding a listed expiry is worse than showing one out of order.
+    """
+    codes: list[str] = []
+    for raw in raw_dates:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        text = raw.strip().upper()
+        parsed = None
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d%b%y", "%d%b%Y"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+        codes.append(parsed.strftime("%d%b%y").upper() if parsed else text)
+
+    def sort_key(code: str):
+        try:
+            return (0, datetime.strptime(code, "%d%b%y"))
+        except ValueError:
+            return (1, datetime.max)
+
+    # dict.fromkeys dedupes while keeping first-seen order for unparseable codes.
+    return sorted(dict.fromkeys(codes), key=sort_key)
+
+
+#: Strikes returned either side of ATM. Enough to reach a deep-ITM or far-OTM
+#: leg without shipping a whole chain into a sidebar dropdown.
+OPTION_STRIKE_WINDOW = 25
+
+
+@flow_bp.route("/api/option-strikes", methods=["GET"])
+@check_session_validity
+def get_option_strikes():
+    """Listed expiries and strikes for one underlying, for the manual leg builder.
+
+    A manually built leg can name an absolute strike and its own expiry. The
+    editor should offer contracts the exchange actually lists rather than a free
+    number and a typed date, so this answers with the master contract's own
+    list: every strike carries the symbol it resolves to and its moneyness, and
+    every relative expiry type carries the date it currently picks.
+
+    Both halves come back in one response because the builder needs them
+    together: pick an expiry, then a strike within it.
+
+    Structure only - no per-strike broker quotes - because the builder needs the
+    contract, not its price, and a quoted chain costs a multiquote round trip
+    every time a dropdown opens.
+    """
+    from services.expiry_service import get_expiry_dates
+    from services.flow_executor_service import resolve_option_exchanges
+    from services.flow_node_contracts import (
+        VALID_EXPIRY_TYPES,
+        format_expiry_for_api,
+        select_expiry,
+    )
+    from services.option_chain_service import get_option_chain
+    from services.option_symbol_service import parse_underlying_symbol
+
+    underlying = (request.args.get("underlying") or "").strip().upper()
+    if not underlying:
+        return jsonify({"status": "error", "message": "underlying is required"}), 400
+
+    option_type = (request.args.get("optionType") or "CE").strip().upper()
+    if option_type not in ("CE", "PE"):
+        return jsonify({"status": "error", "message": "optionType must be CE or PE"}), 400
+
+    requested_expiry = format_expiry_for_api(request.args.get("expiry") or "")
+    requested_expiry_type = (request.args.get("expiryType") or "").strip().lower()
+
+    api_key = get_current_api_key()
+    if not api_key:
+        return (
+            jsonify(
+                {"status": "error", "message": "API key not configured. Generate one at /apikey"}
+            ),
+            401,
+        )
+
+    try:
+        _, fo_exchange = resolve_option_exchanges(
+            underlying, (request.args.get("exchange") or "").strip().upper()
+        )
+        base_symbol, _embedded_expiry = parse_underlying_symbol(underlying)
+
+        success, response, status_code = get_expiry_dates(
+            symbol=base_symbol,
+            exchange=fo_exchange,
+            instrumenttype="options",
+            api_key=api_key,
+        )
+        if not success:
+            return jsonify(response), status_code
+
+        listed = response.get("data") or []
+        expiries = _sorted_expiry_codes(listed)
+        if not expiries:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"No option expiries found for {base_symbol} on {fo_exchange}",
+                    }
+                ),
+                404,
+            )
+
+        # Resolved once here with the executor's own selector, so the panel can
+        # show which contract "current_week" means instead of leaving the author
+        # to find out at run time.
+        resolved = {
+            expiry_type: select_expiry(listed, expiry_type)
+            for expiry_type in sorted(VALID_EXPIRY_TYPES)
+        }
+
+        # Precedence matches the executor's: an explicit date wins over a
+        # relative type, and an expiry the contract does not list falls back to
+        # the nearest rather than answering with an empty strike list.
+        expiry = ""
+        if requested_expiry in expiries:
+            expiry = requested_expiry
+        elif requested_expiry_type:
+            expiry = resolved.get(requested_expiry_type) or ""
+        if expiry not in expiries:
+            expiry = expiries[0]
+
+        chain_ok, chain, chain_code = get_option_chain(
+            underlying=base_symbol,
+            exchange=fo_exchange,
+            expiry_date=expiry,
+            strike_count=OPTION_STRIKE_WINDOW,
+            api_key=api_key,
+            with_quotes=False,
+        )
+        if not chain_ok:
+            return jsonify(chain), chain_code
+
+        side = option_type.lower()
+        strikes = [
+            {
+                "strike": row.get("strike"),
+                "symbol": (row.get(side) or {}).get("symbol"),
+                # ATM / ITMn / OTMn, which differ per side at the same strike.
+                "label": (row.get(side) or {}).get("label"),
+            }
+            for row in chain.get("chain", []) or []
+            if row.get("strike") is not None
+        ]
+
+        return jsonify(
+            {
+                "status": "success",
+                "data": {
+                    "underlying": underlying,
+                    "exchange": fo_exchange,
+                    "expiry": chain.get("expiry_date", expiry),
+                    "expiries": expiries,
+                    "resolved": resolved,
+                    "optionType": option_type,
+                    "strikes": strikes,
+                    "atm": chain.get("atm_strike"),
+                    "underlyingLtp": chain.get("underlying_ltp"),
+                    "underlyingSymbol": chain.get("underlying_symbol"),
+                },
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error fetching option strikes for {underlying}: {e}")
+        return jsonify({"status": "error", "message": "Failed to fetch option strikes"}), 500

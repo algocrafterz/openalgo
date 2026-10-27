@@ -12,10 +12,19 @@ from flask import Blueprint, abort, request, send_file, send_from_directory
 react_bp = Blueprint("react", __name__)
 
 # Pre-compressed encodings to negotiate, in preference order (best ratio first).
-# The Vite build (vite-plugin-compression2) emits <asset>.br and <asset>.gz next
-# to each hashed asset; CI commits them with frontend/dist/. Serving these lets
-# no-nginx (laptop) installs ship compressed bytes with zero per-request CPU,
-# and nginx-fronted servers pass the Content-Encoding through untouched.
+# utils/precompress_assets.py writes <asset>.gz next to each hashed asset at
+# startup. They are deliberately NOT committed with frontend/dist/: compressed
+# output can be neither deflated nor delta-compressed by git, so re-committing
+# it on every CI rebuild grew to two thirds of the repository history.
+#
+# Serving these lets installs with no compressing proxy ship compressed bytes
+# at zero per-request CPU, and nginx or Cloudflare in front passes the
+# Content-Encoding through untouched rather than re-compressing.
+#
+# ".br" stays in the list although nothing in the repo produces it now: the
+# lookup is one stat that misses, and it means an operator whose own pipeline
+# emits brotli gets it served without a code change. Missing variants always
+# fall back to the raw asset.
 _PRECOMPRESSED_ENCODINGS = ((".br", "br"), (".gz", "gzip"))
 
 
@@ -403,6 +412,23 @@ def react_straddlepnl():
     return serve_react_app()
 
 
+# Agent - the LLM agent surface. Registered even though React Router would serve
+# it anyway through the 404 fallback: an unregistered path counts against
+# Error404Tracker for unauthenticated visitors, so a bookmark opened while
+# logged out would push that address toward an IP ban.
+@react_bp.route("/agent", strict_slashes=False)
+def react_agent():
+    return serve_react_app()
+
+
+# Agent configuration - models, provider keys and web search. A separate React
+# route under the same surface, so it needs its own registration for the same
+# Error404Tracker reason as /agent above.
+@react_bp.route("/agent/config", strict_slashes=False)
+def react_agent_config():
+    return serve_react_app()
+
+
 # Strategy Builder - multi-leg option strategy builder with payoff diagram
 @react_bp.route("/strategybuilder", strict_slashes=False)
 def react_strategybuilder():
@@ -490,8 +516,12 @@ def react_analyzer():
 # ============================================================
 
 
-# Webhook Strategies
-# Note: Using strict_slashes=False to handle both /strategy and /strategy/
+# Strategy module (multi-leg options strategies with risk management)
+#
+# Registered even though React Router would serve these anyway via the 404
+# fallback: an unregistered path counts against Error404Tracker for
+# unauthenticated visitors, and a shared strategy link opened while logged out
+# would push the visitor's address toward an IP ban.
 @react_bp.route("/strategy", strict_slashes=False)
 def react_strategy_index():
     return serve_react_app()
@@ -503,12 +533,12 @@ def react_strategy_new():
 
 
 @react_bp.route("/strategy/<int:strategy_id>", strict_slashes=False)
-def react_strategy_view(strategy_id):
+def react_strategy_detail(strategy_id):
     return serve_react_app()
 
 
-@react_bp.route("/strategy/<int:strategy_id>/configure", strict_slashes=False)
-def react_strategy_configure(strategy_id):
+@react_bp.route("/strategy/<int:strategy_id>/edit", strict_slashes=False)
+def react_strategy_edit(strategy_id):
     return serve_react_app()
 
 

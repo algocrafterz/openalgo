@@ -22,6 +22,7 @@ implemented: it needs an owner decision. The full audit report with severities i
 | G11 | `eod.sh` header says cron 15:45; crontab runs it 15:25 (before the 15:30 close); crontab comment says AutoStop 15:30, the real task is 16:00 | `crontab -l`, `eod.sh`, task definitions | Proposed: move to 15:45 and the claude review to 15:55 (needs approval) |
 | G12 | `weekly.sh` documents a cron that does not exist; last weekly report 2026-09-24 | `crontab -l`, `reports/` | Proposed: retire or reinstate (owner decision) |
 | G13 | Tests read real local databases: `test_flattrade_transform` (SymToken tick from `db/openalgo.db`), backfill calendar test (`db/historify.duckdb`) | both fail in a fresh worktree | Calendar test fixed (branch); flattrade test is OpenAlgo core, left alone |
+| G15 | The 14:45 time exit and its retry flatten the whole broker account, not the tracked strategies. `close_all_positions(strategy)` calls `closeposition` with no symbol, and `cancel_all_orders(strategy)` calls `cancelallorder`; OpenAlgo ignores the strategy tag for both. Every open position in every product (CNC and NRML included) is closed under the tag `Squareoff`, and every working order is cancelled, so CNC, manual and other tools' positions and orders are affected too. `time_exit_all`'s docstring ("CNC positions are excluded") is true only of the tracker. Today every configured strategy is MIS, so the flatten closes what it should; the exposure is anything the tracker does not own. Strategy-level verification alone is unsafe with these calls: during the exit every tracked strategy on a symbol stays registered until booking, so `fetch_own_position` (net minus the other strategies' tracked quantity) reads a correctly flat symbol as open whenever two strategies held it (BREAKOUT +10, BREAKOUT-PY +5: net 0, own = -5), giving false retries, a false TIME EXIT FAILED alert and an unconfirmed booking | `api_client.close_all_positions`/`cancel_all_orders`; `services/close_position_service.py` and `sandbox_service.sandbox_close_position` (no symbol: loop every open position); `broker/flattrade/api/order_api.close_all_positions` (every `netqty != 0`, any `prd`); `services/cancel_all_order_service.py` (every open order); review of fix stack 2026-10-24 | Documented, not fixed (owner decision 2026-10-24): see proposal 6 |
 | G14 | `../HOW-IT-WORKS.md` describes ORB-era values (5 positions, 12 trades a day, 15:00 time exit) that no longer match `config.yaml` (2 positions, 10 trades, 14:45) | doc vs config | Documentation debt; not changed |
 
 ## Proposals that need approval (not implemented)
@@ -37,6 +38,15 @@ implemented: it needs an owner decision. The full audit report with severities i
    (now alerted). Alternative: treat it as unconfirmed, retry the square-off, write no closing row.
 4. **G11 schedule.** `eod.sh` at 15:45, `eod_claude_review.sh` at 15:55 (before the 16:00 stop).
 5. **Telegram.** See the audit report, Report A: staged `notify_level` change, no code removal.
+6. **G15, per-position time-exit square-off (follow-up, not started).** Replace both account-wide
+   calls in `_square_off_strategies` and the `_verify_positions_closed` retry. Cancel only the
+   tracked strategies' working orders, by order id. Send one MARKET exit per (symbol, exchange,
+   product) group for exactly the tracked signed quantity. Verify each group against its untracked
+   baseline (net before the exit minus the tracked quantity), and retry only the residual. Booking
+   then uses the known order ids. Requirements before deployment: regression tests with two
+   strategies on one symbol and with an untracked position on that symbol, paper-mode validation
+   over several sessions, and a deployment separate from any OpenAlgo upgrade so a behavior change
+   can be attributed. Changes the 14:45 exit mechanism, so it needs approval of the design first.
 
 ## How to regenerate
 

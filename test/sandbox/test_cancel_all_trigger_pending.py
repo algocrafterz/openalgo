@@ -12,6 +12,7 @@ from datetime import datetime
 
 import pytest
 import pytz
+from sqlalchemy import null
 
 from database.sandbox_db import SandboxOrders, db_session
 from sandbox.order_manager import OrderManager
@@ -32,6 +33,10 @@ def _user(monkeypatch):
 
 
 def _seed(status: str, price_type: str = "SL-M", action: str = "BUY") -> str:
+    # SQL NULL is the sandbox's "reserved nothing" value (2.0.2.8, #2207), written with null() as
+    # place_order does, since the column's Python default would turn None into 0. A literal 0
+    # now means a legacy row whose margin is recalculated on cancel, and this test account has
+    # no reservation to release, so 0 would make the cancel refuse for an unrelated reason.
     order_id = uuid.uuid4().hex[:14]
     now = datetime.now(IST)
     db_session.add(
@@ -39,7 +44,7 @@ def _seed(status: str, price_type: str = "SL-M", action: str = "BUY") -> str:
             orderid=order_id, user_id=USER_ID, symbol="RELIANCE", exchange="NSE", action=action,
             quantity=1, price=0 if price_type != "LIMIT" else 1, trigger_price=1 if "SL" in price_type else 0,
             price_type=price_type, product="MIS", order_status=status, average_price=None,
-            filled_quantity=0, pending_quantity=1, margin_blocked=0, strategy="EVWAP-EARLY-PY",
+            filled_quantity=0, pending_quantity=1, margin_blocked=null(), strategy="EVWAP-EARLY-PY",
             order_timestamp=now, update_timestamp=now,
         )
     )
