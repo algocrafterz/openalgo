@@ -520,7 +520,11 @@ def _restore_tracker_positions(
                     direction=bdir,
                     entry_order_id=found["order_id"],
                     sl_order_id=recovered_sl if i == 0 else "",
-                    fill_price=float(bp.get("average_price", 0) or 0),
+                    # The leg's own recorded fill, not the broker's netted average: another
+                    # strategy's fill on the symbol moves that average (HDFCBANK 2026-10-28
+                    # restored at 678.6, EVWAP's stop fill, instead of its own 675.15).
+                    fill_price=float(found.get("fill_price") or 0)
+                    or float(bp.get("average_price", 0) or 0),
                     ever_seen_nonzero_qty=True,
                     sig_id=found.get("sig_id", ""),
                 )

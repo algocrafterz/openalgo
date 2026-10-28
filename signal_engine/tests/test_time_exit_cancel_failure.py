@@ -2,7 +2,7 @@
 
 Call path: tracker.time_exit_all -> _square_off_strategies (cancel_all_orders, one retry if it
 fails; the order book must then show no working order of the strategy, re-cancelling by id, BEFORE
-close_all_positions) -> _verify_positions_closed (re-check each symbol; the same confirmation
+_close_strategy) -> _verify_positions_closed (re-check each symbol; the same confirmation
 before any re-close) -> _confirm_orders_cancelled.
 
 A strategy whose stops cannot be confirmed cancelled is NOT closed (owner decision 2026-10-25): a
@@ -10,9 +10,9 @@ close beside a live stop can leave the stop to open a reversed position, and the
 then know the remaining position. The position keeps its stop and its tracking, and a CRITICAL
 alert asks for a manual close before the broker square-off.
 
-close_all_positions is OpenAlgo /closeposition, which is position-based: it reads each live net
-quantity and sends one opposite order, so a flat position gets no order and the time exit never
-sends a duplicate close. The hazard is a stop left WORKING after the flatten: if it triggers later
+_close_strategy sends one opposite MARKET order per tracked leg, capped by what the live net
+quantity leaves for that leg, so a flat position gets no order and the time exit never sends a
+duplicate close (test_time_exit_own_legs.py). The hazard is a stop left WORKING after the flatten: if it triggers later
 it opens a new, reversed position. _confirm_orders_cancelled therefore reads the broker ORDER BOOK
 (the cancel API's "success" is not proof), re-cancels while an order of the squared-off strategies
 is still working, and raises a critical log and Telegram alert if that cannot be confirmed, even
@@ -58,7 +58,7 @@ async def _time_exit(cancel_results, books, broker_qty=0):
     with (
         patch("signal_engine.tracker.cancel_all_orders", cancel),
         patch("signal_engine.tracker.cancel_order", cancel_one),
-        patch("signal_engine.tracker.close_all_positions", close),
+        patch.object(PositionTracker, "_close_strategy", close),
         patch(
             "signal_engine.tracker.fetch_net_position",
             new_callable=AsyncMock,
@@ -162,8 +162,9 @@ class TestCancelAllSkipsTriggerPending:
         with (
             patch("signal_engine.tracker.cancel_all_orders", cancel_all),
             patch("signal_engine.tracker.cancel_order", cancel_one),
-            patch(
-                "signal_engine.tracker.close_all_positions",
+            patch.object(
+                PositionTracker,
+                "_close_strategy",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -199,7 +200,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
             rows.clear()
             return True
 
-        async def close(strategy):
+        async def close(strategy, symbols):
             calls.append("close")
             return True
 
@@ -210,7 +211,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
         with (
             patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(side_effect=cancel_by_id)),
-            patch("signal_engine.tracker.close_all_positions", AsyncMock(side_effect=close)),
+            patch.object(PositionTracker, "_close_strategy", AsyncMock(side_effect=close)),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_orderbook", side_effect=fetch_book),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -250,7 +251,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
         with (
             patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)),
-            patch("signal_engine.tracker.close_all_positions", close),
+            patch.object(PositionTracker, "_close_strategy", close),
             patch("signal_engine.tracker.fetch_net_position", AsyncMock(side_effect=qty)),
             patch("signal_engine.tracker.fetch_orderbook", side_effect=fetch_book),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),

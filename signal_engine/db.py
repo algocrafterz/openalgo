@@ -881,14 +881,16 @@ def fetch_last_entry_trade(
     when the in-memory tracker has been wiped. Only returns LONG/SHORT entries
     (never EXIT rows). Returns None if no matching trade is found.
 
-    Returns a dict with: entry, sl, tp, quantity, order_id, direction, executed_at, sig_id.
+    Returns a dict with: entry, sl, tp, quantity, order_id, direction, executed_at, sig_id,
+    fill_price (0.0 when no fill was recorded).
     """
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
         conn = _get_connection()
         cur = conn.execute(
             """
-            SELECT entry, sl, tp, quantity, order_id, direction, executed_at, sig_id
+            SELECT entry, sl, tp, quantity, order_id, direction, executed_at, sig_id,
+                   fill_price
             FROM trades
             WHERE upper(symbol) = upper(?)
               AND upper(strategy) = upper(?)
@@ -903,7 +905,7 @@ def fetch_last_entry_trade(
         row = cur.fetchone()
         if not row:
             return None
-        entry, sl, tp, qty, order_id, direction, executed_at, sig_id = row
+        entry, sl, tp, qty, order_id, direction, executed_at, sig_id, fill_price = row
         return {
             "entry": float(entry or 0.0),
             "sl": float(sl or 0.0),
@@ -913,6 +915,7 @@ def fetch_last_entry_trade(
             "direction": Direction.LONG if str(direction).upper() == "LONG" else Direction.SHORT,
             "executed_at": str(executed_at or ""),
             "sig_id": str(sig_id or ""),
+            "fill_price": float(fill_price or 0.0),
         }
     except Exception as e:
         logger.warning(f"fetch_last_entry_trade failed for {symbol}:{strategy}: {e}")

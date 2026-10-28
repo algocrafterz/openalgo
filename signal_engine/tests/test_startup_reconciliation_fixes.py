@@ -390,3 +390,90 @@ class TestMultiLegRestoreSplitsEachEntry:
         # Only the first (oldest) leg gets the one recoverable sl_order_id.
         assert by_strategy["BREAKINGTRADE-WATCHLIST"].sl_order_id == "SL-WL"
         assert by_strategy["BREAKINGTRADE"].sl_order_id == ""
+
+
+class TestRestoredLegKeepsItsOwnFill:
+    """2026-10-28 HDFCBANK: BREAKINGTRADE bought 131 @675.15 while EVWAP-EARLY-PY's short on
+    the same symbol was stopped out by a BUY 259 @678.6. The broker's netted average then read
+    678.6, a restart restored the BREAKINGTRADE leg with that as its fill, and the leg booked
+    913.05 instead of 1,365.0 and placed its runner stop 3.45 too high."""
+
+    class _Tracker:
+        def __init__(self):
+            self.registered = []
+
+        def find_position(self, *_a):
+            return None
+
+        def register(self, pos):
+            self.registered.append(pos)
+
+    @staticmethod
+    def _leg(strategy, qty, fill_price):
+        row = {
+            "entry": 675.6,
+            "sl": 668.68,
+            "tp": 686.1,
+            "quantity": qty,
+            "order_id": f"E-{strategy}",
+            "sig_id": "",
+            "fill_price": fill_price,
+        }
+        return (strategy, row)
+
+    def _restore(self, broker_positions, legs):
+        tracker = self._Tracker()
+        with patch("signal_engine.startup._lookup_entry_legs", return_value=legs):
+            startup._restore_tracker_positions(tracker, broker_positions, "MIS", sl_orders={})
+        return {p.strategy: p for p in tracker.registered}
+
+    def test_single_leg_uses_its_recorded_fill_not_the_broker_average(self):
+        restored = self._restore(
+            [{"symbol": "HDFCBANK", "quantity": 131, "average_price": 678.6}],
+            [self._leg("BREAKINGTRADE", 131, 675.15)],
+        )
+        assert restored["BREAKINGTRADE"].fill_price == 675.15
+
+    def test_each_split_leg_keeps_its_own_fill(self):
+        restored = self._restore(
+            [{"symbol": "APOLLOHOSP", "quantity": 4, "average_price": 8036.75}],
+            [self._leg("BREAKINGTRADE", 2, 8038.0), self._leg("BREAKINGTRADE-RI", 2, 8035.5)],
+        )
+        assert restored["BREAKINGTRADE"].fill_price == 8038.0
+        assert restored["BREAKINGTRADE-RI"].fill_price == 8035.5
+
+    def test_a_leg_with_no_recorded_fill_falls_back_to_the_broker_average(self):
+        restored = self._restore(
+            [{"symbol": "HDFCBANK", "quantity": 131, "average_price": 678.6}],
+            [self._leg("BREAKINGTRADE", 131, 0.0)],
+        )
+        assert restored["BREAKINGTRADE"].fill_price == 678.6
+
+
+def test_fetch_last_entry_trade_returns_the_recorded_fill(tmp_path, monkeypatch):
+    import sqlite3
+
+    from signal_engine import db
+
+    path = tmp_path / "trades.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY, strategy TEXT, direction TEXT, symbol TEXT,"
+        " entry REAL, sl REAL, tp REAL, quantity INTEGER, order_id TEXT, status TEXT,"
+        " executed_at TEXT, sig_id TEXT, fill_price REAL)"
+    )
+    from datetime import datetime
+
+    from signal_engine.timeutils import IST
+
+    now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        "INSERT INTO trades (strategy, direction, symbol, entry, sl, tp, quantity, order_id,"
+        " status, executed_at, sig_id, fill_price) VALUES"
+        " ('BREAKINGTRADE','LONG','HDFCBANK',675.6,668.68,686.1,131,'E1','SUCCESS',?, '',675.15)",
+        (now,),
+    )
+    conn.commit()
+    monkeypatch.setattr(db, "_get_connection", lambda: conn)
+    row = db.fetch_last_entry_trade("HDFCBANK", "BREAKINGTRADE")
+    assert row["fill_price"] == 675.15

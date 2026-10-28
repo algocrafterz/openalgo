@@ -216,6 +216,22 @@ special case.
 Three separate look-ahead traps were found and fixed during this work, including a BTST list
 that could never have been traded because it needed the 15:15–15:30 session. Assume more exist.
 
+## Recent Changes (2026-10-28)
+
+Two engine fixes from the 2026-10-28 BreakingTrade paper review
+(`docs/paper-monitoring/2026-10-28-BREAKINGTRADE*.md`). Both apply to every strategy.
+
+- **Restored leg keeps its own fill.** `startup._restore_tracker_positions` set a restored leg's
+  `fill_price` from the broker's netted `average_price`, which another strategy's fill on the
+  same symbol moves. HDFCBANK was restored at 678.6 (EVWAP-EARLY-PY's stop fill) instead of
+  675.15, booked 913.05 against 1,365.0, and measured its break-even stop from the wrong price.
+  The leg's trades.db fill (`db.fetch_last_entry_trade` now returns `fill_price`) is used first.
+- **Time exit closes each strategy's own legs.** The 14:45 square-off called OpenAlgo
+  `/closeposition`, which closes the whole account. `tracker._close_strategy` now sends one
+  MARKET order per tracked leg, capped by what the broker's net position leaves for it; nothing
+  is sent (CRITICAL alert) when that is zero or less. The closing order id is kept and used for
+  verification and booking.
+
 ## Recent Changes (2026-10-07)
 
 Ledger and accounting work, accepted 2026-10-07 and not yet committed. The rules these changes

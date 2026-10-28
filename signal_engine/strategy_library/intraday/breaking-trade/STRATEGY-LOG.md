@@ -96,6 +96,34 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-28 17:17 — Two engine fixes from the first BREAKINGTRADE-RI paper day
+- **What changed:** Two record-keeping and closing faults found in the 2026-10-28 paper review
+  were fixed in the engine. Both apply to every strategy, not only BreakingTrade. (1) After a
+  restart the engine took a trade's buy price from the broker's combined position, which other
+  strategies on the same stock can move; it now uses the trade's own recorded fill. (2) The
+  14:45 close sent one "close everything" request, which also closed other strategies' trades;
+  it now sells only each strategy's own shares, one order per trade.
+- **Entry:** Not affected.
+- **Exit (SL):** A trade restored after a restart now measures its break-even stop from its own
+  buy price. On 2026-10-28 the HDFCBANK runner stop sat about 0.5R too high because of fault (1).
+- **Exit (TP):** Not affected. The 14:45 exit happens at the same time for the same trades; only
+  the way the closing order is sent changed.
+- **Consideration:** The engine's own P&L for 2026-10-28 is about Rs 450 too low for
+  BREAKINGTRADE because of fault (1). The fill-backed Strategy P&L page was right all along.
+
+NOTE: (1) `startup._restore_tracker_positions` now sets `fill_price` from the trades.db entry row
+(`db.fetch_last_entry_trade` returns `fill_price`), falling back to the positionbook
+`average_price` only when no fill was recorded. HDFCBANK was restored at 678.6 (EVWAP-EARLY-PY's
+stop fill) instead of 675.15, booked 913.05 against 1,365.0; with APOLLOHOSP's 2.5 split this is
+the whole 449.4 engine-vs-page gap. Tests: `test_startup_reconciliation_fixes.py`
+`TestRestoredLegKeepsItsOwnFill`. (2) `tracker._close_strategy` replaces `close_all_positions`
+(OpenAlgo `/closeposition`, account-wide). Each leg gets a MARKET order for
+`min(tracked qty, net - other tracked legs not yet closed)`; nothing is sent when that is 0 or
+less (a stop already filled, or another strategy's opposite position), with a CRITICAL alert.
+The closing order id is kept for verification and booking, so a symbol another strategy still
+holds no longer reads as "not closed". Tests: `test_time_exit_own_legs.py`. Reviews:
+`signal_engine/docs/paper-monitoring/2026-10-28-BREAKINGTRADE*.md`.
+
 ### 2026-10-28 15:10 — Narrow or wide opening hour and older reference levels tested as entry filters: none holds up
 - **What changed:** Nothing in the strategy. Four ideas were written down first and then tested:
   a narrow first hour (Initial Balance, 09:15-10:15) leads to better breakouts; an open outside

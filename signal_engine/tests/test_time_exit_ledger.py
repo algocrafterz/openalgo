@@ -59,7 +59,7 @@ async def _run_time_exit(
 ):
     with (
         patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
-        patch("signal_engine.tracker.close_all_positions", new_callable=AsyncMock),
+        patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
         patch(
             "signal_engine.tracker.fetch_net_position",
             open_fn or AsyncMock(return_value=open_qty),

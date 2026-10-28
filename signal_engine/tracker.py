@@ -12,7 +12,6 @@ from signal_engine import db, notifier, order_reconcile
 from signal_engine.api_client import (
     cancel_all_orders,
     cancel_order,
-    close_all_positions,
     fetch_net_position,
     fetch_order_fill_price,
     fetch_order_status,
@@ -316,6 +315,8 @@ class PositionTracker:
         self._last_realised_pnl: float = 0.0
         self._pnl_lock: asyncio.Lock = asyncio.Lock()  # serialise _last_realised_pnl updates
         self._time_exit_active: bool = False  # True while time_exit_all() is in progress
+        # tracked key -> id of the MARKET order the square-off sent to close that leg
+        self._square_off_orders: dict[str, str] = {}
         self._last_stop_audit: float | None = None  # time.monotonic() of the last twin-stop audit
         # Day summary counters (reset at midnight via TimeExitScheduler)
         self._day_trades: int = 0
@@ -1905,6 +1906,7 @@ class PositionTracker:
         # Held from the first cancel to the last booking, so neither the poll nor a TP/EXIT
         # signal can book or act on a position the square-off is closing.
         self._time_exit_active = True
+        self._square_off_orders = {}
         try:
             uncancelled, skipped = await self._square_off_strategies(mis_positions)
             still_open = await self._verify_positions_closed(mis_positions, skipped)
@@ -1963,9 +1965,71 @@ class PositionTracker:
                 "stop. Check the order book and close it by hand before the broker square-off."
             )
             return False
-        logger.info(f"Time exit: closing all positions for strategy={strategy}")
-        await close_all_positions(strategy)
+        logger.info(f"Time exit: closing {strategy}'s own positions ({', '.join(sorted(symbols))})")
+        await self._close_strategy(strategy, symbols)
         return True
+
+    async def _close_strategy(self, strategy: str, symbols: set[str]) -> None:
+        """Close `strategy`'s own tracked MIS legs on `symbols`, one MARKET order per leg.
+
+        Not OpenAlgo /closeposition: that closes every open position in the account whatever
+        the strategy tag. On 2026-10-28 BREAKINGTRADE's 14:45 call also closed
+        BREAKINGTRADE-RI's ANGELONE leg and three EVWAP-EARLY-PY positions, none of them booked.
+        """
+        # Imported here: main imports tracker, not the reverse.
+        from signal_engine.main import _send_exit_with_retries
+
+        for key, pos in list(self._positions.items()):
+            if pos.strategy != strategy or pos.symbol not in symbols or pos.product != "MIS":
+                continue
+            qty = await self._own_close_qty(key, pos)
+            if qty <= 0:
+                logger.critical(
+                    f"Time exit: {key} - the broker position leaves nothing for this leg to "
+                    f"close (tracked {pos.quantity}); no order sent"
+                )
+                await notifier.notify(
+                    f"TIME EXIT: {pos.symbol} [{strategy}] was not closed. The broker position "
+                    f"does not hold this strategy's {pos.quantity} shares. Check the position "
+                    "book before the broker square-off."
+                )
+                continue
+            order = build_exit_order(
+                symbol=pos.symbol,
+                exchange=pos.exchange,
+                quantity=qty,
+                product=pos.product,
+                strategy_tag=pos.strategy,
+                direction=pos.direction,
+            )
+            result = await _send_exit_with_retries(order, pos)
+            if result.status == OrderStatus.SUCCESS:
+                self._square_off_orders[key] = result.order_id
+            else:
+                logger.error(f"Time exit: close order for {key} not confirmed: {result.message}")
+
+    async def _own_close_qty(self, key: str, pos) -> int:
+        """Shares to close for this leg: its tracked quantity, capped by what the broker's net
+        position leaves for it once the other tracked legs still held are taken out.
+
+        A leg whose stop already filled shows nothing left, so it is not sold a second time
+        into a reversed position. An unreadable position closes the tracked quantity, which is
+        what the stop that was just cancelled protected.
+        """
+        net = await fetch_net_position(pos.symbol, pos.strategy, pos.exchange or "NSE", pos.product)
+        if net is None:
+            logger.warning(f"Time exit: {key} position unreadable - closing the tracked quantity")
+            return pos.quantity
+        others = sum(
+            (p.quantity if p.direction == Direction.LONG else -p.quantity)
+            for k, p in self._positions.items()
+            if k != key
+            and k not in self._square_off_orders
+            and (p.symbol, p.exchange, p.product) == (pos.symbol, pos.exchange, pos.product)
+        )
+        own = net - others
+        own_in_direction = own if pos.direction == Direction.LONG else -own
+        return min(pos.quantity, own_in_direction)
 
     @staticmethod
     def _working_orders(book, strategies: set[str], symbols: set[str]) -> list[dict]:
@@ -2089,6 +2153,8 @@ class PositionTracker:
             still_open = []
             unread = []
             for k, pos in pending:
+                if await self._square_off_filled(k, pos):
+                    continue
                 qty = await fetch_net_position(
                     pos.symbol, pos.strategy, pos.exchange or "NSE", pos.product
                 )
@@ -2131,6 +2197,15 @@ class PositionTracker:
             f"Close manually before 15:20!"
         )
         return left_open | {k for k, _ in pending}
+
+    async def _square_off_filled(self, key: str, pos) -> bool:
+        """True when the order the square-off sent for this leg has a fill.
+
+        The leg's own order is the proof on a shared symbol: the net position stays non-zero
+        while another strategy still holds it, so a zero net cannot be the test there.
+        """
+        order_id = self._square_off_orders.get(key)
+        return bool(order_id and await fetch_order_fill_price(order_id, pos.strategy))
 
     @staticmethod
     async def _report_unverified_close(positions: list) -> None:
@@ -2201,10 +2276,15 @@ class PositionTracker:
     ) -> tuple[str, "float | None"]:
         """The order that closed `pos` at the square-off and its fill, from the orderbook.
 
-        The square-off goes through the strategy-level close API, which returns no per-position
-        order id, so the closing order is found the way a timed-out exit is: the complete order
-        on this symbol, opposite action and remaining quantity placed since the square-off began.
+        The square-off's own order for the leg when it sent one. Otherwise (an order that came
+        back unconfirmed) the closing order is found the way a timed-out exit is: the complete
+        order on this symbol, opposite action and remaining quantity placed since the
+        square-off began.
         """
+        own = self._square_off_orders.get(self._key(pos.symbol, pos.strategy))
+        if own:
+            used_order_ids.add(own)
+            return own, await fetch_order_fill_price(own, pos.strategy) or None
         action = "SELL" if pos.direction == Direction.LONG else "BUY"
         order_id = find_recent_complete_order_id(
             book, pos.symbol, action, pos.quantity, started, frozenset(used_order_ids)

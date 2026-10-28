@@ -393,7 +393,7 @@ async def _handle_exit_locked(signal) -> None:
 def _exit_blocked_by_time_exit(signal) -> bool:
     """True if time_exit_all() owns the close and this exit must stand down.
 
-    time_exit cancels all orders then fires close_all_positions — a concurrent TP signal
+    time_exit cancels all orders then closes each leg at market — a concurrent TP signal
     would try to cancel the same SL (already gone) and place a duplicate exit order.
     """
     if not tracker._time_exit_active:
