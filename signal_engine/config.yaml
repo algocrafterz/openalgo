@@ -1013,9 +1013,10 @@ strategy_profiles:
     # rejects any other tp for this strategy, and no path reads a target. The trail driver sends one
     # full EXIT (tp_level TRAILING_STOP); the 14:45 time exit closes anything still open.
     #
-    # Stops sit 0.10 ATR beyond the latest 5m swing, as tight as the key-level stops of BREAKOUT,
-    # so the same 0.20% floor rather than the ORB-calibrated 0.50% global.
-    min_sl_pct: 0.002
+    # Stops sit 0.10 ATR beyond the latest 5m swing. Floor raised 0.20% -> 0.40% on 2026-10-28:
+    # round-trip charges are about 8 bps of price, so a 0.3% stop pays 0.27R in charges per trade
+    # (0.20% pays 0.4R) while 12 sessions of stops under 0.3% averaged -0.36R gross.
+    min_sl_pct: 0.004
   EMA9VWAP:
     product: MIS
     # tp_levels absent — ema9-vwap.pine sends ExitQtyPct (100) in its TP1 HIT alert.

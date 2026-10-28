@@ -50,6 +50,31 @@ NOTE: `pipeline/cycle.py` steps open positions when `halted()` is true unless
 `pipeline/runner.py` isolates warm-up and per-cycle exceptions and alerts once per session.
 See `docs/PYTHON-RUNNER-SPEC.md` "Halt".
 
+### 2026-10-28 22:00 - Minimum stop distance raised from 0.20% to 0.40% of price
+
+- **What changed:** The strategy now skips any trade whose protective stop is closer than 0.40% of the
+  price (it was 0.20%). Nothing else changed.
+- **Entry:** Fewer trades open. Trades with a very tight stop are skipped.
+- **Exit (SL):** Not affected. Stops are placed exactly as before; only trades whose stop would be too
+  close are refused.
+- **Exit (TP):** Not affected. There is still no profit target.
+- **Consideration:** Charges are a fixed share of the money traded. A very tight stop means a big
+  position for the same risk, so charges eat a large part of one stop-out (about 0.3 of the amount risked
+  at a 0.3% stop). Across 12 paper sessions, stops under 0.3% lost 0.36 of the amount risked per trade
+  before charges. This is a cost-driven filter from a small sample, not a proven edge. Review after about
+  10 sessions of trades.
+
+NOTE: `strategy_profiles.EVWAP-EARLY-PY.min_sl_pct` in `config.yaml`, read by `validator._min_sl_pct_for`.
+Evidence: 492 closed trades 2026-10-09 to 2026-10-28 from `logs/evwap-early-py_diagnostics_*.jsonl`.
+Gross -29.9R; trailing-stop exits +91R, initial-stop exits -116R (115 trades, all about -1R); trades that
+reached the EMA/VWAP crossover +97R, those that never did -127R. Assuming 8 bps round-trip charges the
+net is about -94R, and stop-under-0.3% trades alone were -21.6R net (32 trades). Longs -34R, shorts +4R
+(market regime, not acted on). An exit-if-no-crossover-after-N-bars rule was tried offline on the same
+sample and is NOT applied: N was fitted on 12 days. Test it in the full-universe backtest first.
+Operational: the OpenAlgo backend stalled (history and positionbook ReadTimeout) on 2026-10-15, 22, 23,
+26 and 28, causing 44, 68, 99 and 281 late-bar skips on the last four days, and the engine did not
+evaluate the 09:20-09:55 window on 2026-10-28. This is a backend problem, not the strategy.
+
 ### 2026-10-12 16:30 - Second paper session checked; time-exit stop cancel and close records fixed
 
 - **What changed:** No rule change. Two technical fixes. (1) At 14:45 the platform's "cancel all
