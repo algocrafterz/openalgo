@@ -28,6 +28,7 @@ from database.symbol import SymToken
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from sandbox.position_locks import holds_position_lock
+from utils import real_threading
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 from utils.symbol_utils import is_future, is_option
@@ -1501,28 +1502,33 @@ class OrderManager:
 
         return True, "Validation passed"
 
+    # The last sequence handed out, per date. A real lock: order placement runs on request
+    # threads and on engine threads, and the critical section is two integer operations.
+    _order_id_lock = real_threading.Lock()
+    _order_id_last: tuple[str, int] = ("", -1)
+
     def _generate_order_id(self):
         """
-        Generate unique order ID in format: YYMMDD + 8-digit unique sequence
-        Example: 25100112345678 (Year 2025, Oct 1st, unique sequence)
+        Generate unique order ID in format: YYMMDD + 8-digit sequence
+        Example: 26102837000123 (2026-10-28, 10:16:40.123 IST)
 
-        Uses microsecond timestamp + random component to avoid race conditions
-        when multiple orders are placed in parallel.
+        The sequence is the number of milliseconds since IST midnight (at most 86,399,999, so it
+        always fits eight digits). When two orders ask in the same millisecond, or the clock has
+        stepped back, the later one is given the next number after the last one handed out, so
+        no two IDs in this process are ever equal. The previous scheme (microsecond-of-second plus
+        a random pair) carried no time of day and could repeat.
         """
-        import random
-
         now = datetime.now(pytz.timezone("Asia/Kolkata"))
         date_prefix = now.strftime("%y%m%d")  # YYMMDD format
+        millis = ((now.hour * 60 + now.minute) * 60 + now.second) * 1000 + now.microsecond // 1000
 
-        # Use microseconds (0-999999) + random (0-99) for 8-digit unique sequence
-        # This avoids race conditions when parallel orders query count simultaneously
-        micro = now.microsecond
-        rand_suffix = random.randint(0, 99)
+        with OrderManager._order_id_lock:
+            last_date, last_millis = OrderManager._order_id_last
+            if date_prefix == last_date and millis <= last_millis:
+                millis = last_millis + 1
+            OrderManager._order_id_last = (date_prefix, millis)
 
-        # Combine: first 6 digits from microseconds, last 2 from random
-        sequence = f"{micro:06d}{rand_suffix:02d}"
-
-        return f"{date_prefix}{sequence}"
+        return f"{date_prefix}{millis:08d}"
 
     def _calculate_order_statistics(self, orders):
         """Calculate order statistics matching broker API format"""
