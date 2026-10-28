@@ -785,6 +785,7 @@ def get_strategy_legs(
                 "today_realized_pnl": (
                     float(r.today_realized_pnl or 0) if r.trade_date == today else 0.0
                 ),
+                "trade_date": r.trade_date,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in query.all()

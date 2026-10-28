@@ -22,8 +22,27 @@ from services.holdings_service import get_holdings
 from services.positionbook_service import get_positionbook
 from services.strategy_pnl_service import pnl_from_book
 from utils.logging import get_logger
+from utils.session import get_trading_session_date
 
 logger = get_logger(__name__)
+
+
+def _in_current_session(leg: dict[str, Any], session_date: str) -> bool:
+    """Whether a leg belongs on the page, which shows the current trading session only.
+
+    A leg qualifies when it was last filled this session. An intraday (MIS) leg last
+    filled in an earlier session cannot still be open, so keeping it only marks stale
+    quantity to today's price. An open CNC/NRML position carries across sessions and
+    stays. A leg with no recorded date is kept while open, since the missing date cannot
+    prove it stale and an open position must not vanish from view.
+    """
+    trade_date = leg.get("trade_date")
+    if trade_date == session_date:
+        return True
+    is_open = abs(float(leg.get("quantity") or 0)) > 1e-9
+    if not is_open:
+        return False
+    return trade_date is None or leg.get("product") != "MIS"
 
 
 def get_strategy_performance(
@@ -110,6 +129,8 @@ def get_strategy_performance(
                 if isinstance(h, dict)
             )
 
+    session_date = get_trading_session_date()
+    legs = [leg for leg in legs if _in_current_session(leg, session_date)]
     grouped = pnl_from_book(legs, positions)
     strategies = list(grouped.values())
 

@@ -194,3 +194,78 @@ def test_legacy_unknown_mode_legs_are_never_fetched_or_surfaced(monkeypatch):
     assert [s["strategy"] for s in response["strategies"]] == ["ORB"]
     assert "legacy_strategies" not in response
     assert "legacy_count" not in response
+
+
+# --- Session scope: the page shows the current trading session only --------------------
+
+SESSION = "2026-10-28"
+
+
+def _scoped(monkeypatch, legs):
+    monkeypatch.setattr(perf_service, "get_analyze_mode", lambda: False)
+    monkeypatch.setattr(perf_service, "get_trading_session_date", lambda: SESSION)
+    monkeypatch.setattr(perf_service, "get_strategy_legs", _legs_by_mode(legs))
+    monkeypatch.setattr(
+        perf_service,
+        "get_positionbook",
+        lambda **_kwargs: (True, {"status": "success", "data": []}, 200),
+    )
+    _success, response, _status = perf_service.get_strategy_performance("a", "tok", "zerodha")
+    return response
+
+
+def test_stale_intraday_leg_from_an_earlier_session_is_not_shown(monkeypatch):
+    """A MIS leg last filled in a previous session cannot still be open. Marking it
+    to today's price printed a large phantom unrealized P&L for a retired strategy."""
+    response = _scoped(
+        monkeypatch,
+        [
+            _leg("BREAKOUT", quantity=-178.0, average_price=1238.0, trade_date="2026-09-24"),
+            _leg("EVWAP-EARLY-PY", trade_date=SESSION),
+        ],
+    )
+
+    assert [s["strategy"] for s in response["strategies"]] == ["EVWAP-EARLY-PY"]
+
+
+def test_strategy_with_only_old_flat_legs_is_not_listed(monkeypatch):
+    response = _scoped(
+        monkeypatch,
+        [_leg("ORB", quantity=0.0, today_realized_pnl=0.0, trade_date="2026-10-27")],
+    )
+
+    assert response["strategies"] == []
+    assert response["count"] == 0
+
+
+def test_old_flat_leg_is_dropped_but_the_strategys_current_legs_remain(monkeypatch):
+    response = _scoped(
+        monkeypatch,
+        [
+            _leg("BREAKINGTRADE", symbol="OLD", quantity=0.0, trade_date="2026-10-27"),
+            _leg("BREAKINGTRADE", symbol="NEW", trade_date=SESSION),
+        ],
+    )
+
+    legs = response["strategies"][0]["legs"]
+    assert [leg["symbol"] for leg in legs] == ["NEW"]
+
+
+def test_open_overnight_position_is_kept(monkeypatch):
+    """CNC and NRML positions legitimately carry across sessions."""
+    response = _scoped(
+        monkeypatch,
+        [
+            _leg("SWING", product="CNC", quantity=50.0, trade_date="2026-10-20"),
+            _leg("FUT", product="NRML", quantity=25.0, trade_date="2026-10-22"),
+        ],
+    )
+
+    assert sorted(s["strategy"] for s in response["strategies"]) == ["FUT", "SWING"]
+
+
+def test_open_leg_with_unknown_date_is_kept(monkeypatch):
+    """A missing date cannot prove a leg is stale, and an open position must not vanish."""
+    response = _scoped(monkeypatch, [_leg("ORB", trade_date=None)])
+
+    assert [s["strategy"] for s in response["strategies"]] == ["ORB"]
