@@ -36,6 +36,7 @@ from database.sandbox_db import (
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager, reconcile_margin, validate_margin_consistency
 from services.quotes_service import get_multiquotes, get_quotes
+from utils import broker_priority
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -329,9 +330,11 @@ class ExecutionEngine:
             api_key = decrypt_token(api_key_obj.api_key_encrypted)
 
             # Use quotes service with API key authentication
-            success, response, status_code = get_quotes(
-                symbol=symbol, exchange=exchange, api_key=api_key
-            )
+            # Pricing or executing an order: not to be queued behind background reads.
+            with broker_priority.critical():
+                success, response, status_code = get_quotes(
+                    symbol=symbol, exchange=exchange, api_key=api_key
+                )
 
             if success and "data" in response:
                 quote_data = response["data"]
@@ -379,9 +382,10 @@ class ExecutionEngine:
             ]
 
             # Use multiquotes service
-            success, response, status_code = get_multiquotes(
-                symbols=symbols_payload, api_key=api_key
-            )
+            with broker_priority.critical():
+                success, response, status_code = get_multiquotes(
+                    symbols=symbols_payload, api_key=api_key
+                )
 
             if success and "results" in response:
                 results = response["results"]

@@ -18,7 +18,7 @@ from broker.flattrade.api.rate_limit import (
     rate_limit_retry_delay,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
-from utils import runtime
+from utils import broker_priority, runtime
 from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.ist import IST_OFFSET
@@ -62,6 +62,12 @@ def _quote_pool():
 # previously issued unpaced requests against the same account, which meant the
 # window this module maintained was never the whole picture (issue #1806).
 # Module-level aliases are kept so the existing call sites below read unchanged.
+# Every history request (EODChartData and TPSeries) goes through get_api_response, which acquires
+# DATA_LIMITER first, so the account's per-second and per-minute limits are enforced for history
+# exactly as for quotes. The history service's fixed 3-per-second spacer therefore adds only
+# delay for this broker and is skipped.
+PACES_OWN_HISTORY = True
+
 _apply_rate_limit = DATA_LIMITER.acquire
 _apply_rate_limit_async = DATA_LIMITER.acquire_async
 _is_rate_limit_error = is_rate_limit_error
@@ -148,7 +154,13 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     url = f"https://piconnect.flattrade.in{endpoint}"
 
-    response = client.request(method, url, content=payload_str, headers=headers)
+    started = time.perf_counter()
+    try:
+        response = client.request(method, url, content=payload_str, headers=headers)
+    except httpx.TimeoutException:
+        DATA_LIMITER.record_timeout()
+        raise
+    DATA_LIMITER.record_latency(time.perf_counter() - started)
     data = response.text
 
     # Print raw response for debugging
@@ -319,9 +331,15 @@ class BrokerData:
             # Shared pooled client rather than a bare httpx.post: this runs once
             # per symbol under a ThreadPoolExecutor, so a per-call connection is
             # a socket churned for every quote in the batch.
-            http_response = get_httpx_client().post(
-                url, content=payload_str, headers=headers, timeout=10.0
-            )
+            started = time.perf_counter()
+            try:
+                http_response = get_httpx_client().post(
+                    url, content=payload_str, headers=headers, timeout=10.0
+                )
+            except httpx.TimeoutException:
+                DATA_LIMITER.record_timeout()
+                raise
+            DATA_LIMITER.record_latency(time.perf_counter() - started)
             response = http_response.json()
 
             if response.get("stat") != "Ok":
@@ -544,13 +562,17 @@ class BrokerData:
             results = []
             with _quote_pool() as executor:
                 future_to_symbol = {
+                    # run_in_context: the pool thread would otherwise lose the caller's
+                    # broker_priority and be paced as an untagged call.
                     executor.submit(
-                        self._fetch_single_quote_sync,
-                        item["symbol"],
-                        item["exchange"],
-                        item["api_exchange"],
-                        item["token"],
-                        api_key,
+                        broker_priority.run_in_context(
+                            self._fetch_single_quote_sync,
+                            item["symbol"],
+                            item["exchange"],
+                            item["api_exchange"],
+                            item["token"],
+                            api_key,
+                        )
                     ): item
                     for item in prepared_symbols
                 }

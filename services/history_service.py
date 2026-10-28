@@ -1,3 +1,5 @@
+import copy
+import hashlib
 import importlib
 import time
 from typing import Any
@@ -51,6 +53,86 @@ def _enforce_rate_limit(*, background: bool = False):
         _next_history_slot = slot + _MIN_HISTORY_INTERVAL
     if wait > 0:
         time.sleep(wait)
+
+
+# Single flight: identical broker-history requests that overlap in time share one broker call.
+#
+# A caller that times out leaves its request running here, still holding its place in the
+# spacer queue above, and its retry used to queue a second request behind it. A request for the
+# same symbol, interval and date range now joins the one in flight instead: it books no spacer
+# slot and makes no broker call, and receives the broker's own answer when that arrives. Nothing
+# is kept once the flight ends, so the next request asks the broker again.
+#
+# A flight older than _FLIGHT_JOIN_WINDOW is not joined, so a request never takes an answer
+# from a call that began long before it was made. The waiters use real-thread primitives
+# because the agent's tools reach this from a real OS thread; the registry lock guards dict
+# work only.
+_FLIGHT_JOIN_WINDOW = 20.0  # seconds a flight may have been running and still be joined
+_FLIGHT_WAIT_TIMEOUT = 60.0  # seconds a waiter waits before it fetches for itself
+
+
+class _Flight:
+    __slots__ = ("event", "result", "error", "started")
+
+    def __init__(self):
+        self.event = real_threading.Event()
+        self.result = None
+        self.error = None
+        self.started = time.monotonic()
+
+
+_inflight: dict[tuple, _Flight] = {}
+_inflight_lock = real_threading.Lock()
+
+
+def _flight_key(symbol, exchange, interval, start_date, end_date, api_key, auth_token, broker):
+    """Key for one history request. The account enters as a hash, never as the key itself."""
+    account = api_key or f"{broker}:{auth_token}"
+    tag = hashlib.sha256(str(account).encode()).hexdigest()[:12]
+    return (tag, symbol, exchange, interval, start_date, end_date)
+
+
+def _single_flight(key: tuple, fetch):
+    """Run ``fetch`` once for all overlapping callers with the same ``key``."""
+    with _inflight_lock:
+        flight = _inflight.get(key)
+        leader = flight is None or time.monotonic() - flight.started > _FLIGHT_JOIN_WINDOW
+        if leader:
+            flight = _Flight()
+            _inflight[key] = flight
+
+    if not leader:
+        if not real_threading.wait_for(flight.event, _FLIGHT_WAIT_TIMEOUT):
+            logger.warning(f"History single-flight wait timed out for {key[1]} {key[3]}; fetching")
+            return fetch()
+        if flight.error is not None:
+            raise flight.error
+        return copy.deepcopy(flight.result)
+
+    try:
+        result = fetch()
+        flight.result = copy.deepcopy(result)
+        return result
+    except BaseException as exc:  # noqa: BLE001 - handed to the waiters unchanged
+        flight.error = exc
+        raise
+    finally:
+        flight.event.set()
+        with _inflight_lock:
+            if _inflight.get(key) is flight:  # a replacement flight is not ours to remove
+                del _inflight[key]
+
+
+def _broker_paces_own_history(broker_name: str) -> bool:
+    """Whether every history call of this broker already passes its own global rate limiter.
+
+    A broker data module says so with ``PACES_OWN_HISTORY = True``. For such a broker the
+    service spacer below only adds delay: it holds a call back for the spacer's turn before the
+    broker's limiter, which already enforces the broker's per-second and per-minute limits,
+    has been asked. A broker that does not say so keeps the spacer.
+    """
+    module = import_broker_module(broker_name)
+    return bool(getattr(module, "PACES_OWN_HISTORY", False)) if module is not None else False
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
@@ -299,33 +381,52 @@ def get_history(
         )
 
     # Source: 'api' (default) - Fetch from broker API
-    # Enforce 3 requests/second rate limit for broker history calls
-    try:
-        if background:
-            _enforce_rate_limit(background=True)
-        else:
-            _enforce_rate_limit()
-    except BrokerBusyError as e:
-        return broker_busy_result(e, f"History request for {exchange}:{symbol}")
+    def fetch():
+        return _get_history_from_api(
+            symbol,
+            exchange,
+            interval,
+            start_date,
+            end_date,
+            api_key=api_key,
+            auth_token=auth_token,
+            feed_token=feed_token,
+            broker=broker,
+            background=background,
+        )
 
-    # Case 1: API-based authentication
+    if api_key or (auth_token and broker):
+        key = _flight_key(
+            symbol, exchange, interval, start_date, end_date, api_key, auth_token, broker
+        )
+        return _single_flight(key, fetch)
+    return fetch()
+
+
+def _get_history_from_api(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    *,
+    api_key: str | None,
+    auth_token: str | None,
+    feed_token: str | None,
+    broker: str | None,
+    background: bool,
+) -> tuple[bool, dict[str, Any], int]:
+    """Wait for this request's turn, then ask the broker."""
+    # Resolve the account first: whether the service spacer applies depends on the broker, and a
+    # request with an invalid key should not take a spacer slot.
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(
             api_key, include_feed_token=True
         )
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
-        return get_history_with_auth(
-            AUTH_TOKEN, FEED_TOKEN, broker_name, symbol, exchange, interval, start_date, end_date
-        )
-
-    # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return get_history_with_auth(
-            auth_token, feed_token, broker, symbol, exchange, interval, start_date, end_date
-        )
-
-    # Case 3: Invalid parameters
+        AUTH_TOKEN, FEED_TOKEN, broker_name = auth_token, feed_token, broker
     else:
         return (
             False,
@@ -335,3 +436,18 @@ def get_history(
             },
             400,
         )
+
+    # Brokers that pace their own history calls need no service spacer. Others keep the fixed
+    # 3-per-second spacing.
+    if not _broker_paces_own_history(broker_name):
+        try:
+            if background:
+                _enforce_rate_limit(background=True)
+            else:
+                _enforce_rate_limit()
+        except BrokerBusyError as e:
+            return broker_busy_result(e, f"History request for {exchange}:{symbol}")
+
+    return get_history_with_auth(
+        AUTH_TOKEN, FEED_TOKEN, broker_name, symbol, exchange, interval, start_date, end_date
+    )

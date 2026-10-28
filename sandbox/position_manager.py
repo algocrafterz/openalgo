@@ -37,6 +37,7 @@ from sandbox.position_locks import holds_position_lock, position_lock  # noqa: F
 from sandbox.session_boundary import IST, last_session_expiry_utc
 from services.market_data_service import get_market_data_service
 from services.quotes_service import get_multiquotes, get_quotes
+from utils import broker_priority
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -995,10 +996,11 @@ class PositionManager:
             # Decrypt the API key
             api_key = decrypt_token(api_key_obj.api_key_encrypted)
 
-            # Use quotes service with API key authentication
-            success, response, status_code = get_quotes(
-                symbol=symbol, exchange=exchange, api_key=api_key
-            )
+            # Valuing a position can wait; an order must not queue behind it.
+            with broker_priority.background():
+                success, response, status_code = get_quotes(
+                    symbol=symbol, exchange=exchange, api_key=api_key
+                )
 
             if success and "data" in response:
                 return response["data"]
@@ -1041,10 +1043,11 @@ class PositionManager:
                 {"symbol": symbol, "exchange": exchange} for symbol, exchange in symbols_list
             ]
 
-            # Use multiquotes service
-            success, response, status_code = get_multiquotes(
-                symbols=symbols_payload, api_key=api_key
-            )
+            # Valuing positions can wait; an order must not queue behind it.
+            with broker_priority.background():
+                success, response, status_code = get_multiquotes(
+                    symbols=symbols_payload, api_key=api_key
+                )
 
             if success and "results" in response:
                 results = response["results"]
