@@ -1,0 +1,14 @@
+- trial: 1
+  kind: material
+  run_id: 2026-10-28-multi-day-balance-breakout-v1
+  fingerprints:
+    rules: 6083f9a504578d67cf82d52d5998d2ef0aa9e0d74c12b22c9e8de532bba889a9
+    params: 95140ea667a707c7224b78ecae4087b21ab4119225f88ec41dbba440487f1be3
+    execution: 2ea945e4de93c38e38d3f47603e1d5f305a4f4d4e2f2d1fb678b38b2455ba6fc
+    cost: f19f715662d153cff54038e272a0b11cde4df4cf8c8dbe7acfeb308997742cb2
+  created_ist: '2026-10-28T12:51:25+05:30'
+- trial: 2
+  kind: external
+  count: 5
+  reason: 'pre-registered grid: V2 to V6 run in an unrecorded driver (see RESULTS.md); V1 is the recorded primary'
+  created_ist: '2026-10-28T12:51:25+05:30'

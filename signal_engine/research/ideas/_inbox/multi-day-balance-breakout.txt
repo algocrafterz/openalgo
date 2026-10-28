@@ -1,0 +1,9 @@
+Request text as received (2026-10-28):
+
+Intraday "multi-day balance breakout" built from auction market theory. Find stocks in multi-day
+balance (overlapping daily 70 percent value areas, narrow composite range relative to daily ATR) and
+trade the first accepted breakout out of that balance, after the initial balance (10:15) and before
+13:00. Stop back inside balance. Target measured move (balance height projected from the broken
+edge). Time exit 14:45. Context: BreakingTrade scanner picks arrive after the move; vendor Market
+Profile states early in the day had no cost-beating edge; an edge needs our own multi-day profile
+levels computed BEFORE the move.

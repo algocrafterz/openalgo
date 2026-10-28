@@ -35,6 +35,10 @@ REGISTRY: dict = {}
 
 
 def _register():
+    from signal_engine.backtest.strategies.balance_breakout import (
+        BalanceBreakout,
+        BalanceParams,
+    )
     from signal_engine.backtest.strategies.breakout import Breakout, BreakoutParams
     from signal_engine.backtest.strategies.dhb import Dhb, DhbParams
     from signal_engine.backtest.strategies.ema9 import Ema9, Ema9Params
@@ -70,6 +74,7 @@ def _register():
         VwapReversion,
         VwapReversionParams,
     )
+    REGISTRY["balance_breakout"] = (BalanceBreakout, BalanceParams, "intraday")
     REGISTRY["breakout"] = (Breakout, BreakoutParams, "intraday")
     REGISTRY["dhb"] = (Dhb, DhbParams, "intraday")
     REGISTRY["ema9"] = (Ema9, Ema9Params, "intraday")

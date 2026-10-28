@@ -1,0 +1,80 @@
+data:
+  complete_bins:
+    first: 09:15
+    last: '15:10'
+  field_families:
+  - price
+  - volume
+  frequency: 5m
+  min_n_minutes: 1
+direction: both
+disclosure:
+  chart_peeking: false
+  destination: python
+  prior_variants: 0
+entry:
+- 'Balance on trade day t from the last 5 completed sessions only: adjacent 70 percent
+  value areas overlap by at least 0.5 of the narrower one, and composite height H
+  = max(VAH) - min(VAL) is at most 1.5 x daily ATR14'
+- 'Long: a 30-minute period close (periods anchored 09:15, closing 10:15 through 12:45)
+  above the composite high while the previous 30-minute close was at or below it;
+  short mirrors below the composite low'
+- First such breakout of the day only, one trade per stock per day; the order fills
+  at the next 5m candle open
+exit:
+- 'Measured-move target: composite high + H for a long, composite low - H for a short'
+- Time exit at 14:45
+filters: none
+holding_period: same_session
+indicators:
+- name: ATR
+  period: 14
+kill_criterion: Net expectancy not above zero out of sample after statutory costs
+  plus 4 bps slippage per side, or no gain over the non-balance placebo.
+name: Multi-day balance breakout
+parameters:
+  atr_len: 14
+  atr_max_multiple: 1.5
+  balance_days: 5
+  bin_pct_of_price: 0.05
+  min_session_bars: 60
+  min_va_overlap: 0.5
+  placebo: none
+  stop_buffer_atr: 0.25
+  stop_mode: edge
+  trigger: p30
+  value_area_pct: 70
+portfolio:
+  capital_per_position: 100000
+  conflict: skip_if_symbol_open
+  max_concurrent: 213
+  max_exposure: 21300000
+  max_trades_per_day: 213
+  mode: multi_position
+  selection: chronological
+product: MIS
+profile: flattrade-nse-cash
+rationale: A multi-day overlapping value area is agreed value; price accepted outside
+  it moves to new value, and the level is known before the move.
+re_entry:
+  allowed: false
+schema_version: 2
+session_window:
+  entry: 10:15-13:00
+sizing:
+  capital_per_trade: 100000
+  risk_per_trade_pct: 1.0
+source:
+  kind: own_words
+  ref: _inbox/multi-day-balance-breakout.txt
+stop:
+- 'Long: composite high - 0.25 x daily ATR14; short: composite low + 0.25 x daily
+  ATR14'
+style: intraday
+take_profit:
+- Composite edge projected by H in the trade direction
+timeframe: 5m
+timing:
+  fill_model: next_bar_open
+  order_submission: signal_close
+  signal_evaluation: bar_close
