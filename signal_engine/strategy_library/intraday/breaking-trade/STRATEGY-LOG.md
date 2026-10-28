@@ -96,6 +96,30 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-28 15:10 — Narrow or wide opening hour and older reference levels tested as entry filters: none holds up
+- **What changed:** Nothing in the strategy. Four ideas were written down first and then tested:
+  a narrow first hour (Initial Balance, 09:15-10:15) leads to better breakouts; an open outside
+  yesterday's value area helps; an untested earlier POC (the busiest price of a past day) ahead
+  of the trade pulls price toward it; entering away from yesterday's and the 5-day POC helps.
+- **Entry:** Not affected.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** On 10 years of balance-breakout trades and 44,000 ordinary breakouts, no
+  filter kept the same sign before and after November 2023, and none made money after costs in
+  both periods. The website's own IB% looked best in its narrow third for BREAKINGTRADE in both
+  months, but on only 19 and 14 trades, which is too few to act on.
+
+NOTE: `experiments/2026-10-ib-reference-levels/` (hypotheses pre-registered in its README).
+Narrow / wide = bottom / top third of IB range / ATR14, cut on in-sample only; split 2023-11-08;
+net after Flattrade charges + 4 bps slippage per side (11.55 bps round trip); t clustered by day.
+- IDEA-034 narrow IB: IS +8.0 net (366) / OOS -4.7 (127); wide IB: -13.8 / -3.6.
+- Open outside prior value in the trade direction: IS -6.0 / OOS -4.7, worse than inside (-1.8 / -2.5).
+- Naked POC on the target side: no magnet in the 44,121-trade placebo (-11.3 / -5.6 vs -10.3 / -7.0).
+- Entry vs prior / composite POC: untestable on breakouts (all but 15 placebo trades are beyond both).
+- BREAKINGTRADE site ib_pct narrow third: P1 -8.6 (19) / P2 +17.6 (14); wide: -15.5 / -10.1.
+  ib_pct rises during the IB, so it is likely IB as a percent of an average range (inferred, not
+  confirmed). Look-ahead check: 0 mismatches on 60 + 25 recomputed trades.
+
 ### 2026-10-28 04:30 — Acting the moment a label appears gains nothing; the guide's extra scans tested
 - **What changed:** Nothing in the strategy. Each label (tails, failed highs/lows, poor
   highs/lows, open drive, the live single-print count) and each ready-made scan from the
