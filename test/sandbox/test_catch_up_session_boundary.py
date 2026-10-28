@@ -26,6 +26,21 @@ def _clear_test_user(user_id: str):
     db_session.commit()
 
 
+def _clear_stale_cnc_rows(cutoff):
+    """Remove CNC rows from before ``cutoff``, whoever left them.
+
+    catch_up_t1_settlement counts every CNC row in the database, of any user and any quantity,
+    so a row left by an earlier day or another test makes it settle, correctly. A test of "a
+    position created today is not swept" needs a database without them.
+    """
+    from database.sandbox_db import SandboxPositions, db_session
+
+    SandboxPositions.query.filter(
+        SandboxPositions.product == "CNC", SandboxPositions.created_at < cutoff
+    ).delete(synchronize_session=False)
+    db_session.commit()
+
+
 def _create_position(
     user_id,
     symbol,
@@ -118,6 +133,7 @@ def test_t1_settlement_does_not_sweep_in_a_position_created_early_today(monkeypa
     _clear_test_user(user_id)
 
     ist_midnight = datetime.combine(datetime.now(IST).date(), datetime.min.time(), tzinfo=IST)
+    _clear_stale_cnc_rows(as_db_utc(ist_midnight))
     _create_position(
         user_id=user_id,
         symbol="SBIN",

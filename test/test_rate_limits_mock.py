@@ -9,6 +9,10 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime
 
+# A manual script (run it with ``python test/test_rate_limits_mock.py``). Its ``test_*`` helpers
+# take arguments pytest cannot supply, so pytest must not collect them.
+__test__ = False
+
 
 class MockAPI:
     """Mock API server with rate limiting"""
